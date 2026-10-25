@@ -78,6 +78,7 @@
       "go:internal/task/randomid",
       "go:internal/taskdir",
       "go:internal/tasklifecycle",
+      "go:internal/verifiedexec",
       "go:internal/workspace",
       "go:internal/workspaces",
       "go:io",
@@ -129,6 +130,7 @@
       "go:internal/taskdir",
       "go:internal/tasklifecycle",
       "go:internal/tasklifecycle/testsupport",
+      "go:internal/verifiedexec",
       "go:internal/workspace",
       "go:internal/workspaces",
       "go:internal/workspaces/testsupport",
@@ -557,6 +559,7 @@
     "layer": "test",
     "imports": [
       "go:bytes",
+      "go:errors",
       "go:os",
       "go:os/exec",
       "go:path/filepath",

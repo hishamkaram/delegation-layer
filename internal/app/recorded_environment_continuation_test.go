@@ -201,8 +201,8 @@ func (f *recordedEnvironmentFixture) capturingCatalog(t *testing.T) commonprovid
 
 // capture returns prepare unchanged in behavior and records what it returns.
 func (f *recordedEnvironmentFixture) capture(hook string, prepare commonprovider.PrepareExistingCandidate) commonprovider.PrepareExistingCandidate {
-	return func(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-		candidate, err := prepare(request, meta)
+	return func(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+		candidate, err := prepare(request, meta, environment)
 		if err == nil {
 			f.captures = append(f.captures, candidateCapture{hook: hook, taskID: request.TaskID, candidate: candidate})
 		}
@@ -228,7 +228,7 @@ func (f *recordedEnvironmentFixture) admitSealedPredecessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := f.deps.Catalog.Candidate(request)
+	candidate, err := f.deps.Catalog.Candidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,16 +414,18 @@ func (f *recordedEnvironmentFixture) assertSuccessor(t *testing.T, id string) {
 }
 
 // assertWorkerRebuild repeats the managed worker's own reconstruction: it
-// restores the saved environment and must match the persisted successor.
+// selects the saved launch scope and must match the persisted successor
+// without changing the process environment.
 func (f *recordedEnvironmentFixture) assertWorkerRebuild(t *testing.T, request *task.TaskRecord, meta *task.MetaRecord) {
 	t.Helper()
-	restore, err := applySavedEnvironment(meta.Environment, meta.EnvironmentRecorded)
+	ambient := os.Environ()
+	scoped, err := scopedDependencies(f.deps.withCapturedEnvironment(), meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, matchErr := prepareMatchedProfile(f.deps, f.root, *request, *meta)
-	if restoreErr := restore(); restoreErr != nil {
-		t.Fatal(restoreErr)
+	_, matchErr := prepareMatchedProfile(scoped, f.root, *request, *meta)
+	if !slices.Equal(os.Environ(), ambient) {
+		t.Fatal("worker reconstruction changed the process environment")
 	}
 	if matchErr != nil {
 		t.Fatalf("worker reconstruction no longer matches the persisted successor: %v", matchErr)

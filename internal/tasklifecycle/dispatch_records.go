@@ -51,7 +51,6 @@ type DispatchResult struct {
 	Existing                       *ExistingTaskResult
 	Phase                          DispatchPhase
 	Failure                        error
-	EnvironmentRestoreError        error
 	Workspace                      *workspaces.AdmissionFinish
 	StoreCloseError                error
 }

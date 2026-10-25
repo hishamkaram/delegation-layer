@@ -18,21 +18,21 @@ import (
 // with any other predicate, reconstruct exactly like
 // PrepareExistingCandidate. The predecessor record is never modified, and no
 // path falls back to a new session or a run launch.
-func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	dialect, err := dialectForRecord(predecessor)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
 	if dialect == dialectACP && isKnownACPReference(request.Mode, predecessor.Predicate) {
-		return prepareCandidate(request, dialectACP, &predecessor, acpReferenceForMode(request.Mode), predecessor.RuntimePreflightSHA256 != "")
+		return prepareCandidate(request, environment, dialectACP, &predecessor, acpReferenceForMode(request.Mode), predecessor.RuntimePreflightSHA256 != "")
 	}
 	if !dialect.nativeRun() {
-		return PrepareExistingCandidate(request, predecessor)
+		return PrepareExistingCandidate(request, predecessor, environment)
 	}
 	if request.PriorSession == nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: an OpenCode successor requires the exact recorded session", ErrUnsupportedProfile)
 	}
-	return prepareCandidate(request, dialectACP, &predecessor, acpReferenceForMode(request.Mode), true)
+	return prepareCandidate(request, environment, dialectACP, &predecessor, acpReferenceForMode(request.Mode), true)
 }
 
 // isUpgradableOutputReference reports whether reference is one of the exact

@@ -424,7 +424,7 @@ func TestExistingPreAttributionProfileRetainsRelaxedProbeAndPredicate(t *testing
 // and (for interactive tasks) live completion policy to be the frozen ones.
 func requireFrozenReconstruction(t *testing.T, request task.TaskRecord, currentReference, frozenReference task.PredicateRef, frozenPolicy completionPolicy) {
 	t.Helper()
-	fresh, err := PrepareCandidate(request)
+	fresh, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func requireFrozenReconstruction(t *testing.T, request task.TaskRecord, currentR
 	if err != nil || !current.Plan.Predicate.Equal(currentReference) {
 		t.Fatalf("fresh predicate=%+v err=%v", current.Plan.Predicate, err)
 	}
-	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: frozenReference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true})
+	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: frozenReference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

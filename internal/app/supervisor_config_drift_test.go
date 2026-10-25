@@ -42,11 +42,7 @@ func newPublishedConfigDriftFixture(t *testing.T) *historicalSupervisorFixture {
 		if readErr != nil {
 			return readErr
 		}
-		drifted := strings.Replace(string(data), "pueue.sock", "upgrade.sock", 1)
-		if drifted == string(data) {
-			return errors.New("private config has no pueue.sock endpoint to retarget")
-		}
-		return os.WriteFile(configPath, []byte(drifted), 0o600)
+		return os.WriteFile(configPath, retargetedPrivateSocketConfig(t, data, fixture.predecessor), 0o600)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +119,7 @@ func assertConfigDriftSuccessor(t *testing.T, fixture *historicalSupervisorFixtu
 	}
 	config := readSupervisorProbeTestFile(t, successor.ConfigPath)
 	clientB := readSupervisorProbeTestFile(t, fixture.clientB)
-	if successor == fixture.predecessor || !strings.HasSuffix(successor.Endpoint, "upgrade.sock") || successor.ConfigDigest != task.ComputeSHA256(config) || successor.ClientSHA256 != task.ComputeSHA256(clientB) {
+	if successor == fixture.predecessor || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.ClientSHA256 != task.ComputeSHA256(clientB) {
 		t.Fatalf("successor does not bind the drifted config and installed client: %+v", successor)
 	}
 }
@@ -138,7 +134,7 @@ func TestPublishedConfigDriftKeepsStrictRefusalOutsideMigration(t *testing.T) {
 	var admitted *pueue.Client
 	admission := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
 		var prepareErr error
-		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, fixture.clientB, fixture.store, fixture.options)
+		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB}, fixture.store, fixture.options)
 		return prepareErr
 	})
 	if admitted != nil {

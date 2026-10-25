@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,21 +35,29 @@ func (l *runnerBudgetLifetime) Terminate(context.Context) error {
 
 func (*runnerBudgetLifetime) CloseTask(context.Context) error { return nil }
 
-func TestApplySavedEnvironmentClearsRecordedEmptyEnvironment(t *testing.T) {
+func TestScopedDependenciesSelectsRecordedEmptyEnvironment(t *testing.T) {
 	const key = "DELEGATE_RECORDED_EMPTY_ENV_TEST"
 	t.Setenv(key, "ambient")
-	restore, err := applySavedEnvironment(nil, true)
+	caller := Dependencies{}.withCapturedEnvironment()
+	scoped, err := scopedDependencies(caller, nil, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := os.Getenv(key); got != "" {
-		t.Fatalf("recorded empty environment retained ambient value %q", got)
+	if scoped.Environment == nil || len(scoped.Environment) != 0 {
+		t.Fatalf("recorded empty environment selected %#v", scoped.Environment)
 	}
-	if err = restore(); err != nil {
-		t.Fatal(err)
+	if !slices.Contains(caller.Environment, key+"=ambient") {
+		t.Fatal("selection changed the captured caller scope")
 	}
 	if got := os.Getenv(key); got != "ambient" {
-		t.Fatalf("environment was not restored after explicit empty environment: %q", got)
+		t.Fatalf("selection changed the process environment: %q", got)
+	}
+	legacy, err := scopedDependencies(caller, []string{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(legacy.Environment, caller.Environment) {
+		t.Fatal("an unrecorded empty environment did not keep the caller scope")
 	}
 }
 

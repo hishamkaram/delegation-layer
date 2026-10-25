@@ -60,7 +60,7 @@ func TestNativeReadOnlyProfilePinsSettingsSessionDirectory(t *testing.T) {
 		Environment:         first.Plan.Environment,
 		EnvironmentRecorded: true,
 		Predicate:           first.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func testNativeProfileReconstruction(t *testing.T, mode string) {
 	nativeProfile := finalizeProfile(t, mustPrepareCandidate(t, request), now)
 	requireNativeProfile(t, nativeProfile, mode)
 
-	nativeReplayCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: nativeProfile.Effective})
+	nativeReplayCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: nativeProfile.Effective}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func testNativeProfileReconstruction(t *testing.T, mode string) {
 		historicalCandidate, historicalErr := PrepareExistingCandidate(request, task.MetaRecord{
 			EffectiveConfig: nativeProfile.Effective,
 			Predicate:       readOnlyV2Reference(),
-		})
+		}, os.Environ())
 		if historicalErr != nil {
 			t.Fatal(historicalErr)
 		}
@@ -110,7 +110,7 @@ func testNativeProfileReconstruction(t *testing.T, mode string) {
 	historicalCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{
 		EffectiveConfig: nativeProfile.Effective,
 		Predicate:       historical,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func testLegacyProfileReconstruction(t *testing.T) {
 	request, now := profileReconstructionFixture(t, ModeReadOnly)
 	legacyCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: task.EffectiveConfig{
 		Policy: &task.PolicyDetails{ProfileRevision: ProfileRevision},
-	}})
+	}}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
 		t.Run(reference.Mode, func(t *testing.T) {
 			request, now := profileReconstructionFixture(t, reference.Mode)
 			current := finalizeProfile(t, mustPrepareCandidate(t, request), now)
-			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective})
+			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective}, os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +177,7 @@ func TestWorkspaceWriteV7ReconstructionRetainsRuntimeCapability(t *testing.T) {
 	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
 		Predicate:       workspaceWriteV7Reference(),
 		EffectiveConfig: current.Effective,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 		Environment:            slices.Clone(admitted.Plan.Environment),
 		EnvironmentRecorded:    true,
 		Predicate:              admitted.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestHistoricalProfilesRemainFinalizerOnly(t *testing.T) {
 	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
 		EffectiveConfig: current.Effective,
 		Predicate:       readOnlyV5Reference(),
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestWorkspaceHistoricalRuntimeRequirementsMatchReconstructedArguments(t *te
 			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
 				EffectiveConfig: current.Effective,
 				Predicate:       testCase.reference,
-			})
+			}, os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -383,7 +383,7 @@ func profileReconstructionFixture(t *testing.T, mode string) (task.TaskRecord, t
 
 func mustPrepareCandidate(t *testing.T, request task.TaskRecord) commonprovider.ProfileCandidate {
 	t.Helper()
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

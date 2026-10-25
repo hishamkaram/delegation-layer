@@ -21,7 +21,7 @@ type preflightFixture struct {
 	prepareFault, finalizeFault error
 }
 
-func (fixture *preflightFixture) candidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+func (fixture *preflightFixture) candidate(request task.TaskRecord, _ []string) (commonprovider.ProfileCandidate, error) {
 	fixture.prepareCalls++
 	if fixture.prepareFault != nil {
 		return commonprovider.ProfileCandidate{}, fixture.prepareFault

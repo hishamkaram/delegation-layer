@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestExistingRetryMissingEnvironmentPortCannotSubmit(t *testing.T) {
 	}
 }
 
-func TestExistingRetryRestoresSavedEnvironmentAfterProfileRefusal(t *testing.T) {
+func TestExistingRetryPreparesInSavedEnvironmentAfterProfileRefusal(t *testing.T) {
 	const key = "DELEGATE_EXISTING_ENV_PROOF"
 	t.Setenv(key, "caller")
 	store, td, req := newAppTestTask(t, false)
@@ -54,43 +55,47 @@ func TestExistingRetryRestoresSavedEnvironmentAfterProfileRefusal(t *testing.T) 
 		}
 	}()
 	calls := 0
-	deps := Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	deps := Dependencies{PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 		calls++
-		if os.Getenv(key) != "recorded" {
-			t.Errorf("profile saw caller environment instead of saved launch state")
+		if !slices.Equal(environment, []string{key + "=recorded"}) {
+			t.Errorf("profile received %q instead of the saved launch scope", environment)
 		}
-		return PreparedProfile{}, task.ErrIdentityMismatch
+		if os.Getenv(key) != "caller" {
+			t.Errorf("retry changed the process environment during preparation")
+		}
+		return commonprovider.ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
+			return PreparedProfile{}, task.ErrIdentityMismatch
+		})(request, environment)
 	}}
 	result := dispatch(Arguments{Root: store.Root, TaskID: successor.TaskID, Provider: successor.Provider, Cwd: successor.CanonicalCwd, Config: successor.RequestedConfig, BriefBytes: []byte("brief")}, deps)
 	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) || calls != 1 {
 		t.Fatalf("retry did not refuse at the real profile boundary: %+v, calls=%d", result, calls)
 	}
 	if os.Getenv(key) != "caller" {
-		t.Fatal("retry did not restore caller environment after refusal")
+		t.Fatal("retry changed the caller environment after refusal")
 	}
 	if _, err = retry.ReadSubmission(); !task.RecordAbsent(err) {
 		t.Fatalf("profile refusal created submission authority: %v", err)
 	}
 }
 
-func TestExistingProjectionPreservesRestoreThenTaskClose(t *testing.T) {
+func TestExistingProjectionPreservesPrimaryThenTaskClose(t *testing.T) {
 	primary := errors.New("profile refused")
-	restoreFault := commonprovider.ErrAuthenticationBlocked
-	for _, closeFault := range []error{nil, errors.New("task close failed")} {
+	for _, closeFault := range []error{nil, errors.New("task close failed"), commonprovider.ErrAuthenticationBlocked} {
 		response := newResponse("dispatch")
 		response.Status = "created"
-		result := existingCommandResult(response, "fixture", tasklifecycle.ExistingTaskResult{Stage: tasklifecycle.ExistingProfile, Failure: primary, EnvironmentRestoreError: restoreFault, TaskCloseError: closeFault})
+		result := existingCommandResult(response, "fixture", tasklifecycle.ExistingTaskResult{Stage: tasklifecycle.ExistingProfile, Failure: primary, TaskCloseError: closeFault})
 		wantCode := 2
-		wantErr := errors.Join(primary, restoreFault)
+		wantErr := primary
 		if closeFault != nil {
 			wantCode = 1
-			wantErr = errors.Join(wantErr, closeFault)
+			wantErr = errors.Join(primary, closeFault)
 		}
 		if result.code != wantCode || result.response.Status != "created" || result.response.Error != wantErr.Error() {
 			t.Fatalf("existing closure changed primary classification or order: %+v", result)
 		}
 		var stage *admissioncore.StageError
-		if !errors.As(result.err, &stage) || stage.Stage() != "existing-task" || !errors.Is(result.err, primary) || !errors.Is(result.err, restoreFault) {
+		if !errors.As(result.err, &stage) || stage.Stage() != "existing-task" || !errors.Is(result.err, primary) {
 			t.Fatalf("lost existing-task stage or causes: %v", result.err)
 		}
 	}

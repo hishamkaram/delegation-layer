@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,6 +152,7 @@ func writeModelsFailureHuman(out io.Writer, response ModelsResponse) error {
 }
 
 func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.ModelCatalog, resultErr error) {
+	deps = deps.withCapturedEnvironment()
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return catalog, admission.WithStage("resolve-state-root", err)
@@ -236,11 +238,11 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 	if err != nil {
 		return Arguments{}, nil, "", err
 	}
-	options, err := admission.SupervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
+	options, err := admission.SupervisorOptionsForCandidate(deps.supervisorControlScope(), candidate)
 	if err != nil {
 		return Arguments{}, nil, "", admission.WithStage("prepare-supervisor-options", err)
 	}
-	privateSupervisor, err := admissionUsesPrivateSupervisor(a, store.Root)
+	privateSupervisor, err := admissionUsesPrivateSupervisor(a, deps, store.Root)
 	if err != nil {
 		return Arguments{}, nil, "", admission.WithStage("prepare-supervisor-options", err)
 	}
@@ -265,7 +267,7 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 }
 
 func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root string) (Arguments, string, error) {
-	runnerOwnership := requestedRunnerOwnership(a)
+	runnerOwnership := requestedRunnerOwnership(a, deps)
 	runner, err := prepareAdmissionExecutables(a, deps, root)
 	if err != nil {
 		return Arguments{}, "", err
@@ -279,12 +281,18 @@ func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root strin
 	return a, queueRepairRunner, nil
 }
 
+// prepareModelsCandidate prepares the provider directly in the composition's
+// launch scope: the caller's for the models command and the saved binding's
+// for an inspection worker.
 func prepareModelsCandidate(deps Dependencies, root string, req task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 	registration, err := deps.Catalog.Lookup(req.Provider)
 	if err != nil || registration.Models == nil || registration.Prepare == nil {
 		return commonprovider.ProfileCandidate{}, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
-	candidate, err := registration.Prepare(req)
+	if deps.Environment == nil {
+		return commonprovider.ProfileCandidate{}, admission.WithStage("prepare-provider", fmt.Errorf("%w: model discovery launch environment was not captured", task.ErrEvidenceFault))
+	}
+	candidate, err := registration.Prepare(req, slices.Clone(deps.Environment))
 	if err != nil {
 		return candidate, admission.WithStage("prepare-provider", err)
 	}

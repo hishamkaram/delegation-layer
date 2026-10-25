@@ -53,7 +53,7 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 	if err != nil {
 		return nil, err
 	}
-	if _, admissionErr := admissioncore.ValidateContinuation(options.Admission, options.ApplyEnvironment, store.Root, *predecessorReq, *predecessorMeta, prior, request); admissionErr != nil {
+	if _, admissionErr := admissioncore.ValidateContinuation(options.Admission, store.Root, *predecessorReq, *predecessorMeta, prior, request); admissionErr != nil {
 		return nil, admissionErr
 	}
 	handedOff, submitted, err := preparePredecessorResolution(store, td, predecessorReq, predecessorMeta, options.Supervisor)
@@ -66,7 +66,7 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 	if !submitted {
 		return nil, task.ErrRequestConflict
 	}
-	if err = PredecessorTerminated(store.Root, td, predecessorReq, SupervisorOptions{Options: options.Supervisor.Control, InitialExecutable: options.Supervisor.InitialExecutable, OpenStore: options.Supervisor.OpenStore}); err != nil {
+	if err = PredecessorTerminated(store.Root, td, predecessorReq, SupervisorOptions{Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore}); err != nil {
 		return nil, err
 	}
 	return prior, nil

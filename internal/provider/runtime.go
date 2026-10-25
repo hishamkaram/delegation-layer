@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -24,8 +23,8 @@ type CLIInfo struct {
 // LocateCLI resolves and fingerprints a provider executable without starting
 // it. Version and help output are observed later by the supervised inspection
 // worker immediately before the provider launch.
-func LocateCLI(name string) (CLIInfo, error) {
-	path, err := exec.LookPath(name)
+func LocateCLI(name string, environment []string) (CLIInfo, error) {
+	path, err := verifiedexec.LookPath(name, environment)
 	if err != nil {
 		return CLIInfo{}, fmt.Errorf("provider executable %q is unavailable: %w", name, err)
 	}

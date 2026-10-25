@@ -126,7 +126,7 @@ func TestLifetimeGuardianStartedExpiresAtImmutableDeadlineWhilePersistenceBlocks
 	if started.returned.Before(deadline) {
 		t.Fatalf("started returned at %v, before the immutable deadline %v", started.returned, deadline)
 	}
-	gate.open()
+	openGuardianCapacityGateAfterRecordExpiry(t, gate, joinBy)
 	select {
 	case persistErr := <-gate.result:
 		if !errors.Is(persistErr, context.DeadlineExceeded) {
@@ -154,7 +154,10 @@ func TestLifetimeGuardianStartedExpiresAtImmutableDeadlineWhilePersistenceBlocks
 // create-once write itself stay with the real control lifetime.
 type guardianCapacityLaunchGate struct {
 	*taskdir.ControlLifetime
-	sequence    uint64
+	sequence uint64
+	// recordCtx is the held write's own context. It is set before entered
+	// closes, so readers that received from entered observe it.
+	recordCtx   context.Context
 	entered     chan struct{}
 	release     chan struct{}
 	releaseOnce sync.Once
@@ -174,6 +177,7 @@ func (g *guardianCapacityLaunchGate) RecordLifetimeLaunchContext(ctx context.Con
 	if facts.Sequence != g.sequence {
 		return g.ControlLifetime.RecordLifetimeLaunchContext(ctx, facts)
 	}
+	g.recordCtx = ctx
 	close(g.entered)
 	<-g.release
 	record, err := g.ControlLifetime.RecordLifetimeLaunchContext(ctx, facts)
@@ -183,6 +187,23 @@ func (g *guardianCapacityLaunchGate) RecordLifetimeLaunchContext(ctx context.Con
 
 func (g *guardianCapacityLaunchGate) open() {
 	g.releaseOnce.Do(func() { close(g.release) })
+}
+
+// openGuardianCapacityGateAfterRecordExpiry releases the held write only after
+// its own context has expired. The client's transport deadline and the
+// guardian's work context run separate timers, so a timed-out client call does
+// not prove the store already observes the expiry.
+func openGuardianCapacityGateAfterRecordExpiry(t *testing.T, gate *guardianCapacityLaunchGate, joinBy time.Time) {
+	t.Helper()
+	select {
+	case <-gate.recordCtx.Done():
+	case <-time.After(time.Until(joinBy)):
+		t.Fatal("held durable launch write context did not expire")
+	}
+	if err := gate.recordCtx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("held durable launch write context = %v, want deadline exceeded", err)
+	}
+	gate.open()
 }
 
 // newGuardianCapacityFixture runs the guardian on the real clock so one

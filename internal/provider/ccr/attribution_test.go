@@ -133,7 +133,7 @@ func TestExistingPreAttributionCCRProfilesRetainTheirLaunchContract(t *testing.T
 		{preAttributionReference(request.Mode, true), true},
 		{preAttributionReference(request.Mode, false), false},
 	} {
-		existing, prepareErr := PrepareExistingCandidate(request, task.MetaRecord{Predicate: test.reference, Environment: []string{"HOME=" + directory, "PATH=" + directory}, EnvironmentRecorded: true})
+		existing, prepareErr := PrepareExistingCandidate(request, task.MetaRecord{Predicate: test.reference, Environment: []string{"HOME=" + directory, "PATH=" + directory}, EnvironmentRecorded: true}, os.Environ())
 		if prepareErr != nil {
 			t.Fatal(prepareErr)
 		}

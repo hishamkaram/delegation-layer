@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -16,10 +17,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, operation *workspace.Operation) (candidate workspace.OperationResult, resultErr error) {
+// runWorkspaceAction runs Git in the worker entrypoint's captured scope.
+func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, operation *workspace.Operation, environment []string) (candidate workspace.OperationResult, resultErr error) {
 	request := operation.Request()
 	candidate = workspace.OperationResult{SchemaVersion: task.SchemaVersion, OperationID: request.OperationID, RequestSHA256: operation.Digest(), Status: "succeeded"}
-	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}}
+	if environment == nil {
+		return candidate, fmt.Errorf("%w: workspace worker launch environment was not captured", task.ErrEvidenceFault)
+	}
+	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}, Environment: slices.Clone(environment)}
 	// Ordinary checkpoints and removals have no workspace resource to load.
 	if request.Kind == workspace.OperationCheckpoint || request.Kind == workspace.OperationCheckpointRemove {
 		return candidate, runCheckpointAction(scope.Context(), store, operation, git)
@@ -38,7 +43,7 @@ func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, op
 	case workspace.OperationCapture:
 		candidate.Artifacts, resultErr = captureManagedCheckout(scope.Context(), store, resource, operation, git)
 	case workspace.OperationVerify:
-		candidate.CommandExit, candidate.Artifacts, resultErr = verifyManagedCheckout(scope, store, resource, request)
+		candidate.CommandExit, candidate.Artifacts, resultErr = verifyManagedCheckout(scope, store, resource, request, environment)
 		if resultErr == nil && candidate.CommandExit != nil && *candidate.CommandExit < 0 {
 			candidate.Status, candidate.ReasonCode, candidate.CommandExit = "failed", "verification_command_signaled", nil
 		}

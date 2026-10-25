@@ -166,7 +166,7 @@ func incompletePrivateConfigRuntimeAbsent(base string) (bool, error) {
 	// following a symlinked component. Data presence likewise proves that setup
 	// advanced beyond the pre-start config publication repaired here.
 	for _, path := range []string{
-		filepath.Join(base, "s"),
+		privateCompactSocketPath(base),
 		filepath.Join(base, "run"),
 		filepath.Join(base, "data"),
 	} {
@@ -420,13 +420,20 @@ func privateConfigYAMLForResolution(base string, resolution ResolutionContext) (
 	}
 	socketPath := filepath.Join(base, "run", "pueue.sock")
 	if len(socketPath) > limit {
-		socketPath = filepath.Join(base, "s")
+		socketPath = privateCompactSocketPath(base)
 	}
 	data := privateConfigYAMLWithSocket(base, socketPath)
 	if _, err := resolvePrivateConfigSource([]byte(data), base, resolution); err != nil {
 		return "", err
 	}
 	return data, nil
+}
+
+// privateCompactSocketPath is the one definition of the short endpoint the
+// config selects when the run-directory socket would exceed the platform limit.
+// Bootstrap residue detection and stale endpoint cleanup recognize the same path.
+func privateCompactSocketPath(base string) string {
+	return filepath.Join(base, "s")
 }
 
 func privateConfigYAMLWithSocket(base, socketPath string) string {

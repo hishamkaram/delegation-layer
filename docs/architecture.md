@@ -87,6 +87,30 @@ request. Provider preparation constructs an immutable candidate containing the
 command, environment, policy, input/output declarations, and identity
 observer. It does not start a process.
 
+Environment selection is explicit rather than ambient. Composition captures
+the caller's environment once, then selects the preparation scope at each
+historical window: the caller's scope, or a task's recorded scope where that
+window replays the saved task. Preparation receives that selected scope and
+filters it through each provider's declared variables for the launch
+environment. Executable lookup resolves `PATH` from the unfiltered scope
+composition selected, never from the process environment, and an adapter does
+not substitute a recorded launch environment for that scope. Launch environment
+follows each provider's own rules for saved and unrecorded records. No step
+swaps the process-global environment. A recorded scope is immutable: task
+metadata and the inspection binding use the environment they recorded, and an
+explicitly recorded empty scope stays empty instead of inheriting the caller. A
+historical record that never recorded a scope keeps the caller's. Successor
+creation is deliberately asymmetric: the public `continue` command selects the
+predecessor's recorded scope around its nested dispatch; an ordinary
+`dispatch --resume-task` keeps the caller's scope; and an interactive resume
+rebinds the saved scope only for task creation. Other successor environment
+policy is unchanged. Supervisor control keeps the caller's bounded environment,
+separate from provider environments; a detached private-queue maintenance
+launch uses the bounded environment of the scope that schedules it. For
+supervisor environments, `nil` keeps the standalone inherited default and a
+non-nil empty slice is an explicit empty selection that does not inherit
+ambient values. Static model-discovery callbacks are unchanged.
+
 Managed runtime-only tasks are admitted from their static request and provider
 contract. Immutable metadata records `runtime_preflight_sha256` and an empty
 `provider_version`; it does not claim runtime compatibility. Each task's runner
@@ -132,8 +156,8 @@ always stay immutable and keep rebuilding under their recorded predicate; only
 the new successor task carries the current one.
 Interactive continuation is the deliberate exception:
 Codex and Claude build the current interactive profile while preserving the
-recorded session identity and restoring the predecessor environment needed to
-find that session. No continuation modifies predecessor evidence.
+recorded session identity and using the recorded predecessor environment needed
+to find that session. No continuation modifies predecessor evidence.
 
 Immediately before a provider process may start, the runner performs a fresh
 capability inspection and receives a current launch plan. A provider path,
@@ -637,7 +661,7 @@ supplied, preserves the provider session identity, and creates a new task
 record. Ordinary successors reconstruct the predecessor's recorded preparation
 contract; fresh dispatches select the current mapping. An interactive successor
 uses the current interactive contract while preserving the exact recorded
-session and restoring the predecessor environment needed to find it. It does
+session and using the recorded predecessor environment needed to find it. It does
 not reconstruct the predecessor's preparation contract. A timeout response
 advertises this path only after durable budget-stop termination evidence is
 present.

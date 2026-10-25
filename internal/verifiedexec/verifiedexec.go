@@ -200,7 +200,7 @@ func NewCommandInDirectory(executable, digest, directory string, environment []s
 // The private directory is unsealed and removed when the caller closes the
 // command after Start/Wait.
 func newPortableCommand(executable, digest, directory string, environment []string, args []string, file *os.File) (command *Command, resultErr error) {
-	temporaryDir, err := os.MkdirTemp("", "delegation-layer-verified-")
+	temporaryDir, err := os.MkdirTemp(environmentTemporaryRoot(environment), "delegation-layer-verified-")
 	if err != nil {
 		return nil, errors.Join(err, file.Close())
 	}
@@ -243,7 +243,7 @@ func buildPortableCommand(executable, digest, directory string, environment []st
 			if err != nil {
 				return nil, nil, err
 			}
-			moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+			moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -259,7 +259,7 @@ func buildPortableCommand(executable, digest, directory string, environment []st
 		if err != nil {
 			return nil, nil, err
 		}
-		moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+		moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -296,7 +296,7 @@ func useCanonicalDarwinSystemExecutable(path string) bool {
 }
 
 func buildPortableScriptCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string, shebang []string) (*exec.Cmd, []string, error) {
-	scriptPath, err := materializePortableScript(file, executable, temporaryDir, digest)
+	scriptPath, err := materializePortableScript(file, executable, temporaryDir, digest, environment)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -316,7 +316,7 @@ func buildPortableScriptCommand(executable, digest, directory string, environmen
 	// sealed system interpreters canonical; all other interpreters retain the
 	// private materialization and its verified digest.
 	if !useCanonicalDarwinSystemExecutable(interpreter.Path) {
-		interpreterPath, interpreterFiles, err = materializePortableInterpreter(interpreterFile, interpreter, temporaryDir)
+		interpreterPath, interpreterFiles, err = materializePortableInterpreter(interpreterFile, interpreter, temporaryDir, environment)
 	}
 	closeErr := interpreterFile.Close()
 	if err = errors.Join(err, closeErr); err != nil {
@@ -346,12 +346,12 @@ func portableScriptArgs(kind scriptKind, interpreterArgs []string, scriptPath, e
 	return append(commandArgs, args...), nil
 }
 
-func materializePortableScript(source *os.File, executable, temporaryDir, expectedSHA256 string) (string, error) {
+func materializePortableScript(source *os.File, executable, temporaryDir, expectedSHA256 string, environment []string) (string, error) {
 	shadowRoot, err := newPortableShadowRoot(temporaryDir, "script")
 	if err != nil {
 		return "", err
 	}
-	moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+	moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
 	if err != nil {
 		return "", err
 	}
@@ -370,7 +370,7 @@ func materializePortableScript(source *os.File, executable, temporaryDir, expect
 // enumerated: their contents are unrelated to the provider and can be very
 // large. The admitted entrypoint itself is materialized separately in this
 // private path.
-func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string) (string, error) {
+func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string, environment []string) (string, error) {
 	relative, err := filepath.Rel(string(filepath.Separator), sourceDirectory)
 	if err != nil {
 		return "", err
@@ -391,13 +391,13 @@ func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string) (strin
 			return "", err
 		}
 	}
-	if err := shadowPathEntries(source, mirror, excludedEntry); err != nil {
+	if err := shadowPathEntries(source, mirror, excludedEntry, environment); err != nil {
 		return "", err
 	}
 	return mirror, nil
 }
 
-func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string) error {
+func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string, environment []string) error {
 	source := sourceDirectory
 	mirror := mirrorDirectory
 	excluded := excludedEntry
@@ -406,44 +406,13 @@ func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string) e
 			return err
 		}
 		parentSource := filepath.Dir(source)
-		if parentSource == source || !shouldMirrorParent(parentSource) {
+		if parentSource == source || !shouldMirrorParent(parentSource, environment) {
 			return nil
 		}
 		excluded = filepath.Base(source)
 		source = parentSource
 		mirror = filepath.Dir(mirror)
 	}
-}
-
-func shouldMirrorParent(path string) bool {
-	path = filepath.Clean(path)
-	if path == string(filepath.Separator) {
-		return false
-	}
-	if temporaryRoot, err := filepath.EvalSymlinks(os.TempDir()); err == nil && path == filepath.Clean(temporaryRoot) {
-		return false
-	}
-	for _, sharedRoot := range []string{
-		filepath.Clean(os.TempDir()),
-		"/tmp",
-		"/private/tmp",
-		"/var/tmp",
-		"/private/var/tmp",
-		"/var/folders",
-		"/private/var/folders",
-		"/bin",
-		"/sbin",
-		"/usr",
-		"/usr/bin",
-		"/usr/sbin",
-		"/System",
-		"/private",
-	} {
-		if path == sharedRoot {
-			return false
-		}
-	}
-	return true
 }
 
 func newPortableShadowRoot(temporaryDir, name string) (string, error) {
@@ -486,12 +455,12 @@ func materializeVerifiedFile(source *os.File, destination, expectedSHA256 string
 	return copyVerifiedFile(target, source, expectedSHA256)
 }
 
-func materializePortableInterpreter(source *os.File, interpreter Info, temporaryDir string) (path string, temporaryFiles []string, resultErr error) {
+func materializePortableInterpreter(source *os.File, interpreter Info, temporaryDir string, environment []string) (path string, temporaryFiles []string, resultErr error) {
 	shadowRoot, err := newPortableShadowRoot(temporaryDir, "interpreter")
 	if err != nil {
 		return "", nil, err
 	}
-	moduleDirectory, err := shadowDirectory(filepath.Dir(interpreter.Path), shadowRoot, filepath.Base(interpreter.Path))
+	moduleDirectory, err := shadowDirectory(filepath.Dir(interpreter.Path), shadowRoot, filepath.Base(interpreter.Path), environment)
 	if err != nil {
 		return "", nil, err
 	}
@@ -667,16 +636,7 @@ func locateInEnvironment(name string, environment []string, directory string) (s
 			return "", fmt.Errorf("resolve verified script interpreter directory: %w", err)
 		}
 	}
-	pathValue := ""
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, "PATH=") {
-			pathValue = strings.TrimPrefix(entry, "PATH=")
-			break
-		}
-	}
-	if pathValue == "" {
-		pathValue = os.Getenv("PATH")
-	}
+	pathValue := EnvironmentValue(environment, "PATH")
 	for _, pathDirectory := range strings.Split(pathValue, string(os.PathListSeparator)) {
 		if pathDirectory == "" {
 			pathDirectory = "."

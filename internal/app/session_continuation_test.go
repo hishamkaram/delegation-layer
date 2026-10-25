@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -46,7 +47,7 @@ func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
 			}
 			rewriteAppProviderExecutable(t, td, tc.executable)
 			profile := appTestExecutionProfile(req, tc.executable, tc.arguments)
-			result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+			result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 				return profile, nil
 			}})
 			if result.code != 0 || result.err != nil {
@@ -213,7 +214,7 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, "")); err != nil {
+	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{})); err != nil {
 		t.Fatalf("terminal predecessor was not released: %v", err)
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
@@ -277,7 +278,7 @@ func resolveTerminalPredecessor(t *testing.T, store *taskdir.Store, req *task.Ta
 		t.Fatal(err)
 	}
 	deps := fixtureContinuationDependencies(t, nil, "").normalized()
-	return tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}, request, req.TaskID)
+	return tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps.withCapturedEnvironment()), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions)}, request, req.TaskID)
 }
 
 func closeAppTestSuccessor(t *testing.T, successor *taskdir.TaskDir) {
@@ -300,7 +301,7 @@ func TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery(t *testing
 		t.Fatal(err)
 	}
 	deps := fixtureContinuationDependencies(t, nil, filepath.Join(t.TempDir(), "missing-pueue")).normalized()
-	resolved, err := tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}, request, req.TaskID)
+	resolved, err := tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps.withCapturedEnvironment()), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions)}, request, req.TaskID)
 	if err != nil {
 		t.Fatalf("durable budget-stop handoff attempted private supervisor recovery: %v", err)
 	}
@@ -344,7 +345,7 @@ func TestResolvePredecessorValidatesProviderBeforeReleasingSession(t *testing.T)
 		t.Fatal(err)
 	}
 	deps := fixtureContinuationDependencies(t, validate, "").normalized()
-	if _, err = tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}, request, req.TaskID); !errors.Is(err, want) {
+	if _, err = tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps.withCapturedEnvironment()), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions)}, request, req.TaskID); !errors.Is(err, want) {
 		t.Fatalf("provider continuation failure = %v, want %v", err, want)
 	}
 	if err = successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
@@ -408,7 +409,7 @@ func fixtureContinuationDependencies(t *testing.T, validate func(task.TaskRecord
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Dependencies{Catalog: catalog, InitialSupervisorExecutable: initialSupervisorExecutable}
+	return Dependencies{Environment: os.Environ(), Catalog: catalog, InitialSupervisorExecutable: initialSupervisorExecutable}
 }
 
 func newPrivateBudgetStoppedPredecessor(t *testing.T, store *taskdir.Store) (*task.PriorSession, *taskdir.TaskDir, *task.TaskRecord) {
@@ -474,7 +475,7 @@ func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
 		}
 	}()
 	prepareAppPublishedTimeoutEvidence(t, td)
-	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, "")); !errors.Is(err, task.ErrSessionBusy) {
+	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{})); !errors.Is(err, task.ErrSessionBusy) {
 		t.Fatalf("active first-turn runner was eligible for continuation: %v", err)
 	}
 }
@@ -535,7 +536,7 @@ func TestRunProviderUnknownOutcomeRetainsContinuation(t *testing.T) {
 	profile.Identity = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 		return nil, errInjectedIdentity
 	}
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedIdentity) || result.response.Outcome != nil {
@@ -643,7 +644,7 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 	releaseErr := errors.New("release durability failed")
 	store.SetFaultInjector(&releaseOnlyFailureInjector{err: releaseErr})
 	profile := appTestExecutionProfile(req, "/usr/bin/printf", []string{"answer\n"})
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, releaseErr) {

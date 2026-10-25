@@ -21,12 +21,18 @@ func (runtime workspaceRuntime) PrepareManaged(ctx context.Context, store *taskd
 	if err != nil {
 		return "", nil, err
 	}
-	options := supervisorcore.OptionsForCurrentEnvironment(runtime.configuration.Control)
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(ctx, runtime.configuration.InitialExecutable, store, options)
+	options := runtime.controlOptions()
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(ctx, runtime.configuration.Lookup(), store, options)
 	return runner, client, err
 }
 
 func (runtime workspaceRuntime) OpenSaved(ctx context.Context, root string, saved task.SupervisorRef) (*pueue.Client, error) {
-	options := supervisorcore.OptionsForCurrentEnvironment(runtime.configuration.Control)
-	return supervisorcore.NewClient(ctx, root, saved, options, true, runtime.configuration.InitialExecutable, runtime.configuration.OpenStore)
+	options := runtime.controlOptions()
+	return supervisorcore.NewClient(ctx, root, saved, options, true, runtime.configuration.Lookup(), runtime.configuration.OpenStore)
+}
+
+// controlOptions binds supervisor control to the runtime's selected scope. An
+// explicit control environment, including an empty one, is kept unchanged.
+func (runtime workspaceRuntime) controlOptions() pueue.Options {
+	return supervisorcore.OptionsForEnvironment(runtime.configuration.Control, runtime.configuration.Environment)
 }

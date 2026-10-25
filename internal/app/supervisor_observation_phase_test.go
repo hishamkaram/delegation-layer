@@ -122,7 +122,7 @@ func TestPublicStatusRepairsCompleteCapabilitylessSchedulingReceipt(t *testing.T
 	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
 	deps := fixture.dependencies()
 	deps.InitialSupervisorExecutable = fixture.clientA
-	warm, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.InitialSupervisorExecutable, fixture.store, fixture.options)
+	warm, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), fixture.store, fixture.options)
 	if err != nil || warm == nil {
 		t.Fatalf("prepare complete scheduling fixture: client=%v err=%v", warm, err)
 	}
@@ -273,7 +273,7 @@ func installObservationPhaseCompatiblePair(t *testing.T, fixture *historicalSupe
 
 func TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter(t *testing.T) {
 	store, deps, legacy := newSupervisorProbeTestFixture(t)
-	held, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
+	held, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, deps.SupervisorOptions)
 	if err != nil || held == nil {
 		t.Fatalf("prepare complete held client: client=%v err=%v", held, err)
 	}
@@ -336,7 +336,7 @@ func TestReconcileStatusDoesNotReusePriorMaintenanceDeferral(t *testing.T) {
 	queue, err = tasklifecycle.ReconcileStatus(
 		t.Context(), healthy.root, healthy.td, &healthy.req, &healthy.meta,
 		healthy.submit.SpecSHA256, healthy.submit.MetaSHA256,
-		tasklifecycle.SupervisorOptions{Options: healthy.options, InitialExecutable: healthy.clientA, OpenStore: openNativeSupervisorStore}, &observed,
+		tasklifecycle.SupervisorOptions{Options: healthy.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: healthy.clientA}, OpenStore: openNativeSupervisorStore}, &observed,
 	)
 	if err != nil || !queue.Matched || observed.Admission != task.AdmissionAdmitted {
 		t.Errorf("healthy poll could not recover the receipted Stashed task: queue=%+v observed=%+v err=%v", queue, observed, err)
@@ -401,7 +401,7 @@ func prepareCompleteStashedObservationClient(t *testing.T, fixture *historicalSu
 	t.Helper()
 	prepared, err := supervisorcore.ObserveTaskSupervisor(
 		t.Context(), fixture.store, fixture.predecessor, &fixture.meta,
-		fixture.options, fixture.clientA, fixture.runner, openNativeSupervisorStore,
+		fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA}, fixture.runner, openNativeSupervisorStore,
 	)
 	settleSupervisorProbeTestClient(t, prepared.Client, err)
 	if err != nil || prepared.Client == nil || prepared.MaintenanceDeferred || prepared.MaintenanceError != nil {

@@ -62,7 +62,7 @@ func TestEnvironmentUsesNativeLoginWithoutPersistingAmbientCredentials(t *testin
 	home, workspace := profileFixture(t)
 	const secret = "fixture-secret-not-to-be-persisted"
 	values := []string{"HOME=" + home, "PATH=/usr/bin", "GEMINI_API_KEY=" + secret}
-	environment, err := prepareEnvironment(values)
+	environment, err := prepareProfileEnvironment(values, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,11 +92,11 @@ func TestEnvironmentUsesNativeLoginWithoutPersistingAmbientCredentials(t *testin
 
 func TestEnvironmentDropsSupervisorBookkeepingAndSortsValues(t *testing.T) {
 	home, _ := profileFixture(t)
-	environment, err := prepareEnvironment([]string{
+	environment, err := prepareProfileEnvironment([]string{
 		"SHLVL=2", "PUEUE_GROUP=default", "HOME=" + home,
 		"GEMINI_API_KEY=fixture-secret", "OLDPWD=" + home, "_=delegate",
 		"PUEUE_WORKER_ID=0", "PATH=/usr/bin",
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestEnvironmentDropsSupervisorBookkeepingAndSortsValues(t *testing.T) {
 func TestEnvironmentRejectsDiscoveryOverridesAndMalformedRoots(t *testing.T) {
 	home, _ := profileFixture(t)
 	for _, extra := range []string{"AGY_HOME=/other", "XDG_CONFIG_HOME=/other", "TMPDIR=relative", "GOCACHE=relative", "GOCACHE=OFF", "GOCACHE=off/", "HOME=/duplicate", "invalid"} {
-		if _, err := prepareEnvironment([]string{"HOME=" + home, extra}); !errors.Is(err, ErrUnsupportedProfile) {
+		if _, err := prepareProfileEnvironment([]string{"HOME=" + home, extra}, false); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Errorf("unsupported environment %q accepted: %v", extra, err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestEnvironmentRejectsDiscoveryOverridesAndMalformedRoots(t *testing.T) {
 
 func TestEnvironmentAcceptsDisabledGoCacheSentinel(t *testing.T) {
 	home, _ := profileFixture(t)
-	environment, err := prepareEnvironment([]string{"HOME=" + home, "GOCACHE=off"})
+	environment, err := prepareProfileEnvironment([]string{"HOME=" + home, "GOCACHE=off"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestCurrentNativeProfileAdmitsWithoutRuntimeFacts(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	request := argumentRequest()
 	request.CanonicalCwd = workspace
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	request := argumentRequest()
 	request.CanonicalCwd = workspace
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 		Environment:            slices.Clone(admitted.Plan.Environment),
 		EnvironmentRecorded:    true,
 		Predicate:              admitted.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func fixtureRuntime() runtimeIdentity {
 
 func fixtureProfileEnvironment(t *testing.T, home string) profileEnvironment {
 	t.Helper()
-	environment, err := prepareEnvironment([]string{"HOME=" + home})
+	environment, err := prepareProfileEnvironment([]string{"HOME=" + home}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

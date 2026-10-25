@@ -27,9 +27,9 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
+	defer func() { fillManagedTaskWorkspace(store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.SupervisorOptions, deps.InitialSupervisorExecutable), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
+	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
 	if observed.ControlObservation {
@@ -57,7 +57,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
+	defer func() { fillManagedTaskWorkspace(store, td, deps.environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
 	applyTaskObservation(&response, observed.Observation, root)
@@ -92,7 +92,7 @@ func (deps storeDependencies) collectionOptions(watch time.Duration) tasklifecyc
 	var reported sync.Once
 	return tasklifecycle.CollectionOptions{
 		Watch: watch, ObserveSupervisor: deps.observeSupervisor,
-		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.initialSupervisorExecutable),
+		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.supervisorLookup),
 		Catalog:    deps.providerCatalog(), Registry: deps.registry,
 		ReportMaintenanceDeferral: func(err error) {
 			if err != nil {

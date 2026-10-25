@@ -22,7 +22,7 @@ func TestContinuationAdmissionMissingEnvironmentOwnerRefusesBeforePreparation(t 
 	successor := predecessor
 	successor.TaskID = strings.Repeat("c", 32)
 	prior := &task.PriorSession{Provider: predecessor.Provider, ConversationID: "recorded-session", PredecessorTaskID: predecessor.TaskID}
-	_, err = admissioncore.ValidateContinuation(options, nil, fixture.root, predecessor, task.MetaRecord{EnvironmentRecorded: true}, prior, successor)
+	_, err = admissioncore.ValidateContinuation(options, fixture.root, predecessor, task.MetaRecord{EnvironmentRecorded: true}, prior, successor)
 	if !errors.Is(err, task.ErrEvidenceFault) || fixture.prepareCalls != 0 || fixture.finalizeCalls != 0 {
 		t.Fatalf("missing environment owner authorized static continuation: %v, calls=%d/%d", err, fixture.prepareCalls, fixture.finalizeCalls)
 	}

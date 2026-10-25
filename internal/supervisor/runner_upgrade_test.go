@@ -432,7 +432,7 @@ func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToPATH(t *testin
 	supervisorfixture.WriteExecutable(t, pathDaemon, "unrelated PATH daemon")
 	t.Setenv("PATH", pathDir)
 
-	gotClient, gotDaemon, err := ResolvePrivateSupervisorExecutables(root, "")
+	gotClient, gotDaemon, err := ResolvePrivateSupervisorExecutables(root, ExecutableLookup{})
 	if err != nil {
 		t.Fatalf("resolve private supervisor pair: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToCurrentBundle(
 	delegate := filepath.Join(bundle, "delegate")
 	supervisorfixture.WriteExecutable(t, delegate, "delegate")
 
-	gotClient, gotDaemon, err := ResolvePrivateSupervisorExecutables(root, delegate)
+	gotClient, gotDaemon, err := ResolvePrivateSupervisorExecutables(root, ExecutableLookup{InitialExecutable: delegate})
 	if err != nil {
 		t.Fatalf("resolve private supervisor pair: %v", err)
 	}
@@ -491,7 +491,7 @@ func TestResolveCurrentPrivateSupervisorExecutablesPrefersCurrentBundle(t *testi
 	delegate := filepath.Join(bundle, "delegate")
 	supervisorfixture.WriteExecutable(t, delegate, "delegate")
 
-	gotClient, gotDaemon, err := ResolveCurrentPrivateSupervisorExecutables(root, delegate)
+	gotClient, gotDaemon, err := ResolveCurrentPrivateSupervisorExecutables(root, ExecutableLookup{InitialExecutable: delegate})
 	if err != nil {
 		t.Fatalf("resolve current private supervisor pair: %v", err)
 	}

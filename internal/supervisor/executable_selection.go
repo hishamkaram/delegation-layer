@@ -10,6 +10,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 func DiscoverControlOwnerExecutable() string {
@@ -37,11 +38,27 @@ func DiscoverControlOwnerExecutable() string {
 	return candidate
 }
 
-func ResolveInitialExecutable(initialSupervisorExecutable string) (string, error) {
-	path := initialSupervisorExecutable
+// ExecutableLookup locates a supervisor pair that no binding records: the
+// explicit initial executable, else the bundled installation, else PATH from
+// Environment. Environment is the launch scope captured by composition; nil
+// is the standalone process environment.
+type ExecutableLookup struct {
+	InitialExecutable string
+	Environment       []string
+}
+
+func (lookup ExecutableLookup) lookPath(name string) (string, error) {
+	if lookup.Environment == nil {
+		return exec.LookPath(name)
+	}
+	return verifiedexec.LookPath(name, lookup.Environment)
+}
+
+func ResolveInitialExecutable(lookup ExecutableLookup) (string, error) {
+	path := lookup.InitialExecutable
 	if path == "" {
 		var err error
-		path, err = exec.LookPath("pueue")
+		path, err = lookup.lookPath("pueue")
 		if err != nil {
 			return "", fmt.Errorf("resolving pueue executable: %w", err)
 		}
@@ -64,12 +81,12 @@ func resolveBundledExecutable(initialSupervisorExecutable string, name string) (
 	return resolveSupervisorExecutable(filepath.Join(directory, name), name)
 }
 
-func resolveBundledExecutables(initialSupervisorExecutable string) (client, daemon string, resultErr error) {
-	return resolveBundledExecutablesWithPath(initialSupervisorExecutable, true)
+func resolveBundledExecutables(lookup ExecutableLookup) (client, daemon string, resultErr error) {
+	return resolveBundledExecutablesWithPath(lookup, true)
 }
 
-func resolveBundledExecutablesWithPath(initialSupervisorExecutable string, allowPath bool) (client, daemon string, resultErr error) {
-	directory, err := bundledSupervisorDirectory(initialSupervisorExecutable)
+func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) (client, daemon string, resultErr error) {
+	directory, err := bundledSupervisorDirectory(lookup.InitialExecutable)
 	if err != nil {
 		return "", "", err
 	}
@@ -81,7 +98,7 @@ func resolveBundledExecutablesWithPath(initialSupervisorExecutable string, allow
 	if clientErr == nil {
 		return client, daemon, nil
 	}
-	if initialSupervisorExecutable != "" || bundledSupervisorPairHasEntry(directory) {
+	if lookup.InitialExecutable != "" || bundledSupervisorPairHasEntry(directory) {
 		return "", "", clientErr
 	}
 	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
@@ -92,7 +109,7 @@ func resolveBundledExecutablesWithPath(initialSupervisorExecutable string, allow
 		return "", "", clientErr
 	}
 
-	pathClient, pathErr := exec.LookPath("pueue")
+	pathClient, pathErr := lookup.lookPath("pueue")
 	if pathErr != nil {
 		return "", "", clientErr
 	}
@@ -107,7 +124,7 @@ func resolveBundledExecutablesWithPath(initialSupervisorExecutable string, allow
 	return client, daemon, nil
 }
 
-func ResolvePrivateSupervisorExecutables(root string, initialSupervisorExecutable string) (client, daemon string, resultErr error) {
+func ResolvePrivateSupervisorExecutables(root string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
 	stateClient, stateDaemon, found, stateErr := ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
 	if stateErr != nil {
 		return "", "", stateErr
@@ -115,7 +132,7 @@ func ResolvePrivateSupervisorExecutables(root string, initialSupervisorExecutabl
 	if found {
 		return stateClient, stateDaemon, nil
 	}
-	return resolveBundledExecutables(initialSupervisorExecutable)
+	return resolveBundledExecutables(lookup)
 }
 
 // resolveCurrentPrivateSupervisorExecutables selects the pair shipped by the
@@ -123,8 +140,8 @@ func ResolvePrivateSupervisorExecutables(root string, initialSupervisorExecutabl
 // does not select the ordinary active generation: pueue's completed published
 // binding remains authoritative until canonical migration publishes a
 // replacement, while a fresh root may bootstrap the staged pair.
-func ResolveCurrentPrivateSupervisorExecutables(root string, initialSupervisorExecutable string) (client, daemon string, resultErr error) {
-	client, daemon, bundledErr := resolveBundledExecutablesWithPath(initialSupervisorExecutable, false)
+func ResolveCurrentPrivateSupervisorExecutables(root string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
+	client, daemon, bundledErr := resolveBundledExecutablesWithPath(lookup, false)
 	if bundledErr == nil {
 		return client, daemon, nil
 	}
@@ -135,7 +152,7 @@ func ResolveCurrentPrivateSupervisorExecutables(root string, initialSupervisorEx
 	if found {
 		return stateClient, stateDaemon, nil
 	}
-	return resolveBundledExecutables(initialSupervisorExecutable)
+	return resolveBundledExecutables(lookup)
 }
 
 func resolveSupervisorPair(directory string) (client, daemon string, resultErr error) {

@@ -100,9 +100,14 @@ func environmentForCommand(environment []string) []string {
 // It is rebuilt for each invocation so HOME/XDG changes are observed by both
 // resolution and the child process without carrying unrelated ambient state.
 func defaultEnvironment() []string {
-	ambient := os.Environ()
-	filtered := make([]string, 0, len(ambient))
-	for _, entry := range ambient {
+	return DefaultEnvironmentFrom(os.Environ())
+}
+
+// DefaultEnvironmentFrom applies the control allowlist to an explicit snapshot.
+// An absent or empty input remains explicitly empty; it never inherits values.
+func DefaultEnvironmentFrom(environment []string) []string {
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok && defaultEnvironmentKey(key) {
 			filtered = append(filtered, entry)

@@ -12,13 +12,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func PreparePrivateAdmissionSupervisor(initialSupervisorExecutable string, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+func PreparePrivateAdmissionSupervisor(lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	controlContext, cancel := ControlContext(options)
 	defer cancel()
-	return PreparePrivateAdmissionSupervisorContext(controlContext, initialSupervisorExecutable, store, options)
+	return PreparePrivateAdmissionSupervisorContext(controlContext, lookup, store, options)
 }
 
-func PreparePrivateAdmissionSupervisorContext(ctx context.Context, initialSupervisorExecutable string, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -29,7 +29,7 @@ func PreparePrivateAdmissionSupervisorContext(ctx context.Context, initialSuperv
 		if supervisor, err := ProbePrivateAdmissionSupervisor(ctx, store, "", "", options); err != nil || supervisor != nil {
 			return supervisor, err
 		}
-		supervisor, acquired, transitionErr := electPrivateAdmissionTransition(ctx, initialSupervisorExecutable, store, options)
+		supervisor, acquired, transitionErr := electPrivateAdmissionTransition(ctx, lookup, store, options)
 		if transitionErr != nil {
 			return nil, ClosePrivateAdmissionTransition(supervisor, transitionErr)
 		}
@@ -45,7 +45,7 @@ func PreparePrivateAdmissionSupervisorContext(ctx context.Context, initialSuperv
 	}
 }
 
-func electPrivateAdmissionTransition(ctx context.Context, initialSupervisorExecutable string, store *taskdir.Store, options pueue.Options) (*pueue.Client, bool, error) {
+func electPrivateAdmissionTransition(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, bool, error) {
 	var supervisor *pueue.Client
 	acquired, err := pueue.TryWithPrivateTransition(ctx, store.Root, func() error {
 		var probeErr error
@@ -55,14 +55,14 @@ func electPrivateAdmissionTransition(ctx context.Context, initialSupervisorExecu
 		}
 		return pueue.WithBootstrapLockContext(ctx, store.Root, func(lockedContext context.Context) error {
 			var prepareErr error
-			supervisor, prepareErr = PreparePrivateAdmissionTransition(lockedContext, initialSupervisorExecutable, store, options)
+			supervisor, prepareErr = PreparePrivateAdmissionTransition(lockedContext, lookup, store, options)
 			return prepareErr
 		})
 	})
 	return supervisor, acquired, err
 }
 
-func PreparePrivateAdmissionTransition(ctx context.Context, initialSupervisorExecutable string, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+func PreparePrivateAdmissionTransition(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	configExisted, err := privateSupervisorConfigExisted(store.Root)
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func PreparePrivateAdmissionTransition(ctx context.Context, initialSupervisorExe
 	if published {
 		return restartPublishedPrivateAdmission(ctx, store, supervisor, configExisted)
 	}
-	return bootstrapPrivateAdmission(ctx, initialSupervisorExecutable, store, options, configExisted)
+	return bootstrapPrivateAdmission(ctx, lookup, store, options, configExisted)
 }
 
 func repairLivePrivateAdmissionTransition(ctx context.Context, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, bool, error) {
@@ -116,8 +116,8 @@ func restartPublishedPrivateAdmission(ctx context.Context, store *taskdir.Store,
 	return supervisor, EnsureOrdinarySchedulingWithBootstrapLock(ctx, store.Root, supervisor)
 }
 
-func bootstrapPrivateAdmission(ctx context.Context, initialSupervisorExecutable string, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, error) {
-	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(store.Root, initialSupervisorExecutable)
+func bootstrapPrivateAdmission(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(store.Root, lookup)
 	if err != nil {
 		return nil, err
 	}

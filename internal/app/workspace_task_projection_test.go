@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -106,7 +107,7 @@ func TestManagedTaskStatusProjectsItsOwnCaptureAcrossSuccessorUse(t *testing.T) 
 		}
 	}()
 	busy := commandResult{response: newResponse("status")}
-	fillManagedTaskWorkspace(store, first.td, &busy)
+	fillManagedTaskWorkspace(store, first.td, os.Environ(), &busy)
 	if busy.response.Workspace == nil || busy.response.Workspace.Capture == nil || busy.response.Workspace.Capture.OperationID != firstCapture || busy.response.Workspace.State != "busy" {
 		t.Fatalf("first task status while a successor is admitted = %+v", busy.response.Workspace)
 	}
@@ -115,7 +116,7 @@ func TestManagedTaskStatusProjectsItsOwnCaptureAcrossSuccessorUse(t *testing.T) 
 		t.Fatal(err)
 	}
 	later := commandResult{response: newResponse("collect")}
-	fillManagedTaskWorkspace(store, first.td, &later)
+	fillManagedTaskWorkspace(store, first.td, os.Environ(), &later)
 	if later.response.Workspace == nil || later.response.Workspace.Capture == nil || later.response.Workspace.Capture.OperationID != firstCapture {
 		t.Fatalf("first task collect adopted a successor capture: %+v", later.response.Workspace)
 	}

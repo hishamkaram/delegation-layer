@@ -20,9 +20,9 @@ func runQueueMaintenance(parsed runnerArguments, deps Dependencies) error {
 	return supervisorcore.RunQueueMaintenance(parsed.Root, deps.SupervisorOptions)
 }
 
-func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup) (*pueue.Client, pueue.Observation, error) {
 	observed := tasklifecycle.Observation{}
-	client, observation, err := tasklifecycle.ReconcileRunner(ctx, root, &observed, td, req, meta, observationSupervisorOptions(supervisorOptions, initialSupervisorExecutable))
+	client, observation, err := tasklifecycle.ReconcileRunner(ctx, root, &observed, td, req, meta, observationSupervisorOptions(supervisorOptions, lookup))
 	applyTaskObservation(response, observed, root)
 	return client, observation, err
 }

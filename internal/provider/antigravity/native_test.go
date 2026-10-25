@@ -27,7 +27,7 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	writeSourceTestFile(t, configPath, content)
 	request := argumentRequest()
 	request.CanonicalCwd = workspace
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func prepareReadOnlyNativeCandidate(t *testing.T) (task.TaskRecord, commonprovid
 	request.Mode = ModeReadOnly
 	request.RequestedConfig.Permission = ModeReadOnly
 	request.CanonicalCwd = workspace
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func assertReadOnlyProfile(t *testing.T, profile commonprovider.PreparedProfile)
 
 func assertReadOnlyReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
 	t.Helper()
-	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective})
+	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func assertReadOnlyReconstruction(t *testing.T, request task.TaskRecord, profile
 		newHistoricalCurrentPrintInterpreterForMode(ModeReadOnly).Reference(),
 		newHistoricalRecordPrintInterpreter(ModeReadOnly).Reference(),
 	} {
-		reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: historicalPredicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment})
+		reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: historicalPredicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment}, os.Environ())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,7 +180,7 @@ func assertUnattendedNativeApproval(t *testing.T, profile commonprovider.Prepare
 
 func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
 	t.Helper()
-	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective})
+	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: historical, Environment: profile.Plan.Environment})
+	oldCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: historical, Environment: profile.Plan.Environment}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 	if !slices.Equal(oldProfile.Plan.Arguments, wantOldArguments) {
 		t.Fatal("historical native launch arguments changed")
 	}
-	if _, err = PrepareExistingCandidate(request, task.MetaRecord{}); err == nil {
+	if _, err = PrepareExistingCandidate(request, task.MetaRecord{}, os.Environ()); err == nil {
 		t.Fatal("historical configuration restrictions silently relaxed")
 	}
 }
@@ -219,7 +219,7 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 func assertHistoricalPredicateReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte, predicates []task.PredicateRef) {
 	t.Helper()
 	for _, predicate := range predicates {
-		candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: predicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment})
+		candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: predicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment}, os.Environ())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -305,7 +305,7 @@ func TestNativeReconstructionRetainsRecordedWritableRoots(t *testing.T) {
 			ProfileRevision: commonprovider.NativeProfileRevision,
 			WritableRoots:   []string{"/tmp", filepath.Join(home, ".gemini")},
 		}},
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

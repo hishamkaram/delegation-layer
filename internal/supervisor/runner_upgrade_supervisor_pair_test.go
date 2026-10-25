@@ -30,7 +30,7 @@ func TestInstallStateSupervisorPairPersistsCurrentExecutables(t *testing.T) {
 	supervisorfixture.WriteExecutable(t, client, "client v1")
 	supervisorfixture.WriteExecutable(t, daemon, "daemon v1")
 	firstClient, firstDaemon := installAndResolveSupervisorPairFixture(t, root, base, client, daemon, "client v1", "daemon v1")
-	resolvedClient, resolvedDaemon, err := resolveBundledExecutables(filepath.Join(base, "delegate-run"))
+	resolvedClient, resolvedDaemon, err := resolveBundledExecutables(ExecutableLookup{InitialExecutable: filepath.Join(base, "delegate-run")})
 	if err != nil || resolvedClient != firstClient || resolvedDaemon != firstDaemon {
 		t.Fatalf("state runner did not resolve the published pair: client=%q daemon=%q err=%v", resolvedClient, resolvedDaemon, err)
 	}
@@ -299,7 +299,7 @@ func TestPrivateRecoveryPrefersSavedHistoricalSupervisorPair(t *testing.T) {
 	if err = installStateSupervisorPair(context.Background(), root, currentClientSource, currentDaemonSource); err != nil {
 		t.Fatal(err)
 	}
-	gotClient, gotDaemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, saved, filepath.Join(root, "missing", "delegate"))
+	gotClient, gotDaemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, saved, ExecutableLookup{InitialExecutable: filepath.Join(root, "missing", "delegate")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestResolveRecoveryPrivateSupervisorExecutablesUsesVerifiedStatePair(t *tes
 	}
 	t.Setenv("PATH", supervisorfixture.CanonicalTempDir(t))
 	missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing", "delegate")
-	resolvedClient, resolvedDaemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, binding, missingDelegate)
+	resolvedClient, resolvedDaemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, binding, ExecutableLookup{InitialExecutable: missingDelegate})
 	if err != nil {
 		t.Fatalf("recovery rejected the verified state-root pair: %v", err)
 	}

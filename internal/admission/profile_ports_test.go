@@ -17,12 +17,12 @@ type failedProfileSource struct {
 	taskCalls    int
 }
 
-func (source *failedProfileSource) Current(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+func (source *failedProfileSource) Current(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 	source.currentCalls++
 	return commonprovider.ProfileCandidate{}, source.fault
 }
 
-func (source *failedProfileSource) ForTask(task.TaskRecord, *task.MetaRecord) (commonprovider.ProfileCandidate, bool, error) {
+func (source *failedProfileSource) ForTask(task.TaskRecord, *task.MetaRecord, []string) (commonprovider.ProfileCandidate, bool, error) {
 	source.taskCalls++
 	return commonprovider.ProfileCandidate{}, source.historical, source.fault
 }
@@ -35,7 +35,7 @@ func TestProfileFactoryFailureDoesNotFallbackOrReadEvidence(t *testing.T) {
 			profiles := NewProfiles(source, func(context.Context, string) (*taskdir.Store, error) {
 				t.Fatal("factory failure reached evidence reader")
 				return nil, task.ErrEvidenceFault
-			})
+			}, []string{})
 			var err error
 			if worker {
 				_, err = profiles.ForWorker("", task.TaskRecord{}, nil)

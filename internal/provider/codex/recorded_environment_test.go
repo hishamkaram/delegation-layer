@@ -69,6 +69,22 @@ func (h launchHome) apply(t *testing.T) {
 	t.Setenv("TMPDIR", h.tmpDir)
 }
 
+// selectedEnvironment is the complete environment a caller selects for h: its
+// own launch selectors and a PATH holding only a fixture codex executable that
+// differs from the ambient one. It returns that executable's path.
+func (h launchHome) selectedEnvironment(t *testing.T) ([]string, string) {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliPath := filepath.Join(directory, "codex")
+	if err = os.WriteFile(cliPath, []byte("selected codex fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"HOME=" + h.home, "CODEX_HOME=" + h.codexHome, "XDG_DATA_HOME=" + h.dataHome, "TMPDIR=" + h.tmpDir, "PATH=" + directory}, cliPath
+}
+
 func (h launchHome) paths() []string {
 	return []string{h.home, h.codexHome, h.dataHome, h.tmpDir}
 }
@@ -131,7 +147,7 @@ func TestExistingNativeCandidateUsesRecordedEnvironmentNotAmbient(t *testing.T) 
 			}
 			saved, ambient := newLaunchHome(t, "saved"), newLaunchHome(t, "ambient")
 			saved.apply(t)
-			candidate, err := prepare(request)
+			candidate, err := prepare(request, os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -152,7 +168,7 @@ func TestExistingNativeCandidateUsesRecordedEnvironmentNotAmbient(t *testing.T) 
 
 func assertRecordedReconstruction(t *testing.T, request task.TaskRecord, meta task.MetaRecord, admitted commonprovider.PreparedProfile, prepareExisting commonprovider.PrepareExistingCandidate, saved, ambient launchHome) {
 	t.Helper()
-	existing, err := prepareExisting(request, meta)
+	existing, err := prepareExisting(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +205,7 @@ func TestExistingFinalizedProfileMatchesRecordUnderDifferentAmbientEnvironment(t
 	meta := profileMeta(original)
 	meta.EnvironmentRecorded = true
 	ambient.apply(t)
-	existing, err := PrepareExistingCandidate(request, meta)
+	existing, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +226,7 @@ func TestExistingLegacyCandidateUsesRecordedEnvironmentNotAmbient(t *testing.T) 
 		Predicate:       LegacyReference(),
 	}
 	saved.apply(t)
-	original, err := PrepareExistingCandidate(request, meta)
+	original, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +234,7 @@ func TestExistingLegacyCandidateUsesRecordedEnvironmentNotAmbient(t *testing.T) 
 	meta = profileMeta(legacy)
 	meta.EnvironmentRecorded = true
 	ambient.apply(t)
-	existing, err := PrepareExistingCandidate(request, meta)
+	existing, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,15 +248,16 @@ func TestExistingLegacyCandidateUsesRecordedEnvironmentNotAmbient(t *testing.T) 
 	}
 }
 
-func TestExistingCandidateFallsBackToAmbientOnlyWithoutRecordedEnvironment(t *testing.T) {
+func TestExistingCandidateFallsBackToProvidedOnlyWithoutRecordedEnvironment(t *testing.T) {
 	request, _ := profileReconstructionFixture(t)
-	ambient := newLaunchHome(t, "ambient")
+	ambient, provided := newLaunchHome(t, "ambient"), newLaunchHome(t, "provided")
 	ambient.apply(t)
+	environment, cliPath := provided.selectedEnvironment(t)
 	meta := task.MetaRecord{
 		EffectiveConfig:        task.EffectiveConfig{Policy: &task.PolicyDetails{ProfileRevision: commonprovider.NativeProfileRevision}},
 		RuntimePreflightSHA256: testSpecHash, Predicate: Reference(),
 	}
-	candidate, err := PrepareExistingCandidate(request, meta)
+	candidate, err := PrepareExistingCandidate(request, meta, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +265,12 @@ func TestExistingCandidateFallsBackToAmbientOnlyWithoutRecordedEnvironment(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(profile.Plan.Environment, "HOME="+ambient.home) || !slices.Contains(profile.Plan.Environment, "CODEX_HOME="+ambient.codexHome) {
-		t.Fatalf("legacy record without an environment must read the ambient HOME and CODEX_HOME (%s)", summarizeValues(profile.Plan.Environment))
+	if !slices.Contains(profile.Plan.Environment, "HOME="+provided.home) || !slices.Contains(profile.Plan.Environment, "CODEX_HOME="+provided.codexHome) {
+		t.Fatalf("legacy record without an environment must read the provided HOME and CODEX_HOME (%s)", summarizeValues(profile.Plan.Environment))
+	}
+	requireNoPath(t, "provided fallback environment", profile.Plan.Environment, ambient.paths())
+	if profile.Plan.Executable != cliPath {
+		t.Fatalf("executable %q want the provided PATH's %q", profile.Plan.Executable, cliPath)
 	}
 }
 
@@ -264,28 +285,89 @@ func TestExistingCandidateFailsClosedForRecordedEmptyEnvironment(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			request, _ := profileReconstructionFixture(t)
 			newLaunchHome(t, "ambient").apply(t)
+			provided, _ := newLaunchHome(t, "provided").selectedEnvironment(t)
 			meta := task.MetaRecord{
 				EffectiveConfig:        task.EffectiveConfig{Policy: &task.PolicyDetails{ProfileRevision: commonprovider.NativeProfileRevision}},
 				RuntimePreflightSHA256: testSpecHash, Predicate: Reference(),
 				Environment: testCase.environment, EnvironmentRecorded: true,
 			}
-			if _, err := PrepareExistingCandidate(request, meta); !errors.Is(err, ErrUnsupportedProfile) {
-				t.Fatalf("recorded empty environment error=%v want ErrUnsupportedProfile instead of the caller's HOME", err)
+			if _, err := PrepareExistingCandidate(request, meta, provided); !errors.Is(err, ErrUnsupportedProfile) {
+				t.Fatalf("recorded empty environment error=%v want ErrUnsupportedProfile instead of the provided HOME", err)
 			}
 		})
 	}
 }
 
-func TestFreshCandidateReadsAmbientEnvironment(t *testing.T) {
+func TestFreshCandidateReadsProvidedEnvironmentNotAmbient(t *testing.T) {
 	request, _ := profileReconstructionFixture(t)
-	ambient := newLaunchHome(t, "ambient")
+	ambient, provided := newLaunchHome(t, "ambient"), newLaunchHome(t, "provided")
 	ambient.apply(t)
-	candidate := mustPrepareCandidate(t, request)
+	environment, cliPath := provided.selectedEnvironment(t)
+	candidate, err := PrepareCandidate(request, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
 	profile, err := candidate.Admit()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(profile.Plan.Environment, "HOME="+ambient.home) || !slices.Contains(profile.Plan.Environment, "CODEX_HOME="+ambient.codexHome) {
-		t.Fatalf("fresh admission must read the caller HOME and CODEX_HOME (%s)", summarizeValues(profile.Plan.Environment))
+	if !slices.Contains(profile.Plan.Environment, "HOME="+provided.home) || !slices.Contains(profile.Plan.Environment, "CODEX_HOME="+provided.codexHome) {
+		t.Fatalf("fresh admission must read the provided HOME and CODEX_HOME (%s)", summarizeValues(profile.Plan.Environment))
+	}
+	requireNoPath(t, "fresh environment", profile.Plan.Environment, ambient.paths())
+	if profile.Plan.Executable != cliPath {
+		t.Fatalf("executable %q want the provided PATH's %q", profile.Plan.Executable, cliPath)
+	}
+}
+
+func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
+	request, _ := profileReconstructionFixture(t)
+	provided := newLaunchHome(t, "provided")
+	environment, _ := provided.selectedEnvironment(t)
+	withoutPath := slices.DeleteFunc(slices.Clone(environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
+	if _, err := PrepareCandidate(request, withoutPath); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("fresh candidate without a provided PATH error=%v want ErrUnsupportedProfile although the ambient PATH has codex", err)
+	}
+}
+
+// The provided scope owns executable lookup, as the ambient process scope did
+// before environments were explicit; the record owns only the launch
+// environment. An ordinary --resume-task successor runs under the caller's
+// scope while its predecessor recorded another one.
+func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing.T) {
+	request, _ := profileReconstructionFixture(t)
+	saved, provided := newLaunchHome(t, "saved"), newLaunchHome(t, "provided")
+	recorded, _ := saved.selectedEnvironment(t)
+	scope, providedCLI := provided.selectedEnvironment(t)
+	providedInfo, err := commonprovider.LocateCLIPath(providedCLI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutPath := slices.DeleteFunc(slices.Clone(recorded), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
+	for name, environment := range map[string][]string{"recorded": recorded, "recorded without PATH": withoutPath} {
+		candidate, prepareErr := PrepareExistingCandidate(request, task.MetaRecord{
+			EffectiveConfig:        task.EffectiveConfig{Policy: &task.PolicyDetails{ProfileRevision: commonprovider.NativeProfileRevision}},
+			RuntimePreflightSHA256: testSpecHash, Predicate: Reference(),
+			Environment: environment, EnvironmentRecorded: true,
+		}, scope)
+		if prepareErr != nil {
+			t.Fatalf("%s: %v", name, prepareErr)
+		}
+		if !slices.Contains(candidate.Inspection.Environment, "HOME="+saved.home) {
+			t.Fatalf("%s did not launch with the recorded HOME (%s)", name, summarizeValues(candidate.Inspection.Environment))
+		}
+		requireNoPath(t, name+" launch environment", candidate.Inspection.Environment, provided.paths())
+		if candidate.Inspection.Executable != providedCLI || candidate.Inspection.ExecutableSHA256 != providedInfo.SHA256 {
+			t.Fatalf("%s executable %q want the provided scope's %q", name, candidate.Inspection.Executable, providedCLI)
+		}
+	}
+	environment := []string{}
+	scopeWithoutPath := slices.DeleteFunc(slices.Clone(scope), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
+	if _, err = PrepareExistingCandidate(request, task.MetaRecord{
+		EffectiveConfig:        task.EffectiveConfig{Policy: &task.PolicyDetails{ProfileRevision: commonprovider.NativeProfileRevision}},
+		RuntimePreflightSHA256: testSpecHash, Predicate: Reference(),
+		Environment: environment, EnvironmentRecorded: true,
+	}, scopeWithoutPath); !errors.Is(err, ErrUnsupportedProfile) || strings.Contains(err.Error(), "provider executable") {
+		t.Fatalf("invalid recorded environment error=%v want its validation error before executable lookup", err)
 	}
 }

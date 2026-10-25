@@ -101,6 +101,7 @@
       "go:internal/task",
       "go:internal/testutil/contributorprovider/fixture",
       "go:internal/testutil/contributorprovider/protocol",
+      "go:internal/verifiedexec",
       "go:io",
       "go:os",
       "go:path/filepath",

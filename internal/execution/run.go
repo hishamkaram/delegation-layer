@@ -27,6 +27,7 @@ type invocation struct {
 	launchDeclaration   []string
 	launchArguments     []string
 	boundPlan           *Plan
+	inherited           []string
 	budget              *budgetOwner
 	started             time.Time
 	wait                chan error
@@ -36,6 +37,7 @@ type invocation struct {
 // finalizes under the same runner lease. The caller retains task/store handles
 // until Run returns. Setup errors preserve the start guard without a new Start.
 func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Options) (result Result) {
+	inherited := opts.inheritedEnvironment()
 	if permit != nil {
 		defer func() { result.Error = errors.Join(result.Error, permit.Release()) }()
 	}
@@ -54,6 +56,7 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 		result.Error = err
 		return result
 	}
+	i.inherited = inherited
 	request, _, err := td.PreparedRecords()
 	if err != nil {
 		result.Error = errors.Join(err, i.discard())
@@ -311,18 +314,30 @@ func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
 	if err != nil {
 		return err
 	}
-	verified, err := verifiedexec.NewCommandInDirectory(plan.Executable, digest, plan.Directory, plan.Environment, arguments...)
+	environment := i.launchEnvironment(plan)
+	verified, err := verifiedexec.NewCommandInDirectory(plan.Executable, digest, plan.Directory, environment, arguments...)
 	if err != nil {
 		return err
 	}
 	cmd := verified.Cmd
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = plan.Directory, i.stdin, i.stdout.writer, i.stderr.writer
-	if plan.Environment != nil {
-		cmd.Env = append([]string{}, plan.Environment...)
-	}
+	cmd.Env = environment
 	i.cmd, i.verified = cmd, verified
 	i.boundPlan = clonePlan(plan)
 	return nil
+}
+
+// launchEnvironment is the single environment for interpreter lookup,
+// materialization, and the child. An explicit plan environment wins, including
+// a non-nil empty one, and is never extended. A nil plan environment selects
+// the snapshot captured at Run entry plus the host's implicit working
+// directory entries, so the launch matches the historical implicit inheritance
+// of exec.Cmd. The result is never nil.
+func (i *invocation) launchEnvironment(plan Plan) []string {
+	if plan.Environment != nil {
+		return append([]string{}, plan.Environment...)
+	}
+	return InheritedCommandEnvironment(i.inherited, plan.Directory)
 }
 
 func (i *invocation) launchArgumentsFor(plan Plan) ([]string, error) {

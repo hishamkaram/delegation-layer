@@ -13,12 +13,12 @@ func TestPrepareEnvironmentPreservesNativeDirectorySelectors(t *testing.T) {
 	home := t.TempDir()
 	agentDir := filepath.Join(home, "pi-config")
 	sessionDir := filepath.Join(home, "pi-sessions")
-	environment, err := prepareEnvironment([]string{
+	environment, err := prepareProfileEnvironment([]string{
 		"HOME=" + home,
 		piAgentDirEnv + "=" + agentDir,
 		piSessionDirEnv + "=" + sessionDir,
 		"PATH=/usr/bin",
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestPrepareEnvironmentPreservesNativeDirectorySelectors(t *testing.T) {
 
 func TestPrepareEnvironmentPinsDefaultSessionDirectory(t *testing.T) {
 	home := t.TempDir()
-	environment, err := prepareEnvironment([]string{"HOME=" + home, "PATH=/usr/bin"})
+	environment, err := prepareProfileEnvironment([]string{"HOME=" + home, "PATH=/usr/bin"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestPrepareEnvironmentRejectsInvalidNativeDirectorySelectors(t *testing.T) 
 		{name: "empty session directory", entry: piSessionDirEnv + "="},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := prepareEnvironment([]string{"HOME=" + home, testCase.entry}); err == nil {
+			if _, err := prepareProfileEnvironment([]string{"HOME=" + home, testCase.entry}, false); err == nil {
 				t.Fatal("invalid native directory selector was accepted")
 			}
 		})

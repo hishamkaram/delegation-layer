@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"os/exec"
+	"slices"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution/plan"
@@ -146,8 +148,14 @@ type Options struct {
 	// the legacy duration-relative clock. A supplied deadline may shorten but
 	// never extend the admitted task budget.
 	Deadline time.Time
-	Identity IdentityObserver
-	Hooks    Hooks
+	// InheritedEnvironment is the caller-selected environment for a launch whose
+	// Plan.Environment is nil. A non-nil empty value is a valid selection that
+	// inherits nothing. When nil, Run captures the process environment once at
+	// entry. An explicit Plan.Environment, including a non-nil empty one,
+	// always wins. Run clones this slice and never mutates it.
+	InheritedEnvironment []string
+	Identity             IdentityObserver
+	Hooks                Hooks
 }
 
 type Result struct {
@@ -163,6 +171,16 @@ func (o Options) clock() Clock {
 		return o.Clock
 	}
 	return realClock{}
+}
+
+// inheritedEnvironment selects the one snapshot a nil Plan.Environment uses
+// for this Run. A non-nil option is the caller's selection, even when empty;
+// otherwise the process environment is captured once.
+func (o Options) inheritedEnvironment() []string {
+	if o.InheritedEnvironment != nil {
+		return slices.Clone(o.InheritedEnvironment)
+	}
+	return os.Environ()
 }
 
 func (o Options) emit(name string) {

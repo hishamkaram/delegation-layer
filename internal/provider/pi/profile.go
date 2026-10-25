@@ -3,7 +3,6 @@ package pi
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"time"
@@ -16,15 +15,18 @@ import (
 
 // PrepareCandidate performs static command construction and describes the
 // shared supervised runtime capability probe. The finalizer consumes only the
-// nonsecret facts produced by that probe.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, nativeCurrentProfile, task.PredicateRef{}, os.Environ(), true)
+// nonsecret facts produced by that probe. environment is the caller's selected
+// launch environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, nativeCurrentProfile, task.PredicateRef{}, environment, environment, true)
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
 // an already admitted task. New native tasks use the native profile; older
-// records continue through the legacy isolated preparation path.
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+// records continue through the legacy isolated preparation path. The caller's
+// environment resolves the executable, and it is the launch environment only
+// for a record that saved none.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, callerEnvironment []string) (commonprovider.ProfileCandidate, error) {
 	profile := legacyProfile
 	if commonprovider.HasNativeProfile(meta) {
 		profile = nativeCurrentProfile
@@ -32,11 +34,11 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 			profile = nativeHistoricalProfile
 		}
 	}
-	environment := os.Environ()
+	environment := callerEnvironment
 	if meta.EnvironmentRecorded {
 		environment = slices.Clone(meta.Environment)
 	}
-	return prepareCandidate(request, profile, meta.Predicate, environment, meta.RuntimePreflightSHA256 != "" && profile == nativeCurrentProfile)
+	return prepareCandidate(request, profile, meta.Predicate, environment, callerEnvironment, meta.RuntimePreflightSHA256 != "" && profile == nativeCurrentProfile)
 }
 
 type profileKind uint8
@@ -47,7 +49,9 @@ const (
 	nativeCurrentProfile
 )
 
-func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredicate task.PredicateRef, environmentValues []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+// prepareCandidate launches with environmentValues and resolves the executable
+// through scope, the environment the caller prepares under.
+func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredicate task.PredicateRef, environmentValues, scope []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	native := profile != legacyProfile
 	environment, err := prepareCandidateEnvironment(request, profile, environmentValues)
 	if err != nil {
@@ -61,7 +65,7 @@ func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredic
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

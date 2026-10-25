@@ -60,16 +60,16 @@ func TestInitialWorkspaceAttachRetainsAdmissionDigest(t *testing.T) {
 	request := resource.Request()
 	arguments := Arguments{Provider: "codex:exec", Isolation: "git-worktree", Base: request.BaseRef}
 	brief := []byte("bounded task")
-	initial, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, request.SourceCwd, brief, time.Minute, nil)
+	initial, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment())), request.TaskID, request.SourceCwd, brief, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	arguments.Isolation, arguments.WorkspaceID = "", request.WorkspaceID
-	attached, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, "/irrelevant/checkout", brief, time.Minute, resource)
+	attached, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment())), request.TaskID, "/irrelevant/checkout", brief, time.Minute, resource)
 	if err != nil || initial != attached {
 		t.Fatalf("known not-created attachment changed admission identity: initial=%s attached=%s err=%v", initial, attached, err)
 	}
-	changed, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, "/irrelevant/checkout", []byte("changed task"), time.Minute, resource)
+	changed, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment())), request.TaskID, "/irrelevant/checkout", []byte("changed task"), time.Minute, resource)
 	if err != nil || changed == initial {
 		t.Fatalf("changed provider input reused immutable admission identity: %s, %v", changed, err)
 	}
@@ -147,7 +147,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 		}
 	}()
 	arguments := Arguments{Isolation: "git-worktree", Runner: "/unused/custom-runner"}
-	managed, _, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), workspaceRuntimeOptions(Dependencies{}), store, strings.Repeat("a", 32), testsupport.CanonicalTempDir(t), []byte("bounded task"))
+	managed, _, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment())), workspaceRuntimeOptions(Dependencies{}.withCapturedEnvironment()), store, strings.Repeat("a", 32), testsupport.CanonicalTempDir(t), []byte("bounded task"))
 	if managed != nil || !errors.Is(err, task.ErrInvalidPermit) {
 		t.Fatalf("custom runner provisioned managed state: managed=%+v err=%v", managed, err)
 	}
@@ -157,7 +157,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 	}
 	arguments.Isolation = ""
 	cwd := testsupport.CanonicalTempDir(t)
-	managed, effective, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), workspaceRuntimeOptions(Dependencies{}), store, strings.Repeat("a", 32), cwd, []byte("ordinary task"))
+	managed, effective, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment())), workspaceRuntimeOptions(Dependencies{}.withCapturedEnvironment()), store, strings.Repeat("a", 32), cwd, []byte("ordinary task"))
 	if err != nil || managed != nil || effective != cwd {
 		t.Fatalf("ordinary custom runner behavior changed: managed=%+v cwd=%q err=%v", managed, effective, err)
 	}

@@ -12,11 +12,11 @@ import (
 // auth2, auth3, or print-record-v1 revision continues under the current record
 // revision. The unproven base revision, portable records, and every other
 // record keep the recorded predicate. The predecessor record is never modified.
-func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if commonprovider.HasNativeProfile(predecessor) && isUpgradableOutputReference(request.Mode, predecessor.Predicate) {
 		predecessor.Predicate = NewRecordPrintInterpreter(request.Mode).Reference()
 	}
-	return PrepareExistingCandidate(request, predecessor)
+	return PrepareExistingCandidate(request, predecessor, environment)
 }
 
 // isUpgradableOutputReference reports whether reference is one of the exact

@@ -62,6 +62,7 @@ func runInspectionLifetimeChildMode(parsed runnerArguments, deps Dependencies) (
 }
 
 func runInspectionWorkerWithLifetime(root, taskID string, supervised bool, lifetimeArgs *runnerArguments, deps Dependencies) (resultErr error) {
+	deps = deps.withCapturedEnvironment()
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return inspectionWorkerFailure("validate-task")
 	}
@@ -139,14 +140,17 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 	if err != nil {
 		return inspectionWorkerFailure("load-task")
 	}
-	supervisorOptions := supervisorcore.OptionsForCurrentEnvironment(deps.SupervisorOptions)
+	// Supervisor control keeps the caller's environment. The rest of the worker
+	// runs in the binding's saved launch scope, including the maintenance its
+	// supervisor client starts.
+	supervisorOptions := supervisorcore.OptionsForEnvironment(deps.SupervisorOptions, deps.Environment)
 	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
-	restoreEnvironment, err := prepareInspectionWorkerEnvironment(observeContext, canonicalRoot, operation, record.Binding)
+	deps, err = prepareInspectionWorkerScope(observeContext, canonicalRoot, operation, record.Binding, deps)
 	if err != nil {
 		return inspectionWorkerFailure("prepare-environment")
 	}
-	defer func() { resultErr = errors.Join(resultErr, restoreEnvironment()) }()
+	supervisorOptions = supervisorcore.OptionsWithMaintenanceScope(supervisorOptions, deps.Environment)
 
 	workerOptions := supervisorcore.OptionsWithEnvironment(supervisorOptions, record.Binding.Environment)
 	supervisor, identity, err := inspectionWorkerSupervisor(observeContext, operation, supervised, record.Binding, workerOptions)
@@ -214,11 +218,13 @@ func validateInspectionWorkerStartup(ctx context.Context, root string, operation
 	return validateCurrentInspectionWorker(ctx, root, operation, binding)
 }
 
-func prepareInspectionWorkerEnvironment(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) (func() error, error) {
+// prepareInspectionWorkerScope validates startup, then selects the binding's
+// saved launch scope over the worker's captured scope.
+func prepareInspectionWorkerScope(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, deps Dependencies) (Dependencies, error) {
 	if err := validateInspectionWorkerStartup(ctx, root, operation, binding); err != nil {
-		return nil, err
+		return Dependencies{}, err
 	}
-	return applySavedEnvironment(binding.Environment, binding.EnvironmentRecorded)
+	return scopedDependencies(deps, binding.Environment, binding.EnvironmentRecorded)
 }
 
 func reconcileInspectionWorker(ctx context.Context, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (supervisor *pueue.Client, identity pueue.InspectionIdentity, resultErr error) {

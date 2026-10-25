@@ -35,7 +35,7 @@ func PrepareContinuationSuccessor(ctx context.Context, root string, successor ta
 		if task.SameSupervisorIdentity(legacyBinding, successor) {
 			return nil
 		}
-		clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.InitialExecutable)
+		clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.Lookup())
 		if err != nil {
 			return err
 		}

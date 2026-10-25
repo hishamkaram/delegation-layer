@@ -17,6 +17,26 @@ import (
 )
 
 func (c *Client) readBinding() (task.SupervisorRef, error) {
+	binding, err := c.readConfigBinding()
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	executable, err := canonicalExecutable(binding.ClientExecutable)
+	if err != nil || executable != binding.ClientExecutable {
+		return task.SupervisorRef{}, errors.Join(ErrBinding, err)
+	}
+	if binding.ClientSHA256, err = hashExecutable(executable); err != nil {
+		return task.SupervisorRef{}, err
+	}
+	return binding, nil
+}
+
+// readConfigBinding derives the config identity of the runtime binding from
+// the current config bytes and their resolution: config digest, endpoint,
+// resolved config digest and any recorded resolution. Executable fields are
+// copied from the runtime binding unauthenticated; readBinding authenticates
+// the client executable.
+func (c *Client) readConfigBinding() (task.SupervisorRef, error) {
 	runtimeBinding := c.runtimeBinding
 	if err := rejectSymlinkComponents(runtimeBinding.ConfigPath); err != nil {
 		return task.SupervisorRef{}, err
@@ -41,15 +61,7 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	executable, err := canonicalExecutable(runtimeBinding.ClientExecutable)
-	if err != nil || executable != runtimeBinding.ClientExecutable {
-		return task.SupervisorRef{}, errors.Join(ErrBinding, err)
-	}
-	digest, err := hashExecutable(executable)
-	if err != nil {
-		return task.SupervisorRef{}, err
-	}
-	binding := task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: runtimeBinding.DaemonExecutable, DaemonSHA256: runtimeBinding.DaemonSHA256, ResolutionCwd: runtimeBinding.ResolutionCwd, ConfigPath: runtimeBinding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: runtimeBinding.ObservedVersion}
+	binding := task.SupervisorRef{ClientExecutable: runtimeBinding.ClientExecutable, ClientSHA256: runtimeBinding.ClientSHA256, DaemonExecutable: runtimeBinding.DaemonExecutable, DaemonSHA256: runtimeBinding.DaemonSHA256, ResolutionCwd: runtimeBinding.ResolutionCwd, ConfigPath: runtimeBinding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: runtimeBinding.ObservedVersion}
 	if runtimeBinding.Endpoint == "" || runtimeBinding.ResolutionOS != "" {
 		setBindingResolution(&binding, resolution)
 	}
@@ -130,6 +142,18 @@ const (
 	bindingConfigChanged
 	bindingChanged
 )
+
+// runtimeConfigAuthenticated reports whether the runtime config still has the
+// exact config identity bound at runtime. It reads no executable, so an owner
+// that needs only the bound config, such as stale endpoint removal for a
+// predecessor whose client was removed, can authenticate it.
+func (c *Client) runtimeConfigAuthenticated() (bool, error) {
+	current, err := c.readConfigBinding()
+	if err != nil {
+		return false, errors.Join(ErrBinding, err)
+	}
+	return current == c.runtimeBinding, nil
+}
 
 // compareBinding reads the canonical binding once. Every read, parse,
 // resolution, symlink or executable fault returns the zero comparison.

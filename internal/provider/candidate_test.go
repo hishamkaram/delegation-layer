@@ -21,7 +21,7 @@ func TestReadyCandidatePreservesProfileAndRefusesInspectionFacts(t *testing.T) {
 	candidate, err := ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
 		calls++
 		return profile, nil
-	})(request)
+	})(request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,11 @@ func TestReadyCandidatePreservesPreparationRefusal(t *testing.T) {
 	want := errors.New("static policy unavailable")
 	candidate, err := ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
 		return PreparedProfile{}, want
-	})(artifactRequest())
+	})(artifactRequest(), catalogTestEnvironment())
 	if !errors.Is(err, want) || candidate.Finalize != nil {
 		t.Fatalf("refused preparation acquired a finalizer: %v", err)
 	}
-	if _, err = ReadyCandidate(nil)(artifactRequest()); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = ReadyCandidate(nil)(artifactRequest(), catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("nil factory accepted: %v", err)
 	}
 }
@@ -91,7 +91,7 @@ func TestReadyCandidateIsolatesFactoryAndFinalizationStorage(t *testing.T) {
 		},
 	}
 	profile.Plan.Environment = []string{"LANG=C"}
-	candidate, err := ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) { return profile, nil })(request)
+	candidate, err := ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) { return profile, nil })(request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestCatalogRequiresInspectionBeforeFinalization(t *testing.T) {
 	profile := catalogTestProfile(executionPlanForCatalogTest(request))
 	calls := 0
 	definition := inspectionTestDefinition()
-	registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+	registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 		return ProfileCandidate{
 			Directory: request.CanonicalCwd, Inspection: definition,
 			Finalize: func(facts json.RawMessage, _ time.Time) (PreparedProfile, error) {
@@ -153,13 +153,13 @@ func TestCatalogRequiresInspectionBeforeFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("inspection bypass: %v", err)
 	}
 	if calls != 0 {
 		t.Fatal("compatibility preparation called inspection finalizer")
 	}
-	candidate, err := catalog.Candidate(request)
+	candidate, err := catalog.Candidate(request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}

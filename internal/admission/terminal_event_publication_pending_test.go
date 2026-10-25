@@ -59,7 +59,7 @@ func newPendingPublicationFixture(t *testing.T) pendingPublicationFixture {
 		block: filepath.Join(gate, "block"), release: filepath.Join(gate, "release"),
 	}
 	fixture.client, _, _ = admissionfixture.NewTerminalEventInspectionSupervisorWithObserver(
-		t, store, TerminalEvidence{}, func(context.Context, string, string) error {
+		t, store, TerminalEvidence{}, func(context.Context, string, string, []string) error {
 			fixture.launches.Add(1)
 			return nil
 		}, fixture.commands.observe,

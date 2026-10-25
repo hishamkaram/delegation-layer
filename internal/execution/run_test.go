@@ -71,7 +71,7 @@ func fixtureTaskWithPlan(t *testing.T, mode string, configure func(*task.MetaRec
 // The test executable is a finite real child. Self-exit prevents the Go test
 // harness's PASS banner from becoming fake provider stdout.
 func TestExecutionHelper(t *testing.T) {
-	mode := os.Getenv("DELEGATE_EXECUTION_HELPER")
+	mode := helperMode()
 	if mode == "" {
 		return
 	}
@@ -85,6 +85,9 @@ func TestExecutionHelper(t *testing.T) {
 }
 
 func helperOutput(mode string) error {
+	if mode == environmentProbeMode {
+		return writeEnvironmentProbe(os.Stdout)
+	}
 	if script, ok := protocolHelperScript(mode); ok {
 		return runProtocolHelper(script)
 	}

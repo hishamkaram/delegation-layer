@@ -37,7 +37,7 @@ func modelsFailureCatalog(t *testing.T, workspace string, prepareErr error) comm
 			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
 		},
 		Interpreters: []predicate.Interpreter{interpreter},
-		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		Prepare: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			if prepareErr != nil {
 				return commonprovider.ProfileCandidate{}, prepareErr
 			}

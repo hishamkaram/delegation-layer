@@ -1,27 +1,27 @@
 package supervisor
 
 import (
-	"errors"
-	"os"
-
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-func ApplyContinuationEnvironment(root string, meta *task.MetaRecord, apply func([]string, bool) (func() error, error)) (func() error, error) {
-	if apply == nil {
-		return nil, task.ErrEvidenceFault
+const environmentConfigKey = "DELEGATE_PUEUE_CONFIG"
+
+// EnvironmentConfigPath returns the DELEGATE_PUEUE_CONFIG value of one
+// captured launch scope. As with the process environment, the first entry
+// wins and an absent key is empty.
+func EnvironmentConfigPath(environment []string) string {
+	return verifiedexec.EnvironmentValue(environment, environmentConfigKey)
+}
+
+// ContinuationConfigEnvironment returns the DELEGATE_PUEUE_CONFIG value in
+// effect inside a predecessor's selected launch scope. A private predecessor
+// binding suppresses that value, so a successor never retargets an external
+// configuration away from the predecessor's own private supervisor.
+func ContinuationConfigEnvironment(root string, predecessor task.MetaRecord, environment []string) string {
+	if pueue.IsPrivateConfig(root, predecessor.SupervisorConfig.ConfigPath) {
+		return ""
 	}
-	restore, err := apply(meta.Environment, meta.EnvironmentRecorded)
-	if err != nil {
-		return nil, err
-	}
-	if !pueue.IsPrivateConfig(root, meta.SupervisorConfig.ConfigPath) {
-		return restore, nil
-	}
-	if err = os.Unsetenv("DELEGATE_PUEUE_CONFIG"); err != nil {
-		return nil, errors.Join(err, restore())
-	}
-	return restore, nil
+	return EnvironmentConfigPath(environment)
 }

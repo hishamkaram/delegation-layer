@@ -51,6 +51,7 @@
       "go:internal/config",
       "go:internal/task",
       "go:internal/taskdir",
+      "go:internal/verifiedexec",
       "go:internal/workspace/contract",
       "go:io",
       "go:os",

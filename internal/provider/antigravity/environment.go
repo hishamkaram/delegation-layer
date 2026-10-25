@@ -25,13 +25,6 @@ var nativeEnvironmentKeys = map[string]struct{}{
 	"TMPDIR": {}, "TMP": {}, "TEMP": {}, "__CF_USER_TEXT_ENCODING": {},
 }
 
-// prepareEnvironment preserves the native Antigravity login location and the
-// bounded process-control values. Unrelated ambient variables, including
-// credential values, never cross the supervisor boundary.
-func prepareEnvironment(values []string) (profileEnvironment, error) {
-	return prepareProfileEnvironment(values, false)
-}
-
 func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
 	return prepareProfileEnvironmentWithOptions(values, native, native)
 }

@@ -96,7 +96,7 @@ func newCheckpointRuntimeFixtureOf(t *testing.T, lineage nativeLineage) checkpoi
 			enqueues.Add(1)
 		}
 	}
-	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{Environment: os.Environ(), Observer: observer}}
+	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{Environment: os.Environ(), Observer: observer}, Environment: os.Environ()}
 	options := workspaceRuntimeOptions(deps)
 	hooks := &checkpointRuntimeHooks{}
 	runtime := checkpointTestRuntime{saved: options.Runtime, runner: executablePath(t), binding: supervisor.Binding(), hooks: hooks}
@@ -160,7 +160,7 @@ func (f checkpointRuntimeFixture) performAction(t *testing.T, operation *workspa
 	var candidate workspace.OperationResult
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: workspaceSignalTestStopper{}}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation)
+		candidate, actionErr = runWorkspaceAction(scope, store, operation, os.Environ())
 		return actionErr
 	})
 	if stopErr != nil {

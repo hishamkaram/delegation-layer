@@ -10,7 +10,7 @@ import (
 
 func continuationSupervisorOptions(deps Dependencies) supervisorcore.ContinuationOptions {
 	return supervisorcore.ContinuationOptions{
-		Options: deps.SupervisorOptions, InitialExecutable: deps.InitialSupervisorExecutable,
+		Options: deps.SupervisorOptions, InitialExecutable: deps.InitialSupervisorExecutable, Environment: deps.Environment,
 		OpenStore: func(ctx context.Context, root string) (*taskdir.Store, error) {
 			return openStoreContext(ctx, root, deps.storeDependencies(), false)
 		},

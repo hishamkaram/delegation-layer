@@ -187,7 +187,11 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 	if request.Kind == workspace.OperationVerify {
 		// Only the submitted verification job receives the caller environment.
 		// Binding and cold daemon startup retain bounded control options.
-		supervisor, err = supervisor.WithCommandEnvironment(os.Environ())
+		environment, scopeErr := deps.scopeEnvironment()
+		if scopeErr != nil {
+			return scopeErr
+		}
+		supervisor, err = supervisor.WithCommandEnvironment(environment)
 		if err != nil {
 			return err
 		}

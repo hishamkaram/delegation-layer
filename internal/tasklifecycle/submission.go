@@ -17,7 +17,7 @@ func SubmitSaved(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecor
 	if meta != nil {
 		supervisorOptions = supervisorcore.OptionsWithEnvironment(supervisorOptions, meta.Environment)
 	}
-	client, err := supervisorcore.NewClient(context.Background(), recoveryRoot, supervisor, supervisorOptions, recoveryRoot != "", options.Supervisor.InitialExecutable, options.Supervisor.OpenStore)
+	client, err := supervisorcore.NewClient(context.Background(), recoveryRoot, supervisor, supervisorOptions, recoveryRoot != "", options.Supervisor.Lookup, options.Supervisor.OpenStore)
 	if err != nil {
 		return submissionFailure(SubmissionClient, err)
 	}

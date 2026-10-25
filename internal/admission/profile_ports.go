@@ -11,11 +11,12 @@ import (
 
 // CandidateSource supplies the configured provider factories. ForTask reports
 // whether the candidate came from the historical factory. A nil metadata input
-// selects the current factory; any factory error ends preparation.
+// selects the current factory; any factory error ends preparation. Each call
+// receives an independent copy of the launch environment Profiles owns.
 // Admission owns all validation and evidence reads after factory selection.
 type CandidateSource interface {
-	Current(task.TaskRecord) (commonprovider.ProfileCandidate, error)
-	ForTask(task.TaskRecord, *task.MetaRecord) (commonprovider.ProfileCandidate, bool, error)
+	Current(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error)
+	ForTask(task.TaskRecord, *task.MetaRecord, []string) (commonprovider.ProfileCandidate, bool, error)
 }
 
 // ProfileStoreOpener retains the application's exact predicate interpretation.

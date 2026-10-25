@@ -39,7 +39,7 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 		return result, err
 	}
 	result.ControlObservation = true
-	prepared, err := supervisorcore.ObserveTaskSupervisor(context.Background(), store, submission.Supervisor, meta, options.Options, options.InitialExecutable, runner, options.OpenStore)
+	prepared, err := supervisorcore.ObserveTaskSupervisor(context.Background(), store, submission.Supervisor, meta, options.Options, options.Lookup, runner, options.OpenStore)
 	if err != nil && !IsPureSupervisorUncertaintyError(err) {
 		return result, err
 	}
@@ -81,7 +81,7 @@ func observeTerminalStatus(root string, td *taskdir.TaskDir, options SupervisorO
 	if err != nil {
 		return err
 	}
-	supervisorcore.CleanupCompletedTaskFromSaved(root, td, meta, options.Options, options.InitialExecutable)
+	supervisorcore.CleanupCompletedTaskFromSaved(root, td, meta, options.Options, options.Lookup)
 	if records, recordsErr := ReadTimeoutRecords(td); recordsErr == nil {
 		// The outcome stays authoritative when optional timeout metadata
 		// is malformed or stale.
@@ -104,7 +104,7 @@ func ReconcileStatus(ctx context.Context, root string, td *taskdir.TaskDir, req 
 	if err != nil {
 		return pueue.Observation{}, err
 	}
-	client, err := supervisorcore.NewClient(ctx, root, submit.Supervisor, clientOptions, true, options.InitialExecutable, options.OpenStore)
+	client, err := supervisorcore.NewClient(ctx, root, submit.Supervisor, clientOptions, true, options.Lookup, options.OpenStore)
 	if err != nil {
 		return pueue.Observation{}, err
 	}

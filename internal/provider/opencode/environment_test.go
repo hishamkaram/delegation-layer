@@ -20,7 +20,7 @@ func TestPrepareEnvironmentScopesXDGRootsToOpenCode(t *testing.T) {
 		"XDG_STATE_HOME=/tmp/xdg-state",
 		"XDG_CACHE_HOME=/tmp/xdg-cache",
 	}
-	environment, err := prepareEnvironment(values)
+	environment, err := prepareProfileEnvironment(values, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestPrepareEnvironmentScopesXDGRootsToOpenCode(t *testing.T) {
 }
 
 func TestPrepareEnvironmentRejectsMalformedXDGHome(t *testing.T) {
-	if _, err := prepareEnvironment([]string{"HOME=/tmp/opencode-home", "XDG_CONFIG_HOME=relative"}); err == nil {
+	if _, err := prepareProfileEnvironment([]string{"HOME=/tmp/opencode-home", "XDG_CONFIG_HOME=relative"}, false); err == nil {
 		t.Fatal("relative XDG_CONFIG_HOME was accepted")
 	}
 }

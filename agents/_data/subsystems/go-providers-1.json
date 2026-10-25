@@ -20,7 +20,6 @@
       "go:maps",
       "go:net/url",
       "go:os",
-      "go:os/exec",
       "go:path/filepath",
       "go:reflect",
       "go:slices",
@@ -47,10 +46,12 @@
       "go:internal/task",
       "go:io",
       "go:os",
+      "go:os/exec",
       "go:path/filepath",
       "go:reflect",
       "go:slices",
       "go:strings",
+      "go:sync",
       "go:testing",
       "go:time"
     ]
@@ -127,7 +128,6 @@
       "go:internal/provider/claude",
       "go:internal/task",
       "go:io",
-      "go:os",
       "go:path/filepath",
       "go:slices",
       "go:strings",

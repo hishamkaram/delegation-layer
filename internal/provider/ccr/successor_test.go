@@ -67,11 +67,11 @@ func TestSuccessorCandidateSelectsCurrentPredicateOfTheSameLaunchShape(t *testin
 func requireSuccessorSelectsTarget(t *testing.T, request task.TaskRecord, reference, target task.PredicateRef, route bool) {
 	t.Helper()
 	meta := successorMeta(request, reference)
-	successor, err := PrepareSuccessorCandidate(request, meta)
+	successor, err := PrepareSuccessorCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
-	reconstructed, err := PrepareExistingCandidate(request, meta)
+	reconstructed, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,8 +190,8 @@ var capabilityProofs = []func(*testing.T, commonprovider.ProfileCandidate) json.
 // under every capability proof.
 func requireSuccessorMatchesReconstruction(t *testing.T, request task.TaskRecord, meta task.MetaRecord) {
 	t.Helper()
-	reconstructed, existingErr := PrepareExistingCandidate(request, meta)
-	successor, successorErr := PrepareSuccessorCandidate(request, meta)
+	reconstructed, existingErr := PrepareExistingCandidate(request, meta, os.Environ())
+	successor, successorErr := PrepareSuccessorCandidate(request, meta, os.Environ())
 	if (existingErr == nil) != (successorErr == nil) || (existingErr != nil && existingErr.Error() != successorErr.Error()) {
 		t.Fatalf("successor error=%v, reconstruction error=%v", successorErr, existingErr)
 	}
@@ -234,7 +234,8 @@ func TestSuccessorTargetsClassifyCredentialFailure(t *testing.T) {
 
 func TestSuccessorCandidateRequiresRecordedEnvironment(t *testing.T) {
 	request := successorRequest(t, config.ModeReadOnly)
-	if _, err := PrepareSuccessorCandidate(request, task.MetaRecord{Predicate: preAttributionReference(config.ModeReadOnly, true)}); !errors.Is(err, task.ErrIdentityMismatch) {
+	provided, _, _ := selectedCCREnvironment(t)
+	if _, err := PrepareSuccessorCandidate(request, task.MetaRecord{Predicate: preAttributionReference(config.ModeReadOnly, true)}, provided); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("unrecorded environment error=%v, want %v", err, task.ErrIdentityMismatch)
 	}
 }
@@ -244,7 +245,7 @@ func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	meta := successorMeta(request, preAttributionReference(config.ModeWorkspaceWrite, false))
 	before := meta
 	before.Environment = slices.Clone(meta.Environment)
-	if _, err := PrepareSuccessorCandidate(request, meta); err != nil {
+	if _, err := PrepareSuccessorCandidate(request, meta, os.Environ()); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, meta) {

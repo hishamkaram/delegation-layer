@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"reflect"
 	"testing"
 
@@ -16,8 +17,10 @@ func TestManagedPublicTaskWorkspaceViewDeadlineRemainsUndetermined(t *testing.T)
 		name    string
 		observe func(Arguments) commandResult
 	}{
-		{name: "status", observe: func(a Arguments) commandResult { return status(a, Dependencies{}) }},
-		{name: "collect", observe: func(a Arguments) commandResult { return collect(a, storeDependencies{}) }},
+		{name: "status", observe: func(a Arguments) commandResult { return status(a, Dependencies{Environment: os.Environ()}) }},
+		{name: "collect", observe: func(a Arguments) commandResult {
+			return collect(a, Dependencies{Environment: os.Environ()}.storeDependencies())
+		}},
 	} {
 		t.Run(observer.name, func(t *testing.T) {
 			requirePublicWorkspaceViewDeadline(t, observer.observe)

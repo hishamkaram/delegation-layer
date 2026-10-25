@@ -20,7 +20,6 @@ func (result DispatchResult) Err() error {
 	if result.Creation != nil {
 		err = result.Creation.Err()
 	}
-	err = joinWorkflowClose(err, result.EnvironmentRestoreError)
 	if result.Workspace != nil {
 		err = joinWorkflowClose(err, result.Workspace.AbortError)
 		err = joinWorkflowClose(err, result.Workspace.DescriptionError)
@@ -40,7 +39,6 @@ func (result ExistingTaskResult) Err() error {
 			err = SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted)
 		}
 	}
-	err = joinWorkflowClose(err, result.EnvironmentRestoreError)
 	err = joinWorkflowClose(err, result.TaskCloseError)
 	if err != nil {
 		err = admissioncore.WithStage("existing-task", err)

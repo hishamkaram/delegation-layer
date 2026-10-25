@@ -55,8 +55,8 @@ func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
 	}
 }
 
-func resolveExecutable() (commonprovider.CLIInfo, error) {
-	info, err := commonprovider.LocateCLI("pi")
+func resolveExecutable(environment []string) (commonprovider.CLIInfo, error) {
+	info, err := commonprovider.LocateCLI("pi", environment)
 	if err != nil {
 		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}

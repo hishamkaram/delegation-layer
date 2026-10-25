@@ -209,14 +209,14 @@ func TestPreparedProfileDeferredAdmissionRejectsInventedObservation(t *testing.T
 func TestCatalogDeferredAdmissionDerivesPlanDigestAndKeepsFinalizerStrict(t *testing.T) {
 	fixture := newDeferredAdmissionFixture(t)
 	registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
-	registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+	registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 		return fixture.candidate(fixture.pending, fixture.pending), nil
 	}
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := catalog.Candidate(fixture.request)
+	candidate, err := catalog.Candidate(fixture.request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,14 +297,14 @@ func TestCatalogFinalizerRejectsWrongRuntimeLaunchIdentityWithoutAuthority(t *te
 			finalized := cloneCandidateProfile(fixture.finalized)
 			testCase.mutate(&finalized)
 			registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
-			registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+			registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 				return fixture.candidate(fixture.pending, finalized), nil
 			}
 			catalog, err := NewCatalog(registration)
 			if err != nil {
 				t.Fatal(err)
 			}
-			candidate, err := catalog.Candidate(fixture.request)
+			candidate, err := catalog.Candidate(fixture.request, catalogTestEnvironment())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -360,14 +360,14 @@ func TestCatalogDeferredAdmissionBindsRuntimeAndPredicateContracts(t *testing.T)
 			registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
 			admit := cloneCandidateProfile(fixture.pending)
 			testCase.mutate(&admit)
-			registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+			registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 				return fixture.candidate(admit, fixture.pending), nil
 			}
 			catalog, err := NewCatalog(registration)
 			if err != nil {
 				t.Fatal(err)
 			}
-			candidate, err := catalog.Candidate(fixture.request)
+			candidate, err := catalog.Candidate(fixture.request, catalogTestEnvironment())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -379,7 +379,7 @@ func TestCatalogDeferredAdmissionBindsRuntimeAndPredicateContracts(t *testing.T)
 	}
 
 	registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
-	registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+	registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 		candidate := fixture.candidate(fixture.pending, fixture.pending)
 		mixed := fixture.definition
 		mixed.Arguments = []string{"--native"}
@@ -391,7 +391,7 @@ func TestCatalogDeferredAdmissionBindsRuntimeAndPredicateContracts(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := catalog.Candidate(fixture.request); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err := catalog.Candidate(fixture.request, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("non-runtime admission candidate was accepted: %v", err)
 	}
 }
@@ -443,14 +443,14 @@ func TestCatalogDeferredAdmissionNormalizesAndDeeplyIsolatesProfiles(t *testing.
 func requireCatalogDeferredCandidate(t *testing.T, fixture deferredAdmissionFixture, admitProfile, finalizeProfile PreparedProfile) ProfileCandidate {
 	t.Helper()
 	registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
-	registration.Prepare = func(task.TaskRecord) (ProfileCandidate, error) {
+	registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
 		return fixture.candidate(admitProfile, finalizeProfile), nil
 	}
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := catalog.Candidate(fixture.request)
+	candidate, err := catalog.Candidate(fixture.request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 
 func ReconcileSubmitted(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, options SupervisorOptions) (result SubmissionResult) {
 	supervisorOptions := supervisorcore.OptionsWithEnvironment(options.Options, meta.Environment)
-	client, err := supervisorcore.NewClient(context.Background(), root, submit.Supervisor, supervisorOptions, true, options.InitialExecutable, options.OpenStore)
+	client, err := supervisorcore.NewClient(context.Background(), root, submit.Supervisor, supervisorOptions, true, options.Lookup, options.OpenStore)
 	if err != nil {
 		return submissionFailure(SubmissionClient, err)
 	}

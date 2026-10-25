@@ -32,7 +32,7 @@ func TestInspectionDeadlineIsOperationalDispatchFailure(t *testing.T) {
 		"--provider", request.Provider, "--brief", briefPath,
 		"--cwd", request.CanonicalCwd, "--id", request.TaskID,
 	}, &stdout, &stderr, Dependencies{
-		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			return commonprovider.ProfileCandidate{}, errors.Join(errors.New("inspection preparation"), inspection.ErrAdmissionExpired)
 		},
 	})
@@ -139,14 +139,8 @@ func newHistoricalInspectionMigrationScenario(t *testing.T) *historicalInspectio
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateBase := filepath.Dir(configPath)
-	oldSocket := strconv.Quote(filepath.Join(privateBase, "run", "pueue.sock"))
-	newSocket := strconv.Quote(filepath.Join(privateBase, "run", "successor.sock"))
-	changedConfig := strings.Replace(string(config), "unix_socket_path: "+oldSocket, "unix_socket_path: "+newSocket, 1)
-	if changedConfig == string(config) {
-		t.Fatal("private supervisor fixture did not contain the predecessor socket")
-	}
-	if err = os.WriteFile(configPath, []byte(changedConfig), 0o600); err != nil {
+	changedConfig := retargetedPrivateSocketConfig(t, config, fixture.predecessor)
+	if err = os.WriteFile(configPath, changedConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var successor *pueue.Client
@@ -167,10 +161,42 @@ func newHistoricalInspectionMigrationScenario(t *testing.T) *historicalInspectio
 		legacyDir:      legacyDir,
 		configPath:     configPath,
 		config:         config,
-		changedConfig:  []byte(changedConfig),
+		changedConfig:  changedConfig,
 		legacyGroup:    legacyGroup,
 		successorGroup: successorGroup,
 	}
+}
+
+// privateSocketPath returns the socket the runtime selected for a private
+// supervisor binding; fixtures never assume its basename.
+func privateSocketPath(t *testing.T, binding task.SupervisorRef) string {
+	t.Helper()
+	path, found := strings.CutPrefix(binding.Endpoint, "unix:")
+	if !found {
+		t.Fatalf("private supervisor endpoint %q is not a unix socket", binding.Endpoint)
+	}
+	return path
+}
+
+// retargetedPrivateSocketPath is a distinct sibling of the binding's actual
+// socket. The one-byte name is never longer than the runtime-selected
+// basename, so it fits whichever socket layout the runtime chose.
+func retargetedPrivateSocketPath(t *testing.T, binding task.SupervisorRef) string {
+	t.Helper()
+	return filepath.Join(filepath.Dir(privateSocketPath(t, binding)), "n")
+}
+
+// retargetedPrivateSocketConfig moves the private config's socket from the
+// binding's actual endpoint to retargetedPrivateSocketPath.
+func retargetedPrivateSocketConfig(t *testing.T, config []byte, binding task.SupervisorRef) []byte {
+	t.Helper()
+	predecessor := privateSocketPath(t, binding)
+	const key = "unix_socket_path: "
+	from := key + strconv.Quote(predecessor)
+	if strings.Count(string(config), from) != 1 {
+		t.Fatalf("private supervisor fixture did not contain the predecessor socket %q exactly once", predecessor)
+	}
+	return []byte(strings.Replace(string(config), from, key+strconv.Quote(retargetedPrivateSocketPath(t, binding)), 1))
 }
 
 func injectHistoricalInspectionMigrationCrash(t *testing.T, scenario *historicalInspectionMigrationScenario) {
@@ -365,13 +391,15 @@ func TestMigrateInspectionGroupRetiresOlderRecoveryAlias(t *testing.T) {
 	store := newBareInspectionStore(t)
 	legacySupervisor, logPath, _ := newUncertainGroupSupervisorWithConfig(t, store.RootID, pueue.PrivateConfigPath(store.Root))
 	privateBase := filepath.Join(store.Root, ".supervisor")
+	// A one-byte socket directly under the private base fits wherever the
+	// runtime can bind its own endpoint, under either socket layout.
 	shared := map[string]any{
 		"host":                    "127.0.0.1",
 		"port":                    "6924",
 		"pueue_directory":         filepath.Join(privateBase, "data"),
 		"runtime_directory":       filepath.Join(privateBase, "run"),
 		"use_unix_socket":         true,
-		"unix_socket_path":        filepath.Join(privateBase, "run", "pueue.sock"),
+		"unix_socket_path":        filepath.Join(privateBase, "a"),
 		"unix_socket_permissions": 448,
 		"alias_file":              filepath.Join(privateBase, "aliases.yml"),
 		"pid_path":                filepath.Join(privateBase, "run", "pueue.pid"),

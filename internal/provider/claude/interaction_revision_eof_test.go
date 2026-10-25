@@ -2,6 +2,7 @@ package claude
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -62,7 +63,7 @@ func interactiveProfileFor(t *testing.T, mode string, reference task.PredicateRe
 	request := profileRequest()
 	request.CanonicalCwd, request.Mode, request.RequestedConfig.Permission = fixtureClaudeEnvironment(t), mode, mode
 	request.RequestedConfig.Interactive = true
-	fresh, err := PrepareCandidate(request)
+	fresh, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func interactiveProfileFor(t *testing.T, mode string, reference task.PredicateRe
 	}
 	profile := current
 	if !current.Plan.Predicate.Equal(reference) {
-		existing, existingErr := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true})
+		existing, existingErr := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true}, os.Environ())
 		if existingErr != nil {
 			t.Fatal(existingErr)
 		}

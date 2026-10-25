@@ -41,6 +41,7 @@ func loadWorkspaceGuardianState(store *taskdir.Store, id string) (lifetimeGuardi
 }
 
 func runWorkspaceOperationWorker(parsed runnerArguments, deps Dependencies) (resultErr error) {
+	deps = deps.withCapturedEnvironment()
 	if !parsed.WorkspaceOperation || !parsed.Supervised || !parsed.LifetimeChild {
 		return task.ErrInvalidPermit
 	}
@@ -60,10 +61,10 @@ func runWorkspaceOperationWorker(parsed runnerArguments, deps Dependencies) (res
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	return runLoadedWorkspaceWorker(parsed, store, operation)
+	return runLoadedWorkspaceWorker(parsed, store, operation, deps.Environment)
 }
 
-func runLoadedWorkspaceWorker(parsed runnerArguments, store *taskdir.Store, operation *workspace.Operation) (resultErr error) {
+func runLoadedWorkspaceWorker(parsed runnerArguments, store *taskdir.Store, operation *workspace.Operation, environment []string) (resultErr error) {
 	ctx, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
 	if err := validateWorkspaceWorker(ctx, operation); err != nil {
@@ -82,7 +83,7 @@ func runLoadedWorkspaceWorker(parsed runnerArguments, store *taskdir.Store, oper
 	stopper := &workspaceBudgetStopper{operation: operation, lifetime: child.Lifetime()}
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: child.Lifetime()}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation)
+		candidate, actionErr = runWorkspaceAction(scope, store, operation, environment)
 		return actionErr
 	})
 	if workErr != nil || stopErr != nil {

@@ -363,8 +363,8 @@ exception: its successor resumes the exact recorded session through the current
 ACP profile; see [OpenCode](providers.md#opencode). Provider-specific continuation validation
 still applies, such as Pi's same-workspace rule and CCR's route-preserving model
 rule. Interactive continuation is the current exception: Codex and Claude use
-the current interactive profile, retain the exact recorded session, and restore
-the predecessor environment needed for session discovery instead of reusing a
+the current interactive profile, retain the exact recorded session, and use
+the recorded predecessor environment needed for session discovery instead of reusing a
 noninteractive predecessor contract.
 
 The

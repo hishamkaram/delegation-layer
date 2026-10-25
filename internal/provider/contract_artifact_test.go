@@ -59,7 +59,7 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksWriterContract(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := catalog.Prepare(request)
+	prepared, err := catalog.Prepare(request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksWriterContract(t *testing
 		t.Fatalf("prepared output declarations changed: %+v", prepared.Plan.OutputArtifacts)
 	}
 	prepared.Plan.InputFiles[0].Content = "x"
-	preparedAgain, err := catalog.Prepare(request)
+	preparedAgain, err := catalog.Prepare(request, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksWriterContract(t *testing
 	if catalogErr != nil {
 		t.Fatal(catalogErr)
 	}
-	if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("unsupported writer contract was accepted: %v", err)
 	}
 }

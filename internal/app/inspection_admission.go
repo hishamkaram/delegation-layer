@@ -19,24 +19,24 @@ func supervisorOptionsForMeta(base pueue.Options, meta task.MetaRecord) pueue.Op
 }
 
 func prepareAdmissionExecutables(a Arguments, deps Dependencies, root string) (string, error) {
-	prepared, err := supervisorcore.PrepareAdmissionExecutables(supervisorAdmissionSelection(a), supervisorAdmissionOptions(deps, deps.SupervisorOptions), root)
+	prepared, err := supervisorcore.PrepareAdmissionExecutables(supervisorAdmissionSelection(a, deps), supervisorAdmissionOptions(deps, deps.SupervisorOptions), root)
 	return prepared.Executable, admissioncore.WithStage(prepared.FailureStage, err)
 }
 
-func requestedRunnerOwnership(a Arguments) string {
-	return supervisorcore.RequestedRunnerOwnership(supervisorAdmissionSelection(a))
+func requestedRunnerOwnership(a Arguments, deps Dependencies) string {
+	return supervisorcore.RequestedRunnerOwnership(supervisorAdmissionSelection(a, deps))
 }
 
 func admissionQueueRepairRunner(a Arguments, deps Dependencies, taskRunner string) (string, error) {
-	return supervisorcore.AdmissionQueueRepairRunner(supervisorAdmissionSelection(a), supervisorAdmissionOptions(deps, deps.SupervisorOptions), taskRunner)
+	return supervisorcore.AdmissionQueueRepairRunner(supervisorAdmissionSelection(a, deps), supervisorAdmissionOptions(deps, deps.SupervisorOptions), taskRunner)
 }
 
-func admissionUsesPrivateSupervisor(a Arguments, root string) (bool, error) {
-	return supervisorcore.AdmissionUsesPrivateSupervisor(supervisorAdmissionSelection(a), root)
+func admissionUsesPrivateSupervisor(a Arguments, deps Dependencies, root string) (bool, error) {
+	return supervisorcore.AdmissionUsesPrivateSupervisor(supervisorAdmissionSelection(a, deps), root)
 }
 
 func preparePrivateAdmissionSupervisor(deps Dependencies, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
-	return supervisorcore.PreparePrivateAdmissionSupervisor(deps.InitialSupervisorExecutable, store, options)
+	return supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, options)
 }
 
 func inspectLegacyEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job) (resultErr error) {
@@ -44,5 +44,5 @@ func inspectLegacyEndedJob(ctx context.Context, store *taskdir.Store, legacy ins
 }
 
 func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client, inspectionGroupReady bool) (facts json.RawMessage, deadline time.Time, resultErr error) {
-	return admissioncore.InspectProvider(admissioncore.InspectionOptions{Runner: a.Runner, DefaultRunner: deps.RunnerExecutable, RunnerOwnership: requestedRunnerOwnership(a), PreserveGeneration: a.savedSupervisor != nil}, store, req, candidate, supervisor, inspectionGroupReady)
+	return admissioncore.InspectProvider(admissioncore.InspectionOptions{Runner: a.Runner, DefaultRunner: deps.RunnerExecutable, RunnerOwnership: requestedRunnerOwnership(a, deps), PreserveGeneration: a.savedSupervisor != nil}, store, req, candidate, supervisor, inspectionGroupReady)
 }

@@ -36,7 +36,7 @@ func testPreUpgradeProfile(t *testing.T, mode string, reference task.PredicateRe
 	t.Setenv("PATH", directory)
 	request := testRequest()
 	request.CanonicalCwd, request.Mode, request.RequestedConfig.Permission = directory, mode, mode
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func testPreUpgradeProfile(t *testing.T, mode string, reference task.PredicateRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true})
+	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func testExistingContinuationPreservesPreResumeRouteArguments(t *testing.T, mode
 	request.CanonicalCwd, request.Mode, request.RequestedConfig.Permission = directory, mode, mode
 	request.RequestedConfig.Model = "legacy-override"
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "recorded-session", PredecessorTaskID: strings.Repeat("c", 32)}
-	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, Environment: []string{"HOME=" + directory, "PATH=" + directory}, EnvironmentRecorded: true})
+	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, Environment: []string{"HOME=" + directory, "PATH=" + directory}, EnvironmentRecorded: true}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestExistingRoutePreservingProfileRequiresRouteCapability(t *testing.T) {
 		Predicate:           Reference(request.Mode),
 		Environment:         []string{"HOME=" + directory, "PATH=" + directory},
 		EnvironmentRecorded: true,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestExistingModeledProfileReplaysRouteCapabilityProof(t *testing.T) {
 	t.Setenv("PATH", directory)
 	request := testRequest()
 	request.CanonicalCwd = directory
-	fresh, err := PrepareCandidate(request)
+	fresh, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestExistingModeledProfileReplaysRouteCapabilityProof(t *testing.T) {
 		EffectiveConfig:     admitted.Effective,
 		Environment:         admitted.Plan.Environment,
 		EnvironmentRecorded: true,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

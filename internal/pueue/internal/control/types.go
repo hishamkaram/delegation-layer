@@ -49,8 +49,12 @@ type Options struct {
 	// PrivateMaintenanceLauncher starts one delegate-run process to own already
 	// persisted private queue maintenance after the invoking CLI exits. Empty
 	// keeps the in-process owner used by focused package tests and embedders.
-	PrivateMaintenanceLauncher func(context.Context, string, string) error
-	resolutionPinned           bool
+	PrivateMaintenanceLauncher func(context.Context, string, string, []string) error
+	// PrivateMaintenanceEnvironment is the immutable launch snapshot selected
+	// by composition. It is separate from the client's control environment.
+	// Nil preserves standalone defaults; nonnil empty inherits nothing.
+	PrivateMaintenanceEnvironment []string
+	resolutionPinned              bool
 	// SuccessfulCleanupAuthorizer is the application-owned policy gate for
 	// exact private-supervisor cleanup. Pueue does not inspect Delegate task or
 	// inspection schemas.

@@ -20,7 +20,7 @@ func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.St
 	if a.RunnerOwnership != task.RunnerOwnershipManaged {
 		return nil, "", fmt.Errorf("%w: managed workspaces require the managed delegate-run runner", task.ErrInvalidPermit)
 	}
-	if err := workspace.ValidateGitEnvironment(); err != nil {
+	if err := deps.ValidateGitEnvironment(); err != nil {
 		return nil, "", err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)

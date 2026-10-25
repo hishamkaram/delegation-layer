@@ -352,8 +352,8 @@ func ccrContinuationCatalog(t *testing.T, captured *commonprovider.ProfileCandid
 	t.Helper()
 	registration := ccr.Registration()
 	capture := func(prepare commonprovider.PrepareExistingCandidate) commonprovider.PrepareExistingCandidate {
-		return func(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-			candidate, err := prepare(request, meta)
+		return func(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+			candidate, err := prepare(request, meta, environment)
 			if err == nil {
 				*captured = candidate
 			}

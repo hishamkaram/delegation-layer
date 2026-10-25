@@ -17,7 +17,12 @@ This document defines the normative requirements for provider adapters
 | `opencode:run` | `read-only`, `workspace-write` | native ACP `plan`/`build` mode; native permission requests answered `reject_once` for read-only and `allow_once` for workspace-write | `opencode acp` started in the workspace directory; mode, model, and effort are acknowledged `session/set_config_option` values | interactive clarification and steering, independent containment |
 
 Each native adapter locates its executable during static preparation and records
-the executable identity in the immutable candidate. Managed runtime-only
+the executable identity in the immutable candidate. Lookup uses the
+unfiltered preparation scope that composition supplies to the factory, which
+may be a recorded scope that composition selected. An adapter does not replace
+that scope with a recorded launch environment; a recorded environment only
+selects the launch environment, under the provider's own saved and unrecorded
+rules. Managed runtime-only
 admission records the required capability digest with no observed version.
 The task's already-supervised runner verifies that the file is still executable, runs its
 version and help commands, and checks the stable public entrypoint flags that

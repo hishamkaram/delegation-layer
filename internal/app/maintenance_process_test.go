@@ -179,7 +179,7 @@ func TestQueueMaintenanceLaunchParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = supervisor.LaunchQueueMaintenanceOwner(context.Background(), executable, root); err != nil {
+	if err = supervisor.LaunchQueueMaintenanceOwnerWithEnvironment(context.Background(), executable, root, pueue.DefaultEnvironment()); err != nil {
 		t.Fatal(err)
 	}
 	if readyPath := os.Getenv(queueMaintenanceParentReady); readyPath != "" {
@@ -298,7 +298,7 @@ func TestQueueMaintenanceOwnerDoesNotInheritUnrelatedDescriptor(t *testing.T) {
 	descriptor := openQueueMaintenanceParentDescriptor(t)
 	writeQueueMaintenanceDescriptorMarker(t, root, descriptor)
 	executable := queueMaintenanceTestExecutable(t)
-	done, err := supervisor.StartQueueMaintenanceOwner(t.Context(), executable, root)
+	done, err := supervisor.StartQueueMaintenanceOwnerWithEnvironment(t.Context(), executable, root, pueue.DefaultEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func waitForFailedQueueMaintenanceOwner(t *testing.T, done <-chan error) {
 func TestQueueMaintenanceOwnerIsReapedWhileCallerLives(t *testing.T) {
 	executable := queueMaintenanceTestExecutable(t)
 	var err error
-	done, err := supervisor.StartQueueMaintenanceOwner(t.Context(), executable, filepath.Join(t.TempDir(), "missing-state"))
+	done, err := supervisor.StartQueueMaintenanceOwnerWithEnvironment(t.Context(), executable, filepath.Join(t.TempDir(), "missing-state"), pueue.DefaultEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}

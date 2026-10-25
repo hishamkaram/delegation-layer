@@ -36,7 +36,7 @@ func testScheduledPrivateMaintenanceTransfersPersistedWakeToProcessLauncher(t *t
 		root       string
 	}
 	launched := make(chan launch, 1)
-	client.options.PrivateMaintenanceLauncher = func(launchContext context.Context, executable, root string) error {
+	client.options.PrivateMaintenanceLauncher = func(launchContext context.Context, executable, root string, _ []string) error {
 		if err := launchContext.Err(); err != nil {
 			t.Fatalf("maintenance launcher received canceled context: %v", err)
 		}
@@ -85,7 +85,7 @@ func privateMaintenanceDoneCallerContext(t *testing.T, expired bool) context.Con
 func TestScheduledPrivateMaintenanceRetainsWakeWhenProcessLaunchFails(t *testing.T) {
 	fixture, client := newMaintenanceProbeFixture(t)
 	client.options.SuccessfulCleanupAuthorizer = privateTerminalTriggerCleanupAuthorizer
-	client.options.PrivateMaintenanceLauncher = func(context.Context, string, string) error {
+	client.options.PrivateMaintenanceLauncher = func(context.Context, string, string, []string) error {
 		return errors.New("injected launch failure")
 	}
 	if err := RequestPrivateQueueMaintenance(t.Context(), fixture.stateRoot); err != nil {

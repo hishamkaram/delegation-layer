@@ -343,7 +343,9 @@ func validatePlanBindings(plan execution.Plan) error {
 }
 
 // PrepareProfile is the narrow preparation function accepted by the app and
-// by hermetic acceptance compositions.
+// by hermetic acceptance compositions. It returns a complete profile, including
+// its hermetic launch environment; environment-aware preparation uses
+// PrepareCandidate instead.
 type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
 
 // Registration is one explicit catalog entry. A nil Prepare function is

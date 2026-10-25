@@ -214,9 +214,11 @@ func (c *Client) privateEndpointUnavailable(ctx context.Context, path string, pr
 }
 
 // removeStalePrivateEndpoint removes only a state-rooted Unix socket whose
-// recorded daemon is already gone. Callers reach this through the bootstrap
-// transition lock, so a Delegate-owned successor cannot race the ownership
-// check and lose its live endpoint.
+// recorded daemon is already gone. The socket must be in the private runtime
+// directory or be the exact compact endpoint of the authenticated runtime
+// config. Callers reach this through the bootstrap transition lock, so a
+// Delegate-owned successor cannot race the ownership check and lose its live
+// endpoint.
 func (c *Client) removeStalePrivateEndpoint(ctx context.Context, path string, process privateProcessIdentity) (bool, error) {
 	if ctx == nil {
 		return false, context.Canceled
@@ -231,9 +233,12 @@ func (c *Client) removeStalePrivateEndpoint(ctx context.Context, path string, pr
 	if !private {
 		return false, nil
 	}
-	runDirectory := filepath.Join(stateRoot, privateSupervisorDirectory, "run")
-	if err := pathWithin(runDirectory, path); err != nil {
-		return false, fmt.Errorf("%w: private supervisor socket is outside its runtime directory", ErrBinding)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := pathWithin(filepath.Join(base, "run"), path); err != nil {
+		authorized, authorizeErr := c.privateCompactEndpointAuthorized(base, path)
+		if authorizeErr != nil || !authorized {
+			return false, errors.Join(fmt.Errorf("%w: private supervisor socket is outside its runtime directory", ErrBinding), authorizeErr)
+		}
 	}
 	if unavailable, err := c.privateProcessUnavailable(process); err != nil {
 		return false, err
@@ -253,7 +258,21 @@ func (c *Client) removeStalePrivateEndpoint(ctx context.Context, path string, pr
 	if err = os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("%w: remove stale private supervisor socket: %w", ErrBinding, err)
 	}
-	return true, syncPrivateDirectory(filepath.Join(stateRoot, privateSupervisorDirectory))
+	return true, syncPrivateDirectory(base)
+}
+
+// privateCompactEndpointAuthorized reports whether path is the exact compact
+// endpoint base/s selected by the authenticated runtime config: the bound
+// config digest, resolved config digest, endpoint and recorded resolution must
+// still match the current config. It needs no client executable, as the run
+// layout does not. Any other path outside the run directory, a forged base/s
+// for a config that selects another endpoint, or a config changed after
+// binding stays unauthorized.
+func (c *Client) privateCompactEndpointAuthorized(base, path string) (bool, error) {
+	if path != privateCompactSocketPath(base) || c.runtimeBinding.Endpoint != "unix:"+path {
+		return false, nil
+	}
+	return c.runtimeConfigAuthenticated()
 }
 
 func (c *Client) privateDaemonPID() (pid int, present bool, resultErr error) {

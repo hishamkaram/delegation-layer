@@ -58,7 +58,7 @@ func TestDispatchWorkflowClosesRealStoreAfterCandidateRefusal(t *testing.T) {
 	temporary, err := filepath.EvalSymlinks(t.TempDir())
 	testsupport.RequireAppTest(t, err)
 	fixture := preflightFixture{root: filepath.Join(temporary, "state"), cwd: t.TempDir(), prepareFault: commonprovider.ErrAuthenticationBlocked}
-	deps := Dependencies{Catalog: preflightFixtureCatalog(t, fixture.candidate)}
+	deps := Dependencies{Catalog: preflightFixtureCatalog(t, fixture.candidate), Environment: os.Environ()}
 	options := dispatchOptions(deps, false)
 	var opened *taskdir.Store
 	options.OpenStore = func(root string, create bool) (*taskdir.Store, error) {
@@ -92,11 +92,11 @@ func TestContinuationProfilesPreserveInjectedCurrentAndHistoricalCatalog(t *test
 		t.Run(map[bool]string{false: "historical", true: "injected current"}[injected], func(t *testing.T) {
 			customFault, historicalFault := errors.New("custom current"), errors.New("recorded contract")
 			customCalls, historicalCalls := 0, 0
-			current := func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			current := func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 				customCalls++
 				return commonprovider.ProfileCandidate{}, customFault
 			}
-			catalog := continuationProfilePortCatalog(t, current, func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+			catalog := continuationProfilePortCatalog(t, current, func(task.TaskRecord, task.MetaRecord, []string) (commonprovider.ProfileCandidate, error) {
 				historicalCalls++
 				return commonprovider.ProfileCandidate{}, historicalFault
 			})
@@ -107,7 +107,7 @@ func TestContinuationProfilesPreserveInjectedCurrentAndHistoricalCatalog(t *test
 			root, cwd := t.TempDir(), t.TempDir()
 			req, err := admissioncore.BuildRequest(strings.Repeat("a", 32), strings.Repeat("b", 32), "fixture:preflight", cwd, task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"}, []byte("brief"), nil)
 			testsupport.RequireAppTest(t, err)
-			profiles := dispatchOptions(deps, true).ContinuationProfiles(task.MetaRecord{})
+			profiles := dispatchOptions(deps, true).ContinuationProfiles(task.MetaRecord{}, os.Environ())
 			_, err = profiles.Prepare(root, req)
 			want, calls := historicalFault, historicalCalls
 			if injected {
@@ -147,12 +147,12 @@ func TestWorkspaceRuntimeConstructorSealsConfigurationAndPreservesStage(t *testi
 func TestDispatchProjectionRetainsPrimaryStatusThroughEveryClosure(t *testing.T) {
 	primary := errors.New("profile refused")
 	restore := commonprovider.ErrAuthenticationBlocked
-	observed := tasklifecycle.DispatchResult{Record: tasklifecycle.RecordAbsent, Phase: tasklifecycle.DispatchProviderSelection, Failure: primary, EnvironmentRestoreError: restore, Workspace: &workspaces.AdmissionFinish{AbortError: errors.New("abort"), DescriptionError: errors.New("describe"), CloseError: errors.New("lease close")}, StoreCloseError: errors.New("store close")}
+	observed := tasklifecycle.DispatchResult{Record: tasklifecycle.RecordAbsent, Phase: tasklifecycle.DispatchProviderSelection, Failure: primary, Workspace: &workspaces.AdmissionFinish{AbortError: restore, DescriptionError: errors.New("describe"), CloseError: errors.New("lease close")}, StoreCloseError: errors.New("store close")}
 	result := dispatchCommandResult(observed)
 	if result.code != 1 || result.response.Status == preflightStatusBlocked || result.err.Error() != observed.Err().Error() {
 		t.Fatalf("late closure changed primary status or error order: %+v", result)
 	}
-	if result.err.Error() != "profile refused\n"+restore.Error()+"\nabort\ndescribe\nlease close\nstore close" {
+	if result.err.Error() != "profile refused\n"+restore.Error()+"\ndescribe\nlease close\nstore close" {
 		t.Fatalf("closure order changed: %v", result.err)
 	}
 }

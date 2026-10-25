@@ -78,7 +78,7 @@ func testSupervisorPairProbeRecoveryFallback(t *testing.T, missingMember bool) {
 	}
 	resolved := make(chan resolution, 1)
 	go func() {
-		client, daemon, err := supervisor.ResolveRecoveryPrivateSupervisorExecutables(fixture.root, binding, missingDelegate)
+		client, daemon, err := supervisor.ResolveRecoveryPrivateSupervisorExecutables(fixture.root, binding, supervisor.ExecutableLookup{InitialExecutable: missingDelegate})
 		resolved <- resolution{client: client, daemon: daemon, err: err}
 	}()
 	var result resolution

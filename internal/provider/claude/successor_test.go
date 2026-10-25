@@ -39,7 +39,7 @@ func newSuccessorFixture(t *testing.T, mode string) successorFixture {
 		t.Fatal(err)
 	}
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: session, PredecessorTaskID: successorPredecessorTask}
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,11 +50,11 @@ func newSuccessorFixture(t *testing.T, mode string) successorFixture {
 	}}
 }
 
-func (f successorFixture) admit(t *testing.T, prepare func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error), reference task.PredicateRef) commonprovider.PreparedProfile {
+func (f successorFixture) admit(t *testing.T, prepare commonprovider.PrepareExistingCandidate, reference task.PredicateRef) commonprovider.PreparedProfile {
 	t.Helper()
 	meta := f.meta
 	meta.Predicate = reference
-	candidate, err := prepare(f.request, meta)
+	candidate, err := prepare(f.request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	fixture.meta.Predicate = preAttributionReferenceForMode(WorkspaceWriteMode)
 	before := fixture.meta
 	before.Environment = slices.Clone(fixture.meta.Environment)
-	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta); err != nil {
+	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta, os.Environ()); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, fixture.meta) {
@@ -160,8 +160,8 @@ func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 
 func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta task.MetaRecord) {
 	t.Helper()
-	reconstructed, existingErr := PrepareExistingCandidate(request, meta)
-	successor, successorErr := PrepareSuccessorCandidate(request, meta)
+	reconstructed, existingErr := PrepareExistingCandidate(request, meta, os.Environ())
+	successor, successorErr := PrepareSuccessorCandidate(request, meta, os.Environ())
 	if (existingErr == nil) != (successorErr == nil) || (existingErr != nil && existingErr.Error() != successorErr.Error()) {
 		t.Fatalf("successor error=%v, reconstruction error=%v", successorErr, existingErr)
 	}

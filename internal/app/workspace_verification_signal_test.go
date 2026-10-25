@@ -32,7 +32,7 @@ func TestSignaledWorkspaceVerificationRetainsDurableDiagnostics(t *testing.T) {
 	var candidate workspace.OperationResult
 	workErr, stopErr := execution.RunSupervised(deadline, execution.SupervisedOptions{Stopper: workspaceSignalTestStopper{}}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation)
+		candidate, actionErr = runWorkspaceAction(scope, store, operation, os.Environ())
 		return actionErr
 	})
 	if workErr != nil || stopErr != nil {

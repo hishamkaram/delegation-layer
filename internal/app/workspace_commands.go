@@ -13,6 +13,7 @@ import (
 )
 
 func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
+	deps = deps.withCapturedEnvironment()
 	response := newResponse("workspace")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
@@ -49,7 +50,7 @@ func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
 		budget = time.Duration(resource.Request().BudgetNanos)
 	}
 	if a.WorkspaceAction != "status" {
-		if err = workspace.ValidateGitEnvironment(); err != nil {
+		if err = workspaceRuntimeOptions(deps).ValidateGitEnvironment(); err != nil {
 			return failed(response, err, 2)
 		}
 	}

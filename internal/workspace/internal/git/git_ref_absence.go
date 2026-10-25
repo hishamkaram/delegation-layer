@@ -104,7 +104,7 @@ func classifyRefAbsenceBatch(stdout, stderr []byte, runErr error, firstRef strin
 // It holds only when native Git configuration proves the files backend, so
 // every symbolic ref is a loose file under the common directory.
 func (g Git) verifyLegacyFilesRefsAbsent(ctx context.Context, commonDir string, missing []string) error {
-	if variable, set := inheritedRefBackendOverride(os.Environ()); set {
+	if variable, set := inheritedRefBackendOverride(g.environment()); set {
 		return legacyStorageUnprovable(fmt.Errorf("inherited %s may select another ref backend", variable))
 	}
 	if err := g.requireFilesRefStorage(ctx, commonDir); err != nil {

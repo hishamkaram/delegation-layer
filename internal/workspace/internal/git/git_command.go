@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"github.com/hishamkaram/delegation-layer/internal/workspace/contract"
 )
 
@@ -34,11 +35,16 @@ var gitReservedEnvironment = map[string]string{
 
 var errGitRunnerRequired = errors.New("git command runner is required")
 
-// ValidateGitEnvironment rejects inherited Git redirections before a caller
-// authorizes any Git operation. It does not run a command or rewrite the
-// process environment.
-func ValidateGitEnvironment() error {
-	return validateInheritedGitEnvironment(os.Environ())
+// ValidateEnvironment validates the same snapshot used to construct commands.
+func (g Git) ValidateEnvironment() error {
+	return validateInheritedGitEnvironment(g.environment())
+}
+
+func (g Git) environment() []string {
+	if g.Environment != nil {
+		return g.Environment
+	}
+	return os.Environ()
 }
 
 func (g Git) executable() string {
@@ -61,7 +67,7 @@ func (g Git) run(ctx context.Context, directory string, args []string, overrides
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	env, err := gitEnvironment(overrides)
+	env, err := gitEnvironment(g.environment(), overrides)
 	if err != nil {
 		return err
 	}
@@ -69,7 +75,13 @@ func (g Git) run(ctx context.Context, directory string, args []string, overrides
 	commandArgs[0] = "-C"
 	commandArgs = append(commandArgs, directory)
 	commandArgs = append(commandArgs, args...)
-	command := exec.Command(g.executable(), commandArgs...)
+	executable, err := verifiedexec.LookPath(g.executable(), env)
+	if err != nil {
+		return fmt.Errorf("resolve Git executable: %w", err)
+	}
+	// Path is the selected lookup result as is; exec.Command would search the
+	// process PATH again for a bare name. Args[0] stays the requested program.
+	command := &exec.Cmd{Path: executable, Args: append([]string{g.executable()}, commandArgs...)}
 	command.Dir = directory
 	command.Env = env
 	command.Stdin = stdin
@@ -92,8 +104,8 @@ func (g Git) run(ctx context.Context, directory string, args []string, overrides
 	return nil
 }
 
-func gitEnvironment(overrides map[string]string) ([]string, error) {
-	if err := ValidateGitEnvironment(); err != nil {
+func gitEnvironment(inherited []string, overrides map[string]string) ([]string, error) {
+	if err := validateInheritedGitEnvironment(inherited); err != nil {
 		return nil, err
 	}
 
@@ -112,8 +124,8 @@ func gitEnvironment(overrides map[string]string) ([]string, error) {
 	}
 	sort.Strings(overrideKeys)
 
-	environment := make([]string, 0, len(os.Environ())+len(overrides)+len(gitReservedEnvironment))
-	for _, entry := range os.Environ() {
+	environment := make([]string, 0, len(inherited)+len(overrides)+len(gitReservedEnvironment))
+	for _, entry := range inherited {
 		key, _, _ := strings.Cut(entry, "=")
 		if _, blocked := gitRedirectionVariables[key]; blocked {
 			continue

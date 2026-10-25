@@ -127,6 +127,16 @@ def cleanup_decision(
     return False, "failure-evidence-retained"
 
 
+_FACT_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _fact(value: object, pattern: re.Pattern[str]) -> str:
+    """Render an absent value, or a public-response value only if it is a bounded identifier."""
+    if value is None:
+        return "none"
+    return value if isinstance(value, str) and pattern.fullmatch(value) else "invalid"
+
+
 def _validate_hex(value: object, pattern: re.Pattern[str], label: str) -> str:
     require(isinstance(value, str) and pattern.fullmatch(value) is not None,
             label + " is invalid")

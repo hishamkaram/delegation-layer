@@ -234,7 +234,7 @@ func TestCatalogRejectsUnsupportedOptionBeforePreparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", RequestedConfig: task.TaskConfig{Permission: "read-only", Model: "explicit"}}
-	if _, err = catalog.Prepare(request); !errors.Is(err, ErrUnsupportedOption) {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); !errors.Is(err, ErrUnsupportedOption) {
 		t.Fatalf("unsupported model was not rejected: %v", err)
 	}
 	if called {
@@ -254,7 +254,7 @@ func TestCatalogRejectsUnsupportedModeBeforePreparation(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "workspace-write", RequestedConfig: task.TaskConfig{Permission: "workspace-write"}}
-	if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("unsupported mode was not rejected: %v", err)
 	}
 	if called {
@@ -274,7 +274,7 @@ func TestCatalogTreatsDefaultEffortAsProviderDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only", Effort: "default"}}
-	if _, err = catalog.Prepare(request); err != nil {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); err != nil {
 		t.Fatalf("provider-default effort was refused: %v", err)
 	}
 	if !called {
@@ -299,7 +299,7 @@ func TestCatalogAcceptsRegisteredHistoricalPredicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only"}}
-	if _, err = catalog.Prepare(request); err != nil {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); err != nil {
 		t.Fatalf("registered historical predicate was refused: %v", err)
 	}
 }
@@ -317,7 +317,7 @@ func TestCatalogRejectsUnknownPreparedPredicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only"}}
-	if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("unknown prepared predicate was accepted: %v", err)
 	}
 }
@@ -332,7 +332,7 @@ func TestCatalogKeepsHistoricalInterpreterWithoutLaunchProfile(t *testing.T) {
 	if got := catalog.Descriptions(); len(got) != 0 {
 		t.Fatalf("historical-only registration was exposed: %+v", got)
 	}
-	if _, err = catalog.Prepare(task.TaskRecord{Provider: ref.Adapter}); !errors.Is(err, ErrProfileUnavailable) {
+	if _, err = catalog.Prepare(task.TaskRecord{Provider: ref.Adapter}, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("historical-only registration acquired launch authority: %v", err)
 	}
 	if _, err = catalog.Registry().Resolve(ref); err != nil {
@@ -367,7 +367,7 @@ func TestCatalogAcceptsValidRequestAndDoesNotTouchExternalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only", NativeTimeout: "1s"}}
-	if _, err = catalog.Prepare(request); err != nil {
+	if _, err = catalog.Prepare(request, catalogTestEnvironment()); err != nil {
 		t.Fatalf("valid request refused: %v", err)
 	}
 	if called != 1 {
@@ -401,9 +401,9 @@ func (p *catalogPreparationProbe) fresh(version string) PrepareCandidate {
 }
 
 func (p *catalogPreparationProbe) withMeta(version string) PrepareExistingCandidate {
-	return func(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
+	return func(request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
 		p.meta = meta
-		return p.fresh(version)(request)
+		return p.fresh(version)(request, environment)
 	}
 }
 
@@ -433,9 +433,13 @@ func TestCatalogPreparationOperationsSelectTheirOwnHook(t *testing.T) {
 	request := catalogPreparationRequest()
 	predecessor := task.MetaRecord{Predicate: task.FixturePredicateRef()}
 	operations := map[string]func() (ProfileCandidate, error){
-		"fresh":     func() (ProfileCandidate, error) { return catalog.Candidate(request) },
-		"existing":  func() (ProfileCandidate, error) { return catalog.ExistingCandidate(request, predecessor) },
-		"successor": func() (ProfileCandidate, error) { return catalog.SuccessorCandidate(request, predecessor) },
+		"fresh": func() (ProfileCandidate, error) { return catalog.Candidate(request, catalogTestEnvironment()) },
+		"existing": func() (ProfileCandidate, error) {
+			return catalog.ExistingCandidate(request, predecessor, catalogTestEnvironment())
+		},
+		"successor": func() (ProfileCandidate, error) {
+			return catalog.SuccessorCandidate(request, predecessor, catalogTestEnvironment())
+		},
 	}
 	for want, operation := range operations {
 		probe.calls, probe.meta = nil, task.MetaRecord{}
@@ -473,7 +477,7 @@ func TestCatalogSuccessorCandidateFallsBackToRecordedPreparation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			candidate, err := catalog.SuccessorCandidate(catalogPreparationRequest(), task.MetaRecord{})
+			candidate, err := catalog.SuccessorCandidate(catalogPreparationRequest(), task.MetaRecord{}, catalogTestEnvironment())
 			if err != nil {
 				t.Fatalf("successor preparation refused: %v", err)
 			}
@@ -492,7 +496,7 @@ func TestCatalogSuccessorCandidateKeepsHistoricalOnlyRegistrationUnlaunchable(t 
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{Provider: ref.Adapter, Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only"}}
-	if _, err = catalog.SuccessorCandidate(request, task.MetaRecord{}); !errors.Is(err, ErrProfileUnavailable) || len(probe.calls) != 0 {
+	if _, err = catalog.SuccessorCandidate(request, task.MetaRecord{}, catalogTestEnvironment()); !errors.Is(err, ErrProfileUnavailable) || len(probe.calls) != 0 {
 		t.Fatalf("historical-only registration acquired successor authority: %v calls=%v", err, probe.calls)
 	}
 }
@@ -502,7 +506,7 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 	tests := []struct {
 		name    string
 		request func(task.TaskRecord) task.TaskRecord
-		hook    func(task.TaskRecord, task.MetaRecord) (ProfileCandidate, error)
+		hook    func(task.TaskRecord, task.MetaRecord, []string) (ProfileCandidate, error)
 		want    error
 		called  bool
 	}{
@@ -516,13 +520,15 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 		},
 		{
 			name: "provider error",
-			hook: func(task.TaskRecord, task.MetaRecord) (ProfileCandidate, error) { return ProfileCandidate{}, cause },
+			hook: func(task.TaskRecord, task.MetaRecord, []string) (ProfileCandidate, error) {
+				return ProfileCandidate{}, cause
+			},
 			want: cause, called: true,
 		},
 		{
 			name: "directory mismatch",
-			hook: func(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
-				candidate, err := (&catalogPreparationProbe{}).withMeta("successor")(request, meta)
+			hook: func(request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
+				candidate, err := (&catalogPreparationProbe{}).withMeta("successor")(request, meta, environment)
 				candidate.Directory = "/elsewhere"
 				return candidate, err
 			},
@@ -530,8 +536,8 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 		},
 		{
 			name: "missing finalizer",
-			hook: func(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
-				candidate, err := (&catalogPreparationProbe{}).withMeta("successor")(request, meta)
+			hook: func(request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
+				candidate, err := (&catalogPreparationProbe{}).withMeta("successor")(request, meta, environment)
 				candidate.Finalize = nil
 				return candidate, err
 			},
@@ -542,9 +548,9 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			called := false
 			registration := testRegistration("alpha:print", "read-only")
-			registration.PrepareSuccessor = func(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
+			registration.PrepareSuccessor = func(request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
 				called = true
-				return test.hook(request, meta)
+				return test.hook(request, meta, environment)
 			}
 			catalog, err := NewCatalog(registration)
 			if err != nil {
@@ -554,7 +560,7 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 			if test.request != nil {
 				request = test.request(request)
 			}
-			if _, err = catalog.SuccessorCandidate(request, task.MetaRecord{}); !errors.Is(err, test.want) || called != test.called {
+			if _, err = catalog.SuccessorCandidate(request, task.MetaRecord{}, catalogTestEnvironment()); !errors.Is(err, test.want) || called != test.called {
 				t.Fatalf("successor validation = %v, hook called=%t; want %v/%t", err, called, test.want, test.called)
 			}
 		})
@@ -564,18 +570,18 @@ func TestCatalogSuccessorCandidateSharesRequestAndCandidateValidation(t *testing
 func TestCatalogSuccessorCandidateBindsRegistryToFinalizedPredicate(t *testing.T) {
 	registration := testRegistration("alpha:print", "read-only")
 	unknown := task.PredicateRef{Adapter: "alpha:print", Mode: "read-only", Version: "unknown", SHA256: task.ComputeSHA256([]byte("unknown"))}
-	registration.PrepareSuccessor = func(request task.TaskRecord, _ task.MetaRecord) (ProfileCandidate, error) {
+	registration.PrepareSuccessor = func(request task.TaskRecord, _ task.MetaRecord, environment []string) (ProfileCandidate, error) {
 		return ReadyCandidate(func(request task.TaskRecord) (PreparedProfile, error) {
 			plan := executionPlanForCatalogTest(request)
 			plan.Predicate = unknown
 			return catalogTestProfile(plan), nil
-		})(request)
+		})(request, environment)
 	}
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := catalog.SuccessorCandidate(catalogPreparationRequest(), task.MetaRecord{})
+	candidate, err := catalog.SuccessorCandidate(catalogPreparationRequest(), task.MetaRecord{}, catalogTestEnvironment())
 	if err != nil {
 		t.Fatal(err)
 	}

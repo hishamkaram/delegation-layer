@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
@@ -23,7 +24,7 @@ func inspectModels(scope execution.PreflightScope, definition provider.Inspectio
 		return nil, errNativeInspection
 	}
 	probe.Directory = definition.Directory
-	probe.Environment = append([]string(nil), definition.Environment...)
+	probe.Environment = slices.Clone(definition.Environment)
 	probe.VersionArgs = append([]string(nil), definition.Models.Capability.VersionArgs...)
 	if len(probe.VersionArgs) == 0 && definition.Runtime != nil {
 		probe.VersionArgs = append([]string(nil), definition.Runtime.VersionArgs...)

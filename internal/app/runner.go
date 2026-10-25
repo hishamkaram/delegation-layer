@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +38,7 @@ type runnerArguments struct {
 // RunRunner executes one saved task from the supervisor's exact root/task
 // command. It shares the public runtime and never accepts a provider argv.
 func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	deps = deps.withCapturedEnvironment()
 	if code, handled := pueue.RunControlOwnerMode(args); handled {
 		return code
 	}
@@ -288,7 +288,7 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 		if preflightErr != nil {
 			return plan, preflightErr
 		}
-		return plan, observeManagedTurnBaseline(scope, store, *admittedReq)
+		return plan, observeManagedTurnBaseline(scope, store, *admittedReq, deps.Environment)
 	}
 	permit, err := td.PrepareStart(0)
 	if err != nil {
@@ -300,7 +300,7 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 	}
 	runResult := execution.Run(td, permit, profile.Plan, execution.Options{
 		Protocol: protocol, Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
-		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(),
+		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(), InheritedEnvironment: deps.Environment,
 		Identity: identityObserver, Hooks: deps.ExecutionHooks,
 	})
 	if runResult.Outcome != nil {
@@ -322,6 +322,7 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 }
 
 func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult) {
+	deps = deps.withCapturedEnvironment()
 	response := newResponse("delegate-run")
 	root, err := tasklifecycle.ResolveRoot(parsed.Root)
 	if err != nil {
@@ -359,12 +360,15 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	supervisorOptions := supervisor.OptionsForCurrentEnvironment(deps.SupervisorOptions)
-	restoreEnvironment, err := applySavedEnvironment(meta.Environment, meta.EnvironmentRecorded)
+	// Supervisor control keeps the caller's environment. Everything after this
+	// point runs in the task's saved launch scope, including maintenance that
+	// the runner's supervisor client starts.
+	supervisorOptions := supervisor.OptionsForEnvironment(deps.SupervisorOptions, deps.Environment)
+	deps, err = scopedDependencies(deps, meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer restoreRunnerEnvironment(&result, restoreEnvironment)
+	supervisorOptions = supervisor.OptionsWithMaintenanceScope(supervisorOptions, deps.Environment)
 	if supervisor.TaskTerminal(inspection) {
 		releaseErr := tasklifecycle.ReleaseContinuationSession(td, req, inspection.Outcome)
 		if releaseErr != nil {
@@ -388,7 +392,7 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
 	supervisorContext, cancelSupervisor := tasklifecycle.SupervisorContextForRunner(req, taskSupervisorOptions)
 	defer cancelSupervisor()
-	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, taskSupervisorOptions, deps.InitialSupervisorExecutable)
+	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, taskSupervisorOptions, deps.supervisorLookup())
 	defer func() { supervisor.CloseMaintenance(client, result.err) }()
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
@@ -403,55 +407,11 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	return runProvider(response, store, td, req, profile, client, lifetimeChild, deps)
 }
 
-func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, lookup supervisor.ExecutableLookup) (*pueue.Client, pueue.Observation, error) {
 	if parsed.Supervised {
 		return resumeSupervisedRunner(ctx, response, td, supervisorOptions)
 	}
-	return reconcileRunner(ctx, root, response, td, req, meta, supervisorOptions, initialSupervisorExecutable)
-}
-
-func applySavedEnvironment(values []string, recorded bool) (func() error, error) {
-	if len(values) == 0 && !recorded {
-		return func() error { return nil }, nil
-	}
-	if err := task.ValidateEnvironment(values); err != nil {
-		return nil, err
-	}
-	original := os.Environ()
-	os.Clearenv()
-	for _, entry := range values {
-		key, value, _ := strings.Cut(entry, "=")
-		if err := os.Setenv(key, value); err != nil {
-			return nil, errors.Join(err, restoreEnvironment(original))
-		}
-	}
-	return func() error { return restoreEnvironment(original) }, nil
-}
-
-func restoreEnvironment(values []string) (resultErr error) {
-	os.Clearenv()
-	for _, entry := range values {
-		key, value, _ := strings.Cut(entry, "=")
-		resultErr = errors.Join(resultErr, os.Setenv(key, value))
-	}
-	return resultErr
-}
-
-func restoreRunnerEnvironment(result *commandResult, restore func() error) {
-	if result == nil || restore == nil {
-		return
-	}
-	applyEnvironmentRestoreError(result, restore())
-}
-
-func applyEnvironmentRestoreError(result *commandResult, restoreErr error) {
-	if restoreErr != nil {
-		result.err = errors.Join(result.err, restoreErr)
-		if result.code == 0 {
-			result.code = 1
-		}
-		result.response.setError(restoreErr)
-	}
+	return reconcileRunner(ctx, root, response, td, req, meta, supervisorOptions, lookup)
 }
 
 func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {

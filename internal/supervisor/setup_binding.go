@@ -13,7 +13,7 @@ func PrepareAdmissionSupervisor(selection AdmissionSelection, runtime AdmissionO
 	var err error
 	var supervisor *pueue.Client
 	if privateSupervisor && selection.SavedSupervisor == nil {
-		supervisor, err = PreparePrivateAdmissionSupervisor(runtime.InitialExecutable, store, runtime.Control)
+		supervisor, err = PreparePrivateAdmissionSupervisor(runtime.Lookup(), store, runtime.Control)
 	} else {
 		supervisor, err = BindInitialWithStart(selection, runtime, store.Root, !requiresInspection)
 	}
@@ -43,7 +43,7 @@ func PrepareAdmissionSupervisor(selection AdmissionSelection, runtime AdmissionO
 
 func BindInitialWithStart(selection AdmissionSelection, runtime AdmissionOptions, root string, startPrivate bool) (*pueue.Client, error) {
 	if selection.SavedSupervisor != nil {
-		return NewClient(context.Background(), root, *selection.SavedSupervisor, runtime.Control, true, runtime.InitialExecutable, runtime.OpenStore)
+		return NewClient(context.Background(), root, *selection.SavedSupervisor, runtime.Control, true, runtime.Lookup(), runtime.OpenStore)
 	}
 	configPath, err := ResolveInitialConfig(selection)
 	if err != nil {
@@ -57,7 +57,7 @@ func BindInitialWithStart(selection AdmissionSelection, runtime AdmissionOptions
 			return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
 		}
 		if !startPrivate {
-			clientExecutable, daemonExecutable, resolveErr := ResolvePrivateSupervisorExecutables(root, runtime.InitialExecutable)
+			clientExecutable, daemonExecutable, resolveErr := ResolvePrivateSupervisorExecutables(root, runtime.Lookup())
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
@@ -65,7 +65,7 @@ func BindInitialWithStart(selection AdmissionSelection, runtime AdmissionOptions
 		}
 		return BindPrivateWithContext(context.Background(), root, runtime)
 	}
-	executable, err := ResolveInitialExecutable(runtime.InitialExecutable)
+	executable, err := ResolveInitialExecutable(runtime.Lookup())
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func BindPrivateWithContext(ctx context.Context, root string, runtime AdmissionO
 	if root == "" {
 		return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
 	}
-	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, runtime.InitialExecutable)
+	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, runtime.Lookup())
 	if err != nil {
 		return nil, err
 	}

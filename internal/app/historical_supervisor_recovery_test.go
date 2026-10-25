@@ -179,7 +179,7 @@ func TestHistoricalSupervisorRecoveryRejectsUnrelatedBinding(t *testing.T) {
 	unrelated := fixture.predecessor
 	unrelated.Endpoint = "unix:" + filepath.Join(fixture.root, ".supervisor", "run", "unrelated.sock")
 
-	client, err := supervisor.NewClient(t.Context(), fixture.root, unrelated, fixture.options, true, fixture.clientB, openNativeSupervisorStore)
+	client, err := supervisor.NewClient(t.Context(), fixture.root, unrelated, fixture.options, true, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB}, openNativeSupervisorStore)
 	if client != nil {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Error(closeErr)

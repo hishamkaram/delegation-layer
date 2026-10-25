@@ -19,6 +19,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
@@ -303,7 +304,7 @@ func startRunnerObservationTestCall(t *testing.T, ctx context.Context, fixture *
 		Observer: call.observe,
 	}
 	go func() {
-		call.client, call.observation, call.err = reconcileRunner(ctx, fixture.store.Root, &call.response, fixture.td, fixture.req, meta, options, "")
+		call.client, call.observation, call.err = reconcileRunner(ctx, fixture.store.Root, &call.response, fixture.td, fixture.req, meta, options, supervisorcore.ExecutableLookup{})
 		close(call.done)
 	}()
 	registerRunnerObservationTestCleanup(t, ctx, call)

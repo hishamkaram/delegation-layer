@@ -6,5 +6,3 @@ import "github.com/hishamkaram/delegation-layer/internal/workspace/internal/git"
 type Git = git.Git
 
 type CommandRunner = git.CommandRunner
-
-func ValidateGitEnvironment() error { return git.ValidateGitEnvironment() }

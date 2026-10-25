@@ -159,7 +159,7 @@ func TestGitEnvironmentReservesNoninteractiveOptionalLockFreeCommands(t *testing
 	t.Setenv("GIT_TERMINAL_PROMPT", "1")
 	t.Setenv("GIT_OPTIONAL_LOCKS", "1")
 	index := filepath.Join(canonicalWorkspaceTestDir(t), "private-index")
-	environment, err := gitEnvironment(map[string]string{"GIT_INDEX_FILE": index})
+	environment, err := gitEnvironment(os.Environ(), map[string]string{"GIT_INDEX_FILE": index})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestGitEnvironmentReservesNoninteractiveOptionalLockFreeCommands(t *testing
 		}
 	}
 	for _, key := range []string{"GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"} {
-		if _, err = gitEnvironment(map[string]string{key: "1"}); !errors.Is(err, ErrInvalidGitContext) {
+		if _, err = gitEnvironment(os.Environ(), map[string]string{key: "1"}); !errors.Is(err, ErrInvalidGitContext) {
 			t.Fatalf("override of reserved %s error = %v", key, err)
 		}
 	}

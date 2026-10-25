@@ -37,7 +37,7 @@ func assertConfigDriftPreparedJournal(t *testing.T, fixture *historicalSuperviso
 	if journal.Legacy != historicalPrivateDaemonIdentityFor(fixture.predecessor) {
 		t.Fatalf("journal predecessor = %+v, want %+v", journal.Legacy, fixture.predecessor)
 	}
-	if successor.ConfigPath != pueue.PrivateConfigPath(fixture.root) || successor.ConfigDigest != task.ComputeSHA256(config) || !strings.HasSuffix(successor.Endpoint, "upgrade.sock") || successor.SHA256 != task.ComputeSHA256(daemonB) {
+	if successor.ConfigPath != pueue.PrivateConfigPath(fixture.root) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.SHA256 != task.ComputeSHA256(daemonB) {
 		t.Fatalf("journal successor does not select the drifted config and installed daemon: %+v", successor)
 	}
 	if journal.LegacyPID != 0 || journal.LegacyProcessStart != "" || journal.LegacyShutdownRequested || journal.LegacyShutdownDispatched || journal.LegacyStopped {

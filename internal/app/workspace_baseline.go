@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
@@ -17,12 +19,16 @@ import (
 // real-index identity at the last preflight boundary before provider Start.
 // It borrows the task's own supervised scope, so it shares the task deadline
 // and command owner; any failure refuses this launch. The baseline ref keeps
-// the observed tree reachable for the later capture comparison.
-func observeManagedTurnBaseline(scope execution.PreflightScope, store *taskdir.Store, request task.TaskRecord) error {
+// the observed tree reachable for the later capture comparison. Git runs in
+// the task's selected launch scope, the same scope its provider turn uses.
+func observeManagedTurnBaseline(scope execution.PreflightScope, store *taskdir.Store, request task.TaskRecord, environment []string) error {
 	if request.Workspace == nil {
 		return nil
 	}
-	return recordManagedTurnBaseline(scope.Context(), store, request, workspace.Git{Runner: workspaceCommandRunner{scope: scope}})
+	if environment == nil {
+		return fmt.Errorf("%w: turn baseline launch environment was not captured", task.ErrEvidenceFault)
+	}
+	return recordManagedTurnBaseline(scope.Context(), store, request, workspace.Git{Runner: workspaceCommandRunner{scope: scope}, Environment: slices.Clone(environment)})
 }
 
 func recordManagedTurnBaseline(ctx context.Context, store *taskdir.Store, request task.TaskRecord, git workspace.Git) (resultErr error) {
@@ -60,7 +66,7 @@ func recordManagedTurnBaseline(ctx context.Context, store *taskdir.Store, reques
 // The private index lives in an invocation-owned scratch directory outside
 // the checkout and state; BuildCapture removes its files before returning.
 func recordTurnBaseline(ctx context.Context, resource *workspace.Resource, git workspace.Git, checkout workspace.Checkout, sequence uint64, subject workspace.Subject) (baseline workspace.TurnBaseline, resultErr error) {
-	scratch, err := os.MkdirTemp("", "delegate-turn-baseline-")
+	scratch, err := os.MkdirTemp(baselineScratchParent(git), "delegate-turn-baseline-")
 	if err != nil {
 		return baseline, err
 	}
@@ -77,6 +83,17 @@ func recordTurnBaseline(ctx context.Context, resource *workspace.Resource, git w
 		Ref: workspacescore.ManagedBaselineRef(request.RootID, request.WorkspaceID, sequence),
 	}
 	return baseline, resource.RecordTurnBaseline(ctx, baseline)
+}
+
+// baselineScratchParent follows the launch scope Git runs in: the selected
+// TMPDIR, never the process's. A nil Environment is the standalone Git
+// convention of inheriting the process environment, which os.MkdirTemp's
+// empty parent already selects.
+func baselineScratchParent(git workspace.Git) string {
+	if git.Environment == nil {
+		return ""
+	}
+	return verifiedexec.TemporaryRoot(git.Environment)
 }
 
 // observeCaptureTurn compares a task capture with its own turn's baseline.

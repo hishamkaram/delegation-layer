@@ -23,11 +23,11 @@ func continuationDependencies(deps Dependencies, predecessorMeta task.MetaRecord
 	if !normalized.useCatalogExisting {
 		return normalized
 	}
-	normalized.PrepareCandidate = func(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	normalized.PrepareCandidate = func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 		if request.RequestedConfig.Interactive && request.PriorSession != nil {
-			return normalized.Catalog.Candidate(request)
+			return normalized.Catalog.Candidate(request, environment)
 		}
-		return normalized.Catalog.SuccessorCandidate(request, predecessorMeta)
+		return normalized.Catalog.SuccessorCandidate(request, predecessorMeta, environment)
 	}
 	return normalized
 }

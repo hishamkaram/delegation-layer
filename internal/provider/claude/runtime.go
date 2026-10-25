@@ -73,8 +73,8 @@ func appendModelRuntimeFlags(requirements commonprovider.RuntimeCapability, requ
 	return requirements
 }
 
-func resolveExecutable() (commonprovider.CLIInfo, error) {
-	info, err := commonprovider.LocateCLI("claude")
+func resolveExecutable(environment []string) (commonprovider.CLIInfo, error) {
+	info, err := commonprovider.LocateCLI("claude", environment)
 	if err != nil {
 		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}

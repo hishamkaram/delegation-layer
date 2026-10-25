@@ -190,7 +190,7 @@ func TestFreshProfileSelectsRouteCompatiblePreparation(t *testing.T) {
 
 func testFreshProfileRoute(t *testing.T, request task.TaskRecord, resumeRoute bool) {
 	t.Helper()
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

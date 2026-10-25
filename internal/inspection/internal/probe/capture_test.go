@@ -46,10 +46,7 @@ func (s nativeTestScope) FinishCommand(cmd *exec.Cmd) error {
 
 func captureDefinition(t *testing.T) provider.InspectionDefinition {
 	t.Helper()
-	info, err := provider.LocateCLI("sh")
-	if err != nil {
-		t.Fatal(err)
-	}
+	info := locateTestShell(t)
 	return provider.InspectionDefinition{
 		Revision: "native-test-v1", Executable: info.Path, ExecutableSHA256: info.SHA256,
 		Directory: "/workspace", Arguments: []string{"fixed"}, Environment: []string{"PATH=/usr/bin"}, OutputLimit: 64,

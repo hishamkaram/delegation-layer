@@ -233,11 +233,11 @@ func TestLegacyManagedRunnerMigrationSurvivesRemovedInstallation(t *testing.T) {
 
 func requireLegacyRunnerContinuation(t *testing.T, root string, req *task.TaskRecord) {
 	t.Helper()
-	loadedReq, loadedMeta, loadedBrief, err := tasklifecycle.LoadContinuationInput(root, dispatchRequest(Arguments{TaskID: req.TaskID}), dispatchOptions(Dependencies{}, false))
+	loadedReq, loadedMeta, loadedBrief, err := tasklifecycle.LoadContinuationInput(root, dispatchRequest(Arguments{TaskID: req.TaskID}, Dependencies{}.withCapturedEnvironment()), dispatchOptions(Dependencies{}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuation, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, loadedReq, loadedMeta, loadedBrief)
+	continuation, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, loadedReq, loadedMeta, loadedBrief)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func requireLegacyRunnerRetry(t *testing.T, root string, store *taskdir.Store, t
 	t.Helper()
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed runner")
-	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, root, store, td, meta)
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), currentRunner, root, store, td, meta)
 	if err != nil || !allowUpgrade || refreshed.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, refreshed.Runner) {
 		t.Fatalf("migrated legacy retry runner = %+v, allowUpgrade=%v, err=%v", refreshed, allowUpgrade, err)
 	}
@@ -280,7 +280,7 @@ func TestLegacyManagedRetryRecordsOwnershipForContinuation(t *testing.T) {
 
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed runner")
-	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, root, store, td, meta)
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), currentRunner, root, store, td, meta)
 	if err != nil || !allowUpgrade || refreshed.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.CurrentManagedRunnerExecutable(root, refreshed.Runner) {
 		t.Fatalf("legacy retry did not select the current managed runner: args=%+v allowUpgrade=%v err=%v", refreshed, allowUpgrade, err)
 	}
@@ -315,7 +315,7 @@ func TestLegacyInspectionRetryKeepsOriginalRunner(t *testing.T) {
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed inspection runner")
 
-	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, fixture.store.Root, fixture.store, td, &meta)
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), currentRunner, fixture.store.Root, fixture.store, td, &meta)
 	if err != nil || allowUpgrade || refreshed.Runner != oldRunner || refreshed.RunnerOwnership != "" {
 		t.Fatalf("legacy inspection retry did not remain pinned: args=%+v allowUpgrade=%v err=%v", refreshed, allowUpgrade, err)
 	}
@@ -393,7 +393,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 		SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)},
 	}
 
-	got, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
+	got, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), source, root, nil, nil, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 	}
 
 	meta.SupervisorConfig.ConfigPath = filepath.Join(testsupport.CanonicalTempDir(t), "external-pueue.yml")
-	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
+	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), source, root, nil, nil, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 	writeRunnerFixture(t, custom, "custom runner")
 	meta.RunnerExecutable = custom
 	meta.RunnerOwnership = task.RunnerOwnershipCustom
-	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
+	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), source, root, nil, nil, meta)
 	if err != nil || allowUpgrade || got.Runner != "" {
 		t.Fatalf("custom retry was rewritten: args=%+v allowUpgrade=%v err=%v", got, allowUpgrade, err)
 	}
@@ -437,10 +437,10 @@ func TestManagedContinuationKeepsRunnerOwnership(t *testing.T) {
 		SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(testsupport.CanonicalTempDir(t), "pueue.yml")},
 	}
 	arguments := Arguments{Runner: managedRunner}
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(arguments), meta); err != nil {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(arguments, Dependencies{}.withCapturedEnvironment()), meta); err != nil {
 		t.Fatal(err)
 	}
-	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(arguments), root, &task.TaskRecord{TaskID: "continuation"}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(arguments, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{TaskID: "continuation"}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

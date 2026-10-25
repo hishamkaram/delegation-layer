@@ -3,6 +3,7 @@ package pi
 import (
 	"bytes"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -174,7 +175,7 @@ func TestPiReconstructionKeepsPriorFreshDefaultRecordsOnTheirRecordedPredicate(t
 			if !fresh.Plan.Predicate.Equal(ReferenceForMode(reference.Mode)) || fresh.Plan.Predicate.Equal(reference) {
 				t.Fatalf("fresh admission predicate=%+v", fresh.Plan.Predicate)
 			}
-			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: fresh.Effective})
+			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: fresh.Effective}, os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -219,7 +220,7 @@ func (f piSuccessorFixture) meta(predecessor task.PredicateRef) task.MetaRecord 
 
 func (f piSuccessorFixture) successor(predecessor task.PredicateRef) commonprovider.PreparedProfile {
 	f.t.Helper()
-	candidate, err := f.catalog.SuccessorCandidate(f.request, f.meta(predecessor))
+	candidate, err := f.catalog.SuccessorCandidate(f.request, f.meta(predecessor), os.Environ())
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -228,7 +229,7 @@ func (f piSuccessorFixture) successor(predecessor task.PredicateRef) commonprovi
 
 func (f piSuccessorFixture) recorded(predecessor task.PredicateRef) commonprovider.PreparedProfile {
 	f.t.Helper()
-	candidate, err := f.catalog.ExistingCandidate(f.request, f.meta(predecessor))
+	candidate, err := f.catalog.ExistingCandidate(f.request, f.meta(predecessor), os.Environ())
 	if err != nil {
 		f.t.Fatal(err)
 	}

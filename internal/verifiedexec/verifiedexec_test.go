@@ -56,10 +56,10 @@ func TestPortableCommandPreservesExecutableDirectoryLayout(t *testing.T) {
 
 func TestShouldMirrorParentStopsAtSharedTemporaryRoots(t *testing.T) {
 	temporaryRoot := filepath.Clean(os.TempDir())
-	if shouldMirrorParent(temporaryRoot) {
+	if shouldMirrorParent(temporaryRoot, os.Environ()) {
 		t.Fatalf("shared temporary root %q would be enumerated", temporaryRoot)
 	}
-	if !shouldMirrorParent(filepath.Join(temporaryRoot, "provider-package")) {
+	if !shouldMirrorParent(filepath.Join(temporaryRoot, "provider-package"), os.Environ()) {
 		t.Fatalf("provider-owned child of temporary root was not eligible for mirroring")
 	}
 }

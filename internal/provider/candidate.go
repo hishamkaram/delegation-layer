@@ -12,12 +12,12 @@ import (
 
 // PrepareCandidate performs only static preparation. The app resolves any
 // requested native inspection before finalizing and admitting an ordinary task.
-type PrepareCandidate func(task.TaskRecord) (ProfileCandidate, error)
+type PrepareCandidate func(task.TaskRecord, []string) (ProfileCandidate, error)
 
 // PrepareExistingCandidate reconstructs a previously admitted profile when a
 // provider has to retain a historical preparation contract across a release.
 // New admission always uses PrepareCandidate.
-type PrepareExistingCandidate func(task.TaskRecord, task.MetaRecord) (ProfileCandidate, error)
+type PrepareExistingCandidate func(task.TaskRecord, task.MetaRecord, []string) (ProfileCandidate, error)
 
 // ProfileCandidate separates a compiled policy description from its external
 // inspection. Finalize is pure; it accepts only validated nonsecret facts.
@@ -122,8 +122,11 @@ func (c ProfileCandidate) ValidateStatePlacement(root string) error {
 
 // ReadyCandidate adapts an existing finite profile factory to the two-stage
 // contract. It cannot consume inspection facts or acquire process authority.
+// The factory owns its complete hermetic launch environment; the supplied
+// caller environment is deliberately unused. Environment-aware factories use
+// PrepareCandidate directly.
 func ReadyCandidate(prepare PrepareProfile) PrepareCandidate {
-	return func(request task.TaskRecord) (ProfileCandidate, error) {
+	return func(request task.TaskRecord, _ []string) (ProfileCandidate, error) {
 		if prepare == nil {
 			return ProfileCandidate{}, ErrProfileUnavailable
 		}

@@ -10,7 +10,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func Cancel(root string, td *taskdir.TaskDir, options pueue.Options, initialExecutable string, openControl ControlClientOpener) (result Cancellation, resultErr error) {
+func Cancel(root string, td *taskdir.TaskDir, options pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (result Cancellation, resultErr error) {
 	inspection, err := td.Inspect()
 	result.Inspection = inspection
 	if err != nil {
@@ -38,7 +38,7 @@ func Cancel(root string, td *taskdir.TaskDir, options pueue.Options, initialExec
 	if err != nil {
 		return result, err
 	}
-	stop, stopErr := StopTask(root, td, requestID, "user", options, initialExecutable, openControl)
+	stop, stopErr := StopTask(root, td, requestID, "user", options, lookup, openControl)
 	if errors.Is(stopErr, task.ErrTerminalTask) {
 		return terminalAfterCancelRace(result, td)
 	}

@@ -12,11 +12,11 @@ import (
 // the advisory wire revision continues under the current predicate for its
 // mode. Every other record, including interactive and portable ones, keeps the
 // recorded predicate. The predecessor record is never modified.
-func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if commonprovider.HasNativeProfile(predecessor) && isUpgradableOutputReference(request.Mode, predecessor.Predicate) {
 		predecessor.Predicate = ReferenceForMode(request.Mode)
 	}
-	return PrepareExistingCandidate(request, predecessor)
+	return PrepareExistingCandidate(request, predecessor, environment)
 }
 
 // isUpgradableOutputReference reports whether reference is an exact print

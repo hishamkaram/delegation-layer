@@ -26,6 +26,7 @@ func TestManagedTurnBaselineFailureRefusesProviderLaunch(t *testing.T) {
 	profile := fixtureLaunchProfile(t, td, req)
 	var starts atomic.Int32
 	deps := Dependencies{
+		Environment:    os.Environ(),
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) { return profile, nil },
 		ExecutionHooks: execution.Hooks{Start: func(command *exec.Cmd) error {
 			starts.Add(1)
