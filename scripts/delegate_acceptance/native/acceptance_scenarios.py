@@ -331,9 +331,6 @@ def run_pi_session_miss(owner) -> int:
     require(workspace_snapshot(acceptance.workspace) == before, "Pi session-miss control changed the workspace")
     acceptance.replay()
     acceptance.shutdown()
-    closure = acceptance.lifetime_closure
-    launches = closure["ordinary"]["tasks"][missed]["launch_count"] if isinstance(closure, dict) else None
-    require(launches == 1, "Pi session miss was not exactly one provider launch")
     tasks = {"fresh": first, "resume": second, "session_miss": missed}
     acceptance.success_receipt = {
         "gate": PI_SESSION_MISS_GATE, "status": "passed", "provider": acceptance.provider,

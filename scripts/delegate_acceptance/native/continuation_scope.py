@@ -180,6 +180,25 @@ def _sealed_stderr(directory: Path, seal: dict[str, object]) -> str:
     return path.read_bytes().decode("utf-8", errors="replace")
 
 
+def require_empty_session_directory(directory: Path) -> None:
+    """Observe the owned empty Pi session directory as a real directory with no entries.
+
+    Any entry, including a child symlink, fails without following it or reporting its name.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(directory, flags)
+        try:
+            with os.scandir(descriptor) as entries:
+                empty = next(entries, None) is None
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise AcceptanceFailure("Pi empty session directory could not be observed as an owned "
+                                "directory; recreate the case") from error
+    require(empty, "Pi session miss left an entry in its empty session directory")
+
+
 def require_session_miss(owner, task_id: str, predecessor: str, session: str,
                          empty_directory: Path) -> dict[str, object]:
     """Accept only Pi's own sealed session-not-found refusal for the exact predecessor session."""
@@ -216,6 +235,7 @@ def require_session_miss(owner, task_id: str, predecessor: str, session: str,
         require(isinstance(value, dict) and value.get("conversation_id") == session,
                 "Pi session miss substituted another provider session")
     require_session_directory(owner, task_id, empty_directory)
+    require_empty_session_directory(empty_directory)
     return {
         "task_id": task_id, "runner_result": runner_result, "publication": "rejected",
         "provider_exit_code": PI_SESSION_MISS_EXIT_CODE, "session_lookup": "not-found",

@@ -210,7 +210,6 @@ def _validate_pi_miss(source: dict[str, object], tasks: dict[str, str]) -> None:
         raise EvidenceError("pi_control_session_miss_invalid")
     closure = source.get("lifetime_closure")
     if (lifetime_closure_error(closure, task_ids=tasks.values()) is not None
-            or closure["ordinary"]["tasks"][tasks["session_miss"]]["launch_count"] != 1
             or source.get("natural_daemon_shutdown") is not True):
         raise EvidenceError("pi_control_lifetime_unproven")
 

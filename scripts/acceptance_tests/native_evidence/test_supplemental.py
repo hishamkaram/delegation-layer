@@ -32,6 +32,8 @@ FINGERPRINT = "7" * 64
 HARNESS = {"harness_revision": REVISION, "harness_sha256": FINGERPRINT, "committed": True}
 SCOPE = {"tmpdir_scopes": dict(supplemental.CONTINUATION_TMPDIR_SCOPES), "writable_roots": "own-tmpdir",
          "selection_inherited": True, "meta_sha256": {"fresh": "8" * 64, "resume": "9" * 64}}
+# Observed native Pi guardian commands per task: version, help and the one primary command.
+PI_GUARDIAN_LAUNCHES = 3
 
 
 def _write(path: Path, value: object) -> None:
@@ -146,6 +148,8 @@ class SupplementalFixture:
         self.pi_control.mkdir()
         tasks = self.task_ids(("fresh", "resume", "session_miss"))
         closure = lifetime_closure_source(tasks)
+        for fact in closure["ordinary"]["tasks"].values():
+            fact["launch_count"] = PI_GUARDIAN_LAUNCHES
         _write(self.pi_control / "success.json", {
             "gate": PI_SESSION_MISS_GATE, "status": "passed", "provider": "pi:json",
             "mode": "read-only", "scenario": PI_SESSION_MISS_SCENARIO,
@@ -404,11 +408,15 @@ class PiControlValidationTests(unittest.TestCase):
         self.receipt = self.fixture.build_canonical()
         self.candidate = supplemental.candidate_from_aggregate(self.receipt, HARNESS, self.fixture.delegate)
 
-    def refused(self, code: str, *, excluded: set[str] | None = None, **overrides) -> None:
+    def reset_pi_control(self) -> None:
+        """Remove the flat Pi control files a previous build wrote under the owned root."""
         if self.fixture.pi_control.exists():
             for path in self.fixture.pi_control.iterdir():
                 path.unlink()
             self.fixture.pi_control.rmdir()
+
+    def refused(self, code: str, *, excluded: set[str] | None = None, **overrides) -> None:
+        self.reset_pi_control()
         self.fixture.build_pi_control(**overrides)
         before = _snapshot(self.fixture.root)
         with self.assertRaisesRegex(EvidenceError, code):
@@ -439,14 +447,46 @@ class PiControlValidationTests(unittest.TestCase):
     def test_control_from_another_harness_is_refused(self):
         self.refused("supplemental_harness_mismatch", harness={**HARNESS, "harness_sha256": "6" * 64})
 
-    def test_redispatched_miss_is_not_one_launch(self):
+    def rewrite_closure(self, change) -> dict[str, str]:
         tasks = self.fixture.build_pi_control()
         path = self.fixture.pi_control / "success.json"
         source = json.loads(path.read_text())
-        source["lifetime_closure"]["ordinary"]["tasks"][tasks["session_miss"]]["launch_count"] = 2
+        change(source, tasks)
         _write(path, source)
-        with self.assertRaisesRegex(EvidenceError, "pi_control_lifetime_unproven"):
-            supplemental.validate_pi_control(self.fixture.pi_control, self.candidate, set())
+        return tasks
+
+    def test_guardian_launch_count_is_not_a_provider_turn_count(self):
+        for launches in (1, 3, 4):
+            with self.subTest(launches=launches):
+                self.reset_pi_control()
+                tasks = self.rewrite_closure(lambda source, tasks: source["lifetime_closure"]["ordinary"][
+                    "tasks"][tasks["session_miss"]].update(launch_count=launches))
+                bound = supplemental.validate_pi_control(self.fixture.pi_control, self.candidate, set())
+                self.assertEqual(bound["tasks"], tasks)
+
+    def test_unproven_lifetime_closure_is_refused(self):
+        def ordinary(source):
+            return source["lifetime_closure"]["ordinary"]
+
+        def extra_task(source, tasks):
+            ordinary(source)["tasks"]["f" * 32] = dict(ordinary(source)["tasks"][tasks["session_miss"]])
+
+        changes = {
+            "no launch": lambda source, tasks: ordinary(source)["tasks"][tasks["session_miss"]].update(
+                launch_count=0),
+            "missing task": lambda source, tasks: ordinary(source)["tasks"].pop(tasks["session_miss"]),
+            "extra task": extra_task,
+            "unfinished daemon": lambda source, tasks: source.update(natural_daemon_shutdown=False),
+            "no closure": lambda source, tasks: source.update(lifetime_closure=None),
+        }
+        for label, change in changes.items():
+            with self.subTest(label):
+                self.reset_pi_control()
+                self.rewrite_closure(change)
+                before = _snapshot(self.fixture.root)
+                with self.assertRaisesRegex(EvidenceError, "pi_control_lifetime_unproven"):
+                    supplemental.validate_pi_control(self.fixture.pi_control, self.candidate, set())
+                self.assertEqual(_snapshot(self.fixture.root), before)
 
     def test_control_task_overlapping_another_receipt_is_refused(self):
         self.refused("supplemental_task_overlap", excluded={f"{self.fixture.serial + 1:032x}"})

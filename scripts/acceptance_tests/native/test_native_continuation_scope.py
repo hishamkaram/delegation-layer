@@ -363,6 +363,42 @@ class PiSessionMissTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "no sealed bounded stderr"):
             self.miss(owner)
 
+    def test_miss_is_refused_unless_the_empty_directory_is_observed_empty(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "session.jsonl").write_text("{}")
+        replacement = self.root / "replacement"
+        replacement.mkdir()
+
+        def file_entry():
+            (self.empty / "session.jsonl").write_text("{}")
+
+        def child_symlink():
+            (self.empty / "link").symlink_to(outside, target_is_directory=True)
+
+        def replaced_by_symlink():
+            self.empty.rmdir()
+            self.empty.symlink_to(replacement, target_is_directory=True)
+
+        for label, change in {"file entry": file_entry, "child symlink": child_symlink,
+                              "replaced by symlink": replaced_by_symlink,
+                              "missing": lambda: self.empty.rmdir()}.items():
+            with self.subTest(label):
+                # Each case owns a new empty directory under the owned temporary root.
+                self.empty = self.root / ("s2-" + label.replace(" ", "-"))
+                self.empty.mkdir()
+                owner = self.owner()
+                change()
+                with self.assertRaisesRegex(AcceptanceFailure, "empty session directory"):
+                    self.miss(owner)
+                self.assertEqual(sorted(path.name for path in outside.iterdir()), ["session.jsonl"])
+
+    def test_unobservable_empty_directory_fails_closed(self):
+        owner = self.owner()
+        with patch.object(scope.os, "scandir", side_effect=PermissionError("denied")), \
+                self.assertRaisesRegex(AcceptanceFailure, "empty session directory could not be observed"):
+            self.miss(owner)
+
     def test_authentication_refusal_is_blocked_not_a_miss(self):
         owner = self.owner()
         with patch.object(scope, "authentication_unavailable", return_value=True), \
@@ -411,9 +447,12 @@ class PiSessionMissScenarioTests(unittest.TestCase):
         owner.dispatch.return_value = FRESH
         owner.continue_public.side_effect = [RESUME, MISS]
         owner.session_ref.return_value = SESSION
-        owner.lifecycle_receipt.return_value = {}
+        owner.success_receipt = None
         owner.provider_runtime_receipt.return_value = {}
+        # Guardian launches count every guardian command, not provider turns.
         owner.lifetime_closure = {"ordinary": {"tasks": {MISS: {"launch_count": launches}}}}
+        owner.lifecycle_receipt.return_value = {"natural_daemon_shutdown": True,
+                                                "lifetime_closure": owner.lifetime_closure}
         owner.harness_observation = {"harness_revision": "a" * 40, "harness_sha256": "7" * 64,
                                      "committed": True}
         owner.canonical_aggregate_sha256 = "c" * 64
@@ -431,7 +470,7 @@ class PiSessionMissScenarioTests(unittest.TestCase):
         return miss
 
     def test_control_turns_share_one_directory_and_the_miss_uses_the_empty_one(self):
-        owner = self.owner(1)
+        owner = self.owner(3)
         miss = self.run_scenario(owner)
         self.assertEqual(owner.dispatch.call_args.kwargs["environment"]["SESSION"], "/owned/s1")
         resume, missed = owner.continue_public.call_args_list
@@ -446,10 +485,24 @@ class PiSessionMissScenarioTests(unittest.TestCase):
                          {"fresh": "control", "resume": "control", "session_miss": "empty"})
         self.assertEqual(receipt["harness"], owner.harness_observation)
         self.assertEqual(receipt["canonical_aggregate_sha256"], "c" * 64)
+        self.assertEqual(receipt["lifetime_closure"], owner.lifetime_closure)
 
-    def test_miss_that_launched_twice_is_refused(self):
-        with self.assertRaisesRegex(AcceptanceFailure, "exactly one provider launch"):
-            self.run_scenario(self.owner(2))
+    def test_guardian_launch_count_is_not_a_provider_turn_count(self):
+        for launches in (1, 3, 4):
+            with self.subTest(launches=launches):
+                owner = self.owner(launches)
+                self.run_scenario(owner)
+                owner.shutdown.assert_called_once_with()
+                self.assertEqual(owner.success_receipt["provider_launches"], 3)
+                self.assertTrue(owner.success_receipt["natural_daemon_shutdown"])
+
+    def test_unproven_lifetime_closure_writes_no_success_receipt(self):
+        owner = self.owner(3)
+        owner.shutdown.side_effect = AcceptanceFailure("managed lifetime closure is not proven: "
+                                                       "lifetime_closure_incomplete")
+        with self.assertRaisesRegex(AcceptanceFailure, "lifetime closure is not proven"):
+            self.run_scenario(owner)
+        self.assertIsNone(owner.success_receipt)
 
 
 class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
