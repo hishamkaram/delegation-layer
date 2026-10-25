@@ -59,6 +59,8 @@ PATCHED = ((storage, "state_base"), (cli, "state_base"), (cli, "github_client"),
            (publication, "observe_publication_source"), (publication, "observe_required_checks"),
            (publication, "observe_harness"), (publication, "git"), (operations.subprocess, "Popen"))
 ORIGINALS = tuple(getattr(owner, name) for owner, name in PATCHED)
+# Every fixture archive member's timestamp: the earliest the ZIP format represents.
+ARCHIVE_TIME = (1980, 1, 1, 0, 0, 0)
 
 
 def context(*, private: object = False) -> SimpleNamespace:
@@ -70,10 +72,14 @@ def context(*, private: object = False) -> SimpleNamespace:
 
 
 def archive(members: dict[str, bytes], compression: int = zipfile.ZIP_DEFLATED) -> bytes:
+    """Equal members always give equal bytes: a fake listing and its later download must hash the same."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression) as bundle:
         for name, data in members.items():
-            bundle.writestr(name, data)
+            # A name alone would stamp the current time; keep its regular-file mode and the requested compression.
+            member = zipfile.ZipInfo(name, date_time=ARCHIVE_TIME)
+            member.external_attr = 0o600 << 16
+            bundle.writestr(member, data, compress_type=compression)
     return buffer.getvalue()
 
 
@@ -180,6 +186,20 @@ class FakeClock:
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
         self.now += seconds
+
+
+class TickingZipClock:
+    """``zipfile``'s ``time`` alias only: each read moves past the format's two-second resolution, so nothing waits."""
+
+    def __init__(self) -> None:
+        self.reads = 0
+
+    def time(self) -> float:
+        self.reads += 1
+        return float(2 * self.reads)
+
+    def localtime(self, seconds: float) -> tuple[int, ...]:
+        return (2026, 1, 1, 0, 0, int(seconds) % 60, 0, 0, 0)
 
 
 class PublicationCase(unittest.TestCase):
@@ -371,6 +391,25 @@ class PublishTests(PublicationCase):
                                  zipfile.ZIP_STORED))
         data[data.index(b"PK\x01\x02") + 8] |= 0x01  # the central directory's general-purpose flags
         return bytes(data)
+
+    def test_fixture_archives_ignore_the_clock_and_keep_each_compression(self):
+        members = {"receipt.json": b'{"report": true}' * 64}
+        for compression in (zipfile.ZIP_DEFLATED, zipfile.ZIP_STORED):
+            with self.subTest(compression=compression):
+                clock = TickingZipClock()
+                with patch.object(zipfile, "time", clock):
+                    first, second = archive(members, compression), archive(members, compression)
+                self.assertEqual(first, second)
+                with zipfile.ZipFile(io.BytesIO(first)) as bundle:
+                    self.assertIsNone(bundle.testzip())
+                    self.assertEqual([info.compress_type for info in bundle.infolist()], [compression])
+                    self.assertEqual({name: bundle.read(name) for name in bundle.namelist()}, members)
+
+    def test_an_oversized_report_is_refused_for_its_size_when_the_clock_ticks_between_listing_and_download(self):
+        self.client.members = {"receipt.json": b" " * (MAX_RECEIPT + 1)}
+        with patch.object(zipfile, "time", TickingZipClock()):
+            self.assertOutcome(self.publish(), 3, "INCOMPLETE", "publication_report_too_large")
+        self.assertEqual(self.client.posts(), 1)
 
     def test_the_report_listing_must_be_complete_across_pages_with_unique_ids(self):
         def other(identity: int) -> dict[str, object]:
