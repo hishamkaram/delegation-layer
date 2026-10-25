@@ -12,15 +12,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 )
 
-func LaunchQueueMaintenanceOwner(ctx context.Context, executable, root string) error {
-	_, err := StartQueueMaintenanceOwner(ctx, executable, root)
-	return err
-}
-
-func StartQueueMaintenanceOwner(ctx context.Context, executable, root string) (<-chan error, error) {
-	return StartQueueMaintenanceOwnerWithEnvironment(ctx, executable, root, pueue.DefaultEnvironment())
-}
-
 func LaunchQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, root string, environment []string) error {
 	_, err := StartQueueMaintenanceOwnerWithEnvironment(ctx, executable, root, environment)
 	return err

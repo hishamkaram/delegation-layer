@@ -128,7 +128,7 @@ func TestSupervisorOptionsSnapshotPreservesCurrentControlEnvironment(t *testing.
 	if runtime.GOOS == "linux" {
 		t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime"))
 	}
-	options := supervisor.OptionsForCurrentEnvironment(pueue.Options{})
+	options := Dependencies{}.withCapturedEnvironment().supervisorControlScope()
 	if options.Environment == nil || !strings.Contains(strings.Join(options.Environment, "\x00"), "HOME=") {
 		t.Fatalf("current supervisor environment was not captured: %v", options.Environment)
 	}

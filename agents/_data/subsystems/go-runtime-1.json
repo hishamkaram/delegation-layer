@@ -130,6 +130,7 @@
       "go:internal/taskdir",
       "go:internal/tasklifecycle",
       "go:internal/tasklifecycle/testsupport",
+      "go:internal/verifiedexec",
       "go:internal/workspace",
       "go:internal/workspaces",
       "go:internal/workspaces/testsupport",

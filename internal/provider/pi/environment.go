@@ -30,11 +30,6 @@ var nativeRuntimePathKeys = []string{
 	"NPM_CONFIG_CACHE", "GOPATH",
 }
 
-// prepareEnvironment retains the historical isolated environment contract.
-func prepareEnvironment(values []string) (profileEnvironment, error) {
-	return prepareProfileEnvironment(values, false)
-}
-
 // prepareProfileEnvironment retains native nonsecret discovery and session
 // selectors for new tasks while keeping the historical environment contract
 // available to reconstruction of older tasks.

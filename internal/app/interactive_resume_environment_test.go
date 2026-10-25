@@ -19,6 +19,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 func TestInteractiveDispatchResumeUsesSavedPiSessionRoot(t *testing.T) {
@@ -122,7 +123,7 @@ func newInteractivePiResumeDependencies(t *testing.T, fixture *interactivePiResu
 	return Dependencies{
 		Catalog: catalog,
 		PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
-			sessionRoot := appTestEnvironmentValue(environment, "PI_CODING_AGENT_SESSION_DIR")
+			sessionRoot := verifiedexec.EnvironmentValue(environment, "PI_CODING_AGENT_SESSION_DIR")
 			fixture.candidateSessionRoots = append(fixture.candidateSessionRoots, sessionRoot)
 			if fixture.testCase.failAdmission && len(fixture.candidateSessionRoots) == 2 {
 				return commonprovider.ProfileCandidate{}, fixture.prepareFailure
@@ -130,8 +131,8 @@ func newInteractivePiResumeDependencies(t *testing.T, fixture *interactivePiResu
 			profile := appTestExecutionProfile(&request, "/usr/bin/true", nil)
 			profile.Plan.Predicate = pi.Reference()
 			profile.Plan.Environment = []string{
-				"HOME=" + appTestEnvironmentValue(environment, "HOME"),
-				"PATH=" + appTestEnvironmentValue(environment, "PATH"),
+				"HOME=" + verifiedexec.EnvironmentValue(environment, "HOME"),
+				"PATH=" + verifiedexec.EnvironmentValue(environment, "PATH"),
 				"PI_CODING_AGENT_SESSION_DIR=" + sessionRoot,
 			}
 			profile.Interaction = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
@@ -357,15 +358,4 @@ func assertInteractivePiSuccessor(t *testing.T, root string, deps Dependencies, 
 	if request.RequestedConfig.Interactive != true {
 		t.Fatalf("successor lost interactive mode: %+v", request.RequestedConfig)
 	}
-}
-
-// appTestEnvironmentValue reads one key from an explicit launch scope the way
-// the process environment does: the first entry wins and absence is empty.
-func appTestEnvironmentValue(environment []string, key string) string {
-	for _, entry := range environment {
-		if name, value, ok := strings.Cut(entry, "="); ok && name == key {
-			return value
-		}
-	}
-	return ""
 }

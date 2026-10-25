@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 )
 
 func TestMaintenanceOwnerUsesExplicitEnvironment(t *testing.T) {
@@ -31,11 +33,13 @@ func TestMaintenanceOwnerUsesExplicitEnvironment(t *testing.T) {
 	}
 }
 
-func TestMaintenanceOwnerCompatibilityStartKeepsBoundedCurrentEnvironment(t *testing.T) {
+func TestMaintenanceOwnerDefaultEnvironmentKeepsBoundedCurrentEnvironment(t *testing.T) {
 	t.Setenv("LANG", "issue91-caller")
-	got := runMaintenanceOwnerMarker(t, StartQueueMaintenanceOwner)
+	got := runMaintenanceOwnerMarker(t, func(ctx context.Context, executable, root string) (<-chan error, error) {
+		return StartQueueMaintenanceOwnerWithEnvironment(ctx, executable, root, pueue.DefaultEnvironment())
+	})
 	if got != "issue91-caller" {
-		t.Fatalf("compatibility start marker = %q, want the bounded current environment", got)
+		t.Fatalf("default environment start marker = %q, want the bounded current environment", got)
 	}
 }
 

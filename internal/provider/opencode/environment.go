@@ -36,10 +36,6 @@ var nativeOpenCodeEnvironmentKeys = map[string]struct{}{
 	"OPENCODE_AUTO_SHARE": {},
 }
 
-func prepareEnvironment(values []string) (profileEnvironment, error) {
-	return prepareProfileEnvironment(values, false)
-}
-
 // prepareProfileEnvironment keeps the historical isolated environment for
 // reconstruction while allowing new tasks to retain native OpenCode discovery
 // and session selectors. Sensitive inline configuration and authentication

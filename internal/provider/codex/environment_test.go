@@ -15,7 +15,7 @@ func TestEnvironmentPreservesCredentialLocationsWithoutInjectionControls(t *test
 	}
 	codexHome := filepath.Join(home, "existing codex home")
 	values := []string{"HOME=" + home, "CODEX_HOME=" + codexHome, "PATH=/usr/bin:/bin", "DYLD_INSERT_LIBRARIES=/unsafe", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE=unrelated", "UNRELATED_SECRET=fixture-other"}
-	got, err := prepareEnvironment(values)
+	got, err := prepareProfileEnvironment(values, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestEnvironmentRejectsAmbiguousOrRelativeCoordinates(t *testing.T) {
 		{"HOME=" + home, "OPENAI_IDENTITY_TOKEN_FILE="},
 		{"HOME=" + home, "PATH=invalid\x00value"},
 	} {
-		if _, err := prepareEnvironment(values); !errors.Is(err, ErrUnsupportedProfile) {
+		if _, err := prepareProfileEnvironment(values, false); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Fatalf("got %v, want unsupported environment", err)
 		}
 	}
@@ -61,7 +61,7 @@ func TestEnvironmentRejectsAmbiguousOrRelativeCoordinates(t *testing.T) {
 
 func TestEnvironmentRejectsAlternateAuthEndpointsAndWorkloadIdentity(t *testing.T) {
 	for _, key := range []string{"OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE", "OPENAI_WORKLOAD_IDENTITY_CONTEXT", "CODEX_REFRESH_TOKEN_URL_OVERRIDE", "CODEX_REVOKE_TOKEN_URL_OVERRIDE", "CODEX_APP_SERVER_LOGIN_CLIENT_ID"} {
-		_, err := prepareEnvironment([]string{"HOME=" + t.TempDir(), key + "=private-fixture-value"})
+		_, err := prepareProfileEnvironment([]string{"HOME=" + t.TempDir(), key + "=private-fixture-value"}, false)
 		if !errors.Is(err, ErrUnsupportedProfile) || strings.Contains(err.Error(), "private-fixture-value") {
 			t.Fatalf("selector %s was not rejected safely: %v", key, err)
 		}

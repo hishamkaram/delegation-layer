@@ -19,7 +19,7 @@ const (
 	snapshotClientScript = "#!/bin/sh\nprintf 'pueue marker=%s\\n' \"${" + snapshotMarkerKey + "-unset}\"\n"
 )
 
-func TestOptionsForCurrentEnvironmentReachesClientChild(t *testing.T) {
+func TestOptionsForEnvironmentWithProcessScopeReachesClientChild(t *testing.T) {
 	t.Setenv(snapshotMarkerKey, snapshotInheritedValue)
 	for _, tc := range []struct {
 		name        string
@@ -31,7 +31,7 @@ func TestOptionsForCurrentEnvironmentReachesClientChild(t *testing.T) {
 		{name: "supplied values pass through", environment: []string{snapshotMarkerKey + "=" + snapshotSuppliedValue}, want: snapshotSuppliedValue},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			options := OptionsForCurrentEnvironment(pueue.Options{Environment: tc.environment})
+			options := OptionsForEnvironment(pueue.Options{Environment: tc.environment}, os.Environ())
 			if got := observeSnapshotMarker(t, options); got != tc.want {
 				t.Fatalf("client child observed marker %q, want %q", got, tc.want)
 			}
@@ -39,18 +39,18 @@ func TestOptionsForCurrentEnvironmentReachesClientChild(t *testing.T) {
 	}
 }
 
-func TestOptionsForCurrentEnvironmentOwnsItsCopy(t *testing.T) {
+func TestOptionsForEnvironmentWithProcessScopeOwnsItsCopy(t *testing.T) {
 	supplied := []string{snapshotMarkerKey + "=" + snapshotSuppliedValue}
-	options := OptionsForCurrentEnvironment(pueue.Options{Environment: supplied})
+	options := OptionsForEnvironment(pueue.Options{Environment: supplied}, os.Environ())
 	supplied[0] = snapshotMarkerKey + "=mutated-after-snapshot"
 	if got := observeSnapshotMarker(t, options); got != snapshotSuppliedValue {
 		t.Fatalf("client child observed marker %q after caller mutation, want %q", got, snapshotSuppliedValue)
 	}
 }
 
-func TestOptionsForCurrentEnvironmentKeepsExplicitEmptyWithoutAmbientFallback(t *testing.T) {
+func TestOptionsForEnvironmentWithProcessScopeKeepsExplicitEmptyWithoutAmbientFallback(t *testing.T) {
 	t.Setenv(snapshotMarkerKey, snapshotInheritedValue)
-	options := OptionsForCurrentEnvironment(pueue.Options{Environment: []string{}})
+	options := OptionsForEnvironment(pueue.Options{Environment: []string{}}, os.Environ())
 	if options.Environment == nil || len(options.Environment) != 0 {
 		t.Fatalf("explicit empty control environment became %q", options.Environment)
 	}
