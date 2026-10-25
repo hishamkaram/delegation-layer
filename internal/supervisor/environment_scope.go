@@ -9,7 +9,16 @@ import (
 // OptionsForEnvironment snapshots the bounded supervisor control environment
 // from one captured launch scope instead of the process environment. An
 // explicit control environment, including an empty one, is copied unchanged.
+// A captured scope also owns the default detached maintenance launch; an
+// explicit maintenance environment, including an empty one, is copied
+// unchanged, and a nil scope keeps the standalone maintenance default.
 func OptionsForEnvironment(base pueue.Options, environment []string) pueue.Options {
+	switch {
+	case base.PrivateMaintenanceEnvironment != nil:
+		base.PrivateMaintenanceEnvironment = slices.Clone(base.PrivateMaintenanceEnvironment)
+	case environment != nil:
+		base.PrivateMaintenanceEnvironment = pueue.DefaultEnvironmentFrom(environment)
+	}
 	if base.Environment != nil {
 		base.Environment = slices.Clone(base.Environment)
 		return base

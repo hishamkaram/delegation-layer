@@ -121,7 +121,7 @@ func TestValidateGitEnvironmentRejectsInheritedRedirections(t *testing.T) {
 	for _, variable := range variables {
 		t.Run(variable, func(t *testing.T) {
 			t.Setenv(variable, filepath.Join(canonicalWorkspaceTestDir(t), "redirect"))
-			if err := ValidateGitEnvironment(); !errors.Is(err, ErrInvalidGitContext) {
+			if err := (Git{}).ValidateEnvironment(); !errors.Is(err, ErrInvalidGitContext) {
 				t.Fatalf("error = %v, want ErrInvalidGitContext", err)
 			}
 		})
@@ -130,7 +130,7 @@ func TestValidateGitEnvironmentRejectsInheritedRedirections(t *testing.T) {
 
 func TestValidateGitEnvironmentAllowsUnsetOrEmptyRedirections(t *testing.T) {
 	t.Setenv("GIT_DIR", "")
-	if err := ValidateGitEnvironment(); err != nil {
+	if err := (Git{}).ValidateEnvironment(); err != nil {
 		t.Fatal(err)
 	}
 }

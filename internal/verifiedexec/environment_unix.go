@@ -14,7 +14,7 @@ func TemporaryRoot(environment []string) string {
 // environmentTemporaryRoot selects TMPDIR without reading the process
 // environment. The fallback is os.TempDir's native Linux/macOS default.
 func environmentTemporaryRoot(environment []string) string {
-	if root := environmentValue(environment, "TMPDIR"); root != "" {
+	if root := EnvironmentValue(environment, "TMPDIR"); root != "" {
 		return root
 	}
 	return "/tmp"

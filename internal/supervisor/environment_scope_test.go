@@ -39,6 +39,36 @@ func TestOptionsForEnvironmentSnapshotsSelectedScope(t *testing.T) {
 	}
 }
 
+func TestOptionsForEnvironmentDefaultsMaintenanceOnlyForCapturedScope(t *testing.T) {
+	t.Setenv("LANG", "ambient")
+	scope := []string{"LANG=selected", "SECRET_TOKEN=hidden"}
+	if got := OptionsForEnvironment(pueue.Options{}, scope).PrivateMaintenanceEnvironment; !slices.Equal(got, []string{"LANG=selected"}) {
+		t.Fatalf("captured maintenance environment = %q, want the bounded selected scope", got)
+	}
+	uncaptured := OptionsForEnvironment(pueue.Options{}, nil)
+	if uncaptured.PrivateMaintenanceEnvironment != nil {
+		t.Fatalf("nil scope selected maintenance environment %q, want standalone default", uncaptured.PrivateMaintenanceEnvironment)
+	}
+	if uncaptured.Environment == nil || len(uncaptured.Environment) != 0 {
+		t.Fatalf("nil scope control environment = %#v, want explicit empty", uncaptured.Environment)
+	}
+	if empty := OptionsForEnvironment(pueue.Options{}, []string{}).PrivateMaintenanceEnvironment; empty == nil || len(empty) != 0 {
+		t.Fatalf("empty scope maintenance environment = %#v, want explicit empty", empty)
+	}
+	explicit := []string{"LANG=explicit"}
+	selected := OptionsForEnvironment(pueue.Options{PrivateMaintenanceEnvironment: explicit}, scope)
+	if !slices.Equal(selected.PrivateMaintenanceEnvironment, explicit) {
+		t.Fatalf("explicit maintenance environment was replaced: %q", selected.PrivateMaintenanceEnvironment)
+	}
+	selected.PrivateMaintenanceEnvironment[0] = "LANG=mutated"
+	if explicit[0] != "LANG=explicit" {
+		t.Fatal("selected maintenance environment aliases its base")
+	}
+	if kept := OptionsForEnvironment(pueue.Options{PrivateMaintenanceEnvironment: []string{}}, scope).PrivateMaintenanceEnvironment; kept == nil || len(kept) != 0 {
+		t.Fatalf("explicit empty maintenance environment changed: %#v", kept)
+	}
+}
+
 func TestAdmissionOptionsForScopeSeparatesControlFromMaintenanceScope(t *testing.T) {
 	t.Setenv("HOME", "/ambient-home")
 	t.Setenv("PATH", "/ambient-bin")
@@ -101,6 +131,13 @@ func TestContinuationConfigEnvironmentSuppressesPrivatePredecessor(t *testing.T)
 	}
 	if got := EnvironmentConfigPath([]string{"PATH=/bin"}); got != "" {
 		t.Fatalf("absent scope config = %q", got)
+	}
+	if got := EnvironmentConfigPath([]string{environmentConfigKey, environmentConfigKey + "=", environmentConfigKey + "=/later/pueue.yml"}); got != "" {
+		t.Fatalf("empty first scope config did not win over a later entry: %q", got)
+	}
+	t.Setenv(environmentConfigKey, "/ambient/pueue.yml")
+	if got := EnvironmentConfigPath(nil); got != "" {
+		t.Fatalf("nil scope config read the process environment: %q", got)
 	}
 	privatePredecessor := task.MetaRecord{SupervisorConfig: task.SupervisorRef{ConfigPath: private}}
 	if got := ContinuationConfigEnvironment(root, privatePredecessor, scope); got != "" {

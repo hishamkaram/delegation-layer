@@ -238,7 +238,7 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 	if err != nil {
 		return Arguments{}, nil, "", err
 	}
-	options, err := admission.SupervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
+	options, err := admission.SupervisorOptionsForCandidate(deps.supervisorControlScope(), candidate)
 	if err != nil {
 		return Arguments{}, nil, "", admission.WithStage("prepare-supervisor-options", err)
 	}

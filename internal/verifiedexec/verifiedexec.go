@@ -636,7 +636,7 @@ func locateInEnvironment(name string, environment []string, directory string) (s
 			return "", fmt.Errorf("resolve verified script interpreter directory: %w", err)
 		}
 	}
-	pathValue := environmentValue(environment, "PATH")
+	pathValue := EnvironmentValue(environment, "PATH")
 	for _, pathDirectory := range strings.Split(pathValue, string(os.PathListSeparator)) {
 		if pathDirectory == "" {
 			pathDirectory = "."

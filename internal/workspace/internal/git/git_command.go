@@ -35,13 +35,6 @@ var gitReservedEnvironment = map[string]string{
 
 var errGitRunnerRequired = errors.New("git command runner is required")
 
-// ValidateGitEnvironment rejects inherited Git redirections before a caller
-// authorizes any Git operation. It does not run a command or rewrite the
-// process environment.
-func ValidateGitEnvironment() error {
-	return (Git{}).ValidateEnvironment()
-}
-
 // ValidateEnvironment validates the same snapshot used to construct commands.
 func (g Git) ValidateEnvironment() error {
 	return validateInheritedGitEnvironment(g.environment())

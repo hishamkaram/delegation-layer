@@ -13,6 +13,12 @@ func Prepare(selection supervisorcore.AdmissionSelection, options PreparationOpt
 			supervisorcore.CloseOwnerMaintenance(supervisorOwner, resultErr)
 		}
 	}()
+	// Bind control to the selected scope before the provider merge. A
+	// continuation has already bound its historical control, which is kept; an
+	// uncaptured composition keeps pueue's standalone default.
+	if options.Supervisor.Environment != nil {
+		options.Supervisor.Control = supervisorcore.OptionsForEnvironment(options.Supervisor.Control, options.Supervisor.Environment)
+	}
 	candidate, err := options.Profiles.Prepare(store.Root, req)
 	if err != nil {
 		return PreparedAdmission{}, WithStage("prepare-provider", err)

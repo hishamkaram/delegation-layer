@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/contributorprovider/fixture"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/contributorprovider/protocol"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 const contributorRuntimeEnvironment = "DELEGATE_CONTRIBUTOR_RUNTIME"
@@ -123,7 +124,7 @@ func resolveRuntime(directory string) (runtimeIdentity, error) {
 }
 
 func resolveRuntimeDirectory(environment []string) (string, error) {
-	raw := environmentValue(environment, contributorRuntimeEnvironment)
+	raw := verifiedexec.EnvironmentValue(environment, contributorRuntimeEnvironment)
 	if raw == "" {
 		// The acceptance supervisor intentionally strips unrelated environment
 		// variables from queued workers. Derive the fixture runtime beside the
@@ -145,18 +146,6 @@ func resolveRuntimeDirectory(environment []string) (string, error) {
 		return "", err
 	}
 	return raw, nil
-}
-
-// environmentValue returns the first entry for key, matching the first-wins
-// lookup of the process environment. A missing key reads as empty; it never
-// falls back to the process environment.
-func environmentValue(environment []string, key string) string {
-	for _, entry := range environment {
-		if name, value, found := strings.Cut(entry, "="); found && name == key {
-			return value
-		}
-	}
-	return ""
 }
 
 func prepareWithDependencies(request task.TaskRecord, dependencies prepareDependencies) (commonprovider.PreparedProfile, error) {

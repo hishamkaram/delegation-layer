@@ -24,7 +24,7 @@ func LookPath(name string, environment []string) (string, error) {
 		return exec.LookPath(name)
 	}
 	errDotDisabled := execErrDotDisabled(environment)
-	for _, directory := range filepath.SplitList(environmentValue(environment, "PATH")) {
+	for _, directory := range filepath.SplitList(EnvironmentValue(environment, "PATH")) {
 		candidate := filepath.Join(directory, name)
 		probe := candidate
 		if !filepath.IsAbs(probe) {
@@ -48,7 +48,7 @@ func LookPath(name string, environment []string) (string, error) {
 // execerrdot setting wins and only the exact value 0 disables the check.
 func execErrDotDisabled(environment []string) bool {
 	disabled := false
-	for _, setting := range strings.Split(environmentValue(environment, "GODEBUG"), ",") {
+	for _, setting := range strings.Split(EnvironmentValue(environment, "GODEBUG"), ",") {
 		if name, value, found := strings.Cut(setting, "="); found && name == "execerrdot" {
 			disabled = value == "0"
 		}

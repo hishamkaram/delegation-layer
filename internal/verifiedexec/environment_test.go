@@ -187,3 +187,29 @@ func writeEnvironmentExecutable(t *testing.T, path string, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+func TestEnvironmentValueReadsFirstWellFormedEntryWithoutAmbientFallback(t *testing.T) {
+	t.Setenv("DELEGATE_ENVIRONMENT_VALUE_TEST", "ambient")
+	tests := []struct {
+		name        string
+		environment []string
+		want        string
+	}{
+		{name: "first entry wins", environment: []string{"KEY=first", "KEY=second"}, want: "first"},
+		{name: "empty first entry wins", environment: []string{"KEY=", "KEY=second"}, want: ""},
+		{name: "malformed entry ignored", environment: []string{"KEY", "KEYX=other", "KEY=value"}, want: "value"},
+		{name: "missing key is empty", environment: []string{"OTHER=value"}, want: ""},
+		{name: "nil never reads ambient", environment: nil, want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			key := "KEY"
+			if test.environment == nil {
+				key = "DELEGATE_ENVIRONMENT_VALUE_TEST"
+			}
+			if got := EnvironmentValue(test.environment, key); got != test.want {
+				t.Fatalf("EnvironmentValue(%q, %q) = %q, want %q", test.environment, key, got, test.want)
+			}
+		})
+	}
+}

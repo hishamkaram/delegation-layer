@@ -1,10 +1,9 @@
 package supervisor
 
 import (
-	"strings"
-
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 const environmentConfigKey = "DELEGATE_PUEUE_CONFIG"
@@ -13,12 +12,7 @@ const environmentConfigKey = "DELEGATE_PUEUE_CONFIG"
 // captured launch scope. As with the process environment, the first entry
 // wins and an absent key is empty.
 func EnvironmentConfigPath(environment []string) string {
-	for _, entry := range environment {
-		if key, value, ok := strings.Cut(entry, "="); ok && key == environmentConfigKey {
-			return value
-		}
-	}
-	return ""
+	return verifiedexec.EnvironmentValue(environment, environmentConfigKey)
 }
 
 // ContinuationConfigEnvironment returns the DELEGATE_PUEUE_CONFIG value in
