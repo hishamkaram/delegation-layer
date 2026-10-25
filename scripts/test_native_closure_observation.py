@@ -21,11 +21,19 @@ from unittest import mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests.inspection.fixtures import TASK as INSPECTION, InspectionFixture
+from scripts.acceptance_tests.test_foundation_owners import failing_lstat
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native_evidence.lifetime_closure import LIFETIME_CLOSURE_KIND
 from scripts.delegate_acceptance.native_evidence.public_contract import CaseClosureAnchor
 from scripts.delegate_acceptance.native_release import closure_observation
 from scripts.delegate_acceptance.native_release.closure_observation import observe_case_closure
 from scripts.delegate_acceptance.native_release.contract import ReleaseError
+from scripts.delegate_acceptance.release_verification.candidate_proof_closure import (
+    encode_proof_closure, read_proof_closure,
+)
+from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.test_candidate_proof_closure import c2_proof, supplement
 
 
 CASE = "case-07-codex-exec-workspace-write-timeout-resume"
@@ -135,7 +143,70 @@ class CaseObservationTests(unittest.TestCase):
         (self.models / "inspections").mkdir()
         self.assertRefused("closure_discovery_unresolved", self.anchor())
         self.diagnostics["model_discovery_inspection"] = {"journal_task_id": "0" * 32}
+        for admitted in ("false", None):
+            with self.subTest(discover_models=admitted):
+                self.diagnostics["failure"]["discover_models"] = admitted
+                self.assertRefused("closure_discovery_admission_invalid", self.anchor())
+        del self.diagnostics["failure"]["discover_models"]
         self.assertRefused("closure_discovery_admission_invalid", self.anchor())
+
+    def test_a_dangling_launch_record_is_not_a_no_launch_root(self):
+        # The canonical producer's no-launch check uses lexists; a dangling link is a present record.
+        for root, name in ((self.models, "inspections"), (self.state, "tasks"), (self.state, "inspections")):
+            with self.subTest(root=root.name, record=name):
+                link = root / name
+                link.symlink_to(self.root / "absent", target_is_directory=True)
+                if root == self.models:
+                    self.assertRefused("closure_discovery_unresolved", self.anchor())
+                else:
+                    with self.assertRaises(AcceptanceFailure):
+                        observe_case_closure(self.native, self.anchor())
+                link.unlink()
+        # The absent control still observes the no-launch closure.
+        case, _, _ = observe_case_closure(self.native, self.anchor())
+        self.assertEqual(case.lifetime_closure["ordinary"]["launch"], "none")
+
+    def test_an_uninspectable_launch_record_refuses(self):
+        for root, name in ((self.models, "inspections"), (self.state, "tasks"), (self.state, "inspections")):
+            with self.subTest(root=root.name, record=name):
+                denied = PermissionError(13, "injected permission denied")
+                with failing_lstat(root / name, denied), self.assertRaises(PermissionError) as raised:
+                    observe_case_closure(self.native, self.anchor())
+                self.assertIs(raised.exception, denied)
+
+    def test_an_ordinary_case_binds_its_recorded_prerequisite_inspection(self):
+        # An ordinary Pi default-model case runs discovery although it is not discovery-only.
+        fixture = InspectionFixture(self)
+        fixture.inspection_records(include_ordinary=False, revision="model-discovery-v1",
+                                   managed_exit_proof=True)
+        self.models = fixture.state
+        self.diagnostics["model_discovery_inspection"] = {"journal_task_id": INSPECTION}
+        self.diagnostics["task_ids"] = [INSPECTION]
+        anchor = self.anchor(diagnostic_task_ids=(INSPECTION,))
+        case, _, _ = observe_case_closure(self.native, anchor)
+        self.assertEqual((case.ordinary_tasks, case.discovery_inspection_id), ((), INSPECTION))
+        self.assertEqual(case.lifetime_closure["ordinary"]["launch"], "none")
+        discovery = case.lifetime_closure["model_discovery"]
+        self.assertEqual(set(discovery["inspections"]), {INSPECTION})
+        self.assertEqual(discovery["inspections"][INSPECTION]["cause"], "completed")
+        # The semantic reader that replay uses accepts the witness against the exact bound set.
+        proof = c2_proof(anchor)
+        resolution = read_proof_closure(encode_proof_closure(supplement(proof, (case,))), (proof,))
+        self.assertEqual(resolution.resource_ids, (CASE,))
+
+        unbound = self.anchor(diagnostic_task_ids=())
+        with self.assertRaises(VerificationError) as caught:
+            read_proof_closure(encode_proof_closure(supplement(c2_proof(unbound), (case,))), (c2_proof(unbound),))
+        self.assertEqual(caught.exception.code, "candidate_proof_closure_inventory_mismatch")
+
+        other = "0" * 32
+        self.diagnostics["model_discovery_inspection"] = {"journal_task_id": other}
+        self.diagnostics["task_ids"] = [other]
+        changed = self.anchor(diagnostic_task_ids=(other,))
+        case, _, _ = observe_case_closure(self.native, changed)
+        with self.assertRaises(VerificationError) as caught:
+            read_proof_closure(encode_proof_closure(supplement(c2_proof(changed), (case,))), (c2_proof(changed),))
+        self.assertEqual(caught.exception.code, "candidate_proof_closure_lifetime_closure_incomplete")
 
 
 class OutputPlacementTests(unittest.TestCase):

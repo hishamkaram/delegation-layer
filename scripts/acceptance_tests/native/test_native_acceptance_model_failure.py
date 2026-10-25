@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.test_foundation_owners import failing_lstat
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     provider_policy,
@@ -18,6 +19,7 @@ from scripts.delegate_acceptance.native import (
 
 PROVIDER = "pi:json"
 JOURNAL = "a" * 32
+MODELS_ROOT, INSPECTION, ORDINARY = "b" * 32, "d" * 32, "c" * 32
 # Distinct sentinels prove the sanitized summary never carries diagnostic text.
 ERROR_TEXT = "Delegate could not start the provider SENTINEL-ERROR."
 RECOVERY = "delegate supervisor migrate --root <same-state-root> --json SENTINEL-RECOVERY"
@@ -263,6 +265,209 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         operation.require_default_model_prerequisite()
         self.assertEqual(operation.model_discovery_exit_code, 2)
         operation.processes.run.assert_called_once()
+        # An operation that journaled nothing records no inspection identity.
+        self.assertIsNone(operation.model_discovery_task_id)
+
+    # A Pi default-model prerequisite whose stubbed CLI journals its one
+    # inspection, as Go does. The real entry, finalizer and diagnostics owners
+    # also run; only the ordinary admission and the supervisor shutdown are
+    # stubbed. The finalizer persists diagnostics before shutdown, so the
+    # inspection identity must already be recorded by then.
+    def journal_one_inspection(self, models: Path) -> None:
+        # Diagnostics describe the journal's files without decoding them.
+        gate.write_json(models / "root.json", {"schema_version": 1, "root_id": MODELS_ROOT})
+        journal = models / "inspections" / INSPECTION
+        journal.mkdir(parents=True)
+        gate.write_json(journal / "request.json", {"schema_version": 1, "task_id": INSPECTION})
+        gate.write_json(journal / "result.json", {"schema_version": 1, "reason": "eligible"})
+
+    def journaled(self, value: dict[str, object], exit_code: object, *, journal=None,
+                  raised: BaseException | None = None) -> tuple[gate.NativeAcceptance, Path]:
+        """The models command calls ``journal`` with its root, then returns or raises ``raised``."""
+        operation = self.operation(value, exit_code, discover_only=False)
+        process = operation.processes.run.return_value
+        write_journal = self.journal_one_inspection if journal is None else journal
+
+        def models_command(*_args: object, **_kwargs: object) -> SimpleNamespace:
+            write_journal(operation.models_state)
+            if raised is not None:
+                raise raised
+            return process
+
+        operation.processes.run.side_effect = models_command
+        operation.processes.capture_root = None
+        operation.state = self.root / "ordinary-state"
+        operation.state.mkdir(exist_ok=True)
+        operation.tasks, operation.numeric_ids = {}, {}
+        operation.owned_directories = ()
+        operation.launch_environment = Mock(return_value={})
+        return operation, operation.models_state / "inspections" / INSPECTION
+
+    def admit_failed_ordinary_task(self, operation: gate.NativeAcceptance) -> None:
+        def admit(name: str, *_args: object, **_kwargs: object) -> None:
+            task = operation.state / "tasks" / ORDINARY
+            task.mkdir(parents=True)
+            (task / "task.json").write_bytes(b'{"task":"fixture"}\n')
+            (task / "meta.json").write_bytes(b'{"meta":"fixture"}\n')
+            operation.tasks[name] = ORDINARY
+            operation.numeric_ids[ORDINARY] = 7
+            raise gate.AcceptanceFailure("fresh provider task failed")
+
+        operation.dispatch = Mock(side_effect=admit)
+
+    def failed_main(self, operation: gate.NativeAcceptance) -> dict[str, object]:
+        """Run the entry's failure path; return the diagnostics persisted before shutdown."""
+        frozen: dict[str, object] = {}
+
+        def safe_shutdown() -> None:
+            frozen.update(json.loads((operation.output / "failure-diagnostics.json").read_text()))
+
+        operation.safe_shutdown = safe_shutdown
+        with patch.object(entry, "choose_output", return_value=operation.output), \
+                patch.object(entry, "NativeAcceptance", return_value=operation):
+            self.assertEqual(entry.main(["--provider", PROVIDER, "--permission", "read-only",
+                                         "--output", str(operation.output)]), 1)
+        self.assertTrue(frozen, "diagnostics were not persisted before shutdown")
+        self.assertIs(frozen["failure"]["discover_models"], False)
+        return frozen
+
+    def process_failure(self) -> RuntimeError:
+        # The acceptance's Processes registry keeps its default RuntimeError failure type.
+        return RuntimeError(f"unexpected exit 3 for {self.root / 'processes' / 'model-discovery'}")
+
+    def assertProcessErrorReported(self, operation: gate.NativeAcceptance, diagnostics: dict[str, object],
+                                   primary: BaseException) -> dict[str, object]:
+        receipt = json.loads((operation.output / "failure.json").read_text())
+        self.assertEqual((receipt["status"], receipt["error"]), ("failed", str(primary)))
+        self.assertEqual(diagnostics["failure"]["error"]["bytes"], len(str(primary).encode()))
+        operation.dispatch.assert_not_called()
+        return receipt
+
+    def assertInspectionBound(self, diagnostics: dict[str, object], journal: Path) -> None:
+        self.assertIn("model_discovery_inspection", diagnostics)
+        inspection = diagnostics["model_discovery_inspection"]
+        self.assertEqual((inspection["journal_task_id"], inspection["journal"]), (INSPECTION, "present"))
+        for name in ("request.json", "result.json"):
+            self.assertEqual(inspection["files"][name]["sha256"], gate.digest(journal / name))
+
+    def test_ordinary_failure_after_discovery_binds_the_recorded_inspection(self):
+        operation, journal = self.journaled(response("available", "ok"), 0)
+        self.admit_failed_ordinary_task(operation)
+        diagnostics = self.failed_main(operation)
+        self.assertInspectionBound(diagnostics, journal)
+        self.assertEqual(diagnostics["task_ids"], [ORDINARY, INSPECTION])
+        self.assertEqual([task["task_id"] for task in diagnostics["tasks"]], [ORDINARY])
+        self.assertEqual((operation.models_root_id, operation.model_discovery_task_id), (MODELS_ROOT, INSPECTION))
+
+    def test_response_validation_failure_keeps_the_journaled_inspection_attributable(self):
+        operation, journal = self.journaled(response("available", "ok"), 2)
+        diagnostics = self.failed_main(operation)
+        self.assertInspectionBound(diagnostics, journal)
+        self.assertEqual(diagnostics["task_ids"], [INSPECTION])
+        self.assertIsNone(operation.model_discovery_exit_code)
+        operation.dispatch.assert_not_called()
+
+
+    def test_process_failure_after_journaling_binds_the_inspection_and_keeps_its_error(self):
+        primary = self.process_failure()
+        operation, journal = self.journaled(response("available", "ok"), 0, raised=primary)
+        diagnostics = self.failed_main(operation)
+        self.assertInspectionBound(diagnostics, journal)
+        self.assertEqual(diagnostics["task_ids"], [INSPECTION])
+        receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
+        self.assertNotIn("direct cause", receipt["traceback"])
+
+    def test_process_failure_without_a_journal_records_no_inspection(self):
+        primary = self.process_failure()
+        operation, _ = self.journaled(response("available", "ok"), 0, journal=lambda _models: None,
+                                      raised=primary)
+        diagnostics = self.failed_main(operation)
+        self.assertNotIn("model_discovery_inspection", diagnostics)
+        self.assertEqual(diagnostics["task_ids"], [])
+        self.assertEqual((operation.models_root_id, operation.model_discovery_task_id), (None, None))
+        receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
+        self.assertNotIn("direct cause", receipt["traceback"])
+
+    def test_process_failure_with_an_invalid_journal_keeps_its_error_and_names_the_identity_cause(self):
+        def two_inspections(models: Path) -> None:
+            self.journal_one_inspection(models)
+            (models / "inspections" / ("e" * 32)).mkdir()
+
+        def regular_file(models: Path) -> None:
+            gate.write_json(models / "root.json", {"schema_version": 1, "root_id": MODELS_ROOT})
+            (models / "inspections").write_bytes(b"")
+
+        def dangling_inspections(models: Path) -> None:
+            gate.write_json(models / "root.json", {"schema_version": 1, "root_id": MODELS_ROOT})
+            (models / "inspections").symlink_to(models / "absent", target_is_directory=True)
+
+        def dangling_root(models: Path) -> None:
+            (models / "root.json").symlink_to(models / "absent.json")
+
+        def duplicate_root_keys(models: Path) -> None:
+            (models / "root.json").write_bytes(
+                ('{"root_id": "%s", "root_id": "%s"}' % (MODELS_ROOT, "e" * 32)).encode())
+
+        def oversized_root(models: Path) -> None:
+            (models / "root.json").write_bytes(b'{"pad": "' + b"x" * (1 << 20) + b'"}')
+
+        # The bounded JSON reader refuses duplicates and oversize with its plain RuntimeError.
+        for label, journal, cause_type, cause in (
+                ("ambiguous", two_inspections, gate.AcceptanceFailure, "inspection journal coverage is not exact"),
+                ("regular file", regular_file, gate.AcceptanceFailure, "inspection journal is invalid"),
+                ("dangling inspections", dangling_inspections, gate.AcceptanceFailure,
+                 "inspection journal is invalid"),
+                ("dangling root", dangling_root, gate.AcceptanceFailure, "root record is invalid"),
+                ("duplicate root keys", duplicate_root_keys, RuntimeError, "duplicate evidence key"),
+                ("oversized root", oversized_root, RuntimeError, "JSON evidence exceeds bound")):
+            with self.subTest(journal=label):
+                primary = self.process_failure()
+                direct, _ = self.journaled(response("available", "ok"), 0, journal=journal, raised=primary)
+                with self.assertRaises(RuntimeError) as raised:
+                    direct.discover_models()
+                self.assertIs(raised.exception, primary)
+                self.assertIs(type(primary.__cause__), cause_type)
+                self.assertIn(cause, str(primary.__cause__))
+                self.assertIsNone(direct.model_discovery_task_id)
+
+                primary = self.process_failure()
+                operation, _ = self.journaled(response("available", "ok"), 0, journal=journal, raised=primary)
+                diagnostics = self.failed_main(operation)
+                self.assertNotIn("model_discovery_inspection", diagnostics)
+                self.assertEqual(diagnostics["task_ids"], [])
+                self.assertIsNone(operation.model_discovery_task_id)
+                receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
+                # The entry's traceback projects the identity fault as the process error's explicit cause.
+                self.assertIn("direct cause", receipt["traceback"])
+                self.assertIn(cause, receipt["traceback"])
+
+
+    def test_process_failure_with_an_uninspectable_inventory_keeps_its_error_and_names_the_fault(self):
+        def root_only(models: Path) -> None:
+            gate.write_json(models / "root.json", {"schema_version": 1, "root_id": MODELS_ROOT})
+
+        # An unreadable parent denies even an entry the command never created.
+        for label, journal, name in (("present root", None, "root.json"),
+                                     ("unlisted inspections", root_only, "inspections")):
+            with self.subTest(inventory=label):
+                denied = PermissionError(13, "injected permission denied")
+                primary = self.process_failure()
+                direct, _ = self.journaled(response("available", "ok"), 0, journal=journal, raised=primary)
+                with failing_lstat(direct.models_state / name, denied), self.assertRaises(RuntimeError) as raised:
+                    direct.discover_models()
+                self.assertIs(raised.exception, primary)
+                self.assertIs(primary.__cause__, denied)
+                self.assertIsNone(direct.model_discovery_task_id)
+
+                primary = self.process_failure()
+                operation, _ = self.journaled(response("available", "ok"), 0, journal=journal, raised=primary)
+                with failing_lstat(operation.models_state / name, denied):
+                    diagnostics = self.failed_main(operation)
+                self.assertNotIn("model_discovery_inspection", diagnostics)
+                self.assertEqual(diagnostics["task_ids"], [])
+                receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
+                self.assertIn("direct cause", receipt["traceback"])
+                self.assertIn("injected permission denied", receipt["traceback"])
 
 
 class PiDiscoveryUnavailableTests(unittest.TestCase):

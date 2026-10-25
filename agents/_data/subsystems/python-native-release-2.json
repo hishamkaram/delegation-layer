@@ -280,17 +280,23 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.inspection.fixtures",
+      "py:acceptance_tests.test_foundation_owners",
       "py:contextlib",
+      "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.native_evidence.lifetime_closure",
       "py:delegate_acceptance.native_evidence.public_contract",
       "py:delegate_acceptance.native_release.closure_observation",
       "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.release_verification.candidate_proof_closure",
+      "py:delegate_acceptance.release_verification.contract",
       "py:hashlib",
       "py:io",
       "py:json",
       "py:pathlib",
       "py:sys",
       "py:tempfile",
+      "py:test_candidate_proof_closure",
       "py:unittest"
     ]
   },

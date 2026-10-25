@@ -173,7 +173,6 @@
       "py:delegate_acceptance.tasks.operations",
       "py:hashlib",
       "py:json",
-      "py:os",
       "py:pathlib",
       "py:sys",
       "py:time"

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.delegate_acceptance.directories import journal, operations as directories
-from scripts.delegate_acceptance.evidence.files import read_json
+from scripts.delegate_acceptance.evidence.files import path_present, read_json
 from scripts.delegate_acceptance.processes import operations as processes
 from scripts.delegate_acceptance.tasks import operations as tasks
 
@@ -151,6 +151,63 @@ class CanonicalOwnerTests(unittest.TestCase):
         self.assertEqual(read_json(record)["state"], "complete")
         self.assertFalse((self.root / "target").exists())
         self.assertEqual(list(quarantine.iterdir()), [])
+
+
+
+def failing_lstat(target: Path, error: OSError):
+    """Make only ``target``'s lstat fail, as an unreadable parent or device fault would."""
+    original = Path.lstat
+
+    def lstat(path, *args, **kwargs):
+        if path == target:
+            raise error
+        return original(path, *args, **kwargs)
+
+    return patch.object(Path, "lstat", lstat)
+
+
+class StrictPresenceTests(unittest.TestCase):
+    """Only a missing entry is absent; presence is never inferred from an uninspectable path."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="strict-presence-")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+
+    def test_only_a_missing_entry_is_absent(self):
+        self.assertFalse(path_present(self.root / "absent"))
+        (self.root / "file").write_bytes(b"")
+        (self.root / "directory").mkdir()
+        (self.root / "dangling").symlink_to(self.root / "absent")
+        for name in ("file", "directory", "dangling"):
+            with self.subTest(entry=name):
+                self.assertTrue(path_present(self.root / name))
+
+    def test_an_uninspectable_entry_propagates_its_own_error(self):
+        (self.root / "file").write_bytes(b"")
+        with self.assertRaises(NotADirectoryError):
+            path_present(self.root / "file" / "child")
+        target = self.root / "tasks"
+        for error in (PermissionError(13, "injected permission denied"), OSError("injected device fault")):
+            with self.subTest(error=type(error).__name__), failing_lstat(target, error):
+                with self.assertRaises(OSError) as raised:
+                    path_present(target)
+                self.assertIs(raised.exception, error)
+
+    def test_an_unreadable_parent_is_not_absence(self):
+        parent = self.root / "locked"
+        (parent / "tasks").mkdir(parents=True)
+        parent.chmod(0)
+        # Restore search permission before the owned directory is removed.
+        self.addCleanup(parent.chmod, 0o700)
+        try:
+            (parent / "tasks").lstat()
+        except PermissionError:
+            pass
+        else:
+            self.skipTest("this process bypasses directory search permission; the injected faults cover it")
+        with self.assertRaises(PermissionError):
+            path_present(parent / "tasks")
 
 
 if __name__ == "__main__":

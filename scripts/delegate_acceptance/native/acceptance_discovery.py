@@ -9,7 +9,7 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import digest, read_json, write_json
+from scripts.delegate_acceptance.evidence.files import digest, path_present, read_json, write_json
 from scripts.delegate_acceptance.evidence.records import parse_json_output, status_jobs
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _task_identity, require
 from scripts.delegate_acceptance.native.constants import NATIVE_DISCOVERY_ENVIRONMENT
@@ -76,32 +76,49 @@ def require_discovery(name: str, selected: Path, environment: dict[str, str]) ->
         raise BlockedFailure(f"{name} discovery does not match the selected executable")
 
 
-def _sync_model_cleanup(owner, ops: ModelDiscoveryCleanupOps) -> None:
-    """Bind cleanup to the model inspection only after its identity exists."""
+def _record_model_discovery_identity(owner) -> str | None:
+    """Record the discovery root and its one journaled inspection as soon as each exists.
+
+    The discovery operation, failure cleanup and queue validation share this
+    one reader, so failure diagnostics can bind the inspection before shutdown.
+    It returns the inspection identity, or None while none is journaled; an
+    invalid root, an ambiguous journal or a changed identity refuses.
+    """
     acceptance = owner
     root_path = acceptance.models_state / "root.json"
-    if not root_path.is_file() or root_path.is_symlink():
-        return
-    root = read_json(root_path)
-    root_id = root.get("root_id")
-    require(_task_identity(root_id), "model discovery root identity is invalid")
-    acceptance.models_root_id = root_id
-    ops.root_id = root_id
-
+    # Only actual absence records nothing; a dangling link or another type is a present, invalid
+    # record, and an uninspectable path raises its own OSError.
+    if path_present(root_path):
+        require(root_path.is_file() and not root_path.is_symlink(), "model discovery root record is invalid")
+        root = read_json(root_path)
+        root_id = root.get("root_id") if isinstance(root, dict) else None
+        require(_task_identity(root_id), "model discovery root identity is invalid")
+        require(acceptance.models_root_id in (None, root_id), "model discovery root identity changed")
+        acceptance.models_root_id = root_id
     inspections = acceptance.models_state / "inspections"
-    if not inspections.is_dir() or inspections.is_symlink():
-        return
+    if not path_present(inspections):
+        return None
+    require(inspections.is_dir() and not inspections.is_symlink(), "model discovery inspection journal is invalid")
     entries = list(inspections.iterdir())
     if not entries:
-        return
+        return None
     require(len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink() and
             _task_identity(entries[0].name),
             "model discovery inspection journal coverage is not exact")
-    task_id = entries[0].name
-    if acceptance.model_discovery_task_id is None:
-        acceptance.model_discovery_task_id = task_id
-    require(acceptance.model_discovery_task_id == task_id,
-            "model discovery task identity changed")
+    # The state's record_task refuses a second, different identity.
+    acceptance.model_discovery_task_id = entries[0].name
+    return entries[0].name
+
+
+def _sync_model_cleanup(owner, ops: ModelDiscoveryCleanupOps) -> None:
+    """Bind cleanup to the model inspection only after its identity exists."""
+    acceptance = owner
+    task_id = _record_model_discovery_identity(acceptance)
+    if acceptance.models_root_id is None:
+        return
+    ops.root_id = acceptance.models_root_id
+    if task_id is None:
+        return
     ops.dispatch_attempts = {task_id}
     ops.inspection_attempts = {task_id}
 
@@ -173,9 +190,21 @@ def discover_models(owner) -> None:
     before = workspace_snapshot(acceptance.workspace)
     argv = acceptance.model_discovery_argv()
     acceptance._discovery_state().record_intent(model_discovery_intent(acceptance))
-    process = acceptance.processes.run(
-        "model-discovery", argv, acceptance.base,
-        expected={0, 1, 2}, timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS)
+    # Bind what the command journaled before any failure freezes the diagnostics,
+    # including a process failure raised after the journal was created.
+    try:
+        process = acceptance.processes.run(
+            "model-discovery", argv, acceptance.base,
+            expected={0, 1, 2}, timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS)
+    except BaseException as error:
+        try:
+            _record_model_discovery_identity(acceptance)
+        # RuntimeError includes AcceptanceFailure and the bounded JSON reader's refusals.
+        except (RuntimeError, OSError, ValueError) as identity_error:
+            # The process failure stays primary; the identity fault is its explicit cause.
+            raise error from identity_error
+        raise
+    _record_model_discovery_identity(acceptance)
     response = parse_json_output(process, "model discovery")
     summary = validate_model_discovery_response(response, acceptance.provider)
     observed_exit = process.result.get("exit_code")
@@ -184,12 +213,6 @@ def discover_models(owner) -> None:
     acceptance.model_discovery = response
     acceptance.model_discovery_summary = summary
     acceptance.model_discovery_exit_code = observed_exit
-    root_path = acceptance.models_state / "root.json"
-    if root_path.is_file() and not root_path.is_symlink():
-        root = read_json(root_path)
-        root_id = root.get("root_id") if isinstance(root, dict) else None
-        require(_task_identity(root_id), "model discovery root identity is invalid")
-        acceptance.models_root_id = root_id
     write_json(acceptance.output / "models.json", response)
     require(workspace_snapshot(acceptance.workspace) == before,
             "model discovery changed the acceptance workspace")
@@ -219,18 +242,8 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
     require(not model_tasks.exists() and not model_tasks.is_symlink(),
             "model discovery created an ordinary task record")
 
-    inspections = acceptance.models_state / "inspections"
-    require(inspections.is_dir() and not inspections.is_symlink(),
-            "model discovery inspection journal is absent")
-    entries = list(inspections.iterdir())
-    require(len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink() and
-            _task_identity(entries[0].name),
-            "model discovery inspection journal coverage is not exact")
-    task_id = entries[0].name
-    if acceptance.model_discovery_task_id is None:
-        acceptance.model_discovery_task_id = task_id
-    require(acceptance.model_discovery_task_id == task_id,
-            "model discovery task identity changed")
+    task_id = _record_model_discovery_identity(acceptance)
+    require(task_id is not None, "model discovery inspection journal is absent")
     validator = NativeTaskOps(acceptance.processes, acceptance.delegate, acceptance.runner, acceptance.pueue,
                               acceptance.models_state.parent, acceptance.models_state, acceptance.output,
                               managed_runner=acceptance.ops.managed_runner,

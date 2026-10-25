@@ -64,6 +64,7 @@
     "imports": [
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.inspection.fixtures",
+      "py:acceptance_tests.test_foundation_owners",
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:delegate_acceptance.native_evidence.lifetime_closure",
@@ -99,6 +100,7 @@
       "py:acceptance_provider_common",
       "py:acceptance_tests.native.support",
       "py:acceptance_tests.resources",
+      "py:acceptance_tests.test_foundation_owners",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:json",
@@ -141,6 +143,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_native",
+      "py:acceptance_tests.test_foundation_owners",
       "py:ast",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.provider_policy",
@@ -194,6 +197,7 @@
     "owner": "py:delegate_acceptance.native",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.test_foundation_owners",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_operations",
       "py:delegate_acceptance.native.production_acp",
