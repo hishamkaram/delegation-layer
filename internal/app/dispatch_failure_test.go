@@ -99,7 +99,7 @@ func TestContinueResponseUsesDispatchFailureEnvelope(t *testing.T) {
 }
 
 func TestContinuePreDispatchFailureHasSpecificRecoveryEnvelope(t *testing.T) {
-	result := continueTask(Arguments{Root: t.TempDir(), TaskID: strings.Repeat("a", 32)}, Dependencies{})
+	result := continueTask(Arguments{Root: t.TempDir(), TaskID: strings.Repeat("a", 32)}, Dependencies{ResourceChecker: fixtureResources})
 	if result.err == nil {
 		t.Fatal("continuation unexpectedly loaded a predecessor from an empty root")
 	}

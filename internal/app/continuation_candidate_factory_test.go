@@ -41,7 +41,7 @@ func candidateFactoryCatalog(t *testing.T, faults map[string]error) commonprovid
 
 func TestContinuationFactoryAdmitsSuccessorsThroughOwnPreparation(t *testing.T) {
 	faults := map[string]error{"fresh": errors.New("fresh"), "existing": errors.New("existing"), "successor": errors.New("successor")}
-	deps := Dependencies{Catalog: candidateFactoryCatalog(t, faults)}
+	deps := Dependencies{ResourceChecker: fixtureResources, Catalog: candidateFactoryCatalog(t, faults)}
 	request := task.TaskRecord{
 		Provider: "fixture:preflight", Mode: config.ModeReadOnly, CanonicalCwd: t.TempDir(),
 		PriorSession:    &task.PriorSession{Provider: "fixture:preflight", ConversationID: "known", PredecessorTaskID: "predecessor"},

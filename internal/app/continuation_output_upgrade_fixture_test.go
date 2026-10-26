@@ -82,6 +82,7 @@ func initOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputU
 	writeRunnerFixture(t, fixture.runner, "#!/bin/sh\nexit 0\n")
 	installOutputUpgradeProvider(t, testCase.executable())
 	fixture.deps = Dependencies{
+		ResourceChecker:             fixtureResources,
 		Catalog:                     testCase.catalog(t),
 		SupervisorOptions:           options,
 		InitialSupervisorExecutable: fixture.supervisor.Binding().ClientExecutable,

@@ -34,6 +34,7 @@ func TestRunNativeProfileRefusesBeforeBinding(t *testing.T) {
 		"--provider", "codex:exec", "--brief", briefPath, "--cwd", filepath.Dir(briefPath),
 		"--id", strings.Repeat("a", 32), "--runner", filepath.Join(t.TempDir(), "runner"),
 	}, &stdout, &stderr, Dependencies{
+		ResourceChecker:             fixtureResources,
 		InitialSupervisorExecutable: missingSupervisor,
 		// The owned empty PATH keeps host-installed provider CLIs out of the
 		// native catalog lookup, so the refusal never depends on the machine.
@@ -589,7 +590,7 @@ func TestRunNonJSONEmitsTaskIdentityAndDescriptors(t *testing.T) {
 	defer closeAppTestTask(t, store, td)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"logs", req.TaskID, "--root", store.Root}, &stdout, &stderr, Dependencies{})
+	code := Run([]string{"logs", req.TaskID, "--root", store.Root}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("non-JSON logs failed: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -612,7 +613,7 @@ func assertLogDescriptors(t *testing.T, sealed bool) {
 	defer closeAppTestTask(t, store, td)
 
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"logs", req.TaskID, "--root", store.Root, "--json"}, &stdout, &stderr, Dependencies{})
+	code := Run([]string{"logs", req.TaskID, "--root", store.Root, "--json"}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})
 	if code != 0 {
 		t.Fatalf("logs exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -640,7 +641,7 @@ func assertLogDescriptors(t *testing.T, sealed bool) {
 func TestDispatchExistingRejectsChangedExplicitSupervisorConfig(t *testing.T) {
 	store, td, req := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/other-pueue.yml"}, Dependencies{})
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/other-pueue.yml"}, Dependencies{ResourceChecker: fixtureResources})
 	if result.code != 2 || !errors.Is(result.err, task.ErrRequestConflict) {
 		t.Fatalf("changed explicit config was not refused: %+v", result)
 	}
@@ -677,7 +678,7 @@ func TestDispatchExistingAcceptsMatchingExplicitSupervisorConfig(t *testing.T) {
 	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
 		t.Fatalf("preparing terminal task cleanup=%v collect=%v", cleanupErr, collectErr)
 	}
-	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/app-pueue.yml"}, Dependencies{})
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/app-pueue.yml"}, Dependencies{ResourceChecker: fixtureResources})
 	if result.code != 0 || result.err != nil || result.response.Publication != task.PublicationCommitted.String() {
 		t.Fatalf("matching explicit config was not accepted: %+v", result)
 	}
@@ -690,7 +691,7 @@ func TestDispatchExistingRejectsChangedRunnerBeforePrivateQueueRepair(t *testing
 	}
 	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("a", 32), false, nil, pueue.PrivateConfigPath(store.Root))
 	defer closeAppTestTask(t, store, td)
-	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), Runner: filepath.Join(t.TempDir(), "other-runner")}, Dependencies{})
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), Runner: filepath.Join(t.TempDir(), "other-runner")}, Dependencies{ResourceChecker: fixtureResources})
 	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) {
 		t.Fatalf("changed runner was not refused before supervisor repair: %+v", result)
 	}
@@ -786,7 +787,7 @@ func collectWatchCLI(t *testing.T, root, id, watch string) (int, Response, time.
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	started := time.Now()
-	code := Run([]string{"--root", root, "collect", id, "--watch", watch, "--json"}, &stdout, &stderr, Dependencies{})
+	code := Run([]string{"--root", root, "collect", id, "--watch", watch, "--json"}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})
 	elapsed := time.Since(started)
 	var response Response
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {

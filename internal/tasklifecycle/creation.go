@@ -9,7 +9,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
-func CreateTask(selection supervisorcore.AdmissionSelection, options CreationOptions, store *taskdir.Store, req task.TaskRecord, brief []byte, briefPath string) (result CreationResult) {
+// CreateTask creates an ordinary task without a resource check. Existing and
+// partial-task recovery uses it; only a fresh dispatch carries a resource gate.
+func CreateTask(selection supervisorcore.AdmissionSelection, options CreationOptions, store *taskdir.Store, req task.TaskRecord, brief []byte, briefPath string) CreationResult {
+	return createTask(selection, options, store, req, brief, briefPath, nil)
+}
+
+func createTask(selection supervisorcore.AdmissionSelection, options CreationOptions, store *taskdir.Store, req task.TaskRecord, brief []byte, briefPath string, gate *resourceGate) (result CreationResult) {
 	prepared, err := admissioncore.Prepare(selection, options.Admission, store, req)
 	if err != nil {
 		err = admissioncore.WithStage("prepare-admission", annotateMissingDispatchStage("preparing inspection admission", err))
@@ -21,6 +27,9 @@ func CreateTask(selection supervisorcore.AdmissionSelection, options CreationOpt
 	runner := prepared.RunnerExecutable
 	if err = profile.ValidateAdmission(req); err != nil {
 		return creationFailure(result, CreationProfile, admissioncore.WithStage("validate-profile", err))
+	}
+	if err = gate.refresh(supervisor.Binding(), options.Admission.Supervisor); err != nil {
+		return creationFailure(result, CreationResources, admissioncore.WithStage("check-resources", err))
 	}
 	runnerOwnership := prepared.RunnerOwnership
 	meta := NewMeta(req, profile, supervisor.Binding(), runner, runnerOwnership, options.PublisherVersion)

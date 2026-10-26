@@ -309,6 +309,7 @@
       "go:internal/task",
       "go:internal/task/randomid",
       "go:internal/testutil/fakeprovider",
+      "go:internal/testutil/resourcecheck",
       "go:io",
       "go:os",
       "go:os/exec",
@@ -534,6 +535,16 @@
       "go:strconv",
       "go:testing",
       "go:unicode"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/resourcecheck",
+    "owner": "go:internal/testutil/resourcecheck",
+    "layer": "test",
+    "imports": [
+      "go:context",
+      "go:internal/resourceadmission",
+      "go:time"
     ]
   }
 ]

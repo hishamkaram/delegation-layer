@@ -210,7 +210,7 @@ func TestExternalInspectionHandoffPreservesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, canceled := range []context.Context{nil, ctx} {
-		if _, err := prepareInspectionHandoffSupervisor(canceled, "", Dependencies{}, pueue.Options{}); !errors.Is(err, context.Canceled) {
+		if _, err := prepareInspectionHandoffSupervisor(canceled, "", Dependencies{ResourceChecker: fixtureResources}, pueue.Options{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("prepare error = %v", err)
 		}
 		if err := supervisorcore.HandoffExternalInspectionGroup(canceled, nil, nil, inspection.GroupRequestRecord{}, inspection.GroupRequestRecord{}); !errors.Is(err, context.Canceled) {

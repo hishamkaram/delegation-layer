@@ -28,7 +28,7 @@ func TestMigrationPreparesInstalledPair(t *testing.T) {
 	var prepared *pueue.Client
 	err := pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		prepared, prepareErr = prepareCurrentPrivateSupervisor(ctx, store.Root, Dependencies{InitialSupervisorExecutable: clientPath}, pueue.Options{})
+		prepared, prepareErr = prepareCurrentPrivateSupervisor(ctx, store.Root, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath}, pueue.Options{})
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, prepared, err)

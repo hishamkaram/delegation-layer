@@ -397,6 +397,31 @@ durable, but it cannot prove that an unrecorded launch is absent and therefore
 does not publish terminal evidence. This is recovery evidence loss, not a
 provider failure.
 
+## A new task is refused for resource pressure
+
+`dispatch` or `continue` returns exit `1` with `failure.code:
+"resource_pressure"`, `failure.stage: "check-resources"`, `task_record:
+"not_created"`, `failure.next_action: "retry_later"`, and
+`failure.retry_after_seconds: 30`. Delegate confirmed host pressure before creating
+the task, so no ordinary task record was created and there is no task to
+observe. A late refusal can follow earlier preparation or provider inspection,
+and a retained workspace can remain. Nothing is queued and Delegate does not
+retry for you.
+
+- Report the refusal, or wait at least 30 seconds and repeat the exact
+  original admission once. A `continue` stays `continue`, with the same root
+  and predecessor. If it is refused again, report and stop.
+- Do not poll, loop, or retry in the background. Do not run Pueue or process
+  commands, kill or pause other work, or call the provider directly.
+- Tasks that are already running or accepted, and `status`, `collect`, and
+  `cancel`, are not affected.
+- `resource_admission.status: "unknown"` with warnings on an admitted task
+  means a metric could not be read. The task runs; observe that same task
+  with `status` and `collect` and do not redispatch.
+
+The check cannot promise that a started task avoids out-of-memory kills. See
+[fresh admission resource check](architecture.md#fresh-admission-resource-check).
+
 ## A task was interrupted
 
 After a host restart, `status` can report `interrupted` with

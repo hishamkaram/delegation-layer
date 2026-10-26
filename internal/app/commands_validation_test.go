@@ -29,7 +29,7 @@ func TestDispatchExistingIDConflictStopsBeforeAdmission(t *testing.T) {
 		"--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
 		"--provider", req.Provider, "--brief", briefPath, "--cwd", req.CanonicalCwd,
 		"--runner", filepath.Join(t.TempDir(), "runner"),
-	}, &stdout, &stderr, Dependencies{InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
+	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if code != 2 {
 		t.Fatalf("conflict exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -57,7 +57,7 @@ func TestDispatchValidationFailureKeepsExplicitTaskPresenceUnknown(t *testing.T)
 		"dispatch", "--json", "--root", store.Root, "--id", req.TaskID,
 		"--provider", req.Provider, "--brief", filepath.Join(t.TempDir(), "missing.md"),
 		"--cwd", req.CanonicalCwd,
-	}, &stdout, &stderr, Dependencies{})
+	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})
 	if code != 2 {
 		t.Fatalf("invalid dispatch exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
@@ -87,7 +87,7 @@ func TestDispatchGeneratedIDValidationFailureRemainsCorrectable(t *testing.T) {
 	code := Run([]string{
 		"dispatch", "--json", "--root", root, "--provider", "antigravity:print",
 		"--brief", brief, "--cwd", cwd, "--budget", "2m", "--native-timeout", "5m",
-	}, &stdout, &stderr, Dependencies{})
+	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources})
 	if code != 2 {
 		t.Fatalf("invalid generated-ID dispatch exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

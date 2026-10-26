@@ -180,7 +180,7 @@ func TestCommittedOutcomeWinsOverClosedLifetime(t *testing.T) {
 			if collected.code != 0 || collected.response.Publication != task.PublicationCommitted.String() || collected.response.Outcome == nil || collected.response.Status != "" || collected.response.Failure != nil {
 				t.Fatalf("collect with outcome and closed lifetime = code %d %+v", collected.code, collected.response)
 			}
-			observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
+			observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 			if observed.code != 0 || observed.response.Publication != task.PublicationCommitted.String() || observed.response.Status != "" || observed.response.Failure != nil {
 				t.Fatalf("status with outcome and closed lifetime = code %d %+v", observed.code, observed.response)
 			}

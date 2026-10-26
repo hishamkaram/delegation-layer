@@ -287,6 +287,23 @@ func ReadPrivateSupervisorBinding(stateRoot string) (task.SupervisorRef, bool, e
 	return control.ReadPrivateSupervisorBinding(stateRoot)
 }
 
+type (
+	ExecutionTarget      = control.ExecutionTarget
+	ExecutionTargetState = control.ExecutionTargetState
+)
+
+const (
+	ExecutionTargetUnknown = control.ExecutionTargetUnknown
+	ExecutionTargetAbsent  = control.ExecutionTargetAbsent
+	ExecutionTargetRunning = control.ExecutionTargetRunning
+)
+
+var ErrExecutionTargetUnverified = control.ErrExecutionTargetUnverified
+
+func ObservePrivateExecutionTarget(ctx context.Context, stateRoot string, options Options) (ExecutionTarget, error) {
+	return control.ObservePrivateExecutionTarget(ctx, stateRoot, options)
+}
+
 func PublishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.SupervisorRef) error {
 	return control.PublishPrivateSupervisorBindingIfAbsent(stateRoot, binding)
 }

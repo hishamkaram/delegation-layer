@@ -62,7 +62,7 @@ func TestSignaledWorkspaceVerificationRetainsDurableDiagnostics(t *testing.T) {
 func newWorkspaceSignalTestOperation(t *testing.T) (*taskdir.Store, *workspace.Operation) {
 	t.Helper()
 	resource, _ := newMappedWorkspaceExecutionFixture(t)
-	store, err := openStore(resource.StateRoot(), Dependencies{}.storeDependencies(), false)
+	store, err := openStore(resource.StateRoot(), Dependencies{ResourceChecker: fixtureResources}.storeDependencies(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

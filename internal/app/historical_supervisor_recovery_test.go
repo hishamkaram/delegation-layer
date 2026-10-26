@@ -646,6 +646,7 @@ func historicalConsumeSubmissionPermit(permit *taskdir.SubmissionPermit) (task.S
 
 func (f *historicalSupervisorFixture) dependencies() Dependencies {
 	return Dependencies{
+		ResourceChecker:             fixtureResources,
 		PredicateRegistry:           predicate.Default,
 		SupervisorOptions:           f.options,
 		InitialSupervisorExecutable: f.clientB,

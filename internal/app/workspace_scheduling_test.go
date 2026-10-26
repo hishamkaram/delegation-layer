@@ -44,7 +44,7 @@ func TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd(t *testing.T) {
 	var adds, enqueues atomic.Int32
 	var receiptFault atomic.Bool
 	options := pueue.Options{Environment: os.Environ(), Observer: workspaceAddCancellationObserver(t, operation, cancel, &adds, &enqueues, &receiptFault)}
-	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options}
+	deps := Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options}
 	err = workspaces.ScheduleExistingOperation(observer, fixture.Store, operation, workspaceRuntimeOptions(deps))
 	if err != nil || !errors.Is(observer.Err(), context.Canceled) || receiptFault.Load() {
 		t.Fatalf("scheduling lost receipt-before-enqueue at observer cancellation: %v, observer=%v, receiptFault=%t", err, observer.Err(), receiptFault.Load())
@@ -94,7 +94,7 @@ func TestWorkspaceSchedulingExpiredReplayOnlyClosesOriginalHelper(t *testing.T) 
 		t.Fatal(err)
 	}
 	var commands atomic.Int32
-	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
+	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
 	observer, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err = workspaces.ScheduleExistingOperation(observer, store, operation, workspaceRuntimeOptions(deps)); err != nil {
@@ -132,7 +132,7 @@ func TestWorkspaceRunningHelperObservationDoesNotContactSupervisor(t *testing.T)
 		}
 	})
 	var commands atomic.Int32
-	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
+	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
 	if err = workspaces.SubmitOperation(t.Context(), store, operation, workspaceRuntimeOptions(deps)); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestWorkspaceVerificationBeforeAuthorizationIsNotIndexed(t *testing.T) {
 	fixture := testsupport.NewRecoveryFixture(t)
 	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.Store)
 	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: lifetimeGuardianTestTaskID, SHA256: task.ComputeSHA256([]byte("verification authorization"))}
-	deps := Dependencies{RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
+	deps := Dependencies{ResourceChecker: fixtureResources, RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
 	operation, err := workspaces.ScheduleOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), workspaces.OperationSpec{Purpose: "verify-" + lifetimeGuardianTestTaskID + ".json", Kind: workspace.OperationVerify, Subject: subject, Budget: time.Minute, Arguments: []string{"/fixture/verify"}}, func(context.Context, *workspace.Operation) error { return context.DeadlineExceeded })
 	defer func() {
 		if closeErr := workspaces.CloseOperation(operation); closeErr != nil {
@@ -182,6 +182,7 @@ func TestWorkspaceExpiredFirstForgetCreatesOnlyMetadataAndFence(t *testing.T) {
 	}
 	var commands atomic.Int32
 	deps := Dependencies{
+		ResourceChecker:  fixtureResources,
 		RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable,
 		SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }},
 	}
@@ -222,7 +223,7 @@ func TestWorkspaceSchedulingReplayRetainsOriginalDeadlineAfterObserverCancellati
 		t.Fatal(err)
 	}
 	var commands, callbacks atomic.Int32
-	deps := Dependencies{SupervisorOptions: pueue.Options{ObservationTimeout: time.Hour, Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
+	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{ObservationTimeout: time.Hour, Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
 	observer, cancelObserver := context.WithCancel(t.Context())
 	cancelObserver()
 	barrier := errors.New("stop before submission")
@@ -313,6 +314,7 @@ func TestWorkspaceScheduleOperationExpiredReplayOnlyClosesOriginalHelper(t *test
 	var commands, callbacks atomic.Int32
 	sentinel := errors.New("expired replay reached submission")
 	deps := Dependencies{
+		ResourceChecker:  fixtureResources,
 		RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable,
 		SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }},
 	}
@@ -378,7 +380,7 @@ func verifyExpiredFirstWorkspaceForgetRecovery(t *testing.T, associated bool) {
 	if associated {
 		seedWorkspaceForgetPurposeWithoutResourceReference(t, fixture, intent, supervisor.Binding())
 	}
-	deps := Dependencies{RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
+	deps := Dependencies{ResourceChecker: fixtureResources, RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
 	operationID, handled, err := workspaces.ReconcileForgetOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), true, time.Minute)
 	if !handled || !workspaces.PendingError(err) || operationID == "" {
 		t.Fatalf("explicit retry could not advance an expired uncreated first helper: id=%s handled=%t err=%v", operationID, handled, err)

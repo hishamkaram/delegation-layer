@@ -23,6 +23,9 @@ var (
 	_ = pueue.PrivateEndpointReady
 	_ = pueue.PrivateEndpointAbsent
 	_ = pueue.PrivateEndpointRefused
+	_ = pueue.ExecutionTargetUnknown
+	_ = pueue.ExecutionTargetAbsent
+	_ = pueue.ExecutionTargetRunning
 	_ = pueue.PublishedPairReady
 	_ = pueue.PublishedPairNotPublished
 	_ = pueue.PublishedPairIncomplete
@@ -50,6 +53,7 @@ var (
 	_ = pueue.ErrPrivateSupervisorMigrationBusy
 	_ = pueue.ErrPrivateSupervisorMigrationRequired
 	_ = pueue.ErrPrivateSupervisorNotInitialized
+	_ = pueue.ErrExecutionTargetUnverified
 
 	_ = pueue.Bind
 	_ = pueue.BindPrivate
@@ -108,6 +112,7 @@ var (
 	_ = pueue.ReadPrivateRecoveryBinding
 	_ = pueue.ReadPrivateSchedulingEvidence
 	_ = pueue.ReadPrivateSupervisorBinding
+	_ = pueue.ObservePrivateExecutionTarget
 	_ = pueue.ReconcilePublishedPrivatePairWithLock
 	_ = pueue.ReconcilePublishedPrivatePairAttemptWithLock
 	_ = pueue.ObservePublishedPrivatePairWithLock
@@ -157,6 +162,9 @@ var (
 	_ = (*pueue.Client).Reconcile
 	_ = (*pueue.Client).AttemptCompletedTaskCleanup
 	_ = (*pueue.Client).ObservePrivateEndpoint
+	_ = pueue.ExecutionTarget.State
+	_ = pueue.ExecutionTarget.PID
+	_ = pueue.ExecutionTarget.StartToken
 	_ = (*pueue.Client).ReconcileInspection
 	_ = (*pueue.Client).ReconcileInspectionWithLease
 	_ = (*pueue.Client).ReconcileStatus
@@ -252,6 +260,8 @@ var (
 	_ pueue.PrivateQueueCleanupPlan
 	_ pueue.PrivateRecovery
 	_ pueue.PrivateEndpointObservation
+	_ pueue.ExecutionTarget
+	_ pueue.ExecutionTargetState
 	_ pueue.PublishedPairAvailability
 	_ pueue.PublishedPairReconciliation
 	_ pueue.CompletedTaskCleanup

@@ -17,9 +17,11 @@ func TestManagedPublicTaskWorkspaceViewDeadlineRemainsUndetermined(t *testing.T)
 		name    string
 		observe func(Arguments) commandResult
 	}{
-		{name: "status", observe: func(a Arguments) commandResult { return status(a, Dependencies{Environment: os.Environ()}) }},
+		{name: "status", observe: func(a Arguments) commandResult {
+			return status(a, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ()})
+		}},
 		{name: "collect", observe: func(a Arguments) commandResult {
-			return collect(a, Dependencies{Environment: os.Environ()}.storeDependencies())
+			return collect(a, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ()}.storeDependencies())
 		}},
 	} {
 		t.Run(observer.name, func(t *testing.T) {

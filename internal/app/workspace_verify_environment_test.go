@@ -197,7 +197,7 @@ func writeVerificationProbe(t *testing.T, path, label string) {
 func newWorkspaceVerificationTestOperation(t *testing.T, arguments []string) (*taskdir.Store, *workspace.Operation, string) {
 	t.Helper()
 	resource, workdir := newMappedWorkspaceExecutionFixture(t)
-	store, err := openStore(resource.StateRoot(), Dependencies{}.storeDependencies(), false)
+	store, err := openStore(resource.StateRoot(), Dependencies{ResourceChecker: fixtureResources}.storeDependencies(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

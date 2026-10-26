@@ -32,6 +32,7 @@ func TestInspectionDeadlineIsOperationalDispatchFailure(t *testing.T) {
 		"--provider", request.Provider, "--brief", briefPath,
 		"--cwd", request.CanonicalCwd, "--id", request.TaskID,
 	}, &stdout, &stderr, Dependencies{
+		ResourceChecker: fixtureResources,
 		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			return commonprovider.ProfileCandidate{}, errors.Join(errors.New("inspection preparation"), inspection.ErrAdmissionExpired)
 		},

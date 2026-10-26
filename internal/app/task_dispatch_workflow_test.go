@@ -38,7 +38,7 @@ func TestContinuationMissingProfilePortRetainsPreparedJournal(t *testing.T) {
 	defer closeAppTestTask(t, store, td)
 	before, err := os.ReadFile(filepath.Join(td.Dir, "meta.json"))
 	testsupport.RequireAppTest(t, err)
-	options := dispatchOptions(Dependencies{}, true)
+	options := dispatchOptions(Dependencies{ResourceChecker: fixtureResources}, true)
 	options.ContinuationProfiles = nil
 	_, _, err = tasklifecycle.ContinuationOptionsForTask(store, options, req.TaskID)
 	if !errors.Is(err, task.ErrEvidenceFault) {
@@ -58,7 +58,7 @@ func TestDispatchWorkflowClosesRealStoreAfterCandidateRefusal(t *testing.T) {
 	temporary, err := filepath.EvalSymlinks(t.TempDir())
 	testsupport.RequireAppTest(t, err)
 	fixture := preflightFixture{root: filepath.Join(temporary, "state"), cwd: t.TempDir(), prepareFault: commonprovider.ErrAuthenticationBlocked}
-	deps := Dependencies{Catalog: preflightFixtureCatalog(t, fixture.candidate), Environment: os.Environ()}
+	deps := Dependencies{ResourceChecker: fixtureResources, Catalog: preflightFixtureCatalog(t, fixture.candidate), Environment: os.Environ()}
 	options := dispatchOptions(deps, false)
 	var opened *taskdir.Store
 	options.OpenStore = func(root string, create bool) (*taskdir.Store, error) {
@@ -100,7 +100,7 @@ func TestContinuationProfilesPreserveInjectedCurrentAndHistoricalCatalog(t *test
 				historicalCalls++
 				return commonprovider.ProfileCandidate{}, historicalFault
 			})
-			deps := Dependencies{Catalog: catalog}
+			deps := Dependencies{ResourceChecker: fixtureResources, Catalog: catalog}
 			if injected {
 				deps.PrepareCandidate = current
 			}

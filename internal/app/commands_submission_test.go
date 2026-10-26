@@ -56,7 +56,7 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 			return receiptErrorObserver{}, nil
 		},
 	}
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedReceipt) {
@@ -300,7 +300,7 @@ func repairOrdinarySubmissionReceiptFailure(t *testing.T, fixture *ordinarySubmi
 
 	writeRunnerStashedStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, numericTaskID)
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"status", fixture.req.TaskID, "--root", fixture.stateRoot, "--json"}, &stdout, &stderr, Dependencies{SupervisorOptions: fixture.options})
+	code := Run([]string{"status", fixture.req.TaskID, "--root", fixture.stateRoot, "--json"}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: fixture.options})
 	if code != 0 {
 		t.Fatalf("status repair exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

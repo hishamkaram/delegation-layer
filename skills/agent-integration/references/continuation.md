@@ -54,6 +54,13 @@ reservation. A changed provider request is a new turn and must pass the normal
 workspace-use reservation. Read [managed workspace guidance](workspaces.md)
 before attaching another provider, review, or verification operation.
 
+A new `continue` is checked for host resource pressure before the successor is
+created. If it returns `resource_pressure` with `task_record: "not_created"` and
+`next_action: "retry_later"`, follow the bounded choice in
+[result handling](result-handling.md): report and stop, or wait 30 seconds and
+retry the exact `continue --task PREDECESSOR_ID` once. Never replace it with a
+fresh dispatch. A predecessor that is already running is not affected.
+
 If `continue` returns `workspace_busy` with `task_record: "not_created"` and
 `next_action: "watch_workspace"`, observe that workspace with the same root.
 Then retry the exact `continue --task PREDECESSOR_ID` after it becomes retained.

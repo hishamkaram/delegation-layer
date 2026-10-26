@@ -59,7 +59,8 @@ func runRunnerScopeProbe(t *testing.T, options runnerRefreshOptions, plan, calle
 	defer fixture.close(t)
 	recordRunnerSupervisorReceipt(t, fixture, 7)
 	deps := Dependencies{
-		Environment: caller,
+		ResourceChecker: fixtureResources,
+		Environment:     caller,
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profile := fixture.profile()
 			profile.Plan.Environment = plan
@@ -106,6 +107,7 @@ func TestRunRunnerEnvShebangResolvesInterpreterFromSelectedScope(t *testing.T) {
 	defer fixture.close(t)
 	recordRunnerSupervisorReceipt(t, fixture, 7)
 	deps := Dependencies{
+		ResourceChecker:   fixtureResources,
 		Environment:       caller,
 		PrepareProfile:    func(task.TaskRecord) (PreparedProfile, error) { return fixture.profile(), nil },
 		SupervisorOptions: pueue.Options{Environment: fixture.environment},

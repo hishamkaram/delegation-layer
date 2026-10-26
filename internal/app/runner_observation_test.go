@@ -107,6 +107,7 @@ func TestRunRunnerObservationExpiryNeverStartsProviderAfterLateStatus(t *testing
 	var starts atomic.Int32
 	providerStarted := make(chan struct{}, 1)
 	deps := Dependencies{
+		ResourceChecker:   fixtureResources,
 		PrepareProfile:    func(task.TaskRecord) (PreparedProfile, error) { return fixture.profile(), nil },
 		PredicateRegistry: predicate.Default,
 		SupervisorOptions: options,
@@ -155,6 +156,7 @@ func TestRunRunnerUsesDurableReceiptWithoutSupervisorObservation(t *testing.T) {
 	var supervisorCommands atomic.Int32
 	var providerStarts atomic.Int32
 	result := runRunner(runnerArguments{Root: fixture.store.Root, TaskID: fixture.req.TaskID, Supervised: true}, Dependencies{
+		ResourceChecker:   fixtureResources,
 		PrepareProfile:    func(task.TaskRecord) (PreparedProfile, error) { return fixture.profile(), nil },
 		PredicateRegistry: predicate.Default,
 		SupervisorOptions: pueue.Options{
@@ -236,6 +238,7 @@ func TestRunRunnerRejectsMalformedSupervisorReceiptBeforeProviderStart(t *testin
 	}
 	var providerStarts atomic.Int32
 	result := runRunner(runnerArguments{Root: fixture.store.Root, TaskID: fixture.req.TaskID, Supervised: true}, Dependencies{
+		ResourceChecker:   fixtureResources,
 		PrepareProfile:    func(task.TaskRecord) (PreparedProfile, error) { return fixture.profile(), nil },
 		PredicateRegistry: predicate.Default,
 		SupervisorOptions: pueue.Options{Environment: fixture.environment},

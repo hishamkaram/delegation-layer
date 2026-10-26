@@ -263,7 +263,7 @@ func TestRejectedOutcomeWinsOverBudgetClosure(t *testing.T) {
 	if collected.response.Publication != task.PublicationRejected.String() || collected.response.Outcome == nil || collected.response.Status != "" || collected.response.Continuation != nil {
 		t.Fatalf("collect with rejected outcome and budget closure = code %d err=%v %+v", collected.code, collected.err, collected.response)
 	}
-	observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
+	observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 	if observed.code != 0 || observed.response.Publication != task.PublicationRejected.String() || observed.response.Status != "" || observed.response.Continuation != nil {
 		t.Fatalf("status with rejected outcome and budget closure = code %d %+v", observed.code, observed.response)
 	}

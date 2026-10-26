@@ -16,6 +16,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/fakeprovider"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/resourcecheck"
 )
 
 const (
@@ -53,6 +54,8 @@ func NewMain(executable string) *Main {
 		InitialSupervisorExecutable: invalidSupervisorPath,
 		RunnerExecutable:            filepath.Join(filepath.Dir(canonical), delegateRunnerName),
 		PublisherVersion:            publisherVersion,
+		// Acceptance fixtures measure supervisor behavior, not host load.
+		ResourceChecker: resourcecheck.Clear(),
 	}
 	if loaded, loadErr := loadHarnessConfig(configPath); loadErr == nil {
 		m.deps.InitialSupervisorExecutable = loaded.Config.SupervisorExecutable

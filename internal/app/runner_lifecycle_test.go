@@ -38,7 +38,7 @@ func (*runnerBudgetLifetime) CloseTask(context.Context) error { return nil }
 func TestScopedDependenciesSelectsRecordedEmptyEnvironment(t *testing.T) {
 	const key = "DELEGATE_RECORDED_EMPTY_ENV_TEST"
 	t.Setenv(key, "ambient")
-	caller := Dependencies{}.withCapturedEnvironment()
+	caller := Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()
 	scoped, err := scopedDependencies(caller, nil, true)
 	if err != nil {
 		t.Fatal(err)

@@ -69,9 +69,10 @@ func (p *protocolFactoryProbe) factory(identity task.SessionIdentity) func(task.
 // admitted plan; it cannot replace the admitted factory.
 func protocolFactoryDependencies(profile PreparedProfile, launches *launchCounter) Dependencies {
 	return Dependencies{
-		Environment:    os.Environ(),
-		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) { return profile, nil },
-		ExecutionHooks: launches.hooks(),
+		ResourceChecker: fixtureResources,
+		Environment:     os.Environ(),
+		PrepareProfile:  func(task.TaskRecord) (PreparedProfile, error) { return profile, nil },
+		ExecutionHooks:  launches.hooks(),
 	}
 }
 
@@ -216,7 +217,8 @@ func TestRunRunnerRefusesInvalidProtocolSelectionBeforeAnyFactory(t *testing.T) 
 	interactionCalls := 0
 	launches := &launchCounter{}
 	deps := Dependencies{
-		Environment: os.Environ(),
+		ResourceChecker: fixtureResources,
+		Environment:     os.Environ(),
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profile := fixture.profile()
 			profile.Protocol = probe.factory(task.SessionIdentity{})

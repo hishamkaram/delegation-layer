@@ -3,6 +3,7 @@ package tasklifecycle
 import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -25,4 +26,11 @@ type DispatchOptions struct {
 	Workspace            workspaces.OperationOptions
 	OpenStore            TaskStoreOpener
 	ContinuationProfiles ContinuationProfiles
+	// Resources checks fresh ordinary admissions only. Nil selects the native
+	// resourceadmission checker when a fresh admission first needs it.
+	Resources ResourceChecker
+	// resourceAssessment is the invocation-local assessment a continuation
+	// already took for the dispatch it owns, so the dispatch does not sample
+	// again. Freshness is still enforced before the task record is written.
+	resourceAssessment *resourceadmission.Assessment
 }

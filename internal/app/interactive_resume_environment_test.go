@@ -133,7 +133,8 @@ func newInteractivePiResumeDependencies(t *testing.T, fixture *interactivePiResu
 		t.Fatal(err)
 	}
 	return Dependencies{
-		Catalog: catalog,
+		ResourceChecker: fixtureResources,
+		Catalog:         catalog,
 		PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 			sessionRoot := verifiedexec.EnvironmentValue(environment, "PI_CODING_AGENT_SESSION_DIR")
 			fixture.candidateSessionRoots = append(fixture.candidateSessionRoots, sessionRoot)

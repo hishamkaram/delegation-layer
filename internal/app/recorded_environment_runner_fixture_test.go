@@ -141,7 +141,8 @@ func TestRecordedEnvironmentRunnerHelper(t *testing.T) {
 	}
 	var launches launchCounter
 	deps := Dependencies{
-		Catalog: testCase.catalog(t),
+		ResourceChecker: fixtureResources,
+		Catalog:         testCase.catalog(t),
 		SupervisorOptions: pueue.Options{
 			Environment:        append(pueue.DefaultEnvironment(), "FAKE_COMMAND_LOG="+request.CommandLog, "FAKE_STATUS_PATH="+request.StatusPath),
 			ObservationTimeout: pueue.DefaultObservationTimeout,

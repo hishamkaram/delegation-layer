@@ -330,7 +330,7 @@ func TestRebindContinuationSupervisorHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	saved := task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath("/state")}
-	_, err := supervisorcore.RebindContinuation(ctx, "/state", saved, continuationSupervisorOptions(Dependencies{}))
+	_, err := supervisorcore.RebindContinuation(ctx, "/state", saved, continuationSupervisorOptions(Dependencies{ResourceChecker: fixtureResources}))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled continuation rebind was not bounded: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestRebindContinuationSupervisorUsesPublishedSuccessor(t *testing.T) {
 	successorGroup.Supervisor = successor
 	publishAppTestGroupMigration(t, store, legacyGroup, successorGroup)
 
-	got, err := supervisorcore.RebindContinuation(context.Background(), store.Root, legacy, continuationSupervisorOptions(Dependencies{}))
+	got, err := supervisorcore.RebindContinuation(context.Background(), store.Root, legacy, continuationSupervisorOptions(Dependencies{ResourceChecker: fixtureResources}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,6 +423,7 @@ func TestRebindContinuationSupervisorRejectsPrivateEndpointDriftWithoutInspectio
 	saved.ResolvedConfigSHA256 = strings.Repeat("b", 64)
 
 	_, err = supervisorcore.RebindContinuation(context.Background(), store.Root, saved, continuationSupervisorOptions(Dependencies{
+		ResourceChecker:             fixtureResources,
 		InitialSupervisorExecutable: clientPath,
 		SupervisorOptions:           options,
 	}))

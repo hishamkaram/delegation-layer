@@ -23,7 +23,7 @@ func TestDispatchExistingRefreshesProfileBeforeSubmission(t *testing.T) {
 	defer closeAppTestTask(t, store, td)
 
 	var profileCalls int
-	deps := Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	deps := Dependencies{ResourceChecker: fixtureResources, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		profileCalls++
 		profile := appTestExecutionProfile(req, "/tmp/app-provider", nil)
 		profile.Effective.Digest = task.ComputeSHA256([]byte("changed-policy"))
@@ -49,6 +49,7 @@ func TestRunRunnerRefreshesProfileAfterSupervisorReconcile(t *testing.T) {
 	var profileCalls int
 	providerStarted := false
 	deps := Dependencies{
+		ResourceChecker: fixtureResources,
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profileCalls++
 			profile := fixture.profile()
@@ -91,6 +92,7 @@ func TestRunRunnerRefreshesProfileAtProcessStartBoundary(t *testing.T) {
 	var profileCalls int
 	providerStarted := false
 	deps := Dependencies{
+		ResourceChecker: fixtureResources,
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profileCalls++
 			profile := fixture.profile()

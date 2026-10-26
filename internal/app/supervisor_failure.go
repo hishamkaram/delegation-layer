@@ -26,12 +26,24 @@ func publicSupervisorError(message string, err error) error {
 
 func commandPresentationError(command string, result commandResult) error {
 	if command == "dispatch" || command == "continue" {
-		failure := dispatchFailure(result.err, result.response.TaskRecord)
-		if failure.ReasonCode != "" {
-			return publicSupervisorError(dispatchFailureMessage(failure.Code), result.err)
+		if public := dispatchPublicError(dispatchFailure(result.err, result.response.TaskRecord), result.err); public != nil {
+			return public
 		}
 	}
 	return result.err
+}
+
+// dispatchPublicError is the detailed public error for a failure whose code
+// has a typed detail, or nil when the command error is presented unchanged.
+func dispatchPublicError(failure DispatchFailureResponse, err error) error {
+	switch {
+	case failure.Code == "resource_pressure":
+		return publicResourceError(dispatchFailureMessage(failure.Code), err)
+	case supervisorFailureCode(failure.Code) && failure.ReasonCode != "":
+		return publicSupervisorError(dispatchFailureMessage(failure.Code), err)
+	default:
+		return nil
+	}
 }
 
 func supervisorFailureReason(err error) string {

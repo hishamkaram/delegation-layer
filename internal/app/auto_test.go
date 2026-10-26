@@ -85,7 +85,7 @@ func TestSelectAutoProviderUsesStaticReadinessAndDefaultPermission(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{Catalog: catalog}.withCapturedEnvironment().normalized()
+	deps := Dependencies{ResourceChecker: fixtureResources, Catalog: catalog}.withCapturedEnvironment().normalized()
 	provider, err := admissioncore.SelectAutoProvider(staticAdmissionOptions(deps), root, strings.Repeat("a", 32), strings.Repeat("b", 32), workspace, task.TaskConfig{Budget: "1m"}, []byte("brief"))
 	if err != nil || provider != "zulu:run" {
 		t.Fatalf("auto provider=%q err=%v calls=%v", provider, err, calls)

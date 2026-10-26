@@ -148,7 +148,7 @@ func TestInteractionJournalCannotHideTerminalOutcome(t *testing.T) {
 	if result.err != nil || result.response.Outcome == nil || result.response.Outcome.Verdict != outcome.Verdict {
 		t.Fatalf("journal hid winner: %+v", result)
 	}
-	observed := status(Arguments{Root: store.Root, TaskID: td.TaskID}, Dependencies{})
+	observed := status(Arguments{Root: store.Root, TaskID: td.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 	if observed.err != nil || observed.response.Outcome == nil || observed.response.Outcome.Verdict != outcome.Verdict {
 		t.Fatalf("status journal hid winner: %+v", observed)
 	}

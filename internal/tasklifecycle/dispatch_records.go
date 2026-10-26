@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -39,6 +40,7 @@ const (
 	DispatchProviderSelection
 	DispatchPredecessor
 	DispatchOpenTask
+	DispatchResources
 )
 
 // DispatchResult preserves primary observations and later closure faults in
@@ -52,4 +54,7 @@ type DispatchResult struct {
 	Failure                        error
 	Workspace                      *workspaces.AdmissionFinish
 	StoreCloseError                error
+	// Resources is the latest invocation-local resource assessment of a fresh
+	// admission. It is nil when the task ID was not definitely absent.
+	Resources *resourceadmission.Assessment
 }

@@ -74,7 +74,7 @@ func TestPreflightWorkflowKeepsStaticEvidenceAndNeverCreatesAuthority(t *testing
 			if id == "" {
 				id = "fixture:preflight"
 			}
-			result := preflight(Arguments{Root: fixture.root, Cwd: fixture.cwd, Provider: id, Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m", Model: test.model}}, Dependencies{Catalog: catalog})
+			result := preflight(Arguments{Root: fixture.root, Cwd: fixture.cwd, Provider: id, Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m", Model: test.model}}, Dependencies{ResourceChecker: fixtureResources, Catalog: catalog})
 			if result.code != test.code || result.response.Status != test.status || fixture.prepareCalls != test.prepareCalls || fixture.finalizeCalls != test.finalizeCalls {
 				t.Fatalf("static preflight order/result changed: %+v, calls=%d/%d", result, fixture.prepareCalls, fixture.finalizeCalls)
 			}

@@ -648,6 +648,7 @@
       "go:internal/predicate",
       "go:internal/provider",
       "go:internal/pueue",
+      "go:internal/resourceadmission",
       "go:internal/supervisor",
       "go:internal/task",
       "go:internal/task/randomid",
@@ -665,6 +666,7 @@
     "layer": "test",
     "imports": [
       "go:bytes",
+      "go:context",
       "go:errors",
       "go:golang.org/x/sys/unix",
       "go:internal/admission",
@@ -672,6 +674,7 @@
       "go:internal/config",
       "go:internal/lifetime",
       "go:internal/pueue",
+      "go:internal/resourceadmission",
       "go:internal/supervisor",
       "go:internal/task",
       "go:internal/taskdir",

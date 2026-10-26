@@ -45,7 +45,7 @@ func verifyWorkspaceCleanupSubmissionRecovery(t *testing.T, kind string) {
 	prepareWorkspaceStagedRecovery(t, operation)
 	for _, stashed := range []bool{true, false} {
 		writeWorkspaceRecoveryQueue(t, statusPath, operation, stashed)
-		err := observeWorkspaceCleanupRecovery(t, fixture, kind, Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options})
+		err := observeWorkspaceCleanupRecovery(t, fixture, kind, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options})
 		if !workspaces.PendingError(err) {
 			t.Fatalf("existing helper recovery failed: %v", err)
 		}
