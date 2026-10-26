@@ -698,6 +698,8 @@ Fresh bootstrap may choose a shorter socket filename inside the same private
 supervisor directory when the ordinary name exceeds the host limit. This
 pre-publication choice does not alter a published generation; changing a
 published config or endpoint still requires the migration flow below.
+An extremely deep `--root` can exceed the limit even with the shorter name; see
+[Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
 
 `delegate-run` normally resolves beside `delegate`. Use the absolute global
 `--runner` option for a source-build layout or a custom integration.

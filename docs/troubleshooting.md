@@ -178,6 +178,19 @@ repairs that config atomically and continues. Any changed config, active
 identity, migration/recovery artifact, endpoint, PID, runtime data, or
 scheduling record still fails closed; users should not edit those files.
 
+The compact name is still below the state root, so an extremely deep custom
+`--root` can exceed the limit even after that fallback. Delegate then refuses
+bootstrap before it writes the private config. Human-readable output can
+include `invalid pueue configuration: unix socket path too long`. With
+`--json`, managed workspace admission may instead report `failure.code:
+"workspace_preparation_failed"` with `failure.stage: "prepare-workspace"`; that
+code alone does not show that the provider is unavailable. Report the failed
+attempt and stop; do not retry its task ID. For a new, independent deployment
+or task, choose a shorter absolute state root outside the workspace, such as the
+default root or a short directory you choose, and reuse it consistently. Keep
+the original root and its evidence; do not rename, delete, or hand-edit its
+supervisor files.
+
 On an upgraded installation, a different verified state-root executable pair
 is only a staged successor. The completed supervisor identity remains the
 active generation, and its ordinary-scheduling receipt must match that exact

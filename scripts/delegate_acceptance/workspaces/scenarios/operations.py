@@ -395,7 +395,7 @@ def _wait_capture(
             raise TimeoutError("workspace capture observation expired: " + workspace_id
                                + " subject " + subject_id)
         response = _wait_workspace(
-            context, workspace_id, timeout=min(15, remaining), task_id=task["task_id"],
+            context, workspace_id, timeout=remaining, task_id=task["task_id"],
         )
         workspace = _workspace_from(response)
         capture = workspace.get("capture")

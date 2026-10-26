@@ -578,6 +578,22 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.workspaces.test_capture_observation_deadline",
+    "owner": "py:delegate_acceptance.workspaces",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.operations",
+      "py:pathlib",
+      "py:subprocess",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.workspaces.test_checkpoints",
     "owner": "py:delegate_acceptance.workspaces",
     "layer": "test",
