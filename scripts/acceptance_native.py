@@ -26,6 +26,8 @@ from scripts.delegate_acceptance.native.acceptance_discovery import (
     require_discovery,
     resolve_executable,
 )
+from scripts.delegate_acceptance.native.constants import PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO
+from scripts.delegate_acceptance.native.continuation_scope import CONTINUATION_COMMANDS
 from scripts.delegate_acceptance.native.output import choose_output as _choose_output
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor
 from scripts.delegate_acceptance.paths.operations import reject_tmp
@@ -51,7 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permission", "--mode", dest="mode",
                         choices=("read-only", "workspace-write"), default=None)
     parser.add_argument("--scenario", choices=(
-        "read-only", "write", "timeout-resume", "interactive", "non-git"))
+        "read-only", "write", "timeout-resume", "interactive", "non-git", PI_SESSION_MISS_SCENARIO))
+    parser.add_argument("--continuation-command", choices=CONTINUATION_COMMANDS,
+                        help="contributor-only: admit the resumable successor through this public command "
+                             "(default dispatch --resume-task)")
+    parser.add_argument("--canonical-aggregate",
+                        help="contributor-only: the passed canonical aggregate receipt a public-continue "
+                             "or Pi session-miss run must validate before any task work")
     parser.add_argument("--output")
     parser.add_argument("--delegate")
     parser.add_argument("--runner")
@@ -152,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             raise BlockedFailure("OpenCode acceptance requires --model with a tool-capable configured route")
         run = NativeAcceptance(argparse.Namespace(**{**vars(args), "output": str(output)}))
         code = run.run()
+        # The Pi control publishes only its own named gate, outside the positive matrix.
+        gate = PI_SESSION_MISS_GATE if args.scenario == PI_SESSION_MISS_SCENARIO else "acceptance-native"
         if not _finalize_run(run, code == 0, blocked=(code == 2)):
             return 1
         if code != 0:
@@ -169,9 +179,9 @@ def main(argv: list[str] | None = None) -> int:
                     **_exit_reason_field(code, args, run)}):
                 return 1
         else:
-            run.publish_success()
+            run.publish_success(expected_gate=gate)
         status = "passed" if code == 0 else "BLOCKED" if code == 2 else "failed"
-        print(json.dumps({"gate": "acceptance-native", "status": status,
+        print(json.dumps({"gate": gate, "status": status,
                           "provider": args.provider, "evidence": str(output)}, sort_keys=True))
         return code
     except BlockedFailure as error:

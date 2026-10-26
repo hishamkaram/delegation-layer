@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 import acceptance_provider_common as provider_common
 from scripts import acceptance_native as entry
 from scripts.acceptance_tests.resources import track_directory_pins
+from scripts.acceptance_tests.test_foundation_owners import failing_lstat
 from scripts.acceptance_tests.native.support import (
     acceptance_task_ops,
     queue_oracle,
@@ -400,6 +401,104 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertEqual(projected_group, group)
             self.assertEqual(set(projected["tasks"]), {"8"})
             self.assertEqual(set(projected["groups"]), {"default", group})
+
+    def test_model_discovery_identity_records_only_one_exact_journal(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-identity-") as directory:
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.models_state = Path(directory) / "models-state"
+            operation.models_state.mkdir()
+            cleanup = SimpleNamespace(root_id=None, dispatch_attempts=set(), inspection_attempts=set())
+
+            def record():
+                """Return the inspection the cleanup owner was bound to, if any."""
+                operation._sync_model_cleanup(cleanup)
+                return next(iter(cleanup.inspection_attempts), None)
+
+            def refused(message):
+                with self.assertRaisesRegex(gate.AcceptanceFailure, message):
+                    record()
+
+            # A command that journaled nothing, such as an unavailable interface, records nothing.
+            self.assertIsNone(record())
+            gate.write_json(operation.models_state / "root.json", {"root_id": "c" * 32})
+            inspections = operation.models_state / "inspections"
+            inspections.mkdir()
+            self.assertIsNone(record())
+            self.assertEqual((operation.models_root_id, operation.model_discovery_task_id, cleanup.root_id),
+                             ("c" * 32, None, "c" * 32))
+            journal = inspections / ("d" * 32)
+            journal.mkdir()
+            self.assertEqual(record(), "d" * 32)
+            self.assertEqual((operation.model_discovery_task_id, cleanup.dispatch_attempts),
+                             ("d" * 32, {"d" * 32}))
+
+            extra = inspections / ("e" * 32)
+            for label, create in (("extra", extra.mkdir), ("file", extra.touch),
+                                  ("symlink", lambda: extra.symlink_to(journal, target_is_directory=True))):
+                with self.subTest(entry=label):
+                    create()
+                    refused("inspection journal coverage is not exact")
+                    if extra.is_dir() and not extra.is_symlink():
+                        extra.rmdir()
+                    else:
+                        extra.unlink()
+            journal.rename(inspections / "not-an-identity")
+            refused("inspection journal coverage is not exact")
+            (inspections / "not-an-identity").rename(extra)
+            refused("model discovery task identity changed")
+            self.assertEqual(operation.model_discovery_task_id, "d" * 32)
+
+            gate.write_json(operation.models_state / "root.json", {"root_id": "f" * 32}, replace=True)
+            refused("model discovery root identity changed")
+            gate.write_json(operation.models_state / "root.json", ["c" * 32], replace=True)
+            refused("model discovery root identity is invalid")
+            self.assertEqual(operation.models_root_id, "c" * 32)
+
+    def test_model_discovery_identity_refuses_dangling_or_non_directory_records(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-identity-shape-") as directory:
+            def operation_with(prepare):
+                operation = object.__new__(gate.NativeAcceptance)
+                operation.models_state = Path(tempfile.mkdtemp(dir=directory))
+                prepare(operation.models_state)
+                return operation, SimpleNamespace(root_id=None, dispatch_attempts=set(),
+                                                  inspection_attempts=set())
+
+            def root(models):
+                gate.write_json(models / "root.json", {"root_id": "c" * 32})
+
+            for label, prepare in (
+                    ("absent", lambda _models: None),
+                    ("empty", lambda models: (root(models), (models / "inspections").mkdir()))):
+                with self.subTest(records=label):
+                    operation, cleanup = operation_with(prepare)
+                    operation._sync_model_cleanup(cleanup)
+                    self.assertIsNone(operation.model_discovery_task_id)
+                    self.assertEqual(cleanup.inspection_attempts, set())
+
+            for label, prepare, message in (
+                    ("dangling root", lambda models: (models / "root.json").symlink_to(models / "absent.json"),
+                     "root record is invalid"),
+                    ("root directory", lambda models: (models / "root.json").mkdir(), "root record is invalid"),
+                    ("dangling inspections", lambda models: (root(models), (models / "inspections").symlink_to(
+                        models / "absent", target_is_directory=True)), "inspection journal is invalid"),
+                    ("regular inspections", lambda models: (root(models), (models / "inspections").touch()),
+                     "inspection journal is invalid")):
+                with self.subTest(records=label):
+                    operation, cleanup = operation_with(prepare)
+                    with self.assertRaisesRegex(gate.AcceptanceFailure, message):
+                        operation._sync_model_cleanup(cleanup)
+                    self.assertEqual((operation.model_discovery_task_id, cleanup.inspection_attempts), (None, set()))
+
+            # An uninspectable record is unknown, never absent.
+            for name in ("root.json", "inspections"):
+                with self.subTest(uninspectable=name):
+                    operation, cleanup = operation_with(root)
+                    denied = PermissionError(13, "injected permission denied")
+                    with failing_lstat(operation.models_state / name, denied), \
+                            self.assertRaises(PermissionError) as raised:
+                        operation._sync_model_cleanup(cleanup)
+                    self.assertIs(raised.exception, denied)
+                    self.assertEqual((operation.model_discovery_task_id, cleanup.inspection_attempts), (None, set()))
 
     def test_standalone_model_shutdown_rejects_terminal_row_without_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-model-queue-unit-") as directory:

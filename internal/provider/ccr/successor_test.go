@@ -63,7 +63,9 @@ func TestSuccessorCandidateSelectsCurrentPredicateOfTheSameLaunchShape(t *testin
 
 // requireSuccessorSelectsTarget prepares the successor and the reconstruction
 // of a record stored under reference. The successor carries target and keeps the
-// recorded launch shape and inspection; the reconstruction keeps reference.
+// recorded launch shape, while its launch and inspection come from the caller's
+// environment like a fresh admission selecting target; the reconstruction keeps
+// reference and its recorded launch.
 func requireSuccessorSelectsTarget(t *testing.T, request task.TaskRecord, reference, target task.PredicateRef, route bool) {
 	t.Helper()
 	meta := successorMeta(request, reference)
@@ -75,6 +77,10 @@ func requireSuccessorSelectsTarget(t *testing.T, request task.TaskRecord, refere
 	if err != nil {
 		t.Fatal(err)
 	}
+	fresh, err := PrepareCandidate(request, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := successor.Finalize(routeFacts(t, successor, route), time.Now())
 	if err != nil {
 		t.Fatalf("recorded capability was refused: %v", err)
@@ -83,13 +89,20 @@ func requireSuccessorSelectsTarget(t *testing.T, request task.TaskRecord, refere
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Plan.Predicate.Equal(target) || !want.Plan.Predicate.Equal(reference) {
+	callerLaunch, err := fresh.Finalize(routeFacts(t, fresh, route), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Plan.Predicate.Equal(target) || !want.Plan.Predicate.Equal(reference) || !callerLaunch.Plan.Predicate.Equal(target) {
 		t.Fatalf("successor predicate %+v (want %+v), reconstruction %+v (want %+v)", got.Plan.Predicate, target, want.Plan.Predicate, reference)
 	}
-	requireSameLaunch(t, got, want)
+	requireSameLaunch(t, got, callerLaunch)
 	requireLaunchShape(t, got.Plan.Arguments, request.RequestedConfig.Model, route)
-	if inspectionDigest(t, successor) != inspectionDigest(t, reconstructed) {
-		t.Error("successor runtime inspection differs from the recorded one")
+	if !slices.Equal(want.Plan.Environment, meta.Environment) || !slices.Equal(want.Plan.Arguments, got.Plan.Arguments) {
+		t.Errorf("reconstruction did not keep its recorded launch: env=%q argv=%q", want.Plan.Environment, want.Plan.Arguments)
+	}
+	if inspectionDigest(t, successor) != inspectionDigest(t, fresh) {
+		t.Error("successor runtime inspection differs from the caller's")
 	}
 	// The recorded route capability decides the launch; the opposite proof is
 	// refused rather than changing the launch shape.
@@ -151,9 +164,10 @@ func TestSuccessorCandidateKeepsPredecessorContinuationValidator(t *testing.T) {
 }
 
 // TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each stored
-// predicate that is not an exact v4 reference with the reconstruction of the
+// predicate that is not an exact v4 or v5 reference with the reconstruction of the
 // same record: finalized under every capability proof, the successor must
-// produce the same predicate or the same error.
+// produce the same predicate and arguments or the same error. Its launch
+// environment is the caller's, covered by successor_environment_test.go.
 func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 	for _, mode := range successorModes {
 		altered := preAttributionReference(mode, true)

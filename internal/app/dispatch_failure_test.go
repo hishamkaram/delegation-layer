@@ -132,7 +132,6 @@ func TestContinuationFailureStagesMapToActionableCodes(t *testing.T) {
 		{stage: "check-continuation-capability", code: "unsupported_continuation"},
 		{stage: "validate-continuation", code: "continuation_unavailable"},
 		{stage: "resolve-continuation-supervisor", code: "continuation_unavailable"},
-		{stage: "restore-continuation-environment", code: "continuation_unavailable"},
 	}
 	for _, test := range tests {
 		t.Run(test.stage, func(t *testing.T) {

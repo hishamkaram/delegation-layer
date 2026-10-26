@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from scripts.acceptance_supervisor_common import digest
 from scripts.acceptance_tests.inspection.fixtures import ROOT, TASK, InspectionFixture
+from scripts.acceptance_tests.test_foundation_owners import failing_lstat
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native import acceptance_lifecycle as lifecycle_impl
 from scripts.delegate_acceptance.native_evidence.lifetime_closure import (
@@ -129,6 +130,22 @@ class ManagedClosureProducerTests(unittest.TestCase):
         unknown.ops.dispatch_attempts = {"d" * 32}
         with self.assertRaisesRegex(AcceptanceFailure, "root record"):
             lifecycle_impl.record_lifetime_closure(unknown)
+
+    def test_an_uninspectable_inventory_is_not_a_known_no_launch(self):
+        fixture = InspectionFixture(self)
+        empty = SimpleNamespace(state=fixture.base / "ordinary-state", base=fixture.base)
+        empty.state.mkdir()
+        for label, target in (("ordinary tasks", empty.state / "tasks"),
+                              ("ordinary inspections", empty.state / "inspections"),
+                              ("undeclared discovery", fixture.base / "models-state" / "inspections")):
+            with self.subTest(inventory=label):
+                acceptance = acceptance_for(empty, {})
+                acceptance.ops.dispatch_attempts = set()
+                denied = PermissionError(13, "injected permission denied")
+                with failing_lstat(target, denied), self.assertRaises(PermissionError) as raised:
+                    lifecycle_impl.record_lifetime_closure(acceptance)
+                self.assertIs(raised.exception, denied)
+                self.assertIsNone(acceptance.lifetime_closure)
 
     def test_model_discovery_root_must_prove_its_own_inspection(self):
         fixture = managed_mixed_root(self)

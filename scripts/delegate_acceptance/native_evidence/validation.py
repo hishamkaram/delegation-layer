@@ -27,6 +27,15 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
     if _digest_file(receipt_path) != case["receipt_sha256"]:
         raise EvidenceError("aggregate_case_digest_mismatch")
     value, _ = _read_json(receipt_path, MAX_RECEIPT_BYTES)
+    validate_case_proof(case, value)
+    _validate_case_cleanup(root, value)
+
+
+def validate_case_proof(case: dict[str, object], value: object) -> dict[str, object]:
+    """Validate one compact case's in-memory identity and proof against its case reference.
+
+    Receipt digests and completed-directory cleanup stay with compact receipt validation.
+    """
     if not isinstance(value, dict) or value.get("kind") != "native-acceptance-case":
         raise EvidenceError("aggregate_case_receipt_invalid")
     for key in ("case_id", "provider", "permission", "scenario", "status", "exit_code"):
@@ -39,7 +48,7 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
     sessions = _validate_case_sessions(proof)
     binaries = _validate_case_binaries(case, proof)
     _validate_case_completion(case, proof, sessions, binaries)
-    _validate_case_cleanup(root, value)
+    return proof
 
 
 def _validate_case_cleanup(root: Path, value: dict[str, object]) -> None:

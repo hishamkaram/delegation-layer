@@ -113,6 +113,8 @@
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_discovery",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.continuation_scope",
       "py:delegate_acceptance.native.output",
       "py:delegate_acceptance.native.workspace",
       "py:delegate_acceptance.paths.operations",

@@ -5,19 +5,25 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// PrepareSuccessorCandidate prepares a new exact-session continuation task
-// from its predecessor's immutable record. It reconstructs the recorded launch
-// shape (the retained CCR route or the explicit model and provider-only auth),
-// environment, roots, and capability inspection like PrepareExistingCandidate,
-// and changes only the output predicate: a credential-aware v4 or v5
-// predecessor continues under the current v6 predicate of the same launch
-// shape. Every other record keeps its recorded predicate. The predecessor
-// record is never modified.
+// PrepareSuccessorCandidate prepares a new exact-session continuation task.
+// The predecessor's immutable record selects only compatibility: its
+// recorded-environment eligibility and its predicate, which fixes the launch
+// shape (the retained CCR route or the explicit model and provider-only auth)
+// and the inspection contract. The caller's environment alone selects the
+// executable, the filtered launch values, the writable roots, and the runtime
+// inspection; a predecessor environment or root is never a fallback. A
+// credential-aware v4 or v5 predecessor continues under the current v6
+// predicate of the same launch shape; every other record keeps its recorded
+// predicate. The predecessor record is never modified.
 func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
-	if target, ok := currentOutputReference(request.Mode, predecessor.Predicate); ok {
-		predecessor.Predicate = target
+	if !predecessor.EnvironmentRecorded {
+		return commonprovider.ProfileCandidate{}, task.ErrIdentityMismatch
 	}
-	return PrepareExistingCandidate(request, predecessor, environment)
+	reference := predecessor.Predicate
+	if target, ok := currentOutputReference(request.Mode, reference); ok {
+		reference = target
+	}
+	return prepare(request, environment, environment, nil, reference)
 }
 
 // currentOutputReference maps an exact v4 or v5 reference to the current

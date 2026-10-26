@@ -205,7 +205,10 @@ added to native argv. Continuation uses the exact recorded provider session.
 New ordinary tasks work in Git and non-Git directories. Delegate supplies
 `--skip-git-repo-check` for both permission modes and exact-session continuation;
 the requested native sandbox remains selected. Existing tasks retain their
-recorded launch contract when reconstructed or continued after an upgrade.
+recorded launch contract when reconstructed after an upgrade. A continuation is
+a new task: it keeps the recorded profile, predicate, and eligibility but takes
+its filtered launch values, writable roots, and executable lookup from the
+caller's current environment.
 Native Git-targeted reviews still require a suitable repository.
 
 Codex's native sandbox can deny staging or committing in a linked worktree
@@ -347,9 +350,12 @@ pre-attribution revision (read-only `native-permissions-v3`, workspace-write
 `native-permissions-v4`) or under the retained scoped or unscoped digest of its
 mode. Other records passed through this successor hook retain their recorded
 predicate. Interactive continuation instead builds the current interactive
-profile while preserving the exact recorded session and the predecessor
-environment. Reconstruction of an existing task always retains its recorded
-predicate.
+profile in the caller's current environment while preserving the exact recorded
+session. A successor takes its filtered launch values, writable roots, and
+executable from the caller's environment, not the predecessor's. A legacy native
+OAuth record derives a fresh policy proof from the caller's inspection instead
+of keeping the predecessor's. Reconstruction of an existing task always retains
+its recorded predicate and environment.
 
 With `--interactive`, Claude uses its native stream-json control protocol,
 `--permission-prompts host`, the SDK's `--permission-prompt-tool stdio` transport,
@@ -383,9 +389,10 @@ extension startup and session persistence cannot create project state before a
 read-only turn begins. A configured session directory that overlaps the
 workspace or Delegate state is rejected before admission. Provider configuration
 and authentication remain native. Continuation uses the exact recorded Pi
-session in the same workspace and reconstructs the predecessor's recorded
-preparation contract, including its effective session directory and historical
-flag mapping. `workspace-write` explicitly selects Pi's
+session in the same workspace and keeps the predecessor's recorded launch
+profile and historical flag mapping. The successor derives its session
+directory, writable roots, and executable from the caller's current environment
+instead of the predecessor's. `workspace-write` explicitly selects Pi's
 built-in `read`, `bash`, `edit`, and `write` tools, so an ambient custom tool
 selection cannot remove the capabilities needed for the requested work. Pi
 still owns extensions, authentication, and permission behavior. It records `provider-native`
@@ -469,8 +476,8 @@ interpretation contracts. An ACP record admitted under `acp-v1` keeps that
 predicate for reconstruction and replay, its answer remains all root text of
 the prompt, and it is never rechecked under `acp-v2`. An exact-session
 continuation of an `acp-v1` or `acp-v2` predecessor resumes the recorded
-session with the recorded environment and writable roots and uses `acp-v2`;
-an ACP record with any other predicate is refused. Records of the historical
+session in the caller's current environment, with writable roots derived there,
+and uses `acp-v2`; an ACP record with any other predicate is refused. Records of the historical
 `opencode run --format json` profiles keep their recorded argv, runtime flag
 probe, and run predicate for reconstruction and replay. This covers the
 `--standalone` native profile, the earlier native profile with `--dir` and
@@ -478,9 +485,11 @@ probe, and run predicate for reconstruction and replay. This covers the
 run predicate revisions 2 through 4 uses run revision 5; an ACP predicate is
 never a recheck target for a run record. An ordinary exact-session
 continuation of a historical native run predecessor creates a new ACP task.
-That task resumes the same recorded session with the recorded environment and
-writable roots under the current ACP launch, capability, and output contracts.
-Pure-mode predecessors continue under their recorded contract. The predecessor
+That task resumes the same recorded session, using the caller's current
+environment and derived writable roots, under the current ACP launch,
+capability, and output contracts, when the caller's current profile is
+compatible. Pure-mode predecessors keep their recorded profile and predicate
+but also launch in the caller's environment. The predecessor
 record and its outcome, including a failed outcome, never change.
 
 ## Adding a provider
@@ -517,11 +526,14 @@ provider-owned permission modes, not an independent sandbox. CCR loads its own
 configuration and extensions. Fresh sessions and exact continuations use Claude
 session UUIDs, while Delegate records the provider as `ccr:print`. A fresh
 dispatch uses the current CCR mapping. An ordinary exact-session continuation
-reconstructs the predecessor's recorded CCR preparation revision: current
-route-preserving sessions use `--resume-route`, while historical modeled
-sessions retain their recorded model/provider-only launch shape. A
-route-preserving continuation therefore rejects a model override that would
-change the recorded route.
+keeps the predecessor's recorded CCR preparation revision and requires a
+predecessor that recorded its environment: current route-preserving sessions
+use `--resume-route`, while historical modeled sessions retain their recorded
+model/provider-only launch shape. The successor launches in the caller's current
+environment. A route-preserving continuation therefore rejects a model override
+that would change the recorded route. A historical modeled `--model` alias or
+provider-only record resolves the alias through the caller's configuration and
+does not promise a retained route.
 
 CCR's foreground exit and sealed Claude stream must both indicate success.
 Fresh CCR tasks use the current `ccr-foreground-v6` revision, with the same

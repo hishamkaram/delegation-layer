@@ -26,9 +26,10 @@ func Description() commonprovider.Description {
 // describes the output contract; it does not qualify a particular CLI build.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description:     Description(),
-		Prepare:         PrepareCandidate,
-		PrepareExisting: PrepareExistingCandidate,
+		Description:      Description(),
+		Prepare:          PrepareCandidate,
+		PrepareExisting:  PrepareExistingCandidate,
+		PrepareSuccessor: PrepareSuccessorCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode),
 			newHistoricalV3Interpreter(Mode), newHistoricalV3Interpreter(WorkspaceWriteMode),

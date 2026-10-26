@@ -22,7 +22,7 @@ from pathlib import Path
 import sys
 
 from scripts.delegate_acceptance.evidence.bounded_files import BoundedReadError, read_bounded_regular_file
-from scripts.delegate_acceptance.evidence.files import write_bytes
+from scripts.delegate_acceptance.evidence.files import path_present, write_bytes
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native.acceptance_lifecycle import managed_root_closure
 from scripts.delegate_acceptance.native_evidence.candidate_proof import validate_candidate_proof
@@ -102,7 +102,11 @@ def _captures(directory: Path) -> list[dict[str, str]]:
 
 
 def _classified(diagnostics: dict[str, object]) -> tuple[tuple[OrdinaryTask, ...], str | None, bool]:
-    """Ordinary tasks, the discovery inspection and the discovery admission the diagnostics recorded."""
+    """Ordinary tasks, the discovery inspection and the discovery-only flag the diagnostics recorded.
+
+    ``discover_models`` names a discovery-only run, not whether discovery ran:
+    an ordinary Pi default-model case journals its prerequisite inspection too.
+    """
     tasks = []
     for item in diagnostics.get("tasks") or []:
         task = object_value(item)
@@ -112,20 +116,23 @@ def _classified(diagnostics: dict[str, object]) -> tuple[tuple[OrdinaryTask, ...
                                   meta_sha256=text_value(object_value(files.get("meta.json")).get("sha256"))))
     inspection = diagnostics.get("model_discovery_inspection")
     discovery = None if inspection is None else object_value(inspection).get("journal_task_id")
-    admitted = object_value(diagnostics.get("failure")).get("discover_models")
-    if type(admitted) is not bool or (discovery is not None and not admitted):
+    discovery_only = object_value(diagnostics.get("failure")).get("discover_models")
+    if type(discovery_only) is not bool:
         raise ReleaseError("closure_discovery_admission_invalid", incomplete=True)
-    return tuple(sorted(tasks, key=lambda task: task.task_id)), None if discovery is None else str(discovery), admitted
+    return (tuple(sorted(tasks, key=lambda task: task.task_id)), None if discovery is None else str(discovery),
+            discovery_only)
 
 
 def _no_launch(state: Path) -> bool:
-    return not (state / "tasks").exists() and not (state / "inspections").exists()
+    # As in the canonical producer, a dangling link is a present launch record and an
+    # uninspectable one raises, so unknown inventory is never a no-launch root.
+    return not path_present(state / "tasks") and not path_present(state / "inspections")
 
 
 def _closure(state: Path, models: Path, ordinary: tuple[OrdinaryTask, ...],
-             discovery: str | None, admitted: bool) -> dict[str, object]:
+             discovery: str | None, discovery_only: bool) -> dict[str, object]:
     """Project each root through the canonical managed-lifetime projection; a no-launch root admitted nothing."""
-    if discovery is None and (admitted or not _no_launch(models)):
+    if discovery is None and (discovery_only or not _no_launch(models)):
         raise ReleaseError("closure_discovery_unresolved", incomplete=True)
     no_launch = {"root_id": None, "launch": "none", "tasks": {}, "inspections": {}}
     ordinary_root = (no_launch if not ordinary and _no_launch(state)
@@ -147,9 +154,9 @@ def observe_case_closure(native: Path, anchor: CaseClosureAnchor) -> tuple[CaseC
     captures = Path(text_value(retained[CAPTURES_LABEL].get("path")))
     if captures != case_dir / "processes":
         raise ReleaseError("closure_capture_location_invalid", incomplete=True)
-    ordinary, discovery, admitted = _classified(diagnostics)
+    ordinary, discovery, discovery_only = _classified(diagnostics)
     closure = _closure(Path(text_value(retained[STATE_LABEL].get("path"))),
-                       Path(text_value(retained[MODELS_LABEL].get("path"))), ordinary, discovery, admitted)
+                       Path(text_value(retained[MODELS_LABEL].get("path"))), ordinary, discovery, discovery_only)
     case = CaseClosure(
         case_id=anchor.case_id, source_compact_sha256=anchor.source_compact_sha256,
         source_receipt_sha256=str(anchor.source_receipt_sha256),

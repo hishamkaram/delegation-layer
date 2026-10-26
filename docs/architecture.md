@@ -100,11 +100,20 @@ swaps the process-global environment. A recorded scope is immutable: task
 metadata and the inspection binding use the environment they recorded, and an
 explicitly recorded empty scope stays empty instead of inheriting the caller. A
 historical record that never recorded a scope keeps the caller's. Successor
-creation is deliberately asymmetric: the public `continue` command selects the
-predecessor's recorded scope around its nested dispatch; an ordinary
-`dispatch --resume-task` keeps the caller's scope; and an interactive resume
-rebinds the saved scope only for task creation. Other successor environment
-policy is unchanged. Supervisor control keeps the caller's bounded environment,
+creation has one policy. A new task created by the public `continue` command, or
+by `dispatch --resume-task` in ordinary or supported interactive mode, is
+prepared in the scope its own caller captured. That scope selects the filtered
+launch environment, derives the writable roots, and supplies the fresh
+applicable capability inspection proof; it also scopes supervisor control and
+detached maintenance. The predecessor's immutable request and metadata decide
+only compatibility and eligibility, and its recorded environment or roots are
+never a fallback. The successor's own metadata then records that scope, so an
+admitted successor reconstructs under the existing rules above. The
+predecessor's saved supervisor binding remains authoritative for environment
+selection: a scope `DELEGATE_PUEUE_CONFIG` that would retarget a private
+predecessor's supervisor is suppressed, and an explicit `--pueue-config` keeps
+its CLI precedence.
+Supervisor control keeps the caller's bounded environment,
 separate from provider environments; a detached private-queue maintenance
 launch uses the bounded environment of the scope that schedules it. For
 supervisor environments, `nil` keeps the standalone inherited default and a
@@ -132,32 +141,43 @@ Workspace-write asks for unattended native tool execution; it does not add a
 provider-independent sandbox. Historical tasks retain their recorded task and
 policy contract; only a fresh provider runtime identity may be refreshed before
 launch. Fresh dispatches use the current provider mapping. An ordinary
-exact-session continuation reconstructs the predecessor's recorded preparation
-contract, including its historical mapping, environment, policy, and predicate,
-then adds the successor turn and exact recorded session. The continuation is a
-new task, so its candidate comes from the catalog's successor operation, which
-is distinct from reconstruction of an already admitted task: an immutable
-existing task is rebuilt exactly, while a provider's optional successor hook may
-select the current compatible output interpreter through its own exact
-compatibility rule. Without that hook the successor uses the recorded
-contract. Except for OpenCode's historical run predecessors below, launch,
-session, permission, configuration, and probe contracts stay preserved. Five
-adapters declare that successor hook: Claude, CCR, OpenCode, Antigravity, and
-Pi. Each moves only an exact eligible earlier output predicate of the same mode
-and launch shape to the current one, and a record of any other revision or
-profile keeps its recorded predicate. OpenCode is the exception: a successor of
-a historical native `opencode run` predecessor uses the current ACP launch,
-capability, and output contracts. It resumes the exact recorded session with
-the recorded environment and writable roots, and never falls back to a new
-session. Pi upgrades only its prior
-fresh-default revision. Codex declares none and uses the recorded contract
-through the fallback. The predecessor's task record, metadata, and launch plan
-always stay immutable and keep rebuilding under their recorded predicate; only
-the new successor task carries the current one.
-Interactive continuation is the deliberate exception:
-Codex and Claude build the current interactive profile while preserving the
-recorded session identity and using the recorded predecessor environment needed
-to find that session. No continuation modifies predecessor evidence.
+exact-session continuation is a new task, so its candidate comes from the
+catalog's successor operation, which is distinct from reconstruction of an
+already admitted task. An immutable existing task is rebuilt exactly from its
+own record. A successor keeps the predecessor's recorded compatibility:
+the record family, permission mode, historical profile and dialect, predicate
+eligibility, and policy mapping. It takes its launch values from the caller's
+captured scope instead: the filtered launch environment, the derived writable
+roots, the executable lookup, and the fresh applicable inspection proof. A
+predecessor's saved environment, roots, or proof are never copied forward, and
+an invalid caller scope fails instead of falling back to them. It adds the
+successor turn and the exact recorded session. Every production continuation
+adapter declares the explicit successor hook: Claude, CCR, OpenCode,
+Antigravity, Pi, and Codex's `codex:exec`; `codex:review` does not support
+continuation. A generic catalog registration may still omit the hook, in which
+case the catalog falls back to its existing-task preparation for custom or
+historical registrations. Each production hook moves only an exact eligible
+earlier output predicate of the same mode and launch shape to the current one
+through that adapter's own rule, and a record of any other revision or profile
+keeps its recorded predicate and historical launch contract. Pi upgrades only
+its prior fresh-default revision. Codex has no predicate upgrade. CCR still
+refuses a predecessor that did not record its environment, and keeps the
+route-preserving `--resume-route` launch and model validation; a historical
+modeled `--model` alias or provider-only record resolves the alias through the
+caller's configuration and does not promise the retained route. OpenCode is the
+exception to the preserved launch shape: a successor of a historical native
+`opencode run` predecessor uses the current ACP launch, capability, and output
+contracts. It resumes the exact recorded session in the caller's scope,
+derives its roots there, and never falls back to a new session. A legacy native
+Claude record derives a fresh policy proof from the caller's inspection; the
+predecessor's record keeps its own. The predecessor's task record, metadata,
+and launch plan always stay immutable and keep rebuilding under their recorded
+predicate; only the new successor task carries the current one.
+An interactive continuation of a supported provider (Codex and Claude) builds the
+current interactive profile in that same caller scope. The caller's scope must
+resolve the exact recorded session handle: there is no fresh-session fallback, no
+ancestor search, and no copy of the predecessor's configuration, profile, or
+authentication. No continuation modifies predecessor evidence.
 
 Immediately before a provider process may start, the runner performs a fresh
 capability inspection and receives a current launch plan. A provider path,
@@ -658,11 +678,14 @@ outcome). Cancellation and stops take precedence over automatic continuation.
 The public `continue` command is a thin path over that existing continuation
 boundary. It reuses the validated predecessor brief unless a follow-up brief is
 supplied, preserves the provider session identity, and creates a new task
-record. Ordinary successors reconstruct the predecessor's recorded preparation
-contract; fresh dispatches select the current mapping. An interactive successor
-uses the current interactive contract while preserving the exact recorded
-session and using the recorded predecessor environment needed to find it. It does
-not reconstruct the predecessor's preparation contract. A timeout response
+record. Ordinary successors keep the predecessor's recorded compatibility and
+historical mapping but launch in the calling process's captured scope, as
+described under environment selection; fresh dispatches select the current
+mapping. An interactive successor uses the current interactive contract in the
+same caller scope while preserving the exact recorded session. It does not
+reconstruct the predecessor's preparation contract. The working directory,
+permission mode, and session stay those of the predecessor, and existing model
+and effort validation and the budget rules are unchanged. A timeout response
 advertises this path only after durable budget-stop termination evidence is
 present.
 

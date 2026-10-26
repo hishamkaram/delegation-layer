@@ -30,11 +30,33 @@ func PrepareReviewCandidate(request task.TaskRecord, environment []string) (comm
 // environment resolves the executable, and it is the launch environment only
 // for a legacy record that saved none.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	inputs := recordedInputs(meta)
+	inputs.environment, inputs.lookupScope = existingEnvironment(meta, environment), environment
+	return prepareCandidate(request, inputs)
+}
+
+// PrepareSuccessorCandidate prepares a new exact-session continuation task. The
+// predecessor's immutable record decides only compatibility: its native or
+// legacy profile, stored predicate, and whether static admission is eligible.
+// The caller's environment alone selects the successor's filtered launch
+// values, derived writable roots, capability digest, and executable lookup, so
+// nothing the predecessor saved is copied forward and an invalid caller
+// environment fails instead of falling back to the record.
+func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	inputs := recordedInputs(predecessor)
+	inputs.environment, inputs.lookupScope = environment, environment
+	return prepareCandidate(request, inputs)
+}
+
+// recordedInputs derives the compatibility choices a codex:exec record makes
+// for every later preparation: its profile, predicate, and eligibility for
+// static admission. The caller completes the environment selection.
+func recordedInputs(meta task.MetaRecord) candidateInputs {
 	native := commonprovider.HasNativeProfile(meta)
-	return prepareCandidate(request, candidateInputs{
+	return candidateInputs{
 		native: native, storedPredicate: meta.Predicate, providerID: Provider,
-		allowStaticAdmit: meta.RuntimePreflightSHA256 != "" && native, environment: existingEnvironment(meta, environment), lookupScope: environment,
-	})
+		allowStaticAdmit: meta.RuntimePreflightSHA256 != "" && native,
+	}
 }
 
 // PrepareExistingReviewCandidate reconstructs a previously admitted review.

@@ -543,6 +543,22 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.test_task_environment",
+    "owner": "py:delegate_acceptance",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.tasks.operations",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.workspaces",
     "owner": "py:delegate_acceptance.workspaces",
     "layer": "test",

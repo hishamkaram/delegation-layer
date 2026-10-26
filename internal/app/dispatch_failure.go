@@ -162,7 +162,7 @@ func dispatchFailureStageCode(stage string) string {
 		return "state_root_unavailable"
 	case "prepare-workspace":
 		return "workspace_preparation_failed"
-	case "resolve-predecessor", "load-predecessor", "load-continuation-session", "validate-continuation", "resolve-continuation-supervisor", "restore-continuation-environment":
+	case "resolve-predecessor", "load-predecessor", "load-continuation-session", "validate-continuation", "resolve-continuation-supervisor":
 		return "continuation_unavailable"
 	case "resolve-continuation-provider":
 		return "provider_unavailable"

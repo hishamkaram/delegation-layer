@@ -44,6 +44,10 @@ import scripts.delegate_acceptance.native.acceptance_lifecycle as acceptance_lif
 from scripts.delegate_acceptance.native.acceptance_lifecycle import SuccessCandidate
 import scripts.delegate_acceptance.native.acceptance_operations as acceptance_operations
 import scripts.delegate_acceptance.native.acceptance_scenarios as acceptance_scenarios
+import scripts.delegate_acceptance.native.continuation_scope as continuation_scope
+from scripts.delegate_acceptance.native.continuation_scope import CONTINUATION_COMMANDS
+from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
+import scripts.delegate_acceptance.native_evidence.supplemental as supplemental
 from scripts.delegate_acceptance.native.acceptance_diagnostics import (
     authentication_unavailable as authentication_unavailable,
 )
@@ -63,6 +67,7 @@ from scripts.delegate_acceptance.native.timeouts import (
 )
 from scripts.delegate_acceptance.native.constants import (
     PROFILES,
+    PI_SESSION_MISS_SCENARIO,
     TASK_BUDGET,
     CANONICAL_TASK_BUDGET,
     TASK_BUDGET_NANOS,
@@ -134,6 +139,44 @@ def _resolve_provider_executable(args: argparse.Namespace, profile: dict[str, ob
         raise BlockedFailure(str(error), reason=BlockReason.EXECUTABLE_UNAVAILABLE) from error
 
 
+def _scenario(provider: str, mode: str, requested: str | None) -> str:
+    """Resolve the case scenario and refuse any provider or permission it does not support."""
+    scenario = requested
+    if scenario is None:
+        scenario = "write" if mode == "workspace-write" else "read-only"
+    if scenario not in {"read-only", "write", "timeout-resume", "interactive", "non-git",
+                        PI_SESSION_MISS_SCENARIO}:
+        raise AcceptanceFailure(f"unsupported native acceptance scenario: {scenario}")
+    if scenario == "read-only" and mode != "read-only":
+        raise AcceptanceFailure("read-only scenario requires --permission read-only")
+    if scenario == "write" and mode != "workspace-write":
+        raise AcceptanceFailure("write scenario requires --permission workspace-write")
+    if scenario == "non-git" and provider != "codex:exec":
+        raise AcceptanceFailure("non-git scenario requires codex:exec")
+    if scenario == "timeout-resume" and (provider not in TIMEOUT_RESUME_PROVIDERS or
+                                         mode != "workspace-write"):
+        raise AcceptanceFailure("timeout-resume scenario requires codex:exec or opencode:run workspace-write")
+    if scenario == "interactive" and (provider != "claude:print" or mode != "read-only"):
+        raise AcceptanceFailure("interactive scenario requires claude:print read-only")
+    if scenario == PI_SESSION_MISS_SCENARIO and (provider != "pi:json" or mode != "read-only"):
+        raise AcceptanceFailure("Pi session-miss scenario requires pi:json read-only")
+    return scenario
+
+
+def _continuation_command(provider: str, scenario: str, requested: str | None) -> str:
+    """Resolve the successor's public command; only plain resumable cases may select one."""
+    if scenario == PI_SESSION_MISS_SCENARIO:
+        if requested not in (None, "continue"):
+            raise AcceptanceFailure("Pi session-miss scenario continues through public continue")
+        return "continue"
+    if requested is None or requested == "dispatch":
+        return "dispatch"
+    if (requested not in CONTINUATION_COMMANDS or scenario not in {"read-only", "write"} or
+            provider == "codex:review"):
+        raise AcceptanceFailure("--continuation-command continue requires a read-only or write resumable case")
+    return requested
+
+
 class NativeAcceptance:
     def __init__(self, args: argparse.Namespace, *, managed_runner: bool = True):
         if args.provider not in PROFILES:
@@ -143,29 +186,16 @@ class NativeAcceptance:
         if requested_mode not in profile["modes"]:
             supported = ", ".join(profile["modes"])
             raise AcceptanceFailure(f"{args.provider} does not support {requested_mode}; supports {supported}")
-        scenario = getattr(args, "scenario", None)
-        if scenario is None:
-            scenario = "write" if requested_mode == "workspace-write" else "read-only"
-        if scenario not in {"read-only", "write", "timeout-resume", "interactive", "non-git"}:
-            raise AcceptanceFailure(f"unsupported native acceptance scenario: {scenario}")
-        if scenario == "read-only" and requested_mode != "read-only":
-            raise AcceptanceFailure("read-only scenario requires --permission read-only")
-        if scenario == "write" and requested_mode != "workspace-write":
-            raise AcceptanceFailure("write scenario requires --permission workspace-write")
-        if scenario == "non-git" and args.provider != "codex:exec":
-            raise AcceptanceFailure("non-git scenario requires codex:exec")
-        if scenario == "timeout-resume" and (args.provider not in TIMEOUT_RESUME_PROVIDERS or
-                                                requested_mode != "workspace-write"):
-            raise AcceptanceFailure("timeout-resume scenario requires codex:exec or opencode:run workspace-write")
-        if scenario == "interactive" and (args.provider != "claude:print" or
-                                            requested_mode != "read-only"):
-            raise AcceptanceFailure("interactive scenario requires claude:print read-only")
+        scenario = _scenario(args.provider, requested_mode, getattr(args, "scenario", None))
+        continuation_command = _continuation_command(args.provider, scenario,
+                                                     getattr(args, "continuation_command", None))
         discover_models = bool(getattr(args, "discover_models", False))
         self.args = args
         self.provider = args.provider
         self.profile = profile
         self.mode = requested_mode
         self.scenario = scenario
+        self.continuation_command = continuation_command
         self.discover_models_only = discover_models
         self.environment = native_environment()
         self.output = clean_absolute(args.output, "live acceptance output")
@@ -179,6 +209,10 @@ class NativeAcceptance:
         self.pueued = resolve_executable(args.pueued, Path(shutil.which("pueued", path=self.environment.get("PATH")) or "pueued"), "pueued")
         self.provider_executable = _resolve_provider_executable(args, profile, self.environment)
         require_discovery(profile["executable"], self.provider_executable, self.environment)
+        self.harness_observation: dict[str, object] | None = None
+        self.canonical_aggregate_sha256: str | None = None
+        if continuation_command == "continue" and not discover_models:
+            self._bind_continuation_candidate(repository)
         self.git: Path | None = None
         if self.provider in {"codex:exec", "codex:review"}:
             discovered_git = shutil.which("git", path=self.environment.get("PATH"))
@@ -238,9 +272,12 @@ class NativeAcceptance:
             self.workspace, self.scenario == "timeout-resume", self._constructor_ownership)
         self.config = self.pueue_base / "pueue.yml"
         write_json(self.config, config_for(self.pueue_base))
+        self.launch_scopes = continuation_scope.create_launch_scopes(
+            self._constructor_ownership, self.base, self.environment,
+            pi_sessions=self.scenario == PI_SESSION_MISS_SCENARIO)
+        # Every command other than an explicitly scoped admission keeps the ambient snapshot.
         self.processes = Processes(
-            self.output / "processes", self.environment,
-            owner=self._constructor_ownership)
+            self.output / "processes", self.environment, owner=self._constructor_ownership)
         self.ops = NativeAcceptanceTaskOps(self, managed_runner=managed_runner)
         self.daemon = None
         self.closed = False
@@ -370,6 +407,34 @@ class NativeAcceptance:
     def publish_success(self, *, expected_gate: str = "acceptance-native") -> None:
         return acceptance_lifecycle.publish_success(self, expected_gate=expected_gate)
 
+    def _bind_continuation_candidate(self, repository: Path) -> None:
+        """Before any task work, bind this run to its committed harness and the canonical candidate.
+
+        Supplemental evidence follows a passed canonical aggregate: this run reads
+        and validates it first, and its success receipt records what it observed.
+        """
+        aggregate = getattr(self.args, "canonical_aggregate", None)
+        require(isinstance(aggregate, str) and bool(aggregate),
+                "continuation acceptance requires --canonical-aggregate")
+        try:
+            observation = supplemental.observe_continuation_harness(self.environment, repository)
+            require(observation["committed"] is True,
+                    "continuation acceptance requires a committed harness")
+            candidate = supplemental.candidate_from_aggregate(
+                clean_absolute(aggregate, "canonical aggregate"), observation, self.delegate)
+            supplemental.require_selected_binaries(candidate, {
+                "runner_sha256": self.runner, "pueue_sha256": self.pueue, "pueued_sha256": self.pueued})
+        except (EvidenceError, OSError) as error:
+            raise AcceptanceFailure(f"continuation candidate is not bound: {error}") from error
+        self.harness_observation = observation
+        self.canonical_aggregate_sha256 = candidate.aggregate_sha256
+
+    def launch_environment(self, scope: str, *, pi_session: Path | None = None) -> dict[str, str]:
+        return self.launch_scopes.environment(scope, pi_session=pi_session)
+
+    def require_continuation_scope(self, predecessor: str, successor: str) -> dict[str, object]:
+        return continuation_scope.require_continuation_scope(self, predecessor, successor)
+
     def direct(self, name: str, argv: list[object], expected=0, timeout=30):
         return acceptance_operations.direct(self, name, argv, expected, timeout)
 
@@ -464,11 +529,12 @@ class NativeAcceptance:
         return acceptance_dispatch.dispatch_argv(self, task_id, brief, predecessor, budget)
 
     def dispatch(self, name: str, brief: Path, predecessor: str | None = None,
-                 budget: str = TASK_BUDGET) -> str:
-        return acceptance_dispatch.dispatch(self, name, brief, predecessor, budget)
+                 budget: str = TASK_BUDGET, *, environment: dict[str, str] | None = None) -> str:
+        return acceptance_dispatch.dispatch(self, name, brief, predecessor, budget, environment=environment)
 
-    def continue_task(self, name: str, brief: Path, predecessor: str) -> str:
-        return acceptance_dispatch.continue_task(self, name, brief, predecessor)
+    def continue_task(self, name: str, brief: Path, predecessor: str, *,
+                      environment: dict[str, str] | None = None) -> str:
+        return acceptance_dispatch.continue_task(self, name, brief, predecessor, environment=environment)
 
     def _interaction_events(self, name: str, task_id: str, after: int,
                             watch_seconds: int) -> dict[str, object]:
@@ -504,8 +570,9 @@ class NativeAcceptance:
     def reply_interaction(self, task_id: str, request_id: str, turn_id: str) -> tuple[str, dict[str, object]]:
         return acceptance_dispatch.reply_interaction(self, task_id, request_id, turn_id)
 
-    def continue_timed_out_task(self, name: str, brief: Path, predecessor: str) -> str:
-        return acceptance_dispatch.continue_timed_out_task(self, name, brief, predecessor)
+    def continue_public(self, name: str, brief: Path, predecessor: str, *,
+                        environment: dict[str, str] | None = None) -> str:
+        return acceptance_dispatch.continue_public(self, name, brief, predecessor, environment=environment)
 
     def wait_done(self, name: str, task_id: str,
                   expected_result: str | frozenset[str] | None = None) -> dict[str, object]:
@@ -645,6 +712,9 @@ class NativeAcceptance:
 
     def run_timeout_resume(self) -> int:
         return acceptance_scenarios.run_timeout_resume(self)
+
+    def run_pi_session_miss(self) -> int:
+        return acceptance_scenarios.run_pi_session_miss(self)
 
     def run(self) -> int:
         return acceptance_scenarios.run(self)

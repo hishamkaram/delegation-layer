@@ -15,10 +15,11 @@ func EnvironmentConfigPath(environment []string) string {
 	return verifiedexec.EnvironmentValue(environment, environmentConfigKey)
 }
 
-// ContinuationConfigEnvironment returns the DELEGATE_PUEUE_CONFIG value in
-// effect inside a predecessor's selected launch scope. A private predecessor
-// binding suppresses that value, so a successor never retargets an external
-// configuration away from the predecessor's own private supervisor.
+// ContinuationConfigEnvironment returns the DELEGATE_PUEUE_CONFIG value of
+// the caller-selected launch scope that the environment argument carries for
+// the new successor task. A private predecessor binding suppresses that value,
+// so a successor never retargets an external configuration away from the
+// predecessor's own private supervisor.
 func ContinuationConfigEnvironment(root string, predecessor task.MetaRecord, environment []string) string {
 	if pueue.IsPrivateConfig(root, predecessor.SupervisorConfig.ConfigPath) {
 		return ""

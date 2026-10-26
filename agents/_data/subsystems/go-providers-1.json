@@ -150,6 +150,7 @@
       "go:internal/task",
       "go:io",
       "go:os",
+      "go:os/exec",
       "go:path/filepath",
       "go:reflect",
       "go:slices",

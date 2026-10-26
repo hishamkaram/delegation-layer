@@ -22,19 +22,30 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-func TestInteractiveDispatchResumeUsesSavedPiSessionRoot(t *testing.T) {
+// TestInteractiveDispatchResumeUsesCallerPiSessionRoot proves that an
+// interactive successor is a new task in the caller's captured scope, like an
+// ordinary one: the predecessor's saved Pi session root is eligibility
+// evidence only and never selects the successor's environment.
+func TestInteractiveDispatchResumeUsesCallerPiSessionRoot(t *testing.T) {
 	prepareFailure := errors.New("actual candidate preparation failed")
-	for _, testCase := range []interactivePiResumeTestCase{
-		{name: "successful admission"},
-		{name: "candidate preparation error", failAdmission: true},
-		{name: "missing predecessor environment", missingEnvironment: true},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newInteractivePiResumeFixture(t, testCase, prepareFailure)
-			result := dispatchInteractivePiResume(fixture)
+	for _, continueCommand := range []bool{false, true} {
+		for _, testCase := range []interactivePiResumeTestCase{
+			{name: "successful admission"},
+			{name: "candidate preparation error", failAdmission: true},
+			{name: "missing predecessor environment", missingEnvironment: true},
+		} {
+			testCase.continueCommand = continueCommand
+			name := "dispatch --resume-task/" + testCase.name
+			if continueCommand {
+				name = "continue --task/" + testCase.name
+			}
+			t.Run(name, func(t *testing.T) {
+				fixture := newInteractivePiResumeFixture(t, testCase, prepareFailure)
+				result := dispatchInteractivePiResume(fixture)
 
-			assertInteractivePiResumeResult(t, fixture, result)
-		})
+				assertInteractivePiResumeResult(t, fixture, result)
+			})
+		}
 	}
 }
 
@@ -42,6 +53,7 @@ type interactivePiResumeTestCase struct {
 	name               string
 	failAdmission      bool
 	missingEnvironment bool
+	continueCommand    bool
 }
 
 type interactivePiResumeFixture struct {
@@ -194,6 +206,15 @@ func prepareInteractivePiResumePredecessor(t *testing.T, fixture *interactivePiR
 }
 
 func dispatchInteractivePiResume(fixture *interactivePiResumeFixture) commandResult {
+	if fixture.testCase.continueCommand {
+		return continueTask(Arguments{
+			Root:        fixture.root,
+			TaskID:      fixture.predecessorID,
+			PueueConfig: fixture.supervisor.Binding().ConfigPath,
+			Runner:      fixture.runner,
+			Config:      task.TaskConfig{Interactive: true},
+		}, fixture.deps)
+	}
 	return dispatch(Arguments{
 		Root:        fixture.root,
 		Provider:    pi.Provider,
@@ -232,8 +253,9 @@ func assertInteractivePiResumeCandidateRoots(t *testing.T, fixture *interactiveP
 		}
 		return
 	}
-	if len(fixture.candidateSessionRoots) != 2 || fixture.candidateSessionRoots[0] != fixture.savedSessionRoot || fixture.candidateSessionRoots[1] != fixture.savedSessionRoot {
-		t.Fatalf("Pi candidate session roots = %v, want both validations to use %q; dispatch result=%+v", fixture.candidateSessionRoots, fixture.savedSessionRoot, result)
+	// Dispatch validates and creates; continue also validates before recovery.
+	if len(fixture.candidateSessionRoots) < 2 || slices.ContainsFunc(fixture.candidateSessionRoots, func(root string) bool { return root != fixture.callerSessionRoot }) {
+		t.Fatalf("Pi candidate session roots = %v, want every validation to use %q; dispatch result=%+v", fixture.candidateSessionRoots, fixture.callerSessionRoot, result)
 	}
 }
 
@@ -278,7 +300,7 @@ func assertInteractivePiSuccessfulResume(t *testing.T, fixture *interactivePiRes
 		t.Fatalf("interactive Pi resume did not create a successor task: %+v", result.response)
 	}
 	assertOrdinarySubmissionCommandCount(t, fixture.commandLog, "add", 1)
-	assertInteractivePiSuccessor(t, fixture.root, fixture.deps, result.response.TaskID, fixture.sessionID, fixture.savedSessionRoot)
+	assertInteractivePiSuccessor(t, fixture.root, fixture.deps, result.response.TaskID, fixture.sessionID, fixture.callerSessionRoot)
 }
 
 func sealInteractivePiPredecessor(t *testing.T, td *taskdir.TaskDir, sessionID, workspace string) {
@@ -353,7 +375,7 @@ func assertInteractivePiSuccessor(t *testing.T, root string, deps Dependencies, 
 		t.Fatalf("successor lost the exact Pi session identity: request=%+v", request)
 	}
 	if !slices.Contains(meta.Environment, "PI_CODING_AGENT_SESSION_DIR="+sessionRoot) {
-		t.Fatalf("successor metadata did not retain the saved Pi session root: %v", meta.Environment)
+		t.Fatalf("successor metadata did not record the caller Pi session root (%d entries)", len(meta.Environment))
 	}
 	if request.RequestedConfig.Interactive != true {
 		t.Fatalf("successor lost interactive mode: %+v", request.RequestedConfig)

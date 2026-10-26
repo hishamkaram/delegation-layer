@@ -173,7 +173,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
     def test_structured_admission_block_is_auth_unavailable_for_dispatch_and_continue(self):
         operation = self._dispatch_operation(AUTH_BLOCK_RESPONSE)
         calls = (lambda: operation.dispatch("fresh", self.brief),
-                 lambda: operation.continue_timed_out_task("resume", self.brief, "a" * 32))
+                 lambda: operation.continue_public("resume", self.brief, "a" * 32))
         for call in calls:
             with self.subTest(call=call), self.assertRaises(BlockedFailure) as raised:
                 call()
@@ -183,7 +183,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
         for response in ({"status": "refused", "error": ENGLISH_AUTH_TEXT}, {}, None):
             operation = self._dispatch_operation(response)
             for call in (lambda: operation.dispatch("fresh", self.brief),
-                         lambda: operation.continue_timed_out_task(
+                         lambda: operation.continue_public(
                              "resume", self.brief, "a" * 32)):
                 with self.subTest(response=response), self.assertRaises(
                         gate.AcceptanceFailure) as raised:

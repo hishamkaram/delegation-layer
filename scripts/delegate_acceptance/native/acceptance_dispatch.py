@@ -62,14 +62,14 @@ def dispatch_request(owner, name: str, brief: Path, predecessor: str | None,
         effort=getattr(acceptance.args, "effort", None), cwd=str(acceptance.workspace))
 
 def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
-             budget: str = TASK_BUDGET) -> str:
+             budget: str = TASK_BUDGET, *, environment: dict[str, str] | None = None) -> str:
     acceptance = owner
     task_id = secrets.token_hex(16)
     argv = acceptance.dispatch_argv(task_id, brief, predecessor, budget)
     request = dispatch_request(acceptance, name, brief, predecessor, budget)
     acceptance.ops.root_id = acceptance.root_id
     try:
-        response = acceptance.ops.dispatch(name, task_id, argv, request=request)
+        response = acceptance.ops.dispatch(name, task_id, argv, request=request, environment=environment)
         root_id, numeric_id = dispatch_binding(response, task_id, name)
         if acceptance.root_id is None:
             acceptance.root_id = root_id
@@ -88,11 +88,13 @@ def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
                                  reason=BlockReason.AUTH_UNAVAILABLE)
         raise
 
-def continue_task(owner, name: str, brief: Path, predecessor: str) -> str:
+def continue_task(owner, name: str, brief: Path, predecessor: str, *,
+                  environment: dict[str, str] | None = None) -> str:
     acceptance = owner
-    return acceptance.dispatch(name, brief, predecessor=predecessor)
+    return acceptance.dispatch(name, brief, predecessor=predecessor, environment=environment)
 
-def continue_timed_out_task(owner, name: str, brief: Path, predecessor: str) -> str:
+def continue_public(owner, name: str, brief: Path, predecessor: str, *,
+                    environment: dict[str, str] | None = None) -> str:
     acceptance = owner
     argv = acceptance.task_command_prefix()
     argv.extend(["continue", "--task", predecessor,
@@ -102,7 +104,7 @@ def continue_timed_out_task(owner, name: str, brief: Path, predecessor: str) -> 
                           predecessor_task_id=predecessor)
     acceptance.ops.root_id = acceptance.root_id
     try:
-        task_id, response = acceptance.ops.continue_task(name, argv, request=request)
+        task_id, response = acceptance.ops.continue_task(name, argv, request=request, environment=environment)
         root_id, numeric_id = dispatch_binding(response, task_id, name)
         require(response.get("command") == "continue" and
                 response.get("parent_task_id") == predecessor,

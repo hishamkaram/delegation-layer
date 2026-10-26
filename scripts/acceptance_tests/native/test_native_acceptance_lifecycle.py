@@ -567,32 +567,36 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertEqual(receipt["raw_process_captures"], "removed")
 
     def test_main_finalizes_the_owned_acceptance_root_before_passing(self):
-        with tempfile.TemporaryDirectory(prefix="native-main-cleanup-unit-") as directory:
-            output = Path(directory) / "evidence"
-            output.mkdir()
-            calls = []
+        # The entry names the expected gate; the Pi control publishes only its own named gate.
+        for scenario, gate in (([], "acceptance-native"),
+                               (["--scenario", "pi-session-miss"], "acceptance-native-pi-session-miss")):
+            with self.subTest(gate=gate), tempfile.TemporaryDirectory(
+                    prefix="native-main-cleanup-unit-") as directory:
+                output = Path(directory) / "evidence"
+                output.mkdir()
+                calls = []
 
-            class Run:
-                def run(self):
-                    calls.append("run")
-                    return 0
+                class Run:
+                    def run(self):
+                        calls.append("run")
+                        return 0
 
-                def finalize(self, success, *, blocked=False):
-                    calls.append(("finalize", success, blocked))
-                    return True
+                    def finalize(self, success, *, blocked=False):
+                        calls.append(("finalize", success, blocked))
+                        return True
 
-                def publish_success(self):
-                    calls.append("publish")
+                    def publish_success(self, *, expected_gate):
+                        calls.append(("publish", expected_gate))
 
-            with patch.object(entry, "choose_output", return_value=output), \
-                    patch.object(entry, "NativeAcceptance", return_value=Run()):
-                code = entry.main([
-                    "--provider", "pi:json", "--permission", "read-only",
-                    "--output", str(output),
-                ])
+                with patch.object(entry, "choose_output", return_value=output), \
+                        patch.object(entry, "NativeAcceptance", return_value=Run()):
+                    code = entry.main([
+                        "--provider", "pi:json", "--permission", "read-only",
+                        *scenario, "--output", str(output),
+                    ])
 
-            self.assertEqual(code, 0)
-            self.assertEqual(calls, ["run", ("finalize", True, False), "publish"])
+                self.assertEqual(code, 0)
+                self.assertEqual(calls, ["run", ("finalize", True, False), ("publish", gate)])
 
     def test_main_treats_cleanup_failure_as_fatal(self):
         with tempfile.TemporaryDirectory(prefix="native-main-cleanup-failure-unit-") as directory:

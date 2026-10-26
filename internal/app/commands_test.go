@@ -33,7 +33,12 @@ func TestRunNativeProfileRefusesBeforeBinding(t *testing.T) {
 		"--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
 		"--provider", "codex:exec", "--brief", briefPath, "--cwd", filepath.Dir(briefPath),
 		"--id", strings.Repeat("a", 32), "--runner", filepath.Join(t.TempDir(), "runner"),
-	}, &stdout, &stderr, Dependencies{InitialSupervisorExecutable: missingSupervisor})
+	}, &stdout, &stderr, Dependencies{
+		InitialSupervisorExecutable: missingSupervisor,
+		// The owned empty PATH keeps host-installed provider CLIs out of the
+		// native catalog lookup, so the refusal never depends on the machine.
+		Environment: []string{"HOME=" + testsupport.CanonicalTempDir(t), "PATH=" + t.TempDir()},
+	})
 	if code != 2 {
 		t.Fatalf("native refusal exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

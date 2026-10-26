@@ -5,14 +5,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from scripts.delegate_acceptance.directories.finalization import finalize_acceptance_artifacts
 from scripts.delegate_acceptance.evidence.bounded_files import BoundedReadError, read_bounded_regular_file
-from scripts.delegate_acceptance.evidence.files import digest, write_bytes, write_json
+from scripts.delegate_acceptance.evidence.files import digest, path_present, write_bytes, write_json
 from scripts.delegate_acceptance.evidence.records import status_jobs
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
@@ -197,8 +196,8 @@ def _known_no_launch(acceptance) -> bool:
     """Return whether the ordinary root provably admitted nothing at all."""
     return (not acceptance.tasks and not acceptance.ops.dispatch_attempts and
             not acceptance.ops.inspection_attempts and
-            not os.path.lexists(acceptance.state / "tasks") and
-            not os.path.lexists(acceptance.state / "inspections"))
+            not path_present(acceptance.state / "tasks") and
+            not path_present(acceptance.state / "inspections"))
 
 
 def record_lifetime_closure(owner) -> None:
@@ -212,7 +211,7 @@ def record_lifetime_closure(owner) -> None:
     task_ids = set(acceptance.tasks.values())
     discovery_required = acceptance.model_discovery_summary is not None
     if not discovery_required:
-        require(not os.path.lexists(acceptance.models_state / "inspections"),
+        require(not path_present(acceptance.models_state / "inspections"),
                 "model discovery state exists without a discovery result")
     proof: dict[str, object] = {
         "schema_version": LIFETIME_CLOSURE_SCHEMA_VERSION, "kind": LIFETIME_CLOSURE_KIND,

@@ -26,7 +26,7 @@ func dispatchPrimaryResult(response Response, observed tasklifecycle.DispatchRes
 	case tasklifecycle.DispatchValidate, tasklifecycle.DispatchWorkspace, tasklifecycle.DispatchProviderSelection:
 		fallback = 2
 	case tasklifecycle.DispatchOpenState, tasklifecycle.DispatchProviderLookup, tasklifecycle.DispatchPredecessor, tasklifecycle.DispatchOpenTask:
-	case tasklifecycle.DispatchGenerateID, tasklifecycle.DispatchEnvironment:
+	case tasklifecycle.DispatchGenerateID:
 		return failed(response, observed.Failure, 1)
 	}
 	return failed(response, observed.Failure, classifyCode(observed.Failure, fallback))

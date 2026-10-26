@@ -104,7 +104,7 @@ class NativeRequestIntentTests(unittest.TestCase):
                                                           result={"exit_code": 1, "natural_wait": True}))
         operation.root_id = "a" * 32
         with self.assertRaisesRegex(AcceptanceFailure, "invalid JSON evidence"):
-            operation.continue_timed_out_task("timeout-resume", self.brief, PREDECESSOR)
+            operation.continue_public("timeout-resume", self.brief, PREDECESSOR)
         self.assertEqual(len(probe.snapshots), 1)
         at_launch = probe.snapshots[0]
         self.assertEqual(len(at_launch), 1, "continuation must retain its intent before launch")

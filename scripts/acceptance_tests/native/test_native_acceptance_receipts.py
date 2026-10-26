@@ -66,7 +66,7 @@ class SuccessReceiptFragmentTests(unittest.TestCase):
         source_directory.mkdir()
         owner = self.owner(provider="codex:exec", mode="workspace-write", scenario="timeout-resume")
         owner.dispatch.return_value = FRESH
-        owner.continue_timed_out_task.return_value = RESUME
+        owner.continue_public.return_value = RESUME
         owner.wait_timed_out.return_value = {"continuation": {"state": "resumed"}}
         owner.collect_timed_out_source.return_value = {"publication": "unpublished"}
         owner.timeout_source_binding.return_value = source_directory

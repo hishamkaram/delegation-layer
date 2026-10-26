@@ -27,6 +27,12 @@ STATUS_CHILD = (
     "sys.stderr.buffer.write(b'finite stderr\\n')\n"
 )
 ECHO_CHILD = "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"
+# Reports only the named markers: an emptied environment may still gain interpreter-injected variables.
+ENV_CHILD = "import json, os, sys; print(json.dumps({k: os.environ.get(k) for k in sys.argv[1:]}))"
+CONSTRUCTOR_MARKER = "PORT_CONSTRUCTOR_MARKER"
+SELECTED_MARKER = "PORT_SELECTED_MARKER"
+AMBIENT_MARKER = "PORT_AMBIENT_MARKER"
+MARKERS = (CONSTRUCTOR_MARKER, SELECTED_MARKER, AMBIENT_MARKER)
 
 
 class RecordingCapture:
@@ -535,6 +541,101 @@ class ProcessFinalizationRetryTests(unittest.TestCase):
             process.wait(10)
         self.assertIsNone(process.result)
         self.assertEqual(process.stdout_path.read_bytes(), b"")
+
+
+class EnvironmentRefusal(RuntimeError):
+    """Caller-chosen failure type: a refusal must use the registry's own."""
+
+
+class ProcessEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix="process-environment-")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.owner = DirectoryOwner()
+        self.addCleanup(self.owner.rollback)
+        self.factory_calls = []
+
+    def book(self, environment, **options):
+        def factory(argv):
+            self.factory_calls.append(argv)
+        book = processes.Processes(self.root / "book", environment, owner=self.owner,
+                                   stdout_capture_factory=factory, **options)
+        self.addCleanup(settle_children, book)
+        return book
+
+    def markers(self, book, environment=None, name="child"):
+        """Run the marker child under one selection; return what the child saw."""
+        process = book.run(name, [PYTHON, "-c", ENV_CHILD, *MARKERS], self.root,
+                           environment=environment)
+        return process, process.json()
+
+    def test_unselected_launch_uses_constructor_snapshot_not_later_ambient(self):
+        constructor = {CONSTRUCTOR_MARKER: "constructor"}
+        book = self.book(constructor)
+        constructor[CONSTRUCTOR_MARKER] = "mutated-after-construction"
+        with patch.dict(os.environ, {AMBIENT_MARKER: "ambient"}):
+            _, seen = self.markers(book)
+        self.assertEqual(seen, {CONSTRUCTOR_MARKER: "constructor", SELECTED_MARKER: None,
+                                AMBIENT_MARKER: None})
+
+    def test_explicit_empty_environment_is_empty_not_a_fallback(self):
+        book = self.book({CONSTRUCTOR_MARKER: "constructor"}, environment_keys_only=True)
+        process, seen = self.markers(book, {})
+        self.assertEqual(seen, {CONSTRUCTOR_MARKER: None, SELECTED_MARKER: None, AMBIENT_MARKER: None})
+        self.assertEqual(process.environment, {})
+        self.assertEqual(read_json(process.directory / "invocation.json")["environment_keys"], [])
+
+    def test_selection_replaces_constructor_snapshot_for_that_launch_only(self):
+        constructor = {CONSTRUCTOR_MARKER: "constructor"}
+        book = self.book(constructor, environment_keys_only=True)
+        ambient_before = dict(os.environ)
+        process, seen = self.markers(book, {SELECTED_MARKER: "selected"}, "selected")
+        self.assertEqual(seen, {CONSTRUCTOR_MARKER: None, SELECTED_MARKER: "selected", AMBIENT_MARKER: None})
+        self.assertEqual(read_json(process.directory / "invocation.json")["environment_keys"],
+                         [SELECTED_MARKER])
+        self.assertEqual(book.environment, constructor)
+        self.assertEqual(dict(os.environ), ambient_before)
+        _, after = self.markers(book, None, "after")
+        self.assertEqual(after, {CONSTRUCTOR_MARKER: "constructor", SELECTED_MARKER: None,
+                                 AMBIENT_MARKER: None})
+
+    def test_start_keeps_a_private_copy_of_the_selected_mapping(self):
+        book = self.book({})
+        selection = {SELECTED_MARKER: "selected"}
+        process = book.start("copy", [PYTHON, "-c", ENV_CHILD, *MARKERS], self.root, environment=selection)
+        selection[SELECTED_MARKER] = "mutated-after-start"
+        selection[AMBIENT_MARKER] = "added-after-start"
+        process.wait(10)
+        self.assertEqual(process.json(), {CONSTRUCTOR_MARKER: None, SELECTED_MARKER: "selected",
+                                          AMBIENT_MARKER: None})
+        self.assertEqual(process.environment, {SELECTED_MARKER: "selected"})
+
+    def test_malformed_selection_is_refused_before_any_capture_or_launch(self):
+        canary = "canary-value"
+        refused = (
+            ("non-mapping", [(SELECTED_MARKER, canary)]),
+            ("non-string value", {SELECTED_MARKER: 7}),
+            ("none value", {SELECTED_MARKER: None}),
+            ("non-string key", {7: canary}),
+            ("empty key", {"": canary}),
+            ("equals in key", {"A=B": canary}),
+            ("NUL in key", {"A\0B": canary}),
+            ("NUL in value", {SELECTED_MARKER: canary + "\0"}),
+        )
+        book = self.book({CONSTRUCTOR_MARKER: "constructor"}, failure_type=EnvironmentRefusal)
+        adopted = []
+        for label, selection in refused:
+            with self.subTest(label), patch.object(processes.subprocess, "Popen") as popen:
+                with self.assertRaises(EnvironmentRefusal) as raised:
+                    book.start("refused", [PYTHON, "-c", "pass"], self.root,
+                               on_spawned=adopted.append, environment=selection)
+                self.assertNotIn(canary, str(raised.exception))
+                popen.assert_not_called()
+        self.assertEqual((self.factory_calls, adopted, book.entries, book.pending()), ([], [], [], []))
+        self.assertEqual(list(book.directory.iterdir()), [])
+        process = book.run("accepted", [PYTHON, "-c", "pass"], self.root, environment={SELECTED_MARKER: "ok"})
+        self.assertEqual(process.directory.name, "001-accepted")
 
 
 if __name__ == "__main__":

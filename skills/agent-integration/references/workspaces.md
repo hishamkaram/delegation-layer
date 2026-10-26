@@ -102,9 +102,11 @@ flag. This auxiliary budget is separate from and does not renew the provider
 task budget. The existing `codex:review` default remains 1 hour.
 
 `continue --task PREDECESSOR_ID` inherits the predecessor's managed workspace,
-working directory, provider session, and recorded environment, while creating
-a new task ID. A changed provider request is a new turn; it must not mutate the
-predecessor's immutable records. A retained workspace can be used by a
+working directory, and provider session, while creating a new task ID. The new
+turn runs in the calling environment, so the exact recorded session must be
+available there; see [continuation](continuation.md). The predecessor's
+admitted records stay unchanged. A changed provider request is a new turn; it
+must not mutate the predecessor's immutable records. A retained workspace can be used by a
 read-only review by attaching its ID, for example:
 
 ```text

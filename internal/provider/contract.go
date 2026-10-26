@@ -351,10 +351,13 @@ type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
 // Registration is one explicit catalog entry. A nil Prepare function is
 // valid for historical-only predicate registrations and never grants launch
 // authority. PrepareSuccessor is an optional PrepareExisting-shaped hook for a
-// new exact-session continuation task: it receives the predecessor's immutable
-// record and may select the current compatible output interpreter, which
-// PrepareExisting must not. Without it, the catalog falls back to
-// PrepareExisting, then Prepare.
+// new exact-session continuation task. It receives the predecessor's immutable
+// record for compatibility and eligibility only, derives launch values from
+// the environment argument, which is the successor's own scope, and may select
+// the current compatible output interpreter, which PrepareExisting must not.
+// Every production continuation adapter declares it; without it, as for a
+// custom or historical registration, the catalog falls back to PrepareExisting,
+// then Prepare.
 type Registration struct {
 	// Models describes optional advisory discovery. It grants no task admission.
 	Models               func() ModelDiscoveryDefinition

@@ -27,18 +27,30 @@ func PrepareCandidate(request task.TaskRecord, environment []string) (commonprov
 // environment resolves the executable, and it is the launch environment only
 // for a record that saved none.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, callerEnvironment []string) (commonprovider.ProfileCandidate, error) {
-	profile := legacyProfile
-	if commonprovider.HasNativeProfile(meta) {
-		profile = nativeCurrentProfile
-		if historicalNativePredicate(meta.Predicate) {
-			profile = nativeHistoricalProfile
-		}
-	}
+	profile := recordedProfile(meta)
 	environment := callerEnvironment
 	if meta.EnvironmentRecorded {
 		environment = slices.Clone(meta.Environment)
 	}
-	return prepareCandidate(request, profile, meta.Predicate, environment, callerEnvironment, meta.RuntimePreflightSHA256 != "" && profile == nativeCurrentProfile)
+	return prepareCandidate(request, profile, meta.Predicate, environment, callerEnvironment, retainsStaticAdmission(meta, profile))
+}
+
+// recordedProfile selects the launch profile a record's predicate admitted
+// under. It reads only compatibility, never launch values.
+func recordedProfile(meta task.MetaRecord) profileKind {
+	if !commonprovider.HasNativeProfile(meta) {
+		return legacyProfile
+	}
+	if historicalNativePredicate(meta.Predicate) {
+		return nativeHistoricalProfile
+	}
+	return nativeCurrentProfile
+}
+
+// retainsStaticAdmission reports whether the record is a current native task
+// that was admitted by capability digest, so its static admission is kept.
+func retainsStaticAdmission(meta task.MetaRecord, profile profileKind) bool {
+	return meta.RuntimePreflightSHA256 != "" && profile == nativeCurrentProfile
 }
 
 type profileKind uint8

@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from scripts.acceptance_tests.test_foundation_owners import failing_lstat
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_operations as operations_impl,
@@ -141,6 +142,14 @@ class ProductionAcpMarkerTests(unittest.TestCase):
                 (task.directory / entry).mkdir()
                 with self.assertRaisesRegex(gate.AcceptanceFailure, "user interaction journal"):
                     task.marker()
+
+    def test_an_uninspectable_journal_entry_keeps_its_label_and_cause(self):
+        denied = PermissionError(13, "injected permission denied")
+        with failing_lstat(self.fresh.directory / "interaction", denied), \
+                self.assertRaisesRegex(gate.AcceptanceFailure,
+                                       f"task {FRESH} interaction entry interaction cannot be inspected") as raised:
+            self.fresh.marker()
+        self.assertIs(raised.exception.__cause__, denied)
 
     def test_session_and_core_seal_tampering_is_refused(self):
         reference = gate.read_json(self.fresh.directory / "provider.ref.json")

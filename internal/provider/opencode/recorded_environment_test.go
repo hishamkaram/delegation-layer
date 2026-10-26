@@ -330,7 +330,7 @@ func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
 	}
 }
 
-func TestSuccessorCandidateFallsBackToProvidedOnlyWithoutRecordedEnvironment(t *testing.T) {
+func TestSuccessorCandidateReadsProvidedEnvironmentWhetherOrNotRecorded(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeReadOnly, dialectNativeV2)
 	ambient, provided := newLaunchHome(t, "ambient"), newLaunchHome(t, "provided")
 	ambient.apply(t)
@@ -351,10 +351,10 @@ func TestSuccessorCandidateFallsBackToProvidedOnlyWithoutRecordedEnvironment(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(candidate.Inspection.Environment, recorded.Environment) {
-		t.Fatalf("successor inspection environment %s want the predecessor's recorded %s", summarizeValues(candidate.Inspection.Environment), summarizeValues(recorded.Environment))
+	requireSelectors(t, "successor of a recorded predecessor must read the provided environment", candidate.Inspection.Environment, provided.selectors())
+	if slices.Contains(candidate.Inspection.Environment, "OPENCODE_CONFIG_DIR="+fixture.request.CanonicalCwd+"/recorded") {
+		t.Fatal("successor inspection environment kept an entry only the predecessor record carried")
 	}
-	requireNoPath(t, "recorded successor inspection environment", candidate.Inspection.Environment, provided.paths())
 }
 
 // The provided scope owns executable lookup, as the ambient process scope did

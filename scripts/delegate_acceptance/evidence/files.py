@@ -30,6 +30,20 @@ def is_staging_file_for(path: Path, name: str) -> bool:
     return len(name) > len(prefix) + len(STAGING_SUFFIX)
 
 
+def path_present(path: Path) -> bool:
+    """Return whether ``path`` names an entry, without following a final symlink.
+
+    Only FileNotFoundError means absent, so a dangling link is present. Any
+    other OSError, such as PermissionError or NotADirectoryError, propagates
+    unchanged because presence is then unknown; callers own its meaning.
+    """
+    try:
+        Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open("rb") as stream:

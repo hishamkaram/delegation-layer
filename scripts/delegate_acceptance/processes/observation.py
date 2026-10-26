@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from typing import Mapping
 from scripts.delegate_acceptance.directories.policy import require
 
 
@@ -39,6 +40,26 @@ def wait_until(predicate, timeout=15, description="condition", *, timeout_error=
             raise timeout_error
         require(within_deadline, "observation expired: " + description)
         time.sleep(0.05)
+
+
+def selected_environment(environment: Mapping[str, str], failure_type) -> dict[str, str]:
+    """Copy one explicit child environment after proving every entry is launchable.
+
+    The selection is the child's entire environment, never an overlay, so an empty
+    mapping stays empty.  ``Processes.start`` calls this before any capture exists,
+    so a refusal leaves nothing to clean up.  The mapping is read once: a later
+    caller mutation cannot change the copy.  A refusal names the offending shape,
+    never a value.
+    """
+    if not isinstance(environment, Mapping):
+        raise failure_type("process environment must be a mapping")
+    selected = dict(environment.items())
+    for key, value in selected.items():
+        if type(key) is not str or type(value) is not str:
+            raise failure_type("process environment keys and values must be strings")
+        if not key or "=" in key or "\0" in key or "\0" in value:
+            raise failure_type("process environment entry is not launchable")
+    return selected
 
 
 def inherited_environment():

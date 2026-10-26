@@ -57,9 +57,9 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 	return continueAdmitted(successor, options, predecessor, meta, result)
 }
 
-// continueAdmitted dispatches the successor in the predecessor's saved launch
-// scope, selected over the caller's scope where the former process-level swap
-// applied it. Supervisor control keeps the caller's environment.
+// continueAdmitted dispatches the successor in the caller's captured launch
+// scope, which owns the new task's provider profile, supervisor control, and
+// maintenance. The predecessor's records decide only compatibility.
 func continueAdmitted(successor DispatchRequest, options ContinuationOptions, predecessor *task.TaskRecord, meta *task.MetaRecord, result ContinuationResult) ContinuationResult {
 	caller := options.Dispatch.Creation.Admission.Profiles.Environment()
 	control := supervisorcore.OptionsForEnvironment(options.Dispatch.Creation.Admission.Supervisor.Control, caller)
@@ -70,15 +70,8 @@ func continueAdmitted(successor DispatchRequest, options ContinuationOptions, pr
 	if err := supervisorcore.RecoverContinuationSelection(controlContext, result.Root, &successor.Selection, options.Supervisor); err != nil {
 		return continuationFailure(result, ContinueSupervisor, "resolve-continuation-supervisor", err)
 	}
-	profiles, err := options.Dispatch.Creation.Admission.Profiles.ForRecord(meta.Environment, meta.EnvironmentRecorded)
-	if err != nil {
-		return continuationFailure(result, ContinueEnvironment, "restore-continuation-environment", err)
-	}
-	selected := profiles.Environment()
-	options.Dispatch.Creation.Admission.Profiles = profiles
-	options.Dispatch.Creation.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Dispatch.Creation.Admission.Supervisor, caller, selected)
+	options.Dispatch.Creation, successor.Selection = newSuccessorCreation(options.Dispatch.Creation, successor.Selection, result.Root, meta)
 	options.Dispatch.Workspace.Runtime = admissioncore.NewWorkspaceRuntime(options.Dispatch.Creation.Admission.Supervisor)
-	successor.Selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(result.Root, *meta, selected)
 	dispatched := Dispatch(successor, options.Dispatch)
 	result.Dispatch = &dispatched
 	result.PredecessorID, result.Runner = predecessor.TaskID, successor.Selection.Runner

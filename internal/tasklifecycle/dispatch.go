@@ -74,10 +74,7 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 		return dispatchFailure(result, DispatchOpenTask, "open-task-record", openErr)
 	}
 	result.Record = DispatchRecordLookup(request.TaskID, false, nil)
-	creation, selection, err := interactiveContinuationCreation(options.Creation, request.Selection, store.Root, predecessorMeta, base.RequestedConfig.Interactive)
-	if err != nil {
-		return dispatchFailure(result, DispatchEnvironment, "apply-continuation-environment", err)
-	}
+	creation, selection := newSuccessorCreation(options.Creation, request.Selection, store.Root, predecessorMeta)
 	created := CreateTask(selection, creation, store, base, brief, request.BriefPath)
 	result.Creation = &created
 	return result

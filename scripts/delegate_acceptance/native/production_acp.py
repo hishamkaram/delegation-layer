@@ -6,7 +6,7 @@ import posixpath
 from pathlib import Path
 from typing import Mapping
 
-from scripts.delegate_acceptance.evidence.files import digest, read_json
+from scripts.delegate_acceptance.evidence.files import digest, path_present, read_json
 from scripts.delegate_acceptance.evidence.validation import (
     AcceptanceFailure,
     _hex_digest,
@@ -30,12 +30,9 @@ INTERACTION_JOURNAL_ENTRIES = ("interaction", ".interaction.lock", "raw/interact
 
 def _absent(path: Path, label: str) -> bool:
     try:
-        path.lstat()
-    except FileNotFoundError:
-        return True
+        return not path_present(path)
     except OSError as error:
         raise AcceptanceFailure(f"{label} cannot be inspected: {error}") from error
-    return False
 
 
 def _admitted_acp_predicate(task_id: str, meta: dict[str, object]) -> dict[str, object]:

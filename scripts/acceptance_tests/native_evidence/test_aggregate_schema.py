@@ -13,6 +13,8 @@ from scripts import native_acceptance_evidence as evidence
 # Import the module, not the TestCase, so its tests are discovered only once.
 from scripts import test_native_acceptance_evidence as evidence_tests
 from scripts.delegate_acceptance.native_evidence import cli
+from scripts.delegate_acceptance.native_evidence import validation
+from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
 from scripts.delegate_acceptance.release_verification import verification
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 
@@ -79,6 +81,39 @@ class ValidatorTests(AggregateSchemaTests):
         path.write_text(json.dumps(value), encoding="utf-8")
         with self.assertRaisesRegex(evidence.EvidenceError, "^aggregate_receipt_invalid$"):
             evidence.validate_aggregate_receipt(path)
+
+
+class SharedCaseProofTests(AggregateSchemaTests):
+    """Compact receipt validation and supplemental validation share one in-memory proof owner."""
+
+    def compact_cases(self, label):
+        path, _ = self.build(label)
+        value = json.loads(path.read_text(encoding="utf-8"))
+        root = path.parent
+        return path, [(case, json.loads((root / case["receipt_path"]).read_text(encoding="utf-8")))
+                      for case in value["cases"]]
+
+    def test_every_compact_case_proof_validates_in_memory_against_its_reference(self):
+        _, cases = self.compact_cases("shared")
+        for case, compact in cases:
+            with self.subTest(case=case["case_id"]):
+                proof = validation.validate_case_proof(case, compact)
+                self.assertEqual(proof["binary_identities"], case["binary_identities"])
+
+    def test_in_memory_mismatch_is_refused_without_reading_the_receipt_path(self):
+        _, cases = self.compact_cases("mismatch")
+        case, compact = cases[0]
+        with self.assertRaisesRegex(EvidenceError, "aggregate_case_receipt_mismatch"):
+            validation.validate_case_proof({**case, "receipt_path": "absent.json"},
+                                           {**compact, "exit_code": 7})
+
+    def test_compact_receipt_validation_routes_through_the_shared_proof(self):
+        path, _ = self.compact_cases("routed")
+        with patch.object(validation, "validate_case_proof",
+                          side_effect=EvidenceError("shared_proof_called")) as shared:
+            with self.assertRaisesRegex(EvidenceError, "shared_proof_called"):
+                evidence.validate_aggregate_receipt(path)
+        shared.assert_called_once()
 
 
 class ConsumerTests(AggregateSchemaTests):
