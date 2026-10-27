@@ -156,14 +156,25 @@ func TestNativeEnvironmentRoundTripsRootSelectors(t *testing.T) {
 }
 
 func TestNativeConfigFileDoesNotReserveDefaultStateRoot(t *testing.T) {
-	home, err := os.Getwd()
+	// The working directory must not decide where the fake home lives.
+	t.Chdir(t.TempDir())
+	// The provider writable roots include the native temporary directories, and
+	// static admission rejects a state root inside them, so the fake home lives
+	// under the user's home rather than in temporary storage.
+	userHome, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
 	}
-	home, err = config.CanonicalizePath(home)
+	fakeHome, err := os.MkdirTemp(userHome, ".delegate-opencode-state-root-")
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if removeErr := os.RemoveAll(fakeHome); removeErr != nil {
+			t.Errorf("remove fake home %s: %v", fakeHome, removeErr)
+		}
+	})
+	home := canonicalTestPath(t, fakeHome)
 	sharedConfigDir := filepath.Join(home, ".config")
 	configFile := filepath.Join(sharedConfigDir, "opencode.json")
 	environment, err := prepareProfileEnvironment([]string{

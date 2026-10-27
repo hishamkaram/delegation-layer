@@ -158,6 +158,48 @@ func (s *Store) readBytesContext(ctx context.Context, path string, limit int64) 
 	return b, errors.Join(err, ctx.Err())
 }
 
+// Digest scratch bounds. The descriptor's stat size only chooses a buffer in
+// this range; it never decides or records content identity.
+const (
+	minDigestScratch = 512
+	maxDigestScratch = 32 << 10
+)
+
+// readDigest hashes at most limit+1 bytes of a rooted private file without
+// retaining them. Only the bytes actually read establish the returned identity.
+func (s *Store) readDigest(path string, limit int64) (string, int64, error) {
+	f, err := s.openFile(path, unix.O_RDONLY)
+	if err != nil {
+		return "", 0, err
+	}
+	digest, size, readErr := digestOpenFile(f, limit)
+	return digest, size, errors.Join(readErr, f.Close())
+}
+
+func (s *Store) readDigestContext(ctx context.Context, path string, limit int64) (string, int64, error) {
+	if ctx == nil {
+		return "", 0, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return "", 0, err
+	}
+	digest, size, err := s.readDigest(path, limit)
+	return digest, size, errors.Join(err, ctx.Err())
+}
+
+func digestOpenFile(f *os.File, limit int64) (string, int64, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	return task.DigestBounded(f, limit, make([]byte, digestScratchSize(info.Size())))
+}
+
+// digestScratchSize clamps a possibly stale size hint to the scratch bounds.
+func digestScratchSize(hint int64) int {
+	return int(min(max(hint, minDigestScratch), maxDigestScratch))
+}
+
 func (s *Store) barrierDir(path string) error {
 	f, err := s.openDir(path)
 	if err != nil {

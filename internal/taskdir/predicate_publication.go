@@ -114,7 +114,7 @@ func (s *payloadStage) descriptor() task.PayloadDescriptor {
 }
 
 func (td *TaskDir) interpretationInput(seal *task.ProviderExitRecord) (predicate.Input, error) {
-	_, req, _, _, _, err := td.loadAndValidatePreparedSet()
+	req, _, _, _, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return predicate.Input{}, err
 	}

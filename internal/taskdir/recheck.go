@@ -193,7 +193,7 @@ func (td *TaskDir) finishRecheckPayload(stage *payloadStage, directory, verdict 
 }
 
 func (td *TaskDir) loadRecheckSource(interpreter predicate.RecoveryInterpreter) (*recheckSource, error) {
-	_, _, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}

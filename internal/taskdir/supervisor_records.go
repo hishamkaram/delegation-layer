@@ -17,7 +17,7 @@ import (
 // OpenBriefForExecution is the sole execution-only stdin capability. Its kernel
 // descriptor is O_RDONLY and points to the exact validated immutable brief.
 func (td *TaskDir) OpenBriefForExecution() (*os.File, error) {
-	_, req, _, _, _, err := td.loadAndValidatePreparedSet()
+	req, _, _, _, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
@@ -25,11 +25,7 @@ func (td *TaskDir) OpenBriefForExecution() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := sha256.New()
-	n, err := io.Copy(h, f)
-	if err == nil && (n != req.BriefLength || hex.EncodeToString(h.Sum(nil)) != req.BriefSHA256) {
-		err = task.ErrIdentityMismatch
-	}
+	err = verifyExecutionBrief(f, req)
 	if err == nil {
 		_, err = f.Seek(0, io.SeekStart)
 	}
@@ -39,11 +35,23 @@ func (td *TaskDir) OpenBriefForExecution() (*os.File, error) {
 	return f, nil
 }
 
+// verifyExecutionBrief proves that the exact execution descriptor holds the
+// validated brief identity. It reads at most one byte beyond the validated
+// length, enough to reject a grown brief without consuming the growth.
+func verifyExecutionBrief(r io.Reader, req *task.TaskRecord) error {
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(r, req.BriefLength+1))
+	if err == nil && (n != req.BriefLength || hex.EncodeToString(h.Sum(nil)) != req.BriefSHA256) {
+		err = task.ErrIdentityMismatch
+	}
+	return err
+}
+
 // ReadBrief returns the validated immutable brief for a continuation request.
 // It is bounded by the same task brief limit used at creation and never
 // exposes the execution-only writable path.
 func (td *TaskDir) ReadBrief() ([]byte, error) {
-	brief, _, _, _, _, err := td.loadAndValidatePreparedSet()
+	brief, err := td.loadAndValidatePreparedBrief()
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +59,7 @@ func (td *TaskDir) ReadBrief() ([]byte, error) {
 }
 
 func (td *TaskDir) ReadSubmission() (*task.SubmitRecord, error) {
-	_, _, meta, spec, hash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, hash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +152,7 @@ func (td *TaskDir) ReadProviderIdentity() (*task.ProviderRefRecord, error) {
 // provider.ref.json itself does not exist. A malformed, unreadable, replaced,
 // or mismatched record, or a missing prepared dependency, is never absent.
 func (td *TaskDir) ReadProviderIdentityPresence() (identity *task.ProviderRefRecord, absent bool, err error) {
-	_, req, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	req, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, false, err
 	}
@@ -188,7 +196,7 @@ func (td *TaskDir) RecordProviderIdentity(identity task.SessionIdentity) error {
 	if err = task.ValidateSessionIdentity(identity); err != nil {
 		return err
 	}
-	_, req, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	req, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return err
 	}

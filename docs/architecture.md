@@ -635,6 +635,14 @@ are payload evidence referenced by validated descriptors. Collection can replay
 that publication without requiring the provider or supervisor to remain
 available.
 
+Every prepared-record validation rereads the request, metadata, and brief; none
+is cached. A reader that needs only the metadata streams the brief through a
+bounded hash instead of retaining it, then compares the full-content digest and
+length with the recorded identity, so a truncated or same-length changed brief
+is a concrete identity fault. Only the continuation brief read returns the
+bytes, as a caller-owned copy. Execution independently hashes the exact
+read-only descriptor it hands to the provider.
+
 ## Native output and derived recovery
 
 The core owns captured files and callback-scoped readers. Provider adapters

@@ -227,7 +227,7 @@ func (td *TaskDir) prepareSet(brief, reqData, metaData []byte) error {
 			return err
 		}
 	}
-	_, _, _, _, _, err := td.loadAndValidatePreparedSet()
+	_, _, _, _, err := td.loadAndValidatePreparedSet()
 	return err
 }
 
@@ -274,68 +274,101 @@ func samePreparedRecord(name string, existing, data []byte) (bool, error) {
 	return reflect.DeepEqual(old, proposed), nil
 }
 
-func (td *TaskDir) loadAndValidatePreparedSet() ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
-	return td.loadAndValidatePreparedSetWithReader(td.store.readBytes)
+// briefIdentity is the SHA-256 and length of the brief bytes actually read,
+// matched against the request's BriefSHA256 and BriefLength.
+type briefIdentity struct {
+	sha256 string
+	length int64
 }
 
-func (td *TaskDir) loadAndValidatePreparedSetContext(ctx context.Context) ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
-	if ctx == nil {
-		return nil, nil, nil, "", "", context.Canceled
+// loadAndValidatePreparedSet validates the current prepared set without
+// retaining the brief: it streams the brief into its identity first.
+func (td *TaskDir) loadAndValidatePreparedSet() (*task.TaskRecord, *task.MetaRecord, string, string, error) {
+	digest, length, err := td.store.readDigest(filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
+	if err != nil {
+		return nil, nil, "", "", err
 	}
-	brief, request, meta, specHash, metaHash, err := td.loadAndValidatePreparedSetWithReader(func(path string, limit int64) ([]byte, error) {
-		return td.store.readBytesContext(ctx, path, limit)
-	})
+	return td.loadAndValidatePreparedSetWithReader(briefIdentity{sha256: digest, length: length}, td.store.readBytes)
+}
+
+func (td *TaskDir) loadAndValidatePreparedSetContext(ctx context.Context) (*task.TaskRecord, *task.MetaRecord, string, string, error) {
+	if ctx == nil {
+		return nil, nil, "", "", context.Canceled
+	}
+	request, meta, specHash, metaHash, err := td.loadPreparedSetContext(ctx)
 	// Local file reads complete synchronously. Recheck after guard validation
 	// so a caller deadline can never produce a successful prepared-set proof.
 	if err = errors.Join(err, ctx.Err()); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
-	return brief, request, meta, specHash, metaHash, nil
+	return request, meta, specHash, metaHash, nil
 }
 
-func (td *TaskDir) loadAndValidatePreparedSetWithReader(read func(string, int64) ([]byte, error)) ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
-	brief, err := read(filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
+func (td *TaskDir) loadPreparedSetContext(ctx context.Context) (*task.TaskRecord, *task.MetaRecord, string, string, error) {
+	digest, length, err := td.store.readDigestContext(ctx, filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
 	if err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
+	return td.loadAndValidatePreparedSetWithReader(briefIdentity{sha256: digest, length: length}, func(path string, limit int64) ([]byte, error) {
+		return td.store.readBytesContext(ctx, path, limit)
+	})
+}
+
+// loadAndValidatePreparedBrief is the only prepared-set entry that retains
+// the brief bytes; it validates them through the same canonical validator.
+func (td *TaskDir) loadAndValidatePreparedBrief() ([]byte, error) {
+	brief, err := td.store.readBytes(filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
+	if err != nil {
+		return nil, err
+	}
+	observed := briefIdentity{sha256: task.ComputeSHA256(brief), length: int64(len(brief))}
+	if _, _, _, _, err = td.loadAndValidatePreparedSetWithReader(observed, td.store.readBytes); err != nil {
+		return nil, err
+	}
+	return brief, nil
+}
+
+// loadAndValidatePreparedSetWithReader is the canonical prepared-set
+// validator. Its caller has already read the brief into its identity.
+func (td *TaskDir) loadAndValidatePreparedSetWithReader(brief briefIdentity, read func(string, int64) ([]byte, error)) (*task.TaskRecord, *task.MetaRecord, string, string, error) {
 	reqBytes, err := read(filepath.Join(td.Dir, "task.json"), task.MaxControlRecordSize)
 	if err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	metaBytes, err := read(filepath.Join(td.Dir, "meta.json"), task.MaxControlRecordSize)
 	if err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	var req task.TaskRecord
 	var meta task.MetaRecord
 	if err = task.DecodeStrict(reqBytes, &req); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	if err = task.ValidateTaskRecord(&req); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	if err = task.DecodeStrict(metaBytes, &meta); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	if err = task.ValidateMetaRecord(&meta); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	specHash := task.ComputeSHA256(reqBytes)
 	metaHash := task.ComputeSHA256(metaBytes)
 	if err = td.matchPrepared(&req, &meta, brief, specHash); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
 	if err = td.validateGuards(&req, &meta, specHash, metaHash); err != nil {
-		return nil, nil, nil, "", "", err
+		return nil, nil, "", "", err
 	}
-	return brief, &req, &meta, specHash, metaHash, nil
+	return &req, &meta, specHash, metaHash, nil
 }
 
-func (td *TaskDir) matchPrepared(req *task.TaskRecord, meta *task.MetaRecord, brief []byte, spec string) error {
+func (td *TaskDir) matchPrepared(req *task.TaskRecord, meta *task.MetaRecord, brief briefIdentity, spec string) error {
 	if req.RootID != td.store.RootID || req.TaskID != td.TaskID || meta.RootID != td.store.RootID || meta.TaskID != td.TaskID || meta.SpecSHA256 != spec {
 		return task.ErrIdentityMismatch
 	}
-	if req.BriefSHA256 != task.ComputeSHA256(brief) || req.BriefLength != int64(len(brief)) {
+	if req.BriefSHA256 != brief.sha256 || req.BriefLength != brief.length {
 		return task.ErrIdentityMismatch
 	}
 	if meta.Predicate.Adapter != req.Provider || meta.Predicate.Mode != req.Mode || !reflect.DeepEqual(req.RequestedConfig, meta.RequestedConfig) {
@@ -383,7 +416,7 @@ func (td *TaskDir) validateStartGuard(req *task.TaskRecord, specHash, metaHash s
 
 // PreparedRecords returns the complete validated immutable request and binding.
 func (td *TaskDir) PreparedRecords() (*task.TaskRecord, *task.MetaRecord, error) {
-	_, req, meta, _, _, err := td.loadAndValidatePreparedSet()
+	req, meta, _, _, err := td.loadAndValidatePreparedSet()
 	return req, meta, err
 }
 
@@ -400,7 +433,7 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 			resultErr = errors.Join(resultErr, td.admissionLock.Unlock(), td.store.maintLock.Unlock())
 		}
 	}()
-	_, req, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	req, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +490,7 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 			resultErr = errors.Join(resultErr, td.runLock.Unlock(), td.store.maintLock.Unlock())
 		}
 	}()
-	_, req, _, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	req, _, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}

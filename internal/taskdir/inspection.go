@@ -30,7 +30,7 @@ func (td *TaskDir) Inspect() (*TaskInspection, error) {
 	if err := td.inspectPresence(insp); err != nil {
 		return insp, err
 	}
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return insp, err
 	}

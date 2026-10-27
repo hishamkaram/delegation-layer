@@ -11,7 +11,7 @@ import (
 // PreparedIdentity returns the exact validated on-disk byte identities. A
 // caller must not reserialize decoded records to reconstruct these digests.
 func (td *TaskDir) PreparedIdentity() (*task.TaskRecord, *task.MetaRecord, string, string, error) {
-	_, request, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	request, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	return request, meta, specHash, metaHash, err
 }
 

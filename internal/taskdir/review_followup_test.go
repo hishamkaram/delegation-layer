@@ -172,7 +172,7 @@ func testUncertainSessionProof(t *testing.T, record string) {
 	td := preparedTask(t, s)
 	must(t, td.ClaimSession("fixture:test", "uncertain-proof"))
 	hook := createUncertainSessionProof(t, td, record)
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	must(t, err)
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
 	must(t, err)

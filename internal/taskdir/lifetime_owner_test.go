@@ -448,7 +448,7 @@ func TestLifetimeRegistrationRequiresIntentForNewWrites(t *testing.T) {
 func TestLifetimeLegacyRegistrationReadRemainsCompatible(t *testing.T) {
 	store := testStore(t)
 	td := preparedTask(t, store)
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	_, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	must(t, err)
 	owner, err := task.LifetimeTaskOwnerSHA256(spec, meta)
 	must(t, err)

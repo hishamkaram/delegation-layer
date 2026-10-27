@@ -63,8 +63,13 @@ func requireCallerScopeKeepsPrivateBinding(t *testing.T, testCase recordedEnviro
 // keeps the caller's explicit authority and binds the named configuration.
 func requireExplicitConfigAuthority(t *testing.T, testCase recordedEnvironmentCase, entryPoint string) {
 	t.Helper()
-	fixture := newRecordedEnvironmentFixtureWith(t, testCase, recordedFixtureOptions{supervisor: recordedPrivateSupervisor})
+	// The explicit configuration is allocated before the fixture installs the
+	// simulated caller scope, so its temporary directory comes from the real
+	// native TMPDIR and the simulated scope does not lengthen its supervisor
+	// endpoint.
 	explicitConfig := writeExplicitExternalConfig(t)
+	fixture := newRecordedEnvironmentFixtureWith(t, testCase, recordedFixtureOptions{supervisor: recordedPrivateSupervisor})
+	requireOutsideCallerTmp(t, explicitConfig, fixture.caller.tmpDir)
 	code, response := fixture.run(t, entryPoint, explicitConfig)
 	requirePrivateSubmissions(t, fixture, "")
 	fixture.assertPredecessorUnchanged(t)
@@ -87,6 +92,19 @@ func requireExplicitConfigAuthority(t *testing.T, testCase recordedEnvironmentCa
 	}
 	if explicitSubmissions != "add\n" {
 		t.Fatalf("explicit supervisor submissions = %q, want one add", explicitSubmissions)
+	}
+}
+
+// requireOutsideCallerTmp fails when path lies inside the simulated caller
+// scope's temporary directory, which would lengthen every path allocated there.
+func requireOutsideCallerTmp(t *testing.T, path, callerTmp string) {
+	t.Helper()
+	relative, err := filepath.Rel(callerTmp, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.IsLocal(relative) {
+		t.Fatalf("explicit configuration %s was allocated inside the caller scope's temporary directory", path)
 	}
 }
 

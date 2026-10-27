@@ -164,7 +164,7 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 		return fmt.Errorf("%w: active runner: %w", task.ErrSessionBusy, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.runLock.Unlock()) }()
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return err
 	}
