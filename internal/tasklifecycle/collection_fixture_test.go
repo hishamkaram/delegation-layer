@@ -62,7 +62,9 @@ func TestRunCohortEntersWorkersTogetherAndJoinsAll(t *testing.T) {
 		finished.Add(1)
 		return nil
 	})
-	guard.Stop()
+	if !guard.Stop() {
+		<-abort
+	}
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
