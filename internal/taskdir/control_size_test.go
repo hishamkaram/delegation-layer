@@ -111,7 +111,7 @@ func TestOversizedSessionReleaseNeverCommits(t *testing.T) {
 func TestOversizedOutcomeDoesNotStagePayload(t *testing.T) {
 	s := testStore(t)
 	td := sealedTask(t, s, "answer")
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	must(t, err)
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
 	must(t, err)
@@ -213,7 +213,7 @@ func TestSessionSizeCheckPreservesExistingClaim(t *testing.T) {
 func TestSessionSizeCheckPreservesExistingRelease(t *testing.T) {
 	s := testStore(t)
 	td := sealedTask(t, s, "answer")
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	must(t, err)
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
 	must(t, err)

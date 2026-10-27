@@ -169,7 +169,7 @@ func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (_ *
 }
 
 func (td *TaskDir) newStopRequest(id, cause string, deadline time.Time) (*task.StopRequestRecord, error) {
-	_, req, meta, spec, hash, err := td.loadAndValidatePreparedSet()
+	req, meta, spec, hash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func (td *TaskDir) ReadStopRequest(id string) (*task.StopRequestRecord, error) {
 	if err := task.ValidateStopRequestRecord(&r); err != nil {
 		return nil, err
 	}
-	_, req, meta, spec, hash, err := td.loadAndValidatePreparedSet()
+	req, meta, spec, hash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +339,7 @@ func (td *TaskDir) ReadStopObservation(id string) (*task.StopObservedRecord, err
 // request and optional side record; absent replies or observations remain nil
 // so callers can report unknown state without fabricating facts.
 func (td *TaskDir) ReadStopRecords() ([]StopRecord, error) {
-	if _, _, _, _, _, err := td.loadAndValidatePreparedSet(); err != nil {
+	if _, _, _, _, err := td.loadAndValidatePreparedSet(); err != nil {
 		return nil, err
 	}
 	ids, err := td.discoverStopRecordIDs()

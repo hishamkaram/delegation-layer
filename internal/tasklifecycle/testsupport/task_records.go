@@ -32,10 +32,8 @@ func NewAppTaskInStoreWithSupervisorConfig(t *testing.T, store *taskdir.Store, i
 		t.Fatal(err)
 	}
 	brief := []byte("brief")
-	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
-	digest := task.ComputeSHA256([]byte("app-test"))
-	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), PriorSession: prior, BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
-	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: "/tmp/app-pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: supervisorConfig, ConfigDigest: digest, Endpoint: "unix:/tmp/app-pueue.sock", ObservedVersion: pueue.FixtureVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	paths := appFixturePaths{provider: "/tmp/app-provider", client: "/tmp/app-pueue", endpoint: "unix:/tmp/app-pueue.sock", config: supervisorConfig}
+	req, meta := appFixtureRecords(store.RootID, id, cwd, brief, prior, paths)
 	td, err := store.CreateTask(id, req, brief, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +60,25 @@ func NewAppTaskInStoreWithSupervisorConfig(t *testing.T, store *taskdir.Store, i
 		}
 	}
 	return td, req
+}
+
+// appFixturePaths names the inert executable and supervisor locations a
+// fixture task records. They are never launched or created.
+type appFixturePaths struct {
+	provider string
+	client   string
+	endpoint string
+	config   string
+}
+
+// appFixtureRecords derives the one valid fixture request/binding pair for
+// brief, so every fixture constructor shares one source for record data.
+func appFixtureRecords(rootID, id, cwd string, brief []byte, prior *task.PriorSession, paths appFixturePaths) (*task.TaskRecord, *task.MetaRecord) {
+	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
+	digest := task.ComputeSHA256([]byte("app-test"))
+	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: rootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), PriorSession: prior, BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
+	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: rootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: paths.provider, ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: paths.client, ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: paths.config, ConfigDigest: digest, Endpoint: paths.endpoint, ObservedVersion: pueue.FixtureVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	return req, meta
 }
 
 func CloseAppTestTask(t *testing.T, store *taskdir.Store, td *taskdir.TaskDir) {

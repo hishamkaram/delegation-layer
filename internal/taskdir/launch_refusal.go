@@ -15,7 +15,7 @@ func (td *TaskDir) TaskLaunchRefusedContext(ctx context.Context) (bool, error) {
 	if err := lifetimeContextErr(ctx); err != nil {
 		return false, err
 	}
-	_, _, meta, specHash, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
+	_, meta, specHash, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return false, err
 	}

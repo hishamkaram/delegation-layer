@@ -36,7 +36,7 @@ func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runn
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
-	_, _, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
+	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (td *TaskDir) readManagedRunnerMigration() (*managedRunnerMigrationRecord, 
 	if td == nil || td.store == nil {
 		return nil, task.ErrInvalidPermit
 	}
-	_, _, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
+	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}

@@ -81,7 +81,7 @@ func (td *TaskDir) RecordLifetimeIntentContext(ctx context.Context, facts Lifeti
 		return nil, err
 	}
 
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
+	_, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +162,7 @@ func (td *TaskDir) RecordLifetimeRegistrationContext(ctx context.Context, facts 
 		return nil, err
 	}
 
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
+	_, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -584,7 +584,7 @@ func lifetimeValidationDependencyError(err error) error {
 }
 
 func (td *TaskDir) matchLifetimeOwner(ctx context.Context, root, id, ownerKind, ownerSHA string) error {
-	_, _, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSetContext(ctx)
+	_, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return err
 	}

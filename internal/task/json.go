@@ -177,15 +177,46 @@ func DecodeStrict(data []byte, target any) error {
 
 // ReadBounded reads up to maxBytes from r. If r contains more than maxBytes, it returns an error.
 func ReadBounded(r io.Reader, maxBytes int64) ([]byte, error) {
-	lr := io.LimitReader(r, maxBytes+1)
-	data, err := io.ReadAll(lr)
-	if err != nil {
-		return nil, fmt.Errorf("reading bounded stream: %w", err)
-	}
-	if int64(len(data)) > maxBytes {
-		return nil, ErrControlRecordTooBig
+	data, err := io.ReadAll(boundedReader(r, maxBytes))
+	if err = checkBoundedRead(int64(len(data)), maxBytes, err); err != nil {
+		return nil, err
 	}
 	return data, nil
+}
+
+// DigestBounded streams up to maxBytes from r through SHA-256 using the
+// caller's scratch buffer and returns the lowercase hex digest and the
+// observed length. It applies the ReadBounded error and size policy.
+func DigestBounded(r io.Reader, maxBytes int64, buffer []byte) (string, int64, error) {
+	if len(buffer) == 0 {
+		return "", 0, fmt.Errorf("%w: bounded digest requires a nonempty scratch buffer", ErrInvariantFault)
+	}
+	h := sha256.New()
+	// The limited reader has no WriteTo and the digest has no ReadFrom, so
+	// every byte passes through the caller's buffer.
+	n, err := io.CopyBuffer(h, boundedReader(r, maxBytes), buffer)
+	if err = checkBoundedRead(n, maxBytes, err); err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// boundedReader exposes one byte beyond maxBytes so an oversized stream is
+// observable without consuming the rest of it.
+func boundedReader(r io.Reader, maxBytes int64) io.Reader {
+	return io.LimitReader(r, maxBytes+1)
+}
+
+// checkBoundedRead is the one bounded-read policy: a read error takes
+// precedence, then any observed byte beyond maxBytes is an oversized record.
+func checkBoundedRead(observed, maxBytes int64, readErr error) error {
+	if readErr != nil {
+		return fmt.Errorf("reading bounded stream: %w", readErr)
+	}
+	if observed > maxBytes {
+		return ErrControlRecordTooBig
+	}
+	return nil
 }
 
 // ReadControlRecord reads a control record from r bounded by MaxControlRecordSize.

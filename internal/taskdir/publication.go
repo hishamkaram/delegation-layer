@@ -103,7 +103,7 @@ func (td *TaskDir) acknowledgeRecord(name string) error {
 // the complete immutable evidence set. It can never acquire Start authority.
 func (td *TaskDir) Collect(predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
 	return td.withCollectionCheck(func() error {
-		_, _, meta, _, _, err := td.loadAndValidatePreparedSet()
+		_, meta, _, _, err := td.loadAndValidatePreparedSet()
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (td *TaskDir) Finalize(predicate task.PredicateRef) (*task.OutcomeRecord, e
 }
 
 func (td *TaskDir) collectOwned(predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
-	_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -193,7 +193,7 @@ func (td *TaskDir) publishCandidate(candidate *task.OutcomeRecord, reader io.Rea
 func (td *TaskDir) commitOutcome(candidate *task.OutcomeRecord, data []byte) (*task.OutcomeRecord, error, error) {
 	committed, cleanupErr, err := td.store.stageAndCommit(td.Dir, "outcome.json", data, td.store.faultInjector)
 	if errors.Is(err, os.ErrExist) {
-		_, _, meta, spec, metaHash, readErr := td.loadAndValidatePreparedSet()
+		_, meta, spec, metaHash, readErr := td.loadAndValidatePreparedSet()
 		if readErr != nil {
 			return nil, nil, readErr
 		}
@@ -253,7 +253,7 @@ func (td *TaskDir) PublishCandidateForTest(verdict, basename string, content []b
 }
 
 func (td *TaskDir) candidateForTest(verdict, basename string, content []byte, predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
-	_, _, meta, spec, metaHash, e := td.loadAndValidatePreparedSet()
+	_, meta, spec, metaHash, e := td.loadAndValidatePreparedSet()
 	if e != nil {
 		return nil, nil, e
 	}
@@ -310,7 +310,7 @@ func (td *TaskDir) PublishRecordCandidateForTest(candidate *task.OutcomeRecord, 
 		if err := task.ValidateOutcomeRecord(candidate); err != nil {
 			return nil, nil, err
 		}
-		_, _, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+		_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
 		if err != nil {
 			return nil, nil, err
 		}

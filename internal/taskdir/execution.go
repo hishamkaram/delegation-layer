@@ -47,7 +47,7 @@ func (td *TaskDir) RecordStartedWithIdentity(diagnosticNanos int64, identity tas
 	if state.sealed {
 		return task.ErrEvidenceFault
 	}
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	_, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func (td *TaskDir) SealWithIdentity(invocation string, exitCode int, exitErr str
 	if state.activeWriters != 0 || state.poisoned != nil {
 		return nil, fmt.Errorf("%w: active or failed raw capture", task.ErrEvidenceFault)
 	}
-	_, _, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	_, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
 	}

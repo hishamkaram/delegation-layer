@@ -657,7 +657,7 @@ func TestProviderIdentityControlLimitAndBoundaryRetry(t *testing.T) {
 	}
 	testAbsent(t, filepath.Join(td.Dir, "provider.ref.json"))
 
-	_, req, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	req, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	must(t, err)
 	observedAt := "2026-09-14T00:00:00.123456789Z"
 	value := exactEscapedControlValue(t, func(conversation string) any {
