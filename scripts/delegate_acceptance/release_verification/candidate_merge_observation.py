@@ -10,10 +10,14 @@ refuses before any later read.
 ``observe_required_checks`` then observes, for the same pull request N and its
 head B, that every status check main's classic branch protection requires now
 passed. GitHub's configuration is the only authority for which contexts and apps
-are required; nothing here names a job, workflow or app. The canonical readiness
-status is bound to the selected readiness run URL alone, and every other
-required row to the Actions job and check run that ran on B under the configured
-app. The result is an observation: it grants no merge, freeze or publication.
+are required; nothing here names a job, workflow or app. Each required Actions
+context is B's one latest check run of that name under the configured app, read
+on the commit itself and bound to the Actions job and check run that ran on B;
+pull request N's rollup may omit check suites GitHub did not associate with N,
+so it never decides those. The canonical readiness status is read from N's
+required rollup, where GitHub's own ``isRequired`` attributes it to the
+configured app, and is bound to the selected readiness run URL alone. The
+result is an observation: it grants no merge, freeze or publication.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
+from urllib.parse import quote
 
 from scripts.delegate_acceptance.native_evidence.public_contract import PublicProofError, parse_json
 from .candidate_publication_preflight import PublicationContext
@@ -51,6 +56,8 @@ ENFORCED_LEVELS = frozenset({"non_admins", "everyone"})
 UNSUPPORTED_RULE = "required_status_checks"
 RULE_PAGE_SIZE = 100
 MAX_RULE_PAGES = 10
+# Two rows per page: a second latest run of one name and app is visible, and refused, on the first page.
+CHECK_RUN_PAGE_SIZE = 2
 READINESS_SOURCE = "readiness-status"
 JOB_SOURCE = "actions-job"
 # A positive decimal identifier within the signed 64-bit range GitHub uses.
@@ -193,23 +200,26 @@ def observe_required_checks(client: GitHubClient, *, context: PublicationContext
     repository, commit = context.request.repository, context.target.commit
     level, required = _branch_policy(client, repository)
     _refuse_required_check_rules(client, repository)
-    raw = command(client.receipt, CHECKS_COMMAND, [
-        "gh", "pr", "checks", str(context.pull_request), "--repo", repository, "--required",
-        "--json", ",".join(CHECK_FIELDS),
-    ], client.environment, capture=True, timeout=REQUEST_TIMEOUT, max_output=MAX_OUTPUT)
-    links = _passed_links(raw, required)
-    readiness_url = f"{SERVER_URL}/{repository}/actions/runs/{context.request.readiness_run_id}"
-    jobs = {name: _job_link(name, link, repository=repository, readiness_url=readiness_url)
-            for name, link in links.items()}
+    listed = {name: _latest_check_run(client, repository, commit=commit, name=name, app_id=app_id)
+              for name, app_id in required.items() if name != STATUS_CONTEXT}
+    if STATUS_CONTEXT in required:
+        raw = command(client.receipt, CHECKS_COMMAND, [
+            "gh", "pr", "checks", str(context.pull_request), "--repo", repository, "--required",
+            "--json", ",".join(CHECK_FIELDS),
+        ], client.environment, capture=True, timeout=REQUEST_TIMEOUT, max_output=MAX_OUTPUT)
+        readiness_url = f"{SERVER_URL}/{repository}/actions/runs/{context.request.readiness_run_id}"
+        _require_readiness_row(raw, required, readiness_url=readiness_url)
     checks = []
     for name, app_id in required.items():
-        job = jobs[name]
-        if job is None:
+        if name == STATUS_CONTEXT:
             checks.append(RequiredCheck(context=name, app_id=app_id, source=READINESS_SOURCE,
                                         run_id=context.request.readiness_run_id, job_id=None, check_run_id=None))
             continue
-        run_id, job_id = job
+        listed_run, link = listed[name]
+        run_id, job_id = _job_link(link, repository=repository)
         check_run = _job_check_run(client, repository, commit=commit, name=name, run_id=run_id, job_id=job_id)
+        if check_run != listed_run:
+            raise _checks_refuse("required_check_run_mismatch")
         _require_check_run(client, repository, commit=commit, name=name, check_run=check_run, app_id=app_id)
         checks.append(RequiredCheck(context=name, app_id=app_id, source=JOB_SOURCE, run_id=run_id,
                                     job_id=job_id, check_run_id=check_run))
@@ -286,11 +296,44 @@ def _refuse_required_check_rules(client: GitHubClient, repository: str) -> None:
     raise _checks_refuse("required_checks_rules_incomplete")
 
 
-def _passed_links(raw: bytes, required: dict[str, int]) -> dict[str, str]:
-    """Each required context's one row, which must have passed; return each row's link.
+def _latest_check_run(client: GitHubClient, repository: str, *, commit: str, name: str,
+                      app_id: int) -> tuple[int, str]:
+    """B's one latest check run named ``name`` from the configured app, which must have passed; its ID and link.
+
+    The listing keeps every status, so a pending latest run is seen and refused,
+    never hidden behind an older completed one. Zero or several latest runs are
+    a missing or ambiguous context; neither is resolved by picking a row.
+    """
+    query = f"check_name={quote(name, safe='')}&app_id={app_id}&filter=latest&per_page={CHECK_RUN_PAGE_SIZE}"
+    reply = object_value(client.json(f"repos/{repository}/commits/{commit}/check-runs?{query}",
+                                     limit=MAX_OBJECT_BYTES), CHECKS_STAGE)
+    total, rows = reply.get("total_count"), reply.get("check_runs")
+    if (type(total) is not int or total < 0 or not isinstance(rows, list)
+            or len(rows) != min(total, CHECK_RUN_PAGE_SIZE)):
+        raise _checks_refuse("required_checks_reply_invalid")
+    if total != 1:
+        raise _checks_refuse("required_checks_inventory_mismatch")
+    run = object_value(rows[0], CHECKS_STAGE)
+    check_run, link, app = run.get("id"), run.get("details_url"), run.get("app")
+    if (type(check_run) is not int or check_run <= 0 or not isinstance(link, str)
+            or not isinstance(app, dict) or type(app.get("id")) is not int):
+        raise _checks_refuse("required_checks_reply_invalid")
+    if run.get("name") != name or run.get("head_sha") != commit:
+        raise _checks_refuse("required_check_run_mismatch")
+    if app["id"] != app_id:
+        raise _checks_refuse("required_check_app_mismatch")
+    if (run.get("status"), run.get("conclusion")) != ("completed", "success"):
+        raise _checks_refuse("required_check_not_successful")
+    return check_run, link
+
+
+def _require_readiness_row(raw: bytes, required: dict[str, int], *, readiness_url: str) -> None:
+    """N's required rollup holds exactly one readiness row, which passed at exactly the selected run.
 
     ``gh`` writes the JSON rows before it would judge them and then exits 0, so
-    exit 0 alone proves nothing: every row is judged here, strictly.
+    exit 0 alone proves nothing: every row's form is judged here, strictly. A
+    row GitHub requires must be a context the policy requires. Other required
+    rows may be absent or in any state: B's own check runs decide those.
     """
     try:
         value = parse_json(raw, "required_checks_reply_invalid")
@@ -298,32 +341,25 @@ def _passed_links(raw: bytes, required: dict[str, int]) -> dict[str, str]:
         raise _checks_refuse("required_checks_reply_invalid") from None
     if not isinstance(value, list):
         raise _checks_refuse("required_checks_reply_invalid")
-    links: dict[str, str] = {}
-    outcomes: set[tuple[str, str]] = set()
+    rows: dict[object, dict[str, object]] = {}
     for item in value:
         row = object_value(item, CHECKS_STAGE)
-        name, bucket, state, link = row.get("name"), row.get("bucket"), row.get("state"), row.get("link")
-        if (set(row) != set(CHECK_FIELDS) or not isinstance(name, str) or not isinstance(bucket, str)
-                or not isinstance(state, str) or not isinstance(link, str)
-                or not isinstance(row["workflow"], str)):
+        if set(row) != set(CHECK_FIELDS) or any(not isinstance(row[field], str) for field in CHECK_FIELDS):
             raise _checks_refuse("required_checks_reply_invalid")
-        if name in links:
+        if row["name"] in rows or row["name"] not in required:
             raise _checks_refuse("required_checks_inventory_mismatch")
-        links[name] = link
-        outcomes.add((bucket, state))
-    if set(links) != set(required):
+        rows[row["name"]] = row
+    row = rows.get(STATUS_CONTEXT)
+    if row is None:
         raise _checks_refuse("required_checks_inventory_mismatch")
-    if outcomes != {("pass", "SUCCESS")}:
+    if (row["bucket"], row["state"]) != ("pass", "SUCCESS"):
         raise _checks_refuse("required_check_not_successful")
-    return {name: links[name] for name in required}
+    if row["link"] != readiness_url:
+        raise _checks_refuse("required_check_readiness_link_mismatch")
 
 
-def _job_link(name: str, link: str, *, repository: str, readiness_url: str) -> tuple[int, int] | None:
-    """None for the readiness status at exactly the selected run; otherwise this repository's run and job."""
-    if name == STATUS_CONTEXT:
-        if link != readiness_url:
-            raise _checks_refuse("required_check_readiness_link_mismatch")
-        return None
+def _job_link(link: str, *, repository: str) -> tuple[int, int]:
+    """The run and job of this repository's Actions job page that the listed check run links to."""
     match = re.fullmatch(re.escape(f"{SERVER_URL}/{repository}/actions/runs/") + _ID + "/job/" + _ID, link)
     if match is None:
         raise _checks_refuse("required_check_link_invalid")
