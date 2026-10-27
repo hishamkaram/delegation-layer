@@ -2,10 +2,10 @@
 
 The fake ``gh`` is a real child found through PATH. It answers the exact
 ``gh pr checks`` argv and the exact GitHub API endpoints from a test-owned JSON
-state file, logs one line per invocation, and answers anything else as not
-found. The context names, apps and IDs are synthetic: the observer must derive
-every required context from the configured policy. Nothing touches the network
-or a provider.
+state file, logs one line per invocation, and
+answers anything else as not found. The context names, apps and IDs are
+synthetic: the observer must derive every required context from the configured
+policy. Nothing touches the network or a provider.
 """
 
 from __future__ import annotations
@@ -49,6 +49,10 @@ FREEZE = "f7" * 20
 READINESS_RUN = 9001
 ACTIONS_APP = 15368
 CONTEXTS = ("checks / lint", "checks / unit", "checks / race", "checks / native")
+# The exact query encoding each listed name must have; the observer encodes, the test states the result.
+ENCODED = {"checks / lint": "checks%20%2F%20lint", "checks / unit": "checks%20%2F%20unit",
+           "checks / race": "checks%20%2F%20race", "checks / native": "checks%20%2F%20native",
+           "build (linux)": "build%20%28linux%29", "build (darwin)": "build%20%28darwin%29"}
 CHECKS_ARGV = ["pr", "checks", "32", "--repo", REPOSITORY, "--required", "--json", "name,bucket,state,link,workflow"]
 CHECKS_KEY = " ".join(CHECKS_ARGV)
 HEADERS = ["-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2026-03-10"]
@@ -57,6 +61,11 @@ BRANCH_KEY = f"GET repos/{REPOSITORY}/branches/main"
 
 def rules_key(page: int) -> str:
     return f"GET repos/{REPOSITORY}/rules/branches/main?per_page=100&page={page}"
+
+
+def listing_key(context: str, app: int = ACTIONS_APP) -> str:
+    return (f"GET repos/{REPOSITORY}/commits/{COMMIT}/check-runs?check_name={ENCODED[context]}"
+            f"&app_id={app}&filter=latest&per_page=2")
 
 
 RULES_KEY = rules_key(1)
@@ -121,8 +130,25 @@ def job_url(run: int, job: int, repository: str = REPOSITORY) -> str:
     return f"https://github.com/{repository}/actions/runs/{run}/job/{job}"
 
 
+def listed(context: str, index: int, app: object = ACTIONS_APP, **changes: object) -> dict[str, object]:
+    """The ``index``-th required job's check run as B's listing returns it, associated with no pull request."""
+    run, job_id, check = ids(index)
+    return {"id": check, "name": context, "head_sha": COMMIT, "status": "completed", "conclusion": "success",
+            "details_url": job_url(run, job_id), "html_url": job_url(run, job_id),
+            "app": {"id": app, "slug": "synthetic-app"}, "check_suite": {"id": 6100}, "pull_requests": [],
+            **changes}
+
+
+def listing(*runs: object, total: object = None) -> dict[str, object]:
+    return {"total_count": len(runs) if total is None else total, "check_runs": list(runs)}
+
+
 def row(name: str, link: str, **changes: object) -> dict[str, object]:
+    """One row of N's required rollup."""
     return {"name": name, "bucket": "pass", "state": "SUCCESS", "link": link, "workflow": "Checks", **changes}
+
+
+READINESS_ROW = row(STATUS_CONTEXT, READINESS_URL, workflow="")
 
 
 def job(context: str, run: int, job_id: int, check: int, **changes: object) -> dict[str, object]:
@@ -165,32 +191,28 @@ class RequiredChecksCase(unittest.TestCase):
         apps = apps or {}
         self.reply(BRANCH_KEY, branch(contexts, apps=apps))
         self.reply(RULES_KEY, [{"type": "pull_request", "ruleset_id": 3}, {"type": "deletion", "ruleset_id": 3}])
+        # N's rollup omits B's CI check suites, which GitHub associated with no pull request.
         rows = []
         for index, name in enumerate(contexts):
             if name == STATUS_CONTEXT:
-                rows.append(row(name, READINESS_URL, workflow=""))
+                rows.append(READINESS_ROW)
                 continue
             run, job_id, check = ids(index)
-            rows.append(row(name, job_url(run, job_id)))
+            app = apps.get(name, ACTIONS_APP)
+            self.reply(listing_key(name, app), listing(listed(name, index, app)))
             self.reply(job_key(job_id), job(name, run, job_id, check))
-            self.reply(check_key(check), check_run(name, check, apps.get(name, ACTIONS_APP)))
+            self.reply(check_key(check), check_run(name, check, app))
         self.reply(CHECKS_KEY, rows)
-        self.configured_rows = tuple(rows)
 
     def reply(self, key: str, output: object, exit_code: int = 0) -> None:
         self.replies[key] = {"output": output, "exit": exit_code}
         self.state_path.write_text(json.dumps(self.replies))
-
-    def rows(self) -> list[dict[str, object]]:
-        """The configured passing rows, unaffected by any reply a test wrote since."""
-        return [dict(item) for item in self.configured_rows]
 
     def observe(self, context: object | None = None) -> RequiredChecks:
         environment = {"PATH": str(self.tree.root / "bin"), "FIXTURE_STATE": str(self.state_path),
                        "FIXTURE_LOG": str(self.log_path), "GH_TOKEN": "private-canary"}
         client = ObservedGitHubClient(self.receipt, environment, self.tree)
         target = publication_context() if context is None else context
-        # The checks query runs through the command owner, outside the observed client.
         return self.tree.observe_operation(lambda: observe_required_checks(client, context=target))
 
     def refused(self, code: str, keys: list[str] | None = None) -> VerificationError:
@@ -217,18 +239,27 @@ class RequiredChecksCase(unittest.TestCase):
             if argv[0] == "pr":
                 self.assertEqual(argv, CHECKS_ARGV)
             else:
-                self.assertEqual(argv[:8], ["api", "--method", "GET", *HEADERS, argv[7]])
+                self.assertEqual(argv, ["api", "--method", "GET", *HEADERS, argv[7]])
         self.assertNotIn("private-canary", repr(self.receipt))
 
     def reset_log(self) -> None:
         self.log_path.unlink(missing_ok=True)
 
 
-PREFIX = [BRANCH_KEY, RULES_KEY, CHECKS_KEY]
+def prefix(contexts: tuple[str, ...] = CONTEXTS, *, apps: dict[str, int] | None = None) -> list[str]:
+    """The reads before any job: the policy, the rules, each job context's listing, then N's rollup."""
+    apps = apps or {}
+    reads = [BRANCH_KEY, RULES_KEY]
+    reads += [listing_key(name, apps.get(name, ACTIONS_APP)) for name in contexts if name != STATUS_CONTEXT]
+    return reads + [CHECKS_KEY] * (STATUS_CONTEXT in contexts)
 
 
-def job_keys(count: int) -> list[str]:
-    return [key for index in range(count) for key in (job_key(ids(index)[1]), check_key(ids(index)[2]))]
+PREFIX = prefix()
+
+
+def job_keys(count: int, start: int = 0) -> list[str]:
+    return [key for index in range(start, start + count)
+            for key in (job_key(ids(index)[1]), check_key(ids(index)[2]))]
 
 
 class HappyPathTests(RequiredChecksCase):
@@ -241,11 +272,11 @@ class HappyPathTests(RequiredChecksCase):
                                                   enforcement_level="non_admins", checks=expected))
         self.assertEqual(self.keys(), [*PREFIX, *job_keys(len(CONTEXTS))])
         self.assert_read_only()
-        self.assertEqual(self.receipt["commands"][2],
-                         {"name": "github-pull-request-required-checks", "argv": ["gh", *CHECKS_ARGV], "exit_code": 0})
+        self.assertEqual(self.receipt["commands"][2]["endpoint"],
+                         f"repos/{REPOSITORY}/commits/{COMMIT}/check-runs"
+                         "?check_name=checks%20%2F%20lint&app_id=15368&filter=latest&per_page=2")
         self.assertEqual([record["name"] for record in self.receipt["commands"]],
-                         ["github-api", "github-api", "github-pull-request-required-checks",
-                          *["github-api"] * (2 * len(CONTEXTS))])
+                         ["github-api"] * (2 + 3 * len(CONTEXTS)))
         with self.assertRaises(FrozenInstanceError):
             setattr(observed.checks[0], "app_id", 1)
         self.assertTrue(self.tree.dispose())
@@ -256,20 +287,65 @@ class HappyPathTests(RequiredChecksCase):
         observed = self.observe()
         self.assertEqual([(check.context, check.app_id) for check in observed.checks],
                          [("build (linux)", ACTIONS_APP), ("build (darwin)", 4242)])
-        self.assertEqual(self.keys(), [*PREFIX, *job_keys(2)])
+        self.assertEqual(self.keys(), [*prefix(renamed, apps={"build (darwin)": 4242}), *job_keys(2)])
 
     def test_everyone_enforcement_is_accepted_and_reported(self):
         self.reply(BRANCH_KEY, branch(level="everyone"))
         self.assertEqual(self.observe().enforcement_level, "everyone")
 
     def test_an_activated_readiness_context_binds_only_the_selected_run_url(self):
-        self.configure((STATUS_CONTEXT, *CONTEXTS[:1]))
+        contexts = (STATUS_CONTEXT, *CONTEXTS[:1])
+        self.configure(contexts)
         observed = self.observe()
         self.assertEqual(observed.checks[0], RequiredCheck(
             context=STATUS_CONTEXT, app_id=ACTIONS_APP, source=READINESS_SOURCE, run_id=READINESS_RUN,
             job_id=None, check_run_id=None))
-        # The readiness status reads no job or check run; only the job row does.
-        self.assertEqual(self.keys(), [*PREFIX, job_key(ids(1)[1]), check_key(ids(1)[2])])
+        # The readiness status reads no job or check run; only the job context does.
+        self.assertEqual(self.keys(), [*prefix(contexts), *job_keys(1, start=1)])
+        self.assertEqual(self.receipt["commands"][3],
+                         {"name": "github-pull-request-required-checks", "argv": ["gh", *CHECKS_ARGV], "exit_code": 0})
+
+
+class CommitScopedLookupTests(RequiredChecksCase):
+    """The checks of a manual CI run on B count although N's rollup omits them; readiness still comes from it."""
+
+    def test_manual_ci_on_b_satisfies_the_policy_when_the_pull_request_rollup_omits_it(self):
+        contexts = (*CONTEXTS, STATUS_CONTEXT)
+        self.configure(contexts)  # The observed rollup: only the readiness row, none of the four jobs.
+        observed = self.observe()
+        self.assertEqual([(check.context, check.source, check.check_run_id) for check in observed.checks],
+                         [*((name, JOB_SOURCE, ids(index)[2]) for index, name in enumerate(CONTEXTS)),
+                          (STATUS_CONTEXT, READINESS_SOURCE, None)])
+        self.assertEqual(self.keys(), [*prefix(contexts), *job_keys(len(CONTEXTS))])
+        self.assert_read_only()
+
+    def test_rollup_rows_of_required_jobs_neither_count_nor_refuse(self):
+        contexts = (*CONTEXTS, STATUS_CONTEXT)
+        self.configure(contexts)
+        self.reply(CHECKS_KEY, [row(CONTEXTS[0], job_url(1, 2), bucket="fail", state="FAILURE"),
+                                row(CONTEXTS[1], job_url(1, 3), bucket="pending", state="PENDING"), READINESS_ROW])
+        self.assertEqual(len(self.observe().checks), len(contexts))
+        self.assertEqual(self.keys(), [*prefix(contexts), *job_keys(len(CONTEXTS))])
+
+    def test_policy_without_readiness_never_reads_the_rollup(self):
+        self.observe()
+        self.assertNotIn(CHECKS_KEY, self.keys())
+
+    def test_readiness_from_an_unconfigured_app_is_refused_despite_a_passing_combined_status(self):
+        contexts = (*CONTEXTS, STATUS_CONTEXT)
+        apps = {STATUS_CONTEXT: 4242}
+        self.configure(contexts, apps=apps)
+        # GitHub's required inventory omits a readiness status the configured app did not post.
+        self.reply(CHECKS_KEY, [])
+        combined = f"GET repos/{REPOSITORY}/commits/{COMMIT}/status?per_page=100&page=1"
+        self.reply(combined, {"state": "success", "sha": COMMIT, "total_count": 1, "statuses": [
+            {"id": 1, "context": STATUS_CONTEXT, "state": "success", "target_url": READINESS_URL}]})
+        self.refused("required_checks_inventory_mismatch", prefix(contexts, apps=apps))
+
+    def test_an_unrequired_successful_run_cannot_stand_in_for_a_required_one(self):
+        self.reset_log()
+        self.reply(listing_key(CONTEXTS[1]), listing(listed("checks / extra", 1)))
+        self.refused("required_check_run_mismatch", prefix(CONTEXTS[:2]))
 
 
 class InputTests(RequiredChecksCase):
@@ -357,81 +433,125 @@ class RulesTests(RequiredChecksCase):
         self.refused("required_checks_rules_incomplete", [BRANCH_KEY, *pages])
 
 
-class CheckRowTests(RequiredChecksCase):
-    """``gh`` exits 0 with its rows; every refused row stops before any job read."""
+class CheckRunListingTests(RequiredChecksCase):
+    """Each job context's listing on B is judged at once; a refused listing stops every later read."""
 
-    def assert_rows(self, code: str, output: object) -> None:
+    def assert_listing(self, code: str, output: object, *, exit_code: int = 0) -> None:
         self.reset_log()
-        self.reply(CHECKS_KEY, output)
+        self.reply(listing_key(CONTEXTS[3]), output, exit_code)
         self.refused(code, PREFIX)
 
-    def test_failed_skipped_and_pending_rows_exiting_zero_are_refused(self):
-        for bucket, state in (("fail", "FAILURE"), ("skipping", "SKIPPED"), ("pending", "IN_PROGRESS"),
-                              ("pending", "PENDING"), ("cancel", "CANCELLED"), ("pass", "NEUTRAL"),
-                              ("skipping", "SUCCESS")):
-            with self.subTest(bucket=bucket, state=state):
-                rows = self.rows()
-                self.assert_rows("required_check_not_successful",
-                                 [*rows[:3], {**rows[3], "bucket": bucket, "state": state}])
+    def test_an_unfinished_failed_neutral_or_skipped_latest_run_is_refused(self):
+        for status, conclusion in (("queued", None), ("in_progress", None), ("completed", None),
+                                   ("completed", "failure"), ("completed", "neutral"), ("completed", "skipped"),
+                                   ("completed", "cancelled"), ("completed", "timed_out"),
+                                   ("completed", "action_required"), ("in_progress", "success")):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.assert_listing("required_check_not_successful", listing(
+                    listed(CONTEXTS[3], 3, status=status, conclusion=conclusion)))
 
-    def test_missing_duplicated_unexpected_or_empty_rows_are_refused(self):
-        rows = self.rows()
-        extra = row("checks / extra", job_url(1, 2))
-        for output in (rows[:3], [*rows, rows[1]], [*rows, extra], [*rows[:3], extra], []):
-            with self.subTest(names=[item["name"] for item in output]):
-                self.assert_rows("required_checks_inventory_mismatch", output)
+    def test_a_missing_or_ambiguous_latest_run_is_refused_never_picked(self):
+        run = listed(CONTEXTS[3], 3)
+        older = listed(CONTEXTS[3], 3, id=9999, details_url=job_url(9998, 9999))
+        for output in (listing(), listing(run, older), listing(run, older, total=3)):
+            with self.subTest(total=output["total_count"]):
+                self.assert_listing("required_checks_inventory_mismatch", output)
 
-    def test_malformed_rows_are_refused(self):
-        first, *rest = self.rows()
-        missing = {key: value for key, value in first.items() if key != "workflow"}
-        duplicate_key = json.dumps(rest)[:-1] + ', {"name": "a", "name": "b"}]'
-        for output in ("not json", {"checks": []}, [*rest, missing], [*rest, {**first, "event": "push"}],
-                       [*rest, {**first, "link": None}], [*rest, {**first, "workflow": 3}],
-                       duplicate_key, "[NaN]"):
+    def test_a_malformed_truncated_or_oversized_listing_is_refused(self):
+        run = listed(CONTEXTS[3], 3)
+        for output in ({"check_runs": [run]}, {"total_count": 1}, listing(total=1), listing(run, total=True),
+                       listing(run, total=-1), listing(run, run, run, total=3), listing(run, run, total=1),
+                       listing(run, total=2), {"total_count": 1, "check_runs": {"0": run}},
+                       listing({**run, "id": 0}), listing({**run, "id": True}), listing({**run, "details_url": None}),
+                       listing({**run, "app": None}), listing({**run, "app": {"id": "15368"}})):
+            with self.subTest(output=json.dumps(output)[:60]):
+                self.assert_listing("required_checks_reply_invalid", output)
+
+    def test_a_non_object_listing_or_run_is_refused(self):
+        for output in ([listed(CONTEXTS[3], 3)], listing("checks / native")):
             with self.subTest(output=str(output)[:40]):
-                self.assert_rows("required_checks_reply_invalid", output)
+                self.assert_listing("github_object_invalid", output)
 
-    def test_a_non_object_row_is_refused(self):
-        self.assert_rows("github_object_invalid", [*self.rows()[:3], "checks / native"])
+    def test_a_run_of_another_name_or_commit_is_refused(self):
+        for changes in ({"name": CONTEXTS[2]}, {"head_sha": MERGED}, {"head_sha": None}):
+            with self.subTest(changes=changes):
+                self.assert_listing("required_check_run_mismatch", listing(listed(CONTEXTS[3], 3, **changes)))
 
-    def test_a_failed_checks_query_keeps_the_command_identity(self):
-        self.reply(CHECKS_KEY, "", exit_code=8)
-        error = self.refused("command_failed", PREFIX)
-        self.assertEqual(error.stage, "github-pull-request-required-checks")
-        self.assertEqual(self.receipt["commands"][-1]["exit_code"], 8)
+    def test_a_run_from_another_app_is_refused(self):
+        self.assert_listing("required_check_app_mismatch", listing(listed(CONTEXTS[3], 3, app=4242)))
 
-    def test_a_job_row_with_a_foreign_or_unbound_link_is_refused(self):
+    def test_a_failed_listing_read_stops(self):
+        self.assert_listing("github_request_failed", "", exit_code=1)
+
+    def test_a_listed_run_with_a_foreign_or_unbound_link_is_refused_before_any_job_read(self):
         foreign = job_url(7000, 8000, "someone/delegation-layer")
         for link in (foreign, READINESS_URL, job_url(7000, 8000) + "/", job_url(0, 8000), job_url(7000, 0),
                      job_url(7000, 8000).replace("/8000", "/08000"), "https://example.com/job/1", ""):
             with self.subTest(link=link):
-                rows = self.rows()
-                self.assert_rows("required_check_link_invalid", [{**rows[0], "link": link}, *rows[1:]])
+                self.reset_log()
+                self.reply(listing_key(CONTEXTS[0]), listing(listed(CONTEXTS[0], 0, details_url=link)))
+                self.refused("required_check_link_invalid", PREFIX)
 
 
 class ReadinessRowTests(RequiredChecksCase):
+    """``gh`` exits 0 with its rows; a refused rollup stops after every listing and before any job read."""
+
+    READY_CONTEXTS = (STATUS_CONTEXT, CONTEXTS[0])
+
     def setUp(self) -> None:
         super().setUp()
-        self.configure((STATUS_CONTEXT, *CONTEXTS[:1]))
+        self.configure(self.READY_CONTEXTS)
 
-    def test_a_readiness_row_for_another_run_or_a_job_is_refused_before_any_job_read(self):
+    def assert_rows(self, code: str, output: object) -> None:
+        self.reset_log()
+        self.reply(CHECKS_KEY, output)
+        self.refused(code, prefix(self.READY_CONTEXTS))
+
+    def test_a_readiness_row_for_another_run_or_a_job_is_refused(self):
         for link in (f"https://github.com/{REPOSITORY}/actions/runs/{READINESS_RUN + 1}", READINESS_URL + "/",
                      f"https://github.com/someone/delegation-layer/actions/runs/{READINESS_RUN}",
-                     job_url(READINESS_RUN, 1)):
+                     job_url(READINESS_RUN, 1), ""):
             with self.subTest(link=link):
-                self.reset_log()
-                rows = self.rows()
-                self.reply(CHECKS_KEY, [{**rows[0], "link": link}, rows[1]])
-                self.refused("required_check_readiness_link_mismatch", PREFIX)
+                self.assert_rows("required_check_readiness_link_mismatch", [{**READINESS_ROW, "link": link}])
 
     def test_the_readiness_run_comes_from_the_context_not_the_row(self):
         with self.assertRaises(VerificationError) as caught:
             self.observe(publication_context(readiness_run=READINESS_RUN + 1))
         self.assertEqual(caught.exception.code, "required_check_readiness_link_mismatch")
 
-    def test_a_missing_required_readiness_row_is_refused(self):
-        self.reply(CHECKS_KEY, self.rows()[1:])
-        self.refused("required_checks_inventory_mismatch", PREFIX)
+    def test_failed_skipped_and_pending_readiness_rows_exiting_zero_are_refused(self):
+        for bucket, state in (("fail", "FAILURE"), ("skipping", "SKIPPED"), ("pending", "IN_PROGRESS"),
+                              ("pending", "PENDING"), ("cancel", "CANCELLED"), ("pass", "NEUTRAL"),
+                              ("skipping", "SUCCESS"), ("fail", "ERROR")):
+            with self.subTest(bucket=bucket, state=state):
+                self.assert_rows("required_check_not_successful",
+                                 [{**READINESS_ROW, "bucket": bucket, "state": state}])
+
+    def test_missing_duplicated_or_unrequired_rows_are_refused(self):
+        job_row = row(CONTEXTS[0], job_url(1, 2))
+        for output in ([], [job_row], [READINESS_ROW, READINESS_ROW], [job_row, job_row, READINESS_ROW],
+                       [READINESS_ROW, row("checks / extra", job_url(1, 2))]):
+            with self.subTest(names=[item["name"] for item in output]):
+                self.assert_rows("required_checks_inventory_mismatch", output)
+
+    def test_malformed_rows_are_refused(self):
+        missing = {key: value for key, value in READINESS_ROW.items() if key != "workflow"}
+        duplicate_key = '[{"name": "a", "name": "b"}]'
+        for output in ("not json", {"checks": []}, [missing], [{**READINESS_ROW, "event": "push"}],
+                       [{**READINESS_ROW, "link": None}], [{**READINESS_ROW, "workflow": 3}],
+                       [{**READINESS_ROW, "name": 7}], duplicate_key, "[NaN]"):
+            with self.subTest(output=str(output)[:40]):
+                self.assert_rows("required_checks_reply_invalid", output)
+
+    def test_a_non_object_row_is_refused(self):
+        self.assert_rows("github_object_invalid", [READINESS_ROW, STATUS_CONTEXT])
+
+    def test_a_failed_checks_query_keeps_the_command_identity(self):
+        self.reset_log()
+        self.reply(CHECKS_KEY, "", exit_code=8)
+        error = self.refused("command_failed", prefix(self.READY_CONTEXTS))
+        self.assertEqual(error.stage, "github-pull-request-required-checks")
+        self.assertEqual(self.receipt["commands"][-1]["exit_code"], 8)
 
 
 class JobTests(RequiredChecksCase):
@@ -454,6 +574,10 @@ class JobTests(RequiredChecksCase):
                         {"conclusion": "skipped"}):
             with self.subTest(changes=changes):
                 self.assert_job("required_check_job_not_successful", **changes)
+
+    def test_a_job_whose_check_run_is_not_the_listed_run_is_refused(self):
+        self.assert_job("required_check_run_mismatch",
+                        check_run_url=f"https://api.github.com/repos/{REPOSITORY}/check-runs/9999")
 
     def test_a_foreign_or_malformed_check_run_url_is_refused(self):
         for url in (f"https://api.github.com/repos/someone/delegation-layer/check-runs/{ids(1)[2]}",
@@ -496,11 +620,21 @@ class UnprovenClosureTests(RequiredChecksCase):
         self.assertIs(self.tree.unresolved, error)
         self.assertIsNone(self.receipt["commands"][-1]["exit_code"])
 
+    def test_unknown_listing_wait_retains_and_stops(self):
+        endpoint = listing_key(CONTEXTS[1]).removeprefix("GET ")
+        fault = ChildFault(lambda argv: argv[-1] == endpoint)
+        self.observe_with(fault, ("command_timeout", "github-api"))
+        self.assertEqual(fault.faulted, [["gh", "api", "--method", "GET", *HEADERS, endpoint]])
+        self.assertEqual((fault.launched, self.keys()), (3, PREFIX[:3]))
+        settle_retained(self, self.tree, fault, (self.state_path, self.log_path))
+
     def test_unknown_checks_query_wait_retains_and_stops(self):
+        contexts = (STATUS_CONTEXT, CONTEXTS[0])
+        self.configure(contexts)
         fault = ChildFault(lambda argv: argv[:3] == ["gh", "pr", "checks"])
         self.observe_with(fault, ("command_timeout", "github-pull-request-required-checks"))
         self.assertEqual((fault.faulted, fault.launched, self.keys()),
-                         ([["gh", *CHECKS_ARGV]], 2, [BRANCH_KEY, RULES_KEY]))
+                         ([["gh", *CHECKS_ARGV]], 3, prefix(contexts)[:-1]))
         settle_retained(self, self.tree, fault, (self.state_path, self.log_path))
 
     def test_unknown_job_wait_retains_and_stops(self):
@@ -508,7 +642,7 @@ class UnprovenClosureTests(RequiredChecksCase):
         fault = ChildFault(lambda argv: argv[-1] == endpoint)
         self.observe_with(fault, ("command_timeout", "github-api"))
         self.assertEqual(fault.faulted, [["gh", "api", "--method", "GET", *HEADERS, endpoint]])
-        self.assertEqual((fault.launched, self.keys()), (5, [*PREFIX, *job_keys(1)]))
+        self.assertEqual((fault.launched, self.keys()), (8, [*PREFIX, *job_keys(1)]))
         settle_retained(self, self.tree, fault, (self.state_path, self.log_path))
 
 
