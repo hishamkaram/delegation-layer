@@ -55,6 +55,7 @@ type Response struct {
 	Capability        *CapabilityReport          `json:"capability,omitempty"`
 	Continuation      *ContinuationResponse      `json:"continuation,omitempty"`
 	Failure           *DispatchFailureResponse   `json:"failure,omitempty"`
+	ResourceAdmission *ResourceAdmissionResponse `json:"resource_admission,omitempty"`
 	Diagnostics       []task.OutputDiagnostic    `json:"diagnostics,omitempty"`
 	Recheck           *RecheckResponse           `json:"recheck,omitempty"`
 	Error             string                     `json:"error,omitempty"`
@@ -79,6 +80,8 @@ type DispatchFailureResponse struct {
 	NextAction      string                     `json:"next_action"`
 	RecoveryCommand string                     `json:"recovery_command,omitempty"`
 	Inspection      *InspectionFailureResponse `json:"inspection,omitempty"`
+	// RetryAfterSeconds is an advisory delay for a retry_later next action.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
 
 // InspectionFailureResponse retains bounded, path-free evidence about an

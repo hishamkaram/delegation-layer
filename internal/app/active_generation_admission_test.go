@@ -520,7 +520,7 @@ func newFreshStagedGenerationFixture(t *testing.T) (*taskdir.Store, Dependencies
 	if err = supervisorcore.PrepareStateSupervisorPair(ctx, root, clientPath, daemonPath); err != nil {
 		t.Fatalf("stage fresh successor pair: %v", err)
 	}
-	return store, Dependencies{InitialSupervisorExecutable: clientPath, SupervisorOptions: templateDeps.SupervisorOptions}, clientPath, daemonPath
+	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: templateDeps.SupervisorOptions}, clientPath, daemonPath
 }
 
 func copyActiveGenerationExecutable(t *testing.T, source, destination, marker string) {

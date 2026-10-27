@@ -416,7 +416,16 @@ func parseCgroupV2Path(data []byte) (string, error) {
 		if parts[2] == "" || !strings.HasPrefix(parts[2], "/") || strings.ContainsRune(parts[2], '\x00') {
 			return "", errors.New("/proc cgroup v2 path is malformed")
 		}
-		path = filepath.Clean(parts[2])
+		// The kernel prints a membership outside the reader's cgroup namespace
+		// with leading ".." components; cleaning would select a different
+		// cgroup inside the view. Kernel paths are otherwise already clean.
+		if parts[2] == "/.." || strings.HasPrefix(parts[2], "/../") {
+			return "", errors.New("/proc cgroup v2 path is outside the cgroup namespace view")
+		}
+		if filepath.Clean(parts[2]) != parts[2] {
+			return "", errors.New("/proc cgroup v2 path is malformed")
+		}
+		path = parts[2]
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
@@ -454,7 +463,13 @@ func parseMountInfo(data []byte) ([]cgroupMount, error) {
 		if !filepath.IsAbs(root) || !filepath.IsAbs(mountPath) {
 			return nil, errors.New("mountinfo cgroup path is not absolute")
 		}
-		mounts = append(mounts, cgroupMount{root: filepath.Clean(root), mountPath: filepath.Clean(mountPath)})
+		// A bind of a hierarchy outside the reader's cgroup namespace has a
+		// root with leading ".." components. Cleaning it would claim the
+		// visible root, so an unclean root is not a usable mount.
+		if filepath.Clean(root) != root {
+			continue
+		}
+		mounts = append(mounts, cgroupMount{root: root, mountPath: filepath.Clean(mountPath)})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err

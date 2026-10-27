@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 		if err := recordQueueMaintenanceDescriptorInheritance(os.Args[1:]); err != nil {
 			os.Exit(2)
 		}
-		os.Exit(RunRunner(os.Args[1:], io.Discard, io.Discard, Dependencies{}))
+		os.Exit(RunRunner(os.Args[1:], io.Discard, io.Discard, Dependencies{ResourceChecker: fixtureResources}))
 	}
 	os.Exit(m.Run())
 }

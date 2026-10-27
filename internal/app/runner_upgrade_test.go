@@ -34,7 +34,7 @@ func TestPrepareAdmissionExecutablesKeepsExplicitRunner(t *testing.T) {
 	got, err := prepareAdmissionExecutables(Arguments{
 		Runner:      custom,
 		PueueConfig: filepath.Join(supervisorfixture.CanonicalTempDir(t), "external-pueue.yml"),
-	}, Dependencies{}, root)
+	}, Dependencies{ResourceChecker: fixtureResources}, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestPrepareAdmissionExecutablesKeepsExplicitRunner(t *testing.T) {
 
 func TestPrepareAdmissionExecutablesRejectsPrivateConfigBeforeInstallingState(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
-	_, err := prepareAdmissionExecutables(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{}, root)
+	_, err := prepareAdmissionExecutables(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{ResourceChecker: fixtureResources}, root)
 	if !errors.Is(err, pueue.ErrConfiguration) {
 		t.Fatalf("private config collision error = %v, want configuration error", err)
 	}
@@ -68,6 +68,7 @@ func TestPrepareAdmissionExecutablesUsesSavedPrivateSupervisorPair(t *testing.T)
 	saved.ConfigPath = pueue.PrivateConfigPath(root)
 
 	got, err := prepareAdmissionExecutables(Arguments{savedSupervisor: &saved}, Dependencies{
+		ResourceChecker:             fixtureResources,
 		InitialSupervisorExecutable: delegate,
 		RunnerExecutable:            runnerSource,
 	}, root)
@@ -100,6 +101,7 @@ func TestPrepareAdmissionExecutablesUsesStateRootPairWhenInstallPairsAreUnavaila
 	writeRunnerFixture(t, runner, "managed runner")
 	missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing", "delegate")
 	got, err := prepareAdmissionExecutables(Arguments{savedSupervisor: &saved}, Dependencies{
+		ResourceChecker:             fixtureResources,
 		InitialSupervisorExecutable: missingDelegate,
 		RunnerExecutable:            runner,
 	}, root)
@@ -164,7 +166,7 @@ base=${config%/*}
 	missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing", "delegate")
 	// This verifies executable-pair resolution, so use the production window;
 	// race instrumentation must not turn scheduler delay into a timeout test.
-	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{InitialSupervisorExecutable: missingDelegate}, pueue.Options{ObservationTimeout: pueue.DefaultObservationTimeout}), root, true)
+	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: missingDelegate}, pueue.Options{ObservationTimeout: pueue.DefaultObservationTimeout}), root, true)
 	if err != nil {
 		t.Fatalf("private supervisor did not bind from its verified state-root pair: %v", err)
 	}

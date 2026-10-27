@@ -11,6 +11,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
@@ -28,13 +29,25 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 		NextAction:      dispatchFailureNextAction(code, taskRecord),
 		RecoveryCommand: dispatchFailureRecoveryCommand(code, taskRecord),
 	}
-	if code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed" {
+	if supervisorFailureCode(code) {
 		failure.ReasonCode = supervisorFailureReason(err)
+	}
+	if pressure, ok := tasklifecycle.ResourcePressureRefusal(err); ok {
+		failure.ReasonCode = resourcePressureReason(pressure)
+	}
+	if failure.NextAction == "retry_later" {
+		failure.RetryAfterSeconds = resourceRetryAfterSeconds
 	}
 	if stage == "inspect-provider" {
 		failure.Inspection = inspectionFailureResponse(err)
 	}
 	return failure
+}
+
+// supervisorFailureCode reports the failure codes whose reason codes come
+// from supervisorFailureReason and whose detail is supervisor-specific.
+func supervisorFailureCode(code string) bool {
+	return code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed"
 }
 
 func inspectionFailureResponse(err error) *InspectionFailureResponse {
@@ -74,6 +87,9 @@ func inspectionFailureClass(err error) string {
 }
 
 func dispatchFailureCode(err error, stage, taskRecord string) string {
+	if _, ok := tasklifecycle.ResourcePressureRefusal(err); ok {
+		return "resource_pressure"
+	}
 	if code := dispatchSubmissionFailureCode(err, stage, taskRecord); code != "" {
 		return code
 	}
@@ -174,6 +190,9 @@ func dispatchFailureStageCode(stage string) string {
 }
 
 func dispatchFailureNextAction(code, taskRecord string) string {
+	if taskRecord == "not_created" && code == "resource_pressure" {
+		return "retry_later"
+	}
 	if taskRecord == "not_created" && code == "supervisor_upgrade_required" {
 		return "run_supervisor_migrate"
 	}
@@ -220,6 +239,7 @@ var dispatchFailureMessages = map[string]string{
 	"workspace_released":                 "The managed workspace was released and cannot accept another turn.",
 	"workspace_identity_changed":         "Delegate could not verify the managed workspace identity. Its files were retained.",
 	"workspace_preparation_failed":       "Delegate could not prepare the managed workspace. Stop and report this failure; its saved evidence was retained.",
+	"resource_pressure":                  "Delegate refused new work because resource pressure was confirmed.",
 }
 
 // genericFailureMessage is the neutral public text for a failure code without a

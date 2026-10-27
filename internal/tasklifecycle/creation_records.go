@@ -12,6 +12,7 @@ const (
 	CreationBrief
 	CreationCapture
 	CreationRecord
+	CreationResources
 )
 
 type CreationRecordObservation uint8

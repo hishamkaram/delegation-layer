@@ -58,7 +58,7 @@ func TestAdmittedContinuationsReconstructFromExistingRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := continuationDependencies(Dependencies{Environment: os.Environ(), Catalog: catalog}, task.MetaRecord{})
+	deps := continuationDependencies(Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), Catalog: catalog}, task.MetaRecord{})
 	base := task.TaskRecord{
 		Provider: config.ProviderFixture, Mode: config.ModeReadOnly, CanonicalCwd: workspace,
 		TaskID: "0123456789abcdef0123456789abcdef", RootID: "fedcba9876543210fedcba9876543210",

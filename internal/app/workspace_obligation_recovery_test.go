@@ -68,7 +68,7 @@ func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspace
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{}, Environment: os.Environ()}
+	deps := Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{}, Environment: os.Environ()}
 	return request, subject, deps
 }
 
@@ -109,7 +109,7 @@ func verifyWorkspaceVerificationRecoveryBinding(t *testing.T, foreign bool) {
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
 	var commands atomic.Int32
-	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
+	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
 	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps)
 	if (!errors.Is(err, task.ErrEvidenceFault) && !errors.Is(err, task.ErrIdentityMismatch)) || commands.Load() != 0 {
 		t.Fatalf("invalid verification binding reached scheduling: commands=%d err=%v", commands.Load(), err)
@@ -125,7 +125,7 @@ func TestWorkspaceObligationRecoveryRejectsUnknownAuthorization(t *testing.T) {
 	}
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, Dependencies{}); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unknown authorization = %v, want evidence fault", err)
 	}
 	if _, err = fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence); !workspace.OperationAbsent(err) {

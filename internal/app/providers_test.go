@@ -140,7 +140,7 @@ func TestDispatchUnsupportedOptionRefusesBeforeSupervisorBinding(t *testing.T) {
 	code := Run([]string{
 		"dispatch", "--json", "--root", root, "--provider", "antigravity:print", "--brief", brief,
 		"--cwd", workspace, "--permission", "workspace-write", "--model", "explicit-model", "--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
-	}, &stdout, &stderr, Dependencies{Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
+	}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources, Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if code != 2 {
 		t.Fatalf("unsupported option exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

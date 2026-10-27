@@ -40,7 +40,8 @@
     "agents/_data/subsystems/python-development-delivery.json",
     "agents/_data/subsystems/python-development-source.json",
     "agents/_data/subsystems/python-native-request-intents.json",
-    "agents/_data/subsystems/python-publication-protocol.json"
+    "agents/_data/subsystems/python-publication-protocol.json",
+    "agents/_data/subsystems/go-resource-admission.json"
   ],
   "migration": "agents/_data/maintainability-migration.jsonl",
   "generated": [

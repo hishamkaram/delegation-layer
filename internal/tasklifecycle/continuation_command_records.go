@@ -2,6 +2,7 @@ package tasklifecycle
 
 import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -24,6 +25,7 @@ const (
 	ContinueSession
 	ContinueGenerateID
 	ContinueSupervisor
+	ContinueResources
 )
 
 type ContinuationResult struct {
@@ -34,6 +36,9 @@ type ContinuationResult struct {
 	Runner                      string
 	Supervisor                  *task.SupervisorRef
 	Dispatch                    *DispatchResult
-	Phase                       ContinuationPhase
-	Failure                     error
+	// Resources is the continuation's initial invocation-local assessment;
+	// a dispatched successor reports its own latest assessment instead.
+	Resources *resourceadmission.Assessment
+	Phase     ContinuationPhase
+	Failure   error
 }

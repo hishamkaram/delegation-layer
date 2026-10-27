@@ -111,7 +111,7 @@ func watchStatus(t *testing.T, fixture *workspacefixture.RecoveryFixture, operat
 
 func workspaceWatch(ctx context.Context, fixture *workspacefixture.RecoveryFixture, operationID string) watchOutcome {
 	a := Arguments{WorkspaceAction: "status", Watch: watchDuration, WorkspaceOperationID: operationID}
-	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, Dependencies{}, time.Minute)
+	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}, time.Minute)
 	return watchOutcome{actionErr: err, result: workspaceCommandActionResponse(ctx, fixture.Store, fixture.Resource, a.WorkspaceAction, false, ack, newResponse("workspace"), err)}
 }
 
@@ -224,7 +224,7 @@ func assertCanceledWatch(t *testing.T, selector string, observed watchOutcome) {
 // verification helper and reads that helper's unlaunched fence.
 func observeExpiredVerification(t *testing.T, fixture *workspacefixture.RecoveryFixture) (observeErr, fenceErr error) {
 	t.Helper()
-	observeErr = observeManagedWorkspace(t.Context(), fixture.Store, fixture.Resource, Dependencies{}, expiredVerificationID)
+	observeErr = observeManagedWorkspace(t.Context(), fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}, expiredVerificationID)
 	selected, err := workspace.LoadOperation(t.Context(), fixture.Store, expiredVerificationID)
 	if err != nil {
 		t.Fatal(err)

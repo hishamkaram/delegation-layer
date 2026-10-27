@@ -96,7 +96,7 @@ func newCheckpointRuntimeFixtureOf(t *testing.T, lineage nativeLineage) checkpoi
 			enqueues.Add(1)
 		}
 	}
-	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{Environment: os.Environ(), Observer: observer}, Environment: os.Environ()}
+	deps := Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{Environment: os.Environ(), Observer: observer}, Environment: os.Environ()}
 	options := workspaceRuntimeOptions(deps)
 	hooks := &checkpointRuntimeHooks{}
 	runtime := checkpointTestRuntime{saved: options.Runtime, runner: executablePath(t), binding: supervisor.Binding(), hooks: hooks}

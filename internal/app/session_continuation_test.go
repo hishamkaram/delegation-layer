@@ -47,7 +47,7 @@ func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
 			}
 			rewriteAppProviderExecutable(t, td, tc.executable)
 			profile := appTestExecutionProfile(req, tc.executable, tc.arguments)
-			result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+			result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 				return profile, nil
 			}})
 			if result.code != 0 || result.err != nil {
@@ -87,7 +87,7 @@ func assertRunRunnerReleasesContinuation(t *testing.T, alreadyTerminal bool) {
 			t.Fatalf("preparing terminal winner cleanup=%v collect=%v", cleanupErr, collectErr)
 		}
 	}
-	result := runRunner(runnerArguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
+	result := runRunner(runnerArguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 	if result.code != 0 || result.err != nil {
 		t.Fatalf("recovery run failed: %+v", result)
 	}
@@ -409,7 +409,7 @@ func fixtureContinuationDependencies(t *testing.T, validate func(task.TaskRecord
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Dependencies{Environment: os.Environ(), Catalog: catalog, InitialSupervisorExecutable: initialSupervisorExecutable}
+	return Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), Catalog: catalog, InitialSupervisorExecutable: initialSupervisorExecutable}
 }
 
 func newPrivateBudgetStoppedPredecessor(t *testing.T, store *taskdir.Store) (*task.PriorSession, *taskdir.TaskDir, *task.TaskRecord) {
@@ -536,7 +536,7 @@ func TestRunProviderUnknownOutcomeRetainsContinuation(t *testing.T) {
 	profile.Identity = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 		return nil, errInjectedIdentity
 	}
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedIdentity) || result.response.Outcome != nil {
@@ -644,7 +644,7 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 	releaseErr := errors.New("release durability failed")
 	store.SetFaultInjector(&releaseOnlyFailureInjector{err: releaseErr})
 	profile := appTestExecutionProfile(req, "/usr/bin/printf", []string{"answer\n"})
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, releaseErr) {
@@ -657,7 +657,7 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 		t.Fatalf("failed release freed session: %v", err)
 	}
 	store.SetFaultInjector(nil)
-	retry := runRunner(runnerArguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
+	retry := runRunner(runnerArguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 	if retry.code != 0 || retry.err != nil || retry.response.Outcome == nil {
 		t.Fatalf("terminal release retry failed: %+v", retry)
 	}

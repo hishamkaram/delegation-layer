@@ -14,7 +14,7 @@ import (
 
 func TestContinuationAdmissionMissingEnvironmentOwnerRefusesBeforePreparation(t *testing.T) {
 	fixture := preflightFixture{root: filepath.Join(t.TempDir(), "state"), cwd: t.TempDir()}
-	options := staticAdmissionOptions(Dependencies{Catalog: preflightFixtureCatalog(t, fixture.candidate)})
+	options := staticAdmissionOptions(Dependencies{ResourceChecker: fixtureResources, Catalog: preflightFixtureCatalog(t, fixture.candidate)})
 	predecessor, err := admissioncore.BuildRequest(strings.Repeat("a", 32), strings.Repeat("b", 32), "fixture:preflight", fixture.cwd, task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"}, []byte("brief"), nil)
 	if err != nil {
 		t.Fatal(err)

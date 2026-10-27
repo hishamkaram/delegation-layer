@@ -597,8 +597,11 @@ never cleaned.
 
 The private supervisor's ordinary default group uses Pueue's unlimited
 parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing
-independent dispatches concurrently; Delegation Layer does not impose a
-task-count or CPU-based concurrency policy. Managed runtime-only dispatches
+independent dispatches concurrently; Delegation Layer sets no fixed
+task-count cap, and Pueue's default group applies no parallel limit. A fresh
+dispatch or `continue` is still subject to the
+[resource admission check](#fresh-admission-resource-check), which can refuse
+the new request; accepted work is untouched. Managed runtime-only dispatches
 create no separate inspection row. Their fresh capability check runs within
 the ordinary task's finite budget. Required admission inspections retain their
 immutable deadlines, including historical 20-second journals. Dispatch prepares
@@ -688,6 +691,67 @@ permission mode, and session stay those of the predecessor, and existing model
 and effort validation and the budget rules are unchanged. A timeout response
 advertises this path only after durable budget-stop termination evidence is
 present.
+
+## Fresh admission resource check
+
+Before a new task is created, `dispatch` and `continue` check whether the host
+shows confirmed resource pressure. The task lifecycle owns the authorization.
+A single resource-admission package owns the observations and the pure
+decision. Observations belong to one invocation: nothing is persisted, cached
+across commands, or kept in a global. The summary in the response is
+invocation-local and is not durable task state.
+
+- **Placement.** A fresh dispatch is checked before workspace or provider
+  preparation. A `continue` is checked after the predecessor loads and before
+  workspace preparation; its shared admitted flow does not repeat the initial
+  check. Before ordinary task creation, a fresh dispatch refreshes the check
+  only when the last observation is older than 5 seconds (monotonic) or the
+  supervisor, execution target, or cgroup membership changed. A refusal at
+  that late point still creates no task record, capture, or ordinary provider
+  run, but earlier provider inspection may already have run, so no refusal
+  claims that every provider process was avoided.
+- **Cost.** A normal check takes about 1 second. A confirmation needs 3
+  intervals. A 4-second sampling budget bounds the waits and tick boundaries
+  between samples. It does not bound a blocked operating-system read or the
+  aggregate memory of concurrent invocations, so there is no universal
+  wall-time guarantee.
+- **Decision.** Confirmed, trustworthy pressure refuses the new request.
+  Healthy or cleared readings admit it. An unreadable or unreliable metric
+  admits it with a structured warning and `resource_admission.status:
+  "unknown"`; an unknown metric never refuses by itself. Confirmed pressure on
+  one metric still refuses when another, independent metric is missing.
+- **Signals.** Host CPU is busy at 95% or more for 3 consecutive intervals of
+  about 1 second. Linux host memory is low against a reserve of `min(1 GiB,
+  10% of RAM)` for 3 consecutive samples after the initial baseline, or
+  critical (below half the reserve) immediately. macOS reports memory-pressure
+  warning for 3 consecutive samples after the initial baseline, or critical
+  immediately. A low or warning baseline alone does not count toward the 3.
+  Inside a Linux cgroup v2 target, a working-set
+  estimate (`current` minus `inactive_file`) is only an estimate, not
+  guaranteed reclaimable memory, and cannot refuse on its own. A cgroup memory
+  refusal also needs the execution target's memory PSI `some` total to grow by
+  at least 1% of each interval for 3 consecutive intervals. Missing PSI,
+  cgroup v1, an unresolved scope, or an unreadable file makes only that
+  dimension unknown with a warning.
+- **Not covered.** This is a refusal guard for new requests. It is not a
+  queue, a background retry, an automatic wait, or a controller. It does not
+  kill, pause, throttle, or offload work, and it adds no task-count cap: the
+  model still chooses fan-out. It cannot promise that a started task avoids
+  out-of-memory kills or that capacity is reserved. On Linux it observes only
+  the visible cgroup hierarchy. A private cgroup namespace can hide higher
+  ancestors even when the visible mount root is `/`, so a memory or CPU limit
+  set outside the namespace is not seen and its pressure is not detected.
+- **Untouched paths.** Recovery of an existing or partly created task, an
+  uncertain task ID, accepted work, `status`, `collect`, `cancel`, and cleanup
+  are never gated.
+
+A pressure refusal is `task_record: "not_created"` and is the only response
+that carries `retry_later` with `failure.retry_after_seconds`; see the
+[CLI reference](cli-reference.md#resource-check) for its fields. The refusal
+reports a sample, and `not_created` is its only authoritative task state. An
+explicit task ID whose absence cannot be proven stays `task_record: "unknown"`
+with stop guidance. No response promises that pressure is absent on every
+other path or later.
 
 ## Runtime discovery
 

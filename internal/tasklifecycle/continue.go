@@ -18,6 +18,11 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 		return continuationFailure(result, ContinueLoadPredecessor, "load-predecessor", err)
 	}
 	result.RootID = predecessor.RootID
+	result.Resources, err = checkContinuationResources(request, root, options.Dispatch)
+	if err != nil {
+		return continuationFailure(result, ContinueResources, "check-resources", err)
+	}
+	options.Dispatch.resourceAssessment = result.Resources
 	result.Workspace, err = PrepareContinuationWorkspace(root, options.Dispatch, *predecessor)
 	if err != nil {
 		return continuationFailure(result, ContinueWorkspace, "prepare-workspace", err)

@@ -222,7 +222,8 @@ func TestInspectionAdmissionRejectsStaticCandidateBeforeSupervisorBinding(t *tes
 			request := newBareInspectionRequest(t, store)
 			candidate := test.candidate(request, store)
 			deps := Dependencies{
-				Environment: os.Environ(),
+				ResourceChecker: fixtureResources,
+				Environment:     os.Environ(),
 				PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 					return candidate, nil
 				},

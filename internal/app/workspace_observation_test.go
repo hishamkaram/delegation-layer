@@ -177,7 +177,7 @@ func TestWorkspaceBusyMutationRequiresExactActionRetry(t *testing.T) {
 					t.Error(releaseErr)
 				}
 			})
-			result := workspaceCommand(Arguments{Root: store.Root, WorkspaceAction: action, WorkspaceID: resource.Request().WorkspaceID}, Dependencies{})
+			result := workspaceCommand(Arguments{Root: store.Root, WorkspaceAction: action, WorkspaceID: resource.Request().WorkspaceID}, Dependencies{ResourceChecker: fixtureResources})
 			response := result.response.Workspace
 			if result.code != 3 || response == nil || response.ReasonCode != "requested_action_not_authorized" || response.NextAction != "retry_"+action || response.OperationID != "" || response.Operation != nil {
 				t.Fatalf("busy mutation was acknowledged as accepted: %+v", result)

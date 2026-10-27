@@ -89,7 +89,7 @@ func TestCodexPendingRuntimeV3Reconstruction(t *testing.T) {
 			testsupport.RequireAppTest(t, err)
 			before, err := os.ReadFile(filepath.Join(td.Dir, "meta.json"))
 			testsupport.RequireAppTest(t, err)
-			profile, err := prepareMatchedProfile(Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}, fixture.store.Root, *request, *meta)
+			profile, err := prepareMatchedProfile(Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), Catalog: NativeCatalog()}, fixture.store.Root, *request, *meta)
 			testsupport.RequireAppTest(t, err)
 			assertCodexRecordedProfile(t, fixture, profile, false)
 			if profile.Plan.RuntimePreflightSHA256 != meta.RuntimePreflightSHA256 {
@@ -118,7 +118,7 @@ func TestCodexContinuationPreservesRecordedContract(t *testing.T) {
 				prior, err := tasklifecycle.ContinuationPrior(td, &fixture.request)
 				testsupport.RequireAppTest(t, err)
 				testsupport.RequireAppTest(t, td.Close())
-				options, _, err := tasklifecycle.ContinuationOptionsForTask(fixture.store, dispatchOptions(Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}, true), fixture.request.TaskID)
+				options, _, err := tasklifecycle.ContinuationOptionsForTask(fixture.store, dispatchOptions(Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), Catalog: NativeCatalog()}, true), fixture.request.TaskID)
 				testsupport.RequireAppTest(t, err)
 				next := fixture.request
 				next.TaskID, next.PriorSession = strings.Repeat("b", 32), prior
@@ -162,7 +162,7 @@ func TestCodexMissingNonGitCapabilityRejectsBeforeLaunch(t *testing.T) {
 	t.Cleanup(func() { testsupport.RequireAppTest(t, td.Close()) })
 	request, meta, err := td.PreparedRecords()
 	testsupport.RequireAppTest(t, err)
-	deps := Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}
+	deps := Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), Catalog: NativeCatalog()}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, *request, *meta)
 	testsupport.RequireAppTest(t, err)
 	permit, err := td.PrepareStart(0)

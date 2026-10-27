@@ -3,7 +3,9 @@
 For independent parallel write work, choose `--isolation git-worktree`
 automatically unless the user explicitly chooses shared coordination. The
 model chooses fan-out and task scope; the supervisor has no fixed task-count
-cap or TTL eviction. A read-only review may attach a retained workspace with
+cap or TTL eviction. Delegate still refuses a new request while the host shows
+confirmed resource pressure: read each response separately, and handle a
+`resource_pressure` refusal as in [result handling](result-handling.md). A read-only review may attach a retained workspace with
 `--workspace ID`. The single managed-workspace policy, capture boundary, and
 release rules live in [managed workspace guidance](workspaces.md); do not
 restate them in each collaboration brief.
@@ -72,7 +74,8 @@ Keep the request-to-label mapping alongside those files. Include any exact
 requested model/effort in its invocation. Read both exit codes, stderr, and JSON
 responses independently; shell `wait` is not proof that either dispatch succeeded.
 Poll only tasks with `task_record: created`. A returned task ID with
-`task_record: not_created` does not identify an observable task.
+`task_record: not_created` does not identify an observable task. One request's
+`resource_pressure` refusal does not change another request's response.
 
 ## Wait within the current turn
 

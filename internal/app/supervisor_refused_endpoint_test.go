@@ -275,6 +275,7 @@ func newRefusedEndpointContinueFixture(t *testing.T) (*outputUpgradeFixture, ref
 	writeRunnerFixture(t, fixture.runner, "#!/bin/sh\nexit 0\n")
 	installOutputUpgradeProvider(t, testCase.executable())
 	fixture.deps = Dependencies{
+		ResourceChecker:             fixtureResources,
 		Catalog:                     catalog,
 		SupervisorOptions:           options,
 		InitialSupervisorExecutable: clientPath,

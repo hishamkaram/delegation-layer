@@ -46,7 +46,7 @@ func TestModelsCandidatePreparesInCompositionScope(t *testing.T) {
 	catalog := environmentReceiptCatalog(t, &receipts)
 	request := task.TaskRecord{Provider: config.ProviderFixture, CanonicalCwd: t.TempDir()}
 
-	_, err := prepareModelsCandidate(Dependencies{Catalog: catalog}, t.TempDir(), request)
+	_, err := prepareModelsCandidate(Dependencies{ResourceChecker: fixtureResources, Catalog: catalog}, t.TempDir(), request)
 	var stage *admission.StageError
 	if !errors.Is(err, task.ErrEvidenceFault) || !errors.As(err, &stage) || stage.Stage() != "prepare-provider" || len(receipts) != 0 {
 		t.Fatalf("uncaptured models scope = %v, receipts=%q", err, receipts)
@@ -54,7 +54,7 @@ func TestModelsCandidatePreparesInCompositionScope(t *testing.T) {
 
 	for _, environment := range [][]string{{"PATH=/caller-bin", "HOME=/caller-home"}, {}} {
 		receipts = nil
-		_, err = prepareModelsCandidate(Dependencies{Catalog: catalog, Environment: environment}, t.TempDir(), request)
+		_, err = prepareModelsCandidate(Dependencies{ResourceChecker: fixtureResources, Catalog: catalog, Environment: environment}, t.TempDir(), request)
 		if !errors.Is(err, commonprovider.ErrAuthenticationBlocked) || !errors.As(err, &stage) || stage.Stage() != "prepare-provider" {
 			t.Fatalf("models preparation failure changed stage: %v", err)
 		}
@@ -73,8 +73,9 @@ func TestInspectionWorkerScopeSelectsBindingEnvironment(t *testing.T) {
 	binding := []string{"PATH=/binding-bin", "HOME=/binding-home"}
 	var receipts [][]string
 	deps := Dependencies{
-		Catalog:     environmentReceiptCatalog(t, &receipts),
-		Environment: caller,
+		ResourceChecker: fixtureResources,
+		Catalog:         environmentReceiptCatalog(t, &receipts),
+		Environment:     caller,
 		PrepareCandidate: func(_ task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 			receipts = append(receipts, slices.Clone(environment))
 			return commonprovider.ProfileCandidate{}, commonprovider.ErrAuthenticationBlocked
@@ -113,7 +114,7 @@ func TestInspectionWorkerScopeSelectsBindingEnvironment(t *testing.T) {
 func TestSupervisorControlScopeBindsCapturedEnvironmentOnly(t *testing.T) {
 	t.Setenv("HOME", "/ambient-home")
 	caller := []string{"HOME=/caller-home", "PATH=/caller-bin", "PROVIDER_SECRET=hidden"}
-	captured := Dependencies{Environment: caller}
+	captured := Dependencies{ResourceChecker: fixtureResources, Environment: caller}
 	want := []string{"HOME=/caller-home", "PATH=/caller-bin"}
 	if got := captured.supervisorControlScope().Environment; !slices.Equal(got, want) {
 		t.Fatalf("captured control scope = %q, want %q", got, want)
@@ -124,10 +125,10 @@ func TestSupervisorControlScopeBindsCapturedEnvironmentOnly(t *testing.T) {
 	if got := supervisorControlOptions(captured).Environment; !slices.Equal(got, want) {
 		t.Fatalf("supervisor command control scope = %q, want %q", got, want)
 	}
-	if got := (Dependencies{}).supervisorControlScope().Environment; got != nil {
+	if got := (Dependencies{ResourceChecker: fixtureResources}).supervisorControlScope().Environment; got != nil {
 		t.Fatalf("standalone control scope = %q, want pueue's nil default", got)
 	}
-	explicit := Dependencies{Environment: caller, SupervisorOptions: pueue.Options{Environment: []string{}}}
+	explicit := Dependencies{ResourceChecker: fixtureResources, Environment: caller, SupervisorOptions: pueue.Options{Environment: []string{}}}
 	if got := explicit.supervisorControlScope().Environment; got == nil || len(got) != 0 {
 		t.Fatalf("explicit empty control environment changed: %#v", got)
 	}

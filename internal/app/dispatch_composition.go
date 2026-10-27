@@ -30,6 +30,7 @@ func dispatchOptions(deps Dependencies, continuation bool) tasklifecycle.Dispatc
 		ContinuationProfiles: func(meta task.MetaRecord, environment []string) admissioncore.Profiles {
 			return profilesForEnvironment(continuationDependencies(deps, meta), environment)
 		},
+		Resources: deps.ResourceChecker,
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestProductionCollectionRegistryRetainsExactContracts(t *testing.T) {
-	registry := (Dependencies{}).storeDependencies().registry()
+	registry := (Dependencies{ResourceChecker: fixtureResources}).storeDependencies().registry()
 	for _, reference := range []task.PredicateRef{
 		task.FixturePredicateRef(),
 		antigravity.NewPrintInterpreter().Reference(), antigravity.NewCurrentPrintInterpreter().Reference(),

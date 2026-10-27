@@ -28,6 +28,11 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 		return dispatchFailure(result, DispatchGenerateID, "generate-task-id", err)
 	}
 	result.TaskID = id
+	gate, resourceErr := openResourceGate(request, options, store, id)
+	result.Resources = gate.current()
+	if resourceErr != nil {
+		return dispatchFailure(result, DispatchResources, "check-resources", resourceErr)
+	}
 	managed, managedCwd, workspaceErr := workspaces.PrepareDispatch(WorkspaceDispatchRequest(request), options.workspaceOptions(), store, id, cwd, brief)
 	if managed != nil {
 		defer func() {
@@ -42,10 +47,10 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 	if managed != nil {
 		request.WorkspaceBinding = managed.Binding()
 	}
-	return dispatchPrepared(request, options, store, cwd, brief, result)
+	return dispatchPrepared(request, options, store, cwd, brief, gate, result)
 }
 
-func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *taskdir.Store, cwd string, brief []byte, result DispatchResult) DispatchResult {
+func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *taskdir.Store, cwd string, brief []byte, gate *resourceGate, result DispatchResult) DispatchResult {
 	var err error
 	request, result, err = resolveDispatchProvider(request, options, store, cwd, brief, result)
 	if err != nil {
@@ -75,7 +80,8 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 	}
 	result.Record = DispatchRecordLookup(request.TaskID, false, nil)
 	creation, selection := newSuccessorCreation(options.Creation, request.Selection, store.Root, predecessorMeta)
-	created := CreateTask(selection, creation, store, base, brief, request.BriefPath)
+	created := createTask(selection, creation, store, base, brief, request.BriefPath, gate)
 	result.Creation = &created
+	result.Resources = gate.current()
 	return result
 }

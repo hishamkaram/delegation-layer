@@ -17,6 +17,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 // UsageText is the public command synopsis shared by delegate and its tests.
@@ -99,6 +100,9 @@ type Dependencies struct {
 	RunnerExecutable            string
 	PublisherVersion            string
 	ExecutionHooks              execution.Hooks
+	// ResourceChecker checks fresh dispatch and continue admissions. Nil
+	// selects the native checker; fixtures inject a deterministic one.
+	ResourceChecker tasklifecycle.ResourceChecker
 	// Environment is the caller's launch-context snapshot. Nil means it was
 	// not captured yet: the first command entrypoint captures os.Environ once
 	// and every later consumer reads that snapshot. A nonnil empty slice is an

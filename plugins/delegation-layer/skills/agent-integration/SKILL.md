@@ -128,8 +128,9 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
     report delegate's evidence; do not assume the user's configuration is faulty
     or remove MCP servers, plugins, settings, or credentials to make it pass.
 11. The model chooses ordinary-task fan-out by issuing independent `dispatch`
-    commands concurrently. The private supervisor does not impose a task-count
-    or CPU-based limit. Use this for independent investigation, debate, review,
+    commands concurrently. There is no fixed task-count cap, but Delegate
+    refuses a new request while the host shows confirmed resource pressure (see
+    the `resource_pressure` row below). Use this for independent investigation, debate, review,
     or provider comparison. For independent parallel writes, choose
     `--isolation git-worktree` automatically unless the user explicitly chooses
     shared coordination; the model chooses fan-out and task scope. A read-only
@@ -313,9 +314,12 @@ for **each attempt**, including requests issued together:
 | `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
 | `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
 | `task_record: not_created`, `failure.code: workspace_provision_pending` or `workspace_busy`, and `failure.next_action: watch_workspace` | Follow [managed workspace recovery](references/result-handling.md#managed-workspace-results) using the same root and workspace. Once ready, retry the exact admission command and inputs. A failed `continue` remains that same `continue`, never a new dispatch. |
+| `task_record: not_created`, `failure.code: resource_pressure`, `failure.next_action: retry_later`, and `failure.retry_after_seconds: 30` | Delegate checked the host and confirmed resource pressure, so no ordinary task record was created and no provider task is running for this attempt. Do not poll or observe a task. Choose one: report the refusal and stop, or wait at least 30 seconds in the foreground and retry the exact original admission argv once. A `continue` stays that same `continue`. If the retry is refused again, report and stop. Never loop, retry in the background, schedule a retry, or run Pueue or process commands. The 30 seconds is advice, not a guarantee that the retry will pass. |
 | `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
-| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. |
+| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. An optional `resource_admission` object with `status: unknown` and `warnings` only means a resource metric could not be read; the task was admitted. Keep the warning with your report, observe that same task with `status` and `collect`, and do not redispatch. |
 | `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
+
+`resource_admission` is optional. Its `status` is `clear`, `pressure`, or `unknown`, and `warnings` is a short list of bounded entries with `code`, optional `metric`, `reason_code`, and `message`. An unknown metric adds a warning and never refuses by itself, but confirmed pressure on an independent metric still refuses. The check runs only for a new dispatch or `continue`; `status`, `collect`, `cancel`, and the recovery of an existing task are not checked or refused.
 
 One attempt's `stop_and_report` does not prevent correcting another independent
 request's usage error. Keep the failed attempt reported as failed. With an

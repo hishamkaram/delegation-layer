@@ -87,7 +87,7 @@ func TestContinueRejectsIncompatibleSuccessorBeforePrivateSupervisorRecovery(t *
 	result := continueTask(Arguments{
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
 		Config: task.TaskConfig{Model: "litellm-glm-5-2-successor"},
-	}, Dependencies{InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
+	}, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if result.code != 2 || !errors.Is(result.err, commonprovider.ErrUnsupportedOption) {
 		t.Fatalf("incompatible continuation result=%+v, want unsupported model override before supervisor recovery", result)
 	}
@@ -157,7 +157,8 @@ func runCCRContinuationEntryPoint(t *testing.T, entryPoint string, testCase ccrC
 
 	var stdout, stderr bytes.Buffer
 	code := Run(args, &stdout, &stderr, Dependencies{
-		Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
+		ResourceChecker: fixtureResources,
+		Catalog:         catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
 	})
 	assertCCRContinuationResponse(t, entryPoint, code, &stdout, &stderr, wantCode, wantStage)
 	assertCCRContinuationProfile(t, entryPoint, candidate, testCase)
@@ -289,7 +290,8 @@ func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessor
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
 		Config: task.TaskConfig{Model: testCase.model},
 	}, Dependencies{
-		Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
+		ResourceChecker: fixtureResources,
+		Catalog:         catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
 	})
 	if result.code != 1 || !errors.Is(result.err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("continuation result=%+v, want blocked supervisor recovery after admission", result)
@@ -426,7 +428,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			seedContinuationSuccessorTestBlocker(t, fixture, "recovery alias")
 			predecessor := newPiContinuationPredecessor(t, fixture, fixture.bindings["A"])
 			before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
-			result := testCase.run(fixture, predecessor, Dependencies{InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
+			result := testCase.run(fixture, predecessor, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 
 			if result.code != 2 || !errors.Is(result.err, pi.ErrUnsupportedProfile) {
 				t.Fatalf("invalid Pi continuation result=%+v, want static unsupported effort before supervisor recovery", result)
@@ -563,11 +565,11 @@ func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSucce
 	var err error
 	switch gate {
 	case "rebind":
-		got, err = supervisorcore.RebindContinuation(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{}))
+		got, err = supervisorcore.RebindContinuation(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{ResourceChecker: fixtureResources}))
 	case "exclusive revalidation":
 		// Exercise the actual exclusive owner, including its recovery-alias
 		// handling, rather than invoking the revalidation helper in isolation.
-		got, err = supervisorcore.PrepareContinuationSuccessor(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{}))
+		got, err = supervisorcore.PrepareContinuationSuccessor(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{ResourceChecker: fixtureResources}))
 	default:
 		t.Fatalf("unknown continuation gate %q", gate)
 	}
@@ -641,7 +643,7 @@ func openContinuationSuccessorTestStoreAt(t *testing.T, root string) *taskdir.St
 	writeContinuationSuccessorTestBytes(t, filepath.Join(root, ".maintenance.lock"), nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	store, err := openStoreContext(ctx, root, Dependencies{}.storeDependencies(), false)
+	store, err := openStoreContext(ctx, root, Dependencies{ResourceChecker: fixtureResources}.storeDependencies(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,12 +20,21 @@ the same as a successful provider result.
    or call a provider directly to replace a failed continuation. Also handle
    `workspace_provision_pending` or `workspace_busy` with `watch_workspace`
    using [managed workspace recovery](#managed-workspace-results) before the
-   generic stop rule. For every other `not_created` response, do not poll;
+   generic stop rule. A `resource_pressure` refusal (`failure.next_action:
+   "retry_later"`, `failure.retry_after_seconds: 30`, `task_record: "not_created"`) is
+   a bounded caller choice: report and stop, or wait at least 30 seconds in the
+   foreground and retry the exact original admission once; `continue` remains
+   `continue`. Never loop, retry in the background, or poll. For every other
+   `not_created` response, do not poll;
    correct the request only if
    `failure.next_action` is `correct_request`, otherwise report and stop. When
    `task_record` is `unknown`, stop and report without polling or retrying.
    Status and collect can report `admission: "unknown"` alongside valid terminal
-   evidence for an existing task.
+   evidence for an existing task. An admitted task can carry
+   `resource_admission` with `status: "unknown"` and bounded `warnings`
+   (for example `resource_observation_unavailable`). That is a warning about
+   an unreadable host metric, not a failure: observe that same task with
+   `status` and `collect`, and do not redispatch.
 3. If `status` is `timed_out`, follow the continuation procedure before treating
    pending publication as a reason to wait. `continuation.resumable: true`
    permits a linked successor even when no outcome has been published. An

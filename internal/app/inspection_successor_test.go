@@ -66,7 +66,7 @@ func newWorkerSuccessorFixture(t *testing.T) *workerSuccessorFixture {
 	}
 	t.Setenv("HOME", fixture.cliDir)
 	t.Setenv("PATH", fixture.cliDir)
-	fixture.store, err = openStore(filepath.Join(base, "state"), Dependencies{Catalog: NativeCatalog()}.storeDependencies(), true)
+	fixture.store, err = openStore(filepath.Join(base, "state"), Dependencies{ResourceChecker: fixtureResources, Catalog: NativeCatalog()}.storeDependencies(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestInspectionWorkerCompilesProspectiveSuccessorWithItsAdmissionFactory(t *
 			fixture.queueInspection(t, request, candidate)
 			before := readImmutableRecords(t, filepath.Join(fixture.store.Root, "tasks", predecessor.TaskID))
 
-			if err = fixture.runWorker(t, request.TaskID, Dependencies{}); err != nil {
+			if err = fixture.runWorker(t, request.TaskID, Dependencies{ResourceChecker: fixtureResources}); err != nil {
 				t.Fatalf("worker refused its admitted successor binding: stage=%s", inspectionWorkerFailureStage(err, "unknown"))
 			}
 			if result := fixture.result(t, request.TaskID); result.Reason != inspection.ResultEligible {
@@ -326,7 +326,7 @@ func TestInspectionWorkerRefusesUnreadablePredecessorWithoutSubstitute(t *testin
 			}
 			fixture.queueInspection(t, request, candidate)
 			for attempt := range 2 {
-				if err = fixture.runWorker(t, request.TaskID, Dependencies{}); err == nil {
+				if err = fixture.runWorker(t, request.TaskID, Dependencies{ResourceChecker: fixtureResources}); err == nil {
 					t.Fatalf("attempt %d accepted an unreadable predecessor", attempt)
 				}
 			}
@@ -378,7 +378,7 @@ func TestInspectionWorkerKeepsAdmittedAndInjectedSelection(t *testing.T) {
 			t.Fatal(err)
 		}
 		fixture.queueInspection(t, request, candidate)
-		if err = fixture.runWorker(t, request.TaskID, Dependencies{}); err != nil {
+		if err = fixture.runWorker(t, request.TaskID, Dependencies{ResourceChecker: fixtureResources}); err != nil {
 			t.Fatalf("admitted successor needed its predecessor: stage=%s", inspectionWorkerFailureStage(err, "unknown"))
 		}
 	})
@@ -391,7 +391,7 @@ func TestInspectionWorkerKeepsAdmittedAndInjectedSelection(t *testing.T) {
 		}
 		fixture.queueInspection(t, request, candidate)
 		calls := 0
-		deps := Dependencies{PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+		deps := Dependencies{ResourceChecker: fixtureResources, PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 			calls++
 			return NativeCatalog().Candidate(request, environment)
 		}}
@@ -411,7 +411,7 @@ func TestInspectionCandidateDependenciesReadPredecessorOnlyForProspectiveSuccess
 	interactive.RequestedConfig.Interactive = true
 	fresh := prospective
 	fresh.PriorSession = nil
-	production := Dependencies{Environment: os.Environ()}.normalized()
+	production := Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ()}.normalized()
 	for name, request := range map[string]task.TaskRecord{"interactive continuation": interactive, "fresh or models task": fresh} {
 		if _, err := inspectionCandidateDependencies(production, fixture.store, request, nil); err != nil {
 			t.Fatalf("%s opened a predecessor: %v", name, err)
@@ -431,7 +431,7 @@ func TestInspectionCandidateDependenciesReadPredecessorOnlyForProspectiveSuccess
 // its override.
 func TestCatalogExistingClassifiesAdmittedInteractiveContinuation(t *testing.T) {
 	faults := map[string]error{"fresh": errors.New("fresh"), "existing": errors.New("existing"), "successor": errors.New("successor")}
-	deps := continuationDependencies(Dependencies{Catalog: candidateFactoryCatalog(t, faults)}, task.MetaRecord{})
+	deps := continuationDependencies(Dependencies{ResourceChecker: fixtureResources, Catalog: candidateFactoryCatalog(t, faults)}, task.MetaRecord{})
 	request := task.TaskRecord{
 		Provider: "fixture:preflight", Mode: config.ModeReadOnly, CanonicalCwd: t.TempDir(),
 		PriorSession:    &task.PriorSession{Provider: "fixture:preflight", ConversationID: "known", PredecessorTaskID: "predecessor"},
@@ -440,7 +440,7 @@ func TestCatalogExistingClassifiesAdmittedInteractiveContinuation(t *testing.T) 
 	ordinary := request
 	ordinary.RequestedConfig.Interactive = false
 	custom := errors.New("custom")
-	customDeps := Dependencies{Catalog: deps.Catalog, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	customDeps := Dependencies{ResourceChecker: fixtureResources, Catalog: deps.Catalog, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return PreparedProfile{}, custom
 	}}
 	for _, test := range []struct {
@@ -553,7 +553,7 @@ func roundTripSuccessorDefinition(t *testing.T, fixture *workerSuccessorFixture,
 		t.Fatal(err)
 	}
 	requireNoSelector(t, description.ID+" binding environment", definition.Environment, []string{"/saved-home", "/saved/bin"})
-	worker, err := scopedDependencies(Dependencies{Environment: []string{"HOME=/ambient-home", "PATH=/ambient/bin"}}.normalized(), definition.Environment, true)
+	worker, err := scopedDependencies(Dependencies{ResourceChecker: fixtureResources, Environment: []string{"HOME=/ambient-home", "PATH=/ambient/bin"}}.normalized(), definition.Environment, true)
 	if err != nil {
 		t.Fatal(err)
 	}

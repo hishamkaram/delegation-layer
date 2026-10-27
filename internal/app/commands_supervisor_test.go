@@ -20,7 +20,7 @@ import (
 
 func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 	t.Setenv("DELEGATE_PUEUE_CONFIG", "")
-	path, err := supervisor.ResolveInitialConfig(supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()))
+	path, err := supervisor.ResolveInitialConfig(supervisorAdmissionSelection(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()))
 	if err != nil || path != "" {
 		t.Fatalf("missing initial config was not left for private supervisor resolution: path=%q err=%v", path, err)
 	}
@@ -28,7 +28,7 @@ func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 
 func TestExplicitSupervisorConfigCannotClaimPrivateStatePath(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	_, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{}, pueue.Options{}), root, true)
+	_, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{ResourceChecker: fixtureResources}, pueue.Options{}), root, true)
 	if !errors.Is(err, pueue.ErrConfiguration) {
 		t.Fatalf("private state config was accepted as an explicit supervisor: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestSupervisorOptionsSnapshotPreservesCurrentControlEnvironment(t *testing.
 	if runtime.GOOS == "linux" {
 		t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime"))
 	}
-	options := Dependencies{}.withCapturedEnvironment().supervisorControlScope()
+	options := Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment().supervisorControlScope()
 	if options.Environment == nil || !strings.Contains(strings.Join(options.Environment, "\x00"), "HOME=") {
 		t.Fatalf("current supervisor environment was not captured: %v", options.Environment)
 	}
@@ -140,21 +140,21 @@ func TestSupervisorOptionsSnapshotPreservesCurrentControlEnvironment(t *testing.
 func TestContinuationMetadataRequiresRecordedLaunchState(t *testing.T) {
 	root := filepath.Clean(t.TempDir())
 	meta := &task.MetaRecord{SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(t.TempDir(), "pueue.yml")}}
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), meta); err == nil || !strings.Contains(err.Error(), "launch environment") {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); err == nil || !strings.Contains(err.Error(), "launch environment") {
 		t.Fatalf("missing launch environment was accepted: %v", err)
 	}
 	meta.Environment = []string{"HOME=/task"}
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}, Dependencies{}.withCapturedEnvironment()), meta); err == nil || !strings.Contains(err.Error(), "runner executable") {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); err == nil || !strings.Contains(err.Error(), "runner executable") {
 		t.Fatalf("missing runner was accepted: %v", err)
 	}
 	meta.RunnerExecutable = "/task/runner"
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: "/other/runner"}, Dependencies{}.withCapturedEnvironment()), meta); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: "/other/runner"}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("runner override error=%v", err)
 	}
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{PueueConfig: "/other/pueue.yml"}, Dependencies{}.withCapturedEnvironment()), meta); !errors.Is(err, task.ErrRequestConflict) {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{PueueConfig: "/other/pueue.yml"}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); !errors.Is(err, task.ErrRequestConflict) {
 		t.Fatalf("supervisor override error=%v", err)
 	}
-	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: meta.RunnerExecutable, PueueConfig: meta.SupervisorConfig.ConfigPath}, Dependencies{}.withCapturedEnvironment()), meta); err != nil {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: meta.RunnerExecutable, PueueConfig: meta.SupervisorConfig.ConfigPath}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), meta); err != nil {
 		t.Fatalf("matching continuation metadata rejected: %v", err)
 	}
 }
@@ -180,7 +180,7 @@ func TestBuildContinuationArgumentsPinsResolvedRoot(t *testing.T) {
 		},
 	}
 	meta := &task.MetaRecord{Environment: []string{"HOME=/task"}, RunnerExecutable: "/task/runner", RunnerOwnership: task.RunnerOwnershipManaged, SupervisorConfig: savedSupervisor}
-	arguments, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, predecessor, meta, []byte("brief"))
+	arguments, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, predecessor, meta, []byte("brief"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestContinuationAdmissionUsesSavedSupervisorBinding(t *testing.T) {
 		ConfigDigest:         digest,
 		ObservedVersion:      "saved-pueue",
 	}
-	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, Dependencies{}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{}, pueue.Options{}), root, true)
+	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{ResourceChecker: fixtureResources}, pueue.Options{}), root, true)
 	if err != nil {
 		t.Fatal(err)
 	}

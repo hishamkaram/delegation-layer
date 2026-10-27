@@ -187,6 +187,46 @@ independently proven empty scope, or canonical closed lifetime evidence with a
 free runner lease for a turn with no seal or outcome (see
 [Preflight and continuation](#preflight-and-continuation)).
 
+### Resource check
+
+A new `dispatch`, and a new `continue` successor, run an automatic host
+resource check before the task is created. There is no flag or configuration
+for it, and no manual provider check. `status`, `collect`, `cancel`, cleanup,
+and the recovery of an existing or uncertain task are never checked.
+
+Responses may carry an optional `resource_admission` object:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `clear`, `pressure`, or `unknown`. |
+| `warnings` | Bounded list; each entry has `code`, optional `metric`, `reason_code`, and `message`. |
+
+- **Admitted with `unknown`.** An unreadable metric adds a warning (for
+  example `resource_observation_unavailable`) and the task is admitted with
+  the same status and exit as usual. An unknown metric never refuses by
+  itself, but confirmed pressure on an independent metric still refuses.
+  Observe the same task with `status` and `collect`; do not dispatch again.
+- **Refused for pressure.** Confirmed pressure returns exit `1` with
+  `failure.code: "resource_pressure"`, `failure.stage: "check-resources"`, a
+  `reason_code`, and `task_record: "not_created"`. Only this response carries
+  `failure.next_action: "retry_later"` with `failure.retry_after_seconds: 30`
+  (nested in `failure`, not top-level). The
+  value is advice, not a reservation. Nothing is queued: the caller chooses
+  to report the refusal, or to wait and repeat the exact original admission
+  once; a `continue` stays that `continue`. Delegate never waits or retries
+  for the caller.
+- **Unchanged guidance.** An explicit task ID that cannot be proven absent
+  stays `task_record: "unknown"` with stop guidance, and a created task is
+  observed, not redispatched.
+
+The check takes about 1 second, and a confirmation needs 3 intervals. A
+4-second sampling budget bounds the waits and tick boundaries between samples,
+not a blocked operating-system read or the aggregate memory of concurrent
+invocations, so there is no universal wall-time guarantee. It does not limit how many tasks the caller starts; it refuses new
+requests only while pressure is confirmed. See
+[fresh admission resource check](architecture.md#fresh-admission-resource-check)
+for the signals and placement.
+
 ## Managed Git workspaces
 
 Managed workspaces are optional. Git is required for managed worktree creation
@@ -330,7 +370,7 @@ contacting Pueue, or launching a provider. It reports `verification:
 
 `continue --task PREDECESSOR_ID` reads the predecessor's validated brief and
 exact provider session, then creates a new linked task through the normal
-admission path. `--brief FILE` replaces the predecessor brief with a new
+admission path, including the [resource check](#resource-check). `--brief FILE` replaces the predecessor brief with a new
 follow-up instruction. `--budget`, `--model`, and `--effort` can override the
 corresponding requested values when the provider advertises them. The command
 refuses a missing, still-running, mismatched, or unsupported predecessor. A

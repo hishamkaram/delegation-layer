@@ -123,7 +123,8 @@ func TestGuardianInspectionWorkerRejectsMissingAuthenticatedChild(t *testing.T) 
 	}
 	var nativeStarts atomic.Int32
 	err := runInspectionWorkerOperationModeWithLifetime(fixture.store.Root, fixture.operation.Request().TaskID, true, nil, Dependencies{
-		Environment: os.Environ(),
+		ResourceChecker: fixtureResources,
+		Environment:     os.Environ(),
 		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			nativeStarts.Add(1)
 			return commonprovider.ProfileCandidate{}, errors.New("unexpected native inspection")
@@ -155,7 +156,8 @@ func testSupervisedInspectionMarkerReconcilesNonManagedBinding(t *testing.T, own
 
 	var nativeStarts atomic.Int32
 	err := runInspectionWorkerOperationModeWithLifetime(fixture.store.Root, taskID, true, nil, Dependencies{
-		Environment: os.Environ(),
+		ResourceChecker: fixtureResources,
+		Environment:     os.Environ(),
 		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			nativeStarts.Add(1)
 			return commonprovider.ProfileCandidate{}, errors.New("native inspection crossed reconciliation guard")

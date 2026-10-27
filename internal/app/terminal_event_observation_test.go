@@ -200,7 +200,7 @@ func terminalEventMaintenanceDependencies(statusCalls, unfilteredStatusCalls *at
 			}
 		}
 	}
-	return Dependencies{SupervisorOptions: options}.normalized()
+	return Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: options}.normalized()
 }
 
 func waitForTestFileContent(t *testing.T, path, want string) {

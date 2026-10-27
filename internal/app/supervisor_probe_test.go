@@ -368,6 +368,7 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 			defer calls.Done()
 			<-start
 			errs <- supervisorcore.RepairQueueForTask(t.Context(), store, supervisor.Binding(), meta, supervisorAdmissionOptions(Dependencies{
+				ResourceChecker:             fixtureResources,
 				InitialSupervisorExecutable: deps.InitialSupervisorExecutable,
 				SupervisorOptions:           deps.SupervisorOptions,
 				RunnerExecutable:            runner,
@@ -462,7 +463,7 @@ printf '%s\n' "$$" > "$base/run/pueue.pid"
 		t.Fatalf("bind healthy private supervisor fixture: %v", err)
 	}
 	listenSupervisorProbeTestEndpoint(t, client.Binding().Endpoint)
-	return store, Dependencies{InitialSupervisorExecutable: clientPath, SupervisorOptions: options}, client
+	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: options}, client
 }
 
 func listenSupervisorProbeTestEndpoint(t *testing.T, endpoint string) {

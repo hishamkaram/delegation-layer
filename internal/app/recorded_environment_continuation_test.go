@@ -265,7 +265,8 @@ func newRecordedEnvironmentFixtureWith(t *testing.T, testCase recordedEnvironmen
 		}
 	})
 	fixture.deps = Dependencies{
-		Catalog: fixture.capturingCatalog(t), SupervisorOptions: supervisorOptions, RunnerExecutable: fixture.runner,
+		ResourceChecker: fixtureResources,
+		Catalog:         fixture.capturingCatalog(t), SupervisorOptions: supervisorOptions, RunnerExecutable: fixture.runner,
 		InitialSupervisorExecutable: clientPath,
 	}
 	fixture.saved.apply(t, fixture.cliDir)

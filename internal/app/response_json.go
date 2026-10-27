@@ -18,8 +18,8 @@ func writeJSONResponse(stdout io.Writer, command string, response *Response, res
 		}
 		failure := response.Failure
 		response.Error = dispatchFailureMessage(failure.Code)
-		if failure.ReasonCode != "" {
-			response.Error = publicSupervisorError(response.Error, resultErr).Error()
+		if public := dispatchPublicError(*failure, resultErr); public != nil {
+			response.Error = public.Error()
 		}
 	}
 	return writeJSON(stdout, *response)
@@ -104,6 +104,7 @@ func truncateDiagnostics(response Response, budget int) Response {
 			candidate.Diagnostics[i].Message, _ = truncateDiagnostic(response.Diagnostics[i].Message, budget)
 		}
 	}
+	candidate.ResourceAdmission = truncateResourceAdmission(response.ResourceAdmission, budget)
 	return candidate
 }
 

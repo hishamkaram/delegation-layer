@@ -17,7 +17,7 @@ func TestExistingRetryMissingEnvironmentPortCannotSubmit(t *testing.T) {
 	store, td, req := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
 	calls := 0
-	deps := Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	deps := Dependencies{ResourceChecker: fixtureResources, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		calls++
 		return PreparedProfile{}, errors.New("unexpected profile preparation")
 	}}
@@ -55,7 +55,7 @@ func TestExistingRetryPreparesInSavedEnvironmentAfterProfileRefusal(t *testing.T
 		}
 	}()
 	calls := 0
-	deps := Dependencies{PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{ResourceChecker: fixtureResources, PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 		calls++
 		if !slices.Equal(environment, []string{key + "=recorded"}) {
 			t.Errorf("profile received %q instead of the saved launch scope", environment)

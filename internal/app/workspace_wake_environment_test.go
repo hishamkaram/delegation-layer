@@ -169,7 +169,7 @@ func TestManagedTaskStatusWakeSubmitsCaptureInCallerEnvironment(t *testing.T) {
 	fixture := newWakeEnvironmentTask(t)
 	environment, selected, _ := selectedLaunchEnvironment(t)
 	var stdout, stderr bytes.Buffer
-	Run([]string{"status", fixture.td.TaskID, "--root", fixture.store.Root, "--json"}, &stdout, &stderr, Dependencies{Environment: environment})
+	Run([]string{"status", fixture.td.TaskID, "--root", fixture.store.Root, "--json"}, &stdout, &stderr, Dependencies{ResourceChecker: fixtureResources, Environment: environment})
 	var response Response
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		t.Fatalf("status response %q: %v (stderr %q)", stdout.String(), err, stderr.String())
@@ -182,7 +182,7 @@ func TestManagedTaskStatusWakeSubmitsCaptureInCallerEnvironment(t *testing.T) {
 func TestManagedTaskCollectWakeUsesCapturedEnvironmentCopy(t *testing.T) {
 	fixture := newWakeEnvironmentTask(t)
 	environment, selected, ambient := selectedLaunchEnvironment(t)
-	deps := Dependencies{Environment: environment}.storeDependencies()
+	deps := Dependencies{ResourceChecker: fixtureResources, Environment: environment}.storeDependencies()
 	environment[len(environment)-1] = "PATH=" + ambient
 	result := collect(fixture.arguments(), deps)
 	if path := fixture.requireSubmitted(t, "collect", result.response.Workspace); path != selected {
@@ -193,7 +193,7 @@ func TestManagedTaskCollectWakeUsesCapturedEnvironmentCopy(t *testing.T) {
 func TestManagedTaskWakeRejectsUncapturedEnvironmentBeforeSubmission(t *testing.T) {
 	fixture := newWakeEnvironmentTask(t)
 	selectedLaunchEnvironment(t)
-	result := status(fixture.arguments(), Dependencies{})
+	result := status(fixture.arguments(), Dependencies{ResourceChecker: fixtureResources})
 	view := result.response.Workspace
 	if view == nil || view.ReasonCode != "workspace_wake_evidence_fault" || view.NextAction != "stop_and_report" {
 		t.Fatalf("uncaptured wake environment was not an evidence fault: %+v", view)
@@ -206,7 +206,7 @@ func TestManagedTaskWakeRejectsUncapturedEnvironmentBeforeSubmission(t *testing.
 			t.Error(closeErr)
 		}
 	})
-	plain := status(Arguments{Root: fixture.store.Root, TaskID: unmanaged.TaskID}, Dependencies{})
+	plain := status(Arguments{Root: fixture.store.Root, TaskID: unmanaged.TaskID}, Dependencies{ResourceChecker: fixtureResources})
 	if plain.response.Workspace != nil {
 		t.Fatalf("task without a managed workspace gained a workspace view: %+v", plain.response.Workspace)
 	}
@@ -218,7 +218,7 @@ func TestManagedTaskWakeRejectsUncapturedEnvironmentBeforeSubmission(t *testing.
 func TestManagedTaskWakeKeepsExplicitEmptyEnvironment(t *testing.T) {
 	fixture := newWakeEnvironmentTask(t)
 	_, _, ambient := selectedLaunchEnvironment(t)
-	result := collect(fixture.arguments(), Dependencies{Environment: []string{}}.storeDependencies())
+	result := collect(fixture.arguments(), Dependencies{ResourceChecker: fixtureResources, Environment: []string{}}.storeDependencies())
 	ambientEntry, _, _ := strings.Cut(ambient, string(os.PathListSeparator))
 	if path := fixture.requireSubmitted(t, "explicit empty collect", result.response.Workspace); strings.Contains(path, ambientEntry) {
 		t.Fatalf("explicit empty environment fell back to the ambient PATH: %q", path)

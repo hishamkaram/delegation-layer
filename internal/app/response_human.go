@@ -12,6 +12,7 @@ import (
 func writeHumanResponse(w io.Writer, response Response) error {
 	var output strings.Builder
 	writeHumanSummary(&output, response)
+	writeHumanResourceAdmission(&output, response.ResourceAdmission)
 	writeHumanSupervisor(&output, response.SupervisorControl)
 	writeHumanContinuation(&output, response.Continuation)
 	writeHumanPayload(&output, response.Payload)

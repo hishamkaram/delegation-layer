@@ -61,7 +61,7 @@ func testPendingRuntimeUpgrade(t *testing.T, name string) {
 		writeAppTestFile(t, helpPath, []byte("--different\n"))
 	}
 	current := runtimeUpgradeCandidate(t, request, currentPath)
-	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) { return current, nil }}
+	deps := Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) { return current, nil }}
 	rebuilt, err := prepareMatchedProfile(deps, store.Root, *persistedRequest, *persistedMeta)
 	testsupport.RequireAppTest(t, err)
 	permit, err := td.PrepareStart(0)
@@ -154,7 +154,7 @@ func TestPendingRuntimeAdmissionReconstructsFromTaskMetadataWithoutInspection(t 
 	if persistedMeta.RuntimePreflightSHA256 == "" || persistedMeta.ProviderVersion != "" {
 		t.Fatalf("admission fabricated runtime verification: %+v", persistedMeta)
 	}
-	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return candidate, nil
 	}}
 	rebuilt, err := prepareMatchedProfile(deps, store.Root, *persistedRequest, *persistedMeta)

@@ -7,6 +7,7 @@ func dispatchCommandResult(observed tasklifecycle.DispatchResult) commandResult 
 	response.RootID, response.TaskID = observed.RootID, observed.TaskID
 	response.TaskRecord = taskRecordPresence(observed.Record)
 	result := dispatchPrimaryResult(response, observed)
+	result.response.ResourceAdmission = resourceAdmissionResponse(observed.Resources)
 	if observed.Workspace != nil {
 		applyManagedAdmissionFinish(observed.Root, *observed.Workspace, &result)
 	}
@@ -26,7 +27,7 @@ func dispatchPrimaryResult(response Response, observed tasklifecycle.DispatchRes
 	case tasklifecycle.DispatchValidate, tasklifecycle.DispatchWorkspace, tasklifecycle.DispatchProviderSelection:
 		fallback = 2
 	case tasklifecycle.DispatchOpenState, tasklifecycle.DispatchProviderLookup, tasklifecycle.DispatchPredecessor, tasklifecycle.DispatchOpenTask:
-	case tasklifecycle.DispatchGenerateID:
+	case tasklifecycle.DispatchGenerateID, tasklifecycle.DispatchResources:
 		return failed(response, observed.Failure, 1)
 	}
 	return failed(response, observed.Failure, classifyCode(observed.Failure, fallback))
