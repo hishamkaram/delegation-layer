@@ -18,9 +18,39 @@ delegate --root /absolute/path/to/state dispatch \
   --json
 ```
 
-The request is durable before supervisor submission. The response includes the
-allocated `task_id` and the initial admission, liveness, and publication
-states. Keep that ID as the only handle for later calls.
+A fresh `dispatch` or `continue` runs the automatic
+[resource check](cli-reference.md#resource-check) before workspace, provider,
+or supervisor preparation. A created request is durable before supervisor
+submission. The response includes `task_id`, `task_record`, and the initial
+admission, liveness, and publication states.
+
+A `task_id` can be allocated, or supplied with `--id`, without a task being
+created. Only `task_record: "created"` names a task: keep that ID as the only
+handle for later `status`, `collect`, and `continue` calls. With
+`task_record: "not_created"`, no task exists, so there is nothing to poll;
+follow `failure.next_action`. With `task_record: "unknown"`, existence could
+not be proven; follow the returned stop guidance and do not dispatch again.
+
+### Resource pressure
+
+Confirmed pressure (sustained, or critical memory) refuses only the new
+request. The response exits `1` with `task_record: "not_created"`,
+`failure.code: "resource_pressure"`, `failure.stage: "check-resources"`, a
+`reason_code` naming the metric and basis, `failure.next_action:
+"retry_later"`, and `failure.retry_after_seconds`. This is the only response
+that carries `retry_later`. The delay is advice, not a reservation: Delegate queues
+nothing and never retries for the caller. Report the refusal, or wait and
+repeat the exact original admission once; a `continue` stays `continue`.
+
+An unavailable metric never refuses by itself. If no independent pressure is
+confirmed, the resource check allows admission to continue with
+`resource_admission.status: "unknown"` and a structured warning; later
+admission steps may still fail. If the task is created, observe it; do not
+dispatch again. Running tasks are untouched, and `status`, `collect`,
+`cancel`, and recovery of an existing or uncertain task are never checked. The
+[CLI reference](cli-reference.md#resource-check) owns the fields and caller
+decisions; [architecture](architecture.md#fresh-admission-resource-check)
+owns the signals, placement, and limits.
 
 ## Task control response
 
@@ -48,9 +78,9 @@ bounded admission, liveness, and publication fields:
 }
 ```
 
-The exact response can also contain `status`, `parent_task_id`, `capability`,
-`continuation`, `supervisor`, `raw`, `pending`, `stops`, `stop`, `failure`,
-`diagnostics`, `recheck`, `error`, and
+The exact response can also contain `task_record`, `status`, `parent_task_id`,
+`capability`, `continuation`, `supervisor`, `raw`, `pending`, `stops`, `stop`,
+`failure`, `resource_admission`, `diagnostics`, `recheck`, `error`, and
 `error_truncated` fields depending on
 the command and observation. Payload and sealed raw output are descriptors, so a client reads
 the named file only after validating that its rooted path, length, and digest
@@ -352,6 +382,9 @@ Normal completion without budget-stop evidence need not include this projection
 in `status` or `collect`; the `continue` admission response has its own
 continuation fields. `codex:review` does not support continuation. Every
 continuation creates a new task and preserves the exact provider session.
+The successor launches in the current caller's environment and supervisor
+control, not the predecessor's; the predecessor's records decide compatibility.
+The [provider guide](providers.md) owns per-provider profile rules.
 Follow the returned failure action when continuation is unavailable; do not
 automatically retry a `stop_and_report` response.
 

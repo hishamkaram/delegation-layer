@@ -11,12 +11,13 @@
         "focus": [
           "caller",
           "delegate",
+          "resources",
           "inspection",
           "store",
           "pueue",
           "acceptance"
         ],
-        "note": "Managed runtime-only admission is static; other paths inspect strictly. Exact receipt persistence precedes enqueue."
+        "note": "A fresh task passes the resource check first; pressure creates no task. Static or strict admission; receipt precedes enqueue."
       },
       {
         "id": "execution",
@@ -62,7 +63,7 @@
     "output": "diagrams/components.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "98b22640e61b575267929aa79fff5cb610ff2e8d",
+      "revision": "13d7e5e73cde55f3b2458ffb919acdd003e1244a",
       "link_mode": "local-only"
     },
     "animation": "none"
@@ -85,7 +86,7 @@
         {
           "path": "cmd/delegate/main.go",
           "line": 15,
-          "end_line": 20,
+          "end_line": 21,
           "label": "CLI entry"
         }
       ]
@@ -106,24 +107,59 @@
       "sources": [
         {
           "path": "scripts/acceptance_native.py",
-          "line": 127,
-          "end_line": 159,
+          "line": 151,
+          "end_line": 223,
           "label": "Native acceptance entry and receipt"
         },
         {
           "path": "scripts/delegate_acceptance/native/provider_policy.py",
-          "line": 15,
-          "end_line": 28,
+          "line": 17,
+          "end_line": 30,
           "label": "Structured authentication block"
         },
         {
           "path": "scripts/acceptance_native_all.sh",
-          "line": 48,
+          "line": 61,
           "end_line": 74,
           "label": "BLOCKED remains neutral"
         }
       ],
       "tag": "auth-gated \u00b7 BLOCKED is neutral"
+    },
+    {
+      "id": "resources",
+      "type": "security",
+      "label": "Resource admission",
+      "sublabel": "resourceadmission \u00b7 fresh tasks only",
+      "pos": [
+        490,
+        330
+      ],
+      "size": [
+        270,
+        100
+      ],
+      "sources": [
+        {
+          "path": "internal/tasklifecycle/resource_admission.go",
+          "line": 111,
+          "end_line": 193,
+          "label": "Fresh-task gate, refresh and continue"
+        },
+        {
+          "path": "internal/resourceadmission/checker.go",
+          "line": 25,
+          "end_line": 46,
+          "label": "Invocation-local sampled check"
+        },
+        {
+          "path": "internal/resourceadmission/assessment.go",
+          "line": 123,
+          "end_line": 137,
+          "label": "Pressure refuses; unknown warns"
+        }
+      ],
+      "tag": "pressure refuses \u00b7 unknown warns"
     },
     {
       "id": "delegate",
@@ -132,7 +168,7 @@
       "sublabel": "app composes tasklifecycle",
       "pos": [
         40,
-        340
+        540
       ],
       "size": [
         250,
@@ -141,21 +177,21 @@
       "sources": [
         {
           "path": "internal/app/runtime.go",
-          "line": 157,
-          "end_line": 231,
+          "line": 207,
+          "end_line": 284,
           "label": "CLI routing and presentation"
         },
         {
-          "path": "internal/tasklifecycle/queue_observation.go",
-          "line": 14,
-          "end_line": 85,
-          "label": "Typed per-attempt status reconciliation"
+          "path": "internal/tasklifecycle/dispatch.go",
+          "line": 12,
+          "end_line": 87,
+          "label": "Fresh resource gate, then preparation"
         },
         {
           "path": "internal/tasklifecycle/creation.go",
           "line": 12,
-          "end_line": 46,
-          "label": "Lifecycle admission and creation"
+          "end_line": 56,
+          "label": "Refresh check, then create and submit"
         }
       ],
       "tag": "bounded CLI responses"
@@ -167,7 +203,7 @@
       "sublabel": "catalog \u00b7 admission \u00b7 sealed probes",
       "pos": [
         490,
-        340
+        540
       ],
       "size": [
         270,
@@ -177,18 +213,18 @@
         {
           "path": "internal/admission/preparation.go",
           "line": 9,
-          "end_line": 64,
+          "end_line": 71,
           "label": "Static or strict admission"
         },
         {
           "path": "internal/admission/profile_recovery.go",
           "line": 57,
-          "end_line": 86,
+          "end_line": 87,
           "label": "Fresh probe and strict profile match"
         },
         {
           "path": "internal/inspection/internal/probe/runtime_probe.go",
-          "line": 39,
+          "line": 27,
           "end_line": 105,
           "label": "Sealed runtime probe implementation"
         }
@@ -202,7 +238,7 @@
       "sublabel": "supervisor policy \u00b7 Pueue rows",
       "pos": [
         490,
-        660
+        860
       ],
       "size": [
         270,
@@ -218,7 +254,7 @@
         {
           "path": "internal/supervisor/scheduling.go",
           "line": 82,
-          "end_line": 103,
+          "end_line": 104,
           "label": "Shared submission gate"
         },
         {
@@ -237,7 +273,7 @@
       "sublabel": "scope \u00b7 termination \u00b7 exact Wait",
       "pos": [
         40,
-        660
+        860
       ],
       "size": [
         250,
@@ -247,13 +283,13 @@
         {
           "path": "internal/guardian/registration.go",
           "line": 113,
-          "end_line": 146,
+          "end_line": 147,
           "label": "Intent and registration writer calls"
         },
         {
           "path": "internal/guardian/worker.go",
           "line": 15,
-          "end_line": 130,
+          "end_line": 131,
           "label": "Exact worker identity and Wait"
         },
         {
@@ -272,7 +308,7 @@
       "sublabel": "workspaces owns use and capture",
       "pos": [
         900,
-        660
+        860
       ],
       "size": [
         270,
@@ -282,19 +318,19 @@
         {
           "path": "internal/workspaces/admission.go",
           "line": 16,
-          "end_line": 61,
+          "end_line": 62,
           "label": "Managed workspace admission"
         },
         {
           "path": "internal/workspaces/capture.go",
-          "line": 91,
-          "end_line": 143,
+          "line": 123,
+          "end_line": 150,
           "label": "Capture receipt requires closure"
         },
         {
           "path": "internal/workspaces/operations.go",
-          "line": 159,
-          "end_line": 216,
+          "line": 170,
+          "end_line": 220,
           "label": "Finite helper submission and receipt"
         }
       ],
@@ -307,7 +343,7 @@
       "sublabel": "execution: preflight \u00b7 Start/Wait \u00b7 seal",
       "pos": [
         40,
-        1000
+        1200
       ],
       "size": [
         260,
@@ -316,20 +352,20 @@
       "sources": [
         {
           "path": "internal/execution/run.go",
-          "line": 88,
-          "end_line": 162,
+          "line": 91,
+          "end_line": 173,
           "label": "Preflight and closure before sealing"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 421,
-          "end_line": 532,
+          "line": 436,
+          "end_line": 546,
           "label": "Provider Start/Wait, seal and finalize"
         },
         {
           "path": "internal/app/workspace_operation_worker.go",
-          "line": 66,
-          "end_line": 98,
+          "line": 67,
+          "end_line": 99,
           "label": "Finite helpers use the same lifetime"
         }
       ],
@@ -342,7 +378,7 @@
       "sublabel": "taskdir \u00b7 inspection \u00b7 workspace",
       "pos": [
         490,
-        1000
+        1200
       ],
       "size": [
         270,
@@ -352,7 +388,7 @@
         {
           "path": "internal/taskdir/publication.go",
           "line": 193,
-          "end_line": 219,
+          "end_line": 220,
           "label": "TaskDir commits terminal outcome"
         },
         {
@@ -377,7 +413,7 @@
       "sublabel": "sealed-evidence interpretation",
       "pos": [
         900,
-        1000
+        1200
       ],
       "size": [
         250,
@@ -387,19 +423,19 @@
         {
           "path": "internal/predicate/contract.go",
           "line": 31,
-          "end_line": 48,
+          "end_line": 65,
           "label": "Typed sealed-evidence interpreter"
         },
         {
           "path": "internal/taskdir/predicate_publication.go",
-          "line": 135,
-          "end_line": 187,
+          "line": 139,
+          "end_line": 191,
           "label": "TaskDir invokes and publishes"
         },
         {
           "path": "internal/taskdir/publication.go",
-          "line": 165,
-          "end_line": 219,
+          "line": 140,
+          "end_line": 220,
           "label": "TaskDir resolves and commits outcome"
         }
       ]
@@ -411,7 +447,7 @@
       "sublabel": "agy \u00b7 codex \u00b7 claude \u00b7 ccr \u00b7 pi \u00b7 opencode",
       "pos": [
         40,
-        1340
+        1540
       ],
       "size": [
         260,
@@ -426,14 +462,14 @@
         },
         {
           "path": "internal/execution/run.go",
-          "line": 288,
-          "end_line": 325,
+          "line": 291,
+          "end_line": 328,
           "label": "Verified command and directory"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 421,
-          "end_line": 438,
+          "line": 436,
+          "end_line": 453,
           "label": "Provider Start and Wait"
         }
       ],
@@ -446,7 +482,7 @@
       "sublabel": "caller directory or Git checkout",
       "pos": [
         490,
-        1340
+        1540
       ],
       "size": [
         270,
@@ -461,14 +497,14 @@
         },
         {
           "path": "internal/execution/run.go",
-          "line": 288,
-          "end_line": 325,
+          "line": 291,
+          "end_line": 328,
           "label": "Execution binds selected directory"
         },
         {
           "path": "internal/workspaces/admission.go",
           "line": 16,
-          "end_line": 61,
+          "end_line": 62,
           "label": "Optional managed dispatch directory"
         }
       ]
@@ -479,6 +515,7 @@
       "kind": "region",
       "label": "Single-host supervised runtime",
       "wraps": [
+        "resources",
         "delegate",
         "inspection",
         "pueue",
@@ -506,6 +543,20 @@
       "from": "acceptance",
       "to": "delegate",
       "label": "live acceptance",
+      "variant": "dashed"
+    },
+    {
+      "id": "delegate-to-resources",
+      "from": "delegate",
+      "to": "resources",
+      "label": "fresh task: check before create",
+      "variant": "security"
+    },
+    {
+      "id": "resources-to-delegate",
+      "from": "resources",
+      "to": "delegate",
+      "label": "pressure refuses \u00b7 unknown warns",
       "variant": "dashed"
     },
     {
@@ -605,12 +656,8 @@
       "id": "delegate-to-caller",
       "from": "delegate",
       "to": "caller",
-      "label": "task id + bounded status",
-      "variant": "dashed",
-      "labelAt": [
-        80,
-        285
-      ]
+      "label": "task id + task_record",
+      "variant": "dashed"
     },
     {
       "id": "delegate-to-workspaces",
@@ -646,12 +693,24 @@
       "dot": "cyan",
       "title": "Source owners",
       "items": [
-        "app composes the CLI; tasklifecycle owns task control. The provider catalog is part of admission preparation.",
+        "app composes the CLI; tasklifecycle owns task control and the fresh-task resource gate. The provider catalog is part of admission preparation.",
         "admission owns profile decisions; inspection and Pueue runtime implementations stay behind their public boundaries.",
         "supervisor owns binding and submission gates; Pueue owns rows. guardian owns native lifetime.",
         "execution owns Start/Wait and sealing; taskdir owns predicate evaluation and outcome commit.",
-        "The guardian records each observed native launch before acknowledgement (internal/guardian/control.go:198-224).",
+        "The guardian records each observed native launch before acknowledgement (internal/guardian/control.go:198-225).",
         "Existing-task status enters ObserveTaskSupervisor; strict preparation and mutation keep their completion gates."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Fresh-task resource admission",
+      "items": [
+        "resourceadmission owns sampling and the pure decision; tasklifecycle owns the gate. Nothing is persisted or cached across commands.",
+        "Fresh dispatch is checked before workspace, provider or supervisor preparation; continue is checked after its predecessor loads.",
+        "Before task creation, the check is refreshed only when it is older than 5 s or the execution target changed.",
+        "Confirmed pressure (3 sustained intervals, or critical memory) refuses: task_record not_created, retry_later, retry_after_seconds.",
+        "Unknown metric: an unavailable metric never refuses by itself. If no independent pressure is confirmed, the check lets admission continue with resource_admission unknown and a warning; later admission steps may still fail.",
+        "Running tasks, status, collect, cancel and existing-task recovery are never checked; nothing is killed or throttled."
       ]
     },
     {

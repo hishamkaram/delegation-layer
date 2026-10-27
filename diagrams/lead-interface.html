@@ -5154,12 +5154,12 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       </div>
     </div>
 
-    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"git@github.com:hishamkaram/delegation-layer","revision":"98b22640e61b575267929aa79fff5cb610ff2e8d","shortRevision":"98b2264","label":"hishamkaram/delegation-layer","linkMode":"local-only"},"referenceCount":27,"nodes":{"caller":[{"path":"cmd/delegate/main.go","line":15,"endLine":20,"label":"CLI entry"},{"path":"scripts/acceptance_native.py","line":127,"endLine":159,"label":"Acceptance automation"},{"path":"scripts/acceptance_native_all.sh","line":48,"endLine":74,"label":"Neutral BLOCKED result"}],"delegate":[{"path":"internal/app/runtime.go","line":157,"endLine":231,"label":"CLI routing and presentation"},{"path":"internal/tasklifecycle/queue_observation.go","line":14,"endLine":85,"label":"Typed per-attempt status reconciliation"},{"path":"internal/tasklifecycle/creation.go","line":12,"endLine":46,"label":"Lifecycle admission and creation"}],"inspect":[{"path":"internal/admission/preparation.go","line":9,"endLine":64,"label":"Static or strict admission"},{"path":"internal/admission/profile_recovery.go","line":57,"endLine":86,"label":"Fresh probe and strict profile match"},{"path":"internal/inspection/internal/probe/runtime_probe.go","line":39,"endLine":105,"label":"Sealed runtime probe implementation"}],"pueue":[{"path":"internal/supervisor/task_observation.go","line":15,"endLine":94,"label":"Existing-task observation"},{"path":"internal/supervisor/scheduling.go","line":82,"endLine":103,"label":"Shared submission gate"},{"path":"internal/pueue/internal/control/staged.go","line":175,"endLine":240,"label":"Stash, commit receipt, then enqueue"}],"guardian":[{"path":"internal/guardian/registration.go","line":113,"endLine":146,"label":"Intent and registration writer calls"},{"path":"internal/guardian/worker.go","line":15,"endLine":130,"label":"Exact worker identity and Wait"},{"path":"internal/guardian/finalization.go","line":168,"endLine":215,"label":"Empty-scope termination proof"}],"runner":[{"path":"internal/execution/run.go","line":88,"endLine":162,"label":"Preflight and closure before sealing"},{"path":"internal/execution/run.go","line":421,"endLine":532,"label":"Provider Start/Wait, seal and finalize"},{"path":"internal/app/workspace_operation_worker.go","line":66,"endLine":98,"label":"Finite helpers use the same lifetime"}],"provider":[{"path":"internal/app/catalog.go","line":20,"endLine":45,"label":"Native provider registrations"},{"path":"internal/execution/run.go","line":288,"endLine":325,"label":"Verified command and directory"},{"path":"internal/execution/run.go","line":421,"endLine":438,"label":"Provider Start and Wait"}],"store":[{"path":"internal/taskdir/taskdir.go","line":199,"endLine":232,"label":"Immutable task-set writer"},{"path":"internal/taskdir/supervisor_records.go","line":96,"endLine":112,"label":"Exact supervisor receipt writer"},{"path":"internal/taskdir/publication.go","line":165,"endLine":219,"label":"Predicate orchestration and commit"}],"predicate":[{"path":"internal/predicate/contract.go","line":31,"endLine":48,"label":"Typed sealed-evidence interpreter"},{"path":"internal/taskdir/predicate_publication.go","line":135,"endLine":187,"label":"TaskDir invokes and publishes"},{"path":"internal/taskdir/publication.go","line":165,"endLine":219,"label":"TaskDir resolves and commits outcome"}]}}</script>
+    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"git@github.com:hishamkaram/delegation-layer","revision":"13d7e5e73cde55f3b2458ffb919acdd003e1244a","shortRevision":"13d7e5e","label":"hishamkaram/delegation-layer","linkMode":"local-only"},"referenceCount":30,"nodes":{"caller":[{"path":"cmd/delegate/main.go","line":15,"endLine":21,"label":"CLI entry"},{"path":"scripts/acceptance_native.py","line":151,"endLine":223,"label":"Acceptance automation"},{"path":"scripts/acceptance_native_all.sh","line":61,"endLine":74,"label":"Neutral BLOCKED result"}],"delegate":[{"path":"internal/tasklifecycle/dispatch.go","line":12,"endLine":87,"label":"Fresh resource gate, then preparation"},{"path":"internal/tasklifecycle/continue.go","line":10,"endLine":90,"label":"Continue: check, then caller-scope dispatch"},{"path":"internal/tasklifecycle/creation.go","line":12,"endLine":56,"label":"Refresh check, then create and submit"}],"resources":[{"path":"internal/tasklifecycle/resource_admission.go","line":111,"endLine":193,"label":"Fresh-task gate, refresh and continue"},{"path":"internal/resourceadmission/checker.go","line":25,"endLine":46,"label":"Invocation-local sampled check"},{"path":"internal/resourceadmission/assessment.go","line":123,"endLine":137,"label":"Pressure refuses; unknown warns"}],"inspect":[{"path":"internal/admission/preparation.go","line":9,"endLine":71,"label":"Static or strict admission"},{"path":"internal/admission/profile_recovery.go","line":57,"endLine":87,"label":"Fresh probe and strict profile match"},{"path":"internal/inspection/internal/probe/runtime_probe.go","line":27,"endLine":105,"label":"Sealed runtime probe implementation"}],"pueue":[{"path":"internal/supervisor/task_observation.go","line":15,"endLine":94,"label":"Existing-task observation"},{"path":"internal/supervisor/scheduling.go","line":82,"endLine":104,"label":"Shared submission gate"},{"path":"internal/pueue/internal/control/staged.go","line":175,"endLine":240,"label":"Stash, commit receipt, then enqueue"}],"guardian":[{"path":"internal/guardian/registration.go","line":113,"endLine":147,"label":"Intent and registration writer calls"},{"path":"internal/guardian/worker.go","line":15,"endLine":131,"label":"Exact worker identity and Wait"},{"path":"internal/guardian/finalization.go","line":168,"endLine":215,"label":"Empty-scope termination proof"}],"runner":[{"path":"internal/execution/run.go","line":91,"endLine":173,"label":"Preflight and closure before sealing"},{"path":"internal/execution/run.go","line":436,"endLine":546,"label":"Provider Start/Wait, seal and finalize"},{"path":"internal/app/workspace_operation_worker.go","line":67,"endLine":99,"label":"Finite helpers use the same lifetime"}],"provider":[{"path":"internal/app/catalog.go","line":20,"endLine":45,"label":"Native provider registrations"},{"path":"internal/execution/run.go","line":291,"endLine":328,"label":"Verified command and directory"},{"path":"internal/execution/run.go","line":436,"endLine":453,"label":"Provider Start and Wait"}],"store":[{"path":"internal/taskdir/taskdir.go","line":119,"endLine":151,"label":"Immutable task-set writer"},{"path":"internal/taskdir/supervisor_records.go","line":104,"endLine":120,"label":"Exact supervisor receipt writer"},{"path":"internal/taskdir/publication.go","line":140,"endLine":220,"label":"Predicate orchestration and commit"}],"predicate":[{"path":"internal/predicate/contract.go","line":31,"endLine":65,"label":"Typed sealed-evidence interpreter"},{"path":"internal/taskdir/predicate_publication.go","line":139,"endLine":191,"label":"TaskDir invokes and publishes"},{"path":"internal/taskdir/publication.go","line":140,"endLine":220,"label":"TaskDir resolves and commits outcome"}]}}</script>
     <script id="archify-i18n-data" type="application/json">{"locale":"en","messages":{"viewer.kind.frontend":"Frontend","viewer.kind.backend":"Backend","viewer.kind.database":"Database","viewer.kind.cloud":"Cloud","viewer.kind.security":"Security","viewer.kind.messagebus":"Message bus","viewer.kind.external":"External","viewer.kind.neutral":"Neutral","viewer.kind.node":"Node","viewer.kind.start":"Start","viewer.kind.active":"Active","viewer.kind.waiting":"Waiting","viewer.kind.decision":"Decision","viewer.kind.success":"Success","viewer.kind.failure":"Failure","viewer.toolbar.actions":"Diagram actions","viewer.theme.toggle.title":"Toggle theme (T)","viewer.theme.toggle":"Toggle color theme","viewer.theme.dark":"Dark","viewer.theme.light":"Light","viewer.preset.choose.title":"Choose visual style (S cycles)","viewer.preset.choose":"Choose visual style","viewer.preset.style":"Style","viewer.preset.menu":"Visual style","viewer.preset.identity":"Visual identity","viewer.preset.cycles":"to cycle","viewer.preset.classic":"Classic","viewer.preset.classic.short":"Classic","viewer.preset.classic.hint":"Stable technical default","viewer.preset.flow":"Signal Flow","viewer.preset.flow.short":"Flow","viewer.preset.flow.hint":"Motion-forward presentation","viewer.preset.blueprint":"Blueprint","viewer.preset.blueprint.hint":"Engineering review","viewer.preset.editorial":"Editorial","viewer.preset.editorial.hint":"Publication and launch notes","viewer.preset.badge.signalFlow":"SIGNAL FLOW","viewer.preset.badge.blueprint":"BLUEPRINT / REV 01","viewer.preset.badge.editorial":"EDITORIAL / FIELD NOTE","viewer.preset.badge.editorialPlate":"ARCHIFY / PLATE 04","viewer.preset.current":"Visual style: {style}. Choose visual style","viewer.motion.live":"Live","viewer.motion.still":"Still","viewer.motion.pause":"Pause motion","viewer.motion.resume":"Resume motion","viewer.motion.reduced":"Motion paused by reduced-motion preference","viewer.motion.hidden":"Motion paused while this page is hidden","viewer.motion.yielding":"Pause motion; currently yielding to {owner}","viewer.motion.yielding.title":"Live preview enabled · yielding to {owner}","viewer.owner.route":"Route Probe","viewer.owner.lens":"Semantic Lens","viewer.owner.relationship":"Relationship Preview","viewer.owner.intent":"Intent Trace","viewer.owner.focus":"semantic focus","viewer.owner.legend":"legend preview","viewer.owner.reader":"reader interaction","viewer.present.enter":"Enter presentation stage","viewer.present.enter.title":"Presentation stage (F)","viewer.present.exit":"Exit presentation stage","viewer.present.exit.title":"Exit presentation stage (F or Escape)","viewer.present.present":"Present","viewer.present.exit.label":"Exit","viewer.export.button":"Export","viewer.export.button.title":"Export diagram (E)","viewer.export.diagram":"Export diagram","viewer.export.menu":"Export","viewer.export.subtitle":"Portable, clean outputs","viewer.export.share":"Share","viewer.export.shareCard":"Share Card","viewer.export.routeShareCard":"Route Share Card","viewer.export.reachShareCard":"Reach Share Card","viewer.export.copyDiagram":"Copy diagram","viewer.export.clipboardPng":"PNG to clipboard","viewer.export.raster":"Raster images","viewer.export.image":"Image","viewer.export.lossless":"Lossless image","viewer.export.compact":"Compact image","viewer.export.modern":"Modern image","viewer.export.vectorMotion":"Vector and motion","viewer.export.vectorMotion.heading":"Vector \u0026 motion","viewer.export.editable":"Editable vector","viewer.export.svg.auto":"SVG · Auto","viewer.export.svg.auto.hint":"Matches host theme","viewer.export.svg.light":"SVG · Light","viewer.export.svg.light.hint":"Always light","viewer.export.svg.dark":"SVG · Dark","viewer.export.svg.dark.hint":"Always dark","viewer.export.motion6s":"6s motion","viewer.export.unsupported":"Not supported by this browser","viewer.export.clipboardUnsupported":"Clipboard image write not supported by this browser","viewer.export.clipboardUnsupported.short":"Clipboard image write not supported in this browser.","viewer.export.motionUnavailable":"Motion capture unavailable in this browser","viewer.export.webmUnavailable":"WebM unavailable in this browser","viewer.export.failed":"Export failed: {message}","viewer.export.unknownVariant":"Unknown Share Card variant: {variant}","viewer.export.routeRequired":"Trace a route before exporting a Route Share Card","viewer.export.reachRequired":"Trace authored reach before exporting a Reach Share Card","viewer.export.unknown":"unknown","viewer.export.routeFailed":"Route Share Card export failed: {message}","viewer.export.reachFailed":"Reach Share Card export failed: {message}","viewer.export.copyFailed":"Copy failed: {message}","viewer.export.copiedPng":"Copied PNG to clipboard","viewer.export.downloadedRoute":"Downloaded Route Share Card","viewer.export.downloadedReach":"Downloaded Reach Share Card","viewer.export.downloadedWebm":"Downloaded WebM","viewer.export.recording":"Recording 6 seconds of motion…","viewer.export.card.routeSummary.one":"Path: {source} → {target} · {count} step","viewer.export.card.routeSummary.other":"Path: {source} → {target} · {count} steps","viewer.export.card.reachSummary":"Authored {direction} from {origin} · {nodes} · {links} · max {hops}","viewer.export.card.node.one":"{count} node","viewer.export.card.node.other":"{count} nodes","viewer.export.card.link.one":"{count} link","viewer.export.card.link.other":"{count} links","viewer.export.card.hop.one":"{count} hop","viewer.export.card.hop.other":"{count} hops","viewer.export.card.routeBadge":"ARCHIFY · ROUTE · {hops}","viewer.export.card.reachBadge":"ARCHIFY · {direction} REACH","viewer.export.direction.upstream":"Upstream","viewer.export.direction.downstream":"Downstream","viewer.export.error.canvasUnavailable":"Canvas unavailable for {label}","viewer.export.error.contextUnavailable":"2D canvas context unavailable for {label}","viewer.export.error.toBlobUnavailable":"canvas.toBlob unavailable for {label}","viewer.export.error.toBlobNull":"canvas.toBlob returned no data for {label}","viewer.export.error.variantsCombined":"Share Card variants cannot be combined","viewer.export.error.viewerState":"Share Card export could not remove temporary viewer state","viewer.export.error.routeState":"Route Card export could not preserve the resolved route safely","viewer.export.error.reachState":"Reach Card export could not preserve authored reach safely","viewer.export.error.webmRequirements":"WebM motion export requires a trace animation and browser MediaRecorder support","viewer.export.error.mediaRecorder":"MediaRecorder failed","viewer.export.error.emptyWebm":"MediaRecorder produced an empty WebM","viewer.export.error.webmBackground":"SVG background could not be loaded for WebM export","viewer.guide.title":"Explore this system","viewer.focus.selectedNodes":"{count} selected nodes","viewer.guide.eyebrow":"Diagram guide","viewer.guide.close":"Close diagram guide","viewer.guide.inspecting":"Inspecting compiled semantics","viewer.guide.actions":"Diagram exploration actions","viewer.guide.find":"Find any node","viewer.guide.find.hint":"Search labels, responsibilities, kinds, and stable IDs.","viewer.guide.route":"Trace a route","viewer.guide.route.aria":"Trace a directed route","viewer.guide.route.hint":"Ask how two semantic nodes connect in authored direction.","viewer.guide.map":"See the whole system","viewer.guide.map.hint":"Open Semantic Radar with a live viewport and stable nodes.","viewer.guide.lens":"Compare semantic kinds","viewer.guide.lens.hint":"Count roles, reveal their traffic, and compare direct authored links.","viewer.guide.present":"Enter Presentation Stage","viewer.guide.present.hint":"Give the live diagram the viewport without changing export.","viewer.guide.shortcuts":"Additional keyboard shortcuts","viewer.guide.shortcut.export":"Export","viewer.guide.shortcut.theme":"Theme","viewer.guide.shortcut.style":"Style","viewer.guide.shortcut.reset":"Reset","viewer.guide.shortcut.zoomIn":"Zoom in","viewer.guide.shortcut.zoomOut":"Zoom out","viewer.guide.shortcut.close":"Close","viewer.guide.credit":"Find Archify useful? A star on GitHub helps","viewer.guide.star":"Star","viewer.guide.facts":"{nodes} · {relationships}","viewer.guide.fact.node.one":"{count} semantic node","viewer.guide.fact.node.other":"{count} semantic nodes","viewer.guide.fact.relationship.one":"{count} relationship","viewer.guide.fact.relationship.other":"{count} relationships","viewer.guide.open":"Open diagram guide","viewer.finder.title":"Find a node","viewer.finder.close":"Close node finder","viewer.finder.placeholder":"Search labels or IDs","viewer.finder.search":"Search diagram nodes","viewer.finder.results":"Diagram nodes","viewer.finder.empty":"No matching nodes","viewer.finder.result.focus":"Focus {label}","viewer.finder.result.routeStart":"Choose {label} as route start","viewer.finder.result.routeTarget":"Choose {label} as route destination, {links}","viewer.finder.status.empty":"No matching nodes","viewer.finder.status.count.one":"{count} matching node","viewer.finder.status.count.other":"{count} matching nodes","viewer.finder.noun.nodes":"nodes","viewer.finder.link.one":"{count} link","viewer.finder.link.other":"{count} links","viewer.finder.result.focus.one":"Focus {label}, {count} related connection","viewer.finder.result.focus.other":"Focus {label}, {count} related connections","viewer.finder.status.filtered":"{visible} of {available} {noun}","viewer.finder.status.all":"{available} {noun}","viewer.passport.eyebrow":"Semantic passport","viewer.passport.metadata":"Node metadata","viewer.passport.evidence":"Verified source evidence","viewer.passport.verified":"Verified source","viewer.passport.verificationScope":"Verified against local Git at the pinned revision. Remote access has not been checked.","viewer.passport.reach":"Authored reach","viewer.passport.reach.trace":"Trace authored reachability","viewer.passport.upstream":"Upstream","viewer.passport.downstream":"Downstream","viewer.passport.upstream.trace":"Trace upstream authored reachability","viewer.passport.downstream.trace":"Trace downstream authored reachability","viewer.passport.close":"Close semantic passport","viewer.passport.move":"Move semantic passport. Drag, use arrow keys, or press Home to reset.","viewer.passport.copy":"Copy link","viewer.passport.copy.focus":"Copy link to focused node","viewer.passport.relations":"Relations","viewer.passport.relations.show":"Show connected relationships","viewer.passport.relations.hide":"Hide connected relationships","viewer.passport.relations.list":"Connected relationships","viewer.passport.copyRelation":"Copy relation","viewer.passport.copyNode":"Copy node","viewer.passport.copyPinned":"Copy link to pinned relationship","viewer.passport.copySource":"Copy link to source node","viewer.passport.copy.focused.success":"Focused node link copied","viewer.passport.copy.pinned.success":"Pinned relationship link copied","viewer.passport.copy.focused.failed":"Could not copy focused node link","viewer.passport.copy.pinned.failed":"Could not copy pinned relationship link","viewer.passport.relationship.none":"No connected relationships","viewer.passport.relationship.count.one":"{count} relation","viewer.passport.relationship.count.other":"{count} relations","viewer.passport.relationship.show.one":"Show {count} connected relationship","viewer.passport.relationship.show.other":"Show {count} connected relationships","viewer.passport.relationship.summary":"{out} outgoing · {in} incoming{loops}","viewer.passport.relationship.loops":" · {count} loop","viewer.passport.relationship.explorer":"Direct relationship explorer","viewer.passport.relationship.help":"Use arrow keys to explore relationships. Press Enter or Space to pin details; Escape clears.","viewer.passport.relationship.loopsBack":"loops back","viewer.passport.relationship.connectsTo":"connects to","viewer.passport.relationship.connectsFrom":"connects from","viewer.passport.relationship.pinned":"Pinned relationship · {from} → {to} · {label}","viewer.passport.relationship.inspect":"Inspect relationship {index} of {total}: {from} to {to}, {label}. Press Enter for details.","viewer.passport.relationship.group.out":"Outgoing","viewer.passport.relationship.group.in":"Incoming","viewer.passport.relationship.group.loop":"Self loops","viewer.passport.relationship.row":"{group}: {relationship}, {neighbor}","viewer.passport.relationship.direction.out":"OUT →","viewer.passport.relationship.direction.in":"← IN","viewer.passport.relationship.direction.loop":"LOOP","viewer.passport.sourceCount.one":"{count} verified source reference","viewer.passport.sourceCount.other":"{count} verified source references","viewer.passport.repository.open":"Open verified repository revision {revision}","viewer.passport.source.open":"Open verified source {path} at revision {revision}","viewer.passport.source.openLink":"Open ↗","viewer.passport.reach.upstream.one":"Trace {count} upstream authored node","viewer.passport.reach.upstream.other":"Trace {count} upstream authored nodes","viewer.passport.reach.downstream.one":"Trace {count} downstream authored node","viewer.passport.reach.downstream.other":"Trace {count} downstream authored nodes","viewer.passport.reach.noUpstream":"No upstream authored nodes","viewer.passport.reach.noDownstream":"No downstream authored nodes","viewer.passport.reach.status":"{direction} · {nodes} nodes · {links} links · max {hops} hops","viewer.route.eyebrow":"Path","viewer.route.start":"Click where the path starts","viewer.route.start.find":"Find start","viewer.route.start.find.aria":"Find a route start","viewer.route.copy":"Copy link","viewer.route.copy.aria":"Copy link to traced route","viewer.route.clear":"Clear","viewer.route.clear.aria":"Clear route probe","viewer.route.traced":"Path","viewer.route.pickTwo":"Click two nodes on the diagram","viewer.route.pickOne":"Click a node on the diagram","viewer.route.controls":"Route journey controls","viewer.route.previous":"Previous route position","viewer.route.play":"Play route journey","viewer.route.pause":"Pause route journey","viewer.route.replay":"Replay route journey","viewer.route.next":"Next route position","viewer.route.journey":"Journey","viewer.route.pause.label":"Pause","viewer.route.replay.label":"Replay","viewer.route.overview":"Overview","viewer.route.overview.aria":"Show complete route overview","viewer.route.instructions":"Click a start, then an end. Paths follow the arrows.","viewer.route.destination":"Where does the path from {label} end?","viewer.route.destination.find":"Find target","viewer.route.destination.find.aria":"Find a reachable route destination","viewer.route.differentDestination":"Choose a different destination","viewer.route.distinct":"Pick two different nodes.","viewer.route.unreachable":"Cannot reach {label} from here","viewer.route.unreachable.detail":"{target} cannot be reached from {source} along the arrows. Pick a highlighted node.","viewer.route.start.instructions":"Next, pick the end. Only nodes you can reach will light up.","viewer.route.copy.success":"Traced route link copied","viewer.route.copy.failed":"Could not copy traced route link","viewer.route.position":"Route position {index} of {total}: {label}","viewer.route.step":"Step {index} of {total} · {phase} · {label}","viewer.route.motionRequired":"Automatic journey requires Live motion","viewer.route.trigger.clear":"Clear traced route","viewer.route.overview.status":"{nodes} · {hops} · shortest path","viewer.route.overview.node.one":"{count} node","viewer.route.overview.node.other":"{count} nodes","viewer.route.overview.hop.one":"{count} step","viewer.route.overview.hop.other":"{count} steps","viewer.route.phase.playing":"Playing","viewer.route.phase.complete":"Complete","viewer.route.phase.inspecting":"Inspecting","viewer.route.destination.count.one":"{count} reachable node is highlighted. Click it.","viewer.route.destination.count.other":"{count} reachable nodes are highlighted. Click one.","viewer.route.noOutgoing":"No arrows lead out of this node. Clear it and pick another start.","viewer.route.result.title":"{source} to {target}","viewer.route.finder.source.title":"Choose route start","viewer.route.finder.source.placeholder":"Search route sources","viewer.route.finder.source.empty":"No matching route sources","viewer.route.finder.source.results":"Nodes that can start a route","viewer.route.finder.source.noun":"route sources","viewer.route.finder.source.badge":"start","viewer.route.finder.target.title":"Destination from {label}","viewer.route.finder.target.placeholder":"Search reachable destinations","viewer.route.finder.target.empty":"No matching reachable destinations","viewer.route.finder.target.results":"Reachable route destinations","viewer.route.finder.target.noun":"reachable destinations","viewer.route.hop.one":"{count} hop","viewer.route.hop.other":"{count} hops","viewer.lens.eyebrow":"Semantic lens","viewer.lens.title":"Compare system roles","viewer.lens.close":"Close semantic lens","viewer.lens.instruction":"Choose up to two semantic kinds. One reveals its real traffic; two compare only direct authored relationships.","viewer.lens.kinds":"Semantic kinds","viewer.lens.choose":"Choose a kind to inspect its nodes and touching relationships.","viewer.lens.copy":"Copy link to semantic lens","viewer.lens.clear":"Clear semantic lens","viewer.lens.open":"Open semantic lens","viewer.lens.openActive":"Open active semantic lens","viewer.lens.legend":"Semantic legend","viewer.lens.legend.inspect.one":"Inspect {label}, {count} node","viewer.lens.legend.inspect.other":"Inspect {label}, {count} nodes","viewer.lens.kind.count.one":"{label}, {count} node","viewer.lens.kind.count.other":"{label}, {count} nodes","viewer.lens.compare.one":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationship","viewer.lens.compare.other":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationships","viewer.lens.single":"{nodes} · {relationships} · connected peers remain visible","viewer.lens.node.one":"{count} {label} node","viewer.lens.node.other":"{count} {label} nodes","viewer.lens.relationship.one":"{count} touching relationship","viewer.lens.relationship.other":"{count} touching relationships","viewer.radar.title":"Semantic radar","viewer.radar.building":"Building overview","viewer.radar.openFull":"Open full semantic radar","viewer.radar.open":"Open radar","viewer.radar.close":"Close semantic radar","viewer.radar.surface":"Diagram overview. Click a node to focus it, or use arrow keys to pan.","viewer.radar.click":"Click node","viewer.radar.drag":"Drag to pan","viewer.radar.space":"Semantic radar needs more MAP space.","viewer.radar.nodes":"Semantic diagram radar nodes","viewer.radar.focus":"Focus {label} from Semantic Radar","viewer.radar.status":"{count} nodes · {viewport}","viewer.radar.fullMap":"{count} nodes · full map","viewer.radar.compacted":"Radar compacted to avoid covering the Semantic Passport or MAP controls.","viewer.radar.cancelWaiting":"Cancel semantic radar waiting for more MAP space","viewer.radar.needsSpace":"Semantic radar needs more visible MAP space","viewer.radar.viewport.full":"full map","viewer.radar.viewport.width":"{percent}% width","viewer.radar.viewport.scale":"{percent}% viewport","viewer.nav.controls":"Diagram view controls","viewer.nav.route":"Trace a directed route","viewer.nav.route.title":"Trace route (R)","viewer.nav.route.short":"ROUTE","viewer.nav.radar":"Open semantic radar","viewer.nav.radar.title":"Semantic radar (M)","viewer.nav.radar.short":"MAP","viewer.nav.lens":"Open semantic lens","viewer.nav.lens.title":"Semantic lens (L)","viewer.nav.lens.short":"LENS","viewer.nav.find":"Find a node","viewer.nav.find.title":"Find a node (/)","viewer.outline.title":"Node index","viewer.rail.show":"Notes \u0026 index","viewer.rail.controls":"Side panel","viewer.rail.collapse":"Collapse side panel","viewer.rail.bottom":"Move panel below the diagram","viewer.rail.right":"Move panel beside the diagram","viewer.nav.guide":"Open diagram guide","viewer.nav.guide.title":"Diagram guide (?)","viewer.nav.zoomOut":"Zoom out","viewer.nav.zoomOut.title":"Zoom out (-)","viewer.nav.reset":"Reset diagram view","viewer.nav.reset.title":"Reset view (0)","viewer.nav.read":"READ","viewer.nav.zoomIn":"Zoom in","viewer.nav.zoomIn.title":"Zoom in (+)","viewer.nav.camera":"{hint}. Reset diagram view","viewer.nav.camera.title":"{semantic}{hint} · reset view (0)","viewer.nav.camera.semantic":"Semantic camera active · ","viewer.nav.level.map":"MAP","viewer.nav.level.read":"READ","viewer.nav.level.full":"FULL","viewer.nav.level.auto":"AUTO","viewer.nav.detail.map":"Zoom in to reveal relationship labels and node context","viewer.nav.detail.read":"Zoom in again to reveal tags and annotations","viewer.nav.detail.full":"Full diagram detail","viewer.intent.summary":"{label}. {out} outgoing, {in} incoming{loops}. {total} connections. Press Enter for details.","viewer.intent.loops":", {count} self loop","viewer.common.copied":"Copied","viewer.common.copyFailed":"Copy failed","viewer.common.copyLink":"Copy link","viewer.common.clear":"Clear","viewer.common.close":"Close"}}</script>
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="0 0 1085 1313" data-sequence-column-fit="spread" data-reader-fit="width-first" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence">
+      <svg viewBox="0 0 1100 1576" data-sequence-column-fit="spread" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence">
         <title id="archify-diagram-title">Delegation Layer — Ordinary Task Lifecycle</title>
         <desc id="archify-diagram-description">A sequence diagram generated by Archify.</desc>
         <!-- Definitions -->
@@ -5185,475 +5185,542 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Time Segments -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="140" width="989" height="287.56" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="140" width="1004" height="426" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="430.67" width="989" height="528" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="574" width="1004" height="548" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="964" width="989" height="284" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="1146" width="1004" height="334" rx="10" class="c-lane" stroke-width="1"/>
 
         <!-- Lifelines -->
-        <path d="M 107 142 L 107 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 218.625 142 L 218.625 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 330.25 142 L 330.25 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 441.875 142 L 441.875 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 553.5 142 L 553.5 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 665.125 142 L 665.125 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 776.75 142 L 776.75 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 888.375 142 L 888.375 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 1000 142 L 1000 1248" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 99 142 L 99 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 201 142 L 201 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 303 142 L 303 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 405 142 L 405 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 507 142 L 507 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 609 142 L 609 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 711 142 L 711 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 813 142 L 813 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 915 142 L 915 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 1017 142 L 1017 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
 
         <!-- Activations -->
-        <rect x="213.625" y="163.11" width="10" height="259.78" rx="3" class="c-mask"/>
-        <rect x="213.625" y="163.11" width="10" height="259.78" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="325.25" y="184.89" width="10" height="93.33000000000004" rx="3" class="c-mask"/>
-        <rect x="325.25" y="184.89" width="10" height="93.33000000000004" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="548.5" y="436.89" width="10" height="519.11" rx="3" class="c-mask"/>
-        <rect x="548.5" y="436.89" width="10" height="519.11" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="660.125" y="492.89" width="10" height="432.44000000000005" rx="3" class="c-mask"/>
-        <rect x="660.125" y="492.89" width="10" height="432.44000000000005" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="325.25" y="604.89" width="10" height="40.440000000000055" rx="3" class="c-mask"/>
-        <rect x="325.25" y="604.89" width="10" height="40.440000000000055" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="771.75" y="660.89" width="10" height="40.440000000000055" rx="3" class="c-mask"/>
-        <rect x="771.75" y="660.89" width="10" height="40.440000000000055" rx="3" class="c-external" stroke-width="1"/>
-        <rect x="995" y="828.89" width="10" height="40.440000000000055" rx="3" class="c-mask"/>
-        <rect x="995" y="828.89" width="10" height="40.440000000000055" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="213.625" y="969.33" width="10" height="270.66999999999996" rx="3" class="c-mask"/>
-        <rect x="213.625" y="969.33" width="10" height="270.66999999999996" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="196" y="157" width="10" height="404" rx="3" class="c-mask"/>
+        <rect x="196" y="157" width="10" height="404" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="298" y="185" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="298" y="185" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="400" y="269" width="10" height="96" rx="3" class="c-mask"/>
+        <rect x="400" y="269" width="10" height="96" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="298" y="381" width="10" height="12" rx="3" class="c-mask"/>
+        <rect x="298" y="381" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="604" y="601" width="10" height="516" rx="3" class="c-mask"/>
+        <rect x="604" y="601" width="10" height="516" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="706" y="657" width="10" height="432" rx="3" class="c-mask"/>
+        <rect x="706" y="657" width="10" height="432" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="400" y="769" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="400" y="769" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="808" y="825" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="808" y="825" width="10" height="40" rx="3" class="c-external" stroke-width="1"/>
+        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-mask"/>
+        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-mask"/>
+        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-mask"/>
+        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
 
         <!-- Messages -->
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="dispatch / --auto" data-edge-key="0" data-edge-id="dispatch">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="dispatch" data-composition-points="114,160;211.625,160" d="M 114 160 L 211.625 160" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="dispatch / continue" data-edge-key="0" data-edge-id="dispatch">
+          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="dispatch" data-composition-points="106,160;194,160" d="M 106 160 L 194 160" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="100.7125" y="140" width="124.19999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="150" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch / --auto</text>
+          <rect x="81.30000000000001" y="140" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="150" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch / continue</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="prepare candidate" data-edge-key="1" data-edge-id="candidate">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="candidate" data-composition-points="225.625,188;323.25,188" d="M 225.625 188 L 323.25 188" class="a-emphasis" data-animate="edge" style="--step:1" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check fresh task resources" data-edge-key="1" data-edge-id="resource-check">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-check" data-composition-points="208,188;296,188" d="M 208 188 L 296 188" class="a-security" data-animate="edge" style="--step:1" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <g data-detail="context">
-          <rect x="212.3375" y="168" width="124.19999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="274.4375" y="178" class="t-edge-emphasis" font-size="11" text-anchor="middle">prepare candidate</text>
+          <rect x="160.2" y="168" width="183.6" height="18" rx="3" class="c-mask"/>
+          <text x="252" y="178" class="t-edge-security" font-size="11" text-anchor="middle">check fresh task resources</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="pueue" data-edge-label="prepare supervisor" data-edge-key="2" data-edge-id="bind-supervisor">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="pueue" data-composition-edge-id="bind-supervisor" data-composition-points="337.25,216;434.875,216" d="M 337.25 216 L 434.875 216" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="resources" data-edge-to="delegate" data-edge-label="clear · unknown + warning · pressure" data-edge-key="2" data-edge-id="resource-result">
+          <path data-composition-edge-from="resources" data-composition-edge-to="delegate" data-composition-edge-id="resource-result" data-composition-points="296,216;208,216" d="M 296 216 L 208 216" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="320.6625" y="196" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="386.0625" y="206" class="t-muted" font-size="11" text-anchor="middle">prepare supervisor</text>
+          <rect x="127.2" y="196" width="249.6" height="18" rx="3" class="c-mask"/>
+          <text x="252" y="206" class="t-muted" font-size="11" text-anchor="middle">clear · unknown + warning · pressure</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="strict, when required" data-edge-key="3" data-edge-id="strict-admission">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="strict-admission" data-composition-points="225.625,244;323.25,244" d="M 225.625 244 L 323.25 244" class="a-dashed" data-animate="edge" style="--step:3" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="pressure: retry_later" data-edge-key="3" data-edge-id="pressure-refusal">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="pressure-refusal" data-composition-points="194,244;106,244" d="M 194 244 L 106 244" class="a-dashed" data-animate="edge" style="--step:3" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="199.1375" y="224" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="274.4375" y="234" class="t-edge-dashed" font-size="11" text-anchor="middle">strict, when required</text>
+          <rect x="74.7" y="224" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="234" class="t-edge-dashed" font-size="11" text-anchor="middle">pressure: retry_later</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="delegate" data-edge-label="admission plan" data-edge-key="4" data-edge-id="prepared">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="delegate" data-composition-edge-id="prepared" data-composition-points="323.25,272;225.625,272" d="M 323.25 272 L 225.625 272" class="a-default" data-animate="edge" style="--step:4" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="prepare candidate" data-edge-key="4" data-edge-id="candidate">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="candidate" data-composition-points="208,272;398,272" d="M 208 272 L 398 272" class="a-emphasis" data-animate="edge" style="--step:4" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="222.2375" y="252" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="274.4375" y="262" class="t-muted" font-size="11" text-anchor="middle">admission plan</text>
+          <rect x="240.9" y="252" width="124.19999999999999" height="18" rx="3" class="c-mask"/>
+          <text x="303" y="262" class="t-edge-emphasis" font-size="11" text-anchor="middle">prepare candidate</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist immutable task" data-edge-key="5" data-edge-id="persist">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="persist" data-composition-points="225.625,300;881.375,300" d="M 225.625 300 L 881.375 300" class="a-emphasis" data-animate="edge" style="--step:5" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="inspect" data-edge-to="pueue" data-edge-label="prepare supervisor" data-edge-key="5" data-edge-id="bind-supervisor">
+          <path data-composition-edge-from="inspect" data-composition-edge-to="pueue" data-composition-edge-id="bind-supervisor" data-composition-points="412,300;500,300" d="M 412 300 L 500 300" class="a-default" data-animate="edge" style="--step:5" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="474.9" y="280" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="553.5" y="290" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist immutable task</text>
+          <rect x="390.6" y="280" width="130.8" height="18" rx="3" class="c-mask"/>
+          <text x="456" y="290" class="t-muted" font-size="11" text-anchor="middle">prepare supervisor</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="add exact stashed row" data-edge-key="6" data-edge-id="stage">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stage" data-composition-points="225.625,328;434.875,328" d="M 225.625 328 L 434.875 328" class="a-default" data-animate="edge" style="--step:6" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="strict, when required" data-edge-key="6" data-edge-id="strict-admission">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="strict-admission" data-composition-points="208,328;398,328" d="M 208 328 L 398 328" class="a-dashed" data-animate="edge" style="--step:6" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="254.95" y="308" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="330.25" y="318" class="t-muted" font-size="11" text-anchor="middle">add exact stashed row</text>
+          <rect x="227.7" y="308" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="303" y="318" class="t-edge-dashed" font-size="11" text-anchor="middle">strict, when required</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist numeric receipt" data-edge-key="7" data-edge-id="receipt">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="receipt" data-composition-points="225.625,356;881.375,356" d="M 225.625 356 L 881.375 356" class="a-emphasis" data-animate="edge" style="--step:7" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="inspect" data-edge-to="delegate" data-edge-label="admission plan" data-edge-key="7" data-edge-id="prepared">
+          <path data-composition-edge-from="inspect" data-composition-edge-to="delegate" data-composition-edge-id="prepared" data-composition-points="398,356;208,356" d="M 398 356 L 208 356" class="a-default" data-animate="edge" style="--step:7" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="471.6" y="336" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="553.5" y="346" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist numeric receipt</text>
+          <rect x="250.8" y="336" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
+          <text x="303" y="346" class="t-muted" font-size="11" text-anchor="middle">admission plan</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="enqueue after receipt" data-edge-key="8" data-edge-id="enqueue">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="enqueue" data-composition-points="225.625,384;434.875,384" d="M 225.625 384 L 434.875 384" class="a-default" data-animate="edge" style="--step:8" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="refresh only if stale or target changed" data-edge-key="8" data-edge-id="resource-refresh">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-refresh" data-composition-points="208,384;296,384" d="M 208 384 L 296 384" class="a-dashed" data-animate="edge" style="--step:8" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="254.95" y="364" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="330.25" y="374" class="t-muted" font-size="11" text-anchor="middle">enqueue after receipt</text>
+          <rect x="117.30000000000001" y="364" width="269.4" height="18" rx="3" class="c-mask"/>
+          <text x="252" y="374" class="t-edge-dashed" font-size="11" text-anchor="middle">refresh only if stale or target changed</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="task id + admission" data-edge-key="9" data-edge-id="accepted">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="accepted" data-composition-points="211.625,412;114,412" d="M 211.625 412 L 114 412" class="a-default" data-animate="edge" style="--step:9" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="late pressure: not_created" data-edge-key="9" data-edge-id="late-refusal">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="late-refusal" data-composition-points="194,412;106,412" d="M 194 412 L 106 412" class="a-dashed" data-animate="edge" style="--step:9" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="94.11250000000001" y="392" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="402" class="t-muted" font-size="11" text-anchor="middle">task id + admission</text>
+          <rect x="58.2" y="392" width="183.6" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="402" class="t-edge-dashed" font-size="11" text-anchor="middle">late pressure: not_created</text>
         </g>
         </g>
 
-        <g data-edge-from="pueue" data-edge-to="guardian" data-edge-label="schedule guardian row" data-edge-key="10" data-edge-id="schedule">
-          <path data-composition-edge-from="pueue" data-composition-edge-to="guardian" data-composition-edge-id="schedule" data-composition-points="448.875,440;546.5,440" d="M 448.875 440 L 546.5 440" class="a-emphasis" data-animate="edge" style="--step:10" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist immutable task" data-edge-key="10" data-edge-id="persist">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="persist" data-composition-points="208,440;908,440" d="M 208 440 L 908 440" class="a-emphasis" data-animate="edge" style="--step:10" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="422.3875" y="420" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="497.6875" y="430" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule guardian row</text>
+          <rect x="479.4" y="420" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="430" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist immutable task</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="scope intent + registration" data-edge-key="11" data-edge-id="scope-intent">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="scope-intent" data-composition-points="560.5,468;881.375,468" d="M 560.5 468 L 881.375 468" class="a-default" data-animate="edge" style="--step:11" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="add exact stashed row" data-edge-key="11" data-edge-id="stage">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stage" data-composition-points="208,468;500,468" d="M 208 468 L 500 468" class="a-default" data-animate="edge" style="--step:11" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="625.8375" y="448" width="190.2" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="458" class="t-muted" font-size="11" text-anchor="middle">scope intent + registration</text>
+          <rect x="278.7" y="448" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="354" y="458" class="t-muted" font-size="11" text-anchor="middle">add exact stashed row</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="start exact worker" data-edge-key="12" data-edge-id="spawn">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="spawn" data-composition-points="560.5,496;658.125,496" d="M 560.5 496 L 658.125 496" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist numeric receipt" data-edge-key="12" data-edge-id="receipt">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="receipt" data-composition-points="208,496;908,496" d="M 208 496 L 908 496" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="543.9125" y="476" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="609.3125" y="486" class="t-edge-emphasis" font-size="11" text-anchor="middle">start exact worker</text>
+          <rect x="476.1" y="476" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="486" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist numeric receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="record worker identity" data-edge-key="13" data-edge-id="worker-identity">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="worker-identity" data-composition-points="560.5,524;881.375,524" d="M 560.5 524 L 881.375 524" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="enqueue after receipt" data-edge-key="13" data-edge-id="enqueue">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="enqueue" data-composition-points="208,524;500,524" d="M 208 524 L 500 524" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="642.3375" y="504" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="514" class="t-muted" font-size="11" text-anchor="middle">record worker identity</text>
+          <rect x="278.7" y="504" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="354" y="514" class="t-muted" font-size="11" text-anchor="middle">enqueue after receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="identity acknowledged" data-edge-key="14" data-edge-id="worker-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="worker-ack" data-composition-points="560.5,552;658.125,552" d="M 560.5 552 L 658.125 552" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="task id · created · warnings" data-edge-key="14" data-edge-id="accepted">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="accepted" data-composition-points="194,552;106,552" d="M 194 552 L 106 552" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="534.0125" y="532" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="609.3125" y="542" class="t-muted" font-size="11" text-anchor="middle">identity acknowledged</text>
+          <rect x="51.60000000000001" y="532" width="196.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="542" class="t-muted" font-size="11" text-anchor="middle">task id · created · warnings</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="read task + receipt" data-edge-key="15" data-edge-id="reconstruct">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="reconstruct" data-composition-points="672.125,580;881.375,580" d="M 672.125 580 L 881.375 580" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="pueue" data-edge-to="guardian" data-edge-label="schedule guardian row" data-edge-key="15" data-edge-id="schedule">
+          <path data-composition-edge-from="pueue" data-composition-edge-to="guardian" data-composition-edge-id="schedule" data-composition-points="514,604;602,604" d="M 514 604 L 602 604" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="708.05" y="560" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="776.75" y="570" class="t-muted" font-size="11" text-anchor="middle">read task + receipt</text>
+          <rect x="482.7" y="584" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="594" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule guardian row</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="inspect" data-edge-label="fresh runtime preflight" data-edge-key="16" data-edge-id="fresh-probe">
-          <path data-composition-edge-from="runner" data-composition-edge-to="inspect" data-composition-edge-id="fresh-probe" data-composition-points="658.125,608;337.25,608" d="M 658.125 608 L 337.25 608" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="scope intent + registration" data-edge-key="16" data-edge-id="scope-intent">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="scope-intent" data-composition-points="616,632;908,632" d="M 616 632 L 908 632" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="415.7875" y="588" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="497.6875" y="598" class="t-edge-security" font-size="11" text-anchor="middle">fresh runtime preflight</text>
+          <rect x="666.9" y="612" width="190.2" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="622" class="t-muted" font-size="11" text-anchor="middle">scope intent + registration</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="runner" data-edge-label="matched launch plan" data-edge-key="17" data-edge-id="launch-plan">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="runner" data-composition-edge-id="launch-plan" data-composition-points="337.25,636;658.125,636" d="M 337.25 636 L 658.125 636" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="start exact worker" data-edge-key="17" data-edge-id="spawn">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="spawn" data-composition-points="616,660;704,660" d="M 616 660 L 704 660" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="428.9875" y="616" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="497.6875" y="626" class="t-muted" font-size="11" text-anchor="middle">matched launch plan</text>
+          <rect x="594.6" y="640" width="130.8" height="18" rx="3" class="c-mask"/>
+          <text x="660" y="650" class="t-edge-emphasis" font-size="11" text-anchor="middle">start exact worker</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="provider" data-edge-label="Start after strict match" data-edge-key="18" data-edge-id="invoke">
-          <path data-composition-edge-from="runner" data-composition-edge-to="provider" data-composition-edge-id="invoke" data-composition-points="672.125,664;769.75,664" d="M 672.125 664 L 769.75 664" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="record worker identity" data-edge-key="18" data-edge-id="worker-identity">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="worker-identity" data-composition-points="616,688;908,688" d="M 616 688 L 908 688" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="635.7375" y="644" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="654" class="t-edge-emphasis" font-size="11" text-anchor="middle">Start after strict match</text>
+          <rect x="683.4" y="668" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="678" class="t-muted" font-size="11" text-anchor="middle">record worker identity</text>
         </g>
         </g>
 
-        <g data-edge-from="provider" data-edge-to="runner" data-edge-label="streams + exact Wait" data-edge-key="19" data-edge-id="capture">
-          <path data-composition-edge-from="provider" data-composition-edge-to="runner" data-composition-edge-id="capture" data-composition-points="769.75,692;672.125,692" d="M 769.75 692 L 672.125 692" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="identity acknowledged" data-edge-key="19" data-edge-id="worker-ack">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="worker-ack" data-composition-points="616,716;704,716" d="M 616 716 L 704 716" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="648.9375" y="672" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="682" class="t-muted" font-size="11" text-anchor="middle">streams + exact Wait</text>
+          <rect x="584.7" y="696" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="660" y="706" class="t-muted" font-size="11" text-anchor="middle">identity acknowledged</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="close task lifetime" data-edge-key="20" data-edge-id="close-lifetime">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="close-lifetime" data-composition-points="658.125,720;560.5,720" d="M 658.125 720 L 560.5 720" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-edge-from="runner" data-edge-to="store" data-edge-label="read task + receipt" data-edge-key="20" data-edge-id="reconstruct">
+          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="reconstruct" data-composition-points="718,744;908,744" d="M 718 744 L 908 744" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="540.6125" y="700" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="609.3125" y="710" class="t-edge-security" font-size="11" text-anchor="middle">close task lifetime</text>
+          <rect x="744.3" y="724" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="813" y="734" class="t-muted" font-size="11" text-anchor="middle">read task + receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="termination + empty scope" data-edge-key="21" data-edge-id="empty-scope">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="empty-scope" data-composition-points="560.5,748;881.375,748" d="M 560.5 748 L 881.375 748" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="runner" data-edge-to="inspect" data-edge-label="fresh runtime preflight" data-edge-key="21" data-edge-id="fresh-probe">
+          <path data-composition-edge-from="runner" data-composition-edge-to="inspect" data-composition-edge-id="fresh-probe" data-composition-points="704,772;412,772" d="M 704 772 L 412 772" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <g data-detail="context">
-          <rect x="632.4375" y="728" width="177" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="738" class="t-edge-emphasis" font-size="11" text-anchor="middle">termination + empty scope</text>
+          <rect x="476.1" y="752" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="762" class="t-edge-security" font-size="11" text-anchor="middle">fresh runtime preflight</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="close acknowledged" data-edge-key="22" data-edge-id="close-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="close-ack" data-composition-points="560.5,776;658.125,776" d="M 560.5 776 L 658.125 776" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="inspect" data-edge-to="runner" data-edge-label="matched launch plan" data-edge-key="22" data-edge-id="launch-plan">
+          <path data-composition-edge-from="inspect" data-composition-edge-to="runner" data-composition-edge-id="launch-plan" data-composition-points="412,800;704,800" d="M 412 800 L 704 800" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="543.9125" y="756" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="609.3125" y="766" class="t-muted" font-size="11" text-anchor="middle">close acknowledged</text>
+          <rect x="489.3" y="780" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="790" class="t-muted" font-size="11" text-anchor="middle">matched launch plan</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="seal evidence; finalize" data-edge-key="23" data-edge-id="seal">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="seal" data-composition-points="672.125,804;881.375,804" d="M 672.125 804 L 881.375 804" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="runner" data-edge-to="provider" data-edge-label="Start after strict match" data-edge-key="23" data-edge-id="invoke">
+          <path data-composition-edge-from="runner" data-composition-edge-to="provider" data-composition-edge-id="invoke" data-composition-points="718,828;806,828" d="M 718 828 L 806 828" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="694.85" y="784" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="776.75" y="794" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal evidence; finalize</text>
+          <rect x="676.8" y="808" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="818" class="t-edge-emphasis" font-size="11" text-anchor="middle">Start after strict match</text>
         </g>
         </g>
 
-        <g data-edge-from="store" data-edge-to="predicate" data-edge-label="evaluate sealed evidence" data-edge-key="24" data-edge-id="interpret">
-          <path data-composition-edge-from="store" data-composition-edge-to="predicate" data-composition-edge-id="interpret" data-composition-points="895.375,832;993,832" d="M 895.375 832 L 993 832" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="provider" data-edge-to="runner" data-edge-label="streams + exact Wait" data-edge-key="24" data-edge-id="capture">
+          <path data-composition-edge-from="provider" data-composition-edge-to="runner" data-composition-edge-id="capture" data-composition-points="806,856;718,856" d="M 806 856 L 718 856" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="858.9875" y="812" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="944.1875" y="822" class="t-muted" font-size="11" text-anchor="middle">evaluate sealed evidence</text>
+          <rect x="690" y="836" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="846" class="t-muted" font-size="11" text-anchor="middle">streams + exact Wait</text>
         </g>
         </g>
 
-        <g data-edge-from="predicate" data-edge-to="store" data-edge-label="interpretation" data-edge-key="25" data-edge-id="verdict">
-          <path data-composition-edge-from="predicate" data-composition-edge-to="store" data-composition-edge-id="verdict" data-composition-points="993,860;895.375,860" d="M 993 860 L 895.375 860" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="close task lifetime" data-edge-key="25" data-edge-id="close-lifetime">
+          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="close-lifetime" data-composition-points="704,884;616,884" d="M 704 884 L 616 884" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <g data-detail="context">
-          <rect x="891.9875" y="840" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="944.1875" y="850" class="t-muted" font-size="11" text-anchor="middle">interpretation</text>
+          <rect x="591.3" y="864" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="660" y="874" class="t-edge-security" font-size="11" text-anchor="middle">close task lifetime</text>
         </g>
         </g>
 
-        <g data-edge-from="store" data-edge-to="runner" data-edge-label="outcome.json verdict" data-edge-key="26" data-edge-id="outcome">
-          <path data-composition-edge-from="store" data-composition-edge-to="runner" data-composition-edge-id="outcome" data-composition-points="881.375,888;672.125,888" d="M 881.375 888 L 672.125 888" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="termination + empty scope" data-edge-key="26" data-edge-id="empty-scope">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="empty-scope" data-composition-points="616,912;908,912" d="M 616 912 L 908 912" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="704.75" y="868" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="776.75" y="878" class="t-muted" font-size="11" text-anchor="middle">outcome.json verdict</text>
+          <rect x="673.5" y="892" width="177" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="902" class="t-edge-emphasis" font-size="11" text-anchor="middle">termination + empty scope</text>
         </g>
         </g>
 
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="managed worker exits" data-edge-key="27" data-edge-id="worker-exit">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="worker-exit" data-composition-points="658.125,916;560.5,916" d="M 658.125 916 L 560.5 916" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="close acknowledged" data-edge-key="27" data-edge-id="close-ack">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="close-ack" data-composition-points="616,940;704,940" d="M 616 940 L 704 940" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="537.3125" y="896" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="609.3125" y="906" class="t-muted" font-size="11" text-anchor="middle">managed worker exits</text>
+          <rect x="594.6" y="920" width="130.8" height="18" rx="3" class="c-mask"/>
+          <text x="660" y="930" class="t-muted" font-size="11" text-anchor="middle">close acknowledged</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="persist exact child Wait" data-edge-key="28" data-edge-id="lifetime-proof">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="lifetime-proof" data-composition-points="560.5,944;881.375,944" d="M 560.5 944 L 881.375 944" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="runner" data-edge-to="store" data-edge-label="seal evidence; finalize" data-edge-key="28" data-edge-id="seal">
+          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="seal" data-composition-points="718,968;908,968" d="M 718 968 L 908 968" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="635.7375" y="924" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="934" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist exact child Wait</text>
+          <rect x="731.1" y="948" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="813" y="958" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal evidence; finalize</text>
         </g>
         </g>
 
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="status / logs / collect" data-edge-key="29" data-edge-id="observe">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="observe" data-composition-points="114,972;211.625,972" d="M 114 972 L 211.625 972" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="store" data-edge-to="predicate" data-edge-label="evaluate sealed evidence" data-edge-key="29" data-edge-id="interpret">
+          <path data-composition-edge-from="store" data-composition-edge-to="predicate" data-composition-edge-id="interpret" data-composition-points="922,996;1010,996" d="M 922 996 L 1010 996" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="80.91250000000001" y="952" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="962" class="t-muted" font-size="11" text-anchor="middle">status / logs / collect</text>
+          <rect x="880.8" y="976" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="966" y="986" class="t-muted" font-size="11" text-anchor="middle">evaluate sealed evidence</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="observe and reconcile" data-edge-key="30" data-edge-id="read">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="read" data-composition-points="225.625,1000;881.375,1000" d="M 225.625 1000 L 881.375 1000" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="predicate" data-edge-to="store" data-edge-label="interpretation" data-edge-key="30" data-edge-id="verdict">
+          <path data-composition-edge-from="predicate" data-composition-edge-to="store" data-composition-edge-id="verdict" data-composition-points="1010,1024;922,1024" d="M 1010 1024 L 922 1024" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="478.2" y="980" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="553.5" y="990" class="t-muted" font-size="11" text-anchor="middle">observe and reconcile</text>
+          <rect x="913.8" y="1004" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
+          <text x="966" y="1014" class="t-muted" font-size="11" text-anchor="middle">interpretation</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="bounded response" data-edge-key="31" data-edge-id="returned">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="returned" data-composition-points="211.625,1028;114,1028" d="M 211.625 1028 L 114 1028" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="store" data-edge-to="runner" data-edge-label="outcome.json verdict" data-edge-key="31" data-edge-id="outcome">
+          <path data-composition-edge-from="store" data-composition-edge-to="runner" data-composition-edge-id="outcome" data-composition-points="908,1052;718,1052" d="M 908 1052 L 718 1052" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="104.0125" y="1008" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="1018" class="t-muted" font-size="11" text-anchor="middle">bounded response</text>
+          <rect x="741" y="1032" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="813" y="1042" class="t-muted" font-size="11" text-anchor="middle">outcome.json verdict</text>
         </g>
         </g>
 
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="cancel TASK_ID" data-edge-key="32" data-edge-id="cancel">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="cancel" data-composition-points="114,1056;211.625,1056" d="M 114 1056 L 211.625 1056" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="managed worker exits" data-edge-key="32" data-edge-id="worker-exit">
+          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="worker-exit" data-composition-points="704,1080;616,1080" d="M 704 1080 L 616 1080" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="110.61250000000001" y="1036" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="1046" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel TASK_ID</text>
+          <rect x="588" y="1060" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="660" y="1070" class="t-muted" font-size="11" text-anchor="middle">managed worker exits</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist one stop request" data-edge-key="33" data-edge-id="cancel-request">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="cancel-request" data-composition-points="225.625,1084;881.375,1084" d="M 225.625 1084 L 881.375 1084" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="persist exact child Wait" data-edge-key="33" data-edge-id="lifetime-proof">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="lifetime-proof" data-composition-points="616,1108;908,1108" d="M 616 1108 L 908 1108" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="468.3" y="1064" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="553.5" y="1074" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist one stop request</text>
+          <rect x="676.8" y="1088" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="1098" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist exact child Wait</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="active owner: terminate scope" data-edge-key="34" data-edge-id="guardian-cancel">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="guardian-cancel" data-composition-points="560.5,1112;881.375,1112" d="M 560.5 1112 L 881.375 1112" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="status / logs / collect" data-edge-key="34" data-edge-id="observe">
+          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="observe" data-composition-points="106,1176;194,1176" d="M 106 1176 L 194 1176" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="619.2375" y="1092" width="203.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="720.9375" y="1102" class="t-edge-dashed" font-size="11" text-anchor="middle">active owner: terminate scope</text>
+          <rect x="68.10000000000001" y="1156" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="1166" class="t-muted" font-size="11" text-anchor="middle">status / logs / collect</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="else, lease: stop row" data-edge-key="35" data-edge-id="stop">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stop" data-composition-points="225.625,1140;434.875,1140" d="M 225.625 1140 L 434.875 1140" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="observe and reconcile" data-edge-key="35" data-edge-id="read">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="read" data-composition-points="208,1204;908,1204" d="M 208 1204 L 908 1204" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="254.95" y="1120" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="330.25" y="1130" class="t-edge-dashed" font-size="11" text-anchor="middle">else, lease: stop row</text>
+          <rect x="482.7" y="1184" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="1194" class="t-muted" font-size="11" text-anchor="middle">observe and reconcile</text>
         </g>
         </g>
 
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="continue TASK_ID" data-edge-key="36" data-edge-id="continue">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="continue" data-composition-points="114,1168;211.625,1168" d="M 114 1168 L 211.625 1168" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="bounded response" data-edge-key="36" data-edge-id="returned">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="returned" data-composition-points="194,1232;106,1232" d="M 194 1232 L 106 1232" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="104.0125" y="1148" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="1158" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue TASK_ID</text>
+          <rect x="91.2" y="1212" width="117.6" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="1222" class="t-muted" font-size="11" text-anchor="middle">bounded response</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="create linked successor" data-edge-key="37" data-edge-id="successor">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="successor" data-composition-points="225.625,1196;881.375,1196" d="M 225.625 1196 L 881.375 1196" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="cancel TASK_ID" data-edge-key="37" data-edge-id="cancel">
+          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="cancel" data-composition-points="106,1260;194,1260" d="M 106 1260 L 194 1260" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="471.6" y="1176" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="553.5" y="1186" class="t-edge-emphasis" font-size="11" text-anchor="middle">create linked successor</text>
+          <rect x="97.80000000000001" y="1240" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="1250" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel TASK_ID</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="new task id" data-edge-key="38" data-edge-id="new-task">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="new-task" data-composition-points="211.625,1224;114,1224" d="M 211.625 1224 L 114 1224" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist one stop request" data-edge-key="38" data-edge-id="cancel-request">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="cancel-request" data-composition-points="208,1288;908,1288" d="M 208 1288 L 908 1288" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="120.5125" y="1204" width="84.6" height="18" rx="3" class="c-mask"/>
-          <text x="162.8125" y="1214" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
+          <rect x="472.8" y="1268" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="1278" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist one stop request</text>
+        </g>
+        </g>
+
+        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="active owner: terminate scope" data-edge-key="39" data-edge-id="guardian-cancel">
+          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="guardian-cancel" data-composition-points="616,1316;908,1316" d="M 616 1316 L 908 1316" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-detail="context">
+          <rect x="660.3" y="1296" width="203.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="762" y="1306" class="t-edge-dashed" font-size="11" text-anchor="middle">active owner: terminate scope</text>
+        </g>
+        </g>
+
+        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="else, lease: stop row" data-edge-key="40" data-edge-id="stop">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stop" data-composition-points="208,1344;500,1344" d="M 208 1344 L 500 1344" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-detail="context">
+          <rect x="278.7" y="1324" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="354" y="1334" class="t-edge-dashed" font-size="11" text-anchor="middle">else, lease: stop row</text>
+        </g>
+        </g>
+
+        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="continue TASK_ID" data-edge-key="41" data-edge-id="continue">
+          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="continue" data-composition-points="106,1372;194,1372" d="M 106 1372 L 194 1372" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-detail="context">
+          <rect x="91.2" y="1352" width="117.6" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="1362" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue TASK_ID</text>
+        </g>
+        </g>
+
+        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check before successor work" data-edge-key="42" data-edge-id="continue-check">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="continue-check" data-composition-points="208,1400;296,1400" d="M 208 1400 L 296 1400" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-detail="context">
+          <rect x="156.9" y="1380" width="190.2" height="18" rx="3" class="c-mask"/>
+          <text x="252" y="1390" class="t-edge-security" font-size="11" text-anchor="middle">check before successor work</text>
+        </g>
+        </g>
+
+        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="linked successor in caller scope" data-edge-key="43" data-edge-id="successor">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="successor" data-composition-points="208,1428;908,1428" d="M 208 1428 L 908 1428" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-detail="context">
+          <rect x="446.4" y="1408" width="223.2" height="18" rx="3" class="c-mask"/>
+          <text x="558" y="1418" class="t-edge-emphasis" font-size="11" text-anchor="middle">linked successor in caller scope</text>
+        </g>
+        </g>
+
+        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="new task id" data-edge-key="44" data-edge-id="new-task">
+          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="new-task" data-composition-points="194,1456;106,1456" d="M 194 1456 L 106 1456" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-detail="context">
+          <rect x="107.7" y="1436" width="84.6" height="18" rx="3" class="c-mask"/>
+          <text x="150" y="1446" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
         </g>
         </g>
 
         <!-- Segment Labels -->
         <g data-graph-role="segment-label" data-segment-id="0">
-          <rect x="56" y="188" width="164.8" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="201" class="t-muted" font-size="9" font-weight="600">Admission and durable enqueue</text>
+          <rect x="220.7" y="134" width="248" height="18" rx="3" class="c-mask"/>
+          <text x="226.7" y="147" class="t-muted" font-size="9" font-weight="600">Resource check, admission and durable enqueue</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="1">
-          <rect x="56" y="434.67" width="242.8" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="447.67" class="t-muted" font-size="9" font-weight="600">Guardian scope, fresh launch and publication</text>
+          <rect x="56" y="578" width="242.8" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="591" class="t-muted" font-size="9" font-weight="600">Guardian scope, fresh launch and publication</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="2">
-          <rect x="56" y="920" width="154.4" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="933" class="t-muted" font-size="9" font-weight="600">Observe, cancel or continue</text>
+          <rect x="56" y="1124" width="154.4" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="1137" class="t-muted" font-size="9" font-weight="600">Observe, cancel or continue</text>
         </g>
 
         <!-- Participants -->
         <g id="node-caller" data-node-id="caller" data-node-label="Caller" tabindex="0" role="button" aria-label="Focus Caller, lead / automation, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="lead / automation" data-node-context="Sequence participant">
           <title>Caller · lead / automation · Sequence participant</title>
-          <rect x="62" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="62" y="72" width="90" height="60" rx="6" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(68 78) scale(0.6875)">
+          <rect x="56" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="56" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(62 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="107" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Caller</text>
-          <text data-detail="context" x="107" y="122" class="t-muted" font-size="7" text-anchor="middle">lead / automation</text>
+          <text data-node-label="" data-detail-anchor="" x="99" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Caller</text>
+          <text data-detail="context" x="99" y="122" class="t-muted" font-size="7" text-anchor="middle">lead / automation</text>
         </g>
 
-        <g id="node-delegate" data-node-id="delegate" data-node-label="Task lifecycle" tabindex="0" role="button" aria-label="Focus Task lifecycle, app→tasklifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="app→tasklifecycle" data-node-context="Sequence participant">
-          <title>Task lifecycle · app→tasklifecycle · Sequence participant</title>
-          <rect x="173.625" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="173.625" y="72" width="90" height="60" rx="6" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(179.625 78) scale(0.6875)">
+        <g id="node-delegate" data-node-id="delegate" data-node-label="Lifecycle" tabindex="0" role="button" aria-label="Focus Lifecycle, app→tasklifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="app→tasklifecycle" data-node-context="Sequence participant">
+          <title>Lifecycle · app→tasklifecycle · Sequence participant</title>
+          <rect x="158" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="158" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(164 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="218.625" y="108" class="t-primary" font-size="9.7" font-weight="600" text-anchor="middle">Task lifecycle</text>
-          <text data-detail="context" x="218.625" y="122" class="t-muted" font-size="7" text-anchor="middle">app→tasklifecycle</text>
+          <text data-node-label="" data-detail-anchor="" x="201" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lifecycle</text>
+          <text data-detail="context" x="201" y="122" class="t-muted" font-size="7" text-anchor="middle">app→tasklifecycle</text>
+        </g>
+
+        <g id="node-resources" data-node-id="resources" data-node-label="Resources" tabindex="0" role="button" aria-label="Focus Resources, fresh-task check, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="fresh-task check" data-node-context="Sequence participant">
+          <title>Resources · fresh-task check · Sequence participant</title>
+          <rect x="260" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="260" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(266 78) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="303" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resources</text>
+          <text data-detail="context" x="303" y="122" class="t-muted" font-size="7" text-anchor="middle">fresh-task check</text>
         </g>
 
         <g id="node-inspect" data-node-id="inspect" data-node-label="Admission" tabindex="0" role="button" aria-label="Focus Admission, policy + probes, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="policy + probes" data-node-context="Sequence participant">
           <title>Admission · policy + probes · Sequence participant</title>
-          <rect x="285.25" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="285.25" y="72" width="90" height="60" rx="6" class="c-security" data-animate="node" style="--step:2" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(291.25 78) scale(0.6875)">
+          <rect x="362" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="362" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(368 78) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="330.25" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admission</text>
-          <text data-detail="context" x="330.25" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + probes</text>
+          <text data-node-label="" data-detail-anchor="" x="405" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admission</text>
+          <text data-detail="context" x="405" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + probes</text>
         </g>
 
         <g id="node-pueue" data-node-id="pueue" data-node-label="Pueue" tabindex="0" role="button" aria-label="Focus Pueue, policy + rows, Sequence participant" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="policy + rows" data-node-context="Sequence participant">
           <title>Pueue · policy + rows · Sequence participant</title>
-          <rect x="396.875" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="396.875" y="72" width="90" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step:3" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(402.875 78) scale(0.6875)">
+          <rect x="464" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="464" y="72" width="86" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step:4" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(470 78) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="441.875" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pueue</text>
-          <text data-detail="context" x="441.875" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + rows</text>
+          <text data-node-label="" data-detail-anchor="" x="507" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pueue</text>
+          <text data-detail="context" x="507" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + rows</text>
         </g>
 
-        <g id="node-guardian" data-node-id="guardian" data-node-label="Lifetime owner" tabindex="0" role="button" aria-label="Focus Lifetime owner, native lifetime, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="native lifetime" data-node-context="Sequence participant">
-          <title>Lifetime owner · native lifetime · Sequence participant</title>
-          <rect x="508.5" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="508.5" y="72" width="90" height="60" rx="6" class="c-security" data-animate="node" style="--step:4" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(514.5 78) scale(0.6875)">
+        <g id="node-guardian" data-node-id="guardian" data-node-label="Guardian" tabindex="0" role="button" aria-label="Focus Guardian, native lifetime, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="native lifetime" data-node-context="Sequence participant">
+          <title>Guardian · native lifetime · Sequence participant</title>
+          <rect x="566" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="566" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:5" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(572 78) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="553.5" y="108" class="t-primary" font-size="9.7" font-weight="600" text-anchor="middle">Lifetime owner</text>
-          <text data-detail="context" x="553.5" y="122" class="t-muted" font-size="7" text-anchor="middle">native lifetime</text>
+          <text data-node-label="" data-detail-anchor="" x="609" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guardian</text>
+          <text data-detail="context" x="609" y="122" class="t-muted" font-size="7" text-anchor="middle">native lifetime</text>
         </g>
 
         <g id="node-runner" data-node-id="runner" data-node-label="Runner" tabindex="0" role="button" aria-label="Focus Runner, delegate-run, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="delegate-run" data-node-context="Sequence participant">
           <title>Runner · delegate-run · Sequence participant</title>
-          <rect x="620.125" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="620.125" y="72" width="90" height="60" rx="6" class="c-backend" data-animate="node" style="--step:5" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(626.125 78) scale(0.6875)">
+          <rect x="668" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="668" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step:6" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(674 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="665.125" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runner</text>
-          <text data-detail="context" x="665.125" y="122" class="t-muted" font-size="7" text-anchor="middle">delegate-run</text>
+          <text data-node-label="" data-detail-anchor="" x="711" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runner</text>
+          <text data-detail="context" x="711" y="122" class="t-muted" font-size="7" text-anchor="middle">delegate-run</text>
         </g>
 
         <g id="node-provider" data-node-id="provider" data-node-label="Provider" tabindex="0" role="button" aria-label="Focus Provider, native CLI, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="native CLI" data-node-context="Sequence participant">
           <title>Provider · native CLI · Sequence participant</title>
-          <rect x="731.75" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="731.75" y="72" width="90" height="60" rx="6" class="c-external" data-animate="node" style="--step:6" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(737.75 78) scale(0.6875)">
+          <rect x="770" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="770" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step:7" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(776 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="776.75" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider</text>
-          <text data-detail="context" x="776.75" y="122" class="t-muted" font-size="7" text-anchor="middle">native CLI</text>
+          <text data-node-label="" data-detail-anchor="" x="813" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider</text>
+          <text data-detail="context" x="813" y="122" class="t-muted" font-size="7" text-anchor="middle">native CLI</text>
         </g>
 
         <g id="node-store" data-node-id="store" data-node-label="TaskDir" tabindex="0" role="button" aria-label="Focus TaskDir, records + outcome, Sequence participant" aria-pressed="false" data-node-kind="database" data-node-sublabel="records + outcome" data-node-context="Sequence participant">
           <title>TaskDir · records + outcome · Sequence participant</title>
-          <rect x="843.375" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="843.375" y="72" width="90" height="60" rx="6" class="c-database" data-animate="node" style="--step:7" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(849.375 78) scale(0.6875)">
+          <rect x="872" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="872" y="72" width="86" height="60" rx="6" class="c-database" data-animate="node" style="--step:8" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(878 78) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="888.375" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskDir</text>
-          <text data-detail="context" x="888.375" y="122" class="t-muted" font-size="7" text-anchor="middle">records + outcome</text>
+          <text data-node-label="" data-detail-anchor="" x="915" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskDir</text>
+          <text data-detail="context" x="915" y="122" class="t-muted" font-size="7" text-anchor="middle">records + outcome</text>
         </g>
 
         <g id="node-predicate" data-node-id="predicate" data-node-label="Predicate" tabindex="0" role="button" aria-label="Focus Predicate, sealed data rules, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="sealed data rules" data-node-context="Sequence participant">
           <title>Predicate · sealed data rules · Sequence participant</title>
-          <rect x="955" y="72" width="90" height="60" rx="6" class="c-mask"/>
-          <rect x="955" y="72" width="90" height="60" rx="6" class="c-security" data-animate="node" style="--step:8" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(961 78) scale(0.6875)">
+          <rect x="974" y="72" width="86" height="60" rx="6" class="c-mask"/>
+          <rect x="974" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:9" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(980 78) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1000" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Predicate</text>
-          <text data-detail="context" x="1000" y="122" class="t-muted" font-size="7" text-anchor="middle">sealed data rules</text>
+          <text data-node-label="" data-detail-anchor="" x="1017" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Predicate</text>
+          <text data-detail="context" x="1017" y="122" class="t-muted" font-size="7" text-anchor="middle">sealed data rules</text>
         </g>
 
         <!-- Legend -->
@@ -5837,11 +5904,25 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="cards">
       <div class="card">
         <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>Fresh-task resource check</h3>
+        </div>
+        <ul>
+          <li>check fresh task resources: a fresh dispatch is checked before workspace, provider or supervisor preparation. Existing or uncertain task IDs skip it.</li>
+          <li>pressure: retry_later: confirmed pressure (3 sustained intervals, or critical memory) refuses the new request with task_record not_created, retry_later and retry_after_seconds. Nothing is queued or retried.</li>
+          <li>unknown + warning: an unavailable metric never refuses by itself. If no independent pressure is confirmed, the check lets admission continue with resource_admission unknown and a warning; later admission steps may still fail.</li>
+          <li>refresh only if stale or target changed: before task creation the check reruns only when it is older than 5 s or the execution target changed. A late refusal still creates no task.</li>
+          <li>Running tasks, status, collect, cancel and existing-task recovery are never checked. Nothing is persisted, killed or throttled.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
           <div class="card-dot cyan"></div>
           <h3>Grouped source owners</h3>
         </div>
         <ul>
-          <li>Control is app composition calling tasklifecycle behavior. Admission groups profile policy with sealed inspection workers.</li>
+          <li>Control is app composition calling tasklifecycle behavior. resourceadmission owns sampling and the pure pressure decision; tasklifecycle owns the fresh-task gate.</li>
           <li>supervisor owns binding and gates; Pueue owns queue rows. guardian owns lifetime; execution owns provider Start/Wait and sealing.</li>
           <li>Status uses ObserveTaskSupervisor. A shared-lease canonical generation check precedes cached or fresh task rows; optional repair remains mutation-gated.</li>
           <li>prepare candidate: app composes tasklifecycle; task creation calls admission.Prepare. Managed runtime-only profiles admit a static capability contract without version/help workers.</li>
@@ -5865,7 +5946,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>scope intent + registration: The guardian writes intent before scope creation and registration before starting its managed worker.</li>
           <li>identity acknowledged: The worker cannot receive its hello acknowledgement until its observed identity is durable.</li>
           <li>fresh runtime preflight: Admission reconstructs the candidate, probes the current runtime inside the guardian scope and finite budget, finalizes strictly, and matches the admitted contract.</li>
-          <li>Start after strict match: Strict profile matching precedes Start. The guardian records each observed native launch before acknowledging it (internal/guardian/control.go:198-224).</li>
+          <li>Start after strict match: Strict profile matching precedes Start. The guardian records each observed native launch before acknowledging it (internal/guardian/control.go:198-225).</li>
           <li>termination + empty scope: The guardian proves the native scope empty and persists termination before acknowledging close.</li>
           <li>seal evidence; finalize: execution seals provider.exit and calls TaskDir.Finalize only after successful lifetime closure.</li>
           <li>final outcome: TaskDir commits outcome.json as committed or rejected, then returns it to execution. Payload files are evidence, not terminal authority.</li>
@@ -5881,8 +5962,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <ul>
           <li>observe and reconcile: tasklifecycle can recover the exact stashed row or publish an existing seal. A typed pre-mutation refusal during stashed recovery triggers fresh same-client observation. Each attempt replaces derived maintenance deferral; no new provider turn.</li>
           <li>active owner: terminate scope: The active guardian reads the durable request and persists native termination proof.</li>
-          <li>otherwise: stop exact row: Direct queue stopping requires the task lifetime lease, so no guardian can concurrently own or launch the provider.</li>
-          <li>create linked successor: Continuation creates a new task and reuses admission and submission; it does not replay the predecessor’s consumed launch.</li>
+          <li>else, lease: stop row: Direct queue stopping requires the task lifetime lease, so no guardian can concurrently own or launch the provider.</li>
+          <li>linked successor in caller scope: continue loads the predecessor, runs one resource check, then dispatches a new task in the current caller&#39;s environment and supervisor control. Predecessor records decide only compatibility.</li>
         </ul>
       </div>
 
