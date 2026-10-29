@@ -234,7 +234,10 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "runtime",
     "imports": [
-      "py:delegate_acceptance.private_cli.commands"
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:subprocess",
+      "py:uuid"
     ]
   },
   {

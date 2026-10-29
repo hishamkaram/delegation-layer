@@ -78,6 +78,16 @@ def _retain_capture_failure(error, stdout_path, stderr_path):
     error.retained_capture_paths = (str(stdout_path), str(stderr_path))
 
 
+def _bind_timeout_to_process(error, process, stdout_path, stderr_path):
+    """Name the direct control process and this call's capture files on the timeout actually raised.
+
+    Without a started process nothing is bound, so no PID or capture mapping is ever invented.
+    """
+    if process is not None:
+        error.process_pid = process.pid
+        error.capture_paths = (str(stdout_path), str(stderr_path))
+
+
 @contextmanager
 def _launch_lock(deadline):
     """Hold the capture start lock; with an absolute deadline, bound the wait and refuse an expired launch."""
@@ -143,8 +153,11 @@ def run_captured_command(command, env, timeout, *, capture_root, deadline=None):
                 captured_stderr = _read_capture(capture_root, stderr_name)
             except BaseException as read_error:
                 _retain_capture_failure(primary_error, stdout_path, stderr_path)
+                _bind_timeout_to_process(primary_error, process, stdout_path, stderr_path)
                 raise primary_error from read_error
-        raise subprocess.TimeoutExpired(command, wait_budget, output=captured_stdout, stderr=captured_stderr) from None
+        timeout_error = subprocess.TimeoutExpired(command, wait_budget, output=captured_stdout, stderr=captured_stderr)
+        _bind_timeout_to_process(timeout_error, process, stdout_path, stderr_path)
+        raise timeout_error from None
     except BaseException as primary_error:
         if process is not None:
             _reap_private_control_process(process, primary_error, stdout_path, stderr_path)

@@ -25,6 +25,15 @@ def record_invocation_error(receipt, args, error, captured):
         "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         "stderr_tail": output_tail(stderr),
     }
+    command = getattr(error, "cmd", None)
+    if command is not None:
+        evidence["command"] = [str(part) for part in command]
+    process_pid = getattr(error, "process_pid", None)
+    if process_pid is not None:
+        evidence["direct_process"] = {"pid": process_pid, "provenance": "subprocess.Popen.pid"}
+    capture_paths = getattr(error, "capture_paths", ())
+    if capture_paths:
+        evidence["capture_paths"] = list(capture_paths)
     retained_paths = getattr(error, "retained_capture_paths", ())
     if retained_paths:
         evidence["capture_failure"] = {

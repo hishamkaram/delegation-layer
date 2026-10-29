@@ -543,6 +543,27 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.private_cli.test_disposal_observer_receipts",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.disposal_observer",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:threading",
+      "py:time",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:test_acceptance_sealed_cleanup",
     "owner": "py:test_acceptance_sealed_cleanup",
     "layer": "test",

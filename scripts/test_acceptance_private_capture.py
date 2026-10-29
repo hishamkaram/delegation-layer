@@ -136,6 +136,16 @@ class PrivateCaptureTests(unittest.TestCase):
         self.assert_error_receipt(args, error, stdout, stderr, None)
         self.assertEqual(len(children), 1)
         self.assertIsNotNone(children[0].returncode, "timed-out child was not reaped")
+        # The raised timeout names the direct child and the exact capture files of this call.
+        self.assertEqual(getattr(error, "process_pid", None), children[0].pid)
+        self.assertEqual([Path(path).read_bytes() for path in getattr(error, "capture_paths", ())], [stdout, stderr])
+        self.assertEqual(set(error.capture_paths), {str(path) for path in self.capture_root.directory.iterdir()})
+        self.assertFalse(hasattr(error, "retained_capture_paths"))
+        receipt = self.read_receipt()
+        self.assertEqual(receipt["command"], [sys.executable, *args])
+        self.assertEqual(receipt["direct_process"], {"pid": children[0].pid, "provenance": "subprocess.Popen.pid"})
+        self.assertEqual(receipt["capture_paths"], list(error.capture_paths))
+        self.assertNotIn("capture_failure", receipt)
 
     @staticmethod
     def reap_child(process):
@@ -155,6 +165,23 @@ class PrivateCaptureTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.filename, str(missing))
         self.assert_error_receipt(args, raised.exception, b"", b"", None)
+        # No process started, so the receipt names none and no capture mapping.
+        for field in ("direct_process", "capture_paths", "command"):
+            self.assertNotIn(field, self.read_receipt())
+
+    def test_prelaunch_deadline_refusal_records_no_process(self):
+        args = ["status", "--json"]
+        with patch.object(capture.subprocess, "Popen") as spawn, \
+                self.assertRaisesRegex(TimeoutError, "expired before launch"):
+            private_cli.run_json(
+                sys.executable, self.environment, args, timeout=None, deadline=0.0,
+                receipt=self.receipt, capture_root=self.capture_root,
+            )
+        spawn.assert_not_called()
+        receipt = self.read_receipt()
+        for field in ("direct_process", "capture_paths", "command"):
+            self.assertNotIn(field, receipt)
+        self.assertEqual(tuple(self.capture_root.directory.iterdir()), ())
 
     def test_normal_json_and_exit_policy_keep_existing_receipts(self):
         document = {"message": "café", "count": 3, "complete": True}
@@ -271,6 +298,8 @@ class PrivateCaptureTests(unittest.TestCase):
 
     def test_timeout_primary_survives_capture_read_failure_with_receipt_cause(self):
         class TimedOutProcess:
+            pid = 4242
+
             def __init__(self, args):
                 self.args = args
                 self.killed = False
@@ -313,6 +342,11 @@ class PrivateCaptureTests(unittest.TestCase):
             set(capture_failure["retained_paths"]),
             {str(path) for path in self.capture_root.directory.iterdir()},
         )
+        self.assertEqual(getattr(error, "process_pid", None), process.pid)
+        self.assertEqual(getattr(error, "capture_paths", None), error.retained_capture_paths)
+        self.assertEqual(evidence["direct_process"], {"pid": process.pid, "provenance": "subprocess.Popen.pid"})
+        self.assertEqual(evidence["capture_paths"], capture_failure["retained_paths"])
+        self.assertEqual(evidence["command"], [sys.executable, *args])
 
     def test_unreaped_cleanup_reports_primary_error_and_retained_capture(self):
         class UnreapedProcess:
