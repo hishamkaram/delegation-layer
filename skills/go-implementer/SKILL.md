@@ -27,6 +27,9 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 
 - the bounded implementation handoff, affected canonical transition row IDs,
   and fixed interface contract;
+- Root's [initial
+  brief](../../agents/_data/maintainability-contract.md#delivery-slices-and-the-initial-brief)
+  for the slice;
 - exact owned files, affected consumers, and compatibility constraints;
 - existing error and persistence behavior;
 - deterministic fixtures or mocks for the relevant success and failure paths.

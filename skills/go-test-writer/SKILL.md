@@ -25,6 +25,8 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 
 - the behavior contract, affected canonical transition rows, production record
   stores, and real consumer interfaces;
+- the behavior cases and completion entry point from Root's [initial
+  brief](../../agents/_data/maintainability-contract.md#delivery-slices-and-the-initial-brief);
 - the success, rejection, timeout, malformed, conflict, and writer-failure
   cases that matter;
 - existing fixtures, historical predicate revisions, and persistence formats;

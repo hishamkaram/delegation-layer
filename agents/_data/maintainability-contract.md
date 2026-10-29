@@ -1150,20 +1150,6 @@ just the owned files. An explicitly requested patch proposal is a valid
 deliverable, labeled as a proposal; it is not an implementation and does not
 complete an implementation assignment.
 
-Once required OS/provider primitives and interface prerequisites are proven,
-complete the smallest end-to-end path that demonstrates the requested outcome
-before expanding supporting tooling. Agree owner interfaces before dependent
-work starts, then run independent file owners in parallel. Use focused checks
-during edits, satisfy all applicable gates before peer review, and run required
-full gates on the final combined snapshot; reuse earlier evidence only where its
-source, binary, environment and claim bindings remain applicable, without
-replacing required native or final checks. Reopen an agreed architecture when a
-concrete finding or changed requirement invalidates it. Report progress by
-acceptance milestones, remaining gaps and the next blocking dependency, with
-component test results as supporting evidence. This sequencing preserves the
-full approved scope and never authorizes hiding gaps, weakening checks or
-deferring requirements without authorization.
-
 A change to a shared Python callable's signature or required options
 inventories its direct and indirect consumers, tests included, through imports,
 aliases, attribute references and callbacks passed to helpers, not only through
@@ -1172,6 +1158,94 @@ helper is a consumer. Focused test groups selected by file name support
 iteration but never replace the integrated gate: before the next candidate
 build, Root runs the existing `make test-python` on the complete combined
 post-image.
+
+#### Delivery slices and the initial brief
+
+Before coding starts, Root splits an issue into coherent behavior slices. Each
+slice can be reviewed and merged on its own. Behavior sets the size: never split
+by an arbitrary line count, and never split one behavior artificially. A
+foundation slice need not absorb the whole epic, but no authorized requirement
+or confirmed defect is dropped quietly: each has an owning slice or an explicit
+`OPEN` entry.
+
+Root writes the initial brief in the existing plan or assignment; this contract
+is its only format, with no separate template, schema, or tracker. The brief
+names:
+
+- the behavior, with its positive and failure cases;
+- the actual completion entry point, such as the public command or gate that
+  shows the outcome, and every affected consumer;
+- dependencies, interface prerequisites, and the base revision;
+- the owned files, including any fixture, registry, build, default-suite, and
+  documentation wiring the slice needs;
+- the check and review plan for each [stage](#check-and-review-stages); and
+- the done condition, including the requested finish, such as required CI and
+  merge.
+
+A field found missing later is an ownership or wiring omission in the brief;
+Root amends the brief rather than treating the fix as worker scope creep.
+
+Once required OS/provider primitives and interface prerequisites are proven,
+build the thinnest real path through the shipped CLI that shows the requested
+outcome before expanding supporting infrastructure. Agree owner interfaces
+before dependent work starts, then run independent file owners in parallel.
+Exclude a shared file from a worker's ownership only for an actual concurrent
+writer or a named hazard, and record that file's owner and the integration
+dependency. A review of an upstream interface is labeled as interface review; it
+is not the final review.
+
+A finite, closed execution may end with a criterion still `OPEN` or `BLOCKED`.
+It records the criterion, cause, owner, dependency, and next action, and stays
+with the same owner until Root explicitly transfers it. A staged checkpoint is
+not completion.
+
+#### Check and review stages
+
+Each stage keeps its own evidence; a later stage never replaces an earlier one.
+
+1. **Edit**: focused tests for the changed behavior, with expected red for each
+   new regression test.
+2. **Peer review**: a scoped review of the exact snapshot after
+   `make verify-maintainability-strict` and the applicable checks pass on it.
+3. **Correction**: review the delta, its affected consumers and invariants, and
+   every prior finding. When the impact is uncertain, broaden to a full review.
+4. **Merge candidate**: on a stable candidate, run the full required combined
+   gates, the applicable native, provider, and candidate proofs, and then the
+   final integrated review.
+
+Do not start a comprehensive readiness run while a known applicable defect is
+unfixed. A run made anyway is labeled diagnostic and cannot approve. Each
+repeated broad check or review names the inputs that changed since its last run
+and why a narrower check is not enough. There is no cap on correction rounds
+and no waiver of a required check.
+
+#### Findings and evidence reuse
+
+Classify every new finding as one of:
+
+- a **blocker**: it is in the current change, breaks an affected invariant or
+  acceptance criterion, or is independently an unsafe P0 or P1 defect; or
+- a **follow-up**: a separately owned item with a named owner, outside the
+  current change.
+
+Classification does not defer an authorized fix: an explicit authorization to
+fix every finding still applies until the user changes it.
+
+Reuse earlier evidence only after assessing its source, dependency, binary,
+environment, and claim bindings against the current snapshot; reuse never
+replaces a required native or final check. A new head needs a new verdict: it
+invalidates earlier approval, while earlier findings stay open until rechecked
+on the new snapshot. Reopen an agreed architecture when a concrete finding or
+changed requirement invalidates it.
+
+Report progress by acceptance milestones, remaining gaps, and the next blocking
+dependency, with component test results as supporting evidence. A status record
+is a short current summary that links immutable history records; it does not
+accumulate history itself. A new issue starts in a fresh lead thread from a
+self-contained handoff, and work already in flight is not restarted to adopt a
+newer cycle. This sequencing preserves the full approved scope and never
+authorizes hiding gaps, weakening checks, or deferring requirements without
+authorization.
 
 ### Evidence status is not approval
 
