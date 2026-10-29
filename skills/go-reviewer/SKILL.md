@@ -28,7 +28,11 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 - the exact reviewed source snapshot, including changed and untracked inputs,
   plus base and head revisions when available;
 - the changed files and their relevant consumers/call paths;
-- the implementation handoff, test output, and acceptance receipts; and
+- the implementation handoff, test output, and acceptance receipts;
+- the review stage and the inputs changed since the last review, as the
+  contract's [check and review
+  stages](../../agents/_data/maintainability-contract.md#check-and-review-stages)
+  require; and
 - any previous finding and the claimed correction.
 
 For managed workspace changes, review the canonical [W1–W7 transition
@@ -87,8 +91,10 @@ Git-subprocess lifecycle policy in the review skill.
    snapshot.
 6. Keep an active review incomplete until its terminal result is observed and
    published. Timeout or silence is not permission to kill the review. A
-   changed reviewed source snapshot invalidates prior findings or approval;
-   recheck the new exact snapshot.
+   changed reviewed source snapshot invalidates prior approval but not prior
+   findings: each finding stays open until rechecked on the new exact snapshot
+   under the contract's [evidence reuse
+   rule](../../agents/_data/maintainability-contract.md#findings-and-evidence-reuse).
 
 ## Deliverables
 

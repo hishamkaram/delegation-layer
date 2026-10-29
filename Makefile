@@ -292,7 +292,6 @@ check:
 	$(MAKE) verify-gates
 	$(MAKE) test-race
 	$(MAKE) test-python
-	$(MAKE) build
 	$(MAKE) smoke-cli
 	$(MAKE) vuln
 

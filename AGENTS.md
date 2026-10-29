@@ -102,7 +102,9 @@ tooling, CI, and behavior-bearing rules or docs, keep every applicable gate.
    test that fails on its intended assertion before the fix is expected red, not
    a setup failure; any other failure is not. The
    [worker check levels](agents/_data/maintainability-contract.md#worker-check-levels)
-   own the details.
+   own the details; the contract's
+   [check and review stages](agents/_data/maintainability-contract.md#check-and-review-stages)
+   own which checks apply at each stage.
 8. Never weaken assertions, suppress a meaningful check, relabel handwritten
    code as generated, or add an exception to make a change pass. The refactor's
    baseline inventory permits only unchanged, owned findings; completion requires

@@ -34,18 +34,24 @@ never capacity evidence. Only the executable private CLI gate may make the
 queue snapshots below the number of callers. Exact one-flight behavior is
 proved separately by the deterministic package test, which holds the first
 snapshot open until every counted caller has crossed the observation boundary;
-a process-launch barrier alone does not establish that overlap. Clone the
-repository and run the local checks before editing:
+a process-launch barrier alone does not establish that overlap.
+
+Clone the repository and run `make tool-versions` to confirm the pinned
+toolchain. Checks then follow the contract's [check and review
+stages](../agents/_data/maintainability-contract.md#check-and-review-stages):
+focused tests while editing, `make verify-maintainability-strict` and the
+applicable checks before peer review, and the full gate on the final combined
+snapshot:
 
 ```sh
-go test ./...
-make test-race
-make verify-maintainability-strict
-make test-native-harness
 make check
-make skill-package-check
-make plugin-package-check
 ```
+
+`make check` already runs `make test-race`, `make verify-maintainability-strict`,
+`make skill-package-check`, and `make plugin-package-check`. It does not run
+`make test-native-harness`; also run that target when a change touches the
+native acceptance harness or its tests. Its discovery commands differ from
+`make test-python`, and the native acceptance targets depend on it.
 
 The repository's `AGENTS.md`, invariant contracts under `agents/_data/`, and
 focused skills under `skills/` are the authoritative contributor instructions.
