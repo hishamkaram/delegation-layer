@@ -272,11 +272,14 @@ ambiguous, unrelated, or unproven inspection rows remain available
 without blocking cleanup of validated rows. Failed removal retains the
 candidate for a later terminal trigger to retry, so no Pueue command or
 state-file editing is required.
-`status` and `collect` also request removal of their task's exact recorded row
-after a terminal outcome exists. A runner can publish that outcome shortly
-before Pueue marks its row ended; Delegate leaves that still-running row intact
-and defers removal to later private maintenance. Cleanup errors do not change
-that outcome.
+`status` and `collect` never remove a private row themselves. When their task's
+exact ended row is still present, or its closed custody is still pending, they
+durably request a full private maintenance pass. When they can, they also
+start the independent maintenance owner; otherwise the request waits for a
+later terminal callback or admission. A failed pass is retried only after a
+new request, so re-running `status` or `collect` on the same root, while the
+row or custody is still pending, records that request. Maintenance
+errors are logged on stderr and do not change the outcome or exit code.
 An explicit external `--pueue-config` is never cleaned by these paths.
 
 If an admission command (`dispatch` or `continue`) cannot use the current
@@ -515,12 +518,17 @@ editing task records, or extracting a plausible answer from raw logs.
 Each task and inspection records the pool that holds its verified executables.
 If that pool is missing, replaced, foreign, aliased, or otherwise unavailable,
 Delegate keeps the custody and reports the concrete cause; this is conservative
-retention, not a task failure. `status` and `collect` log
+retention, not a task failure. The guardian logs
 `delegate: lifetime custody release deferred: ...` on stderr, and the
-authoritative task outcome, publication, and exit code are unchanged. An
-ended inspection row whose custody is still pending is kept in the supervisor
-queue; the next maintenance pass retries it. The next `status` or `collect` on
-the same root retries the release once the pool is usable again.
+authoritative task outcome, publication, and exit code are unchanged. For a
+private supervisor, the guardian also requests a full maintenance pass; a
+later elected pass that consumes it retries the release; `status` and `collect` request another pass while
+closed custody is still pending. For an external supervisor, `status` and
+`collect` retry the release themselves; their own fault is logged as
+`delegate: task maintenance observation deferred: ...`. An ended inspection row whose custody
+is still pending is kept in the supervisor queue; a later maintenance pass
+retries it. Once the pool is usable again, run `status` or `collect` on the
+same root.
 
 - Do not delete, move, replace, or recreate the pool directory
   (`<state root>/.custody` or `<TMPDIR>/delegate-custody-<RootID>`), and do not

@@ -93,7 +93,6 @@ func collectionAttemptEnded(observed *CollectionResult) bool {
 }
 
 func finishCollection(observed CollectionResult, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options CollectionOptions, outcome *task.OutcomeRecord, collectErr error) (CollectionResult, error) {
-	supervisorcore.CleanupCompletedTaskFromSaved(root, td, meta, options.Supervisor.Options, options.Supervisor.Lookup)
 	completion := &CollectionCompletion{Outcome: outcome, CollectionError: collectErr}
 	observed.Completion = completion
 	// Optional timeout metadata cannot replace a committed or rejected outcome.

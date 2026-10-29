@@ -229,6 +229,9 @@ var _ = pueue.Options{
 	PrivateTerminalEvidencePreparer: func(context.Context, string, task.SupervisorRef, []pueue.Job) error {
 		return nil
 	},
+	PrivateTerminalCustodyReleaser: func(context.Context, string, task.SupervisorRef, pueue.PrivateTerminalCustodyScope) error {
+		return nil
+	},
 	PrivateMigrationAuthorizer: func(context.Context, string, task.SupervisorRef, []pueue.Job) error {
 		return nil
 	},
@@ -258,6 +261,7 @@ var (
 	_ pueue.Options
 	_ pueue.Pending
 	_ pueue.PrivateQueueCleanupPlan
+	_ pueue.PrivateTerminalCustodyScope
 	_ pueue.PrivateRecovery
 	_ pueue.PrivateEndpointObservation
 	_ pueue.ExecutionTarget

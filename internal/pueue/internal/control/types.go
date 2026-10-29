@@ -63,6 +63,15 @@ type Options struct {
 	// queue identity is protected. Authorization remains a separate read-only
 	// application decision after that short mutation boundary is released.
 	PrivateTerminalEvidencePreparer func(context.Context, string, task.SupervisorRef, []Job) error
+	// PrivateTerminalCustodyReleaser is the application-owned custody owner for
+	// one elected maintenance pass. It runs with neither queue identity nor the
+	// generation lease held, so custody filesystem work never blocks lifecycle
+	// transitions or submissions: once per full-recovery generation before the
+	// queue is observed, and after each capture before removal reacquires both.
+	// It grants no removal authority. Its fault fails the attempt without
+	// withholding rows the application authorizer still approves. Inline queue
+	// cleanup by other consumers never calls it. Nil skips custody release.
+	PrivateTerminalCustodyReleaser func(context.Context, string, task.SupervisorRef, PrivateTerminalCustodyScope) error
 	// PrivateMigrationAuthorizer is the application-owned policy gate for
 	// stopping a private supervisor. Pueue supplies an immutable queue snapshot;
 	// it does not inspect Delegate task or inspection schemas.
@@ -89,6 +98,22 @@ type Options struct {
 type PrivateQueueCleanupPlan struct {
 	RemoveIDs []int64
 	Settling  bool
+}
+
+// PrivateTerminalCustodyScope is the work one maintenance phase hands to the
+// custody owner. Candidates is a copy of the snapshot rows selected by one
+// capture: a full capture can include active, unrelated, and duplicate-label
+// witnesses, and preparation may have skipped or deferred any row. A candidate
+// carries no terminal, closure, or release authority; the consumer validates
+// its canonical records before releasing anything. Full marks the separate
+// full-recovery phase: it runs once per full-recovery generation with no
+// candidates, before the supervisor endpoint is verified or the queue
+// captured, so custody that needs no queue row is reconciled even when the
+// queue is unavailable. Capture phases, including settling recaptures, are
+// never Full.
+type PrivateTerminalCustodyScope struct {
+	Candidates []Job
+	Full       bool
 }
 
 // Observation is positive only when exactly one row matches the complete binding.

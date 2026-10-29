@@ -129,7 +129,7 @@ func TestPreparedPrivateMigrationDoesNotAuthorizeTerminalMaintenance(t *testing.
 	run := newPrivateQueueMaintenanceRun(fixture.legacy, false)
 	err := WithSupervisorLeaseContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		assertPreparedPrivateObservationIncomplete(t, fixture)
-		return run.maintainLocked(ctx)
+		return run.maintain(ctx)
 	})
 	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Errorf("prepared journal granted terminal maintenance authority: %v", err)

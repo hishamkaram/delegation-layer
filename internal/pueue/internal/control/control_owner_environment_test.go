@@ -30,6 +30,7 @@ func TestControlOwnerChildEnvironmentFollowsCommandEnvironment(t *testing.T) {
 			command.Dir = filepath.Dir(executable)
 			command.Env = tc.environment
 			pending := startControlOwnerTest(t, command, "ffffffffffffffffffffffffffffffff", "")
+			awaitControlOwnerTest(t, pending)
 			result, err := observeCommand(t.Context(), pending, 2*time.Second)
 			if err != nil {
 				t.Fatalf("external owner result: %+v: %v", result, err)
@@ -49,6 +50,7 @@ func TestControlOwnerEnvironmentOwnsItsCopy(t *testing.T) {
 	command.Env = environment
 	pending := startControlOwnerTest(t, command, "ffffffffffffffffffffffffffffffff", "")
 	environment[0] = ownerMarkerKey + "=mutated-after-start"
+	awaitControlOwnerTest(t, pending)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatalf("external owner result: %+v: %v", result, err)

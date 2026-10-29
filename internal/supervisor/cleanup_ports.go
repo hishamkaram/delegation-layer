@@ -21,9 +21,10 @@ type InspectionEvidence interface {
 // custody of an inspection's verified executables. Both methods run only after
 // the row's lifetime evidence was validated, inside the operation's existing
 // Close ownership. PrepareVerifiedLifetime releases a canonically closed
-// lifetime's custody. AuthorizeInspectionRemoval reports whether that custody is
-// released; false or an error retains only this row, so a later pass retries
-// the exact recorded pool.
+// lifetime's custody; ReleaseInspectionCustody calls it while no generation
+// lease or queue identity is held. AuthorizeInspectionRemoval reports whether
+// that custody is released; false or an error retains only this row, so a
+// later pass retries the exact recorded pool.
 type InspectionCustody interface {
 	PrepareVerifiedLifetime(context.Context, *inspection.Operation) error
 	AuthorizeInspectionRemoval(context.Context, *inspection.Operation) (bool, error)

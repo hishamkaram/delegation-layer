@@ -428,6 +428,15 @@ has no ticket; it exposes the complete current snapshot, including inspection
 rows with missing candidates. Durable task and inspection journals
 remain the sole authority for every removal. A later callback or accepted
 terminal observation wakes a retry for rows retained by an earlier failed pass.
+A failed attempt never re-runs itself; it waits for a new positive wake.
+For terminal maintenance, a private root whose binding predates the
+logical-identity record is adopted inside the asynchronous maintenance helper
+(`RunQueueMaintenance`), not by a public observer, under the bootstrap EX lease, from the existing config, recorded daemon identity, and
+resolved executable pair. It never creates a config, starts or restarts a
+queue, or relaxes a hash check; a refusal keeps the wake pending. Adoption goes
+through the existing `PreparePrivateWithLock`, whose status-overflow cleanup of
+authorized successful rows can still run under that EX lease. Migration keeps
+the relevant inspection rows, so a later full pass can retry their custody.
 
 A queue writer publishes intent under its dedicated owner lock before waiting
 for exclusive queue identity. New readers check that intent before and while
@@ -598,12 +607,23 @@ An exact status command that exits transiently is retried only within the
 immutable admission window and its cause is retained if that window expires.
 Malformed status, schema, output-limit, binding, identity, and evidence faults
 remain immediate failures rather than retry signals.
-`status` and `collect` can also remove the exact recorded row of their terminal
-task. A terminal outcome may precede the Pueue row's ended state while the
-runner exits, so Delegate defers that exact running row to later maintenance
-instead of removing it. Cleanup failures are maintenance-only; durable task
-outcomes remain authoritative. External `--pueue-config` installations are
-never cleaned.
+For a private supervisor, the maintenance step of `status` and `collect` is an
+observer (`internal/app/task_maintenance.go`). It reads its own task's closed
+custody hint and reconciles its exact published row read-only; it never
+removes a row, binds the supervisor for mutation, or releases custody. A
+positive hint (closed custody still pending, or the exact ended row still
+present) durably requests one full maintenance generation. The observer then
+attempts to start the existing independent maintenance owner only when it holds
+a published-row client and a maintenance launcher; otherwise the durable wake
+waits for a later callback or admission to consume it. When neither the
+custody hint nor the exact row hint is positive, the observer requests
+nothing. This optional maintenance step adds no supervisor probe or repair;
+the command's own task observation is unchanged. A task with a validated saved external binding has no elected
+owner, so its observer keeps the synchronous custody retry and never cleans
+rows; a malformed saved binding classifies nothing and never falls back to that
+external path. Maintenance faults are logged warnings; the command's outcome,
+payload, JSON, and exit code are unchanged. External `--pueue-config`
+installations are never cleaned.
 
 The private supervisor's ordinary default group uses Pueue's unlimited
 parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing
@@ -681,10 +701,28 @@ have no placement and keep their private copy.
 - **Release.** The recorded pool identity and canonical native closure govern
   release. Closure is proven only by the canonical journal reader
   (`guardian.ReadClosureProof`); a dead process, an unheld lock, or an inherited
-  descriptor is never evidence, and pending closure releases nothing. `status`,
-  `collect`, and the guardian after its run attempt one bounded release (10
-  seconds). A custody fault is logged, retried by the next observer of the same
-  records, and never rewrites the task outcome or the guardian's result.
+  descriptor is never evidence, and pending closure releases nothing. The
+  guardian's post-run release is the primary path, bounded at 10 seconds. For a
+  private task, a release fault persists a full maintenance wake before the
+  guardian exits, in its own cancel-independent phase bounded by
+  `pueue.DefaultObservationTimeout` (5 seconds); it renews no provider, task,
+  or native budget. That write is best-effort I/O: its failure is logged, not
+  guaranteed away. For an external task, the next `status` or `collect` retries
+  the release synchronously. A custody fault never rewrites the task outcome or
+  the guardian's result.
+- **Private maintenance custody.** The elected private maintenance owner
+  (`internal/pueue/internal/control/private_queue_cleanup.go`) calls the
+  application releaser `releasePrivateTerminalCustody` with neither the
+  generation lease nor queue identity held. A full generation first calls it
+  with no candidates, before the queue endpoint is captured, and it retries
+  closed custody for every ordinary task listed by `taskdir` `TaskIDs`, so a
+  removed row, lost callback, or stopped queue cannot strand custody. Each
+  capture then prepares evidence under queue identity, hands a deep copy of its
+  candidates to the releaser, and removal reacquires both leases for fresh
+  revalidation. Candidates, task-directory names, outcomes, and row absence are
+  discovery only; the exact recorded pool and canonical closure remain the only
+  release authority. A custody fault fails the attempt without withholding
+  other authorized rows; a later positive wake retries it.
 - **Inspection cleanup.** After an ended inspection row's lifetime evidence
   validates, maintenance releases its closed custody. Removing that row, once
   its terminal evidence also validates, additionally requires that no custody

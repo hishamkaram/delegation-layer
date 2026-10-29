@@ -14,7 +14,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -245,15 +244,4 @@ func lifetimeCustodyPending(ctx context.Context, records guardian.ClosureRecords
 		return true, nil
 	}
 	return custody.pool.ReleasePending(custody.namespace)
-}
-
-// reportLifetimeCustodyRelease releases after an operation that must not change
-// its result for a custody fault. The fault is logged and retried by the next
-// observer of the same records.
-func reportLifetimeCustodyRelease(records guardian.ClosureRecords) {
-	ctx, cancel := context.WithTimeout(context.Background(), lifetimeCustodyReleaseTimeout)
-	defer cancel()
-	if err := releaseLifetimeCustody(ctx, records); err != nil {
-		log.Printf("delegate: lifetime custody release deferred: %v", err)
-	}
 }

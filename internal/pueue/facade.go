@@ -464,12 +464,13 @@ var (
 )
 
 type (
-	Options                 = control.Options
-	PrivateQueueCleanupPlan = control.PrivateQueueCleanupPlan
-	CommandEvent            = control.CommandEvent
-	Identity                = control.Identity
-	Launch                  = control.Launch
-	State                   = control.State
+	Options                     = control.Options
+	PrivateQueueCleanupPlan     = control.PrivateQueueCleanupPlan
+	PrivateTerminalCustodyScope = control.PrivateTerminalCustodyScope
+	CommandEvent                = control.CommandEvent
+	Identity                    = control.Identity
+	Launch                      = control.Launch
+	State                       = control.State
 )
 
 const (

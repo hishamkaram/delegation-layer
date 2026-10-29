@@ -57,6 +57,9 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
    consumes that validated receipt and must not repeat those lifecycle
    operations. Retain reconciliation only for
    legacy or direct invocations without the supervised launch marker.
+   Terminal custody and row maintenance follow the contract's [terminal
+   maintenance recovery](../../agents/_data/maintainability-contract.md#terminal-maintenance-recovery)
+   rows.
 8. Keep healthy admission free of supervisor subprocesses. Validate the exact
    published generation and scheduling receipt under its shared lease, then
    probe the private Unix endpoint directly. Route missing, refused, changed,

@@ -94,15 +94,19 @@ func TestInspectionCustodyEvidenceKeepsNativePolicy(t *testing.T) {
 }
 
 // TestPrivateCleanupOwnerReleasesVerifiedInspectionCustody drives the
-// production cleanup factory: a missing pool keeps its views and its row and
-// never changes preparation's or migration's result, and the next pass
-// releases the exact recorded pool and then authorizes the row.
+// production cleanup factory: identity-protected preparation never touches
+// custody, the unprotected custody phase reports a missing pool while keeping
+// its views and its row, migration's result is unchanged, and the next custody
+// phase releases the exact recorded pool and then authorizes the row.
 func TestPrivateCleanupOwnerReleasesVerifiedInspectionCustody(t *testing.T) {
 	f := newEndedCustodyInspection(t)
 	taskID := strings.Repeat("b", 32)
 	restore := moveCustodyTestPool(t, f.registration.CustodyPlacement)
 	if err := privateCleanupOwner().PrepareEndedInspectionEvidence(t.Context(), f.store, f.legacy, taskID, f.job); err != nil {
 		t.Fatalf("a custody fault changed preparation's result: %v", err)
+	}
+	if err := releasePrivateTerminalCustody(t.Context(), f.store.Root, f.supervisor, pueue.PrivateTerminalCustodyScope{Candidates: []pueue.Job{f.job}}); err == nil {
+		t.Fatal("the custody phase did not report a missing pool")
 	}
 	if err := inspectLegacyEndedJob(context.Background(), f.store, f.legacy, f.job); err != nil {
 		t.Fatalf("migration validator consulted custody: %v", err)
@@ -120,8 +124,14 @@ func TestPrivateCleanupOwnerReleasesVerifiedInspectionCustody(t *testing.T) {
 	if err := privateCleanupOwner().PrepareEndedInspectionEvidence(t.Context(), f.store, f.legacy, taskID, f.job); err != nil {
 		t.Fatal(err)
 	}
+	if !custodyTestPending(t, f.registration) {
+		t.Fatal("identity-protected preparation released custody")
+	}
+	if err := releasePrivateTerminalCustody(t.Context(), f.store.Root, f.supervisor, pueue.PrivateTerminalCustodyScope{Candidates: []pueue.Job{f.job}}); err != nil {
+		t.Fatal(err)
+	}
 	if custodyTestPending(t, f.registration) {
-		t.Fatal("preparation did not release the recorded pool")
+		t.Fatal("the custody phase did not release the recorded pool")
 	}
 	if !f.removable(t) {
 		t.Fatal("a released row was not authorized for removal")

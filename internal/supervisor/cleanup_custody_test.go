@@ -20,6 +20,9 @@ import (
 // task ID, recording each custody call.
 type scriptedInspectionEvidence struct {
 	invalid map[string]bool
+	// releaseOnPrepare makes a fault-free PrepareVerifiedLifetime release the
+	// custody that AuthorizeInspectionRemoval later reports.
+	releaseOnPrepare bool
 
 	mu            sync.Mutex
 	released      map[string]bool
@@ -48,7 +51,14 @@ func (e *scriptedInspectionEvidence) PrepareVerifiedLifetime(_ context.Context, 
 	defer e.mu.Unlock()
 	id := operation.Request().TaskID
 	e.calls = append(e.calls, "prepare:"+id)
-	return e.prepareFaults[id]
+	fault := e.prepareFaults[id]
+	if e.releaseOnPrepare && fault == nil {
+		if e.released == nil {
+			e.released = make(map[string]bool)
+		}
+		e.released[id] = true
+	}
+	return fault
 }
 
 func (e *scriptedInspectionEvidence) AuthorizeInspectionRemoval(_ context.Context, operation *inspection.Operation) (bool, error) {
@@ -103,6 +113,20 @@ func newCustodyCleanupFixture(t *testing.T) custodyCleanupFixture {
 // is valid and returns its queue row.
 func (f custodyCleanupFixture) endedInspection(t *testing.T, fill string, id int64, binding inspection.Binding) pueue.Job {
 	t.Helper()
+	job := f.unpreparedInspection(t, fill, id, binding)
+	// Native preparation retains the legacy worker exit, as maintenance does
+	// before it authorizes removal.
+	native := NewCleanup(nativeOnlyEvidence{evidence: &scriptedInspectionEvidence{}}, absentWorkspace)
+	if err := native.PrepareEndedInspectionEvidence(t.Context(), f.store, f.legacy, strings.Repeat(fill, 32), job); err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+// unpreparedInspection writes the same ended inspection without its
+// identity-protected worker observation.
+func (f custodyCleanupFixture) unpreparedInspection(t *testing.T, fill string, id int64, binding inspection.Binding) pueue.Job {
+	t.Helper()
 	request := testsupport.NewInspectionRequest(t, f.store)
 	request.TaskID = strings.Repeat(fill, 32)
 	digest := strings.Repeat("a", 64)
@@ -139,14 +163,7 @@ func (f custodyCleanupFixture) endedInspection(t *testing.T, fill string, id int
 		t.Fatal(err)
 	}
 	label := (pueue.InspectionIdentity{RootID: f.store.RootID, TaskID: request.TaskID}).Label()
-	job := pueue.Job{ID: id, Label: &label, State: pueue.StateEnded, Group: f.legacy.Name}
-	// Native preparation retains the legacy worker exit, as maintenance does
-	// before it authorizes removal.
-	native := NewCleanup(nativeOnlyEvidence{evidence: &scriptedInspectionEvidence{}}, absentWorkspace)
-	if err = native.PrepareEndedInspectionEvidence(t.Context(), f.store, f.legacy, request.TaskID, job); err != nil {
-		t.Fatal(err)
-	}
-	return job
+	return pueue.Job{ID: id, Label: &label, State: pueue.StateEnded, Group: f.legacy.Name}
 }
 
 func absentWorkspace(context.Context, *taskdir.Store, inspection.GroupRequestRecord, string, pueue.Job) (bool, error) {
@@ -210,28 +227,99 @@ func TestCleanupCustodyRetainsOnlyUnreleasedInspectionRows(t *testing.T) {
 	}
 }
 
-func TestCleanupPreparationReleasesCustodyWithoutChangingItsResult(t *testing.T) {
+// Identity-protected preparation keeps its native evidence work and never
+// touches custody; the release phase owns that filesystem work.
+func TestCleanupPreparationLeavesCustodyToReleasePhase(t *testing.T) {
 	f := newCustodyCleanupFixture(t)
-	managed := f.endedInspection(t, "a", 7, inspection.Binding{
+	managed := f.unpreparedInspection(t, "a", 7, inspection.Binding{
 		RunnerOwnership: task.RunnerOwnershipManaged, WorkerExitProof: inspection.WorkerExitProofGuardianWaitV1,
 	})
-	legacy := f.endedInspection(t, "b", 8, inspection.Binding{})
-	evidence := &scriptedInspectionEvidence{prepareFaults: map[string]error{
-		strings.Repeat("a", 32): errors.New("custody pool root is missing"),
-		strings.Repeat("b", 32): errors.New("custody pool identity differs"),
-	}}
+	legacy := f.unpreparedInspection(t, "b", 8, inspection.Binding{})
+	evidence := &scriptedInspectionEvidence{}
 	cleanup := NewCleanup(evidence, absentWorkspace)
-	for _, job := range []pueue.Job{managed, legacy} {
-		id, _, _, err := LegacyJobTaskID(*job.Label, f.store.RootID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = cleanup.PrepareEndedInspectionEvidence(t.Context(), f.store, f.legacy, id, job); err != nil {
-			t.Fatalf("custody fault changed preparation of row %d: %v", job.ID, err)
-		}
+	if err := cleanup.PrepareTerminalEvidence(t.Context(), f.store.Root, f.supervisor, []pueue.Job{managed, legacy}); err != nil {
+		t.Fatal(err)
+	}
+	if got := evidence.recorded(); len(got) != 0 {
+		t.Fatalf("protected preparation called custody: %v", got)
+	}
+	if !workerObservationRecorded(t, f.store, strings.Repeat("b", 32)) {
+		t.Fatal("protected preparation did not retain the legacy worker exit")
+	}
+}
+
+// The release phase validates the canonical evidence of each unique ended
+// inspection row and releases its custody, joining faults without stopping.
+// It runs without queue identity, so it publishes no worker observation.
+func TestCleanupReleaseInspectionCustodyPublishesNoObservation(t *testing.T) {
+	f := newCustodyCleanupFixture(t)
+	released := f.unpreparedInspection(t, "a", 7, inspection.Binding{})
+	faulted := f.unpreparedInspection(t, "b", 8, inspection.Binding{})
+	invalid := f.unpreparedInspection(t, "c", 9, inspection.Binding{})
+	duplicate := f.unpreparedInspection(t, "d", 10, inspection.Binding{})
+	duplicateCopy := duplicate
+	duplicateCopy.ID = 11
+	workspaceLabel := (pueue.InspectionIdentity{RootID: f.store.RootID, TaskID: strings.Repeat("e", 32)}).Label()
+	workspaceRow := pueue.Job{ID: 12, Label: &workspaceLabel, State: pueue.StateEnded, Group: f.legacy.Name}
+	ordinaryLabel := "delegate:" + f.store.RootID + ":" + strings.Repeat("f", 32)
+	ordinaryRow := pueue.Job{ID: 13, Label: &ordinaryLabel, State: pueue.StateEnded, Group: "default"}
+	custodyFault := errors.New("custody pool root is missing")
+	evidence := &scriptedInspectionEvidence{
+		invalid:       map[string]bool{strings.Repeat("c", 32): true},
+		prepareFaults: map[string]error{strings.Repeat("b", 32): custodyFault},
+	}
+	cleanup := NewCleanup(evidence, absentWorkspace)
+	jobs := []pueue.Job{released, faulted, invalid, duplicate, duplicateCopy, workspaceRow, ordinaryRow}
+	err := cleanup.ReleaseInspectionCustody(t.Context(), f.store.Root, f.supervisor, jobs)
+	if !errors.Is(err, custodyFault) || !strings.Contains(err.Error(), strings.Repeat("b", 32)) {
+		t.Fatalf("custody release error=%v, want the joined fault naming its inspection", err)
 	}
 	want := []string{"prepare:" + strings.Repeat("a", 32), "prepare:" + strings.Repeat("b", 32)}
 	if got := evidence.recorded(); !slices.Equal(got, want) {
-		t.Fatalf("custody preparation calls %v, want %v, including the guardian-wait row", got, want)
+		t.Fatalf("custody calls %v, want only validated unique inspection rows %v", got, want)
 	}
+	for _, fill := range []string{"a", "b"} {
+		if workerObservationRecorded(t, f.store, strings.Repeat(fill, 32)) {
+			t.Fatalf("custody release published a worker observation for inspection %s", fill)
+		}
+	}
+	if err = NewCleanup(nativeOnlyEvidence{evidence: evidence}, absentWorkspace).ReleaseInspectionCustody(t.Context(), f.store.Root, f.supervisor, jobs); err != nil {
+		t.Fatalf("release without a custody owner: %v", err)
+	}
+}
+
+// A successful release reaches removal in the same pass; a faulted release
+// retains only its own row behind the unchanged removal gate.
+func TestCleanupReleasedCustodyReachesRemovalInSamePass(t *testing.T) {
+	f := newCustodyCleanupFixture(t)
+	released := f.endedInspection(t, "a", 7, inspection.Binding{})
+	faulted := f.endedInspection(t, "b", 8, inspection.Binding{})
+	evidence := &scriptedInspectionEvidence{
+		releaseOnPrepare: true,
+		prepareFaults:    map[string]error{strings.Repeat("b", 32): errors.New("custody pool identity differs")},
+	}
+	cleanup := NewCleanup(evidence, absentWorkspace)
+	jobs := []pueue.Job{released, faulted}
+	if got := f.authorize(t, cleanup, jobs); len(got) != 0 {
+		t.Fatalf("rows %v were removable before custody release", got)
+	}
+	if err := cleanup.ReleaseInspectionCustody(t.Context(), f.store.Root, f.supervisor, jobs); err == nil {
+		t.Fatal("custody fault was not reported")
+	}
+	if got, want := f.authorize(t, cleanup, jobs), []int64{7}; !slices.Equal(got, want) {
+		t.Fatalf("removed rows %v after release, want only the released inspection %v", got, want)
+	}
+}
+
+func workerObservationRecorded(t *testing.T, store *taskdir.Store, id string) bool {
+	t.Helper()
+	operation, err := inspection.LoadOperationContext(t.Context(), store, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, readErr := operation.ReadWorkerResultContext(t.Context())
+	if err = operation.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return readErr == nil
 }

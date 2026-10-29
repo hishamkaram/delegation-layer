@@ -210,10 +210,10 @@ func requireGuardianReleaseAfterRunError(t *testing.T, s custodyContractStore, c
 	var failed *guardian.Guardian
 	wantErr := failed.Run(context.Background())
 	parsed := runnerArguments{TaskID: s.taskID, Inspection: true}
-	if err := runGuardianWithWorkspaceCompletion(failed, nil, s.store, parsed, Dependencies{}); err == nil || err.Error() != wantErr.Error() || !custodyTestPending(t, registration) {
+	if err := runGuardianWithWorkspaceCompletion(failed, lifetimeGuardianRunState{}, s.store, parsed, Dependencies{}); err == nil || err.Error() != wantErr.Error() || !custodyTestPending(t, registration) {
 		t.Fatalf("run without closure records: error %v, want %v and no release", err, wantErr)
 	}
-	if err := runGuardianWithWorkspaceCompletion(failed, closure, s.store, parsed, Dependencies{}); err == nil || err.Error() != wantErr.Error() {
+	if err := runGuardianWithWorkspaceCompletion(failed, lifetimeGuardianRunState{closure: closure}, s.store, parsed, Dependencies{}); err == nil || err.Error() != wantErr.Error() {
 		t.Fatalf("failed run error %v, want unchanged %v", err, wantErr)
 	}
 	if custodyTestPending(t, registration) {

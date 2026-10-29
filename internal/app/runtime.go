@@ -197,6 +197,9 @@ func (d Dependencies) normalized() Dependencies {
 	if d.SupervisorOptions.PrivateTerminalEvidencePreparer == nil {
 		d.SupervisorOptions.PrivateTerminalEvidencePreparer = preparePrivateTerminalEvidence
 	}
+	if d.SupervisorOptions.PrivateTerminalCustodyReleaser == nil {
+		d.SupervisorOptions.PrivateTerminalCustodyReleaser = releasePrivateTerminalCustody
+	}
 	if d.SupervisorOptions.PrivateMigrationAuthorizer == nil {
 		d.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue
 	}

@@ -247,11 +247,14 @@ func newCustodyRebootFixture(t *testing.T, holdRunnerLease bool, cause string) (
 	return fixture, registration
 }
 
-// TestStatusAndCollectReleaseCustodyWhenOfferDerivationFails: a malformed
-// provider identity makes the timed-out offer's session resolution fail after
-// closure is proven. The offer is absent and the session fault is reported,
-// and canonical release still happens without changing that result.
-func TestStatusAndCollectReleaseCustodyWhenOfferDerivationFails(t *testing.T) {
+// TestStatusAndCollectRequestCustodyReleaseWhenOfferDerivationFails: a
+// malformed provider identity makes the timed-out offer's session resolution
+// fail after closure is proven. The offer is absent and the session fault is
+// reported. The private public path releases nothing: a pool fault is only a
+// warning, a provable remaining release persists one full wake, and the
+// elected owner's custody phase then releases the exact recorded pool without
+// changing that result.
+func TestStatusAndCollectRequestCustodyReleaseWhenOfferDerivationFails(t *testing.T) {
 	commands := map[string]func(*testing.T, *rebootFixture) commandResult{"status": rebootStatus, "collect": rebootCollect}
 	for name, run := range commands {
 		t.Run(name, func(t *testing.T) {
@@ -260,12 +263,16 @@ func TestStatusAndCollectReleaseCustodyWhenOfferDerivationFails(t *testing.T) {
 			writeRebootTaskFile(t, fixture, "provider.ref.json", []byte("{"))
 
 			restore := moveCustodyTestPool(t, registration.CustodyPlacement)
+			before := readTaskMaintenanceWake(t, fixture.root)
 			faultedResult := run(t, fixture)
 			restore()
 			if !custodyTestPending(t, registration) {
 				t.Fatal("a missing pool was treated as released")
 			}
+			requireTaskMaintenanceWakeUnchanged(t, fixture.root, before, "a pool fault")
 			healthyResult := run(t, fixture)
+			requirePublicCustodyRequest(t, fixture.root, registration, before)
+			runTaskCustodyOwner(t, fixture.root)
 			for _, result := range []commandResult{faultedResult, healthyResult} {
 				if result.response.Continuation != nil || result.err == nil || !strings.Contains(result.err.Error(), "predecessor session is unavailable") {
 					t.Fatalf("%s with failed offer derivation = code %d err=%v continuation=%+v", name, result.code, result.err, result.response.Continuation)
@@ -275,18 +282,22 @@ func TestStatusAndCollectReleaseCustodyWhenOfferDerivationFails(t *testing.T) {
 				t.Fatalf("custody fault changed the result:\nfaulted %s\nhealthy %s", faulted, healthy)
 			}
 			if custodyTestPending(t, registration) {
-				t.Fatalf("%s did not release custody when offer derivation failed", name)
+				t.Fatalf("the owner did not release custody after %s requested it", name)
 			}
+			settled := readTaskMaintenanceWake(t, fixture.root)
+			run(t, fixture)
+			requireTaskMaintenanceWakeUnchanged(t, fixture.root, settled, "a settled "+name+" poll")
 		})
 	}
 }
 
-// TestStatusReleasesClosedCustodyWhileRunnerLeaseIsHeld: the runner lease (not
-// the lifetime-owner lease) is still held, so no resumable continuation is
-// offered, but canonical closure alone authorizes release. An open lifetime
-// keeps its views. Each command runs alone on a fresh fixture, so one
-// command's release can never mask another's.
-func TestStatusReleasesClosedCustodyWhileRunnerLeaseIsHeld(t *testing.T) {
+// TestStatusRequestsClosedCustodyReleaseWhileRunnerLeaseIsHeld: the runner
+// lease (not the lifetime-owner lease) is still held, so no resumable
+// continuation is offered, but canonical closure alone makes release work
+// remain. The public path persists a wake and the owner releases; an open
+// lifetime keeps its views and requests nothing. Each command runs alone on a
+// fresh fixture, so one command's request can never mask another's.
+func TestStatusRequestsClosedCustodyReleaseWhileRunnerLeaseIsHeld(t *testing.T) {
 	// Only status derives the held-lease offer; collect alone reports none.
 	commands := map[string]struct {
 		run           func(*testing.T, *rebootFixture) commandResult
@@ -303,7 +314,14 @@ func TestStatusReleasesClosedCustodyWhileRunnerLeaseIsHeld(t *testing.T) {
 			t.Run(name+"/closed="+strconv.FormatBool(!tc.wantPending), func(t *testing.T) {
 				fixture, registration := newCustodyRebootFixture(t, true, tc.cause)
 				requireRunnerLeaseHeld(t, fixture)
+				before := readTaskMaintenanceWake(t, fixture.root)
 				requireRunnerLeaseHeldOffer(t, command.run(t, fixture), command.reportsLeased && !tc.wantPending)
+				if tc.wantPending {
+					requireTaskMaintenanceWakeUnchanged(t, fixture.root, before, "an open lifetime")
+				} else {
+					requirePublicCustodyRequest(t, fixture.root, registration, before)
+				}
+				runTaskCustodyOwner(t, fixture.root)
 				if got := custodyTestPending(t, registration); got != tc.wantPending {
 					t.Fatalf("%s left custody pending = %t, want %t", name, got, tc.wantPending)
 				}
