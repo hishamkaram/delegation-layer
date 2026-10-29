@@ -18,17 +18,6 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.private_cli.fixtures",
-    "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_private_cli",
-      "py:acceptance_supervisor_common",
-      "py:pathlib",
-      "py:tempfile"
-    ]
-  },
-  {
     "name": "py:acceptance_tests.private_cli.modern_application_fixture",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",

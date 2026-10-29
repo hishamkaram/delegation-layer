@@ -480,10 +480,26 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.private_cli.fixtures",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_supervisor_common",
+      "py:contextlib",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:tempfile",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.private_cli.test_noexec_state",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.private_cli.fixtures",
       "py:contextlib",
       "py:delegate_acceptance.private_cli.application",
       "py:delegate_acceptance.private_cli.arguments",
@@ -492,7 +508,7 @@
       "py:delegate_acceptance.private_cli.noexec_state",
       "py:delegate_acceptance.processes.contracts",
       "py:io",
-      "py:json",
+      "py:os",
       "py:pathlib",
       "py:sys",
       "py:tempfile",
@@ -505,6 +521,7 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.private_cli.fixtures",
       "py:acceptance_tests.resources",
       "py:delegate_acceptance.private_cli.application",
       "py:delegate_acceptance.private_cli.configuration",
@@ -517,7 +534,6 @@
       "py:delegate_acceptance.private_cli.handoff_observation",
       "py:delegate_acceptance.private_cli.receipt",
       "py:delegate_acceptance.private_cli.scenario_entry",
-      "py:json",
       "py:pathlib",
       "py:sys",
       "py:tempfile",

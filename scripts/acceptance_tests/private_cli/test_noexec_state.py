@@ -2,13 +2,19 @@
 
 from contextlib import redirect_stderr
 import io
-import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from scripts.acceptance_tests.private_cli.fixtures import (
+    canonical_pool_marker,
+    create_private_pool_directory,
+    reported_as_another_user,
+    write_pool_marker,
+)
 from scripts.delegate_acceptance.private_cli import application, arguments, noexec_state
 from scripts.delegate_acceptance.private_cli.configuration import (
     DEFAULT_STOP_SCENARIO,
@@ -158,10 +164,9 @@ class CustodyTree:
         self.execution.mkdir()
 
     def pool(self, name, pool_id, parent=None, marker=True):
-        root = (parent or self.execution) / name
-        root.mkdir(parents=True)
+        root = create_private_pool_directory((parent or self.execution) / name)
         if marker:
-            (root / ".identity").write_text(json.dumps({"version": 1, "pool_id": pool_id}, separators=(",", ":")))
+            write_pool_marker(root, canonical_pool_marker(pool_id))
         return root
 
     @staticmethod
@@ -256,7 +261,7 @@ class CustodyPlacementTests(unittest.TestCase):
         elsewhere = self.tree.pool("elsewhere", POOL_B, parent=self.tree.root)
         for root, pool_id in ((elsewhere, POOL_B), (self.tree.execution, POOL_B)):
             with self.subTest(root=root.name):
-                (root / ".identity").write_text(json.dumps({"version": 1, "pool_id": pool_id}))
+                write_pool_marker(root, canonical_pool_marker(pool_id))
                 self.assert_refused(
                     self.tree.closures({TASK: self.tree.registration(root, pool_id)}, {INSPECTION: self.good_inspection}),
                     "task " + TASK + " custody pool root is not beneath the execution temporary root",
@@ -288,14 +293,86 @@ class CustodyPlacementTests(unittest.TestCase):
             "task " + TASK + " custody pool marker does not match its registration",
         )
 
-    def test_a_marker_that_is_not_the_version_one_record_is_refused(self):
-        marker = self.pool_a / ".identity"
-        for content in ('{"version":2,"pool_id":"%s"}' % POOL_A, '{"version":1,"pool_id":"%s","x":1}' % POOL_A,
-                        "not json", "[]", '{"version":true,"pool_id":"%s"}' % POOL_A):
-            with self.subTest(content=content):
-                marker.write_text(content)
-                with self.assertRaises(RuntimeError):
-                    self.tree.prove(self.tree.closures({TASK: self.good_task}, {INSPECTION: self.good_inspection}))
+    def prove_good(self):
+        return self.tree.prove(self.tree.closures({TASK: self.good_task}, {INSPECTION: self.good_inspection}))
+
+    def test_the_canonical_private_marker_is_accepted(self):
+        self.assertEqual(self.prove_good()["tasks"][TASK]["marker"], "matched")
+
+    def test_a_marker_that_is_not_the_canonical_version_one_record_is_refused(self):
+        # Go's decodePoolIdentity accepts only its own json.Marshal bytes; json.loads accepts most of these.
+        valid = canonical_pool_marker(POOL_A).decode()
+        contents = {
+            "other version": '{"version":2,"pool_id":"%s"}' % POOL_A,
+            "unknown field": '{"version":1,"pool_id":"%s","x":1}' % POOL_A,
+            "boolean version": '{"version":true,"pool_id":"%s"}' % POOL_A,
+            "array": "[]",
+            "duplicate key": '{"version":1,"version":1,"pool_id":"%s"}' % POOL_A,
+            "duplicate id": '{"version":1,"pool_id":"%s","pool_id":"%s"}' % (POOL_B, POOL_A),
+            "trailing newline": valid + "\n",
+            "leading whitespace": " " + valid,
+            "inner whitespace": '{"version": 1, "pool_id": "%s"}' % POOL_A,
+            "reordered keys": '{"pool_id":"%s","version":1}' % POOL_A,
+            "float version": '{"version":1.0,"pool_id":"%s"}' % POOL_A,
+            "escaped id": '{"version":1,"pool_id":"\\u0061%s"}' % POOL_A[1:],
+            "uppercase id": canonical_pool_marker(POOL_A.upper()).decode(),
+            "short id": canonical_pool_marker("abc").decode(),
+        }
+        for name, content in contents.items():
+            with self.subTest(name=name):
+                write_pool_marker(self.pool_a, content.encode())
+                self.assertRaisesRegex(
+                    RuntimeError, "task " + TASK + " custody pool identity marker is not the canonical version 1 record",
+                    self.prove_good)
+        for name, content in {"not json": b"not json", "empty": b""}.items():
+            with self.subTest(name=name):
+                write_pool_marker(self.pool_a, content)
+                self.assertRaisesRegex(RuntimeError, "task " + TASK + " custody pool identity marker is not JSON",
+                                       self.prove_good)
+
+    def test_a_marker_that_is_not_private_to_this_user_is_refused(self):
+        for mode in (0o644, 0o640, 0o400, 0o700, 0o4600):
+            with self.subTest(mode=oct(mode)):
+                write_pool_marker(self.pool_a, canonical_pool_marker(POOL_A), mode)
+                self.assertRaisesRegex(
+                    RuntimeError, "task " + TASK + " custody pool identity marker has an unsafe owner or mode",
+                    self.prove_good)
+        write_pool_marker(self.pool_a, canonical_pool_marker(POOL_A))
+        with reported_as_another_user(self.pool_a / ".identity"):
+            self.assertRaisesRegex(
+                RuntimeError, "task " + TASK + " custody pool identity marker has an unsafe owner or mode",
+                self.prove_good)
+
+    def test_a_pool_root_without_group_or_world_bits_is_accepted(self):
+        for mode in (0o700, 0o500):
+            with self.subTest(mode=oct(mode)):
+                self.pool_a.chmod(mode)
+                self.addCleanup(self.pool_a.chmod, 0o700)
+                self.assertEqual(self.prove_good()["tasks"][TASK]["marker"], "matched")
+
+    def test_a_pool_root_that_is_not_private_to_this_user_is_refused(self):
+        message = "task " + TASK + " custody pool root is not a private directory of this user"
+        for mode in (0o755, 0o750, 0o705, 0o701):
+            with self.subTest(mode=oct(mode)):
+                self.pool_a.chmod(mode)
+                self.assertRaisesRegex(RuntimeError, message, self.prove_good)
+        self.pool_a.chmod(0o700)
+        with reported_as_another_user(self.pool_a):
+            self.assertRaisesRegex(RuntimeError, message, self.prove_good)
+
+    def test_an_oversized_directory_or_fifo_marker_is_not_a_bounded_regular_file(self):
+        oversized = self.tree.pool("oversized", POOL_A, marker=False)
+        write_pool_marker(oversized, canonical_pool_marker(POOL_A) + b" " * noexec_state.MAX_POOL_IDENTITY_BYTES)
+        directory = self.tree.pool("directory", POOL_A, marker=False)
+        (directory / ".identity").mkdir(mode=0o700)
+        fifo = self.tree.pool("fifo", POOL_A, marker=False)
+        os.mkfifo(fifo / ".identity", 0o600)
+        for root in (oversized, directory, fifo):
+            with self.subTest(root=root.name):
+                self.assert_refused(
+                    self.tree.closures({TASK: self.tree.registration(root, POOL_A)}, {INSPECTION: self.good_inspection}),
+                    "task " + TASK + " custody pool identity marker is not a bounded regular file",
+                )
 
     def test_a_symlinked_marker_is_not_a_regular_file(self):
         marker = self.pool_a / ".identity"

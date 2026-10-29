@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 import fcntl
-import json
 import os
 from pathlib import Path
 import shutil
@@ -14,7 +13,11 @@ import unittest.mock
 from unittest.mock import patch
 from scripts import acceptance_private_cli as private_cli
 from scripts.acceptance_tests.private_cli.fixtures import _release_live_directory_tokens
+from scripts.acceptance_tests.private_cli.fixtures import canonical_pool_marker
+from scripts.acceptance_tests.private_cli.fixtures import create_private_pool_directory
+from scripts.acceptance_tests.private_cli.fixtures import reported_as_another_user
 from scripts.acceptance_tests.private_cli.fixtures import set_up_private_capture_root
+from scripts.acceptance_tests.private_cli.fixtures import write_pool_marker
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.lifetime.identity import ordinary_lifetime_owner_digest
@@ -31,7 +34,6 @@ from scripts.delegate_acceptance.private_cli import supervisor
 ROOT_ID = "b" * 32
 POOL_ID = "c" * 64
 # The native layout the fixture reads: an identity marker and per-owner views.
-POOL_MARKER = ".identity"
 POOL_VIEWS = "views"
 WITNESS_TIMEOUT_SECONDS = 10
 
@@ -58,14 +60,39 @@ class DisposalFixture(unittest.TestCase):
         self.events = []
 
     def pool(self, pool_root, pool_id=POOL_ID, owners=(), views=True):
-        pool_root.mkdir(parents=True)
-        (pool_root / POOL_MARKER).write_text(json.dumps({"version": 1, "pool_id": pool_id}))
+        create_private_pool_directory(pool_root)
+        write_pool_marker(pool_root, canonical_pool_marker(pool_id))
         (pool_root / "images").mkdir()
         if views:
-            (pool_root / POOL_VIEWS).mkdir()
+            create_private_pool_directory(pool_root / POOL_VIEWS)
             for owner in owners:
-                (pool_root / POOL_VIEWS / owner).mkdir()
+                create_private_pool_directory(pool_root / POOL_VIEWS / owner)
         return pool_root
+
+    def invalid_pools(self, parent):
+        """Pools Go's ReleasePending refuses at the root, marker, views or an owner link, with each refusal."""
+        duplicate = b'{"version":1,"version":1,"pool_id":"%s"}' % POOL_ID.encode()
+        cases = (("duplicate-key", duplicate, 0o600, "not the canonical version 1 record"),
+                 ("world-readable", canonical_pool_marker(POOL_ID), 0o644, "unsafe owner or mode"))
+        pools = [(write_pool_marker(self.pool(parent / name), raw, mode).parent, message)
+                 for name, raw, mode, message in cases]
+        shared_root = self.pool(parent / "group-readable-root")
+        shared_root.chmod(0o755)
+        shared_views = self.pool(parent / "group-readable-views")
+        (shared_views / POOL_VIEWS).chmod(0o755)
+        file_owner = self.pool(parent / "file-owner")
+        (file_owner / POOL_VIEWS / "owner").write_bytes(b"")
+        symlinked_owner = self.pool(parent / "symlinked-owner")
+        (symlinked_owner / POOL_VIEWS / "owner").symlink_to(
+            create_private_pool_directory(parent / "owner-elsewhere"), target_is_directory=True)
+        shared_owner = self.pool(parent / "group-readable-owner", owners=("owner",))
+        (shared_owner / POOL_VIEWS / "owner").chmod(0o755)
+        owner_fault = "custody pool view owner owner is not a private directory of this user"
+        return pools + [
+            (shared_root, "custody pool root is not a private directory of this user"),
+            (shared_views, "custody pool views is not a private directory of this user"),
+            (file_owner, owner_fault), (symlinked_owner, owner_fault), (shared_owner, owner_fault),
+        ]
 
     def snapshot(self):
         return sorted((str(path.relative_to(self.root)), path.is_dir()) for path in self.root.rglob("*"))
@@ -173,7 +200,7 @@ class LeasedShutdownTests(DisposalFixture):
         def appears_under_lease():
             calls.append(1)
             if len(calls) == 2:
-                late_owner.mkdir()
+                create_private_pool_directory(late_owner)
                 maintenance.start()
             return closure
 
@@ -204,6 +231,19 @@ class LeasedShutdownTests(DisposalFixture):
                 started = time.monotonic()
                 with self.assertRaisesRegex(RuntimeError, message):
                     self.shutdown()
+                self.assertLess(time.monotonic() - started, WITNESS_TIMEOUT_SECONDS / 2)
+                self.assertEqual(self.events, [("closure", False)])
+
+    def test_invalid_pool_with_empty_views_sends_no_shutdown(self):
+        for pool, message in self.invalid_pools(self.state):
+            self.events.clear()
+            closure = _closure((pool, POOL_ID))
+            # A second reply lets a reader that wrongly reports ready reach the shutdown this refuses.
+            with self.subTest(pool=pool.name), self.native_edges([closure, closure]):
+                started = time.monotonic()
+                with self.assertRaisesRegex(RuntimeError, message):
+                    self.shutdown()
+                # A concrete fault refuses at once; it never waits out the deadline as pending release.
                 self.assertLess(time.monotonic() - started, WITNESS_TIMEOUT_SECONDS / 2)
                 self.assertEqual(self.events, [("closure", False)])
 
@@ -263,6 +303,80 @@ class LeasedShutdownTests(DisposalFixture):
         self.assertEqual(ledger, [pending])
         config.unlink()
         self.assertIsNone(supervisor.shutdown_pending_private_supervisor(pending, ledger, capture_root=None))
+
+
+class CustodyViewsTests(DisposalFixture):
+    """The views directory and every owner entry beneath it must be private directories of this user."""
+
+    def pending(self, pool):
+        return noexec_state.custody_release_pending(_closure((pool, POOL_ID)), (self.state,))
+
+    def views_of(self, name, owners=()):
+        return self.pool(self.state / name, owners=owners) / POOL_VIEWS
+
+    def test_private_views_read_ready_or_pending_and_0500_is_private(self):
+        self.assertEqual(self.pending(self.pool(self.state / "empty")), ())
+        held = self.pool(self.state / "held", owners=("owner",))
+        self.assertEqual(self.pending(held), (str(held / POOL_VIEWS / "owner"),))
+        read_only = self.views_of("read-only", owners=("owner",))
+        (read_only / "owner").chmod(0o500)
+        read_only.chmod(0o500)
+        self.addCleanup(read_only.chmod, 0o700)
+        self.assertEqual(self.pending(read_only.parent), (str(read_only / "owner"),))
+
+    def test_missing_views_remains_a_fixture_layout_refusal(self):
+        with self.assertRaisesRegex(RuntimeError, "fixture layout assertion failed"):
+            self.pending(self.pool(self.state / "no-views", views=False))
+
+    def test_shared_or_foreign_views_is_refused(self):
+        message = "custody pool views is not a private directory of this user"
+        for mode in (0o755, 0o750, 0o701):
+            with self.subTest(mode=oct(mode)):
+                views = self.views_of("views-%o" % mode)
+                views.chmod(mode)
+                self.assertRaisesRegex(RuntimeError, message, self.pending, views.parent)
+        views = self.views_of("foreign-views")
+        with reported_as_another_user(views):
+            self.assertRaisesRegex(RuntimeError, message, self.pending, views.parent)
+
+    def test_an_owner_entry_that_is_not_a_private_directory_of_this_user_is_refused(self):
+        message = "custody pool view owner owner is not a private directory of this user"
+        file_owner = self.views_of("file-owner")
+        (file_owner / "owner").write_bytes(b"")
+        symlinked_owner = self.views_of("symlinked-owner")
+        (symlinked_owner / "owner").symlink_to(
+            create_private_pool_directory(self.state / "owner-elsewhere"), target_is_directory=True)
+        shared_owner = self.views_of("shared-owner", owners=("owner",))
+        (shared_owner / "owner").chmod(0o750)
+        for views in (file_owner, symlinked_owner, shared_owner):
+            with self.subTest(views=views.parent.name):
+                self.assertRaisesRegex(RuntimeError, message, self.pending, views.parent)
+        foreign_owner = self.views_of("foreign-owner", owners=("owner",))
+        with reported_as_another_user(foreign_owner / "owner"):
+            self.assertRaisesRegex(RuntimeError, message, self.pending, foreign_owner.parent)
+
+    def test_an_owner_released_after_listing_is_absent_but_another_read_fault_is_concrete(self):
+        views = self.views_of("releasing", owners=("owner",))
+        owner = views / "owner"
+        real_lstat = Path.lstat
+
+        def released_first(path):
+            if path == owner:
+                owner.rmdir()
+            return real_lstat(path)
+
+        with patch.object(Path, "lstat", released_first):
+            self.assertEqual(self.pending(views.parent), ())
+        create_private_pool_directory(owner)
+
+        def denied(path):
+            if path == owner:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_lstat(path)
+
+        with patch.object(Path, "lstat", denied), \
+                self.assertRaisesRegex(RuntimeError, "custody pool view owner owner is unreadable"):
+            self.pending(views.parent)
 
 
 class PredecessorLeaseTests(DisposalFixture):
@@ -365,6 +479,15 @@ class RootRemovalReadinessTests(DisposalFixture):
                 self.remove(_closure((pool, POOL_ID)))
             rollback.assert_not_called()
         self.assertEqual(self.snapshot(), before)
+
+    def test_invalid_pool_with_empty_views_keeps_every_root_byte(self):
+        for pool, message in self.invalid_pools(self.state):
+            before = self.snapshot()
+            with self.subTest(pool=pool.name), patch.object(root_cleanup, "rollback_owned_directories") as rollback:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    self.remove(_closure((pool, POOL_ID)))
+                rollback.assert_not_called()
+            self.assertEqual(self.snapshot(), before)
 
     def test_foreign_pool_is_refused_unread(self):
         foreign = self.pool(self.base / "foreign", owners=("owner",))
@@ -490,6 +613,19 @@ class ObservedRecoveryTests(ObservedReadinessFixture):
             self.observed_shutdown(self.observer())
         self.assertEqual(self.observed, [])
         self.assertEqual(self.events, [("shutdown", True)])
+
+    def test_invalid_pool_with_empty_views_runs_no_observation_or_shutdown(self):
+        for pool, message in self.invalid_pools(self.state):
+            self.events.clear()
+            self.observed.clear()
+            with self.subTest(pool=pool.name):
+                with self.daemon_edges(), \
+                        patch.object(supervisor, "authorize_managed_lifetime_closure",
+                                     return_value=_closure((pool, POOL_ID))), \
+                        self.assertRaisesRegex(RuntimeError, message):
+                    self.observed_shutdown(self.observer())
+                self.assertEqual(self.observed, [])
+                self.assertEqual(self.events, [])
 
     def test_wrong_root_failed_command_and_pool_faults_retain_without_shutdown(self):
         self.intent_only_task()

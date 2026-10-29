@@ -4,14 +4,20 @@ The caller owns the noexec parent; the harness owns only the container it create
 there. Each lifetime registration is the sole authority for the custody pool its
 scope used. This module only checks those published records against the exact
 execution temporary root and the pool identity marker on disk; it never derives a
-pool location itself.
+pool location itself. Go's verifiedexec Pool owns the root, its marker and its
+views; the static checks here mirror Go's root, marker, views and owner-link
+decisions and never relax them. They read by path once and claim nothing
+against a concurrent replacement.
 """
 
 import json
+import os
 from pathlib import Path
 import stat
 
 from scripts.delegate_acceptance.directories.policy import require
+from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
+from scripts.delegate_acceptance.evidence.validation import _hex_digest
 from scripts.delegate_acceptance.lifetime.policy import validate_custody_placement
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
@@ -27,6 +33,10 @@ POOL_VIEWS_NAME = "views"
 MAX_REPORTED_PENDING_NAMESPACES = 8
 POOL_IDENTITY_VERSION = 1
 MAX_POOL_IDENTITY_BYTES = 256
+# The only mode taskdir.CheckPrivateStat accepts for a private regular file.
+POOL_IDENTITY_MODE = 0o600
+# The permission bits verifiedexec.requirePrivateInfo forbids on a pool root, views or owner directory.
+POOL_DIRECTORY_SHARED_BITS = 0o077
 CUSTODY_NAMESPACE_KINDS = ("tasks", "inspections")
 
 
@@ -106,8 +116,9 @@ def custody_release_pending(closures, owned_roots):
     Pools come only from validated registrations; registrations without a
     placement keep their existing contract. A pool outside every owned root is
     refused before anything beneath it is read. A missing, replaced or aliased
-    pool root or marker, or conflicting identities for one pool, is a concrete
-    fault and raises; it never reads as released. An empty result is ready.
+    pool root or marker, a views directory or owner entry that is not a private
+    directory of this user, or conflicting identities for one pool, is a
+    concrete fault and raises; it never reads as released. An empty result is ready.
     """
     owned = tuple(Path(root).resolve() for root in owned_roots)
     pools = {}
@@ -146,19 +157,53 @@ def describe_pending_custody(pending):
 
 
 def _pool_view_owners(label, pool_root):
+    """Return the owner namespaces present in a private views directory of the pool.
+
+    ReleasePending observes only its requested namespace; this fixture reader
+    conservatively checks every entry like that requested link of Go's
+    observeDirectory. An entry released after the listing is absent; any other
+    entry that is not a private directory of this user is a concrete fault.
+    """
     views = pool_root / POOL_VIEWS_NAME
     try:
         info = views.lstat()
-        names = sorted(entry.name for entry in views.iterdir()) if stat.S_ISDIR(info.st_mode) else None
     except FileNotFoundError:
-        names = None
+        info = None
     except OSError as error:
         raise RuntimeError(label + " custody pool views are unreadable: " + str(error)) from error
     # Fixture layout assertion, not the product contract: Prepare creates views
     # before a placement is recorded, so a prepared registered pool without it
     # is not this fixture's layout. ReleasePending itself accepts a missing views.
-    require(names is not None, label + " fixture layout assertion failed: registered custody pool has no views directory")
-    return names
+    require(info is not None, label + " fixture layout assertion failed: registered custody pool has no views directory")
+    _require_private_directory(info, label + " custody pool views is not a private directory of this user")
+    try:
+        names = sorted(entry.name for entry in views.iterdir())
+    except OSError as error:
+        raise RuntimeError(label + " custody pool views are unreadable: " + str(error)) from error
+    return [name for name in names if _view_owner_present(label, views / name)]
+
+
+def _view_owner_present(label, owner):
+    try:
+        info = owner.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise RuntimeError(label + " custody pool view owner " + owner.name + " is unreadable: " + str(error)) from error
+    _require_private_directory(
+        info, label + " custody pool view owner " + owner.name + " is not a private directory of this user"
+    )
+    return True
+
+
+def _require_private_directory(info, message):
+    """Go's requirePrivateInfo over an lstat: a real directory of the effective user without group or world bits."""
+    require(
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.geteuid()
+        and not stat.S_IMODE(info.st_mode) & POOL_DIRECTORY_SHARED_BITS,
+        message,
+    )
 
 
 def _resolve_existing(label, *paths):
@@ -169,23 +214,38 @@ def _resolve_existing(label, *paths):
 
 
 def _pool_marker_id(label, pool_root):
+    """Return the marker id of a private pool root; refuse a root or marker Go refuses statically.
+
+    Mirrors proveIdentity's root check, requirePrivateInfo (a real directory
+    owned by the effective user without group or world bits), then
+    requireIdentityFile (a bounded regular file owned by the effective user
+    with exactly mode 0600) and decodePoolIdentity (only the bytes Go's
+    json.Marshal writes for a version 1 record with a 64-lowercase-hex id).
+    """
     marker = pool_root / POOL_IDENTITY_NAME
     try:
+        _require_private_directory(
+            pool_root.lstat(), label + " custody pool root is not a private directory of this user"
+        )
         info = marker.lstat()
         require(
             stat.S_ISREG(info.st_mode) and info.st_size <= MAX_POOL_IDENTITY_BYTES,
             label + " custody pool identity marker is not a bounded regular file",
         )
-        record = json.loads(marker.read_bytes())
+        require(
+            info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == POOL_IDENTITY_MODE,
+            label + " custody pool identity marker has an unsafe owner or mode",
+        )
+        raw = marker.read_bytes()
+        record = json.loads(raw)
     except OSError as error:
         raise RuntimeError(label + " custody pool identity marker is unreadable: " + str(error)) from error
     except ValueError as error:
         raise RuntimeError(label + " custody pool identity marker is not JSON") from error
+    pool_id = record.get("pool_id") if isinstance(record, dict) else None
     require(
-        isinstance(record, dict)
-        and set(record) == {"version", "pool_id"}
-        and type(record["version"]) is int
-        and record["version"] == POOL_IDENTITY_VERSION,
-        label + " custody pool identity marker is not a version 1 record",
+        _hex_digest(pool_id)
+        and raw == canonical_go_json({"version": POOL_IDENTITY_VERSION, "pool_id": pool_id}, newline=False),
+        label + " custody pool identity marker is not the canonical version 1 record",
     )
-    return record["pool_id"]
+    return pool_id

@@ -5,7 +5,6 @@ wiring and policy only; whether a public CLI places custody correctly on a real 
 native acceptance evidence.
 """
 
-import json
 from pathlib import Path
 import sys
 import tempfile
@@ -13,6 +12,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from scripts.acceptance_tests.private_cli.fixtures import (
+    canonical_pool_marker,
+    create_private_pool_directory,
+    write_pool_marker,
+)
 from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.delegate_acceptance.private_cli import application, handoff as handoff_impl
 from scripts.delegate_acceptance.private_cli import fixture_setup, scenario_entry
@@ -262,9 +266,8 @@ class NoexecCaseFlowTests(unittest.TestCase):
             directory.mkdir(parents=True)
         self.pools = {}
         for name, pool_id in (("pool-a", POOL_A), ("pool-b", POOL_B)):
-            pool = self.execution / name
-            pool.mkdir()
-            (pool / ".identity").write_text(json.dumps({"version": 1, "pool_id": pool_id}))
+            pool = create_private_pool_directory(self.execution / name)
+            write_pool_marker(pool, canonical_pool_marker(pool_id))
             self.pools[pool_id] = pool
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 1, 1, {})
         self.cases = {}
