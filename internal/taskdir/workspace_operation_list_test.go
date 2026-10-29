@@ -162,22 +162,11 @@ func TestWorkspaceOperationIDsRefusesUnusableParent(t *testing.T) {
 			store := testStore(t)
 			test.setup(t, workspaceOperationsParent(store))
 			ids, err := store.WorkspaceOperationIDs(t.Context())
-			if ids != nil || err == nil || workspaceOperationsAbsent(err) {
+			if ids != nil || err == nil || directoryAbsent(err) {
 				t.Fatalf("unusable parent = %v, %v; want a non-absence refusal", ids, err)
 			}
 			requireMaintenanceReleased(t, store)
 		})
-	}
-}
-
-func TestWorkspaceOperationsAbsenceRequiresEveryCauseAbsent(t *testing.T) {
-	if !workspaceOperationsAbsent(errors.Join(os.ErrNotExist, os.ErrNotExist)) {
-		t.Fatal("joined absence was not absence")
-	}
-	for _, err := range []error{nil, errTestReadFault, errors.Join(os.ErrNotExist, errTestReadFault)} {
-		if workspaceOperationsAbsent(err) {
-			t.Fatalf("%v classified as absence", err)
-		}
 	}
 }
 

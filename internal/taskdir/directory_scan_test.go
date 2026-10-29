@@ -170,3 +170,14 @@ func TestStopRecordDiscoveryKeepsAbsenceAndEntryIdentity(t *testing.T) {
 		t.Fatalf("unexpected stop entry = %v, want evidence fault", err)
 	}
 }
+
+func TestDirectoryAbsenceRequiresEveryCauseAbsent(t *testing.T) {
+	if !directoryAbsent(errors.Join(os.ErrNotExist, os.ErrNotExist)) {
+		t.Fatal("joined absence was not absence")
+	}
+	for _, err := range []error{nil, errTestReadFault, errors.Join(os.ErrNotExist, errTestReadFault)} {
+		if directoryAbsent(err) {
+			t.Fatalf("%v classified as absence", err)
+		}
+	}
+}
