@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io/fs"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,30 +219,106 @@ func TestReconnectedConnectionPassesEveryGuard(t *testing.T) {
 	requireOpens(t, connector, 2)
 }
 
-func TestSecondOperationWaitsAndNeverNestsATransaction(t *testing.T) {
-	store, connector, _ := faultStore(t)
-	entered, release := make(chan struct{}), make(chan struct{})
-	first := make(chan error, 1)
-	firstCtx := testContext(t)
+// heldTransaction is one operation a test holds open inside its body. The
+// test that starts it owns its goroutine, release gate, and result.
+type heldTransaction struct {
+	release func()
+	// done closes after err is written, so err is read only after done.
+	done chan struct{}
+	err  error
+}
+
+// holdTransaction starts one guarded operation whose body waits for release
+// or its context. It returns once the body is entered, or with the
+// operation's error when the operation ends before its body. Cleanup cancels,
+// releases, and joins the operation on every path, including a failed
+// assertion.
+func holdTransaction(t *testing.T, store *Store, guard txStep) (*heldTransaction, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(testContext(t))
+	entered, released := make(chan struct{}), make(chan struct{})
+	held := &heldTransaction{release: sync.OnceFunc(func() { close(released) }), done: make(chan struct{})}
 	go func() {
-		first <- store.transact(firstCtx, store.currentGuard, func(context.Context, *sql.Tx) error {
+		defer close(held.done)
+		held.err = store.transact(ctx, guard, func(ctx context.Context, _ *sql.Tx) error {
 			close(entered)
-			<-release
-			return nil
+			select {
+			case <-released:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		})
 	}()
-	<-entered
+	t.Cleanup(func() {
+		cancel()
+		held.release()
+		<-held.done
+	})
+	select {
+	case <-entered:
+		return held, nil
+	case <-held.done:
+		return nil, fmt.Errorf("held operation ended before its body: %w", held.err)
+	}
+}
+
+// finish releases the held body and returns the operation's result.
+func (h *heldTransaction) finish() error {
+	h.release()
+	<-h.done
+	return h.err
+}
+
+func TestSecondOperationWaitsAndNeverNestsATransaction(t *testing.T) {
+	store, connector, _ := faultStore(t)
+	held, err := holdTransaction(t, store, store.currentGuard)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(testContext(t), 100*time.Millisecond)
 	defer cancel()
 	if err := store.CreateSchedule(ctx, testDefinition(testScheduleID)); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("second operation err=%v, want its own deadline", err)
 	}
-	close(release)
-	if err := <-first; err != nil {
+	if err := held.finish(); err != nil {
 		t.Fatalf("first operation: %v", err)
 	}
 	createSchedule(t, store, testScheduleID)
 	requireOpens(t, connector, 1)
+}
+
+func TestHeldTransactionReportsAFailureBeforeItsBody(t *testing.T) {
+	store, connector, _ := faultStore(t)
+	errGuard := errors.New("guard refused the held operation")
+	_, err := holdTransaction(t, store, func(context.Context, *sql.Tx) error { return errGuard })
+	if !errors.Is(err, errGuard) {
+		t.Fatalf("held operation err=%v, want the guard failure", err)
+	}
+	createSchedule(t, store, testScheduleID)
+	requireOpens(t, connector, 1)
+}
+
+func TestHeldTransactionCleanupCancelsAndJoinsAnAbandonedOperation(t *testing.T) {
+	store, connector, _ := faultStore(t)
+	var held *heldTransaction
+	if !t.Run("abandoned before finish", func(t *testing.T) {
+		var err error
+		if held, err = holdTransaction(t, store, store.currentGuard); err != nil {
+			t.Fatal(err)
+		}
+	}) {
+		return
+	}
+	select {
+	case <-held.done:
+	default:
+		t.Fatal("subtest cleanup returned with the held operation still running")
+	}
+	createSchedule(t, store, testScheduleID)
+	// The cleanup canceled the operation before it ended, so transact retired
+	// its connection.
+	requireOpens(t, connector, 2)
 }
 
 func TestFaultConnectionKeepsTheDriverInterfaceSet(t *testing.T) {
