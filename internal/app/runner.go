@@ -72,7 +72,7 @@ func runRunnerControlMode(parsed runnerArguments, stderr io.Writer, deps Depende
 		return 0, true
 	case parsed.Guardian:
 		if err := runLifetimeGuardianMode(parsed, deps.normalized()); err != nil {
-			return writeCLIError(stderr, errors.New("task lifetime unavailable"), 1), true
+			return writeLifetimeGuardianFailure(stderr, err), true
 		}
 		return 0, true
 	case parsed.Inspection:
