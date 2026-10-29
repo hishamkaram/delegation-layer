@@ -217,8 +217,11 @@ func ensurePrivateSupervisorMigrationComplete(stateRoot string, binding task.Sup
 }
 
 // authorizePrivateMutationWithLock checks the published generation while the
-// caller retains its EX lease. A compatible recovery pair can control that
-// generation without owning its persisted executable provenance.
+// caller retains its bootstrap lease. Generation writers hold the EX lease, so
+// a caller's SH lease keeps these facts stable for a read-only eligibility
+// observation; only a check under the caller's EX lease authorizes mutation.
+// A compatible recovery pair can control that generation without owning its
+// persisted executable provenance.
 func (c *Client) authorizePrivateMutationWithLock(stateRoot string) error {
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)
 	if err != nil {
