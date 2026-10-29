@@ -14,7 +14,7 @@ from scripts.delegate_acceptance.native.diagnostics import _delegate_status_summ
 from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.acceptance_diagnostics import authentication_unavailable
 from scripts.delegate_acceptance.native.provider_policy import authentication_blocked
-from scripts.delegate_acceptance.native.constants import TASK_BUDGET, WATCH_SECONDS
+from scripts.delegate_acceptance.native.constants import TASK_BUDGET, WATCH_SECONDS, case_task_budget
 from scripts.delegate_acceptance.tasks.request_intent import TaskRequest
 
 
@@ -31,12 +31,17 @@ def task_command_prefix(owner) -> list[object]:
 
 def dispatch_argv(owner, task_id: str, brief: Path,
                   predecessor: str | None = None,
-                  budget: str = TASK_BUDGET) -> list[object]:
+                  budget: str | None = None) -> list[object]:
+    """Build one dispatch; an omitted budget uses the provider case's contract."""
     acceptance = owner
+    requested = case_task_budget(acceptance.provider).requested if budget is None else budget
     argv = acceptance.task_command_prefix()
     argv.extend(["dispatch", "--provider", acceptance.provider,
                  "--brief", brief, "--cwd", acceptance.workspace, "--id", task_id,
-                 "--permission", acceptance.mode, "--budget", budget, "--json"])
+                 "--permission", acceptance.mode])
+    if requested is not None:
+        argv.extend(["--budget", requested])
+    argv.append("--json")
     model = getattr(acceptance.args, "model", None)
     effort = getattr(acceptance.args, "effort", None)
     if model:
@@ -52,9 +57,15 @@ def dispatch_argv(owner, task_id: str, brief: Path,
     return argv
 
 def dispatch_request(owner, name: str, brief: Path, predecessor: str | None,
-                     budget: str) -> TaskRequest:
-    """Bind the role, brief and the owner inputs dispatch_argv reads, before any launch."""
+                     budget: str | None) -> TaskRequest:
+    """Bind the role, brief and the owner inputs dispatch_argv reads, before any launch.
+
+    A dispatch that omits ``--budget`` binds the canonical provider default it relies on.
+    """
     acceptance = owner
+    if budget is None:
+        case = case_task_budget(acceptance.provider)
+        budget = case.canonical if case.requested is None else case.requested
     return TaskRequest(
         role=name, brief_sha256=digest(brief), budget=budget, predecessor_task_id=predecessor,
         provider=acceptance.provider, permission=acceptance.mode,
@@ -62,7 +73,7 @@ def dispatch_request(owner, name: str, brief: Path, predecessor: str | None,
         effort=getattr(acceptance.args, "effort", None), cwd=str(acceptance.workspace))
 
 def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
-             budget: str = TASK_BUDGET, *, environment: dict[str, str] | None = None) -> str:
+             budget: str | None = None, *, environment: dict[str, str] | None = None) -> str:
     acceptance = owner
     task_id = secrets.token_hex(16)
     argv = acceptance.dispatch_argv(task_id, brief, predecessor, budget)

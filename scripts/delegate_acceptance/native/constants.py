@@ -1,5 +1,7 @@
 """Immutable native acceptance budgets, profiles, and validation limits."""
 
+from dataclasses import dataclass
+
 PROFILES = {
     "ccr:print": {
         "executable": "ccr", "modes": ("read-only", "workspace-write"),
@@ -38,6 +40,34 @@ TASK_BUDGET = "5m"
 CANONICAL_TASK_BUDGET = "5m0s"
 TASK_BUDGET_NANOS = 300_000_000_000
 WATCH_SECONDS = 330
+
+
+@dataclass(frozen=True)
+class CaseTaskBudget:
+    """One case's dispatch budget, its persisted record, and the outer runner wait.
+
+    ``requested`` is the public ``--budget`` argument; None omits the flag so
+    the case exercises the product's provider default.
+    """
+
+    requested: str | None
+    canonical: str
+    nanos: int
+    watch_seconds: int
+
+
+ORDINARY_TASK_BUDGET = CaseTaskBudget(TASK_BUDGET, CANONICAL_TASK_BUDGET, TASK_BUDGET_NANOS, WATCH_SECONDS)
+# Codex review keeps Delegate's public one-hour default
+# (policy.DefaultCodexReviewBudgetDuration); the wait keeps the ordinary
+# 30-second bootstrap margin above that budget.
+CODEX_REVIEW_DEFAULT_TASK_BUDGET = CaseTaskBudget(None, "1h0m0s", 3_600_000_000_000, 3_630)
+_PROVIDER_TASK_BUDGETS = {"codex:review": CODEX_REVIEW_DEFAULT_TASK_BUDGET}
+
+
+def case_task_budget(provider: str) -> CaseTaskBudget:
+    """Return the one budget contract every fresh task of a provider's case uses."""
+    return _PROVIDER_TASK_BUDGETS.get(provider, ORDINARY_TASK_BUDGET)
+
 # Every native runner-status call is a retained private process capture.
 # Poll slowly so a full WATCH_SECONDS wait stays a small, bounded inventory.
 RUNNER_STATUS_POLL_SECONDS = 5
@@ -63,6 +93,12 @@ TIMEOUT_LEASE_MODE = 0o600
 MODEL_DISCOVERY_TASK_BUDGET = "5m0s"
 MODEL_DISCOVERY_TASK_BUDGET_NANOS = 300_000_000_000
 MODEL_DISCOVERY_TIMEOUT_SECONDS = 330
+# `delegate models` takes no --budget; Go fixes its one inspection at 5m
+# (ModelDiscoveryTimeout) and persists it as the request budget. Receipts keep
+# the gate's 5m label beside that persisted value for every provider.
+MODEL_DISCOVERY_OPERATION_BUDGET = CaseTaskBudget(
+    TASK_BUDGET, MODEL_DISCOVERY_TASK_BUDGET, MODEL_DISCOVERY_TASK_BUDGET_NANOS,
+    MODEL_DISCOVERY_TIMEOUT_SECONDS)
 MAX_RAW_BYTES = 8 * 1024 * 1024
 MAX_CONTROL_BYTES = 1 << 20
 AUTHENTICATION_STATUS_CODES = frozenset({401, 403})

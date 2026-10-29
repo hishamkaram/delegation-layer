@@ -298,4 +298,6 @@ def acceptance_task_ops(operation: gate.NativeAcceptance, root: Path):
     operation.base = root
     operation.models_state = root / "models-state"
     operation.scenario = "read-only"
+    # The task ledger reads its runner wait from the owner's provider case.
+    vars(operation).setdefault("provider", "codex:exec")
     return gate.NativeAcceptanceTaskOps(operation)

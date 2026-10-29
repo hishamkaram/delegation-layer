@@ -497,5 +497,13 @@
       "py:unittest.mock",
       "py:zipfile"
     ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.constants",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": [
+      "py:dataclasses"
+    ]
   }
 ]

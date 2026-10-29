@@ -10,7 +10,7 @@ from scripts.delegate_acceptance.native.fixtures import require_replay_unchanged
 from scripts.delegate_acceptance.native.provider_policy import model_discovery_exit_code
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor, task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
-from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, MAX_RAW_BYTES, PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO, TASK_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_SOURCE_RUNNER_RESULTS
+from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, MAX_RAW_BYTES, PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO, TASK_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_SOURCE_RUNNER_RESULTS, MODEL_DISCOVERY_OPERATION_BUDGET, case_task_budget
 from scripts.delegate_acceptance.native.continuation_scope import (
     admit_successor, require_session_directory, require_session_miss)
 
@@ -179,8 +179,8 @@ def _run_model_discovery(owner) -> int:
     acceptance.success_receipt = {
         "gate": "acceptance-native", "status": "passed",
         "provider": acceptance.provider, "mode": acceptance.mode,
-        "task_budget": TASK_BUDGET,
-        "canonical_task_budget": CANONICAL_TASK_BUDGET,
+        "task_budget": MODEL_DISCOVERY_OPERATION_BUDGET.requested,
+        "canonical_task_budget": MODEL_DISCOVERY_OPERATION_BUDGET.canonical,
         "requested_model": getattr(acceptance.args, "model", None),
         "requested_effort": getattr(acceptance.args, "effort", None),
         "model_discovery": acceptance.model_discovery_summary,
@@ -203,10 +203,11 @@ def _run_review(owner) -> int:
             "Codex review changed the workspace")
     acceptance.replay({"fresh": acceptance.records["fresh-collect"]}, names=("fresh",))
     acceptance.shutdown()
+    budget = case_task_budget(acceptance.provider)
     acceptance.success_receipt = {
         "gate": "acceptance-native", "status": "passed", "provider": acceptance.provider,
-        "mode": acceptance.mode, "task_budget": TASK_BUDGET,
-        "canonical_task_budget": CANONICAL_TASK_BUDGET,
+        "mode": acceptance.mode, "task_budget": budget.requested,
+        "canonical_task_budget": budget.canonical,
         "requested_model": getattr(acceptance.args, "model", None),
         "requested_effort": getattr(acceptance.args, "effort", None),
         "model_discovery": acceptance.model_discovery_summary,

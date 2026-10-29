@@ -161,6 +161,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             config = operation.config = operation.base / "pueue.yml"
             operation.processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
             track_directory_pins(self, (operation.processes.capture_root,))
+            operation.provider = "codex:exec"
             operation.ops = gate.NativeAcceptanceTaskOps(operation)
             # A regressed cleanup reports expiry promptly instead of retaining.
             operation.ops.watch_seconds = 2
@@ -568,9 +569,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_main_finalizes_the_owned_acceptance_root_before_passing(self):
         # The entry names the expected gate; the Pi control publishes only its own named gate.
-        for scenario, gate in (([], "acceptance-native"),
-                               (["--scenario", "pi-session-miss"], "acceptance-native-pi-session-miss")):
-            with self.subTest(gate=gate), tempfile.TemporaryDirectory(
+        for scenario, gate_name in (([], "acceptance-native"),
+                                    (["--scenario", "pi-session-miss"], "acceptance-native-pi-session-miss")):
+            with self.subTest(gate=gate_name), tempfile.TemporaryDirectory(
                     prefix="native-main-cleanup-unit-") as directory:
                 output = Path(directory) / "evidence"
                 output.mkdir()
@@ -596,7 +597,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     ])
 
                 self.assertEqual(code, 0)
-                self.assertEqual(calls, ["run", ("finalize", True, False), ("publish", gate)])
+                self.assertEqual(calls, ["run", ("finalize", True, False), ("publish", gate_name)])
 
     def test_main_treats_cleanup_failure_as_fatal(self):
         with tempfile.TemporaryDirectory(prefix="native-main-cleanup-failure-unit-") as directory:

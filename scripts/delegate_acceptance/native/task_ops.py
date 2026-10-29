@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from scripts.delegate_acceptance.native.constants import RUNNER_STATUS_POLL_SECONDS, WATCH_SECONDS
+from scripts.delegate_acceptance.native.constants import RUNNER_STATUS_POLL_SECONDS, case_task_budget
 from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
@@ -37,12 +37,14 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
     external supervisor config, so Go queues that bundle runner itself. Only
     internal fixtures that exercise custom-runner history pass
     ``managed_runner=False``.
+
+    The runner wait and failure cleanup observe the provider case's budget contract.
     """
 
     def __init__(self, owner, *, managed_runner: bool = True) -> None:
         super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
                          owner.base, owner.state, owner.output,
-                         watch_seconds=WATCH_SECONDS,
+                         watch_seconds=case_task_budget(owner.provider).watch_seconds,
                          expected_inspection_binding_required=False,
                          managed_runner=managed_runner, runner_placement=BUNDLE_RUNNER,
                          runner_poll_seconds=RUNNER_STATUS_POLL_SECONDS)

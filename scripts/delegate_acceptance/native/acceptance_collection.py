@@ -18,7 +18,7 @@ from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER,
 from scripts.delegate_acceptance.native.workspace import task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
 from scripts.delegate_acceptance.tasks.publication import verify_collected_outcome
-from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, TASK_BUDGET_NANOS, TIMEOUT_RESUME_SOURCE_BUDGET_NANOS
+from scripts.delegate_acceptance.native.constants import CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET_NANOS, case_task_budget
 
 
 def terminal_private_queue(owner, status: dict[str, object]) -> bool:
@@ -234,12 +234,18 @@ def _validate_provider_metadata_binding(
 
 def _request_binding(owner, task_id: str, require_launch_evidence: bool = False,
                      require_started_evidence: bool = False,
-                     budget: str = CANONICAL_TASK_BUDGET,
-                     budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
+                     budget: str | None = None,
+                     budget_nanos: int | None = None) -> tuple[
         Path, dict[str, object], dict[str, object], str, str, Path]:
+    """Validate the persisted request; an omitted budget pair is the provider case's contract."""
     acceptance = owner
     require(not (require_launch_evidence and require_started_evidence),
             "provider launch evidence modes are mutually exclusive")
+    require((budget is None) == (budget_nanos is None),
+            "persisted budget expectation must name both its text and nanoseconds")
+    if budget is None or budget_nanos is None:
+        case = case_task_budget(acceptance.provider)
+        budget, budget_nanos = case.canonical, case.nanos
     directory = acceptance.state / "tasks" / task_id
     require(directory.is_dir() and not directory.is_symlink(),
             f"task {task_id} directory is absent")
