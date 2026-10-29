@@ -80,11 +80,13 @@ func RunQueueMaintenance(root string, options pueue.Options, lookup ExecutableLo
 // EnsurePrivateSupervisorBindingWithLock under the bootstrap EX lease remains
 // the sole authority. It never creates a config, starts or restarts a queue,
 // or relaxes a daemon, path, hash or generation check; a pair that cannot
-// prove the recorded owner is refused and the durable wake stays pending.
+// prove the recorded owner is refused and the durable wake stays pending. It
+// enters only an existing bootstrap boundary, so a late callback cannot
+// recreate a root that disposal removed or that never published a supervisor.
 func adoptLegacyPrivateSupervisor(root string, options pueue.Options, lookup ExecutableLookup) (task.SupervisorRef, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(options))
 	defer cancel()
-	err := pueue.WithBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
+	err := pueue.WithExistingBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
 		if _, found, err := pueue.ReadPrivateSupervisorBinding(root); err != nil || found {
 			return err
 		}

@@ -4,6 +4,7 @@ from contextlib import redirect_stderr
 import io
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
     reported_as_another_user,
     write_pool_marker,
 )
+from scripts.delegate_acceptance.directories.policy import require_private_directory
 from scripts.delegate_acceptance.private_cli import application, arguments, noexec_state
 from scripts.delegate_acceptance.private_cli.configuration import (
     DEFAULT_STOP_SCENARIO,
@@ -47,6 +49,35 @@ def invocation(*extra, scenario=EXTERNAL_NOEXEC_STATE_SCENARIO):
 def parse(*extra, scenario=EXTERNAL_NOEXEC_STATE_SCENARIO):
     with patch.object(sys, "argv", invocation(*extra, scenario=scenario)):
         return arguments.parse_arguments()
+
+
+class PrivateDirectoryPredicateTests(unittest.TestCase):
+    """The shared pure predicate judges only the facts and owner it is given."""
+
+    OWNER = 4242
+
+    @staticmethod
+    def info(mode, uid):
+        return os.stat_result((mode, 1, 1, 1, uid, 0, 0, 0, 0, 0))
+
+    def test_a_directory_of_the_given_owner_without_group_or_world_bits_is_private(self):
+        for mode in (0o700, 0o500, 0o000):
+            with self.subTest(mode=oct(mode)):
+                require_private_directory(self.info(stat.S_IFDIR | mode, self.OWNER), "refused", owner_uid=self.OWNER)
+
+    def test_shared_bits_another_owner_or_a_non_directory_is_refused(self):
+        refused = {
+            "group-bit": self.info(stat.S_IFDIR | 0o750, self.OWNER),
+            "world-bit": self.info(stat.S_IFDIR | 0o701, self.OWNER),
+            "other-owner": self.info(stat.S_IFDIR | 0o700, self.OWNER + 1),
+            "regular-file": self.info(stat.S_IFREG | 0o700, self.OWNER),
+            "symlink": self.info(stat.S_IFLNK | 0o700, self.OWNER),
+        }
+        for name, info in refused.items():
+            with self.subTest(case=name):
+                self.assertRaisesRegex(
+                    RuntimeError, "^refused$", require_private_directory, info, "refused", owner_uid=self.OWNER
+                )
 
 
 class NoexecArgumentsTests(unittest.TestCase):

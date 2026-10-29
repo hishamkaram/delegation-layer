@@ -54,7 +54,7 @@ class DisposalFixture(unittest.TestCase):
         self.parent = self.base / "parent"
         self.root = self.parent / (private_cli.PRIVATE_ACCEPTANCE_PREFIX + "test")
         self.state = self.root / "state"
-        (self.state / ".supervisor").mkdir(parents=True)
+        (self.state / ".supervisor").mkdir(mode=0o700, parents=True)
         for name in ("transition.lock", "bootstrap.lock"):
             (self.state / ".supervisor" / name).touch(mode=0o600)
         self.events = []
@@ -461,9 +461,13 @@ class RootRemovalReadinessTests(DisposalFixture):
         owner = private_cli.DirectoryOwner()
         token = owner.adopt_created("private root", self.root, self.parent)
         entries = owner.transfer()
-        with patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=closure):
+        with patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=closure), \
+                leases.DisposalLeases() as disposal:
             try:
-                root_cleanup.remove_private_acceptance_root(token, entries, managed_state_roots=((self.state, ()),))
+                root_cleanup.remove_private_acceptance_root(
+                    token, entries, managed_state_roots=((self.state, ()),), disposal=disposal,
+                    deadline=time.monotonic() + 5,
+                )
             finally:
                 _release_live_directory_tokens(entries)
 
@@ -508,6 +512,16 @@ BOOT_ID = "linux:12345678-1234-1234-1234-123456789abc"
 
 def _write_record(path, value):
     path.write_bytes(canonical_go_json(value))
+
+
+class SupervisorClock:
+    """A monotonic-only clock bound in place of the supervisor module's ``time``; any other use fails loudly."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
 
 
 class ObservedReadinessFixture(DisposalFixture):
@@ -654,15 +668,21 @@ class ObservedRecoveryTests(ObservedReadinessFixture):
     def test_expired_budget_launches_no_further_observation_and_joins_the_started_one(self):
         self.intent_only_task()
         self.intent_only_task(OTHER_TASK_ID)
+        clock = SupervisorClock()
+        budget = 0.2
         finished = []
 
-        def slow(_task):
-            time.sleep(0.4)
+        def outlive_budget(_task):
+            # The started observation consumes the whole budget before it returns.
+            clock.now += budget
             finished.append(True)
 
+        # Only the supervisor module's clock binding is controlled, so real preflight time cannot
+        # spend the budget before the first observation starts.
         with self.daemon_edges(), patch.object(supervisor, "DEFAULT_DISPATCH_WORKERS", 1), \
+                patch.object(supervisor, "time", clock), \
                 self.assertRaisesRegex(TimeoutError, "budget expired before task " + OTHER_TASK_ID):
-            self.observed_shutdown(self.observer(slow), timeout=0.2, task_ids=(TASK_ID, OTHER_TASK_ID))
+            self.observed_shutdown(self.observer(outlive_budget), timeout=budget, task_ids=(TASK_ID, OTHER_TASK_ID))
         self.assertEqual([task for task, _held, _left in self.observed], [TASK_ID])
         self.assertEqual(finished, [True])
         self.assertNotIn("shutdown", [name for name, _held in self.events])

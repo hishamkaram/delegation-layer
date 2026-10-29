@@ -199,8 +199,14 @@ func recordPrivateTerminalEvent(ctx context.Context, stateRoot string, id int64,
 	if err != nil || !present {
 		return false, err
 	}
+	// Ticket publication provisioned the event lock. A callback enters only that
+	// existing lock, so one racing disposal cannot make it recreate the root; a
+	// missing lock records nothing and the caller requests a full wake.
 	recorded := false
-	err = withPrivateTerminalEventLock(ctx, stateRoot, func(base string) error {
+	_, err = withExistingPrivateTerminalEventLock(ctx, stateRoot, unix.LOCK_EX, func(base string) error {
+		if recoverErr := recoverPrivateTerminalEventStages(base); recoverErr != nil {
+			return recoverErr
+		}
 		lockedPresent, ticketErr := readTerminalEventTicket(base, id)
 		if ticketErr != nil || !lockedPresent {
 			return ticketErr

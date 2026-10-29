@@ -389,7 +389,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         context.add_task(TASK_ID)
         context.attempted_task_ids.append(TASK_ID)
         if private_config:
-            context.private_config.parent.mkdir()
+            context.private_config.parent.mkdir(mode=0o700)
             context.private_config.write_text("fixture\n", encoding="utf-8")
             if lifecycle_locks:
                 for name in ("transition.lock", "bootstrap.lock"):
@@ -477,16 +477,55 @@ class SetupProcessOwnershipTests(unittest.TestCase):
     def test_missing_lifecycle_locks_refuse_shutdown_and_retain_the_root(self):
         events = []
         context, _cohort = self._daemon_context(events, lifecycle_locks=False)
+        supervisor_entries = sorted(path.name for path in context.private_config.parent.iterdir())
         closed = {"root_id": "root", "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
             context, events, [closed, closed])
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked"])
         native.command.assert_not_called()
         self.assertFalse((context.private_config.parent / "transition.lock").exists())
+        # The refused root is left exactly as found, without even the optional election lock.
+        self.assertNotIn("queue-maintenance.lock", supervisor_entries)
+        self.assertEqual(sorted(path.name for path in context.private_config.parent.iterdir()), supervisor_entries)
         self.assertEqual(
             (cleanup["lifetime_closed"], cleanup["daemon_closed"], cleanup["authorized"]),
             (True, False, False))
         self.assertIn("transition.lock", cleanup["daemon_error"])
+
+    def test_state_renamed_after_authorized_shutdown_is_still_rechecked_and_the_root_retained(self):
+        events = []
+        context, _cohort = self._daemon_context(events)
+        moved = context.root_token.directory / "moved-state"
+        # Runs before the fixture releases its pins, which require the state at its owned path.
+        self.addCleanup(lambda: moved.rename(context.state) if moved.is_dir() else None)
+        canonical_validate = private_cli_supervisor.validate_managed_lifetime_closure
+        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+
+        def validate(state, task_ids):
+            events.append("closure-checked")
+            # Only a present state is faked closed; a missing one meets the canonical refusal.
+            return closed if state.exists() else canonical_validate(state, task_ids)
+
+        def shutdown_then_rename(*_arguments, **_options):
+            events.append("shutdown")
+            context.state.rename(moved)
+
+        native = mock.Mock()
+        native.gone.side_effect = [False, True]
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", side_effect=validate),
+            mock.patch.object(private_cli_supervisor, "private_shutdown_evidence",
+                              return_value=(4242, context.private_config.parent / "run" / "pueue.sock", (1, 2))),
+            mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
+            mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", return_value=True),
+            mock.patch.object(private_cli_supervisor, "pueue_command", side_effect=shutdown_then_rename),
+        ):
+            cleanup = context.cleanup("passed")
+        self.assertEqual((cleanup["daemon_closed"], cleanup["authorized"], cleanup["decision"]),
+                         (True, False, "cleanup-failed-evidence-retained"))
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked",
+                                  "closure-checked", "shutdown", "closure-checked"])
+        self.assertTrue(context.root_token.directory.is_dir() and moved.is_dir())
 
     def test_closure_without_a_private_config_is_awaited_and_no_shutdown_is_called(self):
         events = []

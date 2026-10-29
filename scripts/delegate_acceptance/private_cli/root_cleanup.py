@@ -1,5 +1,8 @@
 """Private CLI root cleanup boundary."""
 
+from pathlib import Path
+import os
+
 from scripts.delegate_acceptance.directories.operations import OwnedDirectory
 from scripts.delegate_acceptance.directories.operations import rollback_owned_directories
 from scripts.delegate_acceptance.directories.policy import require
@@ -10,9 +13,21 @@ from scripts.delegate_acceptance.private_cli.supervisor import authorize_managed
 
 
 def remove_private_acceptance_root(
-    root_token: OwnedDirectory, owned_directories: tuple[OwnedDirectory, ...], managed_state_roots=()
+    root_token: OwnedDirectory,
+    owned_directories: tuple[OwnedDirectory, ...],
+    managed_state_roots=(),
+    *,
+    disposal=None,
+    deadline=None,
 ):
-    """Authorize managed closure and owned custody release, then remove the exact owned root."""
+    """Authorize managed closure and owned custody release, then remove the exact owned root.
+
+    A managed root that still has a private supervisor is removed only under the
+    ``disposal`` owner's held lease, taken here within ``deadline`` unless an
+    earlier shutdown already holds it; closure and custody are rechecked under
+    it. Canonical closure and empty custody alone do not prove that elected
+    maintenance finished. A late write or deletion fault retains and raises.
+    """
     if not isinstance(root_token, OwnedDirectory):
         raise RuntimeError("private acceptance root identity token is required")
     if root_token.directory.parent != root_token.parent or not root_token.directory.name.startswith(
@@ -24,14 +39,29 @@ def remove_private_acceptance_root(
     entries = tuple(owned_directories)
     if not any(entry is root_token for entry in entries):
         raise RuntimeError("private acceptance root token is absent from ownership sequence")
-    for entry in managed_state_roots:
-        if isinstance(entry, tuple) and len(entry) == 2:
-            state, task_ids = entry
-        else:
-            state, task_ids = entry, ()
-        closure = authorize_managed_lifetime_closure(state, tuple(task_ids))
-        pending = custody_release_pending(closure, tuple(entry.directory for entry in entries))
-        require(not pending, "custody release remained pending before root removal: " + describe_pending_custody(pending))
+    managed = tuple(
+        entry if isinstance(entry, tuple) and len(entry) == 2 else (entry, ()) for entry in managed_state_roots
+    )
+    owned_roots = tuple(entry.directory for entry in entries)
+    # A refusal before the lease leaves every root byte unchanged; the lease then
+    # excludes elected maintenance and the same facts are rechecked under it.
+    _require_disposal_ready(managed, owned_roots)
+    for state in sorted({Path(state) for state, _task_ids in managed}, key=str):
+        if os.path.lexists(state / ".supervisor"):
+            require(disposal is not None, "private supervisor root has no disposal lease: " + str(state))
+            require(
+                disposal.holds(state) or deadline is not None,
+                "private supervisor disposal lease has no deadline: " + str(state),
+            )
+            disposal.hold(state, deadline)
+    _require_disposal_ready(managed, owned_roots)
     rollback_owned_directories(entries)
     if root_token.directory.exists() or root_token.directory.is_symlink():
         raise RuntimeError("private acceptance root deletion was not verified: " + str(root_token.directory))
+
+
+def _require_disposal_ready(managed, owned_roots):
+    for state, task_ids in managed:
+        closure = authorize_managed_lifetime_closure(state, tuple(task_ids))
+        pending = custody_release_pending(closure, owned_roots)
+        require(not pending, "custody release remained pending before root removal: " + describe_pending_custody(pending))

@@ -479,7 +479,8 @@
       "py:delegate_acceptance.workspaces.scenarios.model",
       "py:delegate_acceptance.workspaces.scenarios.policy",
       "py:pathlib",
-      "py:threading"
+      "py:threading",
+      "py:time"
     ]
   },
   {

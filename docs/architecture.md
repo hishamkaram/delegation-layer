@@ -437,6 +437,35 @@ queue, or relaxes a hash check; a refusal keeps the wake pending. Adoption goes
 through the existing `PreparePrivateWithLock`, whose status-overflow cleanup of
 authorized successful rows can still run under that EX lease. Migration keeps
 the relevant inspection rows, so a later full pass can retry their custody.
+Adoption enters only an existing bootstrap lock: a deleted root, a root without
+`.supervisor`, or a missing bootstrap lock returns
+`ErrPrivateSupervisorNotInitialized` and creates nothing. The callback recorder
+likewise enters only an existing terminal-event lock, recovers interrupted
+stages under it, and rechecks its ticket there; a missing lock records no
+candidate and the helper requests a full wake. Ticket publication still
+provisions that lock.
+
+Canonical lifetime closure and empty custody do not prove that elected
+maintenance finished: Pueue 4.0.4's shutdown waits for task children, not
+callback helpers (upstream source, not a native observation). The
+acceptance harness's final disposal (`finalize_fixture`, the workspace context
+cleanup, and the candidate-install bootstrap, which shares one value across its
+shutdown and canonical owned-root removal) therefore owns one `DisposalLeases`
+value from each authorized shutdown through exact root deletion. Per root it
+first opens the existing `transition.lock` and `bootstrap.lock` without creating
+them, and only then opens or creates `queue-maintenance.lock`, so a refused root
+is left exactly as found. It flocks `queue-maintenance.lock`, then
+`transition.lock`, then `bootstrap.lock` EX
+within the caller's existing deadline, waits for readiness outside the current
+root's lease, and releases only that root's lease before its custody wait;
+roots it already shut down stay held through deletion. The remover refuses a
+managed root that still has `.supervisor` without that held lease and rechecks
+closure and custody under it. The lease excludes elected maintenance only; it
+does not prove that callback helpers exited, so a late write or deletion fault
+retains the root and reports an error. A lease release fault at teardown is a
+cleanup error: `finalize_fixture` still writes its one FAIL receipt with the
+original failure and the actual removed or retained root state. Mid-scenario
+shutdowns and historical fixture seeding keep the transition lease alone.
 
 A queue writer publishes intent under its dedicated owner lock before waiting
 for exclusive queue identity. New readers check that intent before and while

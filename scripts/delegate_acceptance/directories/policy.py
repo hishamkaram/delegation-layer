@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+import stat
+
+# Group and world permission bits a private directory must not carry.
+PRIVATE_DIRECTORY_SHARED_BITS = 0o077
 
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def require_private_directory(info, message, *, owner_uid):
+    """Go's requirePrivateInfo over a stat result: a real directory of ``owner_uid`` without group or world bits."""
+    require(
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == owner_uid
+        and not stat.S_IMODE(info.st_mode) & PRIVATE_DIRECTORY_SHARED_BITS,
+        message,
+    )
 
 
 def _cleanup_identity(value, label):

@@ -19,7 +19,8 @@
     "layer": "pure",
     "imports": [
       "py:__future__",
-      "py:pathlib"
+      "py:pathlib",
+      "py:stat"
     ]
   },
   {

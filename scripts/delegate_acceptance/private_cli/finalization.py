@@ -8,6 +8,7 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure_until
 from scripts.delegate_acceptance.private_cli.supervisor import await_observed_disposal_readiness
 from scripts.delegate_acceptance.private_cli.capture import reap_captured_process
+from scripts.delegate_acceptance.private_cli.leases import DisposalLeases
 from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_ALREADY_CLOSED
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_SHUT_DOWN
@@ -33,33 +34,42 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
     predecessor_roots = frozenset(
         pending["predecessor"].state for pending in lifetime.supervisor_cleanups if "predecessor" in pending
     )
-    handed_off_roots = shutdown_supplemental_supervisors(cleanup_errors, lifetime)
-    shutdown_primary_supervisor(
-        args,
-        cleanup_errors,
-        current_handoff_binding,
-        lifetime,
-        primary_closure_ready,
-        success,
-        predecessor_roots=predecessor_roots - handed_off_roots,
-        deadline=primary_deadline,
-    )
-    if lifetime.inspection_process is not None:
-        _, _, reaped, retry_error = reap_captured_process(lifetime.inspection_process, 5)
-        if reaped:
-            lifetime.inspection_process = None
-        if retry_error is not None:
-            cleanup_errors.append(retry_error)
-    if lifetime.inspection_process is not None:
-        cleanup_errors.append(RuntimeError("fixture process remained live after bounded cleanup"))
-    if cleanup_errors:
-        success = False
-        print(
-            "Retained private acceptance state after fixture process cleanup failure: "
-            + "; ".join(str(error) for error in cleanup_errors),
-            flush=True,
+    # One disposal owner holds each root's lease from its authorized shutdown through root deletion.
+    # Its teardown fault is a cleanup error: the one terminal receipt below still records it.
+    disposal = DisposalLeases()
+    try:
+        handed_off_roots = shutdown_supplemental_supervisors(cleanup_errors, lifetime, disposal=disposal)
+        shutdown_primary_supervisor(
+            args,
+            cleanup_errors,
+            current_handoff_binding,
+            lifetime,
+            primary_closure_ready,
+            success,
+            predecessor_roots=predecessor_roots - handed_off_roots,
+            deadline=primary_deadline,
+            disposal=disposal,
         )
-    success, root_cleanup = finish_root_cleanup(cleanup_errors, failure, lifetime, success)
+        if lifetime.inspection_process is not None:
+            _, _, reaped, retry_error = reap_captured_process(lifetime.inspection_process, 5)
+            if reaped:
+                lifetime.inspection_process = None
+            if retry_error is not None:
+                cleanup_errors.append(retry_error)
+        if lifetime.inspection_process is not None:
+            cleanup_errors.append(RuntimeError("fixture process remained live after bounded cleanup"))
+        if cleanup_errors:
+            success = False
+            print(
+                "Retained private acceptance state after fixture process cleanup failure: "
+                + "; ".join(str(error) for error in cleanup_errors),
+                flush=True,
+            )
+        success, root_cleanup = finish_root_cleanup(
+            cleanup_errors, failure, lifetime, success, disposal=disposal, deadline=primary_deadline
+        )
+    finally:
+        release_disposal_leases(disposal, cleanup_errors)
     cleanup_evidence = {
         "status": (
             "failed"
@@ -93,6 +103,14 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
         print("Retained private acceptance state for diagnosis: " + str(lifetime.base))
     if cleanup_failure is not None:
         raise cleanup_failure
+
+
+def release_disposal_leases(disposal, cleanup_errors):
+    """Release every held disposal lease; a close fault becomes a cleanup error, never an escaped exception."""
+    try:
+        disposal.release_all()
+    except OSError as error:
+        cleanup_errors.append(RuntimeError("disposal lease release failed: " + str(error)))
 
 
 def release_fixture_workers(args, cleanup_errors, lifetime, success):
@@ -155,18 +173,18 @@ def await_primary_readiness(state, task_ids, env, deadline, observe):
         await_observed_disposal_readiness(state, task_ids, shutdown_custody_roots(state, env), deadline, observe)
 
 
-def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
+def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None):
     """Return roots whose every captured predecessor was cleanly proven closed before cleanup."""
     clean_handoffs = {}
     for pending in tuple(lifetime.supervisor_cleanups):
         if "predecessor" in pending:
             root = pending["predecessor"].state
-            handed_off = shutdown_captured_predecessor(cleanup_errors, lifetime, pending)
+            handed_off = shutdown_captured_predecessor(cleanup_errors, lifetime, pending, disposal=disposal)
             clean_handoffs[root] = clean_handoffs.get(root, True) and handed_off
         else:
             try:
                 shutdown_pending_private_supervisor(
-                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.base_token
+                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.base_token, disposal=disposal
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -175,7 +193,7 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
     return frozenset(root for root, handed_off in clean_handoffs.items() if handed_off)
 
 
-def shutdown_captured_predecessor(cleanup_errors, lifetime, pending):
+def shutdown_captured_predecessor(cleanup_errors, lifetime, pending, *, disposal=None):
     """Return True only for a clean already-closed handoff; any other outcome keeps the primary skip."""
     target = pending["predecessor"]
     disposition = None
@@ -186,6 +204,7 @@ def shutdown_captured_predecessor(cleanup_errors, lifetime, pending):
             pending["env"],
             task_ids=tuple(pending["task_ids"]),
             capture_root=lifetime.base_token,
+            disposal=disposal,
         )
         if disposition not in (PREDECESSOR_SHUT_DOWN, PREDECESSOR_ALREADY_CLOSED):
             raise RuntimeError("unknown captured predecessor shutdown disposition: %r" % (disposition,))
@@ -217,7 +236,16 @@ def release_pending_predecessor(pending, supervisor_cleanups):
 
 
 def shutdown_primary_supervisor(
-    args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success, *, predecessor_roots, deadline
+    args,
+    cleanup_errors,
+    current_handoff_binding,
+    lifetime,
+    primary_closure_ready,
+    success,
+    *,
+    predecessor_roots,
+    deadline,
+    disposal=None,
 ):
     if current_handoff_binding is not None:
         cleanup_client = current_handoff_binding["client"]
@@ -264,6 +292,7 @@ def shutdown_primary_supervisor(
                     state=cleanup_state,
                     task_ids=cleanup_task_ids,
                     capture_root=lifetime.base_token,
+                    disposal=disposal,
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -272,7 +301,7 @@ def shutdown_primary_supervisor(
                 print("Retained private acceptance state after unproven shutdown: " + str(cleanup_error), flush=True)
 
 
-def finish_root_cleanup(cleanup_errors, failure, lifetime, success):
+def finish_root_cleanup(cleanup_errors, failure, lifetime, success, *, disposal=None, deadline=None):
     root_cleanup = {"status": "not-created", "verified": lifetime.base is None}
     if success and failure is None and not cleanup_errors and lifetime.base is not None:
         try:
@@ -286,7 +315,11 @@ def finish_root_cleanup(cleanup_errors, failure, lifetime, success):
                 + [entry for entry in main_owned if entry is not lifetime.base_token]
             )
             remove_private_acceptance_root(
-                lifetime.base_token, owned_directories, managed_state_roots=tuple(lifetime.managed_state_roots)
+                lifetime.base_token,
+                owned_directories,
+                managed_state_roots=tuple(lifetime.managed_state_roots),
+                disposal=disposal,
+                deadline=deadline,
             )
             root_cleanup = {"status": "removed", "verified": True}
         except BaseException as cleanup_error:

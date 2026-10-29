@@ -165,3 +165,26 @@ class InstalledDefaultCoreTests(unittest.TestCase):
         self.assertEqual(down.call_args.args[0], self.root / "pair" / "pueue")
         self.assertEqual(down.call_args.kwargs["task_ids"], (TASK_ID,))
         self.assertEqual(self.ledger, [])
+
+    def test_a_disposal_owner_is_forwarded_to_the_shutdown_and_defaults_to_none(self):
+        task = {"worker_wait": {"result": "success"}, "termination": {"cause": "completed", "scope_empty": True}}
+        owner = object()
+        for kwargs, expected in (({}, None), ({"disposal": owner}, owner)):
+            with self.subTest(kwargs=kwargs):
+                cleanup = packaged_defaults.register_installed_default(self.installed, self.ledger)
+                with patch.object(packaged_defaults, "shutdown_private_supervisor",
+                                  return_value=self.closure({TASK_ID: task})) as down:
+                    packaged_defaults.shutdown_installed_default(
+                        self.installed, self.admitted, cleanup, self.ledger, capture_root=None, **kwargs)
+                self.assertIs(down.call_args.kwargs["disposal"], expected)
+
+    def test_the_bootstrap_core_hands_its_disposal_owner_to_the_shutdown_step(self):
+        owner = object()
+        with patch.object(packaged_defaults, "register_installed_default", return_value="entry"), \
+                patch.object(packaged_defaults, "dispatch_installed_default", return_value=self.admitted), \
+                patch.object(packaged_defaults, "collect_installed_default", return_value="a" * 64), \
+                patch.object(packaged_defaults, "file_fingerprint", return_value={"sha256": "a" * 64}), \
+                patch.object(packaged_defaults, "shutdown_installed_default", return_value={}) as down:
+            packaged_defaults.prove_installed_default_bootstrap(
+                self.installed, supervisor_cleanups=self.ledger, capture_root=None, disposal=owner)
+        self.assertIs(down.call_args.kwargs["disposal"], owner)

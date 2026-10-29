@@ -394,7 +394,7 @@ def await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, ob
     return closure
 
 
-def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, observe=None):
+def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, observe=None, *, disposal=None):
     """Run action(closure) under the transition lease once closure and custody release hold.
 
     Closure is authorized and custody release awaited outside the lease, then
@@ -403,34 +403,54 @@ def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, obse
     that keeps finding views cannot outlive it. The one deadline covers every
     wait, observation and lock attempt. Without an observer an incomplete
     closure refuses at once; with one, readiness may first sweep it once.
+
+    With a ``disposal`` owner the lease is its disposal lease, which also
+    excludes elected maintenance and stays held after the action through root
+    deletion. Every wait runs outside this root's lease: a held lease for this
+    root is released first, while other roots the owner already shut down stay
+    held.
     """
+    if disposal is not None and disposal.holds(state) and disposal_ready_now(state, task_ids, owned_roots) is None:
+        disposal.release(state)
     if observe is None:
         closure = authorize_managed_lifetime_closure(state, task_ids)
         await_custody_release(closure, owned_roots, deadline)
     else:
         closure = await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe)
     while True:
-        with private_fixture_transition_until(Path(state), deadline):
+        if disposal is None:
+            with private_fixture_transition_until(Path(state), deadline):
+                closure = authorize_managed_lifetime_closure(state, task_ids)
+                pending = custody_release_pending(closure, owned_roots)
+                if not pending:
+                    return action(closure)
+        else:
+            disposal.hold(Path(state), deadline)
             closure = authorize_managed_lifetime_closure(state, task_ids)
             pending = custody_release_pending(closure, owned_roots)
             if not pending:
                 return action(closure)
+            disposal.release(state)
         require_custody_release_budget(pending, deadline)
         await_custody_release(closure, owned_roots, deadline)
 
 
-def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
+def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root, disposal=None):
     """Authorize closure and custody release, then shut down and observe PID and endpoint disappearance.
 
     The caller must not hold the transition lease. Returns the closure that
     authorized this shutdown, after the daemon exited and its endpoint closed.
+    A final-disposal caller passes its ``disposal`` owner to keep the lease held.
     """
     return shutdown_observed_private_supervisor(
-        client, config, env, timeout, state=state, task_ids=task_ids, capture_root=capture_root, observe=None
+        client, config, env, timeout, state=state, task_ids=task_ids, capture_root=capture_root, observe=None,
+        disposal=disposal,
     )
 
 
-def shutdown_observed_private_supervisor(client, config, env, timeout=30, *, state, task_ids, capture_root, observe):
+def shutdown_observed_private_supervisor(
+    client, config, env, timeout=30, *, state, task_ids, capture_root, observe, disposal=None
+):
     """Run shutdown_private_supervisor with an optional caller-bound public observer of ``task_ids``.
 
     ``observe`` is None or a callback bound to the selected Delegate CLI and
@@ -445,10 +465,12 @@ def shutdown_observed_private_supervisor(client, config, env, timeout=30, *, sta
         )
         return closure
 
-    return run_when_disposal_ready(state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down, observe)
+    return run_when_disposal_ready(
+        state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down, observe, disposal=disposal
+    )
 
 
-def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root):
+def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root, disposal=None):
     """Shut down one ordinary supervisor ledger entry, then drop it from the ledger.
 
     Returns the authorizing closure, or None while the entry's config does not
@@ -464,6 +486,7 @@ def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture
         state=pending["state"],
         task_ids=tuple(pending.get("task_ids", ())),
         capture_root=capture_root,
+        disposal=disposal,
     )
     supervisor_cleanups.remove(pending)
     return closure
@@ -480,7 +503,7 @@ def predecessor_closed(target, deadline, *, capture_root):
     ) and private_shutdown_endpoint_closed(target.endpoint, target.socket_identity, deadline)
 
 
-def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids=(), capture_root):
+def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids=(), capture_root, disposal=None):
     """Shut down a captured pre-retarget generation through its pinned backup config.
 
     The production transition lease is held from the read-only readiness
@@ -507,7 +530,9 @@ def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids
         require_predecessor_backup(target)
         return PREDECESSOR_SHUT_DOWN
 
-    return run_when_disposal_ready(target.state, task_ids, shutdown_custody_roots(target.state, env), deadline, shut_down)
+    return run_when_disposal_ready(
+        target.state, task_ids, shutdown_custody_roots(target.state, env), deadline, shut_down, disposal=disposal
+    )
 
 
 def shutdown_observed_supervisor(client, config, env, evidence, deadline, *, capture_root):

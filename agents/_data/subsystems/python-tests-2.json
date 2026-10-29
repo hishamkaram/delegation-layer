@@ -738,6 +738,35 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.private_cli.test_private_disposal_lease",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:contextlib",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:threading",
+      "py:time",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.private_cli.test_private_disposal_readiness",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",

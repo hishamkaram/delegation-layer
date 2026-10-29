@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import threading
+import time
 
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
@@ -205,14 +206,29 @@ class WorkspaceContext:
         return evidence
 
     def cleanup(self, verdict: str) -> dict[str, object]:
-        """Release only fixture gates, then authorize exact cleanup if safe."""
+        """Release only fixture gates, then authorize exact cleanup if safe.
+
+        One disposal owner holds the state root's lease from the authorized shutdown
+        through exact root deletion; deletion takes it within this cleanup's deadline
+        when the daemon was already closed.
+        """
+        deadline = time.monotonic() + MANAGED_LIFETIME_CLOSURE_TIMEOUT
+        with private_cli_leases.DisposalLeases() as disposal:
+            return self._cleanup_with_disposal(verdict, disposal, deadline)
+
+    def _cleanup_with_disposal(
+        self, verdict: str, disposal: private_cli_leases.DisposalLeases, deadline: float
+    ) -> dict[str, object]:
         self.release_gates()
         cohort_evidence = self.close_cohorts(remove_closed=False)
         lifetime_closed = False
         lifetime_error = None
         daemon_closed = not self.private_config.exists()
         daemon_error = None
-        if self.state.exists():
+        # Observed once: a state present here stays a managed root through removal, so a later
+        # rename cannot drop the remover's closure and custody recheck.
+        managed_state_roots = ((self.state, tuple(self.task_ids)),) if self.state.exists() else ()
+        if managed_state_roots:
             # A worker released by the gates may still be closing; wait for canonical closure
             # so a late close cannot skip the private daemon's shutdown.
             try:
@@ -233,6 +249,7 @@ class WorkspaceContext:
                     state=self.state,
                     task_ids=tuple(self.task_ids),
                     capture_root=self.root_token,
+                    disposal=disposal,
                 )
                 daemon_closed = True
             except (RuntimeError, OSError) as error:
@@ -267,8 +284,9 @@ class WorkspaceContext:
             private_cli_root_cleanup.remove_private_acceptance_root(
                 self.root_token,
                 entries,
-                managed_state_roots=((self.state, tuple(self.task_ids)),)
-                if self.state.exists() else (),
+                managed_state_roots=managed_state_roots,
+                disposal=disposal,
+                deadline=deadline,
             )
             self.cleanup_done = True
             result["removed_owned_directories"] = [str(entry.directory) for entry in entries]

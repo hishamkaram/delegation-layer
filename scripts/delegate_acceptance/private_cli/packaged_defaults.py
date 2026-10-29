@@ -227,8 +227,12 @@ def collect_installed_default(installed, admitted, *, capture_root, run_receipt=
     return runner_digest
 
 
-def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, *, capture_root):
-    """Shut down through the selected pair, drop the ledger entry, and return the task's revalidated closure."""
+def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, *, capture_root, disposal=None):
+    """Shut down through the selected pair, drop the ledger entry, and return the task's revalidated closure.
+
+    A final-disposal caller passes its ``disposal`` owner, which then keeps the state root's lease held
+    after the shutdown; without one the shutdown holds the transition lease only while it runs.
+    """
     closure = shutdown_private_supervisor(
         admitted.pair / "pueue",
         installed.config,
@@ -236,21 +240,25 @@ def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups
         state=installed.state,
         task_ids=(admitted.task_id,),
         capture_root=capture_root,
+        disposal=disposal,
     )
     supervisor_cleanups.remove(cleanup)
     return require_task_closure(closure, admitted)
 
 
-def prove_installed_default_bootstrap(installed, *, supervisor_cleanups, capture_root):
+def prove_installed_default_bootstrap(installed, *, supervisor_cleanups, capture_root, disposal=None):
     """Run one finite fixture turn through ``installed`` and return its closed bootstrap facts.
 
     The ledger entry is registered before dispatch and stays in ``supervisor_cleanups``
     on any failure for the caller's cleanup; success removes it after verified shutdown.
+    A caller that deletes the state root passes its ``disposal`` owner, which holds the
+    root's lease from the verified shutdown on.
     """
     cleanup = register_installed_default(installed, supervisor_cleanups)
     admitted = dispatch_installed_default(installed, cleanup, capture_root=capture_root)
     runner_digest = collect_installed_default(installed, admitted, capture_root=capture_root)
-    task = shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root)
+    task = shutdown_installed_default(
+        installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root, disposal=disposal)
     wait = task.get("worker_wait") or {}
     termination = task.get("termination") or {}
     return InstalledBootstrap(

@@ -16,6 +16,7 @@ from pathlib import Path
 import stat
 
 from scripts.delegate_acceptance.directories.policy import require
+from scripts.delegate_acceptance.directories.policy import require_private_directory
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.validation import _hex_digest
 from scripts.delegate_acceptance.lifetime.policy import validate_custody_placement
@@ -36,7 +37,6 @@ MAX_POOL_IDENTITY_BYTES = 256
 # The only mode taskdir.CheckPrivateStat accepts for a private regular file.
 POOL_IDENTITY_MODE = 0o600
 # The permission bits verifiedexec.requirePrivateInfo forbids on a pool root, views or owner directory.
-POOL_DIRECTORY_SHARED_BITS = 0o077
 CUSTODY_NAMESPACE_KINDS = ("tasks", "inspections")
 
 
@@ -175,7 +175,9 @@ def _pool_view_owners(label, pool_root):
     # before a placement is recorded, so a prepared registered pool without it
     # is not this fixture's layout. ReleasePending itself accepts a missing views.
     require(info is not None, label + " fixture layout assertion failed: registered custody pool has no views directory")
-    _require_private_directory(info, label + " custody pool views is not a private directory of this user")
+    require_private_directory(
+        info, label + " custody pool views is not a private directory of this user", owner_uid=os.geteuid()
+    )
     try:
         names = sorted(entry.name for entry in views.iterdir())
     except OSError as error:
@@ -190,20 +192,12 @@ def _view_owner_present(label, owner):
         return False
     except OSError as error:
         raise RuntimeError(label + " custody pool view owner " + owner.name + " is unreadable: " + str(error)) from error
-    _require_private_directory(
-        info, label + " custody pool view owner " + owner.name + " is not a private directory of this user"
+    require_private_directory(
+        info,
+        label + " custody pool view owner " + owner.name + " is not a private directory of this user",
+        owner_uid=os.geteuid(),
     )
     return True
-
-
-def _require_private_directory(info, message):
-    """Go's requirePrivateInfo over an lstat: a real directory of the effective user without group or world bits."""
-    require(
-        stat.S_ISDIR(info.st_mode)
-        and info.st_uid == os.geteuid()
-        and not stat.S_IMODE(info.st_mode) & POOL_DIRECTORY_SHARED_BITS,
-        message,
-    )
 
 
 def _resolve_existing(label, *paths):
@@ -224,8 +218,10 @@ def _pool_marker_id(label, pool_root):
     """
     marker = pool_root / POOL_IDENTITY_NAME
     try:
-        _require_private_directory(
-            pool_root.lstat(), label + " custody pool root is not a private directory of this user"
+        require_private_directory(
+            pool_root.lstat(),
+            label + " custody pool root is not a private directory of this user",
+            owner_uid=os.geteuid(),
         )
         info = marker.lstat()
         require(

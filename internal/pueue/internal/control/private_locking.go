@@ -30,6 +30,14 @@ func WithBootstrapLockContext(ctx context.Context, stateRoot string, callback fu
 	return withProvisionedPrivateLockContext(ctx, stateRoot, "bootstrap.lock", unix.LOCK_EX, callback)
 }
 
+// WithExistingBootstrapLockContext is WithBootstrapLockContext for recovery
+// that may only adopt an already-published root. It never provisions the
+// private base or its lock: a missing root, supervisor directory, or bootstrap
+// lock returns ErrPrivateSupervisorNotInitialized and leaves the path absent.
+func WithExistingBootstrapLockContext(ctx context.Context, stateRoot string, callback func(context.Context) error) error {
+	return withPublishedPrivateLockContext(ctx, stateRoot, "bootstrap.lock", unix.LOCK_EX, callback)
+}
+
 // TryWithPrivateTransition elects one state-root transition owner without
 // competing with shared supervisor leases. A false acquisition means another
 // caller is already preparing this root; callers should wait for that

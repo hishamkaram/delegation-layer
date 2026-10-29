@@ -501,6 +501,7 @@
     "imports": [
       "py:acceptance_tests.private_cli.fixtures",
       "py:contextlib",
+      "py:delegate_acceptance.directories.policy",
       "py:delegate_acceptance.private_cli.application",
       "py:delegate_acceptance.private_cli.arguments",
       "py:delegate_acceptance.private_cli.configuration",
@@ -510,6 +511,7 @@
       "py:io",
       "py:os",
       "py:pathlib",
+      "py:stat",
       "py:sys",
       "py:tempfile",
       "py:unittest",
