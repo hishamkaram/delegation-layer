@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,7 +43,7 @@ func TestContinuationLeavesPredecessorOutputPredicateFrozen(t *testing.T) {
 			// The shared recheck fixture seals native follow-up evidence under the
 			// source and requires the original rejection to be published. A frozen
 			// scoped source accepts the neutral cycle, so its fixture adds the
-			// unknown content block only its advisory target accepts.
+			// unknown content block only its current target accepts.
 			sealedProviderRecheckTask(t, registry, providerRecheckSource{
 				provider: testCase.provider, opaqueContent: isScopedRecheckSource(testCase.source),
 				reference: testCase.source, target: testCase.target,
@@ -304,12 +305,13 @@ func outputUpgradeCCRFacts(t *testing.T, candidate commonprovider.ProfileCandida
 	return facts
 }
 
-// TestCCROutputUpgradeSourcesFailClosedOnCapabilityDisagreement keeps each CCR
-// source and target bound to the route capability that selected its launch, for
-// reconstruction and for a new successor alike: a route-preserving contract
-// refuses a CLI without --resume-route, and a modeled contract refuses a CLI
-// that advertises it.
-func TestCCROutputUpgradeSourcesFailClosedOnCapabilityDisagreement(t *testing.T) {
+// TestCCROutputUpgradeSourcesKeepTheirLaunchAcrossRouteCapabilityChanges
+// keeps each CCR source and target bound to the launch its contract records,
+// for reconstruction and for a new successor alike. A route-preserving
+// contract refuses a CLI without --resume-route, which its launch requires. A
+// modeled contract never uses that flag, so a CLI that has gained it keeps the
+// modeled argv and predicate instead of switching to the route launch.
+func TestCCROutputUpgradeSourcesKeepTheirLaunchAcrossRouteCapabilityChanges(t *testing.T) {
 	operations := map[string]outputUpgradeCandidateSource{
 		"existing":  commonprovider.Catalog.ExistingCandidate,
 		"successor": commonprovider.Catalog.SuccessorCandidate,
@@ -318,7 +320,7 @@ func TestCCROutputUpgradeSourcesFailClosedOnCapabilityDisagreement(t *testing.T)
 		for _, reference := range []task.PredicateRef{testCase.source, testCase.target} {
 			for name, prepare := range operations {
 				t.Run(testCase.name+"/"+reference.Version+"/"+name, func(t *testing.T) {
-					requireCCRCapabilityDisagreementRefused(t, testCase, reference, prepare)
+					requireCCRRouteCapabilityChangeHandled(t, testCase, reference, prepare)
 				})
 			}
 		}
@@ -331,10 +333,12 @@ func outputUpgradeCCRCases(t *testing.T) []outputUpgradeCase {
 	return slices.DeleteFunc(outputUpgradeCases(t), func(testCase outputUpgradeCase) bool { return testCase.provider != ccr.Provider })
 }
 
-// requireCCRCapabilityDisagreementRefused finalizes the candidate prepared from
-// a record stored under reference: the recorded route capability is accepted
-// and the opposite one is refused as an unavailable profile.
-func requireCCRCapabilityDisagreementRefused(t *testing.T, testCase outputUpgradeCase, reference task.PredicateRef, prepare outputUpgradeCandidateSource) {
+// requireCCRRouteCapabilityChangeHandled finalizes the candidate prepared from
+// a record stored under reference with the recorded route capability and with
+// the opposite one. A route contract refuses the removed capability as an
+// unavailable profile; a modeled contract accepts the added capability with
+// the same modeled launch and predicate.
+func requireCCRRouteCapabilityChangeHandled(t *testing.T, testCase outputUpgradeCase, reference task.PredicateRef, prepare outputUpgradeCandidateSource) {
 	t.Helper()
 	installOutputUpgradeProvider(t, testCase.executable())
 	request := outputUpgradeSuccessorRequest(t, testCase)
@@ -349,11 +353,30 @@ func requireCCRCapabilityDisagreementRefused(t *testing.T, testCase outputUpgrad
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = candidate.Finalize(outputUpgradeCCRFacts(t, candidate, testCase.route), time.Now()); err != nil {
+	// Only a modeled contract carries the queued-launch decision, and the
+	// catalog forwards the provider's own decision.
+	if decide := candidate.AcceptRefreshedNativeFacts; testCase.route != (decide == nil) ||
+		(decide != nil && decide(json.RawMessage(`{"resume_route":false}`), json.RawMessage(`{"resume_route":true}`)) != nil) {
+		t.Fatalf("refreshed-facts decision present=%v for route=%v", decide != nil, testCase.route)
+	}
+	recorded, err := candidate.Finalize(outputUpgradeCCRFacts(t, candidate, testCase.route), time.Now())
+	if err != nil {
 		t.Fatalf("recorded capability was refused: %v", err)
 	}
-	if _, err = candidate.Finalize(outputUpgradeCCRFacts(t, candidate, !testCase.route), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
-		t.Errorf("opposite capability error=%v, want %v", err, commonprovider.ErrProfileUnavailable)
+	changed, err := candidate.Finalize(outputUpgradeCCRFacts(t, candidate, !testCase.route), time.Now())
+	if testCase.route {
+		if !errors.Is(err, commonprovider.ErrProfileUnavailable) {
+			t.Errorf("removed route capability error=%v, want %v", err, commonprovider.ErrProfileUnavailable)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("added route capability was refused: %v", err)
+	}
+	if !changed.Plan.Predicate.Equal(recorded.Plan.Predicate) || !slices.Equal(changed.Plan.Arguments, recorded.Plan.Arguments) ||
+		!slices.Contains(changed.Plan.Arguments, "--model") || slices.Contains(changed.Plan.Arguments, "--resume-route") {
+		t.Fatalf("added route capability changed the modeled launch: %+v %q, recorded %+v %q",
+			changed.Plan.Predicate, changed.Plan.Arguments, recorded.Plan.Predicate, recorded.Plan.Arguments)
 	}
 }
 

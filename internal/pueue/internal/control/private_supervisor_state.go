@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/migration"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -668,7 +669,25 @@ func privateEndpointProbe(ctx context.Context, path string) (unavailable, refuse
 		// starting or shutting down, so only a later probe can prove absence.
 		return false, true, nil
 	}
+	if privateDialEndedByCaller(ctx, err) {
+		// The caller's own cancellation or deadline ended the dial. That says
+		// nothing about the binding, so the dial error keeps its own identity.
+		return false, false, err
+	}
 	return false, false, errors.Join(ErrBinding, err)
+}
+
+// privateDialEndedByCaller reports whether a dial error is the caller's own
+// termination. The dialer also detects a passed caller deadline on its own,
+// from the deadline and the clock, so the dial can report that deadline before
+// the caller's context records it; a passed caller deadline therefore also
+// matches.
+func privateDialEndedByCaller(ctx context.Context, err error) bool {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Is(err, ctxErr)
+	}
+	deadline, bounded := ctx.Deadline()
+	return bounded && !time.Now().Before(deadline) && errors.Is(err, context.DeadlineExceeded)
 }
 
 func privateClientReadyEndpoint(ctx context.Context, client *Client) (bool, error) {

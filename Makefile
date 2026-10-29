@@ -161,6 +161,7 @@ supervisor-fixtures: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/provider ./internal/testutil/fakeprovider/cmd/provider
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/pueue-fake ./internal/testutil/fakesupervisor/cmd/pueue
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/harnessprobe ./internal/testutil/harnessprobe
+	CGO_ENABLED=0 go test -c -buildvcs=false -o bin/harness-tools/scheduler-fixture ./internal/scheduler
 
 acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh

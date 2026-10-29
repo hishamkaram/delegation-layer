@@ -126,7 +126,7 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 		stdout.discard()
 		return capabilityOutput{}, runtimeProbeError("stderr-capture-unavailable")
 	}
-	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, args...)
+	cmd, verified, err := newVerifiedCommand(scope, definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, args...)
 	if err != nil {
 		stdout.discard()
 		stderr.discard()

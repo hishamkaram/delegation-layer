@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 // PreflightScope borrows an already-supervised lifetime. Its context cancels
@@ -18,6 +19,7 @@ type PreflightScope struct {
 	authorize func() error
 	start     func(func() error) error
 	lifetime  Lifetime
+	binder    CommandBinder
 }
 
 // Context carries the existing owner's absolute deadline, without another timer.
@@ -54,6 +56,14 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 		return s.Start(start)
 	}
 	return s.Start(func() error { return s.lifetime.StartCommand(cmd, start) })
+}
+
+// BindCommand binds one native command through the owner's binder with the
+// scope's deadline context; a scope without a binder makes a private copy. The
+// caller owns the returned command and closes it after Wait, or after a refused
+// start.
+func (s PreflightScope) BindCommand(request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
+	return bindCommand(s.ctx, s.binder, request)
 }
 
 // FinishCommand lets the guardian drain residual descendants after the owned
@@ -93,6 +103,7 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 		authorize: func() error { return b.authorize(opts, "preflight-authorized") },
 		start:     func(start func() error) error { return b.authorizeAndStart(opts, start) },
 		lifetime:  opts.Lifetime,
+		binder:    opts.Binder,
 	}
 	if err := scope.Authorize(); err != nil {
 		return Plan{}, err
@@ -106,6 +117,9 @@ type SupervisedOptions struct {
 	Clock    Clock
 	Stopper  Stopper
 	Lifetime Lifetime
+	// Binder binds every native command started through the scope. Nil keeps
+	// the private copy that Command.Close removes.
+	Binder CommandBinder
 }
 
 // RunSupervised runs finite inspection work inside an existing supervisor job.
@@ -117,7 +131,7 @@ func RunSupervised(deadline time.Time, opts SupervisedOptions, work func(Preflig
 	if deadline.IsZero() || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
-	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime}
+	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, Binder: opts.Binder}
 	budget := armBudgetUntil(executionOptions.clock(), deadline, executionOptions)
 	workErr = budget.runScoped(executionOptions, work)
 	if workErr == nil {

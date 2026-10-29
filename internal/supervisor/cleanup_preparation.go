@@ -63,6 +63,13 @@ func (c *Cleanup) PrepareEndedInspectionEvidence(ctx context.Context, store *tas
 			return err
 		}
 	}
+	if c.custody != nil {
+		if err = c.custody.PrepareVerifiedLifetime(ctx, operation); err != nil {
+			// The row authorizer keeps withholding removal until a later pass
+			// releases the exact recorded pool; native evidence is unchanged.
+			log.Printf("delegate: terminal inspection %s custody release deferred: %v", id, err)
+		}
+	}
 	if operation.Request().Binding.WorkerExitProof == inspection.WorkerExitProofGuardianWaitV1 {
 		return nil
 	}

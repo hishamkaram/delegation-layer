@@ -26,6 +26,9 @@ func (g *Guardian) prepareRunScope(ctx context.Context) (string, Scope, error) {
 	if err = g.recordIntent(ctx, plan, bootID); err != nil {
 		return "", nil, err
 	}
+	if g.placement, err = g.resolvePlacement(ctx); err != nil {
+		return "", nil, err
+	}
 	scope, err := g.options.ScopeFactory(plan)
 	if errors.Is(err, lifetime.ErrScopeExists) {
 		recoveryCtx, cancel := g.recoveryContext(ctx)
@@ -46,6 +49,38 @@ func (g *Guardian) prepareRunScope(ctx context.Context) (string, Scope, error) {
 		return "", nil, fmt.Errorf("%w: scope factory returned nil scope", errLifetimeGuardianInvalid)
 	}
 	return bootID, scope, nil
+}
+
+// resolvePlacement fixes the custody placement this run registers. A committed
+// registration is the only placement authority once it exists, including its
+// nil placement, so the selector runs only after a confirmed clean absence and
+// at most once per run. A scope collision never selects again.
+func (g *Guardian) resolvePlacement(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
+	registration, err := g.options.Records.ReadLifetimeRegistrationContext(ctx)
+	if err == nil {
+		if registration == nil {
+			return nil, fmt.Errorf("%w: registration reader returned nil record", task.ErrEvidenceFault)
+		}
+		return registration.CustodyPlacement.Clone(), nil
+	}
+	if !task.RecordAbsent(err) {
+		return nil, fmt.Errorf("read lifetime registration before custody placement: %w", err)
+	}
+	if g.options.SelectPlacement == nil {
+		return nil, nil
+	}
+	selected, err := g.options.SelectPlacement(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("select lifetime custody placement: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, fmt.Errorf("select lifetime custody placement: %w", err)
+	}
+	placement := selected.Clone()
+	if err = task.ValidateLifetimeCustodyPlacement(placement); err != nil {
+		return nil, fmt.Errorf("%w: selected lifetime custody placement: %w", errLifetimeGuardianInvalid, err)
+	}
+	return placement, nil
 }
 
 func (g *Guardian) bindAndRecordRunScope(ctx context.Context, bootID string) error {
@@ -76,9 +111,15 @@ func (g *Guardian) resolveCreatedScopeFailure(ctx context.Context, bootID string
 	if err != nil {
 		return fmt.Errorf("read lifetime registration after write failure: %w", err)
 	}
-	if !g.registrationMatchesScope(registration, bootID) {
+	if !g.registrationNamesScope(registration, bootID) {
 		disposeErr := g.disposeUnregisteredScope(ctx)
 		return errors.Join(task.ErrIdentityMismatch, disposeErr)
+	}
+	if !sameLifetimeCustodyPlacement(registration.CustodyPlacement, g.placement) {
+		// The registration publishes this exact native scope, so the scope is
+		// registered and must stay resident. Its foreign placement is neither
+		// adopted nor acknowledged; finalization keeps retrying this resolver.
+		return fmt.Errorf("%w: lifetime registration custody placement differs from this run", task.ErrEvidenceFault)
 	}
 	if err = g.recordRegistration(ctx, bootID); err != nil {
 		return fmt.Errorf("acknowledge lifetime registration after setup failure: %w", err)
@@ -95,7 +136,16 @@ func (g *Guardian) disposeUnregisteredScope(ctx context.Context) error {
 	return err
 }
 
+// registrationMatchesScope requires both this native scope and this run's
+// custody placement.
 func (g *Guardian) registrationMatchesScope(registration *task.LifetimeRegistrationRecord, bootID string) bool {
+	return g.registrationNamesScope(registration, bootID) &&
+		sameLifetimeCustodyPlacement(registration.CustodyPlacement, g.placement)
+}
+
+// registrationNamesScope compares only the native scope identity. Failure
+// resolution uses it to decide whether this scope was ever published.
+func (g *Guardian) registrationNamesScope(registration *task.LifetimeRegistrationRecord, bootID string) bool {
 	if registration == nil || g.scope == nil {
 		return false
 	}
@@ -108,6 +158,13 @@ func (g *Guardian) registrationMatchesScope(registration *task.LifetimeRegistrat
 		registration.ScopeID == ref.Identifier() &&
 		registration.BootID == bootID &&
 		registration.Deadline == g.options.Deadline.UTC().Format(time.RFC3339Nano)
+}
+
+func sameLifetimeCustodyPlacement(first, second *task.LifetimeCustodyPlacement) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return *first == *second
 }
 
 func (g *Guardian) recordIntent(ctx context.Context, plan lifetime.Plan, bootID string) error {
@@ -135,6 +192,8 @@ func (g *Guardian) recordRegistration(ctx context.Context, bootID string) error 
 		ScopeID:   ref.Identifier(),
 		BootID:    bootID,
 		Deadline:  g.options.Deadline,
+
+		CustodyPlacement: g.placement.Clone(),
 	})
 	if err != nil {
 		return fmt.Errorf("record lifetime registration: %w", err)

@@ -12,7 +12,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func (c *Cleanup) InspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job) (resultErr error) {
+// InspectEndedJob validates one ended row's native terminal evidence. It never
+// consults custody, so migration keeps its pool-free verdict.
+func (c *Cleanup) InspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job) error {
+	return c.inspectEndedJob(ctx, store, legacy, job, nil)
+}
+
+// inspectEndedJob also applies validated, when non-nil, to an ended inspection
+// row whose terminal evidence was validated. Other rows never reach it.
+func (c *Cleanup) inspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
 	if store == nil {
 		return fmt.Errorf("%w: inspection state store is unavailable", inspection.ErrGroupMigrationRequired)
 	}
@@ -30,7 +38,7 @@ func (c *Cleanup) InspectEndedJob(ctx context.Context, store *taskdir.Store, leg
 		return nil
 	}
 	if inspectionWorker {
-		return c.inspectEndedInspection(ctx, store, legacy, taskID, job)
+		return c.inspectEndedInspection(ctx, store, legacy, taskID, job, validated)
 	}
 	return inspectLegacyEndedTask(ctx, store, legacy, taskID, job)
 }
@@ -94,7 +102,7 @@ func recordLegacyEndedInspectionExit(ctx context.Context, operation *inspection.
 	return nil
 }
 
-func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job) (resultErr error) {
+func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
 	if err := validateLegacyEndedInspectionJob(taskID, job); err != nil {
 		return err
 	}
@@ -112,5 +120,8 @@ func (c *Cleanup) inspectEndedInspection(ctx context.Context, store *taskdir.Sto
 	if err := c.inspection.ValidateLifetime(ctx, operation, taskID, job); err != nil {
 		return err
 	}
-	return validateLegacyEndedInspectionEvidence(ctx, operation, taskID, job)
+	if err := validateLegacyEndedInspectionEvidence(ctx, operation, taskID, job); err != nil || validated == nil {
+		return err
+	}
+	return validated(ctx, operation)
 }

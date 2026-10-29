@@ -134,6 +134,9 @@ func parseCurrentClaudeStdoutForMode(reader io.Reader, mode string, policy compl
 }
 
 func processClaudeCurrentRecord(state *eventState, value providerjson.Value) error {
+	if state.attribution != nil {
+		state.attribution.selected = nil
+	}
 	event, err := state.attribution.decodeEvent(value)
 	if err != nil {
 		state.markSemantic(err.Error())
@@ -180,6 +183,8 @@ func applyClaudeCurrentEvent(state *eventState, event claudeCurrentEvent) {
 		applyClaudeCurrentMessageEvent(state, event.fields, "user")
 	case "error":
 		state.markSemantic("top-level error event is terminally ambiguous")
+	case "rate_limit_event":
+		state.attribution.observeRateLimit(state, event)
 	default:
 		if strings.HasPrefix(event.typeName, "thread.") || strings.HasPrefix(event.typeName, "turn.") || strings.HasPrefix(event.typeName, "session.") {
 			state.markSemantic("unknown thread/turn/session lifecycle event: " + event.typeName)
@@ -460,7 +465,7 @@ func applyClaudeCurrentResult(state *eventState, fields map[string]providerjson.
 		state.markSemantic("result precedes system/init")
 		return
 	}
-	result, err := decodeClaudeCurrentResult(fields, state.init.sessionID, value)
+	result, err := decodeClaudeCurrentResult(fields, state.init.sessionID, value, state.attribution.classifiesFailedRequests())
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -469,8 +474,10 @@ func applyClaudeCurrentResult(state *eventState, fields map[string]providerjson.
 	state.result = result
 }
 
-func decodeClaudeCurrentResult(fields map[string]providerjson.Value, initSessionID string, value providerjson.Value) (resultState, error) {
-	subtype, isError, sessionID, err := decodeClaudeCurrentResultIdentity(fields, initSessionID)
+// decodeClaudeCurrentResult decodes one current result. failedRequests is the
+// immutable policy's choice for a documented failed final request.
+func decodeClaudeCurrentResult(fields map[string]providerjson.Value, initSessionID string, value providerjson.Value, failedRequests bool) (resultState, error) {
+	subtype, isError, sessionID, err := decodeClaudeCurrentResultIdentity(fields, initSessionID, failedRequests)
 	if err != nil {
 		return resultState{}, err
 	}
@@ -494,7 +501,7 @@ func decodeClaudeCurrentResult(fields map[string]providerjson.Value, initSession
 	return result, nil
 }
 
-func decodeClaudeCurrentResultIdentity(fields map[string]providerjson.Value, initSessionID string) (string, bool, string, error) {
+func decodeClaudeCurrentResultIdentity(fields map[string]providerjson.Value, initSessionID string, failedRequests bool) (string, bool, string, error) {
 	subtype, err := claudeCurrentRequiredText(fields, "subtype", 128)
 	if err != nil {
 		return "", false, "", errors.New("result subtype is missing or not a string")
@@ -509,6 +516,11 @@ func decodeClaudeCurrentResultIdentity(fields map[string]providerjson.Value, ini
 	sessionID, err := claudeCurrentRequiredString(fields, "session_id", 128)
 	if err != nil || !validSessionID(sessionID) || sessionID != initSessionID {
 		return "", false, "", errors.New("result session identity conflicts with system/init")
+	}
+	if failedRequests && subtype == resultSuccess && isError {
+		// The documented failed final request reports subtype success; the
+		// result refusal classifies it as a provider failure.
+		return subtype, isError, sessionID, nil
 	}
 	if flagErr := validateResultFlags(subtype, isError); flagErr != nil {
 		return "", false, "", flagErr

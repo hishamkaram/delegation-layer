@@ -51,11 +51,11 @@ func reopenedSettlementCases(mode string) []reopenedSettlementCase {
 
 // forEachSettlementCase runs check for every settlement case under each strict
 // revision, identified by its exact reference: the retained interactive-v5 and
-// the current interactive-v6.
+// interactive-v6 and the current interactive-v7.
 func forEachSettlementCase(t *testing.T, check func(t *testing.T, mode string, reference task.PredicateRef, tc reopenedSettlementCase)) {
 	t.Helper()
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, reference := range []task.PredicateRef{scopedInteractionReference(mode), interactionReference(mode)} {
+		for _, reference := range []task.PredicateRef{scopedInteractionReference(mode), advisoryInteractionReference(mode), interactionReference(mode)} {
 			for _, tc := range reopenedSettlementCases(mode) {
 				t.Run(mode+"/"+reference.Version+"/"+tc.name, func(t *testing.T) { check(t, mode, reference, tc) })
 			}
@@ -78,8 +78,13 @@ func TestStrictInteractiveSealedPredicatesRequireCurrentSettlementAfterClosure(t
 			}
 			return
 		}
-		if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
-			t.Fatalf("settled trace rejected or published a notification answer: %+v answer=%q", interpretation, answer)
+		// Only the current revision frames the accepted follow-up answer.
+		wantAnswer := tracePrincipalText
+		if reference.Equal(interactionReference(mode)) {
+			wantAnswer = expectedResponses(t, lines)
+		}
+		if interpretation.Verdict != task.VerdictCommitted || answer != wantAnswer {
+			t.Fatalf("settled trace rejected or published the wrong answer: %+v answer=%q", interpretation, answer)
 		}
 		if interpretation.Session == nil || *interpretation.Session != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) {
 			t.Fatalf("session=%+v", interpretation.Session)

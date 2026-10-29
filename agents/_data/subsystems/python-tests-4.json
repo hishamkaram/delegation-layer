@@ -478,5 +478,52 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_noexec_state",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:contextlib",
+      "py:delegate_acceptance.private_cli.application",
+      "py:delegate_acceptance.private_cli.arguments",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.noexec_state",
+      "py:delegate_acceptance.processes.contracts",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_noexec_scenario",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.resources",
+      "py:delegate_acceptance.private_cli.application",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_setup",
+      "py:delegate_acceptance.private_cli.handoff",
+      "py:delegate_acceptance.private_cli.handoff_cleanup",
+      "py:delegate_acceptance.private_cli.handoff_observation",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.scenario_entry",
+      "py:json",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]

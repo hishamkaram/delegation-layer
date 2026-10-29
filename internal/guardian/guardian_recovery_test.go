@@ -137,9 +137,7 @@ func TestLifetimeGuardianRejectsLaunchBeyondSharedLimitBeforeAck(t *testing.T) {
 		f.callMust(t, "begin", f.message(lifetimeMessageBegin, sequence, 0))
 		f.callMust(t, "failed", f.message(lifetimeMessageFailed, sequence, 0))
 	}
-	if err := f.call(t, f.message(lifetimeMessageBegin, task.MaxLifetimeLaunches+1, 0)); err == nil {
-		t.Fatal("launch beyond shared limit was acknowledged")
-	}
+	f.callRefused(t, "launch beyond shared limit", f.message(lifetimeMessageBegin, task.MaxLifetimeLaunches+1, 0), lifetimeGuardianCodeInvalidOrder)
 	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
 	f.worker.release()
 	if err := f.waitRun(t); err != nil {
@@ -177,9 +175,7 @@ func TestLifetimeGuardianDoesNotDestroyBeforeTerminationIsDurable(t *testing.T) 
 		},
 	)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
-	if err := f.call(t, f.message(lifetimeMessageClose, 0, 0)); err == nil {
-		t.Fatal("close succeeded despite termination write failure")
-	}
+	f.callRefused(t, "close despite termination write failure", f.message(lifetimeMessageClose, 0, 0), lifetimeGuardianCodeTermination)
 	f.worker.release()
 	waitForLifetimeGuardianTerminationRetry(t, retryEntered)
 	destroy, release := f.scope.disposalCounts()
@@ -254,9 +250,7 @@ func TestLifetimeGuardianDeadlineFencesBegin(t *testing.T) {
 		t.Fatalf("hello: %v", err)
 	}
 	f.setNow(time.Now().Add(2 * time.Hour))
-	if err := f.call(t, f.message(lifetimeMessageBegin, 1, 0)); err == nil {
-		t.Fatal("begin after deadline was accepted")
-	}
+	f.callRefusedOrClosed(t, "begin after deadline", f.message(lifetimeMessageBegin, 1, 0), lifetimeGuardianCodeDeadline)
 	f.worker.release()
 	if err := f.waitRun(t); err != nil && !errors.Is(err, errLifetimeGuardianDeadline) {
 		t.Fatalf("run: %v", err)
@@ -340,9 +334,7 @@ func assertLifetimeGuardianLaunchRecordFailure(t *testing.T, wantErr error, conf
 	configure(f.records)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
 	f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
-	if err := f.call(t, f.message(lifetimeMessageStarted, 1, 404)); err == nil {
-		t.Fatal("started was accepted despite an invalid launch record")
-	}
+	f.callRefused(t, "started despite an invalid launch record", f.message(lifetimeMessageStarted, 1, 404), lifetimeGuardianCodeStarted)
 	f.worker.release()
 	if err := f.waitRun(t); !errors.Is(err, wantErr) {
 		t.Fatalf("run error = %v, want %v", err, wantErr)
@@ -688,7 +680,7 @@ func TestLifetimeGuardianControlLossRecovers(t *testing.T) {
 
 func (f *lifetimeGuardianTestFixture) waitForWorker(t *testing.T) error {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := f.scenarioContext(t)
 	defer cancel()
 	select {
 	case <-f.worker.waitEntered:
@@ -831,15 +823,11 @@ func TestLifetimeGuardianCloseUsesImmutableWorkDeadline(t *testing.T) {
 
 func TestLifetimeGuardianRejectsInvalidOrdering(t *testing.T) {
 	f := newLifetimeGuardianTestFixture(t)
-	if err := f.call(t, f.message(lifetimeMessageBegin, 1, 0)); err == nil {
-		t.Fatal("begin before hello was accepted")
-	}
+	f.callRefused(t, "begin before hello", f.message(lifetimeMessageBegin, 1, 0), lifetimeGuardianCodeInvalidOrder)
 	if err := f.call(t, f.message(lifetimeMessageHello, 0, 0)); err != nil {
 		t.Fatalf("hello: %v", err)
 	}
-	if err := f.call(t, f.message(lifetimeMessageFinish, 1, 0)); err == nil {
-		t.Fatal("finish without active launch was accepted")
-	}
+	f.callRefused(t, "finish without active launch", f.message(lifetimeMessageFinish, 1, 0), lifetimeGuardianCodeInvalidOrder)
 	if err := f.call(t, f.message(lifetimeMessageClose, 0, 0)); err != nil {
 		t.Fatalf("close: %v", err)
 	}

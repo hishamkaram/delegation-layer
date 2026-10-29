@@ -55,11 +55,13 @@ class PrivateGuardianEvidenceTests(unittest.TestCase):
             **common, "boot_id": "boot-token", "owner_kind": "task",
             "owner_sha256": owner_digest, "scope_kind": "process-group",
             "assurance": "cooperative", "scope_plan": "process-group-plan",
+            "deadline": "2026-09-15T00:00:30Z",
         }
         registration = {
             **common, "boot_id": "boot-token", "owner_kind": "task",
             "owner_sha256": owner_digest, "scope_kind": "process-group",
             "assurance": "cooperative", "scope_id": "process-group-scope",
+            "deadline": "2026-09-15T00:00:30Z",
         }
         registration_bytes = (json.dumps(registration, sort_keys=True) + "\n").encode()
         registration_digest = hashlib.sha256(registration_bytes).hexdigest()
@@ -101,6 +103,7 @@ class PrivateGuardianEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(specifications[0]["scope_kind"], "process-group")
         self.assertEqual(specifications[0]["assurance"], "cooperative")
+        self.assertEqual(specifications[0]["deadline"], "2026-09-15T00:00:30Z")
         self.assertEqual(
             specifications[0]["owner_lock"], self.lifetime / "owner.lock",
         )

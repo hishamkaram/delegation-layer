@@ -67,9 +67,12 @@ func (profiles Profiles) Fresh(root string, req task.TaskRecord, meta task.MetaR
 		// Runtime-only journals from before capability digests were recorded do
 		// not contain enough information to compare command shape. The current
 		// supervised probe is therefore authoritative for those records. Native
-		// projections remain byte-for-byte bound to their admission proof.
-		if !runtimeOnlyInspectionDefinition(*candidate.Inspection) && !inspectionFactsMatchForDefinition(facts, freshFacts, candidate.Inspection.Runtime != nil) {
-			return execution.Plan{}, task.ErrEvidenceFault
+		// projections remain bound to their admission proof: canonical equality,
+		// or a validated difference the candidate's recorded launch accepts.
+		if !runtimeOnlyInspectionDefinition(*candidate.Inspection) {
+			if err = refreshedInspectionFactsError(candidate, facts, freshFacts); err != nil {
+				return execution.Plan{}, err
+			}
 		}
 		facts = freshFacts
 	}

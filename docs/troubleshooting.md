@@ -510,6 +510,39 @@ still rejects the evidence; exit `1` or `2` means an operational error or an
 ineligible request. Preserve those diagnostics rather than relaunching paid work,
 editing task records, or extracting a plausible answer from raw logs.
 
+## Recorded executable custody is unavailable
+
+Each task and inspection records the pool that holds its verified executables.
+If that pool is missing, replaced, foreign, aliased, or otherwise unavailable,
+Delegate keeps the custody and reports the concrete cause; this is conservative
+retention, not a task failure. `status` and `collect` log
+`delegate: lifetime custody release deferred: ...` on stderr, and the
+authoritative task outcome, publication, and exit code are unchanged. An
+ended inspection row whose custody is still pending is kept in the supervisor
+queue; the next maintenance pass retries it. The next `status` or `collect` on
+the same root retries the release once the pool is usable again.
+
+- Do not delete, move, replace, or recreate the pool directory
+  (`<state root>/.custody` or `<TMPDIR>/delegate-custody-<RootID>`), and do not
+  edit the task or lifetime records. Delegate does not reselect a pool for an
+  existing task, and a missing pool is not treated as released. No command
+  repairs it.
+- A registration written before custody existed has no recorded pool. Delegate
+  never releases it, and a worker refuses to start a task or inspection from it.
+- If a new task fails with `select lifetime custody placement`, the message
+  reports the cause of the state-root pool's refusal. Only when that refusal was
+  `noexec` and the fallback location was then attempted and also failed does it
+  report both causes. Any other state-root refusal, such as a foreign or aliased
+  directory, fails directly with its own cause and no fallback is tried.
+
+If the state root is on a `noexec` mount and the supervisor is external, the
+fallback pool lives under `TMPDIR` (default `/tmp`) as captured by the guardian
+process. The pool path below it must be on a mount that allows execution;
+otherwise the refusal reports `custody pool filesystem is mounted noexec`. The
+private bundled supervisor is stored under the state root and cannot run from a
+`noexec` state root. See
+[verified executable custody](architecture.md#verified-executable-custody).
+
 ## Collection fails after a successful run
 
 If the response contains a valid outcome alongside an operational error, keep

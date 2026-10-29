@@ -51,8 +51,13 @@ from scripts.delegate_acceptance.hermetic.scenarios_publication import run_p05_s
 from scripts.delegate_acceptance.hermetic.scenarios_publication import run_p06_abandon
 from scripts.delegate_acceptance.hermetic.scenarios_publication import run_p06_overlap
 from scripts.delegate_acceptance.hermetic.scenarios_publication import run_p07
+from scripts.delegate_acceptance.hermetic.scenarios_scheduler import run_s01_scheduler_compatibility
 import sys
 import traceback
+
+# scheduler-fixture is the scheduler facade's test binary (make
+# supervisor-fixtures); only SCHEDULER-COMPAT runs it.
+TOOL_NAMES = ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe", "scheduler-fixture")
 
 
 class HermeticSuite:
@@ -61,7 +66,7 @@ class HermeticSuite:
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.results = []
-        for name in ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe"):
+        for name in TOOL_NAMES:
             canonical_executable(self.tools / name)
 
     def run_case(self, case_id, fn, **kwargs):
@@ -97,7 +102,7 @@ class HermeticSuite:
                     "path": str(self.tools / name),
                     "sha256": digest(self.tools / name),
                 }
-                for name in ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe")
+                for name in TOOL_NAMES
             },
             "cases": self.results,
             "counts": {
@@ -125,11 +130,12 @@ class HermeticSuite:
         self._run_publication_cases()
         self._run_budget_cases()
         self._run_control_cases()
+        self.run_case("SCHEDULER-COMPAT", run_s01_scheduler_compatibility)
         summary = self.write_summary()
         if summary["counts"]["fail"]:
             raise SystemExit(1)
         print(
-            "PASS hermetic H: %d cases; A/P/B/C counts and independently started "
+            "PASS hermetic H: %d cases; A/P/B/C/S counts and independently started "
             "delegate-run evidence recorded" % summary["counts"]["pass"],
             flush=True,
         )
@@ -236,6 +242,7 @@ class HermeticSuite:
             "C08-ended-unsealed": run_c08_ended_unsealed_cancel,
             "SESSION-CHAIN": run_session_chain,
             "SESSION-CHAIN-BASELINE": run_session_chain_baseline,
+            "SCHEDULER-COMPAT": run_s01_scheduler_compatibility,
         }
         for case_id in case_ids:
             fn = controls.get(case_id)

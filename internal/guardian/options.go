@@ -113,6 +113,11 @@ type Options struct {
 	Now                    func() time.Time
 	UserStop               func() (bool, error)
 	StopPoll               time.Duration
+
+	// SelectPlacement chooses the custody placement for a run whose
+	// registration is confirmed absent. Nil keeps registrations unplaced;
+	// workspace owners must leave it nil.
+	SelectPlacement func(context.Context) (*task.LifetimeCustodyPlacement, error)
 }
 
 // New constructs the canonical lifecycle owner. The option
@@ -199,6 +204,9 @@ func validateLifetimeGuardianIdentity(options Options) error {
 func validateLifetimeGuardianProofs(options Options) error {
 	if options.OwnerKind != task.LifetimeOwnerTask && options.UserStop != nil {
 		return fmt.Errorf("%w: user stop polling requires a task owner", errLifetimeGuardianInvalid)
+	}
+	if options.OwnerKind == task.LifetimeOwnerWorkspace && options.SelectPlacement != nil {
+		return fmt.Errorf("%w: workspace lifetimes have no custody placement", errLifetimeGuardianInvalid)
 	}
 	return nil
 }

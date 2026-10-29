@@ -32,6 +32,8 @@ const (
 	// are not checked for unique keys, unknown content blocks are opaque, and
 	// an unknown completion reason is an unsupported completion.
 	advisoryScopedCompletion
+	// advisoryFollowUpCompletion exposes every accepted root answer.
+	advisoryFollowUpCompletion
 )
 
 // completionAttribution is the canonical current completion reducer for one
@@ -54,6 +56,17 @@ type completionAttribution struct {
 	// messages are excluded from cycles, invalid message scopes reject, and
 	// leading acknowledgements may precede the principal result.
 	scoped bool
+	// project selects one callback-scoped answer at a time, never a history.
+	project            bool
+	selected           *claudeSelectedAnswer
+	hasFollowUpAnswers bool
+	// failedRequests classifies the documented failed final request, subtype
+	// success with is_error true, as a provider failure instead of malformed
+	// output, and correlates its api_error with the latest same-session
+	// rate-limit rejection; quota_attribution.go owns the correlation.
+	failedRequests bool
+	quotaRejected  bool
+	principalQuota bool
 	// advisory is fixed by the immutable completion policy and selects the
 	// advisory wire projection, init authority, and unsupported reasons.
 	advisory bool
@@ -85,6 +98,8 @@ func newCompletionAttribution(policy completionPolicy) *completionAttribution {
 		return &completionAttribution{scoped: true}
 	case advisoryScopedCompletion:
 		return &completionAttribution{scoped: true, advisory: true}
+	case advisoryFollowUpCompletion:
+		return &completionAttribution{scoped: true, advisory: true, project: true, failedRequests: true}
 	case singleResultCompletion:
 		return nil
 	}
@@ -189,7 +204,12 @@ func (a *completionAttribution) acceptPrincipal(state *eventState, value provide
 		a.nextIndex = 1
 	}
 	a.stage = leadingStart
+	a.principalQuota = a.consumeQuota(completion)
 	a.principalFault = completion.fault()
+	a.principalFault.quota = a.principalQuota
+	if a.project {
+		a.selected = &claudeSelectedAnswer{index: a.nextIndex - 1, origin: "caller", text: state.result.currentAnswer}
+	}
 }
 
 func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCurrentEvent) {
@@ -198,11 +218,12 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 		state.markSemantic(err.Error())
 		return
 	}
+	quota := a.consumeQuota(completion)
 	if reason := followUpSequenceFault(a, completion); reason != "" {
 		state.markSemantic(reason)
 		return
 	}
-	result, err := decodeClaudeCurrentResult(event.fields, state.init.sessionID, event.value)
+	result, err := decodeClaudeCurrentResult(event.fields, state.init.sessionID, event.value, a.classifiesFailedRequests())
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -224,7 +245,11 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 		fault = completionFault{refusal: refusalIncomplete}
 	}
 	if fault.refusal != "" {
+		fault.quota = quota
 		a.recordFollowUpFault(fault)
+	} else if a.project {
+		a.hasFollowUpAnswers = true
+		a.selected = &claudeSelectedAnswer{index: a.nextIndex - 1, origin: "task-notification", text: result.currentAnswer}
 	}
 }
 

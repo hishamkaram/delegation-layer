@@ -35,6 +35,9 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	if pressure, ok := tasklifecycle.ResourcePressureRefusal(err); ok {
 		failure.ReasonCode = resourcePressureReason(pressure)
 	}
+	if code == "provider_unavailable" && commonprovider.NativeCapabilityUnavailable(err) {
+		failure.ReasonCode = providerCapabilityChangedReason
+	}
 	if failure.NextAction == "retry_later" {
 		failure.RetryAfterSeconds = resourceRetryAfterSeconds
 	}
@@ -43,6 +46,24 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	}
 	return failure
 }
+
+// providerCapabilityChangedReason marks an unavailable provider whose whole
+// refusal is a capability the recorded launch requires and the installed CLI
+// no longer offers. Its public detail is fixed and names no provider value.
+const providerCapabilityChangedReason = "provider_capability_changed"
+
+const providerCapabilityChangedDetail = "The installed provider CLI no longer offers a capability that this task's recorded launch requires."
+
+// providerPublicError presents a provider refusal with its fixed detail while
+// keeping the complete command error as its cause.
+type providerPublicError struct {
+	message string
+	cause   error
+}
+
+func (e *providerPublicError) Error() string { return e.message }
+
+func (e *providerPublicError) Unwrap() error { return e.cause }
 
 // supervisorFailureCode reports the failure codes whose reason codes come
 // from supervisorFailureReason and whose detail is supervisor-specific.

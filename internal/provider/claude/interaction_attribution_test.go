@@ -56,10 +56,17 @@ func evaluateInteractiveTrace(t *testing.T, v predicate.Interpreter, lines []str
 
 func TestInteractiveV4SelectsPrincipalAcrossLaterNotifications(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		current, answer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), interactiveFollowUpTrace(mode))
-		if current.Session == nil || *current.Session != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) || current.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
-			t.Fatalf("%s interactive-v4=%+v answer=%q", mode, current, answer)
+		// The frozen principal-only interactive-v6 keeps selecting the principal;
+		// the current interactive-v7 frames every accepted root answer.
+		frozenAdvisory, answer := evaluateInteractiveTrace(t, newAdvisoryInteractionInterpreter(mode), interactiveFollowUpTrace(mode))
+		if frozenAdvisory.Session == nil || *frozenAdvisory.Session != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) || frozenAdvisory.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
+			t.Fatalf("%s interactive-v6=%+v answer=%q", mode, frozenAdvisory, answer)
 		}
+		current, answer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), interactiveFollowUpTrace(mode))
+		if current.Session == nil || *current.Session != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) {
+			t.Fatalf("%s interactive-v7 session=%+v", mode, current.Session)
+		}
+		requireCommittedResponses(t, current, answer, interactiveFollowUpTrace(mode))
 		// Frozen interactive-v3 rejects assistant output in a follow-up turn and
 		// otherwise publishes the latest root result.
 		if frozen, _ := evaluateInteractiveTrace(t, newPreAttributionInteractionInterpreter(mode), interactiveFollowUpTrace(mode)); frozen.Verdict != task.VerdictRejected {
@@ -70,13 +77,16 @@ func TestInteractiveV4SelectsPrincipalAcrossLaterNotifications(t *testing.T) {
 		if frozen.Verdict != task.VerdictCommitted || frozenAnswer != "neutral" {
 			t.Fatalf("%s interactive-v3 replay changed: %+v answer=%q", mode, frozen, frozenAnswer)
 		}
-		if current, answer = evaluateInteractiveTrace(t, newInteractionInterpreter(mode), withoutMessages); current.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
-			t.Fatalf("%s interactive-v4 selected a notification answer: %+v answer=%q", mode, current, answer)
-		}
 		closed := []string{interactiveInitLine(mode), attributedResultLine(tracePrincipalText, `,"result_index":0`, 1, "0.1"), interactiveIdle, interactiveInitLine(mode), interactiveAssistant("neutral"), attributedResultLine("neutral", notificationAttribution(1), 1, "0.2")}
-		afterClosure, closedAnswer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), closed)
-		if afterClosure.Verdict != task.VerdictCommitted || closedAnswer != tracePrincipalText {
-			t.Fatalf("%s follow-up after input closure=%+v answer=%q", mode, afterClosure, closedAnswer)
+		// A follow-up without messages, and one after input closure, stay
+		// evidence: the frozen interactive-v6 publishes the principal alone and
+		// the current interactive-v7 frames both answers.
+		for _, lines := range [][]string{withoutMessages, closed} {
+			if frozenAdvisory, frozenAnswer := evaluateInteractiveTrace(t, newAdvisoryInteractionInterpreter(mode), lines); frozenAdvisory.Verdict != task.VerdictCommitted || frozenAnswer != tracePrincipalText {
+				t.Fatalf("%s interactive-v6 selected a notification answer: %+v answer=%q", mode, frozenAdvisory, frozenAnswer)
+			}
+			current, answer = evaluateInteractiveTrace(t, newInteractionInterpreter(mode), lines)
+			requireCommittedResponses(t, current, answer, lines)
 		}
 	}
 }

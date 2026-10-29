@@ -61,6 +61,20 @@ the same as a successful provider result.
 8. Never relaunch an uncertain task by guessing. Observe only a task whose
    record is known to exist; the `task_record` decision above takes precedence.
 
+Committed publication certifies that the provider/evidence predicate passed;
+it does not certify fulfillment of the brief. The Lead must read the complete
+validated payload, including all attributed follow-up sections when present,
+and check requested artifacts, tests, and acceptance criteria before declaring
+the work done. Never select only the first, last, or largest answer section
+and discard the others.
+
+A progress-only answer is not completion. First inspect all validated answers
+and artifacts; if work remains, use a supported exact-session continuation
+under [continuation guidance](continuation.md). Existing permissions and
+`stop_and_report` rules still apply. Workers must keep owned commands in the
+foreground or await native background completion before their final handoff.
+A promise to monitor detached work is not a finished result.
+
 For an `inspect-provider` failure, preserve the optional
 `failure.inspection.class`, `deadline_state`, and `journal_task_id` fields in
 the report. They are bounded diagnostics, not a new recovery instruction.

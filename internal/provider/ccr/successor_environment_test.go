@@ -78,7 +78,8 @@ func predecessorFamilies(mode string) []predecessorFamily {
 }
 
 // facts is the launch-help projection the family's recorded inspection
-// accepts; opposite is one it must refuse rather than change the launch.
+// accepts; opposite is the other route projection, which a legacy inspection
+// refuses rather than change the launch.
 func (f predecessorFamily) facts(t *testing.T, candidate commonprovider.ProfileCandidate) json.RawMessage {
 	t.Helper()
 	if f.legacy {
@@ -307,8 +308,12 @@ func testSuccessorLaunchesFromCaller(t *testing.T, mode string, family predecess
 	if want := expectedArguments(mode, family.successorModel(), family.route); !slices.Equal(successor.Plan.Arguments, want) {
 		t.Fatalf("successor argv %q want %q", successor.Plan.Arguments, want)
 	}
-	if _, err := candidate.Finalize(family.opposite(t, candidate), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
-		t.Fatalf("opposite capability error=%v, want %v", err, commonprovider.ErrProfileUnavailable)
+	if family.legacy {
+		if _, err := candidate.Finalize(family.opposite(t, candidate), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
+			t.Fatalf("legacy inspection accepted a route projection: %v", err)
+		}
+	} else {
+		requireOppositeRouteCapability(t, "successor", candidate, successor, family.route)
 	}
 
 	// A reconstructs from its own request: its explicit model and fresh

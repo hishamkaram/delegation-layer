@@ -221,7 +221,9 @@ func TestUnscopedRevisionKeepsUnscopedInterpretation(t *testing.T) {
 		if rejected, answer := evaluateWriteTrace(t, frozen, nested); rejected.Verdict != task.VerdictRejected || rejected.Refusal != refusalMalformed || answer != "" {
 			t.Fatalf("%s unscoped revision accepted nested messages before a parent init: %+v answer=%q", mode, rejected, answer)
 		}
-		if committed, answer := evaluateWriteTrace(t, current, nested); committed.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
+		// The current revision frames every accepted root answer; nested
+		// assistant text is never a section.
+		if committed, answer := evaluateWriteTrace(t, current, nested); committed.Verdict != task.VerdictCommitted || answer != expectedResponses(t, nested) {
 			t.Fatalf("%s current revision rejected nested messages: %+v answer=%q", mode, committed, answer)
 		}
 		// The unscoped revision never read the field: any value is an ordinary
@@ -253,7 +255,10 @@ func TestUnscopedRevisionStillCommitsPayloadsWithoutNestedMessages(t *testing.T)
 		} {
 			retained, retainedAnswer := evaluateWriteTrace(t, frozen, lines)
 			scoped, scopedAnswer := evaluateWriteTrace(t, NewInterpreter(mode), lines)
-			if retained.Verdict != task.VerdictCommitted || retainedAnswer != tracePrincipalText || scopedAnswer != retainedAnswer || !reflect.DeepEqual(retained.Usage, scoped.Usage) {
+			// The retained revision stays principal-only; the current revision
+			// frames every accepted root answer and keeps principal accounting.
+			if retained.Verdict != task.VerdictCommitted || retainedAnswer != tracePrincipalText || scoped.Verdict != task.VerdictCommitted ||
+				scopedAnswer != expectedResponses(t, lines) || !reflect.DeepEqual(retained.Usage, scoped.Usage) {
 				t.Fatalf("%s %s retained=%+v/%q current=%+v/%q", mode, name, retained, retainedAnswer, scoped, scopedAnswer)
 			}
 		}
@@ -283,8 +288,8 @@ func requireInteractiveNestedMessageScope(t *testing.T, mode string) {
 	if rejected, answer := evaluateInteractiveTrace(t, frozen, nested); rejected.Verdict != task.VerdictRejected || answer != "" {
 		t.Fatalf("%s interactive-v4 accepted nested messages before a parent init: %+v answer=%q", mode, rejected, answer)
 	}
-	if committed, answer := evaluateInteractiveTrace(t, current, nested); committed.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
-		t.Fatalf("%s interactive-v5 rejected nested messages: %+v answer=%q", mode, committed, answer)
+	if committed, answer := evaluateInteractiveTrace(t, current, nested); committed.Verdict != task.VerdictCommitted || answer != expectedResponses(t, nested) {
+		t.Fatalf("%s current interactive revision rejected nested messages: %+v answer=%q", mode, committed, answer)
 	}
 	if committed, answer := evaluateInteractiveTrace(t, frozen, interactiveFollowUpTrace(mode)); committed.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
 		t.Fatalf("%s interactive-v4 no longer commits its native follow-up trace: %+v answer=%q", mode, committed, answer)
@@ -316,8 +321,8 @@ func requireInteractiveReopenedSettlement(t *testing.T, mode string) {
 			t.Fatalf("%s interactive-v4 end-of-stream %q: %+v answer=%q", mode, tc.name, interpretation, answer)
 		}
 		strict, strictAnswer := evaluateInteractiveTrace(t, current, lines)
-		if (strict.Verdict == task.VerdictCommitted) != tc.settled || (tc.settled && strictAnswer != tracePrincipalText) {
-			t.Fatalf("%s interactive-v5 end-of-stream %q: %+v answer=%q", mode, tc.name, strict, strictAnswer)
+		if (strict.Verdict == task.VerdictCommitted) != tc.settled || (tc.settled && strictAnswer != expectedResponses(t, lines)) {
+			t.Fatalf("%s current interactive end-of-stream %q: %+v answer=%q", mode, tc.name, strict, strictAnswer)
 		}
 	}
 }

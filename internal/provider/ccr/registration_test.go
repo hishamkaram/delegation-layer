@@ -61,7 +61,7 @@ func TestPreAttributionReferencesRetainSealedContractDigests(t *testing.T) {
 		})
 	}
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		if Reference(mode).Version != "ccr-foreground-v6" || modeledReference(mode).Version != "ccr-foreground-v6-modeled" ||
+		if Reference(mode).Version != "ccr-foreground-v7" || modeledReference(mode).Version != "ccr-foreground-v7-modeled" ||
 			Reference(mode).Equal(preAttributionReference(mode, true)) || modeledReference(mode).Equal(preAttributionReference(mode, false)) {
 			t.Fatalf("attributed CCR references were not versioned: %+v %+v", Reference(mode), modeledReference(mode))
 		}
@@ -69,8 +69,9 @@ func TestPreAttributionReferencesRetainSealedContractDigests(t *testing.T) {
 }
 
 // TestScopedReferencesRetainSealedContractDigests pins the CCR v5 digests
-// sealed under Claude's scoped policy and strict wire, and the current v6
-// digests bound to the advisory contract.
+// sealed under Claude's scoped policy and strict wire, the frozen v6 digests
+// bound to the principal-only advisory contract, and the current v7 digests
+// bound to the follow-up contract.
 func TestScopedReferencesRetainSealedContractDigests(t *testing.T) {
 	for _, test := range []struct {
 		got           task.PredicateRef
@@ -80,10 +81,14 @@ func TestScopedReferencesRetainSealedContractDigests(t *testing.T) {
 		{scopedReference(config.ModeReadOnly, false), "ccr-foreground-v5-modeled", "7483b129ea91cc745e5a45573df3669a7297b98b8bf43d2c1f28a3edae874f3c"},
 		{scopedReference(config.ModeWorkspaceWrite, true), "ccr-foreground-v5", "468b9b0e25cd7d9936ef2293197ba6b72f16ac2aa9546eac70f837b7f5fdcb59"},
 		{scopedReference(config.ModeWorkspaceWrite, false), "ccr-foreground-v5-modeled", "e8413e812488699abb7b6c1695665927dfd39d820cb54ebe380b7cb8cdf4da61"},
-		{Reference(config.ModeReadOnly), "ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"},
-		{modeledReference(config.ModeReadOnly), "ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"},
-		{Reference(config.ModeWorkspaceWrite), "ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"},
-		{modeledReference(config.ModeWorkspaceWrite), "ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"},
+		{advisoryReference(config.ModeReadOnly, true), "ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"},
+		{advisoryReference(config.ModeReadOnly, false), "ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"},
+		{advisoryReference(config.ModeWorkspaceWrite, true), "ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"},
+		{advisoryReference(config.ModeWorkspaceWrite, false), "ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"},
+		{Reference(config.ModeReadOnly), "ccr-foreground-v7", "7447125836ee96e2d8d16760d4dcb90c78d619bf75ef50f6343a012ffaf213cb"},
+		{modeledReference(config.ModeReadOnly), "ccr-foreground-v7-modeled", "92e13e9d0405eb9b097a78289d9e5e3b017c62f54e48dec8cb1627840732c647"},
+		{Reference(config.ModeWorkspaceWrite), "ccr-foreground-v7", "568f56184cec02f9a853099eaf2a4b3b827baec1df97af735013d02b53ae6a6d"},
+		{modeledReference(config.ModeWorkspaceWrite), "ccr-foreground-v7-modeled", "e61c42768544e0e79fa71a31cf5594ae31d2ad4115aa18b33c7584956b32f32d"},
 	} {
 		if test.got.Version != test.version || test.got.SHA256 != test.want {
 			t.Fatalf("CCR reference=%+v want %s/%s", test.got, test.version, test.want)
@@ -106,6 +111,8 @@ func requireRegisteredReferences(t *testing.T, registration commonprovider.Regis
 	wanted := []task.PredicateRef{
 		Reference(config.ModeReadOnly), Reference(config.ModeWorkspaceWrite),
 		modeledReference(config.ModeReadOnly), modeledReference(config.ModeWorkspaceWrite),
+		advisoryReference(config.ModeReadOnly, true), advisoryReference(config.ModeWorkspaceWrite, true),
+		advisoryReference(config.ModeReadOnly, false), advisoryReference(config.ModeWorkspaceWrite, false),
 		scopedReference(config.ModeReadOnly, true), scopedReference(config.ModeWorkspaceWrite, true),
 		scopedReference(config.ModeReadOnly, false), scopedReference(config.ModeWorkspaceWrite, false),
 		preAttributionReference(config.ModeReadOnly, true), preAttributionReference(config.ModeWorkspaceWrite, true),
@@ -141,9 +148,11 @@ func requireRecoveryChain(t *testing.T, registration commonprovider.Registration
 				t.Fatalf("recovery from %+v did not select %+v: %v", pair.source, pair.target, resolveErr)
 			}
 		}
-		for _, current := range []task.PredicateRef{Reference(mode), modeledReference(mode)} {
+		// The principal-only advisory references share the current verdict
+		// rules, so a recheck could only reject again; they are no source.
+		for _, current := range []task.PredicateRef{Reference(mode), modeledReference(mode), advisoryReference(mode, true), advisoryReference(mode, false)} {
 			if _, resolveErr := registry.ResolveRecovery(current); !errors.Is(resolveErr, predicate.ErrRecoveryUnsupported) {
-				t.Fatalf("current reference %s became a recovery source: %v", current.Version, resolveErr)
+				t.Fatalf("reference %s became a recovery source: %v", current.Version, resolveErr)
 			}
 		}
 	}

@@ -179,14 +179,12 @@ func TestExistingModeledProfileReplaysRouteCapabilityProof(t *testing.T) {
 	if !rebuilt.Plan.Predicate.Equal(admitted.Plan.Predicate) || !slices.Equal(rebuilt.Plan.Arguments, admitted.Plan.Arguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, admitted.Effective) {
 		t.Fatalf("reconstruction changed admitted profile: admitted=%+v rebuilt=%+v", admitted.Plan.Predicate, rebuilt.Plan.Predicate)
 	}
+	requireOppositeRouteCapability(t, "modeled reconstruction", existing, rebuilt, false)
 	assertModeledProfileRejectsIncompatibleProofs(t, existing)
 }
 
 func assertModeledProfileRejectsIncompatibleProofs(t *testing.T, existing commonprovider.ProfileCandidate) {
 	t.Helper()
-	if _, err := existing.Finalize(routeFacts(t, existing, true), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
-		t.Fatalf("modeled predicate accepted route-preserving proof: %v", err)
-	}
 	if _, err := existing.Finalize(legacyFacts(t, existing), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
 		t.Fatalf("modeled predicate accepted legacy proof: %v", err)
 	}

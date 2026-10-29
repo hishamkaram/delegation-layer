@@ -71,6 +71,7 @@ supervisor operations.
 | `internal/admission` | Required provider inspection and admission evidence | `inspection/contract` is pure; inspection journals and probes have sealed implementations. |
 | `internal/tasklifecycle` | Ordinary turn creation, reuse, submission, observation, and control | Admission supplies validated profiles; task storage and the guardian retain their own journal and lifetime authority. |
 | `internal/workspaces` | Managed workspace use, capture, release, and recovery | `workspace/contract` is pure; sealed Git and journal implementations execute its operations. |
+| `internal/scheduler` | Optional recurring-schedule storage for one state root | `scheduler/contract` holds pure values, rules, and the `Store` port; the `scheduler` facade adds `Open` and the owner lease; a sealed SQLite adapter is the only database writer. |
 
 Interfaces belong to the consumer that needs them. Passing a primitive or a
 recovery operation across a boundary does not transfer policy ownership.
@@ -129,7 +130,16 @@ started and sealed task evidence. There is no shared admission capability
 cache or second runtime-only inspection worker.
 
 Native policy projections, model discovery, custom runners, and historical
-tasks retain their admission inspection contract. The inspection worker's
+tasks retain their admission inspection contract. At a queued task's start, the
+fresh native projection must canonically equal the admission proof unless the
+provider candidate supplies a pure refreshed-facts decision. Core consults that
+decision only for two well-formed runtime envelopes with valid native objects,
+maps its typed refusal to a fixed evidence fault, and treats any other answer
+as a contract fault. Acceptance covers only the native facts: the finalizer
+receives the fresh observation, the stored proof is never rewritten, and the
+finalized profile must still match the recorded environment, roots, policy,
+predicate, and artifacts. CCR supplies the decision only for a modeled record,
+which ignores an added `--resume-route`. The inspection worker's
 non-secret facts are passed to the profile finalizer, which records the
 observed version and effective policy in metadata. The inspection binding keeps
 the same environment for a queued worker, including when a private daemon is
@@ -643,6 +653,77 @@ is a concrete identity fault. Only the continuation brief read returns the
 bytes, as a caller-owned copy. Execution independently hashes the exact
 read-only descriptor it hands to the provider.
 
+## Verified executable custody
+
+A managed task or inspection process runs its provider and probe executables
+from verified, immutable images instead of a private copy that each command
+removes. `internal/verifiedexec` owns the pool: one image per SHA-256 digest
+(mode `0500`, never rewritten) and, for each bound command, a private hard-link
+view under the owning task's or inspection's namespace. Workspace operations
+have no placement and keep their private copy.
+
+- **Placement owner.** The guardian chooses one placement after confirming that
+  no lifetime registration exists and before it creates the native scope or
+  registers a worker. The create-once registration records it as the optional
+  version-1 `custody_placement` (`pool_root`, `pool_id`). Afterwards the
+  registration is the only authority: the worker, `status`, `collect`, and
+  cleanup read it and never reselect or recreate a pool
+  (`internal/guardian/registration.go`, `internal/app/custody.go`).
+- **Selection.** The preferred pool is `<state root>/.custody`. Only when every
+  cause of its refusal is a native, confirmed `noexec` mount (Linux and macOS)
+  does selection fall back to `<canonical TMPDIR>/delegate-custody-<RootID>`.
+  `TMPDIR` (default `/tmp`) and the working directory are captured once from the
+  guardian's environment; a relative `TMPDIR` resolves against that directory.
+  The fallback is a different location of the same pool design, with its own
+  identity marker. Any other refusal of the state-root pool fails the guardian
+  run directly with its own cause, before it creates the scope. Only when the
+  fallback was attempted and also failed does the error name both causes.
+- **Release.** The recorded pool identity and canonical native closure govern
+  release. Closure is proven only by the canonical journal reader
+  (`guardian.ReadClosureProof`); a dead process, an unheld lock, or an inherited
+  descriptor is never evidence, and pending closure releases nothing. `status`,
+  `collect`, and the guardian after its run attempt one bounded release (10
+  seconds). A custody fault is logged, retried by the next observer of the same
+  records, and never rewrites the task outcome or the guardian's result.
+- **Inspection cleanup.** After an ended inspection row's lifetime evidence
+  validates, maintenance releases its closed custody. Removing that row, once
+  its terminal evidence also validates, additionally requires that no custody
+  remains pending, so an unavailable pool retains only that row until a later
+  pass. This availability gate applies only to removing an ended inspection
+  row. It does not gate active-task or task-row cleanup, native evidence
+  validation, or explicit migration. Launches are not exempt: a worker binds
+  through the recorded pool and proves its identity first.
+- **Unresolved pools.** A missing, replaced, foreign, aliased, or otherwise
+  unavailable recorded pool stays unresolved and retained with its concrete
+  cause. Delegate does not repair it, reselect another pool, or treat a missing
+  pool as released. A registration without a placement predates custody: its
+  record keeps its legacy bytes and digest, it is never released, and a worker
+  refuses to start a task or inspection from it. Older strict binaries decode
+  records without unknown fields, so they are not guaranteed to read a
+  registration that carries a placement.
+- **Footprint.** Images are shared across owners. An image stays until no view
+  links it; idle reclaim then removes it best-effort after a bind or release.
+  There is no TTL and no background service, so the footprint of an image whose
+  owner is unreleased persists until canonical release.
+- **Noexec scope.** The fallback covers a noexec state root used with an
+  external supervisor. A private bundled supervisor pair is stored below the
+  state root (`.supervisor`, `internal/supervisor/pair_publication.go`), so it
+  cannot run from a noexec state root and the fallback does not change that.
+- **Assurance limit.** An image covers only the files `verifiedexec` binds by
+  digest: the admitted entrypoint and, for a supported interpreter script, its
+  interpreter. Shadow paths preserve provider-owned dependency lookup through
+  links to the original installation. Later-loaded shared libraries and
+  imported modules (for example `node_modules`) remain live and can change
+  after binding. A matching
+  entrypoint digest is therefore not proof of the identity of the provider's
+  runtime dependencies, and Delegate does not hash them
+  (`internal/verifiedexec/verifiedexec.go`, `newCommand` and `shadowDirectory`).
+- **Threat model.** The pool checks are a static check of a private directory
+  owned by the current user: canonical path, no alias, one filesystem, and the
+  recorded identity marker. They do not defend against a hostile process of the
+  same user mutating the pool concurrently, a physically cloned disk, or power
+  loss.
+
 ## Native output and derived recovery
 
 The core owns captured files and callback-scoped readers. Provider adapters
@@ -769,6 +850,27 @@ help, and verifies the stable flags it can observe reliably. This accommodates
 provider releases that change their version number or omit forwarded options
 from pipe-based help output while preserving the runtime entrypoint contract.
 
+Three identifiers stay separate. The observed harness version is the release
+the provider reports; it is evidence, never an admission allowlist, and never
+selects a parser. A negotiated protocol version, such as OpenCode's ACP
+`protocolVersion`, is a capability that must be negotiated before a session
+starts. The Delegate interpretation revision is a predicate reference's
+`Version` and `SHA256`: the immutable local identity of how sealed output is
+interpreted. It changes only when Delegate's interpretation changes, for
+example when Claude's current revisions began publishing every accepted root
+answer and reporting a correlated quota failure. A provider release alone never
+changes it, and every saved task replays under its recorded revision. When a
+candidate carries a runtime probe, a queued or retried task may run a newer
+executable or version after a fresh probe while its recorded policy and
+predicate stay bound (`internal/admission/profile_binding_policy.go`). A
+candidate without a runtime probe, such as a custom or legacy binding, keeps
+exact matching; no binding upgrades automatically. A CCR modeled record on a
+CCR that newly advertises `--resume-route` keeps its recorded modeled argv and
+predicate; only that one-direction addition is accepted, and a route-preserving
+record whose CCR stops advertising the flag is still refused. A native proof
+showed modeled session and model preservation on a route-capable CCR, but no
+real CCR release upgrade between admission and launch has been observed.
+
 The implemented `delegate models` command is a separate advisory path. It
 reuses the state-rooted supervisor and runs one bounded native model inspection
 with the `model-discovery-v1` five-minute window, allowing first-run provider
@@ -778,6 +880,49 @@ provider task. Its `complete` flag describes model enumeration; null effort
 metadata remains distinguishable from an explicitly empty list. Discovery is
 never used as an admission allowlist, and model facts are not treated as proof
 that an account can execute a listed model.
+
+## Scheduler storage
+
+Only the storage foundation of the recurring-schedule scheduler exists. No
+command, service, or task dispatch uses it yet; the scheduling behavior that
+will build on it is deferred. It is unrelated to the pueue supervisor that runs
+admitted tasks.
+
+- **Location and creation.** The optional database is
+  `<root>/.scheduler/schedules.sqlite`. Only the exclusive scheduler owner
+  lease may create or migrate it. `Open` never creates or migrates, takes no
+  lease, and reports a missing or uninitialized database as not found. The
+  directory and file must be owned by the current user, private (`0700` and
+  `0600`), and not a symbolic link.
+- **Schema.** Version 1 is the only version. Initialization takes an empty or
+  absent file from `user_version` 0 to 1 in one transaction. It creates four
+  `STRICT` tables: root metadata, schedules, occurrences, and skip spans. A
+  partial unique index allows at most one unreleased occurrence per schedule.
+  Every operation on an initialized database first verifies the exact schema
+  objects and that the stored root identity matches the state root, before it
+  touches domain data. Initialization instead checks that the file is eligible,
+  then creates the schema, the root metadata row, and the version in one
+  transaction, and verifies the result before it commits. A newer or foreign
+  database is refused, never repaired.
+- **Authority.** The immutable task files stay the authority for every task's
+  outcome. Stored observations are a cache and never authorize a launch.
+  Ordinary dispatch, status, and collect do not depend on the database. There
+  is no backfill from existing tasks and no relocation of task state.
+- **Writes.** Each `Store` method is one short immediate transaction on a
+  single reserved connection; no SQL handle or caller transaction crosses the
+  port. Any error can leave the commit outcome unknown, so callers re-read
+  before acting. Only `ClaimNewlyCommitted` from a successful `ClaimAndArm`
+  authorizes one invocation. `ClaimExisting` and `ClaimUnknown` never authorize
+  invocation, even when a later readback finds the row. Connections set `foreign_keys`, `synchronous=EXTRA`, and a
+  busy timeout, plus `fullfsync` on Darwin, and every transaction verifies them.
+- **Journal mode.** The adapter requires the SQLite default rollback journal
+  (`DELETE`). It verifies the mode and refuses anything else; it never converts
+  a database. A refusal changes no data, but stock SQLite may still recover or
+  checkpoint the file when it opens and closes it.
+
+The [module registry](../agents/_data/subsystems.json) enforces the package
+boundaries. This design makes no exactly-once or power-loss guarantee beyond
+what SQLite documents for these settings.
 
 ## Failure and recovery
 

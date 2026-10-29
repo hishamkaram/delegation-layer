@@ -355,7 +355,9 @@ func staticCCRAdmission(t *testing.T, candidate commonprovider.ProfileCandidate,
 		t.Fatal(err)
 	}
 	finalize := candidate.Finalize
-	candidate.Inspection = &snapshot
+	// A runtime-only inspection has no native projection to refresh, so the
+	// provider's refreshed native-facts decision leaves with it.
+	candidate.Inspection, candidate.AcceptRefreshedNativeFacts = &snapshot, nil
 	candidate.Admit = func() (commonprovider.PreparedProfile, error) {
 		profile, finalizeErr := finalize(facts, time.Now())
 		// Static admission claims no observed version; the runner's own

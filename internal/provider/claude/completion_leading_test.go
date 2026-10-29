@@ -149,7 +149,13 @@ func TestLeadingAcknowledgementsPrintCompletion(t *testing.T) {
 			for _, tc := range leadingCases(mode, revision.advisory) {
 				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
 					interpretation, answer := evaluateWriteTrace(t, revision.print(mode), tc.lines)
-					requireLeadingVerdict(t, tc, false, interpretation, answer)
+					if revision.name == "follow-up" && tc.commit {
+						if interpretation.Verdict != task.VerdictCommitted || answer != expectedResponses(t, tc.lines) {
+							t.Fatalf("%+v answer=%q", interpretation, answer)
+						}
+					} else {
+						requireLeadingVerdict(t, tc, false, interpretation, answer)
+					}
 				})
 			}
 		}
@@ -163,7 +169,11 @@ func TestLeadingAcknowledgementsInteractiveSealedCompletion(t *testing.T) {
 				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
 					lines := append(append([]string{interactiveRunning}, tc.lines...), interactiveIdle)
 					interpretation, answer := evaluateInteractiveTrace(t, revision.interactive(mode), lines)
-					requireLeadingVerdict(t, tc, true, interpretation, answer)
+					if revision.name == "follow-up" && tc.commit {
+						requireCommittedResponses(t, interpretation, answer, lines)
+					} else {
+						requireLeadingVerdict(t, tc, true, interpretation, answer)
+					}
 				})
 			}
 		}

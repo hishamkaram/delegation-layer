@@ -18,24 +18,26 @@ import (
 // composedLaunchCount exceeds the former 64-launch namespace.
 const composedLaunchCount = 72
 
-// guardianCapacityScenarioBudget is the one immutable deadline of a composed
-// capacity scenario. Every started transition persists through a real durable
-// control store that re-verifies the whole launch prefix, so no single RPC has
-// its own budget; production worker calls likewise use the immutable task
-// deadline. It matches the two-minute task deadlines of the worker-client
-// deadline tests.
-const guardianCapacityScenarioBudget = 2 * time.Minute
+// A composed capacity scenario runs under one immutable deadline,
+// lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget). Every
+// started transition persists through a real durable control store that
+// re-verifies the whole launch prefix, so no single RPC has its own budget;
+// production worker calls likewise use the immutable task deadline.
 
 // guardianCapacityDeadlineProofBudget is the immutable deadline of the
 // blocked-persistence proof. It admits real-store setup on a loaded host and is
 // the wall-clock interval that proof waits out.
 const guardianCapacityDeadlineProofBudget = 5 * time.Second
 
+// guardianCapacityExpiryJoinBudget bounds the proof's joins after its deadline
+// has expired: the released write, the worker side close and the Run join.
+const guardianCapacityExpiryJoinBudget = 2 * time.Minute
+
 // The real guardian acknowledges, persists and finalizes more launches than
 // the former limit through a durable control store, and the termination binds
 // the complete persisted set.
 func TestLifetimeGuardianPersistsLaunchesBeyondFormerLimitThroughControlStore(t *testing.T) {
-	f, operation, deadline, transport := newGuardianCapacityFixture(t, guardianCapacityScenarioBudget, nil)
+	f, operation, deadline, transport := newGuardianCapacityFixture(t, lifetimeGuardianScenarioBudget, nil)
 	ctx, cancel := context.WithDeadline(t.Context(), deadline)
 	defer cancel()
 	startGuardianCapacityWorker(t, ctx, f)
@@ -61,7 +63,7 @@ func TestLifetimeGuardianPersistsLaunchesBeyondFormerLimitThroughControlStore(t 
 // whose failed record write must turn started into a refusal.
 func TestLifetimeGuardianStartedCompletesThroughHeldControlStoreWrite(t *testing.T) {
 	gate := newGuardianCapacityLaunchGate(1)
-	f, operation, deadline, transport := newGuardianCapacityFixture(t, guardianCapacityScenarioBudget, gate)
+	f, operation, deadline, transport := newGuardianCapacityFixture(t, lifetimeGuardianScenarioBudget, gate)
 	ctx, cancel := context.WithDeadline(t.Context(), deadline)
 	defer cancel()
 	startGuardianCapacityWorker(t, ctx, f)
@@ -108,7 +110,7 @@ func TestLifetimeGuardianStartedExpiresAtImmutableDeadlineWhilePersistenceBlocks
 		startedDone <- guardianCapacityCallResult{err: err, returned: time.Now()}
 	}()
 	awaitGuardianCapacityGate(t, ctx, gate)
-	joinBy := time.Now().Add(guardianCapacityScenarioBudget)
+	joinBy := lifetimeGuardianScenarioDeadline(t, guardianCapacityExpiryJoinBudget)
 	var started guardianCapacityCallResult
 	select {
 	case started = <-startedDone:
@@ -207,8 +209,9 @@ func openGuardianCapacityGateAfterRecordExpiry(t *testing.T, gate *guardianCapac
 }
 
 // newGuardianCapacityFixture runs the guardian on the real clock so one
-// immutable deadline, fixed before the control lifetime exists, governs the
-// guardian, the durable store and every client call.
+// immutable deadline, computed before the fixture exists and passed to the
+// fixture and to Options.Deadline alike, governs the guardian, the durable
+// store and every client call.
 func newGuardianCapacityFixture(
 	t *testing.T,
 	budget time.Duration,
@@ -216,13 +219,9 @@ func newGuardianCapacityFixture(
 ) (*lifetimeGuardianTestFixture, *taskdir.ControlLifetime, time.Time, *lifetimeWireDeadlineHistoryConn) {
 	t.Helper()
 	var operation *taskdir.ControlLifetime
-	var deadline time.Time
-	f := newLifetimeGuardianTestFixtureWithOptions(t, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil,
+	deadline := lifetimeGuardianScenarioDeadline(t, budget)
+	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(t, t.Context(), deadline, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil,
 		func(options *Options) {
-			deadline = time.Now().Add(budget)
-			if testDeadline, bounded := t.Deadline(); bounded && testDeadline.Before(deadline) {
-				deadline = testDeadline
-			}
 			options.Deadline = deadline
 			options.Now = time.Now
 			// Cleanup after an expired deadline writes through the real store, so it

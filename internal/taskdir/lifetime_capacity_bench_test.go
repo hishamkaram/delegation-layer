@@ -43,7 +43,7 @@ func BenchmarkControlLifetimeLaunchRead(b *testing.B) {
 	for _, count := range []uint64{1, 32, 64} {
 		b.Run(fmt.Sprintf("records=%d", count), func(b *testing.B) {
 			control, lifetime := newCapacityControlLifetime(b)
-			digest := registerCapacityControlLifetime(b, lifetime)
+			digest := registerCapacityControlLifetime(context.Background(), b, lifetime)
 			for sequence := uint64(1); sequence <= count; sequence++ {
 				putCapacityControlLaunch(b, control, controlCapacityLaunch(lifetime, digest, sequence), sequence)
 			}
@@ -109,7 +109,7 @@ func BenchmarkControlLifetimeLaunchReadConcurrent200Stores(b *testing.B) {
 			lifetimes := make([]*ControlLifetime, 0, stores)
 			for range stores {
 				control, lifetime := newCapacityControlLifetime(b)
-				digest := registerCapacityControlLifetime(b, lifetime)
+				digest := registerCapacityControlLifetime(context.Background(), b, lifetime)
 				for sequence := uint64(1); sequence <= count; sequence++ {
 					seedCapacityControlLaunch(b, control, controlCapacityLaunch(lifetime, digest, sequence))
 				}
@@ -221,7 +221,7 @@ func BenchmarkControlLifetimeLaunchAppend(b *testing.B) {
 			for range b.N {
 				b.StopTimer()
 				control, lifetime := newCapacityControlLifetime(b)
-				registerCapacityControlLifetime(b, lifetime)
+				registerCapacityControlLifetime(context.Background(), b, lifetime)
 				counter := &directoryBarrierCounter{}
 				control.store.SetFaultInjector(counter)
 				b.StartTimer()

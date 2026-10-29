@@ -25,8 +25,11 @@ import (
 const lifetimeChildFD = 3
 
 type lifetimeGuardianRunState struct {
-	ownerKind      string
-	records        guardian.Records
+	ownerKind string
+	records   guardian.Records
+	// closure reads the same journal family for the post-run custody release.
+	// Workspace runs leave it nil because they have no custody placement.
+	closure        guardian.ClosureRecords
 	acquireOwner   func(context.Context) (guardian.Owner, error)
 	reconcileOwned func(context.Context) error
 	userStop       func() (bool, error)
@@ -46,6 +49,7 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		}
 		state.ownerKind = task.LifetimeOwnerInspection
 		state.records = operation
+		state.closure = operation
 		state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 			return operation.AcquireLifetimeOwner(ctx)
 		}
@@ -69,6 +73,7 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		return lifetimeGuardianRunState{}, errors.Join(task.ErrEvidenceFault, td.Close())
 	}
 	state.records = td
+	state.closure = td
 	state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 		return td.AcquireLifetimeOwner(ctx)
 	}
@@ -81,6 +86,15 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 	state.deadline = time.Now().Add(time.Duration(req.BudgetNanos))
 	state.closeOwner = td.Close
 	return state, nil
+}
+
+// placementSelector selects custody only for a run with closure records, so a
+// workspace run never selects one.
+func (s lifetimeGuardianRunState) placementSelector(stateRoot, rootID string, environment []string) func(context.Context) (*task.LifetimeCustodyPlacement, error) {
+	if s.closure == nil {
+		return nil
+	}
+	return newLifetimeCustodySelector(stateRoot, rootID, environment, s.deadline).selectPlacement
 }
 
 // runLifetimeGuardianMode is the composition boundary between scheduler and
@@ -159,16 +173,22 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 			inheritedCloseErr = closeErr
 			return nil
 		},
+		SelectPlacement: state.placementSelector(canonicalRoot, store.RootID, deps.Environment),
 	})
 	if err != nil {
 		return err
 	}
-	guardianErr := runGuardianWithWorkspaceCompletion(lifetimeOwner, store, parsed, deps)
+	guardianErr := runGuardianWithWorkspaceCompletion(lifetimeOwner, state.closure, store, parsed, deps)
 	return errors.Join(guardianErr, inheritedCloseErr)
 }
 
-func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
+func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, closure guardian.ClosureRecords, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
 	guardianErr := lifetimeOwner.Run(context.Background())
+	if closure != nil {
+		// Release whatever closure the run proved, even after a run error; a
+		// custody fault never replaces the guardian's own result.
+		reportLifetimeCustodyRelease(closure)
+	}
 	if parsed.Inspection {
 		return guardianErr
 	}
@@ -257,4 +277,7 @@ var (
 	_ guardian.Records = (*taskdir.TaskDir)(nil)
 	_ guardian.Records = (*inspection.Operation)(nil)
 	_ guardian.Records = (*workspace.Operation)(nil)
+
+	_ guardian.ClosureRecords = (*taskdir.TaskDir)(nil)
+	_ guardian.ClosureRecords = (*inspection.Operation)(nil)
 )

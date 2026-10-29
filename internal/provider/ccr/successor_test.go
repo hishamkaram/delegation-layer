@@ -104,11 +104,9 @@ func requireSuccessorSelectsTarget(t *testing.T, request task.TaskRecord, refere
 	if inspectionDigest(t, successor) != inspectionDigest(t, fresh) {
 		t.Error("successor runtime inspection differs from the caller's")
 	}
-	// The recorded route capability decides the launch; the opposite proof is
-	// refused rather than changing the launch shape.
-	if _, err = successor.Finalize(routeFacts(t, successor, !route), time.Now()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
-		t.Errorf("opposite capability error=%v, want %v", err, commonprovider.ErrProfileUnavailable)
-	}
+	// The recorded launch decides the shape: a removed required route flag is
+	// refused, and an added unused one keeps the modeled launch.
+	requireOppositeRouteCapability(t, "successor", successor, got, route)
 }
 
 // inspectionDigest identifies the supervised inspection definition, whose

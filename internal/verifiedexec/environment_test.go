@@ -107,7 +107,7 @@ func TestPortableCommandUsesSelectedTemporaryDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command, err := newPortableCommand(provider.Path, provider.SHA256, "", []string{"TMPDIR=" + selected}, nil, source)
+	command, err := privateBinding(provider.Path, provider.SHA256, "", []string{"TMPDIR=" + selected}, nil).newCommand(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,13 +154,13 @@ func TestShouldMirrorParentUsesSelectedTemporaryRootAndCanonicalAlias(t *testing
 		t.Fatal(err)
 	}
 	t.Setenv("TMPDIR", ambient)
-	environment := []string{"TMPDIR=" + alias}
+	boundary := environmentTemporaryRoot([]string{"TMPDIR=" + alias})
 	for _, path := range []string{selected, alias} {
-		if shouldMirrorParent(path, environment) {
+		if shouldMirrorParent(path, boundary) {
 			t.Fatalf("selected temporary root %q would be enumerated", path)
 		}
 	}
-	if !shouldMirrorParent(filepath.Join(selected, "provider-package"), environment) {
+	if !shouldMirrorParent(filepath.Join(selected, "provider-package"), boundary) {
 		t.Fatal("provider-owned directory was not eligible for mirroring")
 	}
 }
@@ -172,7 +172,7 @@ func TestShadowDirectoryDoesNotEnumerateSelectedTemporaryRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeEnvironmentExecutable(t, filepath.Join(selected, "unrelated"), 0o600)
-	mirror, err := shadowDirectory(provider, t.TempDir(), "provider-cli", []string{"TMPDIR=" + selected})
+	mirror, err := shadowDirectory(provider, t.TempDir(), "provider-cli", selected)
 	if err != nil {
 		t.Fatal(err)
 	}

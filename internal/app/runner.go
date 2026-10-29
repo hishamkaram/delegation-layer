@@ -300,7 +300,7 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 	}
 	runResult := execution.Run(td, permit, profile.Plan, execution.Options{
 		Protocol: protocol, Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
-		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(), InheritedEnvironment: deps.Environment,
+		Lifetime: lifetimeChild.Lifetime(), Binder: lifetimeChild.Binder(), Deadline: lifetimeChild.Deadline(), InheritedEnvironment: deps.Environment,
 		Identity: identityObserver, Hooks: deps.ExecutionHooks,
 	})
 	if runResult.Outcome != nil {

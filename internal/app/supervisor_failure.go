@@ -41,6 +41,8 @@ func dispatchPublicError(failure DispatchFailureResponse, err error) error {
 		return publicResourceError(dispatchFailureMessage(failure.Code), err)
 	case supervisorFailureCode(failure.Code) && failure.ReasonCode != "":
 		return publicSupervisorError(dispatchFailureMessage(failure.Code), err)
+	case failure.ReasonCode == providerCapabilityChangedReason:
+		return &providerPublicError{message: dispatchFailureMessage(failure.Code) + " " + providerCapabilityChangedDetail, cause: err}
 	default:
 		return nil
 	}

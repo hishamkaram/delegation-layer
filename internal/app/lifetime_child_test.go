@@ -58,6 +58,8 @@ func TestOpenTaskLifetimeChildRejectsValidTamperedScopeBeforeHello(t *testing.T)
 		ScopeID:   scopeID,
 		BootID:    bootID,
 		Deadline:  deadline,
+		// A placed registration reaches the scope check this test targets.
+		CustodyPlacement: custodyContractPlacement("a"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +139,8 @@ func TestOpenInspectionLifetimeChildRejectsValidTamperedScopeBeforeHello(t *test
 		ScopeID:   scopeID,
 		BootID:    bootID,
 		Deadline:  operation.Deadline(),
+		// A placed registration reaches the scope check this test targets.
+		CustodyPlacement: custodyContractPlacement("a"),
 	}); err != nil {
 		t.Fatal(err)
 	}

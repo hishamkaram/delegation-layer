@@ -6,6 +6,9 @@ from scripts.delegate_acceptance.private_cli.configuration import COLLECT_WATCH
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_TASK_COUNT
+from scripts.delegate_acceptance.private_cli.noexec_state import require_alternate_exec_custody
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from pathlib import Path
@@ -65,6 +68,7 @@ class HandoffCase:
     handoff_action: str
     case_label: str
     handoff_cases: dict[str, dict[str, object]]
+    receipt_detail: str = "external_inspection_handoff"
 
 
 @dataclass
@@ -129,6 +133,104 @@ def run_external_inspection_handoff_acceptance(
             handoff_cases=handoff_cases,
         )
     )
+
+
+def run_external_noexec_state_acceptance(**inputs):
+    """Prove external-mode noexec state keeps each scope in its recorded exec custody pool, without a private handoff.
+
+    The inputs are the HandoffCase fields.
+    """
+    return _run_noexec_state_case(HandoffCase(receipt_detail="external_noexec_state", **inputs))
+
+
+def _run_noexec_state_case(case: HandoffCase):
+    resources = HandoffCleanup()
+    execution_root = case.env.get("TMPDIR")
+    require(execution_root, "noexec state case environment omitted the execution TMPDIR")
+    task_commands, supervisor_control, evidence, record_evidence = _initialize_handoff_case(case, resources)
+    try:
+        task, _ = _start_external_task(case, evidence, resources, supervisor_control, task_commands)
+        closures = _close_noexec_state_scope(case, evidence, task, resources)
+        evidence["custody_placement"] = require_alternate_exec_custody(
+            closures, state_root=case.state, execution_root=Path(execution_root)
+        )
+        evidence["tasks"]["external"]["status"] = _observe_external_status(case, task_commands, task)
+        collected = run_json(
+            case.delegate,
+            case.env,
+            [*task_commands.external_prefix, "collect", task.task_id, "--watch", COLLECT_WATCH, "--json"],
+            timeout=COLLECT_TIMEOUT_SECONDS,
+            receipt=task_commands.receipts / "collect-external.json",
+            phase="external-task-collection",
+            capture_root=case.capture_root,
+        )
+        if collected.get("outcome", {}).get("verdict") != "committed":
+            raise RuntimeError("external noexec-state task did not publish a committed outcome")
+        require(task.metadata_path.read_bytes() == task.metadata, "external task metadata changed after collection")
+        case.run_receipt.increment("collected_task_count")
+        supervisor_control.shutdown_external()
+        evidence["tasks"]["external"]["collection"] = "external-binding"
+        record_evidence()
+        case.run_receipt.stage("external-noexec-state-proved")
+        return evidence
+    except BaseException as error:
+        resources.primary_error = error
+        record_evidence()
+        raise
+    finally:
+        _finalize_handoff_case(case, evidence, record_evidence, resources, supervisor_control)
+
+
+def _observe_external_status(case, task_commands, task):
+    """One public status call; admission, liveness and publication are independent and collect asserts the outcome."""
+    observed = run_json(
+        case.delegate,
+        case.env,
+        [*task_commands.external_prefix, "status", task.task_id, "--json"],
+        timeout=45,
+        receipt=task_commands.receipts / "status-external.json",
+        phase="external-task-status",
+        capture_root=case.capture_root,
+    )
+    root_id = task.response.get("root_id")
+    require(isinstance(root_id, str) and root_id, "external status needs the dispatch response root id")
+    require(observed.get("command") == "status", "external status answered a different command")
+    require(observed.get("task_id") == task.task_id, "external status observed a different task")
+    require(observed.get("root_id") == root_id, "external status observed a different root")
+    require(not observed.get("failure") and not observed.get("error"), "external status reported an operational failure")
+    preserved = {"task_id": task.task_id, "root_id": root_id}
+    for key in ("admission", "liveness", "publication"):
+        if key in observed:
+            require(isinstance(observed[key], str), "external status " + key + " is not text")
+            preserved[key] = observed[key]
+    if isinstance(observed.get("pending"), dict) and isinstance(observed["pending"].get("kind"), str):
+        preserved["pending"] = observed["pending"]["kind"]
+    return preserved
+
+
+def _close_noexec_state_scope(case, evidence, task, resources):
+    evidence["tasks"]["external"] = {
+        "dispatch": default_stop_dispatch_evidence(task.response),
+        "meta_sha256_before_collect": task.metadata_sha256,
+        "meta_binding": "external",
+        "owner_proof": prove_lifetime_owner_cohort(task.specifications, resources.old_cohort),
+    }
+    closures = _release_gate_and_await_closures(case, resources)
+    closure = closures.get("tasks", {}).get(task.task_id)
+    evidence["tasks"]["external"]["closure"] = external_handoff_closure_evidence(closure, task.task_id)
+    evidence["tasks"]["external"]["fixture_lease_cleanup"] = resources.old_cohort.remove_closed_fifos()
+    resources.old_cohort.close()
+    resources.old_cohort = None
+    require_empty_fixture_waiters(case.waiter_directory)
+    evidence["cleanup"]["fixture_waiter_entries"] = 0
+    case.run_receipt.update_counts(running_task_count=0, live_lease_count=0)
+    return closures
+
+
+def _release_gate_and_await_closures(case, resources):
+    resources.release_gate.release()
+    resources.release_gate = None
+    return await_managed_lifetime_closure(case.state, tuple(case.attempted_task_ids), timeout=45)
 
 
 def _run_handoff_case(case: HandoffCase):
@@ -201,7 +303,8 @@ def _run_handoff_case(case: HandoffCase):
 
 def _initialize_handoff_case(case, resources):
     require(
-        case.handoff_action in ("explicit-migrate", "automatic-models", "automatic-dispatch"),
+        case.handoff_action
+        in ("explicit-migrate", "automatic-models", "automatic-dispatch", EXTERNAL_NOEXEC_STATE_SCENARIO),
         "external inspection handoff action is unsupported: " + str(case.handoff_action),
     )
     require(
@@ -226,7 +329,7 @@ def _initialize_handoff_case(case, resources):
 
     def record_evidence():
         case.handoff_cases[case.case_label] = evidence
-        case.run_receipt.add_details(external_inspection_handoff=case.handoff_cases)
+        case.run_receipt.add_details(**{case.receipt_detail: case.handoff_cases})
 
     record_evidence()
     waiting_brief = Path(case.state).parent / "external-handoff-waiting-brief.md"
@@ -294,7 +397,17 @@ def _initial_handoff_evidence(case, external_config, external_endpoint, external
             "private_daemon": "pending",
         },
     }
+    if case.handoff_action == EXTERNAL_NOEXEC_STATE_SCENARIO:
+        _external_only_evidence(evidence)
     return evidence
+
+
+def _external_only_evidence(evidence):
+    """The noexec-state flow has one external task and never creates a private supervisor."""
+    evidence["scenario"] = EXTERNAL_NOEXEC_STATE_SCENARIO
+    evidence["requested_task_count"] = EXTERNAL_NOEXEC_STATE_TASK_COUNT
+    del evidence["supervisors"]["private"]
+    del evidence["cleanup"]["private_daemon"]
 
 
 def _prove_external_daemon_ready(evidence, resources, supervisor_control):
@@ -530,9 +643,7 @@ def _prove_handoff_owners(
 
 
 def _close_handoff_scopes(case, evidence, new_task_id, old_task_id, resources):
-    resources.release_gate.release()
-    resources.release_gate = None
-    closures = await_managed_lifetime_closure(case.state, tuple(case.attempted_task_ids), timeout=45)
+    closures = _release_gate_and_await_closures(case, resources)
     for role, task_id in (("external", old_task_id), ("private", new_task_id)):
         closure = closures.get("tasks", {}).get(task_id)
         evidence["tasks"][role]["closure"] = external_handoff_closure_evidence(closure, task_id)

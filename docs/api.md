@@ -28,7 +28,11 @@ A `task_id` can be allocated, or supplied with `--id`, without a task being
 created. Only `task_record: "created"` names a task: keep that ID as the only
 handle for later `status`, `collect`, and `continue` calls. With
 `task_record: "not_created"`, no task exists, so there is nothing to poll;
-follow `failure.next_action`. With `task_record: "unknown"`, existence could
+follow `failure.next_action`. A `provider_unavailable` failure whose cause is
+a capability the recorded launch requires and the installed provider CLI no
+longer offers adds `failure.reason_code: "provider_capability_changed"` and a
+fixed detail in `error`; its exit code and `stop_and_report` guidance are
+unchanged. With `task_record: "unknown"`, existence could
 not be proven; follow the returned stop guidance and do not dispatch again.
 
 ### Resource pressure

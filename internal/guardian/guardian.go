@@ -23,6 +23,8 @@ type Guardian struct {
 	scope  Scope
 	codec  *lifetimeCodec
 	bootID string
+	// placement is resolved once before scope creation and never mutated.
+	placement *task.LifetimeCustodyPlacement
 
 	registrationRecorded   bool
 	unregisteredDisposed   bool

@@ -92,7 +92,7 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 		stdout.discard()
 		return modelCommandResult{}, err
 	}
-	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, args...)
+	cmd, verified, err := newVerifiedCommand(scope, definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, args...)
 	if err != nil {
 		stdout.discard()
 		stderr.discard()

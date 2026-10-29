@@ -168,7 +168,7 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 		return completeInspectionFailureContext(observeContext, operation, "consume-start")
 	}
 
-	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, lifetimeChild.Lifetime(), deps, store, record, meta)
+	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, lifetimeChild, deps, store, record, meta)
 	maintenanceErr = errors.Join(workErr, stopErr)
 	if workErr != nil || stopErr != nil {
 		stage := inspectionWorkerFailureStage(workErr, "run-inspection")
@@ -322,10 +322,12 @@ func waitInspectionSupervisorReceipt(ctx context.Context, operation *inspection.
 	}
 }
 
-func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, lifetime execution.Lifetime, deps Dependencies, store *taskdir.Store, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
+func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, lifetimeChild *openedLifetimeChild, deps Dependencies, store *taskdir.Store, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
+	lifetime := lifetimeChild.Lifetime()
 	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity, lifetime: lifetime}
 	var facts json.RawMessage
-	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
+	options := execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime, Binder: lifetimeChild.Binder()}
+	workErr, stopErr := execution.RunSupervised(operation.Deadline(), options, func(scope execution.PreflightScope) error {
 		return runInspectionCallback(scope, operation, deps, store, record, meta, &facts)
 	})
 	return facts, workErr, stopErr

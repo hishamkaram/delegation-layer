@@ -135,6 +135,7 @@ func prepare(request task.TaskRecord, scope, values, recordedRoots []string, ref
 	}
 	return commonprovider.ProfileCandidate{
 		Directory: request.CanonicalCwd, WritableRoots: slices.Clone(roots), Inspection: &definition,
+		AcceptRefreshedNativeFacts: refreshedFactsDecision(reference, request.Mode),
 		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
 			revision, selectedReference, selectionErr := selectPreparation(reference, request.Mode, data)
 			if selectionErr != nil {
@@ -210,10 +211,49 @@ func selectPreparation(reference task.PredicateRef, mode string, data json.RawMe
 		return contract.launch, reference, nil
 	}
 	capabilities, err := routeCapabilitiesForFacts(data)
-	if err != nil || capabilities.ResumeRoute != (contract.launch == resumeRoutePreparation) {
-		return 0, task.PredicateRef{}, commonprovider.ErrProfileUnavailable
+	if err != nil {
+		return 0, task.PredicateRef{}, err
+	}
+	if !routeCapabilitiesSupportLaunch(contract.launch, capabilities) {
+		return 0, task.PredicateRef{}, fmt.Errorf("%w: %w", commonprovider.ErrProfileUnavailable, commonprovider.NativeFactsRefusalError{Reason: commonprovider.NativeCapabilityChanged})
 	}
 	return contract.launch, reference, nil
+}
+
+// routeCapabilitiesSupportLaunch is the single rule binding a route-inspected
+// contract to an observed capability. The route-preserving launch requires
+// --resume-route. The modeled launch never uses it, so a CCR that has gained
+// the flag still supports the recorded modeled argv and predicate; selection
+// never switches a recorded modeled contract to the route launch.
+func routeCapabilitiesSupportLaunch(launch preparationRevision, capabilities routeCapabilities) bool {
+	return launch != resumeRoutePreparation || capabilities.ResumeRoute
+}
+
+// refreshedFactsDecision lets a queued task whose exact recorded reference is
+// a modeled route-inspected contract keep its admission when the same CCR
+// later advertises --resume-route. Every other contract keeps exact equality.
+func refreshedFactsDecision(reference task.PredicateRef, mode string) func(stored, fresh json.RawMessage) error {
+	if reference == (task.PredicateRef{}) {
+		return nil
+	}
+	contract, err := preparationForReference(reference, mode)
+	if err != nil || contract != (preparationContract{launch: legacyPreparation, inspection: routeInspection}) {
+		return nil
+	}
+	return func(stored, fresh json.RawMessage) error {
+		recorded, decodeErr := decodeRouteCapabilities(stored)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		current, decodeErr := decodeRouteCapabilities(fresh)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if !routeCapabilitiesSupportLaunch(contract.launch, current) || (recorded.ResumeRoute && !current.ResumeRoute) {
+			return commonprovider.NativeFactsRefusalError{Reason: commonprovider.NativeCapabilityChanged}
+		}
+		return nil
+	}
 }
 
 func routeCapabilitiesForFacts(data json.RawMessage) (routeCapabilities, error) {
@@ -221,9 +261,20 @@ func routeCapabilitiesForFacts(data json.RawMessage) (routeCapabilities, error) 
 	if err != nil {
 		return routeCapabilities{}, err
 	}
-	var capabilities routeCapabilities
-	if err = task.DecodeStrict(native, &capabilities); err != nil {
+	capabilities, err := decodeRouteCapabilities(native)
+	if err != nil {
 		return routeCapabilities{}, commonprovider.ErrProfileUnavailable
+	}
+	return capabilities, nil
+}
+
+// decodeRouteCapabilities is the one strict decoder of the route inspection
+// projection: a missing, null, duplicate, unknown, or mistyped field is
+// invalid.
+func decodeRouteCapabilities(native json.RawMessage) (routeCapabilities, error) {
+	var capabilities routeCapabilities
+	if err := task.DecodeStrict(native, &capabilities); err != nil {
+		return routeCapabilities{}, commonprovider.NativeFactsRefusalError{Reason: commonprovider.NativeFactsInvalid}
 	}
 	return capabilities, nil
 }

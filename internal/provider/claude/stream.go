@@ -24,8 +24,8 @@ func NewStreamInterpreter(reference task.PredicateRef) (predicate.Interpreter, e
 }
 
 // NewAttributedStreamInterpreterWithRecovery binds a caller-owned stream
-// reference to the current advisory completion policy described by
-// ContractForMode: the caller's principal result is the answer, root
+// reference to the frozen advisory completion policy described by
+// AdvisoryNativeContractForMode: the caller's principal result is the answer, root
 // provider-native background notification cycles must be attributed and
 // settled before EOF, nested agent messages stay outside those cycles, only
 // session identity and native permission are init authority, and an unknown
@@ -33,6 +33,10 @@ func NewStreamInterpreter(reference task.PredicateRef) (predicate.Interpreter, e
 // are used only by offline recovery; ordinary evaluation still requires the
 // bound reference and recovery never rewrites the sealed input.
 func NewAttributedStreamInterpreterWithRecovery(reference task.PredicateRef, recoverySources ...task.PredicateRef) (predicate.Interpreter, error) {
+	return newAttributedStreamInterpreter(reference, advisoryScopedCompletion, recoverySources)
+}
+
+func newAttributedStreamInterpreter(reference task.PredicateRef, policy completionPolicy, recoverySources []task.PredicateRef) (predicate.Interpreter, error) {
 	if err := task.ValidatePredicateRef(reference); err != nil {
 		return nil, err
 	}
@@ -47,7 +51,20 @@ func NewAttributedStreamInterpreterWithRecovery(reference task.PredicateRef, rec
 			return nil, fmt.Errorf("invalid Claude stream recovery source %s/%s", source.Adapter, source.Version)
 		}
 	}
-	return interpreter{mode: reference.Mode, streamReference: &reference, recoverySources: slices.Clone(recoverySources), completion: advisoryScopedCompletion}, nil
+	return interpreter{mode: reference.Mode, streamReference: &reference, recoverySources: slices.Clone(recoverySources), completion: policy}, nil
+}
+
+// NewFollowUpStreamInterpreterWithRecovery binds a caller-owned stream
+// reference to the current follow-up completion policy described by
+// ContractForMode: the principal and all accepted root follow-up results are the answer, root
+// provider-native background notification cycles must be attributed and
+// settled before EOF, nested agent messages stay outside those cycles, only
+// session identity and native permission are init authority, and an unknown
+// completion reason is unsupported. The listed same-wire historical sources
+// are used only by offline recovery; ordinary evaluation still requires the
+// bound reference and recovery never rewrites the sealed input.
+func NewFollowUpStreamInterpreterWithRecovery(reference task.PredicateRef, recoverySources ...task.PredicateRef) (predicate.Interpreter, error) {
+	return newAttributedStreamInterpreter(reference, advisoryFollowUpCompletion, recoverySources)
 }
 
 // NewScopedStreamInterpreter replays a caller-owned stream reference sealed

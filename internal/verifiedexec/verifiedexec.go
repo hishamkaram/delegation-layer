@@ -22,11 +22,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	verifiedExecutablePath  = "/dev/fd/3"
-	verifiedInterpreterPath = "/dev/fd/4"
-	maxVerifiedShebangBytes = 4096
-)
+const maxVerifiedShebangBytes = 4096
+
+// errViewNoExec reports a view directory on a noexec filesystem where a copied
+// executable would have to run.
+var errViewNoExec = errors.New("verified executable view directory is on a noexec filesystem")
 
 // Info is the path and content identity of an executable.
 type Info struct {
@@ -34,43 +34,36 @@ type Info struct {
 	SHA256 string
 }
 
-// Command owns the descriptors and temporary materializations used by a
-// verified command. On Linux the first descriptor is the admitted entrypoint;
-// the second is an interpreter used by a supported script entrypoint.
+// Command owns the private materialization of one verified command. Every
+// constructor binds the child to a private view of the admitted bytes, never to
+// the original path or descriptor, on every supported OS.
 type Command struct {
 	Cmd            *exec.Cmd
-	files          []*os.File
 	temporaryDir   string
 	temporaryFiles []string
+	// retainView is set for pool-bound commands: their view belongs to the
+	// owner's lifetime and is removed only by Pool.ReleaseOwner.
+	retainView bool
 }
 
-// ReleaseDescriptors closes parent-owned descriptors after a child has started.
-// Portable commands have no inherited descriptors; their private materializations
-// remain owned by Close until the child has exited.
-func (c *Command) ReleaseDescriptors() error {
-	if c == nil {
-		return nil
-	}
-	var closeErr error
-	files := c.files
-	c.files = nil
-	for _, file := range files {
-		if file != nil {
-			closeErr = errors.Join(closeErr, file.Close())
-		}
-	}
-	return closeErr
-}
+// ReleaseDescriptors is the hook callers run after a child has started. A
+// verified command holds no inherited descriptors, so there is nothing to
+// release; its private view stays owned by Close until the child has exited.
+func (c *Command) ReleaseDescriptors() error { return nil }
 
-// Close releases resources owned by a command. A started child has already
-// inherited descriptors and opened temporary materializations, so closing and
-// removing them does not interrupt that child.
+// Close releases what the command owns. A private-copy command removes its
+// view; the started child has already opened what it needs. A pool-bound
+// command keeps its view for Pool.ReleaseOwner and has nothing local to close.
 func (c *Command) Close() error {
-	if c == nil {
+	if c == nil || c.retainView {
 		return nil
 	}
-	closeErr := c.ReleaseDescriptors()
-	closeErr = errors.Join(closeErr, unsealTemporaryDirectory(c.temporaryDir))
+	return c.removeView()
+}
+
+// removeView unseals and deletes the command's own view directory.
+func (c *Command) removeView() error {
+	closeErr := unsealTemporaryDirectory(c.temporaryDir)
 	for _, path := range c.temporaryFiles {
 		if path != "" {
 			closeErr = errors.Join(closeErr, os.RemoveAll(path))
@@ -123,7 +116,7 @@ func Open(path, expectedSHA256 string) (*os.File, error) {
 		return nil, errors.Join(err, file.Close())
 	}
 	if digest != expectedSHA256 {
-		return nil, errors.Join(errors.New("runtime executable identity does not match admission"), file.Close())
+		return nil, errors.Join(changedExecutable(errors.New("runtime executable identity does not match admission")), file.Close())
 	}
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		return nil, errors.Join(err, file.Close())
@@ -131,11 +124,26 @@ func Open(path, expectedSHA256 string) (*os.File, error) {
 	return file, nil
 }
 
-// NewCommand keeps the inspected executable bound through native start. Linux
-// runs it from an inherited descriptor; other supported platforms use private
-// materializations of the admitted bytes. A supported interpreter script keeps
-// the original entrypoint path in its argument view. Replacing the named path
-// after this function returns cannot change the admitted entrypoint bytes.
+// CommandRequest is the immutable-by-convention input of a verified command
+// binding: the admitted executable path and digest, the directory used to
+// resolve relative PATH entries in a script shebang (matching exec.Cmd.Dir),
+// the environment used for interpreter lookup and loader-path policy, and the
+// child's arguments. Constructors read the slices only while building the
+// command (the exec.Cmd owns its own argument slice), so callers may reuse them
+// once the constructor returns.
+type CommandRequest struct {
+	Executable  string
+	SHA256      string
+	Directory   string
+	Environment []string
+	Args        []string
+}
+
+// NewCommand binds the inspected executable to a private view of its admitted
+// bytes on Linux and macOS alike. A supported interpreter script keeps the
+// original entrypoint path in its argument view. Replacing, truncating or
+// rewriting the named path after this function returns cannot change the bytes
+// the child observes. The caller closes the command after Start/Wait.
 func NewCommand(executable, digest string, environment []string, args ...string) (*Command, error) {
 	return NewCommandInDirectory(executable, digest, "", environment, args...)
 }
@@ -145,62 +153,65 @@ func NewCommand(executable, digest string, environment []string, args ...string)
 // against that directory, matching exec.Cmd.Dir rather than this process's
 // current directory.
 func NewCommandInDirectory(executable, digest, directory string, environment []string, args ...string) (*Command, error) {
-	file, err := Open(executable, digest)
+	return NewCommandFromRequest(CommandRequest{Executable: executable, SHA256: digest, Directory: directory, Environment: environment, Args: args})
+}
+
+// NewCommandFromRequest is the private-copy constructor behind NewCommand and
+// NewCommandInDirectory, for owners with no lifetime-owned pool.
+func NewCommandFromRequest(request CommandRequest) (*Command, error) {
+	file, err := openAdmittedEntrypoint(request)
 	if err != nil {
 		return nil, err
 	}
-	if runtime.GOOS != "linux" {
-		return newPortableCommand(executable, digest, directory, environment, args, file)
-	}
-
-	shebang, err := readShebang(file)
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-	if len(shebang) == 0 {
-		cmd := exec.Command(verifiedExecutablePath, args...)
-		cmd.Args[0] = executable
-		cmd.ExtraFiles = []*os.File{file}
-		return &Command{Cmd: cmd, files: []*os.File{file}}, nil
-	}
-
-	interpreter, interpreterArgs, kind, err := locateInterpreter(shebang, environment, directory)
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-	interpreterFile, err := Open(interpreter.Path, interpreter.SHA256)
-	if err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-
-	commandArgs := append([]string(nil), interpreterArgs...)
-	switch kind {
-	case nodeScript:
-		commandArgs = append(commandArgs, "--input-type=module", "-e", `import("/dev/fd/3")`, executable)
-	case shellScript:
-		commandArgs = append(commandArgs, "-c", ". /dev/fd/3", executable)
-	default:
-		return nil, errors.Join(errors.New("unsupported verified script interpreter"), file.Close(), interpreterFile.Close())
-	}
-	commandArgs = append(commandArgs, args...)
-	cmd := exec.Command(verifiedInterpreterPath, commandArgs...)
-	cmd.Args[0] = interpreter.Path
-	cmd.ExtraFiles = []*os.File{file, interpreterFile}
-	return &Command{Cmd: cmd, files: []*os.File{file, interpreterFile}}, nil
+	return request.privateBinding().newCommand(file)
 }
 
-// newPortableCommand materializes the inspected bytes in a private directory
-// on systems where executing an inherited descriptor is not supported. On
-// macOS, sealed system executables stay at their canonical path because the
+// fileMaterializer places the admitted bytes of an open file at destination
+// inside a view and verifies them against expectedSHA256. The private
+// implementation is materializeVerifiedFile, a byte copy; the pool's
+// implementation links a verified shared image.
+type fileMaterializer func(source *os.File, destination, expectedSHA256 string) error
+
+// portableBinding is the named input of the view builder: what is bound, where
+// its per-launch view directory is created, and how files are materialized.
+type portableBinding struct {
+	executable  string
+	digest      string
+	directory   string
+	environment []string
+	args        []string
+	viewRoot    string
+	materialize fileMaterializer
+	retainView  bool
+}
+
+func privateBinding(executable, digest, directory string, environment, args []string) portableBinding {
+	return portableBinding{
+		executable: executable, digest: digest, directory: directory,
+		environment: environment, args: args,
+		viewRoot: environmentTemporaryRoot(environment), materialize: materializeVerifiedFile,
+	}
+}
+
+func (r CommandRequest) privateBinding() portableBinding {
+	return privateBinding(r.Executable, r.SHA256, r.Directory, r.Environment, r.Args)
+}
+
+// newCommand materializes the inspected bytes in a private view directory.
+// On macOS, sealed system executables stay at their canonical path because the
 // kernel can reject a relocated platform binary even when its bytes match.
 // Script module lookups and compiled loader-relative dependencies are backed by
 // a private shadow path whose non-entrypoint entries reference the original
 // provider installation. The materialized tree is sealed read-only before the
 // command is returned, binding its path to the admitted bytes through Start.
-// The private directory is unsealed and removed when the caller closes the
-// command after Start/Wait.
-func newPortableCommand(executable, digest, directory string, environment []string, args []string, file *os.File) (command *Command, resultErr error) {
-	temporaryDir, err := os.MkdirTemp(environmentTemporaryRoot(environment), "delegation-layer-verified-")
+// A private view is unsealed and removed when the caller closes the command
+// after Start/Wait; a retained (pooled) view is removed by its owner's release.
+func (b portableBinding) newCommand(file *os.File) (command *Command, resultErr error) {
+	viewRoot, err := b.absoluteViewRoot()
+	if err != nil {
+		return nil, errors.Join(err, file.Close())
+	}
+	temporaryDir, err := os.MkdirTemp(viewRoot, "delegation-layer-verified-")
 	if err != nil {
 		return nil, errors.Join(err, file.Close())
 	}
@@ -219,7 +230,7 @@ func newPortableCommand(executable, digest, directory string, environment []stri
 		}
 	}()
 
-	cmd, temporaryFiles, err := buildPortableCommand(executable, digest, directory, environment, args, file, temporaryDir)
+	cmd, temporaryFiles, err := b.buildCommand(file, temporaryDir)
 	if err != nil {
 		return nil, err
 	}
@@ -229,50 +240,120 @@ func newPortableCommand(executable, digest, directory string, environment []stri
 	if err = closeSource(); err != nil {
 		return nil, err
 	}
-	return &Command{Cmd: cmd, temporaryDir: temporaryDir, temporaryFiles: temporaryFiles}, nil
+	return &Command{Cmd: cmd, temporaryDir: temporaryDir, temporaryFiles: temporaryFiles, retainView: b.retainView}, nil
 }
 
-func buildPortableCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string) (*exec.Cmd, []string, error) {
+// absoluteViewRoot addresses the view root absolutely, resolved as the child
+// resolves a relative TMPDIR, so the view cannot be found against a different
+// working directory at Start. The environment itself is not modified.
+func (b portableBinding) absoluteViewRoot() (string, error) {
+	return launchPath(b.directory, b.viewRoot)
+}
+
+// temporaryBoundary is the user's TMPDIR as the child resolves it. It is derived
+// from the environment alone, independent of viewRoot: a pooled view lives under
+// the custody pool root, which is not the user's temporary directory.
+func (b portableBinding) temporaryBoundary() (string, error) {
+	return launchPath(b.directory, environmentTemporaryRoot(b.environment))
+}
+
+// buildCommand materializes the entrypoint exactly once and classifies the
+// materialized bytes, so the snapshot that is parsed is the snapshot that
+// executes. A cache hit therefore cannot turn a rewritten original into a
+// different class than the bytes the kernel will see. Protected Darwin system
+// executables are the exception: their original sits on the sealed system
+// volume, cannot be rewritten, and must keep its canonical path.
+func (b portableBinding) buildCommand(file *os.File, temporaryDir string) (*exec.Cmd, []string, error) {
+	path, err := b.entrypointPath(temporaryDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if useCanonicalDarwinSystemExecutable(b.executable) {
+		return b.buildProtectedCommand(file, path, temporaryDir)
+	}
+	if err = b.materialize(file, path, b.digest); err != nil {
+		return nil, nil, err
+	}
+	shebang, err := readScriptHeader(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(shebang) != 0 {
+		return b.buildScriptCommand(path, shebang, temporaryDir)
+	}
+	if err = b.requireExecutableView(temporaryDir); err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.Command(path, b.args...)
+	cmd.Args[0] = b.executable
+	return cmd, nil, nil
+}
+
+// buildProtectedCommand serves a Darwin sealed-system entrypoint. A native one
+// stays at its canonical path behind a symlink; a script is copied as data.
+func (b portableBinding) buildProtectedCommand(file *os.File, path, temporaryDir string) (*exec.Cmd, []string, error) {
 	shebang, err := readShebang(file)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(shebang) == 0 {
-		if useCanonicalDarwinSystemExecutable(executable) {
-			shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
-			if err != nil {
-				return nil, nil, err
-			}
-			moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
-			if err != nil {
-				return nil, nil, err
-			}
-			path := filepath.Join(moduleDirectory, filepath.Base(executable))
-			if err := os.Symlink(executable, path); err != nil {
-				return nil, nil, err
-			}
-			cmd := exec.Command(path, args...)
-			cmd.Args[0] = executable
-			return cmd, []string{path}, nil
-		}
-		shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
-		if err != nil {
+		if err = os.Symlink(b.executable, path); err != nil {
 			return nil, nil, err
 		}
-		moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
-		if err != nil {
-			return nil, nil, err
-		}
-		path := filepath.Join(moduleDirectory, filepath.Base(executable))
-		materializeErr := materializeVerifiedFile(file, path, digest)
-		if materializeErr != nil {
-			return nil, nil, materializeErr
-		}
-		cmd := exec.Command(path, args...)
-		cmd.Args[0] = executable
-		return cmd, nil, nil
+		cmd := exec.Command(path, b.args...)
+		cmd.Args[0] = b.executable
+		return cmd, []string{path}, nil
 	}
-	return buildPortableScriptCommand(executable, digest, directory, environment, args, file, temporaryDir, shebang)
+	if err = b.materialize(file, path, b.digest); err != nil {
+		return nil, nil, err
+	}
+	return b.buildScriptCommand(path, shebang, temporaryDir)
+}
+
+// entrypointPath creates the shadow layout of the entrypoint's installation
+// directory under the view's "executable" root and returns where the
+// entrypoint itself belongs.
+func (b portableBinding) entrypointPath(temporaryDir string) (string, error) {
+	shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
+	if err != nil {
+		return "", err
+	}
+	boundary, err := b.temporaryBoundary()
+	if err != nil {
+		return "", err
+	}
+	moduleDirectory, err := shadowDirectory(filepath.Dir(b.executable), shadowRoot, filepath.Base(b.executable), boundary)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(moduleDirectory, filepath.Base(b.executable)), nil
+}
+
+// requireExecutableView refuses a view directory on a noexec filesystem. It is
+// called only where a copied executable would itself run, never for data that is
+// only read or for protected Darwin executables that stay at their canonical
+// path. Nothing is left behind: the caller's deferred cleanup removes the view.
+func (b portableBinding) requireExecutableView(temporaryDir string) error {
+	forbids, err := filesystemForbidsExec(temporaryDir)
+	if err != nil {
+		return fmt.Errorf("check the view filesystem of %s: %w", temporaryDir, err)
+	}
+	if !forbids {
+		return nil
+	}
+	return fmt.Errorf("%w: %s (chosen by %s) cannot run the verified copy of %s; the failed view is removed; select an exec-capable directory",
+		errViewNoExec, b.viewRoot, b.viewSource(), b.executable)
+}
+
+func (b portableBinding) viewSource() string {
+	switch {
+	case b.retainView:
+		return "the custody pool root"
+	case EnvironmentValue(b.environment, "TMPDIR") != "":
+		return "TMPDIR in the launch environment"
+	default:
+		return "the default /tmp"
+	}
 }
 
 func useCanonicalDarwinSystemExecutable(path string) bool {
@@ -295,13 +376,13 @@ func useCanonicalDarwinSystemExecutable(path string) bool {
 	return false
 }
 
-func buildPortableScriptCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string, shebang []string) (*exec.Cmd, []string, error) {
-	scriptPath, err := materializePortableScript(file, executable, temporaryDir, digest, environment)
-	if err != nil {
-		return nil, nil, err
-	}
+// buildScriptCommand binds a script whose bytes are already materialized at
+// scriptPath and whose shebang was read from those bytes. The interpreter is
+// bound too, and a nested script interpreter is refused on the bound
+// interpreter, not on a path that can change after it was hashed.
+func (b portableBinding) buildScriptCommand(scriptPath string, shebang []string, temporaryDir string) (*exec.Cmd, []string, error) {
 	temporaryFiles := []string{scriptPath}
-	interpreter, interpreterArgs, kind, err := locateInterpreter(shebang, environment, directory)
+	interpreter, interpreterArgs, kind, err := locateInterpreter(shebang, b.environment, b.directory)
 	if err != nil {
 		return nil, temporaryFiles, err
 	}
@@ -316,14 +397,21 @@ func buildPortableScriptCommand(executable, digest, directory string, environmen
 	// sealed system interpreters canonical; all other interpreters retain the
 	// private materialization and its verified digest.
 	if !useCanonicalDarwinSystemExecutable(interpreter.Path) {
-		interpreterPath, interpreterFiles, err = materializePortableInterpreter(interpreterFile, interpreter, temporaryDir, environment)
+		if err = b.requireExecutableView(temporaryDir); err == nil {
+			interpreterPath, interpreterFiles, err = b.materializeInterpreter(interpreterFile, interpreter, temporaryDir)
+		}
 	}
 	closeErr := interpreterFile.Close()
 	if err = errors.Join(err, closeErr); err != nil {
 		return nil, append(temporaryFiles, interpreterFiles...), err
 	}
 	temporaryFiles = append(temporaryFiles, interpreterFiles...)
-	commandArgs, err := portableScriptArgs(kind, interpreterArgs, scriptPath, executable, args)
+	if nested, nestedErr := readScriptHeader(interpreterPath); nestedErr != nil {
+		return nil, temporaryFiles, nestedErr
+	} else if len(nested) != 0 {
+		return nil, temporaryFiles, errors.New("nested verified script interpreters are unsupported")
+	}
+	commandArgs, err := portableScriptArgs(kind, interpreterArgs, scriptPath, b.executable, b.args)
 	if err != nil {
 		return nil, temporaryFiles, err
 	}
@@ -346,22 +434,6 @@ func portableScriptArgs(kind scriptKind, interpreterArgs []string, scriptPath, e
 	return append(commandArgs, args...), nil
 }
 
-func materializePortableScript(source *os.File, executable, temporaryDir, expectedSHA256 string, environment []string) (string, error) {
-	shadowRoot, err := newPortableShadowRoot(temporaryDir, "script")
-	if err != nil {
-		return "", err
-	}
-	moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable), environment)
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(moduleDirectory, filepath.Base(executable))
-	if err := materializeVerifiedFile(source, path, expectedSHA256); err != nil {
-		return "", err
-	}
-	return path, nil
-}
-
 // shadowDirectory creates a private path matching sourceDirectory. Entries in
 // the executable directory and each provider-path ancestor are symlinked to
 // the original installation so arbitrarily nested parent-relative imports and
@@ -370,7 +442,7 @@ func materializePortableScript(source *os.File, executable, temporaryDir, expect
 // enumerated: their contents are unrelated to the provider and can be very
 // large. The admitted entrypoint itself is materialized separately in this
 // private path.
-func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string, environment []string) (string, error) {
+func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry, temporaryRoot string) (string, error) {
 	relative, err := filepath.Rel(string(filepath.Separator), sourceDirectory)
 	if err != nil {
 		return "", err
@@ -391,13 +463,13 @@ func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string, enviro
 			return "", err
 		}
 	}
-	if err := shadowPathEntries(source, mirror, excludedEntry, environment); err != nil {
+	if err := shadowPathEntries(source, mirror, excludedEntry, temporaryRoot); err != nil {
 		return "", err
 	}
 	return mirror, nil
 }
 
-func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string, environment []string) error {
+func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry, temporaryRoot string) error {
 	source := sourceDirectory
 	mirror := mirrorDirectory
 	excluded := excludedEntry
@@ -406,7 +478,7 @@ func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string, e
 			return err
 		}
 		parentSource := filepath.Dir(source)
-		if parentSource == source || !shouldMirrorParent(parentSource, environment) {
+		if parentSource == source || !shouldMirrorParent(parentSource, temporaryRoot) {
 			return nil
 		}
 		excluded = filepath.Base(source)
@@ -455,17 +527,21 @@ func materializeVerifiedFile(source *os.File, destination, expectedSHA256 string
 	return copyVerifiedFile(target, source, expectedSHA256)
 }
 
-func materializePortableInterpreter(source *os.File, interpreter Info, temporaryDir string, environment []string) (path string, temporaryFiles []string, resultErr error) {
+func (b portableBinding) materializeInterpreter(source *os.File, interpreter Info, temporaryDir string) (path string, temporaryFiles []string, resultErr error) {
 	shadowRoot, err := newPortableShadowRoot(temporaryDir, "interpreter")
 	if err != nil {
 		return "", nil, err
 	}
-	moduleDirectory, err := shadowDirectory(filepath.Dir(interpreter.Path), shadowRoot, filepath.Base(interpreter.Path), environment)
+	boundary, err := b.temporaryBoundary()
+	if err != nil {
+		return "", nil, err
+	}
+	moduleDirectory, err := shadowDirectory(filepath.Dir(interpreter.Path), shadowRoot, filepath.Base(interpreter.Path), boundary)
 	if err != nil {
 		return "", nil, err
 	}
 	path = filepath.Join(moduleDirectory, filepath.Base(interpreter.Path))
-	if err := materializeVerifiedFile(source, path, interpreter.SHA256); err != nil {
+	if err := b.materialize(source, path, interpreter.SHA256); err != nil {
 		return "", nil, err
 	}
 	return path, nil, nil
@@ -600,11 +676,6 @@ func locateInterpreter(shebang, environment []string, directory string) (Info, [
 	if err != nil {
 		return Info{}, nil, 0, err
 	}
-	if script, err := readScriptHeader(info.Path); err != nil {
-		return Info{}, nil, 0, err
-	} else if len(script) != 0 {
-		return Info{}, nil, 0, errors.New("nested verified script interpreters are unsupported")
-	}
 
 	switch filepath.Base(interpreterName) {
 	case "node", "nodejs":
@@ -659,14 +730,14 @@ func openExecutable(path string) (*os.File, os.FileInfo, error) {
 	}
 	before, err := os.Lstat(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, missingExecutable(err)
 	}
 	if !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
 		return nil, nil, errors.New("runtime is not a regular executable")
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, missingExecutable(err)
 	}
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
@@ -681,7 +752,7 @@ func fingerprintOpened(path string, file *os.File, before os.FileInfo) (string, 
 		return "", err
 	}
 	if !opened.Mode().IsRegular() || opened.Mode().Perm()&0o111 == 0 || !os.SameFile(before, opened) {
-		return "", errors.New("runtime changed before inspection")
+		return "", changedExecutable(errors.New("runtime changed before inspection"))
 	}
 	hash := sha256.New()
 	length, err := io.Copy(hash, file)
@@ -690,13 +761,13 @@ func fingerprintOpened(path string, file *os.File, before os.FileInfo) (string, 
 	}
 	final, statErr := file.Stat()
 	named, nameErr := os.Lstat(path)
-	if err = errors.Join(statErr, nameErr); err != nil {
+	if err = errors.Join(statErr, missingExecutable(nameErr)); err != nil {
 		return "", err
 	}
 	if !named.Mode().IsRegular() || named.Mode().Perm()&0o111 == 0 || !os.SameFile(named, opened) ||
 		!os.SameFile(final, opened) || final.Size() != opened.Size() || length != opened.Size() ||
 		!final.ModTime().Equal(opened.ModTime()) || !named.ModTime().Equal(opened.ModTime()) {
-		return "", errors.New("runtime changed during inspection")
+		return "", changedExecutable(errors.New("runtime changed during inspection"))
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }

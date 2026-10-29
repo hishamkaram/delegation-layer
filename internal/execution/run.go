@@ -28,6 +28,7 @@ type invocation struct {
 	launchArguments     []string
 	boundPlan           *Plan
 	inherited           []string
+	binder              CommandBinder
 	budget              *budgetOwner
 	started             time.Time
 	wait                chan error
@@ -56,7 +57,7 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 		result.Error = err
 		return result
 	}
-	i.inherited = inherited
+	i.inherited, i.binder = inherited, opts.Binder
 	request, _, err := td.PreparedRecords()
 	if err != nil {
 		result.Error = errors.Join(err, i.discard())
@@ -96,8 +97,8 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 		if bindErr != nil {
 			startErr = bindErr
 		} else if deferred {
-			// The historical provider executable is no longer the current
-			// candidate. Fresh preflight will select and verify the replacement.
+			// The binder reported that the admitted provider executable changed.
+			// Fresh preflight will select and verify the replacement.
 			startErr = nil
 		}
 	}
@@ -271,21 +272,19 @@ func (i *invocation) bindInitial(plan Plan, allowRuntimeRefresh bool) (bool, err
 	if err == nil || !allowRuntimeRefresh {
 		return false, err
 	}
-	// Only an executable that no longer matches its recorded bytes may be
-	// repaired by the fresh runtime preflight. A valid executable with another
-	// bind failure remains a definite setup error.
-	_, meta, metaErr := i.td.PreparedRecords()
-	if metaErr != nil {
-		return false, err
+	// Only a refusal whose every cause is the binder's report that the admitted
+	// executable changed may be repaired by the fresh runtime preflight. Any
+	// other or joined cause remains a definite setup refusal.
+	if task.AllErrorCauses(err, isAdmittedExecutableChange) {
+		return true, nil
 	}
-	expected, digestErr := executableDigest(plan, *meta, allowRuntimeRefresh)
-	if digestErr == nil {
-		observed, fingerprintErr := verifiedexec.Fingerprint(plan.Executable)
-		if fingerprintErr == nil && observed == expected {
-			return false, err
-		}
-	}
-	return true, nil
+	return false, err
+}
+
+// isAdmittedExecutableChange is the leaf predicate of the initial binding's
+// whole-error classification. verifiedexec owns the provenance of the marker.
+func isAdmittedExecutableChange(cause error) bool {
+	return errors.Is(cause, verifiedexec.ErrAdmittedExecutableChanged)
 }
 
 func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
@@ -315,7 +314,9 @@ func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
 		return err
 	}
 	environment := i.launchEnvironment(plan)
-	verified, err := verifiedexec.NewCommandInDirectory(plan.Executable, digest, plan.Directory, environment, arguments...)
+	verified, err := bindCommand(i.bindingContext(), i.binder, verifiedexec.CommandRequest{
+		Executable: plan.Executable, SHA256: digest, Directory: plan.Directory, Environment: environment, Args: arguments,
+	})
 	if err != nil {
 		return err
 	}
@@ -325,6 +326,16 @@ func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
 	i.cmd, i.verified = cmd, verified
 	i.boundPlan = clonePlan(plan)
 	return nil
+}
+
+// bindingContext is the budget owner's deadline context once it is armed, as
+// for a refreshed plan. The initial binding precedes the budget, so its context
+// has no deadline, as the historical private copy had none.
+func (i *invocation) bindingContext() context.Context {
+	if i.budget == nil {
+		return context.Background()
+	}
+	return i.budget.workContext
 }
 
 // launchEnvironment is the single environment for interpreter lookup,

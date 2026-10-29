@@ -43,22 +43,30 @@ func TestStopNativePrivateSupervisorWaitsForRecordedProcess(t *testing.T) {
 }
 
 // assertNativeTeardownWaitsForRecordedProcess runs one endpoint scenario.
-// With the exact recorded process live, the canonical wait stays pending
-// until its deadline. After that process exits and is joined, cleanup closes
-// the endpoint, and a repeated cleanup also succeeds.
+// The stop begins under the ordinary observation bound and must classify the
+// endpoint first. With the exact recorded process live, the canonical wait
+// then stays pending until its own deadline. After that process exits and is
+// joined, cleanup closes the endpoint, and a repeated cleanup also succeeds.
 func assertNativeTeardownWaitsForRecordedProcess(t *testing.T, refused bool) {
 	t.Helper()
 	fixture, process, finish := newRecordedTeardownProcess(t)
 	if !refused {
 		removePrivateTestPath(t, fixture.socketPath)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
+	refusal, err := beginNativePrivateSupervisorStop(ctx, fixture.client)
+	cancel()
+	if err != nil || errors.Is(refusal, ErrPrivateEndpointRefused) != refused {
+		t.Fatalf("stop begin = refusal %v err %v, want refusal %t", refusal, err, refused)
+	}
 	// The finite deadline is the behavior proof that the wait stays pending.
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	err := stopNativePrivateSupervisor(ctx, fixture.client, process)
+	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err = awaitNativePrivateSupervisorStop(ctx, fixture.client, process, refusal)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrPrivateEndpointRefused) != refused {
 		t.Fatalf("cleanup with the recorded process live = %v, want a pending wait that keeps refusal %t", err, refused)
 	}
+	assertNativeTeardownWaitIsPending(t, err, refusal)
 	if refused {
 		fixture.assertSocketPreserved(t)
 	}
@@ -75,6 +83,24 @@ func assertNativeTeardownWaitsForRecordedProcess(t *testing.T, refused bool) {
 		}
 	}
 	assertPrivateTestPathMissing(t, fixture.socketPath)
+}
+
+// assertNativeTeardownWaitIsPending requires the wait's own error to be a
+// plain deadline, not a binding fault. A refusal carries ErrBinding by design,
+// so a refused endpoint must be the exact second cause beside that wait error.
+func assertNativeTeardownWaitIsPending(t *testing.T, err, refusal error) {
+	t.Helper()
+	waitErr := err
+	if refusal != nil {
+		var joined interface{ Unwrap() []error }
+		if !errors.As(err, &joined) || len(joined.Unwrap()) != 2 || !errors.Is(joined.Unwrap()[1], refusal) {
+			t.Fatalf("cleanup with the recorded process live = %v, want the wait error joined with refusal %v", err, refusal)
+		}
+		waitErr = joined.Unwrap()[0]
+	}
+	if !errors.Is(waitErr, context.DeadlineExceeded) || errors.Is(waitErr, ErrBinding) {
+		t.Fatalf("pending wait = %v, want its deadline without a binding fault", waitErr)
+	}
 }
 
 // TestStopNativePrivateSupervisorReportsUnknownProcess keeps an incomplete or

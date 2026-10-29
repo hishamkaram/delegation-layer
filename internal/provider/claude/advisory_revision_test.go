@@ -12,10 +12,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// The current advisory revisions use version strings no earlier digest of the
-// same mode uses; their digests are pinned so a contract edit that silently
-// stops matching its frozen clause fails here.
+// The advisory revisions, now frozen for replay, and the current follow-up
+// revisions use version strings no earlier digest of the same mode uses; their
+// digests are pinned so a contract edit that silently stops matching its
+// frozen clause fails here.
 const (
+	followUpReadDigest             = "ad2a736b3818a894ff05cf199232b5f3ca68b12a3adedf46162a34ee13b4529e"
+	followUpWriteDigest            = "59e9269aec10199c1d2f1aa1dbc96e3722323a9a5280441afd71befd9835585c"
+	followUpReadInteractiveDigest  = "5ced78e26beaa8dce20007741b0d802093fb290f86cef312a247b5797806ae9a"
+	followUpWriteInteractiveDigest = "dafdd1952e3b31110f3a63c4478819a26020b3c0692722e0bfde79d78898778d"
 	advisoryReadDigest             = "a4f38219dcb1a105cf20c75f54341effde2310b6a15f61665a3b597eaa205fa8"
 	advisoryWriteDigest            = "7b64659e74a5b11e4717b5f942efa577544c2dd0730479e0f47a05ff0402bd8b"
 	advisoryReadInteractiveDigest  = "f06decd5719453bb8282dcb464befef53e0511e63b05ca71cf78b32bc622876c"
@@ -31,10 +36,10 @@ func TestAdvisoryRevisionsPinIdentityAndEveryContractEdit(t *testing.T) {
 		version, digest   string
 		scopedDigest      string
 	}{
-		{ReferenceForMode(Mode), scopedReference(Mode), "native-permissions-v5", advisoryReadDigest, scopedReadDigest},
-		{ReferenceForMode(WorkspaceWriteMode), scopedReference(WorkspaceWriteMode), "native-permissions-v6", advisoryWriteDigest, scopedWriteDigest},
-		{interactionReference(Mode), scopedInteractionReference(Mode), "interactive-v6", advisoryReadInteractiveDigest, scopedReadInteractiveDigest},
-		{interactionReference(WorkspaceWriteMode), scopedInteractionReference(WorkspaceWriteMode), "interactive-v6", advisoryWriteInteractiveDigest, scopedWriteInteractiveDigest},
+		{advisoryReference(Mode), scopedReference(Mode), "native-permissions-v5", advisoryReadDigest, scopedReadDigest},
+		{advisoryReference(WorkspaceWriteMode), scopedReference(WorkspaceWriteMode), "native-permissions-v6", advisoryWriteDigest, scopedWriteDigest},
+		{advisoryInteractionReference(Mode), scopedInteractionReference(Mode), "interactive-v6", advisoryReadInteractiveDigest, scopedReadInteractiveDigest},
+		{advisoryInteractionReference(WorkspaceWriteMode), scopedInteractionReference(WorkspaceWriteMode), "interactive-v6", advisoryWriteInteractiveDigest, scopedWriteInteractiveDigest},
 	} {
 		if revision.reference.Version != revision.version || revision.reference.SHA256 != revision.digest || revision.scoped.SHA256 != revision.scopedDigest {
 			t.Fatalf("revision identity changed: current=%+v scoped=%+v", revision.reference, revision.scoped)
@@ -44,9 +49,42 @@ func TestAdvisoryRevisionsPinIdentityAndEveryContractEdit(t *testing.T) {
 		Mode:               append(advisoryReadOnlyEdits(), advisoryCompletionEdits()...),
 		WorkspaceWriteMode: append(advisoryWorkspaceWriteEdits(), advisoryCompletionEdits()...),
 	} {
-		requireContractEdits(t, mode, scopedNativeContract(mode), ContractForMode(mode), edits)
+		requireContractEdits(t, mode, scopedNativeContract(mode), AdvisoryNativeContractForMode(mode), edits)
 	}
-	requireContractEdits(t, "interactive", scopedInteractionContract, interactionContract(), advisoryInteractionEdits())
+	requireContractEdits(t, "interactive", scopedInteractionContract, advisoryInteractionContract(), advisoryInteractionEdits())
+}
+
+func TestFollowUpRevisionsPinIdentityAndEveryContractEdit(t *testing.T) {
+	policy := contractEdit{
+		old: "only the principal result is selected as the answer, follow-up answers are never selected",
+		new: "without accepted nonempty root follow-up answers the principal payload is byte-exact",
+	}
+	quota := contractEdit{old: policy.old, new: "the rejection reports the constant diagnostic provider_quota_exhausted with field rate_limit_info and no provider value"}
+	for _, revision := range []struct {
+		mode, frozenVersion, version, digest string
+	}{
+		{Mode, "native-permissions-v5", "native-permissions-v6", followUpReadDigest},
+		{WorkspaceWriteMode, "native-permissions-v6", "native-permissions-v7", followUpWriteDigest},
+	} {
+		reference := ReferenceForMode(revision.mode)
+		if reference.Version != revision.version || reference.SHA256 != revision.digest || ContractForMode(revision.mode) == AdvisoryNativeContractForMode(revision.mode) {
+			t.Fatalf("follow-up revision identity changed: %+v", reference)
+		}
+		version := contractEdit{old: `"version":"` + revision.frozenVersion + `"`, new: `"version":"` + revision.version + `"`}
+		requireContractEdits(t, revision.mode, AdvisoryNativeContractForMode(revision.mode), ContractForMode(revision.mode), []contractEdit{version, policy, quota})
+		if strings.Contains(ContractForMode(revision.mode), policy.old) {
+			t.Fatalf("%s follow-up contract retains the principal-only clause", revision.mode)
+		}
+	}
+	for mode, digest := range map[string]string{Mode: followUpReadInteractiveDigest, WorkspaceWriteMode: followUpWriteInteractiveDigest} {
+		if reference := interactionReference(mode); reference.Version != "interactive-v7" || reference.SHA256 != digest {
+			t.Fatalf("interactive follow-up revision identity changed: %+v", reference)
+		}
+	}
+	requireContractEdits(t, "interactive follow-up", advisoryInteractionContract(), interactionContract(), followUpInteractionEdits())
+	if strings.Contains(interactionContract(), "; only the principal result is selected;") || !strings.Contains(interactionContract(), quota.new) {
+		t.Fatal("interactive follow-up contract does not state the shared follow-up policy")
+	}
 }
 
 // requireContractEdits requires every edit to match its frozen clause exactly
@@ -205,8 +243,12 @@ func TestCurrentRevisionsRecoverScopedSealsWithoutRewriting(t *testing.T) {
 		lines := []string{interactiveInitLine(mode), opaque, principalLine()}
 		requireScopedSealRecovers(t, registry, scopedReference(mode), ReferenceForMode(mode), lines)
 		requireScopedSealRecovers(t, registry, scopedInteractionReference(mode), interactionReference(mode), wrapInteractiveSession(lines))
-		if _, err := registry.ResolveRecovery(ReferenceForMode(mode)); !errors.Is(err, predicate.ErrRecoveryUnsupported) {
-			t.Fatalf("%s current revision became a recovery source: %v", mode, err)
+		// The current and the principal-only advisory revisions are no
+		// source: the advisory one shares the current verdict rules.
+		for _, reference := range []task.PredicateRef{ReferenceForMode(mode), advisoryReference(mode)} {
+			if _, err := registry.ResolveRecovery(reference); !errors.Is(err, predicate.ErrRecoveryUnsupported) {
+				t.Fatalf("%s %s became a recovery source: %v", mode, reference.Version, err)
+			}
 		}
 	}
 }

@@ -45,5 +45,5 @@ func prepareNativeSuccessorCandidate(request task.TaskRecord, predecessor task.M
 // pre-attribution revision, the retained unscoped attribution revision, and
 // the scoped strict-wire revision of the same mode.
 func isUpgradableOutputReference(mode string, reference task.PredicateRef) bool {
-	return reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
+	return reference.Equal(advisoryReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
 }

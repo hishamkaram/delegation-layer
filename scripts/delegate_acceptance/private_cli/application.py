@@ -7,6 +7,7 @@ from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import SUPERVISOR_UPGRADE_RECOVERY_SCENARIO
 from scripts.delegate_acceptance.private_cli.contention_controls import run_prepared_modern_contention
 from scripts.delegate_acceptance.private_cli.contention_policy import MODERN_CONTENTION_SCENARIO
@@ -20,6 +21,7 @@ from scripts.delegate_acceptance.private_cli.initial import prepare_initial_obse
 from scripts.delegate_acceptance.private_cli.arguments import prepare_receipt
 from scripts.delegate_acceptance.private_cli.capacity_entry import run_capacity_scenario
 from scripts.delegate_acceptance.private_cli.scenario_entry import run_handoff_scenarios
+from scripts.delegate_acceptance.private_cli.scenario_entry import run_noexec_state_scenario
 from scripts.delegate_acceptance.private_cli.legacy import run_legacy_scenario
 from scripts.delegate_acceptance.private_cli.scenario_entry import run_recovery_scenario
 from scripts.delegate_acceptance.private_cli.scenario_entry import run_stop_scenario
@@ -53,6 +55,11 @@ def main():
 
         if args.scenario == EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
             run_handoff_scenarios(lease_nonce, lifetime, response_directory, run_receipt, fixture)
+            success = True
+            return
+
+        if args.scenario == EXTERNAL_NOEXEC_STATE_SCENARIO:
+            run_noexec_state_scenario(lease_nonce, lifetime, response_directory, run_receipt, fixture)
             success = True
             return
 

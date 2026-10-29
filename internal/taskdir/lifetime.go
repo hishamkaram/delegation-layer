@@ -37,6 +37,9 @@ type (
 		ScopeID   string
 		BootID    string
 		Deadline  time.Time
+
+		// CustodyPlacement is optional; writers persist their own snapshot.
+		CustodyPlacement *task.LifetimeCustodyPlacement
 	}
 
 	LifetimeLaunchFacts struct {
@@ -183,6 +186,7 @@ func (td *TaskDir) RecordLifetimeRegistrationContext(ctx context.Context, facts 
 		Deadline:      facts.Deadline.UTC().Format(time.RFC3339Nano),
 		CreatedAt:     timestamp(),
 	}
+	record.CustodyPlacement = facts.CustodyPlacement.Clone()
 	if err = task.ValidateLifetimeRegistrationRecord(&record); err != nil {
 		return nil, err
 	}

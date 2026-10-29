@@ -69,9 +69,21 @@ type lockWait struct {
 // OpenLockFile opens or creates a lock file with O_CLOEXEC, mode 0600,
 // syncs the lock file AND its parent directory, and verifies FD_CLOEXEC.
 func OpenLockFile(path string, level LockLevel) (*LockFile, error) {
+	return OpenLockFileContext(context.Background(), path, level)
+}
+
+// OpenLockFileContext is OpenLockFile bounded by ctx. ctx is checked while the
+// parent directories are prepared and again immediately before the lock inode
+// is opened; a parent error takes priority. Once opening starts, validation,
+// barriers, and descriptor cleanup finish regardless of ctx, and no system
+// call is interrupted.
+func OpenLockFileContext(ctx context.Context, path string, level LockLevel) (*LockFile, error) {
 	dir := filepath.Dir(path)
-	if err := createDirectoriesWithAncestorBarrier(dir, nil); err != nil {
+	if err := createDirectoriesWithAncestorBarrierContext(ctx, dir, nil); err != nil {
 		return nil, fmt.Errorf("creating lock parent directory %s: %w", dir, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("opening lock file %s: %w", path, err)
 	}
 
 	f, err := openLockInode(func(flags int) (*os.File, error) {

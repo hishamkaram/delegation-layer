@@ -24,7 +24,8 @@ type attributedRevision struct {
 func attributedRevisions() []attributedRevision {
 	return []attributedRevision{
 		{name: "scoped", print: newScopedInterpreter, interactive: newScopedInteractionInterpreter},
-		{name: "advisory", advisory: true, print: func(mode string) predicate.Interpreter { return NewInterpreter(mode) }, interactive: newInteractionInterpreter},
+		{name: "advisory", advisory: true, print: newAdvisoryInterpreter, interactive: newAdvisoryInteractionInterpreter},
+		{name: "follow-up", advisory: true, print: func(mode string) predicate.Interpreter { return NewInterpreter(mode) }, interactive: newInteractionInterpreter},
 	}
 }
 
@@ -230,7 +231,7 @@ func TestCurrentRepeatedInitComparesAuthorityOnly(t *testing.T) {
 			lines[traceSecondInit] = replacement
 			lines[traceFirstInit] = changed[(index+1)%len(changed)]
 			interpretation, answer := evaluateWriteTrace(t, NewInterpreter(mode), lines)
-			requireCommittedPrincipal(t, mode+" print", interpretation, answer)
+			requireCommittedResponses(t, interpretation, answer, lines)
 			if whole := interpretation.Usage[1]; whole.EstimatedCostUSD == nil || *whole.EstimatedCostUSD != "0.5157" {
 				t.Fatalf("%s settled cost=%+v", mode, whole)
 			}
@@ -240,7 +241,9 @@ func TestCurrentRepeatedInitComparesAuthorityOnly(t *testing.T) {
 			interactive := interactiveFollowUpTrace(mode)
 			interactive[7] = replacement
 			sealed, sealedAnswer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), interactive)
-			requireCommittedPrincipal(t, mode+" interactive", sealed, sealedAnswer)
+			requireCommittedResponses(t, sealed, sealedAnswer, interactive)
+			frozenSealed, frozenAnswer := evaluateInteractiveTrace(t, newAdvisoryInteractionInterpreter(mode), interactive)
+			requireCommittedPrincipal(t, mode+" frozen interactive", frozenSealed, frozenAnswer)
 			requireLiveCurrentTrace(t, mode, interactive)
 		}
 		for name, replacement := range map[string]string{

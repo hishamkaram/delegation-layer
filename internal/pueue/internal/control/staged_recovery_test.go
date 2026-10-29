@@ -16,39 +16,123 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
+// TestClientCloseAfterPendingTransfersEnqueueOwnership holds the exact
+// enqueue process at its completion gate after it started, then cancels only
+// the caller. Every earlier command runs under the ordinary observation bound.
+// The returned Pending owns the deferred cleanup: closing refuses new work,
+// and cleanup runs once, only after the enqueue's natural completion. The
+// cleanup records the Pending state it observes, so an early cleanup fails
+// even when it runs after the immediate check below.
 func TestClientCloseAfterPendingTransfersEnqueueOwnership(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
-	appendStagedEnvironment(fake, "FAKE_ENQUEUE_DELAY=0.5")
-	fake.client.options.ObservationTimeout = 20 * time.Millisecond
-	_, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
-	observation, err := fake.client.SubmitStaged(context.Background(), permit, launch, func(Observation) error { return nil })
-	if !errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil {
+	scope, result, releaseEnqueue := submitWithHeldEnqueue(t, fake)
+	observation, err := result.observation, result.err
+	if !errors.Is(err, ErrEnqueueUncertain) || !errors.Is(err, ErrInFlight) || errors.Is(err, ErrSubmissionUncertain) {
 		t.Fatalf("enqueue did not retain pending ownership: observation=%+v err=%v", observation, err)
 	}
-
-	cleanupCalled := make(chan struct{})
-	fake.client.cleanup = func() error {
-		close(cleanupCalled)
-		return nil
+	if !observation.Matched || observation.State != StateStashed || observation.NumericTaskID != 7 || observation.Pending == nil {
+		t.Fatalf("enqueue uncertainty lost the matched staged receipt: %+v", observation)
 	}
+
+	cleanup := recordDeferredCleanup(fake.client, observation.Pending)
 	if closeErr := fake.client.CloseAfterPending(err); closeErr != nil {
 		t.Fatal(closeErr)
-	}
-	select {
-	case <-observation.Pending.Done():
-		t.Fatal("closing the client completed its pending enqueue")
-	default:
 	}
 	if _, snapshotErr := fake.client.Snapshot(t.Context()); !errors.Is(snapshotErr, ErrConfiguration) {
 		t.Fatalf("closing client accepted new work: %v", snapshotErr)
 	}
-	if !awaitPendingNaturally(observation.Pending, 2*time.Second) {
+	select {
+	case <-observation.Pending.Done():
+		t.Fatal("closing the client completed its held enqueue")
+	case <-cleanup.called:
+		t.Fatal("closing the client ran cleanup while its enqueue was held")
+	default:
+	}
+
+	if releaseErr := releaseEnqueue(); releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+	if !awaitPendingNaturally(observation.Pending, time.Until(scope.final)) {
 		t.Fatal("transferred enqueue ownership did not reach natural completion")
 	}
+	cleanup.assertRanOnceAfterCompletion(t, scope.final)
+	if got := len(stagedInvocations(t, fake, "enqueue")); got != 1 {
+		t.Fatalf("held enqueue was duplicated: %d", got)
+	}
+}
+
+// submitWithHeldEnqueue submits one staged ordinary task whose enqueue
+// process is held at its completion gate once it has started, then cancels
+// only the caller's context. It returns the call scope, the submission
+// result, and the idempotent gate release, which scope cleanup also runs.
+func submitWithHeldEnqueue(t *testing.T, fake *fakeSupervisor) (*testCallScope, ordinaryRecoveryResult, func() error) {
+	t.Helper()
+	enqueueGate := filepath.Join(t.TempDir(), "enqueue-released")
+	appendStagedEnvironment(fake, "FAKE_ENQUEUE_GATE="+enqueueGate)
+	_, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
+	enqueueStarted := make(chan struct{})
+	closeEnqueueStarted := sync.OnceFunc(func() { close(enqueueStarted) })
+	fake.client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "started" && effectiveEnqueueCommand(event.Argv) {
+			closeEnqueueStarted()
+		}
+	}
+	scope := newTestCallScope(t, fake.client.options)
+	releaseEnqueue := sync.OnceValue(func() error { return os.WriteFile(enqueueGate, nil, 0o600) })
+	scope.onRelease(func() {
+		if err := releaseEnqueue(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := scope.cancelableContext()
+	submission := startTestCall(scope, func() ordinaryRecoveryResult {
+		observation, err := fake.client.SubmitStaged(ctx, permit, launch, func(Observation) error { return nil })
+		return ordinaryRecoveryResult{observation: observation, err: err}
+	})
+	awaitEntry(scope, enqueueStarted, submission, "submission did not start its enqueue")
+	cancel()
+	return scope, awaitCall(scope, submission, "submission"), releaseEnqueue
+}
+
+// deferredCleanupRecorder replaces a client's cleanup and records each call
+// together with whether the transferred Pending had completed by then.
+type deferredCleanupRecorder struct {
+	pending          *Pending
+	calls            atomic.Int32
+	beforeCompletion atomic.Bool
+	called           chan struct{}
+}
+
+func recordDeferredCleanup(client *Client, pending *Pending) *deferredCleanupRecorder {
+	recorder := &deferredCleanupRecorder{pending: pending, called: make(chan struct{})}
+	client.cleanup = recorder.cleanup
+	return recorder
+}
+
+func (r *deferredCleanupRecorder) cleanup() error {
 	select {
-	case <-cleanupCalled:
-	case <-time.After(2 * time.Second):
+	case <-r.pending.Done():
+	default:
+		r.beforeCompletion.Store(true)
+	}
+	if r.calls.Add(1) == 1 {
+		close(r.called)
+	}
+	return nil
+}
+
+// assertRanOnceAfterCompletion waits until deadline for the cleanup and
+// requires exactly one call, made after the Pending completed.
+func (r *deferredCleanupRecorder) assertRanOnceAfterCompletion(t *testing.T, deadline time.Time) {
+	t.Helper()
+	if !waitUntil(r.called, deadline) {
 		t.Fatal("deferred client cleanup did not follow pending completion")
+	}
+	if r.beforeCompletion.Load() {
+		t.Fatal("deferred client cleanup ran before the held enqueue completed")
+	}
+	if got := r.calls.Load(); got != 1 {
+		t.Fatalf("deferred client cleanup ran %d times, want once", got)
 	}
 }
 

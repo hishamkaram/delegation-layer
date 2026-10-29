@@ -65,9 +65,12 @@ func normalizedNativeTimeout(provider, value string, budget int64) (string, erro
 	if err := policy.ValidateProvider(provider); err != nil {
 		return "", err
 	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 || int64(duration) > budget {
-		return "", errors.New("native timeout must be positive and no greater than the task budget")
+	duration, err := parseNativeTimeout(value)
+	if err != nil {
+		return "", err
+	}
+	if err := checkNativeTimeoutBudget(duration, time.Duration(budget)); err != nil {
+		return "", err
 	}
 	return duration.String(), nil
 }
@@ -97,10 +100,8 @@ func validateRequestedConfig(provider string, request TaskConfig, mode string, b
 	if request.Budget != duration.String() || int64(duration) != budget {
 		return errors.New("requested budget must be normalized and match budget_nanos")
 	}
-	for _, value := range []string{request.Model, request.Effort} {
-		if strings.TrimSpace(value) != value || strings.ContainsRune(value, '\x00') {
-			return errors.New("model and effort must be nonblank literal values when supplied")
-		}
+	if err := validateModelEffort(request.Model, request.Effort); err != nil {
+		return err
 	}
 	return ValidateReviewTarget(request.ReviewTarget)
 }
@@ -150,10 +151,17 @@ func validateTaskConfiguration(r *TaskRecord) error {
 	}
 	// Saved evidence outlives the execution directory. Fresh execution authority
 	// additionally validates the current filesystem at the storage boundary.
-	if !nonblank(r.CanonicalCwd) || !filepath.IsAbs(r.CanonicalCwd) || filepath.Clean(r.CanonicalCwd) != r.CanonicalCwd {
+	if !IsCanonicalCwd(r.CanonicalCwd) {
 		return errors.New("saved task cwd must be a clean absolute path")
 	}
 	return validatePriorSession(r)
+}
+
+// IsCanonicalCwd reports whether value has the lexical shape saved as a task
+// working directory: nonblank, free of NUL bytes, absolute, and already clean.
+// It does not consult the filesystem, resolve links, or require UTF-8.
+func IsCanonicalCwd(value string) bool {
+	return nonblank(value) && filepath.IsAbs(value) && filepath.Clean(value) == value
 }
 
 func validatePriorSession(r *TaskRecord) error {

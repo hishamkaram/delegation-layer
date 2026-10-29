@@ -237,57 +237,18 @@ func TestInspectionTerminalReconciliationRetainsOnePendingProbe(t *testing.T) {
 }
 
 func TestAwaitInspectionPollReturnsAtCallerDeadlineWithPendingCommand(t *testing.T) {
-	store := supervisorfixture.NewInspectionStore(t)
-	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
-	operation := admissionfixture.NewInspectionPollTestOperation(t, store, bound)
-	statusPath := filepath.Join(filepath.Dir(logPath), "status.json")
-	admissionfixture.WriteInspectionPollTestStatus(t, statusPath, operation, false)
-
-	entered := make(chan struct{})
-	released := make(chan struct{})
-	release := sync.OnceFunc(func() { close(released) })
-	t.Cleanup(release)
-	signalEntered := sync.OnceFunc(func() { close(entered) })
-	client, err := pueue.NewClient(bound.Binding(), pueue.Options{
-		Environment:        append(os.Environ(), "FAKE_LOG="+logPath, "FAKE_STATUS="+statusPath),
-		ObservationTimeout: 10 * time.Second,
-		Observer: func(event pueue.CommandEvent) {
-			if event.Stage == "completed" && slices.Contains(event.Argv, "status") {
-				signalEntered()
-				<-released
-			}
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := client.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-
-	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
-	defer cancel()
-	type result struct {
-		facts json.RawMessage
-		err   error
-	}
-	done := make(chan result, 1)
-	go func() {
-		facts, observeErr := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
-		done <- result{facts: facts, err: observeErr}
-	}()
+	gate := newHeldStatusGate()
+	ctx, logPath, done := startAwaitPollHeldStatus(t, gate)
 
 	ready, cancelReady := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelReady()
 	select {
-	case <-entered:
+	case <-gate.entered:
 	case got := <-done:
-		release()
+		gate.release()
 		t.Fatalf("inspection returned before its supervisor command was retained: facts=%s err=%v", got.facts, got.err)
 	case <-ready.Done():
-		release()
+		gate.release()
 		t.Fatalf("supervisor command did not reach the controlled pending state: %v", ready.Err())
 	}
 	ctx.Expire()
@@ -297,14 +258,14 @@ func TestAwaitInspectionPollReturnsAtCallerDeadlineWithPendingCommand(t *testing
 	select {
 	case got := <-done:
 		if got.facts != nil || !errors.Is(got.err, inspection.ErrAdmissionExpired) || !errors.Is(got.err, pueue.ErrInFlight) {
-			release()
+			gate.release()
 			t.Fatalf("expired caller lost its stable pending result: facts=%s err=%v", got.facts, got.err)
 		}
 		pending := admissionfixture.AssertRetainedInspectionPending(t, got.err)
-		release()
+		gate.release()
 		admissionfixture.DrainInspectionPending(t, pending)
 	case <-joinContext.Done():
-		release()
+		gate.release()
 		<-done
 		t.Fatalf("inspection did not return after its caller deadline: %v", joinContext.Err())
 	}
@@ -315,6 +276,32 @@ func TestAwaitInspectionPollReturnsAtCallerDeadlineWithPendingCommand(t *testing
 	}
 	if count := strings.Count(string(invocations), "arg=status\n"); count != 1 {
 		t.Fatalf("deadline started another supervisor observation: status count=%d log=%s", count, invocations)
+	}
+}
+
+// startAwaitPollHeldStatus starts admission polling against a running worker
+// whose status command gate holds; the caller deadline is armed after setup.
+func startAwaitPollHeldStatus(t *testing.T, gate *heldStatusGate) (*admissionfixture.ControllableDeadlineContext, string, <-chan heldProbeResult) {
+	t.Helper()
+	store := supervisorfixture.NewInspectionStore(t)
+	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
+	operation := admissionfixture.NewInspectionPollTestOperation(t, store, bound)
+	statusPath := filepath.Join(filepath.Dir(logPath), "status.json")
+	admissionfixture.WriteInspectionPollTestStatus(t, statusPath, operation, false)
+	client := newHeldStatusClient(t, bound, logPath, gate, gate.observe)
+
+	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
+	done := startHeldProbe(t, gate, cancel, func() (json.RawMessage, error) {
+		return awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
+	})
+	return ctx, logPath, done
+}
+
+func holdAwaitPollStatus(t *testing.T, gate *heldStatusGate) {
+	t.Helper()
+	_, _, done := startAwaitPollHeldStatus(t, gate)
+	if err := gate.awaitEntered(done, 10*time.Second); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -19,9 +19,13 @@ type nativeHooks struct {
 	wait  func(*exec.Cmd) error
 }
 
-// nativeScope preserves the private runNative signature while making the
-// execution package the single owner of the command lifetime boundary.
-type nativeScope = execution.CommandScope
+// nativeScope is the private runNative boundary: the execution package owns
+// the command lifetime and the binding decision; execution.PreflightScope
+// satisfies both.
+type nativeScope interface {
+	execution.CommandScope
+	commandBinder
+}
 
 // runNative is private to the supervised inspection lifetime. The scope owns
 // the final start gate and guardian registration. Cancellation refuses a new
@@ -41,7 +45,7 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	}
 	// A nil Stdin makes the child receive finite EOF. The command is bound to
 	// the executable observed during admission before the final Start gate.
-	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
+	cmd, verified, err := newVerifiedCommand(scope, definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
 	if err != nil {
 		return nil, errNativeInspection
 	}

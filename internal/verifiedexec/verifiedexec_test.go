@@ -24,7 +24,7 @@ func TestPortableCommandPreservesExecutableDirectoryLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporaryDir := t.TempDir()
-	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, "", nil, nil, source, temporaryDir)
+	command, temporaryFiles, err := privateBinding(provider.Path, provider.SHA256, "", nil, nil).buildCommand(source, temporaryDir)
 	if err != nil {
 		if closeErr := source.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -56,10 +56,10 @@ func TestPortableCommandPreservesExecutableDirectoryLayout(t *testing.T) {
 
 func TestShouldMirrorParentStopsAtSharedTemporaryRoots(t *testing.T) {
 	temporaryRoot := filepath.Clean(os.TempDir())
-	if shouldMirrorParent(temporaryRoot, os.Environ()) {
+	if shouldMirrorParent(temporaryRoot, environmentTemporaryRoot(os.Environ())) {
 		t.Fatalf("shared temporary root %q would be enumerated", temporaryRoot)
 	}
-	if !shouldMirrorParent(filepath.Join(temporaryRoot, "provider-package"), os.Environ()) {
+	if !shouldMirrorParent(filepath.Join(temporaryRoot, "provider-package"), environmentTemporaryRoot(os.Environ())) {
 		t.Fatalf("provider-owned child of temporary root was not eligible for mirroring")
 	}
 }
@@ -101,7 +101,7 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporaryDir := t.TempDir()
-	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, root, []string{"PATH=" + filepath.Dir(node)}, nil, source, temporaryDir)
+	command, temporaryFiles, err := privateBinding(provider.Path, provider.SHA256, root, []string{"PATH=" + filepath.Dir(node)}, nil).buildCommand(source, temporaryDir)
 	if err != nil {
 		if closeErr := source.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -161,7 +161,7 @@ func TestPortableCommandPreservesParentRelativeNodeImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporaryDir := t.TempDir()
-	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, packageRoot, []string{"PATH=" + filepath.Dir(node)}, nil, source, temporaryDir)
+	command, temporaryFiles, err := privateBinding(provider.Path, provider.SHA256, packageRoot, []string{"PATH=" + filepath.Dir(node)}, nil).buildCommand(source, temporaryDir)
 	if err != nil {
 		if closeErr := source.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -221,7 +221,7 @@ func TestPortableCommandPreservesNestedParentRelativeNodeImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporaryDir := t.TempDir()
-	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, packageRoot, []string{"PATH=" + filepath.Dir(node)}, nil, source, temporaryDir)
+	command, temporaryFiles, err := privateBinding(provider.Path, provider.SHA256, packageRoot, []string{"PATH=" + filepath.Dir(node)}, nil).buildCommand(source, temporaryDir)
 	if err != nil {
 		if closeErr := source.Close(); closeErr != nil {
 			t.Error(closeErr)

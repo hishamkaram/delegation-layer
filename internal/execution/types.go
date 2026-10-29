@@ -144,6 +144,10 @@ type Options struct {
 	Clock         Clock
 	Stopper       Stopper
 	Lifetime      Lifetime
+	// Binder binds the provider command, both the initial and any refreshed
+	// plan, and every native command started through PreflightScope. Nil keeps
+	// the private copy that Command.Close removes.
+	Binder CommandBinder
 	// Deadline is the immutable outer guardian deadline. A zero value retains
 	// the legacy duration-relative clock. A supplied deadline may shorten but
 	// never extend the admitted task budget.
