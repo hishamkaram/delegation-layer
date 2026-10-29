@@ -305,10 +305,75 @@ def _remove_empty_cleanup_quarantine(parent_fd, name, descriptor, expected_ident
     os.rmdir(name, dir_fd=parent_fd)
 
 
+def _isolate_directory_at(parent_fd, name, deadline=None):
+    """Rename one directory to a fresh sibling without ever replacing an entry.
+
+    A same-parent rename does not rewrite the directory's ".." entry, so it does
+    not need write permission on a product-sealed directory.
+    """
+    for _attempt in range(16):
+        _check_cleanup_deadline(deadline)
+        isolated_name = ".delegate-cleanup-" + secrets.token_hex(16)
+        try:
+            _rename_noreplace(parent_fd, name, parent_fd, isolated_name)
+        except FileExistsError:
+            continue
+        return isolated_name
+    raise RuntimeError("could not allocate a unique cleanup quarantine")
+
+
+def _open_isolated_directory(parent_fd, isolated_name, expected_identity, name):
+    """Hold the isolated directory and grant owner access only to that exact inode."""
+    result = os.stat(isolated_name, dir_fd=parent_fd, follow_symlinks=False)
+    require((result.st_dev, result.st_ino) == expected_identity,
+            "owned entry was replaced during cleanup; retained in quarantine: " +
+            isolated_name)
+    descriptor = os.open(isolated_name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+    try:
+        held = os.fstat(descriptor)
+        require(stat.S_ISDIR(held.st_mode) and
+                (held.st_dev, held.st_ino) == expected_identity,
+                "owned directory changed while opening: " + name)
+        if held.st_mode & stat.S_IRWXU != stat.S_IRWXU:
+            require(held.st_uid == os.getuid(),
+                    "sealed owned directory is not owned by the current user; "
+                    "retained in quarantine: " + isolated_name)
+            os.fchmod(descriptor, stat.S_IMODE(held.st_mode) | stat.S_IRWXU)
+        return descriptor
+    except BaseException:
+        _close_parent_descriptor(descriptor)
+        raise
+
+
+def _remove_directory_at(parent_fd, name, expected_identity, deadline=None):
+    """Isolate one exact directory beside itself, then delete its contents."""
+    isolated_name = _isolate_directory_at(parent_fd, name, deadline)
+    descriptor = _open_isolated_directory(
+        parent_fd, isolated_name, expected_identity, name)
+    try:
+        for child in os.listdir(descriptor):
+            _check_cleanup_deadline(deadline)
+            child_result = os.stat(child, dir_fd=descriptor, follow_symlinks=False)
+            _remove_entry_at(descriptor, child,
+                             (child_result.st_dev, child_result.st_ino),
+                             deadline=deadline)
+        _check_cleanup_deadline(deadline)
+        current = os.stat(isolated_name, dir_fd=parent_fd, follow_symlinks=False)
+        require((current.st_dev, current.st_ino) == expected_identity,
+                "owned directory changed during cleanup: " + name)
+        os.rmdir(isolated_name, dir_fd=parent_fd)
+    finally:
+        _close_parent_descriptor(descriptor)
+
+
 def _remove_entry_at(parent_fd, name, expected_identity, require_directory=False,
                      deadline=None, *, _allow_fifo=False):
     """Atomically isolate one exact entry before deleting any of its bytes."""
     _check_cleanup_deadline(deadline)
+    visible = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if stat.S_ISDIR(visible.st_mode) and not _allow_fifo:
+        _remove_directory_at(parent_fd, name, expected_identity, deadline)
+        return
     quarantine_name, quarantine_fd, quarantine_identity = \
         _create_cleanup_quarantine(parent_fd)
     moved = False
@@ -324,37 +389,16 @@ def _remove_entry_at(parent_fd, name, expected_identity, require_directory=False
         is_directory = stat.S_ISDIR(result.st_mode) and not stat.S_ISLNK(result.st_mode)
         if require_directory:
             require(is_directory, "owned directory is unsafe: " + name)
-        if is_directory:
-            descriptor = os.open("entry", _DIRECTORY_OPEN_FLAGS, dir_fd=quarantine_fd)
-            try:
-                held = os.fstat(descriptor)
-                require((held.st_dev, held.st_ino) == expected_identity,
-                        "owned directory changed while opening: " + name)
-                for child in os.listdir(descriptor):
-                    _check_cleanup_deadline(deadline)
-                    child_result = os.stat(
-                        child, dir_fd=descriptor, follow_symlinks=False)
-                    child_identity = (child_result.st_dev, child_result.st_ino)
-                    _remove_entry_at(descriptor, child, child_identity,
-                                     deadline=deadline)
-                current = os.stat(
-                    "entry", dir_fd=quarantine_fd, follow_symlinks=False)
-                require((current.st_dev, current.st_ino) == expected_identity,
-                        "owned directory changed during cleanup: " + name)
-                os.rmdir("entry", dir_fd=quarantine_fd)
-            finally:
-                _close_parent_descriptor(descriptor)
+        if _allow_fifo:
+            require(stat.S_ISFIFO(result.st_mode) and result.st_uid == os.getuid(),
+                    "owned FIFO is unsafe: " + name)
         else:
-            if _allow_fifo:
-                require(stat.S_ISFIFO(result.st_mode) and result.st_uid == os.getuid(),
-                        "owned FIFO is unsafe: " + name)
-            else:
-                require(stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode),
-                        "unsupported unsafe entry in owned directory: " + name)
-            current = os.stat("entry", dir_fd=quarantine_fd, follow_symlinks=False)
-            require((current.st_dev, current.st_ino) == expected_identity,
-                    "owned directory entry changed during cleanup: " + name)
-            os.unlink("entry", dir_fd=quarantine_fd)
+            require(stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode),
+                    "unsupported unsafe entry in owned directory: " + name)
+        current = os.stat("entry", dir_fd=quarantine_fd, follow_symlinks=False)
+        require((current.st_dev, current.st_ino) == expected_identity,
+                "owned directory entry changed during cleanup: " + name)
+        os.unlink("entry", dir_fd=quarantine_fd)
         _remove_empty_cleanup_quarantine(
             parent_fd, quarantine_name, quarantine_fd, quarantine_identity,
             deadline=deadline)

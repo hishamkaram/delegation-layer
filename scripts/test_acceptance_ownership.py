@@ -444,11 +444,11 @@ class DirectoryOwnershipTests(unittest.TestCase):
             moved = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = os.rename
+            original_rename = directory_operations._rename_noreplace
 
-            def rename_then_pause(source, destination, *args, **kwargs):
-                result = original_rename(source, destination, *args, **kwargs)
-                if source == "owned" and destination == "entry":
+            def rename_then_pause(source_fd, source, destination_fd, destination):
+                result = original_rename(source_fd, source, destination_fd, destination)
+                if source == "owned" and destination.startswith(".delegate-cleanup-"):
                     moved.set()
                     if not replacement_ready.wait(5):
                         raise RuntimeError("replacement fixture did not continue")
@@ -460,7 +460,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 except BaseException as error:  # Preserve the worker failure for the test thread.
                     errors.append(error)
 
-            with patch.object(directory_operations.os, "rename", side_effect=rename_then_pause):
+            with patch.object(directory_operations, "_rename_noreplace", side_effect=rename_then_pause):
                 worker = threading.Thread(target=cleanup)
                 worker.start()
                 try:
@@ -484,14 +484,14 @@ class DirectoryOwnershipTests(unittest.TestCase):
             rename_ready = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = os.rename
+            original_rename = directory_operations._rename_noreplace
 
-            def pause_before_rename(source, destination, *args, **kwargs):
-                if source == "owned" and destination == "entry":
+            def pause_before_rename(source_fd, source, destination_fd, destination):
+                if source == "owned" and destination.startswith(".delegate-cleanup-"):
                     rename_ready.set()
                     if not replacement_ready.wait(5):
                         raise RuntimeError("replacement fixture did not continue")
-                return original_rename(source, destination, *args, **kwargs)
+                return original_rename(source_fd, source, destination_fd, destination)
 
             def cleanup():
                 try:
@@ -499,7 +499,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 except BaseException as error:  # Preserve the worker failure for the test thread.
                     errors.append(error)
 
-            with patch.object(directory_operations.os, "rename", side_effect=pause_before_rename):
+            with patch.object(directory_operations, "_rename_noreplace", side_effect=pause_before_rename):
                 worker = threading.Thread(target=cleanup)
                 worker.start()
                 try:
@@ -514,7 +514,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             self.assertFalse(worker.is_alive())
             self.assertEqual(len(errors), 1)
             self.assertRegex(str(errors[0]), "replaced.*quarantine")
-            retained = tuple(root.glob(".delegate-cleanup-*/entry/keep.txt"))
+            retained = tuple(root.glob(".delegate-cleanup-*/keep.txt"))
             self.assertEqual(len(retained), 1)
             self.assertEqual(retained[0].read_text(), "replacement")
             self.assertTrue((root / "original").is_dir())

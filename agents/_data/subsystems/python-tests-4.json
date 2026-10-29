@@ -525,5 +525,20 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:test_acceptance_sealed_cleanup",
+    "owner": "py:test_acceptance_sealed_cleanup",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:itertools",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]
