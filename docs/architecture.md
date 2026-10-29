@@ -612,7 +612,11 @@ observer (`internal/app/task_maintenance.go`). It reads its own task's closed
 custody hint and reconciles its exact published row read-only; it never
 removes a row, binds the supervisor for mutation, or releases custody. A
 positive hint (closed custody still pending, or the exact ended row still
-present) durably requests one full maintenance generation. The observer then
+present) durably requests one full maintenance generation. It publishes that
+wake in the guardian's fresh cancel-independent phase bounded by
+`pueue.DefaultObservationTimeout` (5 seconds), separate from its own 10-second
+observation bound, so an exhausted observation cannot drop the wake; this can
+add up to 5 seconds and renews no provider, task, or native budget. The observer then
 attempts to start the existing independent maintenance owner only when it holds
 a published-row client and a maintenance launcher; otherwise the durable wake
 waits for a later callback or admission to consume it. When neither the

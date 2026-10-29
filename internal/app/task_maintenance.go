@@ -190,9 +190,10 @@ func absentRecordIsNone(err error) error {
 // requestMaintenance persists one full wake for an accepted positive hint and
 // starts the existing independent owner. Each accepted hint is a new
 // generation, so a hint observed after a failed pass is runnable again. The
-// wake stays durable when no owner can be started here.
+// row observation may have exhausted ctx, so the wake is published in its own
+// bounded phase. The wake stays durable when no owner can be started here.
 func (o taskMaintenanceObserver) requestMaintenance(ctx context.Context, client *pueue.Client) error {
-	if err := pueue.RequestPrivateQueueMaintenance(ctx, o.root); err != nil {
+	if err := requestPrivateFullMaintenanceWake(ctx, o.root); err != nil {
 		return err
 	}
 	if client == nil || o.options.PrivateMaintenanceLauncher == nil {
@@ -225,16 +226,16 @@ func releaseGuardianLifetimeCustody(root string, closure guardian.ClosureRecords
 	if !private {
 		return
 	}
-	if wakeErr := requestGuardianCustodyRecovery(ctx, root); wakeErr != nil {
+	if wakeErr := requestPrivateFullMaintenanceWake(ctx, root); wakeErr != nil {
 		log.Printf("delegate: lifetime custody recovery request deferred: %v", wakeErr)
 	}
 }
 
-// requestGuardianCustodyRecovery publishes the full wake for a release fault
-// in its own bounded phase. The release may have exhausted or cancelled ctx;
-// the wake must still be durable, under the same bound the terminal callback
-// uses for its journal publication.
-func requestGuardianCustodyRecovery(ctx context.Context, root string) error {
+// requestPrivateFullMaintenanceWake publishes one full wake in its own bounded
+// phase. The caller's release or observation may have exhausted or cancelled
+// ctx; the wake must still be durable, under the same bound the terminal
+// callback uses for its journal publication.
+func requestPrivateFullMaintenanceWake(ctx context.Context, root string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pueue.DefaultObservationTimeout)
 	defer cancel()
 	return pueue.RequestPrivateQueueMaintenance(ctx, root)

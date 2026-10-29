@@ -277,8 +277,49 @@ func TestGuardianCustodyRecoveryOutlivesExhaustedReleaseContext(t *testing.T) {
 			if ctx.Err() == nil {
 				t.Fatal("fixture release context is still live")
 			}
-			if err = requestGuardianCustodyRecovery(ctx, root); err != nil {
+			if err = requestPrivateFullMaintenanceWake(ctx, root); err != nil {
 				t.Errorf("recovery request after an exhausted release: %v", err)
+			}
+			requireTaskMaintenanceFullWake(t, root, taskMaintenanceWake{})
+		})
+	}
+}
+
+// TestPrivateObserverWakeOutlivesExhaustedObservationContext: a positive hint
+// whose row observation exhausted or cancelled the observer's context still
+// leaves a durable full wake.
+func TestPrivateObserverWakeOutlivesExhaustedObservationContext(t *testing.T) {
+	exhausted := map[string]func() context.Context{
+		"canceled": func() context.Context {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx
+		},
+		"deadline exceeded": func() context.Context {
+			ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+			t.Cleanup(cancel)
+			return ctx
+		},
+	}
+	for name, observation := range exhausted {
+		t.Run(name, func(t *testing.T) {
+			// The private journal refuses symlinked ancestors, and TempDir is
+			// not canonical where the temporary root is an alias (macOS /var).
+			parent, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(parent, "state")
+			if err = os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			makePrivateSupervisorBase(t, root)
+			ctx := observation()
+			if ctx.Err() == nil {
+				t.Fatal("fixture observation context is still live")
+			}
+			if err = (taskMaintenanceObserver{root: root}).requestMaintenance(ctx, nil); err != nil {
+				t.Errorf("maintenance request after an exhausted observation: %v", err)
 			}
 			requireTaskMaintenanceFullWake(t, root, taskMaintenanceWake{})
 		})
