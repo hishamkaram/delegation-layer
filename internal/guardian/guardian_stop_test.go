@@ -330,8 +330,10 @@ func TestLifetimeGuardianRecordBoundariesPreserveSelectedContext(t *testing.T) {
 			t.Fatalf("%s record lost caller context value: %v", name, got)
 		}
 	}
-	if intentContext != runContext || registrationContext != runContext {
-		t.Fatal("initial lifetime records did not receive the state-machine context")
+	for name, ctx := range map[string]context.Context{"intent": intentContext, "registration": registrationContext} {
+		if deadline, bounded := ctx.Deadline(); !bounded || !deadline.Equal(f.guardian.options.Deadline) {
+			t.Fatalf("%s record context deadline = %v bounded=%t, want the immutable startup deadline %v", name, deadline, bounded, f.guardian.options.Deadline)
+		}
 	}
 	if workerContext.Done() != nil {
 		t.Fatal("worker identity record did not retain its non-cancelable ownership context")
