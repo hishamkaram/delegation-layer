@@ -7,7 +7,9 @@ from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capture import run_captured_text_command
 from scripts.delegate_acceptance.private_cli.environment import phase_environment
-from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition
+from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition_until
+from scripts.delegate_acceptance.private_cli.noexec_state import custody_release_pending
+from scripts.delegate_acceptance.private_cli.noexec_state import describe_pending_custody
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 import errno
 import json
@@ -294,18 +296,69 @@ def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
-def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
-    """Authorize lifetime closure, then observe PID and endpoint disappearance.
+def shutdown_custody_roots(state, env):
+    """Return the roots whose recorded custody pools this shutdown may read: its state and its TMPDIR."""
+    temporary = env.get("TMPDIR")
+    return (Path(state),) if not temporary else (Path(state), Path(temporary))
 
-    Returns the closure that authorized this shutdown, after the daemon exited
-    and its endpoint closed.
+
+def await_custody_release(closure, owned_roots, deadline):
+    """Outside every lease, wait for the recorded pools of a closed scope to release their views.
+
+    Holding the transition lease here would stall the shared bootstrap
+    maintenance that releases inspection views. A concrete pool fault raises at
+    once; views still held at the deadline name their owner namespaces.
+    """
+    while True:
+        pending = custody_release_pending(closure, owned_roots)
+        if not pending:
+            return
+        require_custody_release_budget(pending, deadline)
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
+def require_custody_release_budget(pending, deadline):
+    """Refuse once the one shutdown deadline has passed with owner namespaces still holding views."""
+    if time.monotonic() >= deadline:
+        raise RuntimeError("custody release remained pending before supervisor shutdown: "
+                           + describe_pending_custody(pending))
+
+
+def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action):
+    """Run action(closure) under the transition lease once closure and custody release hold.
+
+    Closure is authorized and custody release awaited outside the lease, then
+    rechecked read-only once under it. Pending release leaves the lease, then
+    the same deadline is checked before the next bounded wait, so a recheck
+    that keeps finding views cannot outlive it. The one deadline covers every
+    wait and lock attempt.
     """
     closure = authorize_managed_lifetime_closure(state, task_ids)
+    while True:
+        await_custody_release(closure, owned_roots, deadline)
+        with private_fixture_transition_until(Path(state), deadline):
+            closure = authorize_managed_lifetime_closure(state, task_ids)
+            pending = custody_release_pending(closure, owned_roots)
+            if not pending:
+                return action(closure)
+        require_custody_release_budget(pending, deadline)
+
+
+def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
+    """Authorize closure and custody release, then shut down and observe PID and endpoint disappearance.
+
+    The caller must not hold the transition lease. Returns the closure that
+    authorized this shutdown, after the daemon exited and its endpoint closed.
+    """
     deadline = time.monotonic() + timeout
-    shutdown_observed_supervisor(
-        client, config, env, private_shutdown_evidence(config), deadline, capture_root=capture_root
-    )
-    return closure
+
+    def shut_down(closure):
+        shutdown_observed_supervisor(
+            client, config, env, private_shutdown_evidence(config), deadline, capture_root=capture_root
+        )
+        return closure
+
+    return run_when_disposal_ready(state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down)
 
 
 def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root):
@@ -343,17 +396,18 @@ def predecessor_closed(target, deadline, *, capture_root):
 def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids=(), capture_root):
     """Shut down a captured pre-retarget generation through its pinned backup config.
 
-    The production transition lease is held from closure authorization through
-    the final backup check, so cooperating lifecycle writers cannot change the
-    captured root's config, PID file, or socket while the command runs.
+    The production transition lease is held from the read-only readiness
+    recheck through the final backup check, so cooperating lifecycle writers
+    cannot change the captured root's config, PID file, or socket while the
+    command runs. Closure and custody release are awaited before that lease.
 
     Returns PREDECESSOR_ALREADY_CLOSED only when the captured generation was
     proven closed before this cleanup sent anything; otherwise
     PREDECESSOR_SHUT_DOWN after this cleanup's own verified shutdown.
     """
-    with private_fixture_transition(target.state):
-        authorize_managed_lifetime_closure(target.state, task_ids)
-        deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + timeout
+
+    def shut_down(_closure):
         require_predecessor_backup(target)
         # A migration may already have stopped this generation before it failed.
         if predecessor_closed(target, deadline, capture_root=capture_root):
@@ -364,7 +418,9 @@ def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids
         # The command reads the backup by path. This detects a replaced backup;
         # it cannot prove that no transient substitution happened during the command.
         require_predecessor_backup(target)
-    return PREDECESSOR_SHUT_DOWN
+        return PREDECESSOR_SHUT_DOWN
+
+    return run_when_disposal_ready(target.state, task_ids, shutdown_custody_roots(target.state, env), deadline, shut_down)
 
 
 def shutdown_observed_supervisor(client, config, env, evidence, deadline, *, capture_root):

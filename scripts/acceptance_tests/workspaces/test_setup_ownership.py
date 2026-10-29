@@ -379,14 +379,21 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         self.assertNotIn("retained_owned_directories_status", cleanup)
         self._assert_pinned_then_released(context)
 
-    def _daemon_context(self, events, *, private_config=True):
-        """A context with one task, optionally a private daemon config, and a gate and cohort."""
+    def _daemon_context(self, events, *, private_config=True, lifecycle_locks=True):
+        """A context with one task, optionally a private daemon config, and a gate and cohort.
+
+        An admitted root carries the lifecycle election and bootstrap lock files
+        that first admission provisions; shutdown takes them as its transition lease.
+        """
         context = self._context()
         context.add_task(TASK_ID)
         context.attempted_task_ids.append(TASK_ID)
         if private_config:
             context.private_config.parent.mkdir()
             context.private_config.write_text("fixture\n", encoding="utf-8")
+            if lifecycle_locks:
+                for name in ("transition.lock", "bootstrap.lock"):
+                    (context.private_config.parent / name).touch(mode=0o600)
         gate = mock.create_autospec(private_cli_leases.LockedReleaseGate, instance=True)
         gate.release.side_effect = lambda: events.append("gate-released")
         cohort = mock.create_autospec(private_cli_leases.LiveFIFOLeaseCohort, instance=True)
@@ -446,9 +453,10 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         context, cohort = self._daemon_context(events)
         closed = {"root_id": "root", "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [AcceptanceFailure("worker still closing"), closed, closed])
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed, closed])
+        # Closure is awaited, authorized before the lease, rechecked read-only under it, then shut down.
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
-                                  "closure-checked", "closure-checked", "shutdown"])
+                                  "closure-checked", "closure-checked", "closure-checked", "shutdown"])
         cohort.remove_closed_fifos.assert_not_called()
         self.assertEqual((context.gates, context.cohorts), ([], []))
         self.assertEqual(len(self.clock.sleeps), 1)
@@ -465,6 +473,20 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             (True, True, False, "failure-evidence-retained"))
         self.assertNotIn("lifetime_error", cleanup)
         self.assertNotIn("daemon_error", cleanup)
+
+    def test_missing_lifecycle_locks_refuse_shutdown_and_retain_the_root(self):
+        events = []
+        context, _cohort = self._daemon_context(events, lifecycle_locks=False)
+        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        cleanup, native = self._finalize_failed_with_closure(
+            context, events, [closed, closed])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked"])
+        native.command.assert_not_called()
+        self.assertFalse((context.private_config.parent / "transition.lock").exists())
+        self.assertEqual(
+            (cleanup["lifetime_closed"], cleanup["daemon_closed"], cleanup["authorized"]),
+            (True, False, False))
+        self.assertIn("transition.lock", cleanup["daemon_error"])
 
     def test_closure_without_a_private_config_is_awaited_and_no_shutdown_is_called(self):
         events = []

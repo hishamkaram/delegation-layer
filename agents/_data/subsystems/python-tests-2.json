@@ -736,5 +736,29 @@
       "py:tempfile",
       "py:unittest"
     ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_disposal_readiness",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:contextlib",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.noexec_state",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:fcntl",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:shutil",
+      "py:tempfile",
+      "py:threading",
+      "py:time",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]

@@ -51,9 +51,31 @@ class LockedReleaseGate:
             os.close(descriptor)
 
 
+TRANSITION_LOCK_TIMEOUT_SECONDS = 30
+
+
 @contextmanager
 def private_fixture_transition(state):
-    """Serialize historical fixture seeds with the production transition owner."""
+    """Serialize historical fixture seeds with the production transition owner.
+
+    Each lock waits up to TRANSITION_LOCK_TIMEOUT_SECONDS.
+    """
+    with _transition_locks(state, lambda: TRANSITION_LOCK_TIMEOUT_SECONDS) as supervisor:
+        yield supervisor
+
+
+@contextmanager
+def private_fixture_transition_until(state, deadline):
+    """Take the same transition lease with every lock wait bounded by one monotonic deadline.
+
+    An expired deadline still makes one acquisition attempt per lock.
+    """
+    with _transition_locks(state, lambda: max(0.0, deadline - time.monotonic())) as supervisor:
+        yield supervisor
+
+
+@contextmanager
+def _transition_locks(state, lock_timeout):
     supervisor = state / ".supervisor"
     with ExitStack() as owners:
         for name in ("transition.lock", "bootstrap.lock"):
@@ -67,7 +89,7 @@ def private_fixture_transition(state):
                 except BlockingIOError:
                     return False
 
-            wait_until(acquire, timeout=30, description="historical seed lifecycle lock")
+            wait_until(acquire, timeout=lock_timeout(), description="historical seed lifecycle lock")
         yield supervisor
 
 

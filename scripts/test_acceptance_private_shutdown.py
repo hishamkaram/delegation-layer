@@ -138,6 +138,11 @@ class PrivateShutdownTests(unittest.TestCase):
             self.capture_root_parent,
         )
         self.addCleanup(self.capture_owner.rollback)
+        # Shutdown takes the production transition lease, so the state root carries its lock files.
+        self.state = self.capture_root_parent / "state"
+        (self.state / ".supervisor").mkdir(parents=True)
+        for name in ("transition.lock", "bootstrap.lock"):
+            (self.state / ".supervisor" / name).touch(mode=0o600)
 
     def test_shutdown_evidence_accepts_owned_compact_native_socket(self):
         with tempfile.TemporaryDirectory(prefix="dls-", dir="/tmp") as directory:
@@ -207,7 +212,7 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
                 patch.object(private_cli.time, "sleep"):
             private_cli.shutdown_private_supervisor(
-                "client", "config", {}, timeout=5, state=Path("/fixture/state"),
+                "client", "config", {}, timeout=5, state=self.state,
                 capture_root=self.capture_root)
         self.assertEqual(gone.call_count, 4)
         self.assertEqual(closed.call_count, 3)
@@ -220,10 +225,11 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(supervisor_impl, "private_shutdown_endpoint_closed", return_value=True), \
                 patch.object(supervisor_impl, "pueue_command") as command, \
                 patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
-                patch.object(private_cli.time, "monotonic", side_effect=[0, 0, 2]):
+                patch.object(private_cli.time, "monotonic", side_effect=[0, 0, 0, 0, 0, 0, 2]):
+            # deadline, two lease lock waits (remaining + wait_until each), shutdown command, expired loop
             with self.assertRaises(TimeoutError):
                 private_cli.shutdown_private_supervisor(
-                    "client", "config", {}, timeout=1, state=Path("/fixture/state"),
+                    "client", "config", {}, timeout=1, state=self.state,
                     capture_root=self.capture_root)
         command.assert_called_once()
 
@@ -236,7 +242,7 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(private_cli.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "PID identity changed"):
                 private_cli.shutdown_private_supervisor(
-                    "client", "config", {}, state=Path("/fixture/state"),
+                    "client", "config", {}, state=self.state,
                     capture_root=self.capture_root)
 
     def test_real_child_is_not_gone_until_reaped(self):
@@ -299,7 +305,7 @@ class PrivateShutdownTests(unittest.TestCase):
                         patch.object(private_cli.time, "sleep"):
                     connection.return_value.__enter__.return_value.connect.side_effect = [TimeoutError(), ConnectionRefusedError(private_cli.errno.ECONNREFUSED, "closed")]
                     private_cli.shutdown_private_supervisor(
-                        "client", "config", {}, state=Path("/fixture/state"),
+                        "client", "config", {}, state=self.state,
                         capture_root=self.capture_root)
                 command.assert_called_once()
 
