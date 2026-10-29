@@ -17,7 +17,8 @@ from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.admission import read_created_task_status
 from scripts.delegate_acceptance.directories.operations import rollback_owned_directories
 from scripts.delegate_acceptance.private_cli.commands import run_json
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.disposal_observer import public_status_observer
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_observed_private_supervisor
 from scripts.delegate_acceptance.private_cli.queue_policy import task_rows_by_label
 import threading
 import time
@@ -346,8 +347,14 @@ def _collect_and_restart_capacity(capacity_proof, case, dispatcher, receipts, ta
         case.run_receipt.phase("capacity_collection")
     with ThreadPoolExecutor(max_workers=min(case.parallel_tasks, 16)) as pool:
         list(pool.map(collect, task_ids))
-    shutdown_private_supervisor(
-        case.client, case.config, case.env, state=case.state, task_ids=tuple(task_ids), capture_root=case.capture_root
+    shutdown_observed_private_supervisor(
+        case.client,
+        case.config,
+        case.env,
+        state=case.state,
+        task_ids=tuple(task_ids),
+        capture_root=case.capture_root,
+        observe=public_status_observer(case.delegate, case.state, case.env, capture_root=case.capture_root),
     )
     return _restart_capacity_task(capacity_proof, case, dispatcher, receipts, task_ids)
 

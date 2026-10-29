@@ -1,11 +1,13 @@
 """Private CLI supervisor boundary."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from io import BufferedRandom
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capture import run_captured_text_command
+from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_DISPATCH_WORKERS
 from scripts.delegate_acceptance.private_cli.environment import phase_environment
 from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition_until
 from scripts.delegate_acceptance.private_cli.noexec_state import custody_release_pending
@@ -16,6 +18,7 @@ import json
 import os
 import socket
 import stat
+import threading
 import time
 
 
@@ -282,7 +285,11 @@ def authorize_managed_lifetime_closure(state, task_ids=()):
 
 def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
     """Wait for naturally exiting managed workers before supervisor shutdown."""
-    deadline = time.monotonic() + timeout
+    return await_managed_lifetime_closure_until(state, task_ids, time.monotonic() + timeout)
+
+
+def await_managed_lifetime_closure_until(state, task_ids, deadline):
+    """Wait for the canonical closure until one caller-owned monotonic deadline."""
     last_error = None
     while True:
         try:
@@ -324,24 +331,92 @@ def require_custody_release_budget(pending, deadline):
                            + describe_pending_custody(pending))
 
 
-def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action):
+def disposal_ready_now(state, task_ids, owned_roots):
+    """Return the closure when it validates and its recorded pools hold no views; otherwise None.
+
+    Only an incomplete closure reads as not ready. A concrete pool identity or
+    storage fault raises, so the caller retains instead of observing.
+    """
+    try:
+        closure = authorize_managed_lifetime_closure(state, task_ids)
+    except AcceptanceFailure:
+        return None
+    return None if custody_release_pending(closure, owned_roots) else closure
+
+
+def sweep_disposal_observer(task_ids, deadline, observe):
+    """Run observe(task_id, deadline) once per explicit task and return the reported root identities.
+
+    The absolute deadline itself is passed on, never a recomputed budget. The
+    sweep reuses the fixture's bounded caller concurrency and joins every
+    started command before it returns or raises. No command starts once the
+    deadline has passed or any worker's observation has failed.
+    """
+    stopped = threading.Event()
+
+    def observe_one(task_id):
+        if stopped.is_set():
+            raise RuntimeError("disposal observation stopped after an earlier failure before task " + task_id)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("disposal observation budget expired before task " + task_id)
+        try:
+            return observe(task_id, deadline)
+        except BaseException:
+            stopped.set()
+            raise
+
+    with ThreadPoolExecutor(max_workers=max(1, min(len(task_ids), DEFAULT_DISPATCH_WORKERS))) as pool:
+        futures = [pool.submit(observe_one, task_id) for task_id in task_ids]
+        try:
+            return frozenset(future.result() for future in futures)
+        except BaseException:
+            stopped.set()
+            pool.shutdown(wait=True, cancel_futures=True)
+            raise
+
+
+def await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe):
+    """Outside every lease, await closure and custody release with at most one public observer sweep.
+
+    Already-ready scopes run no observation. Otherwise one sweep of the
+    explicit created tasks gives the public recovery path its documented
+    next-observer turn; the canonical closure and recorded pools are then
+    reread under the same deadline. The observer outcome is never authority.
+    """
+    closure = disposal_ready_now(state, task_ids, owned_roots)
+    if closure is not None:
+        return closure
+    observed_roots = sweep_disposal_observer(tuple(task_ids), deadline, observe)
+    closure = await_managed_lifetime_closure_until(state, task_ids, deadline)
+    if not observed_roots <= {closure["root_id"]}:
+        raise RuntimeError("disposal status observation reported a different root than the canonical closure")
+    await_custody_release(closure, owned_roots, deadline)
+    return closure
+
+
+def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, observe=None):
     """Run action(closure) under the transition lease once closure and custody release hold.
 
     Closure is authorized and custody release awaited outside the lease, then
     rechecked read-only once under it. Pending release leaves the lease, then
     the same deadline is checked before the next bounded wait, so a recheck
     that keeps finding views cannot outlive it. The one deadline covers every
-    wait and lock attempt.
+    wait, observation and lock attempt. Without an observer an incomplete
+    closure refuses at once; with one, readiness may first sweep it once.
     """
-    closure = authorize_managed_lifetime_closure(state, task_ids)
-    while True:
+    if observe is None:
+        closure = authorize_managed_lifetime_closure(state, task_ids)
         await_custody_release(closure, owned_roots, deadline)
+    else:
+        closure = await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe)
+    while True:
         with private_fixture_transition_until(Path(state), deadline):
             closure = authorize_managed_lifetime_closure(state, task_ids)
             pending = custody_release_pending(closure, owned_roots)
             if not pending:
                 return action(closure)
         require_custody_release_budget(pending, deadline)
+        await_custody_release(closure, owned_roots, deadline)
 
 
 def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
@@ -349,6 +424,18 @@ def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_
 
     The caller must not hold the transition lease. Returns the closure that
     authorized this shutdown, after the daemon exited and its endpoint closed.
+    """
+    return shutdown_observed_private_supervisor(
+        client, config, env, timeout, state=state, task_ids=task_ids, capture_root=capture_root, observe=None
+    )
+
+
+def shutdown_observed_private_supervisor(client, config, env, timeout=30, *, state, task_ids, capture_root, observe):
+    """Run shutdown_private_supervisor with an optional caller-bound public observer of ``task_ids``.
+
+    ``observe`` is None or a callback bound to the selected Delegate CLI and
+    owned root; ``task_ids`` must be known created records. See
+    run_when_disposal_ready for when it runs.
     """
     deadline = time.monotonic() + timeout
 
@@ -358,7 +445,7 @@ def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_
         )
         return closure
 
-    return run_when_disposal_ready(state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down)
+    return run_when_disposal_ready(state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down, observe)
 
 
 def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root):

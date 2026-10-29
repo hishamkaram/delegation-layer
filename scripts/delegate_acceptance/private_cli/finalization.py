@@ -5,20 +5,30 @@ from scripts.delegate_acceptance.evidence.validation import require
 
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
-from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
+from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure_until
+from scripts.delegate_acceptance.private_cli.supervisor import await_observed_disposal_readiness
 from scripts.delegate_acceptance.private_cli.capture import reap_captured_process
 from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_ALREADY_CLOSED
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_SHUT_DOWN
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_pending_private_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_predecessor_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_custody_roots
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_remaining
+import time
+
+
+# One primary-root finalization deadline: readiness, observation, lease and shutdown share it.
+PRIMARY_FINALIZATION_SECONDS = 45
 
 
 def finalize_fixture(args, failure, lifetime, run_receipt, success):
     cleanup_errors = []
     run_receipt.phase("cleanup")
-    current_handoff_binding, primary_closure_ready = release_fixture_workers(args, cleanup_errors, lifetime, success)
+    current_handoff_binding, primary_closure_ready, primary_deadline = release_fixture_workers(
+        args, cleanup_errors, lifetime, success
+    )
     # Select captured predecessor roots once: their primary config may name a successor endpoint.
     predecessor_roots = frozenset(
         pending["predecessor"].state for pending in lifetime.supervisor_cleanups if "predecessor" in pending
@@ -32,6 +42,7 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
         primary_closure_ready,
         success,
         predecessor_roots=predecessor_roots - handed_off_roots,
+        deadline=primary_deadline,
     )
     if lifetime.inspection_process is not None:
         _, _, reaped, retry_error = reap_captured_process(lifetime.inspection_process, 5)
@@ -85,6 +96,7 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
 
 
 def release_fixture_workers(args, cleanup_errors, lifetime, success):
+    primary_deadline = time.monotonic() + PRIMARY_FINALIZATION_SECONDS
     primary_closure_ready = True
     if lifetime.release_gate is not None:
         try:
@@ -105,10 +117,14 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
         closure_state = current_handoff_binding["state"]
         closure_task_ids = tuple(current_handoff_binding["task_ids"])
         closure_config = current_handoff_binding["config"]
+        closure_env = current_handoff_binding["env"]
+        closure_observer = None
     else:
         closure_state = lifetime.managed_state_roots[0][0] if lifetime.managed_state_roots else None
         closure_task_ids = tuple(lifetime.managed_state_roots[0][1]) if lifetime.managed_state_roots else ()
         closure_config = lifetime.private_config
+        closure_env = lifetime.env
+        closure_observer = lifetime.primary_observer
     if (
         not success
         and closure_config is not None
@@ -116,7 +132,7 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
         and (current_handoff_binding is not None or lifetime.managed_state_roots)
     ):
         try:
-            await_managed_lifetime_closure(closure_state, closure_task_ids, timeout=45)
+            await_primary_readiness(closure_state, closure_task_ids, closure_env, primary_deadline, closure_observer)
         except BaseException as cleanup_error:
             primary_closure_ready = False
             cleanup_errors.append(
@@ -128,7 +144,15 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
             lifetime.inspection_process = None
         if process_cleanup_error is not None:
             cleanup_errors.append(process_cleanup_error)
-    return current_handoff_binding, primary_closure_ready
+    return current_handoff_binding, primary_closure_ready, primary_deadline
+
+
+def await_primary_readiness(state, task_ids, env, deadline, observe):
+    """Before primary daemon shutdown, await closure; a bound observer also recovers and awaits custody release."""
+    if observe is None:
+        await_managed_lifetime_closure_until(state, task_ids, deadline=deadline)
+    else:
+        await_observed_disposal_readiness(state, task_ids, shutdown_custody_roots(state, env), deadline, observe)
 
 
 def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
@@ -193,7 +217,7 @@ def release_pending_predecessor(pending, supervisor_cleanups):
 
 
 def shutdown_primary_supervisor(
-    args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success, *, predecessor_roots
+    args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success, *, predecessor_roots, deadline
 ):
     if current_handoff_binding is not None:
         cleanup_client = current_handoff_binding["client"]
@@ -236,6 +260,7 @@ def shutdown_primary_supervisor(
                     client,
                     cleanup_config,
                     cleanup_env,
+                    timeout=shutdown_remaining(deadline),
                     state=cleanup_state,
                     task_ids=cleanup_task_ids,
                     capture_root=lifetime.base_token,

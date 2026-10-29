@@ -39,12 +39,25 @@ def record_invocation_error(receipt, args, error, captured):
 
 
 def run_json(
-    delegate, env, args, expected=(0,), timeout=45, receipt=None, phase=None, *, capture_root, capture_response=False
+    delegate,
+    env,
+    args,
+    expected=(0,),
+    timeout=45,
+    receipt=None,
+    phase=None,
+    *,
+    capture_root,
+    capture_response=False,
+    deadline=None,
 ):
+    """Run one Delegate control command; pass ``timeout=None`` with an absolute ``deadline`` instead."""
     captured = None
     try:
         command_env = phase_environment(env, phase) if phase is not None else env
-        captured = run_captured_command([str(delegate), *args], command_env, timeout, capture_root=capture_root)
+        captured = run_captured_command(
+            [str(delegate), *args], command_env, timeout, capture_root=capture_root, deadline=deadline
+        )
         result = subprocess.CompletedProcess(
             captured.args, captured.returncode, captured.stdout.decode("utf-8"), captured.stderr.decode("utf-8")
         )

@@ -5,10 +5,12 @@ from scripts.delegate_acceptance.private_cli.environment import phase_environmen
 from scripts.delegate_acceptance.directories.operations import OwnedDirectory
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.processes.observation import wait_until
+from contextlib import contextmanager
 import io
 import os
 import subprocess
 import threading
+import time
 import uuid
 
 
@@ -76,9 +78,37 @@ def _retain_capture_failure(error, stdout_path, stderr_path):
     error.retained_capture_paths = (str(stdout_path), str(stderr_path))
 
 
-def run_captured_command(command, env, timeout, *, capture_root):
-    """Run one private control CLI with capture owned by the acceptance root."""
+@contextmanager
+def _launch_lock(deadline):
+    """Hold the capture start lock; with an absolute deadline, bound the wait and refuse an expired launch."""
+    if deadline is None:
+        with CAPTURE_START_LOCK:
+            yield
+        return
+    if not CAPTURE_START_LOCK.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise TimeoutError("private control command deadline expired while waiting to launch")
+    try:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("private control command deadline expired before launch")
+        yield
+    finally:
+        CAPTURE_START_LOCK.release()
+
+
+def run_captured_command(command, env, timeout, *, capture_root, deadline=None):
+    """Run one private control CLI with capture owned by the acceptance root.
+
+    Pass exactly one budget. ``timeout`` is relative and starts at launch.
+    ``deadline`` is an absolute monotonic deadline: it bounds the launch-lock
+    wait and the wait gets only what remains. An already-expired deadline is
+    refused under the lock before any capture file exists. Expiry during
+    capture preparation is refused by a final cooperative check immediately
+    before the spawn; that refusal retains its empty capture files in the
+    owned capture root and reports them as retained capture paths.
+    """
     _assert_capture_root(capture_root)
+    require((timeout is None) != (deadline is None), "private control command needs exactly one of timeout or deadline")
+    wait_budget = timeout
     capture_id = uuid.uuid4().hex
     stdout_name = "capture-" + capture_id + ".stdout"
     stderr_name = "capture-" + capture_id + ".stderr"
@@ -86,14 +116,20 @@ def run_captured_command(command, env, timeout, *, capture_root):
     stderr_path = _capture_path(capture_root, stderr_name)
     process = None
     try:
-        with CAPTURE_START_LOCK:
+        with _launch_lock(deadline):
             _assert_capture_root(capture_root)
             with (
                 _open_capture_writer(capture_root, stdout_name) as output,
                 _open_capture_writer(capture_root, stderr_name) as errors,
             ):
+                if deadline is not None and time.monotonic() >= deadline:
+                    expired = TimeoutError("private control command deadline expired during capture preparation")
+                    _retain_capture_failure(expired, stdout_path, stderr_path)
+                    raise expired
                 process = subprocess.Popen(command, env=env, stdout=output, stderr=errors)
-        code = _wait_private_control_process(process, timeout, "private control command")
+        if deadline is not None:
+            wait_budget = deadline - time.monotonic()
+        code = _wait_private_control_process(process, wait_budget, "private control command")
         with CAPTURE_START_LOCK:
             captured_stdout = _read_capture(capture_root, stdout_name)
             captured_stderr = _read_capture(capture_root, stderr_name)
@@ -108,7 +144,7 @@ def run_captured_command(command, env, timeout, *, capture_root):
             except BaseException as read_error:
                 _retain_capture_failure(primary_error, stdout_path, stderr_path)
                 raise primary_error from read_error
-        raise subprocess.TimeoutExpired(command, timeout, output=captured_stdout, stderr=captured_stderr) from None
+        raise subprocess.TimeoutExpired(command, wait_budget, output=captured_stdout, stderr=captured_stderr) from None
     except BaseException as primary_error:
         if process is not None:
             _reap_private_control_process(process, primary_error, stdout_path, stderr_path)
