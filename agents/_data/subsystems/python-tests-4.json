@@ -577,5 +577,22 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:test_acceptance_ownership_lifetime",
+    "owner": "py:test_acceptance_ownership",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_supervisor_common",
+      "py:contextlib",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:pathlib",
+      "py:tempfile",
+      "py:test_acceptance_ownership",
+      "py:threading",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]
