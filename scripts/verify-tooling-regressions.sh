@@ -784,4 +784,6 @@ expect_guard_failure "install-tools rejects go${GO_PIN} under a changed pin" "${
 cp "${REPO_ROOT}/.go-version" "${GO_PIN_FILE}"
 create_valid_stubs
 
+"${SCRIPT_DIR}/test-check-build.sh"
+
 echo "All ${PASSED_CASES} black-box tooling regression checks passed successfully."
