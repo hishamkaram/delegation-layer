@@ -166,8 +166,8 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 		return preparationContract{}, err
 	}
 	switch {
-	case reference.Equal(Reference(mode)), reference.Equal(advisoryReference(mode, true)), reference.Equal(scopedReference(mode, true)), reference.Equal(preAttributionReference(mode, true)),
-		reference.Equal(preCredentialReference(mode, true)):
+	case reference.Equal(Reference(mode)), isProjectionReference(mode, reference), reference.Equal(advisoryReference(mode, true)), reference.Equal(scopedReference(mode, true)),
+		reference.Equal(preAttributionReference(mode, true)), reference.Equal(preCredentialReference(mode, true)):
 		return preparationContract{launch: resumeRoutePreparation, inspection: routeInspection}, nil
 	case reference.Equal(modeledReference(mode)), reference.Equal(advisoryReference(mode, false)), reference.Equal(scopedReference(mode, false)), reference.Equal(preAttributionReference(mode, false)),
 		reference.Equal(preCredentialReference(mode, false)):
@@ -185,7 +185,8 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 // legacy v2/v1 launches recover as v7-modeled. Every earlier reference is
 // replay-only. The principal-only advisory v6 references share the current
 // verdict rules, so they are not recovery sources: a recheck could only reject
-// again.
+// again. The read-only projection v7 reference, sealed before failed-request
+// classification, is replay-only for the same reason.
 func Registration() commonprovider.Registration {
 	builders := []func(mode string) (predicate.Interpreter, error){
 		func(mode string) (predicate.Interpreter, error) {
@@ -226,7 +227,7 @@ func Registration() commonprovider.Registration {
 			return claude.NewHistoricalStreamInterpreter(HistoricalReference(mode))
 		},
 	}
-	interpreters := make([]predicate.Interpreter, 0, 2*len(builders))
+	interpreters := make([]predicate.Interpreter, 0, 2*len(builders)+1)
 	for _, build := range builders {
 		for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
 			interpreter, err := build(mode)
@@ -236,6 +237,11 @@ func Registration() commonprovider.Registration {
 			interpreters = append(interpreters, interpreter)
 		}
 	}
+	projection, err := wrapCredentialInterpreter(claude.NewProjectionStreamInterpreter(projectionReference(config.ModeReadOnly)))
+	if err != nil {
+		panic(err)
+	} // Immutable compiled contract.
+	interpreters = append(interpreters, projection)
 	return commonprovider.Registration{
 		Description: commonprovider.Description{
 			ID: Provider, Discoverable: true,

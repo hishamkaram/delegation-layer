@@ -10,9 +10,9 @@ import (
 // family, permission mode, predicate eligibility, and static-admission
 // eligibility. The caller's environment alone selects the new launch values,
 // writable roots, executable, and policy evidence; a predecessor environment
-// is never a fallback. A native print predecessor sealed before the advisory
-// wire revision continues under the current predicate for its mode; every
-// other record keeps its recorded predicate. A legacy native OAuth record
+// is never a fallback. A native print predecessor sealed under an exact
+// revision that isUpgradableOutputReference lists continues under the current
+// predicate for its mode; every other record keeps its recorded predicate. A legacy native OAuth record
 // derives a fresh policy proof from the caller's inspection instead of
 // retaining the predecessor's. The predecessor record is never modified.
 func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
@@ -42,8 +42,10 @@ func prepareNativeSuccessorCandidate(request task.TaskRecord, predecessor task.M
 
 // isUpgradableOutputReference reports whether reference is an exact print
 // predicate whose interpretation the current predicate for mode corrects: the
-// pre-attribution revision, the retained unscoped attribution revision, and
-// the scoped strict-wire revision of the same mode.
+// pre-attribution revision, the retained unscoped attribution revision, the
+// scoped strict-wire revision, the principal-only advisory revision, and the
+// projection revision sealed before failed-request classification, each of
+// the same mode.
 func isUpgradableOutputReference(mode string, reference task.PredicateRef) bool {
-	return reference.Equal(advisoryReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
+	return reference.Equal(projectionReference(mode)) || reference.Equal(advisoryReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
 }

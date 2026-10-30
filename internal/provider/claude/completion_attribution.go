@@ -34,6 +34,11 @@ const (
 	advisoryScopedCompletion
 	// advisoryFollowUpCompletion exposes every accepted root answer.
 	advisoryFollowUpCompletion
+	// projectionFollowUpCompletion is the frozen follow-up policy of the
+	// projection revisions: it exposes every accepted root answer but, sealed
+	// before failed-request classification, keeps a failed final request
+	// malformed and never correlates a quota.
+	projectionFollowUpCompletion
 )
 
 // completionAttribution is the canonical current completion reducer for one
@@ -100,6 +105,8 @@ func newCompletionAttribution(policy completionPolicy) *completionAttribution {
 		return &completionAttribution{scoped: true, advisory: true}
 	case advisoryFollowUpCompletion:
 		return &completionAttribution{scoped: true, advisory: true, project: true, failedRequests: true}
+	case projectionFollowUpCompletion:
+		return &completionAttribution{scoped: true, advisory: true, project: true}
 	case singleResultCompletion:
 		return nil
 	}

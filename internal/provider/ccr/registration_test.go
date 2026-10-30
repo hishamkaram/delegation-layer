@@ -121,6 +121,7 @@ func requireRegisteredReferences(t *testing.T, registration commonprovider.Regis
 		preCredentialReference(config.ModeReadOnly, false), preCredentialReference(config.ModeWorkspaceWrite, false),
 		previousReference(config.ModeReadOnly), previousReference(config.ModeWorkspaceWrite),
 		HistoricalReference(config.ModeReadOnly), HistoricalReference(config.ModeWorkspaceWrite),
+		projectionReference(config.ModeReadOnly),
 	}
 	if len(registration.Interpreters) != len(wanted) {
 		t.Fatalf("interpreters=%d want=%d", len(registration.Interpreters), len(wanted))

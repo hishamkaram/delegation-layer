@@ -59,6 +59,7 @@ func Registration() commonprovider.Registration {
 			newScopedInteractionInterpreter(WorkspaceWriteMode),
 			newAdvisoryInterpreter(Mode), newAdvisoryInterpreter(WorkspaceWriteMode),
 			newAdvisoryInteractionInterpreter(Mode), newAdvisoryInteractionInterpreter(WorkspaceWriteMode),
+			newProjectionInterpreter(Mode), newProjectionInterpreter(WorkspaceWriteMode),
 		},
 	}
 }

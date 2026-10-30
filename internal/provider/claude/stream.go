@@ -67,6 +67,15 @@ func NewFollowUpStreamInterpreterWithRecovery(reference task.PredicateRef, recov
 	return newAttributedStreamInterpreter(reference, advisoryFollowUpCompletion, recoverySources)
 }
 
+// NewProjectionStreamInterpreter replays a caller-owned stream reference
+// sealed under the frozen follow-up policy described by
+// ProjectionNativeContractForMode: follow-up answers are framed as under the
+// current policy, a failed final request stays malformed, and no quota is
+// correlated. It is replay-only and never a recovery source or target.
+func NewProjectionStreamInterpreter(reference task.PredicateRef) (predicate.Interpreter, error) {
+	return newAttributedStreamInterpreter(reference, projectionFollowUpCompletion, nil)
+}
+
 // NewScopedStreamInterpreter replays a caller-owned stream reference sealed
 // under the frozen scoped policy and strict wire described by
 // ScopedNativeContractForMode. It is replay-only and never a recovery target.

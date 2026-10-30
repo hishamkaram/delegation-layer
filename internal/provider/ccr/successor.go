@@ -12,8 +12,9 @@ import (
 // and the inspection contract. The caller's environment alone selects the
 // executable, the filtered launch values, the writable roots, and the runtime
 // inspection; a predecessor environment or root is never a fallback. A
-// credential-aware v4, v5, or v6 predecessor continues under the current v7
-// predicate of the same launch shape; every other record keeps its recorded
+// credential-aware v4, v5, or v6 predecessor, or the read-only projection v7
+// predecessor, continues under the current v7 predicate of the same launch
+// shape; every other record keeps its recorded
 // predicate. The predecessor record is never modified.
 func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if !predecessor.EnvironmentRecorded {
@@ -26,11 +27,12 @@ func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRec
 	return prepare(request, environment, environment, nil, reference)
 }
 
-// currentOutputReference maps an exact v4 or v5 reference to the current
-// reference that shares its route-preserving or modeled launch shape.
+// currentOutputReference maps an exact v4, v5, v6, or projection v7
+// reference to the current reference that shares its route-preserving or
+// modeled launch shape.
 func currentOutputReference(mode string, source task.PredicateRef) (task.PredicateRef, bool) {
 	switch {
-	case source.Equal(advisoryReference(mode, true)), source.Equal(preAttributionReference(mode, true)), source.Equal(scopedReference(mode, true)):
+	case isProjectionReference(mode, source), source.Equal(advisoryReference(mode, true)), source.Equal(preAttributionReference(mode, true)), source.Equal(scopedReference(mode, true)):
 		return Reference(mode), true
 	case source.Equal(advisoryReference(mode, false)), source.Equal(preAttributionReference(mode, false)), source.Equal(scopedReference(mode, false)):
 		return modeledReference(mode), true

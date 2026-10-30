@@ -40,6 +40,9 @@ type interpreter struct {
 	unscoped bool
 	// advisory retains the principal-only advisory revision for replay.
 	advisory bool
+	// projection retains the follow-up revision sealed before failed-request
+	// classification for replay.
+	projection bool
 	// scoped identifies the retained claude:print revision of mode sealed
 	// under the scoped policy and strict wire; it is replay-only and a
 	// recovery source of the current revision.
@@ -69,6 +72,10 @@ func newUnscopedInterpreter(mode string) predicate.Interpreter {
 
 func newAdvisoryInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, advisory: true}
+}
+
+func newProjectionInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, projection: true}
 }
 
 func newScopedInterpreter(mode string) predicate.Interpreter {
@@ -127,6 +134,9 @@ func (v interpreter) Reference() task.PredicateRef {
 	}
 	if v.advisory {
 		return advisoryReference(v.mode)
+	}
+	if v.projection {
+		return projectionReference(v.mode)
 	}
 	if v.legacy {
 		return LegacyReference()
@@ -211,9 +221,10 @@ func (v interpreter) Target() task.PredicateRef { return v.Reference() }
 // is the single recovery target for every earlier same-wire native revision
 // whose rejected evidence it can accept. The frozen principal-only advisory
 // revision shares the current verdict rules, so it is never a source: a
-// recheck could only reject again.
+// recheck could only reject again. The frozen projection revision is no
+// source either: every stream it rejects the current revision also rejects.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution || v.unscoped || v.scoped || v.advisory {
+	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution || v.unscoped || v.scoped || v.advisory || v.projection {
 		return false
 	}
 	if len(v.recoverySources) > 0 {
@@ -256,6 +267,9 @@ func (v interpreter) completionPolicy() completionPolicy {
 	}
 	if v.advisory {
 		return advisoryScopedCompletion
+	}
+	if v.projection {
+		return projectionFollowUpCompletion
 	}
 	return advisoryFollowUpCompletion
 }

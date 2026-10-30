@@ -72,7 +72,7 @@ func nativePermissionForReference(mode string, reference task.PredicateRef) stri
 // retained unscoped revisions are matched by isUnscopedReference.
 func nativeDefaultPermissionReferences(mode string) []task.PredicateRef {
 	return []task.PredicateRef{
-		ReferenceForMode(mode), advisoryReference(mode), scopedReference(mode), preAttributionReferenceForMode(mode),
+		ReferenceForMode(mode), projectionReference(mode), advisoryReference(mode), scopedReference(mode), preAttributionReferenceForMode(mode),
 		previousNativeProbeReferenceForMode(mode), historicalNativeReferenceForMode(mode),
 		interactionReference(mode), advisoryInteractionReference(mode), scopedInteractionReference(mode), unscopedInteractionReference(mode),
 		preAttributionInteractionReference(mode), previousInteractionReference(mode), historicalInteractionReference(mode),
@@ -110,7 +110,7 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 	}
 	return ReferenceForMode(mode), []task.PredicateRef{
 		historicalNativeReferenceForMode(mode), previousNativeProbeReferenceForMode(mode), preAttributionReferenceForMode(mode),
-		unscopedReference(mode), scopedReference(mode), advisoryReference(mode),
+		unscopedReference(mode), scopedReference(mode), advisoryReference(mode), projectionReference(mode),
 	}
 }
 

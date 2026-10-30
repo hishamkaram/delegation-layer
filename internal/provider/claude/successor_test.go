@@ -63,10 +63,10 @@ func (f successorFixture) admit(t *testing.T, prepare commonprovider.PrepareExis
 }
 
 // eligibleSuccessorSources are the exact print predicates the current
-// predicate of the same mode corrects: pre-attribution and the retained
-// unscoped and scoped revisions.
+// predicate of the same mode corrects: pre-attribution, the retained unscoped
+// and scoped revisions, and the frozen projection revision.
 func eligibleSuccessorSources(mode string) []task.PredicateRef {
-	return []task.PredicateRef{preAttributionReferenceForMode(mode), unscopedReference(mode), scopedReference(mode)}
+	return []task.PredicateRef{preAttributionReferenceForMode(mode), unscopedReference(mode), scopedReference(mode), projectionReference(mode)}
 }
 
 // TestSuccessorCandidateSelectsCurrentPredicateUnderCallerPreparation pairs

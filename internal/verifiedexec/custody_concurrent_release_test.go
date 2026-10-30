@@ -17,9 +17,11 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -243,11 +245,15 @@ func newReleaseGroup(t *testing.T, capacity int, unpark func()) *releaseGroup {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	g := &releaseGroup{t: t, ctx: ctx, cancel: cancel, unpark: unpark, results: make(chan callResult, capacity)}
-	t.Cleanup(func() {
-		g.stop()
-		g.wg.Wait()
-	})
+	t.Cleanup(g.cleanup)
 	return g
+}
+
+// cleanup is the group's one teardown, registered with t.Cleanup: it cancels the
+// calls, unparks them and does not return before every started call has.
+func (g *releaseGroup) cleanup() {
+	g.stop()
+	g.wg.Wait()
 }
 
 func (g *releaseGroup) stop() {
@@ -373,19 +379,130 @@ func awaitSignal(t *testing.T, signal <-chan struct{}, what string) {
 const (
 	releaseFailureChildTest = "TestPoolReleaseFailureCleanupChild"
 	releaseFailureChildEnv  = "DELEGATE_CUSTODY_RELEASE_FAILURE"
+	// Modes of the failure child. The expected mode fails once, at the real
+	// requireNext; the others add one more failure after the join marker.
+	failureModeExpected     = "expected"
+	failureModeCleanupError = "extra-cleanup-error"
+	failureModeRaceStderr   = "race-stderr"
+	extraCleanupError       = "extra cleanup error after the join marker"
+	raceStderrReport        = "WARNING: DATA RACE"
 	// releaseJoinedMarker is printed by the child's cleanup probe only when
 	// every started call has been joined while the fixture still exists.
 	releaseJoinedMarker = "custody-release-group: every started call joined before fixture deletion"
+	failureChildSource  = "custody_concurrent_release_test.go"
 )
 
 var errReleaseSentinel = errors.New("sentinel result of the unparked caller")
 
-// TestPoolReleaseFailureCleanupJoinsEveryCaller runs the child below, which
-// fails at the real requireNext while its other caller is still parked, and
-// requires the child to fail with the sentinel and to report that its cleanup
-// joined every started call before the fixture was deleted.
-func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
-	cmd := selfCommand(t, releaseFailureChildTest, releaseFailureChildEnv+"=1")
+// intendedFailureDiagnostic is the one diagnostic the expected failure child's
+// requireNext prints for its sentinel result.
+var intendedFailureDiagnostic = fmt.Sprintf("the unparked caller (caller 1) returned %v; want nil", errReleaseSentinel)
+
+func isClosed(signal <-chan struct{}) bool {
+	select {
+	case <-signal:
+		return true
+	default:
+		return false
+	}
+}
+
+// TestReleaseGroupCleanupWaitsForCallsHeldByTheirOwnCompletion checks the
+// group's canonical cleanup by itself in a synctest bubble. A call that has seen
+// its context canceled is held by a completion gate the test owns, independent
+// of cancel and unpark: the cleanup must have canceled and unparked yet must not
+// return until the call completes. Without the join it returns while the call is
+// held, deterministically.
+func TestReleaseGroupCleanupWaitsForCallsHeldByTheirOwnCompletion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		canceled := make(chan struct{})
+		unparked := make(chan struct{})
+		completion := make(chan struct{})
+		var unparkOnce, completionOnce sync.Once
+		group := newReleaseGroup(t, 1, func() { unparkOnce.Do(func() { close(unparked) }) })
+		openCompletion := func() { completionOnce.Do(func() { close(completion) }) }
+		// Registered after the group, so after a failed assertion the gate opens
+		// before the group's own cleanup waits for the call.
+		t.Cleanup(openCompletion)
+		group.start(0, func(ctx context.Context) error {
+			<-ctx.Done()
+			close(canceled)
+			<-completion
+			return nil
+		})
+		returned := make(chan struct{})
+		go func() {
+			group.cleanup()
+			close(returned)
+		}()
+		synctest.Wait()
+		if !isClosed(canceled) || !isClosed(unparked) {
+			t.Fatalf("cleanup left the call's context canceled=%v, parked callers unparked=%v; want both", isClosed(canceled), isClosed(unparked))
+		}
+		if isClosed(returned) {
+			t.Fatal("cleanup returned while a started call was still held")
+		}
+		openCompletion()
+		synctest.Wait()
+		if !isClosed(returned) || !group.allJoined() {
+			t.Fatalf("cleanup returned=%v, all joined=%v after the call completed; want both", isClosed(returned), group.allJoined())
+		}
+	})
+}
+
+// validateFailureChild requires exactly the output of the expected failure
+// child, a Go 1.27 test binary run without -v: exit status 1, an empty stderr,
+// and only these lines, each once: the join marker, the "--- FAIL" header with
+// a duration, the intended diagnostic from this file with a line number, and the
+// closing FAIL. Any other line, including a second diagnostic, is an error.
+func validateFailureChild(outcome workerOutcome) error {
+	if outcome.Exit != 1 {
+		return fmt.Errorf("exit status %d; want exactly 1", outcome.Exit)
+	}
+	if outcome.Stderr != "" {
+		return fmt.Errorf("stderr %q; want it empty", outcome.Stderr)
+	}
+	seen := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(outcome.Stdout), "\n"), "\n") {
+		kind, ok := failureChildLineKind(line)
+		if !ok {
+			return fmt.Errorf("unrecognized output line %q", line)
+		}
+		seen[kind]++
+	}
+	for _, kind := range []string{"marker", "header", "diagnostic", "closing"} {
+		if seen[kind] != 1 {
+			return fmt.Errorf("%d %s lines; want exactly 1", seen[kind], kind)
+		}
+	}
+	return nil
+}
+
+func failureChildLineKind(line string) (kind string, ok bool) {
+	if line == releaseJoinedMarker {
+		return "marker", true
+	}
+	if line == "FAIL" {
+		return "closing", true
+	}
+	if duration, found := strings.CutPrefix(line, "--- FAIL: "+releaseFailureChildTest+" ("); found {
+		seconds, found := strings.CutSuffix(duration, "s)")
+		_, parseErr := strconv.ParseFloat(seconds, 64)
+		return "header", found && parseErr == nil
+	}
+	if rest, found := strings.CutPrefix(line, "    "+failureChildSource+":"); found {
+		number, message, found := strings.Cut(rest, ": ")
+		_, parseErr := strconv.Atoi(number)
+		return "diagnostic", found && parseErr == nil && message == intendedFailureDiagnostic
+	}
+	return "", false
+}
+
+// runFailureChild re-executes this test binary as the failure child in mode and
+// returns its captured outcome after waiting for that exact process.
+func runFailureChild(t *testing.T, mode string) workerOutcome {
+	t.Helper()
+	cmd := selfCommand(t, releaseFailureChildTest, releaseFailureChildEnv+"="+mode)
 	process := &workerProcess{cmd: cmd}
 	cmd.Stdout, cmd.Stderr = &process.stdout, &process.stderr
 	if err := cmd.Start(); err != nil {
@@ -396,16 +513,34 @@ func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
 			t.Errorf("cleanup of the failure child: %v", err)
 		}
 	})
-	outcome := process.wait(t)
-	stdout := string(outcome.Stdout)
-	if outcome.Exit == 0 {
-		t.Fatalf("the failure child passed; it must fail at its sentinel result:\n%s", stdout)
+	return process.wait(t)
+}
+
+// TestPoolReleaseFailureCleanupJoinsEveryCaller composes the real pieces: the
+// child fails at the real requireNext while its other caller is parked, and
+// must show exactly the intended failure and the join marker.
+func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
+	outcome := runFailureChild(t, failureModeExpected)
+	if err := validateFailureChild(outcome); err != nil {
+		t.Fatalf("the failure child: %v\nstdout:\n%s", err, outcome.Stdout)
 	}
-	if !strings.Contains(stdout, errReleaseSentinel.Error()) {
-		t.Fatalf("the failure child did not fail with the sentinel (stderr %q):\n%s", outcome.Stderr, stdout)
-	}
-	if !strings.Contains(stdout, releaseJoinedMarker) {
-		t.Fatalf("the failure child's cleanup did not join every started call before fixture deletion (stderr %q):\n%s", outcome.Stderr, stdout)
+}
+
+// TestFailureChildValidatorRejectsAdditionalFailures runs the child with one
+// more failure after the join marker and before the fixture is deleted, and
+// with a race report on stderr; neither may be accepted as the expected failure.
+func TestFailureChildValidatorRejectsAdditionalFailures(t *testing.T) {
+	for mode, injected := range map[string]string{failureModeCleanupError: extraCleanupError, failureModeRaceStderr: raceStderrReport} {
+		t.Run(mode, func(t *testing.T) {
+			outcome := runFailureChild(t, mode)
+			err := validateFailureChild(outcome)
+			if err == nil {
+				t.Fatalf("the validator accepted a child with an additional failure:\nstdout:\n%s\nstderr: %q", outcome.Stdout, outcome.Stderr)
+			}
+			if !strings.Contains(err.Error(), injected) {
+				t.Fatalf("the validator rejected for another reason: %v (injected %q)", err, injected)
+			}
+		})
 	}
 }
 
@@ -413,13 +548,21 @@ func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
 // run skips it. One real release is parked while the other call returns the
 // sentinel, so requireNext fails the test with the real Fatalf. The probe is
 // registered after the fixture and before the group, so cleanup order runs the
-// group's join, then the probe, then the fixture's deletion.
+// group's cleanup, then the probe, then any extra failure, then the fixture's
+// deletion.
 func TestPoolReleaseFailureCleanupChild(t *testing.T) {
-	if os.Getenv(releaseFailureChildEnv) == "" {
+	mode := os.Getenv(releaseFailureChildEnv)
+	if mode == "" {
 		t.Skip("body of the child of TestPoolReleaseFailureCleanupJoinsEveryCaller")
 	}
 	f := newReleaseFixture(t)
 	f.bindClosed("closed")
+	switch mode {
+	case failureModeCleanupError:
+		t.Cleanup(func() { t.Error(extraCleanupError) })
+	case failureModeRaceStderr:
+		t.Cleanup(func() { fmt.Fprintln(os.Stderr, raceStderrReport) })
+	}
 	var group *releaseGroup
 	t.Cleanup(func() {
 		_, dirErr := os.Stat(f.rig.dir)

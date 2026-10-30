@@ -17,7 +17,7 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 33 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 35 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
 	checks := []struct {
@@ -45,6 +45,8 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		{26, registration.Interpreters[26].Reference().Equal(scopedReference(WorkspaceWriteMode))},
 		{27, registration.Interpreters[27].Reference().Equal(scopedInteractionReference(Mode))},
 		{28, registration.Interpreters[28].Reference().Equal(scopedInteractionReference(WorkspaceWriteMode))},
+		{33, registration.Interpreters[33].Reference().Equal(projectionReference(Mode))},
+		{34, registration.Interpreters[34].Reference().Equal(projectionReference(WorkspaceWriteMode))},
 	}
 	for _, check := range checks {
 		if !check.matches {
