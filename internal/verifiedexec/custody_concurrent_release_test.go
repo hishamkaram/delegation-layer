@@ -454,8 +454,11 @@ func TestReleaseGroupCleanupWaitsForCallsHeldByTheirOwnCompletion(t *testing.T) 
 // child, a Go 1.27 test binary run without -v: exit status 1, an empty stderr,
 // and only these lines, each once: the join marker, the "--- FAIL" header with
 // a duration, the intended diagnostic from this file with a line number, and the
-// closing FAIL. Any other line, including a second diagnostic, is an error.
-func validateFailureChild(outcome workerOutcome) error {
+// closing FAIL. When coverMode is not empty the instrumented child also prints
+// exactly one framework coverage summary; when it is empty that line is as
+// unexpected as any other. Any other line, including a second diagnostic, is an
+// error.
+func validateFailureChild(outcome workerOutcome, coverMode string) error {
 	if outcome.Exit != 1 {
 		return fmt.Errorf("exit status %d; want exactly 1", outcome.Exit)
 	}
@@ -470,9 +473,13 @@ func validateFailureChild(outcome workerOutcome) error {
 		}
 		seen[kind]++
 	}
-	for _, kind := range []string{"marker", "header", "diagnostic", "closing"} {
-		if seen[kind] != 1 {
-			return fmt.Errorf("%d %s lines; want exactly 1", seen[kind], kind)
+	wantCoverage := 0
+	if coverMode != "" {
+		wantCoverage = 1
+	}
+	for kind, want := range map[string]int{"marker": 1, "header": 1, "diagnostic": 1, "closing": 1, "coverage": wantCoverage} {
+		if seen[kind] != want {
+			return fmt.Errorf("%d %s lines; want exactly %d", seen[kind], kind, want)
 		}
 	}
 	return nil
@@ -485,6 +492,9 @@ func failureChildLineKind(line string) (kind string, ok bool) {
 	if line == "FAIL" {
 		return "closing", true
 	}
+	if summary, found := strings.CutPrefix(line, "coverage: "); found {
+		return "coverage", isCoverageSummary(summary)
+	}
 	if duration, found := strings.CutPrefix(line, "--- FAIL: "+releaseFailureChildTest+" ("); found {
 		seconds, found := strings.CutSuffix(duration, "s)")
 		_, parseErr := strconv.ParseFloat(seconds, 64)
@@ -496,6 +506,43 @@ func failureChildLineKind(line string) (kind string, ok bool) {
 		return "diagnostic", found && parseErr == nil && message == intendedFailureDiagnostic
 	}
 	return "", false
+}
+
+// isCoverageSummary reports whether summary, the text after "coverage: ", is
+// one of the two forms the Go 1.27 framework prints (internal/coverage/cformat
+// EmitPercent): "N% of statements" with an optional " in <patterns>" suffix
+// that -coverpkg adds, or "[no statements]" for an empty selection. The suffix
+// must hold a nonempty pattern list with no surrounding blanks.
+func isCoverageSummary(summary string) bool {
+	if summary == "[no statements]" {
+		return true
+	}
+	percent, suffix, found := strings.Cut(summary, "% of statements")
+	if !found || !isCoveragePercent(percent) {
+		return false
+	}
+	if suffix == "" {
+		return true
+	}
+	patterns, found := strings.CutPrefix(suffix, " in ")
+	return found && patterns != "" && strings.TrimSpace(patterns) == patterns
+}
+
+// isCoveragePercent reports whether text is plain decimal digits with at most
+// one inner point and a value from 0 to 100, the shape of the framework's
+// "%.1f" percentage. ParseFloat alone would also accept signs, exponents, NaN
+// and Inf.
+func isCoveragePercent(text string) bool {
+	const digits = "0123456789"
+	whole, fraction, hasPoint := strings.Cut(text, ".")
+	if whole == "" || strings.Trim(whole, digits) != "" {
+		return false
+	}
+	if hasPoint && (fraction == "" || strings.Trim(fraction, digits) != "") {
+		return false
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	return err == nil && value >= 0 && value <= 100
 }
 
 // runFailureChild re-executes this test binary as the failure child in mode and
@@ -521,7 +568,7 @@ func runFailureChild(t *testing.T, mode string) workerOutcome {
 // must show exactly the intended failure and the join marker.
 func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
 	outcome := runFailureChild(t, failureModeExpected)
-	if err := validateFailureChild(outcome); err != nil {
+	if err := validateFailureChild(outcome, testing.CoverMode()); err != nil {
 		t.Fatalf("the failure child: %v\nstdout:\n%s", err, outcome.Stdout)
 	}
 }
@@ -533,7 +580,7 @@ func TestFailureChildValidatorRejectsAdditionalFailures(t *testing.T) {
 	for mode, injected := range map[string]string{failureModeCleanupError: extraCleanupError, failureModeRaceStderr: raceStderrReport} {
 		t.Run(mode, func(t *testing.T) {
 			outcome := runFailureChild(t, mode)
-			err := validateFailureChild(outcome)
+			err := validateFailureChild(outcome, testing.CoverMode())
 			if err == nil {
 				t.Fatalf("the validator accepted a child with an additional failure:\nstdout:\n%s\nstderr: %q", outcome.Stdout, outcome.Stderr)
 			}
@@ -541,6 +588,88 @@ func TestFailureChildValidatorRejectsAdditionalFailures(t *testing.T) {
 				t.Fatalf("the validator rejected for another reason: %v (injected %q)", err, injected)
 			}
 		})
+	}
+}
+
+// expectedFailureStdout is the stdout of a correct expected failure child,
+// with extra lines appended after the closing FAIL.
+func expectedFailureStdout(extra ...string) []byte {
+	lines := append([]string{
+		releaseJoinedMarker,
+		"--- FAIL: " + releaseFailureChildTest + " (0.62s)",
+		"    " + failureChildSource + ":579: " + intendedFailureDiagnostic,
+		"FAIL",
+	}, extra...)
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// TestFailureChildValidatorCoverageSummary pins the one coverage line the
+// validator allows: exactly one well-formed framework summary when the test
+// binary is instrumented, none otherwise, and every strict rule still applies
+// with it.
+func TestFailureChildValidatorCoverageSummary(t *testing.T) {
+	const summary = "coverage: 54.7% of statements"
+	child := func(lines ...string) workerOutcome {
+		return workerOutcome{Exit: 1, Stdout: expectedFailureStdout(lines...)}
+	}
+	for _, line := range []string{
+		summary, "coverage: 0.0% of statements", "coverage: 100.0% of statements",
+		summary + " in ./internal/verifiedexec", summary + " in ./internal/verifiedexec, ./internal/provider/ccr",
+		"coverage: [no statements]",
+	} {
+		for _, mode := range []string{"set", "count", "atomic"} {
+			t.Run("enabled "+mode+" accepts "+line, func(t *testing.T) {
+				requireValidatorVerdict(t, child(line), mode, "")
+			})
+		}
+		t.Run("disabled rejects "+line, func(t *testing.T) {
+			requireValidatorVerdict(t, child(line), "", "1 coverage lines; want exactly 0")
+		})
+	}
+	for _, test := range []struct {
+		name      string
+		coverMode string
+		outcome   workerOutcome
+		wantErr   string
+	}{
+		{"disabled without a summary", "", child(), ""},
+		{"enabled without a summary", "set", child(), "0 coverage lines; want exactly 1"},
+		{"enabled with a duplicate summary", "atomic", child(summary, summary), "2 coverage lines; want exactly 1"},
+		{"enabled with a duplicate suffixed summary", "set", child(summary+" in ./a", summary+" in ./a"), "2 coverage lines; want exactly 1"},
+		{"enabled with a duplicate empty selection", "set", child("coverage: [no statements]", "coverage: [no statements]"), "2 coverage lines; want exactly 1"},
+		{"enabled with a summary and an empty selection", "set", child(summary, "coverage: [no statements]"), "2 coverage lines; want exactly 1"},
+		{"enabled with an extra diagnostic", "set", child(summary, "    "+failureChildSource+":580: "+extraCleanupError), "unrecognized output line"},
+		{"enabled with an extra diagnostic after an empty selection", "set", child("coverage: [no statements]", "    "+failureChildSource+":580: "+extraCleanupError), "unrecognized output line"},
+		{"enabled with stderr", "set", workerOutcome{Exit: 1, Stdout: expectedFailureStdout(summary), Stderr: raceStderrReport + "\n"}, "stderr"},
+		{"enabled with exit zero", "set", workerOutcome{Exit: 0, Stdout: expectedFailureStdout(summary)}, "exit status 0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requireValidatorVerdict(t, test.outcome, test.coverMode, test.wantErr)
+		})
+	}
+	for _, malformed := range []string{
+		"coverage: 100.1% of statements", "coverage: -1.0% of statements", "coverage: +5.0% of statements", "coverage: NaN% of statements",
+		"coverage: Inf% of statements", "coverage: 1e1% of statements", "coverage: 5.% of statements", "coverage: .5% of statements",
+		"coverage: % of statements", "coverage: 54.7%", "coverage: 54.7% of statements of ./...", "coverage: 54.7% of statements extra",
+		summary + " in", summary + " in ", summary + " in  ", summary + " in ./a ", summary + "in ./a", summary + " in ./a\r",
+		"coverage: [no statements] in ./a", "coverage: [no statements]x", "coverage: [no statements", "coverage: [none]", "coverage:", "coverage: ",
+	} {
+		t.Run("malformed "+malformed, func(t *testing.T) {
+			requireValidatorVerdict(t, child(malformed), "set", "unrecognized output line")
+		})
+	}
+}
+
+// requireValidatorVerdict requires validateFailureChild to accept outcome when
+// wantErr is empty, and otherwise to reject it with an error holding wantErr.
+func requireValidatorVerdict(t *testing.T, outcome workerOutcome, coverMode, wantErr string) {
+	t.Helper()
+	err := validateFailureChild(outcome, coverMode)
+	switch {
+	case wantErr == "" && err != nil:
+		t.Fatalf("the validator rejected a correct child: %v", err)
+	case wantErr != "" && (err == nil || !strings.Contains(err.Error(), wantErr)):
+		t.Fatalf("the validator gave %v; want a rejection holding %q", err, wantErr)
 	}
 }
 
