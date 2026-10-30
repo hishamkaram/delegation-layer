@@ -270,6 +270,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 self.assertIs(validator_type.call_args.kwargs["managed_runner"], True)
                 self.assertEqual(validator_type.call_args.kwargs["runner_placement"], BUNDLE_RUNNER)
 
+                journal["request"]["binding"]["helper_sha256"] = ""
+                operation._validate_model_discovery_evidence(status, model_group)
+
                 journal["request"]["binding"]["helper_executable"] = str(foreign.resolve())
                 with self.assertRaisesRegex(gate.AcceptanceFailure,
                                             "model discovery provider binding changed"):

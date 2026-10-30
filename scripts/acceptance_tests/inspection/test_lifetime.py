@@ -83,6 +83,56 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "daemon provenance is incomplete"):
             provider_common._validate_inspection_binding(binding, "inspection binding")
 
+    def test_model_discovery_closure_accepts_an_unhashed_installed_provider(self):
+        directory = self.fixture.inspection_records(
+            include_ordinary=False, revision="model-discovery-v1",
+            managed_exit_proof=True, helper_sha256="")
+        request_bytes = (directory / "request.json").read_bytes()
+        request = read_json(directory / "request.json")
+        self.assertEqual(request["binding"]["helper_sha256"], "")
+
+        closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
+
+        proof = closure["inspections"][TASK]
+        self.assertEqual(proof["registration"]["owner_sha256"],
+                         digest(directory / "request.json"))
+        self.assertEqual(proof["worker_wait"]["result"], "success")
+        self.assertTrue(proof["termination"]["scope_empty"])
+        self.assertEqual((directory / "request.json").read_bytes(), request_bytes)
+
+    def test_inspection_binding_rejects_malformed_optional_provider_diagnostics(self):
+        directory = self.fixture.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        for value in (None, False, 0, " ", "invalid", "e" * 63, "E" * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    AcceptanceFailure, "helper_sha256 is invalid"):
+                provider_common._validate_inspection_binding(
+                    dict(binding, helper_sha256=value), "inspection binding")
+        del binding["helper_sha256"]
+        with self.assertRaisesRegex(AcceptanceFailure, "missing fields"):
+            provider_common._validate_inspection_binding(binding, "inspection binding")
+
+    def test_inspection_binding_keeps_definition_and_worker_digests_required(self):
+        directory = self.fixture.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        for key in ("definition_sha256", "worker_sha256"):
+            for value in ("", None, "invalid"):
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(
+                        AcceptanceFailure, key + " is invalid"):
+                    provider_common._validate_inspection_binding(
+                        dict(binding, **{key: value}), "inspection binding")
+
+    def test_model_discovery_closure_rejects_a_malformed_provider_digest(self):
+        directory = self.fixture.inspection_records(
+            include_ordinary=False, revision="model-discovery-v1",
+            managed_exit_proof=True)
+        request = read_json(directory / "request.json")
+        request["binding"]["helper_sha256"] = "E" * 64
+        write_json(directory / "request.json", request, replace=True)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "helper_sha256 is invalid"):
+            provider_common.validate_managed_lifetime_closure(self.fixture.state)
+
     def test_managed_guardian_wait_replaces_queue_worker_observation(self):
         directory = self.fixture.inspection_records(managed_exit_proof=True)
 

@@ -30,7 +30,6 @@ class ModelDiscoveryIntent:
     budget_nanos: int
     brief_sha256: str
     helper_executable: str
-    helper_sha256: str
 
     def __post_init__(self) -> None:
         require(all(isinstance(value, str) and value for value in (
@@ -39,5 +38,5 @@ class ModelDiscoveryIntent:
                 isinstance(self.initial_entries, tuple) and
                 all(isinstance(name, str) and name for name in self.initial_entries) and
                 type(self.budget_nanos) is int and self.budget_nanos > 0 and
-                _hex_digest(self.brief_sha256) and _hex_digest(self.helper_sha256),
+                _hex_digest(self.brief_sha256),
                 "model discovery request intent is invalid")
