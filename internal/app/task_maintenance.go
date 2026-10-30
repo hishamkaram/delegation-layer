@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
+	"sync/atomic"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -44,6 +46,11 @@ func releasePrivateTerminalCustody(ctx context.Context, root string, supervisor 
 	return errors.Join(err, releaseClosedTaskCustody(ctx, root))
 }
 
+// closedTaskCustodyWorkers bounds the ordinary-task custody releases one full
+// pass runs at once. Each release may wait on a pool's non-interruptible view
+// removal, so a pass at its deadline can still hold up to this many.
+const closedTaskCustodyWorkers = 4
+
 func releaseClosedTaskCustody(ctx context.Context, root string) (resultErr error) {
 	store, err := taskdir.OpenStoreWithPredicatesContext(ctx, root, predicate.Default())
 	if err != nil {
@@ -54,16 +61,57 @@ func releaseClosedTaskCustody(ctx context.Context, root string) (resultErr error
 	if err != nil {
 		return err
 	}
-	var faults []error
-	for _, id := range ids {
-		if err = ctx.Err(); err != nil {
-			return errors.Join(append(faults, err)...)
-		}
-		if err = releaseStoredTaskCustody(ctx, store, id); err != nil {
-			faults = append(faults, fmt.Errorf("task %s custody release: %w", id, err))
-		}
+	return releaseTaskCustodyInOrder(ctx, ids, func(ctx context.Context, id string) error {
+		return releaseStoredTaskCustody(ctx, store, id)
+	})
+}
+
+// releaseTaskCustodyInOrder is the coordinator of one pass's task releases. It
+// hands the unique ids out in inventory order to at most
+// closedTaskCustodyWorkers workers; a worker checks ctx after receiving an id
+// and before calling release, and stops once it observes cancellation. A
+// release fault never skips an independent task. Every started release is
+// joined before the coordinator returns, so the caller's store outlives it.
+// Faults keep inventory order and their task ids; cancellation that skipped
+// any id is joined once after them.
+func releaseTaskCustodyInOrder(ctx context.Context, ids []string, release func(context.Context, string) error) error {
+	faults := make([]error, len(ids))
+	work := make(chan int)
+	var workers sync.WaitGroup
+	var workerStopped atomic.Bool
+	for range min(closedTaskCustodyWorkers, len(ids)) {
+		workers.Go(func() {
+			for index := range work {
+				if ctx.Err() != nil {
+					workerStopped.Store(true)
+					return
+				}
+				if err := release(ctx, ids[index]); err != nil {
+					faults[index] = fmt.Errorf("task %s custody release: %w", ids[index], err)
+				}
+			}
+		})
+	}
+	handedOut := handOutTaskCustody(ctx, len(ids), work)
+	close(work)
+	workers.Wait()
+	if !handedOut || workerStopped.Load() {
+		faults = append(faults, ctx.Err())
 	}
 	return errors.Join(faults...)
+}
+
+// handOutTaskCustody sends each inventory index in order and reports whether
+// every index was handed out before ctx was done.
+func handOutTaskCustody(ctx context.Context, count int, work chan<- int) bool {
+	for index := range count {
+		select {
+		case work <- index:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
 }
 
 func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id string) (resultErr error) {

@@ -1,0 +1,643 @@
+package verifiedexec
+
+// Concurrent release of one namespace. The canonical caller has already proven
+// the owner closed, so every caller below releases a namespace whose commands
+// were closed without ever being started. Pool.ReleaseOwner removes views and
+// the witness outside the pool gate, so callers may overlap at any removal
+// step; the contract is that every call returns nil, the namespace ends
+// missing, a living owner keeps its views and image, and one later uncontended
+// release leaves no idle image. A single release does not have to reclaim an
+// image itself: its reclaim is best-effort and skips a busy gate.
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+const (
+	releaseRounds   = 5
+	releaseChildren = 3
+	// closedViews is the number of images, and so of views, each closed namespace holds.
+	closedViews = 3
+
+	releaseChildRootEnv  = "DELEGATE_CUSTODY_RELEASE_ROOT"
+	releaseChildIDEnv    = "DELEGATE_CUSTODY_RELEASE_ID"
+	releaseChildOwnerEnv = "DELEGATE_CUSTODY_RELEASE_OWNER"
+	releaseChildTest     = "TestPoolReleaseChildProcess"
+)
+
+// releaseFixture is a pool with one living owner and three images. Image 0 is
+// linked by the living owner and by every closed namespace; images 1 and 2 are
+// linked by closed namespaces only, so only they are idle once a namespace is
+// released.
+type releaseFixture struct {
+	rig     *poolRig
+	entries [closedViews]string
+	digests [closedViews]string
+}
+
+func newReleaseFixture(t *testing.T) *releaseFixture {
+	t.Helper()
+	f := &releaseFixture{rig: newPoolRig(t)}
+	for i := range f.entries {
+		f.entries[i], f.digests[i] = plainEntry(t, f.rig.dir, fmt.Sprintf("release-%d", i))
+	}
+	f.rig.binder("living", plainRequest(f.entries[0], f.digests[0]))
+	return f
+}
+
+// bindClosed leaves owner as a closed owner does: one view per image, every
+// command closed. Close only closes local handles, so the views stay.
+func (f *releaseFixture) bindClosed(owner string) {
+	t := f.rig.t
+	t.Helper()
+	for i := range f.entries {
+		command, err := f.rig.pool.Bind(context.Background(), f.rig.ns(owner), plainRequest(f.entries[i], f.digests[i]))
+		if err != nil {
+			t.Fatalf("setup blocked: bind %s for %s: %v", f.entries[i], owner, err)
+		}
+		if err = errors.Join(requireViewHoldsDigest(command, f.digests[i]), command.Close()); err != nil {
+			t.Fatalf("setup blocked: close the command of %s: %v", owner, err)
+		}
+	}
+	f.rig.requireViewDirs(owner, closedViews)
+}
+
+// requireReleased asserts what every caller's return must have established:
+// the namespace is gone for every pool handle and the living owner is intact.
+func (f *releaseFixture) requireReleased(owner string, pools []*Pool) {
+	rig := f.rig
+	rig.t.Helper()
+	for i, pool := range pools {
+		if pending, err := pool.ReleasePending(rig.ns(owner)); err != nil || pending {
+			rig.t.Fatalf("pool handle %d: %s pending %v (%v) after every release returned", i, owner, pending, err)
+		}
+	}
+	if _, err := os.Lstat(rig.ownerDir(owner)); !errors.Is(err, os.ErrNotExist) {
+		rig.t.Fatalf("witness of %s after every release returned: %v", owner, err)
+	}
+	rig.requireViewsLinkImages("living", f.entries[0])
+}
+
+// requireIdleImagesReclaimedBy runs the one uncontended release the contract
+// leaves for reclaim, then requires that only the living owner's image remains.
+func (f *releaseFixture) requireIdleImagesReclaimedBy(owner string) {
+	rig := f.rig
+	rig.t.Helper()
+	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns(owner)); err != nil {
+		rig.t.Fatalf("uncontended release of the already released %s: %v", owner, err)
+	}
+	if got := rig.images(); !slices.Equal(got, []string{f.digests[0]}) {
+		rig.t.Fatalf("images %v after the uncontended release; want only the living owner's %s", got, f.digests[0])
+	}
+	rig.requireImagesDir(1)
+	entries, err := os.ReadDir(rig.pool.viewsPath())
+	if err != nil || len(entries) != 1 || entries[0].Name() != "living" {
+		rig.t.Fatalf("views directory holds %v (%v); want only the living owner", entries, err)
+	}
+	rig.requireViewsLinkImages("living", f.entries[0])
+}
+
+func (f *releaseFixture) releaseLiving() {
+	rig := f.rig
+	rig.t.Helper()
+	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("living")); err != nil {
+		rig.t.Fatal(err)
+	}
+	rig.requireNothingBound()
+}
+
+// siblingPools returns n pool handles on the rig's root and identity, each its
+// own value with the rig's log and hook, as n independent callers would hold.
+func siblingPools(rig *poolRig, n int, hook func(poolPoint, string)) []*Pool {
+	rig.t.Helper()
+	pools := make([]*Pool, n)
+	for i := range pools {
+		pool, err := NewPoolWithIdentity(rig.pool.root, rig.id)
+		if err != nil {
+			rig.t.Fatal(err)
+		}
+		pool.logf = rig.logf
+		pool.faults.at = hook
+		pools[i] = pool
+	}
+	return pools
+}
+
+// arrivalBarrier parks the first n arrivals until all n have arrived. Hooked
+// on the first identity check of ReleaseOwner, which precedes every read of the
+// owner, it makes all n callers observe the owner fully populated. release lets
+// parked arrivals go without waiting for the rest.
+type arrivalBarrier struct {
+	t       *testing.T
+	mu      sync.Mutex
+	n       int
+	arrived int
+	all     chan struct{}
+	aborted chan struct{}
+	once    sync.Once
+}
+
+func newArrivalBarrier(t *testing.T, n int) *arrivalBarrier {
+	return &arrivalBarrier{t: t, n: n, all: make(chan struct{}), aborted: make(chan struct{})}
+}
+
+func (b *arrivalBarrier) release() { b.once.Do(func() { close(b.aborted) }) }
+
+func (b *arrivalBarrier) hook(point poolPoint, _ string) {
+	if point != pointIdentityChecked {
+		return
+	}
+	b.mu.Lock()
+	b.arrived++
+	mine := b.arrived
+	if mine == b.n {
+		close(b.all)
+	}
+	b.mu.Unlock()
+	if mine > b.n {
+		return
+	}
+	select {
+	case <-b.all:
+	case <-b.aborted:
+	case <-time.After(handshakeTimeout):
+		b.t.Error("the release callers never all reached their first identity check")
+	}
+}
+
+// parkedAt parks the first caller to reach point until release is called and
+// lets every other caller through.
+type parkedAt struct {
+	t      *testing.T
+	point  poolPoint
+	mu     sync.Mutex
+	taken  bool
+	parked chan struct{}
+	resume chan struct{}
+	once   sync.Once
+}
+
+func newParkedAt(t *testing.T, point poolPoint) *parkedAt {
+	return &parkedAt{t: t, point: point, parked: make(chan struct{}), resume: make(chan struct{})}
+}
+
+func (p *parkedAt) release() { p.once.Do(func() { close(p.resume) }) }
+
+func (p *parkedAt) hook(point poolPoint, _ string) {
+	if point != p.point {
+		return
+	}
+	p.mu.Lock()
+	first := !p.taken
+	p.taken = true
+	p.mu.Unlock()
+	if !first {
+		return
+	}
+	close(p.parked)
+	select {
+	case <-p.resume:
+	case <-time.After(handshakeTimeout):
+		p.t.Errorf("the caller parked at %s was never resumed", p.point)
+	}
+}
+
+// callResult is the outcome of one started call.
+type callResult struct {
+	caller int
+	err    error
+}
+
+// releaseGroup owns every goroutine a test starts for concurrent releases. It
+// is created after the fixture, so its cleanup runs before the fixture's
+// scratch deletion: the cleanup cancels the calls' context, lets parked callers
+// go and joins every started call, so no call outlives the pool files it uses
+// and a failed test never abandons one. Each call receives the group's context,
+// which the pool honors between view removals.
+type releaseGroup struct {
+	t       *testing.T
+	ctx     context.Context
+	cancel  context.CancelFunc
+	unpark  func()
+	results chan callResult
+	wg      sync.WaitGroup
+
+	mu       sync.Mutex
+	started  int
+	finished int
+}
+
+// newReleaseGroup returns a group that holds the results of up to capacity
+// calls. unpark must be safe to call more than once and from any goroutine.
+func newReleaseGroup(t *testing.T, capacity int, unpark func()) *releaseGroup {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	g := &releaseGroup{t: t, ctx: ctx, cancel: cancel, unpark: unpark, results: make(chan callResult, capacity)}
+	t.Cleanup(func() {
+		g.stop()
+		g.wg.Wait()
+	})
+	return g
+}
+
+func (g *releaseGroup) stop() {
+	g.cancel()
+	g.unpark()
+}
+
+func (g *releaseGroup) start(caller int, call func(context.Context) error) {
+	g.mu.Lock()
+	g.started++
+	g.mu.Unlock()
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		g.results <- callResult{caller: caller, err: call(g.ctx)}
+		g.mu.Lock()
+		g.finished++
+		g.mu.Unlock()
+	}()
+}
+
+// allJoined reports, without waiting, that at least one call started and every
+// started call has returned.
+func (g *releaseGroup) allJoined() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.started > 0 && g.started == g.finished
+}
+
+// join waits for every started call. At the deadline it cancels the calls and
+// unparks them, still joins them, and only then fails the test.
+func (g *releaseGroup) join(what string) {
+	g.t.Helper()
+	deadline := time.AfterFunc(handshakeTimeout, g.stop)
+	g.wg.Wait()
+	if !deadline.Stop() {
+		g.t.Fatalf("%s did not finish within %v; the calls were canceled, unparked and joined", what, handshakeTimeout)
+	}
+}
+
+// requireNext requires the next call to finish within the handshake bound with
+// a nil error.
+func (g *releaseGroup) requireNext(who string) {
+	g.t.Helper()
+	select {
+	case result := <-g.results:
+		if result.err != nil {
+			g.t.Fatalf("%s (caller %d) returned %v; want nil", who, result.caller, result.err)
+		}
+	case <-time.After(handshakeTimeout):
+		g.t.Fatalf("%s never returned", who)
+	}
+}
+
+func releaseCall(pool *Pool, ns Namespace) func(context.Context) error {
+	return func(ctx context.Context) error { return pool.ReleaseOwner(ctx, ns) }
+}
+
+func TestPoolConcurrentReleaseOfOneClosedNamespaceConverges(t *testing.T) {
+	for _, callers := range []int{2, 3, 4} {
+		t.Run(fmt.Sprintf("%d-callers", callers), func(t *testing.T) {
+			f := newReleaseFixture(t)
+			for round := range releaseRounds {
+				owner := fmt.Sprintf("closed-%d", round)
+				f.bindClosed(owner)
+				barrier := newArrivalBarrier(t, callers)
+				pools := siblingPools(f.rig, callers, barrier.hook)
+				group := newReleaseGroup(t, callers, barrier.release)
+				for caller, pool := range pools {
+					group.start(caller, releaseCall(pool, f.rig.ns(owner)))
+				}
+				group.join(fmt.Sprintf("%d concurrent releases of %s", callers, owner))
+				for range callers {
+					group.requireNext("a concurrent release of " + owner)
+				}
+				f.requireReleased(owner, pools)
+				f.requireIdleImagesReclaimedBy(owner)
+			}
+			f.releaseLiving()
+			f.rig.rec.note("concurrent-release", "%d rounds x %d simultaneous callers of one closed namespace of %d views: every call returned nil, the living owner kept its image, the final uncontended release left only that image; logged %d lines", releaseRounds, callers, closedViews, len(f.rig.logged()))
+		})
+	}
+}
+
+// TestPoolReleaseOverlapsAnotherCallerAtEachRemovalStep parks one caller inside
+// removeOwner, with the gate not held and its view list already read, while a
+// second caller releases the whole namespace. The parked caller then resumes
+// over a namespace that no longer exists.
+func TestPoolReleaseOverlapsAnotherCallerAtEachRemovalStep(t *testing.T) {
+	for _, point := range []poolPoint{pointAfterViewRemoved, pointBeforeWitnessRemove} {
+		t.Run(string(point), func(t *testing.T) {
+			f := newReleaseFixture(t)
+			f.bindClosed("closed")
+			parked := newParkedAt(t, point)
+			pools := siblingPools(f.rig, 2, parked.hook)
+			group := newReleaseGroup(t, len(pools), parked.release)
+			for caller, pool := range pools {
+				group.start(caller, releaseCall(pool, f.rig.ns("closed")))
+			}
+			awaitSignal(t, parked.parked, "a caller to park at "+string(point))
+			group.requireNext("the unparked caller")
+			f.requireReleased("closed", pools[:1])
+			parked.release()
+			group.requireNext("the resumed caller")
+			group.join("both releases")
+			f.requireReleased("closed", pools)
+			f.requireIdleImagesReclaimedBy("closed")
+			f.releaseLiving()
+			f.rig.rec.note("overlap-"+string(point), "one caller parked at %s; the other released the namespace and returned nil; the parked one resumed over a missing owner and returned nil", point)
+		})
+	}
+}
+
+func awaitSignal(t *testing.T, signal <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(handshakeTimeout):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+const (
+	releaseFailureChildTest = "TestPoolReleaseFailureCleanupChild"
+	releaseFailureChildEnv  = "DELEGATE_CUSTODY_RELEASE_FAILURE"
+	// releaseJoinedMarker is printed by the child's cleanup probe only when
+	// every started call has been joined while the fixture still exists.
+	releaseJoinedMarker = "custody-release-group: every started call joined before fixture deletion"
+)
+
+var errReleaseSentinel = errors.New("sentinel result of the unparked caller")
+
+// TestPoolReleaseFailureCleanupJoinsEveryCaller runs the child below, which
+// fails at the real requireNext while its other caller is still parked, and
+// requires the child to fail with the sentinel and to report that its cleanup
+// joined every started call before the fixture was deleted.
+func TestPoolReleaseFailureCleanupJoinsEveryCaller(t *testing.T) {
+	cmd := selfCommand(t, releaseFailureChildTest, releaseFailureChildEnv+"=1")
+	process := &workerProcess{cmd: cmd}
+	cmd.Stdout, cmd.Stderr = &process.stdout, &process.stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start the failure child: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := process.reap(); err != nil {
+			t.Errorf("cleanup of the failure child: %v", err)
+		}
+	})
+	outcome := process.wait(t)
+	stdout := string(outcome.Stdout)
+	if outcome.Exit == 0 {
+		t.Fatalf("the failure child passed; it must fail at its sentinel result:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, errReleaseSentinel.Error()) {
+		t.Fatalf("the failure child did not fail with the sentinel (stderr %q):\n%s", outcome.Stderr, stdout)
+	}
+	if !strings.Contains(stdout, releaseJoinedMarker) {
+		t.Fatalf("the failure child's cleanup did not join every started call before fixture deletion (stderr %q):\n%s", outcome.Stderr, stdout)
+	}
+}
+
+// TestPoolReleaseFailureCleanupChild is the body of the failure child; a normal
+// run skips it. One real release is parked while the other call returns the
+// sentinel, so requireNext fails the test with the real Fatalf. The probe is
+// registered after the fixture and before the group, so cleanup order runs the
+// group's join, then the probe, then the fixture's deletion.
+func TestPoolReleaseFailureCleanupChild(t *testing.T) {
+	if os.Getenv(releaseFailureChildEnv) == "" {
+		t.Skip("body of the child of TestPoolReleaseFailureCleanupJoinsEveryCaller")
+	}
+	f := newReleaseFixture(t)
+	f.bindClosed("closed")
+	var group *releaseGroup
+	t.Cleanup(func() {
+		_, dirErr := os.Stat(f.rig.dir)
+		if group != nil && group.allJoined() && dirErr == nil {
+			fmt.Println(releaseJoinedMarker)
+		}
+	})
+	parked := newParkedAt(t, pointBeforeWitnessRemove)
+	pool := siblingPools(f.rig, 1, parked.hook)[0]
+	group = newReleaseGroup(t, 2, parked.release)
+	group.start(0, releaseCall(pool, f.rig.ns("closed")))
+	awaitSignal(t, parked.parked, "the real release to park")
+	group.start(1, func(context.Context) error { return errReleaseSentinel })
+	group.requireNext("the unparked caller")
+}
+
+// selfCommand prepares this test binary to run only test, with a minimal
+// environment: the scratch settings the fixtures read, then env.
+func selfCommand(t *testing.T, test string, env ...string) *exec.Cmd {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(executable, "-test.run=^"+test+"$")
+	cmd.Env = append([]string{"TMPDIR=" + os.TempDir()}, env...)
+	if scratchDir := os.Getenv(proofScratchEnv); scratchDir != "" {
+		cmd.Env = append(cmd.Env, proofScratchEnv+"="+scratchDir)
+	}
+	return cmd
+}
+
+// childPipes are the four endpoints of the two pipes a release child needs:
+// childIn and childOut belong to the child; start and ready stay with the
+// parent.
+type childPipes struct {
+	childIn  *os.File
+	start    *os.File
+	ready    *os.File
+	childOut *os.File
+}
+
+// openChildPipes allocates the child's stdin pipe, then its stdout pipe. When
+// the second allocation fails it closes both endpoints of the first and returns
+// every error.
+func openChildPipes(pipe func() (*os.File, *os.File, error)) (childPipes, error) {
+	childIn, start, err := pipe()
+	if err != nil {
+		return childPipes{}, fmt.Errorf("allocate the start pipe: %w", err)
+	}
+	ready, childOut, err := pipe()
+	if err != nil {
+		return childPipes{}, errors.Join(fmt.Errorf("allocate the ready pipe: %w", err), childIn.Close(), start.Close())
+	}
+	return childPipes{childIn: childIn, start: start, ready: ready, childOut: childOut}, nil
+}
+
+func (p childPipes) closeAll() error {
+	return errors.Join(p.childIn.Close(), p.start.Close(), p.ready.Close(), p.childOut.Close())
+}
+
+func TestOpenChildPipesClosesTheFirstPairWhenTheSecondFails(t *testing.T) {
+	errSecond := errors.New("sentinel failure of the second pipe")
+	var firstIn, firstOut *os.File
+	calls := 0
+	_, err := openChildPipes(func() (*os.File, *os.File, error) {
+		calls++
+		if calls == 2 {
+			return nil, nil, errSecond
+		}
+		var pipeErr error
+		if firstIn, firstOut, pipeErr = os.Pipe(); pipeErr != nil {
+			t.Fatalf("setup blocked: os.Pipe: %v", pipeErr)
+		}
+		return firstIn, firstOut, nil
+	})
+	if !errors.Is(err, errSecond) {
+		t.Fatalf("openChildPipes gave %v; want the second pipe's sentinel", err)
+	}
+	for name, end := range map[string]*os.File{"child stdin end": firstIn, "start end": firstOut} {
+		if _, statErr := end.Stat(); !errors.Is(statErr, os.ErrClosed) {
+			t.Errorf("the %s of the first pair after the failure: %v; want it closed", name, statErr)
+		}
+	}
+}
+
+// releaseChild is one separate process parked inside ReleaseOwner at its first
+// identity check, with the parent's ends of its start and ready lines.
+type releaseChild struct {
+	process *workerProcess
+	start   *os.File
+	ready   *bufio.Reader
+}
+
+// startReleaseChild re-executes this test binary as TestPoolReleaseChildProcess.
+// The child is finite and sends no signal: the parent's Wait on that exact
+// process is the oracle that it is gone. The cleanup is registered as soon as
+// the child runs, so every later failure still closes the start line, waits for
+// the child and then closes the ready line.
+func startReleaseChild(t *testing.T, root, id, owner string) *releaseChild {
+	t.Helper()
+	cmd := selfCommand(t, releaseChildTest, releaseChildRootEnv+"="+root, releaseChildIDEnv+"="+id, releaseChildOwnerEnv+"="+owner)
+	pipes, err := openChildPipes(os.Pipe)
+	if err != nil {
+		t.Fatalf("setup blocked: %v", err)
+	}
+	child := &releaseChild{process: &workerProcess{cmd: cmd}, start: pipes.start, ready: bufio.NewReader(pipes.ready)}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = pipes.childIn, pipes.childOut, &child.process.stderr
+	if err = cmd.Start(); err != nil {
+		t.Fatalf("start release child: %v", errors.Join(err, pipes.closeAll()))
+	}
+	t.Cleanup(func() {
+		if closeErr := pipes.start.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+			t.Errorf("close the start line of a release child: %v", closeErr)
+		}
+		if _, reapErr := child.process.reap(); reapErr != nil {
+			t.Errorf("cleanup of a release child: %v", reapErr)
+		}
+		if closeErr := pipes.ready.Close(); closeErr != nil {
+			t.Errorf("close the ready line of a release child: %v", closeErr)
+		}
+	})
+	if err = errors.Join(pipes.childIn.Close(), pipes.childOut.Close()); err != nil {
+		t.Fatalf("close the child's ends of its pipes: %v", err)
+	}
+	return child
+}
+
+func (c *releaseChild) awaitReady(t *testing.T) {
+	t.Helper()
+	line := make(chan error, 1)
+	go func() {
+		text, err := c.ready.ReadString('\n')
+		if err == nil && text != "READY\n" {
+			err = fmt.Errorf("first line %q; want READY", text)
+		}
+		line <- err
+	}()
+	select {
+	case err := <-line:
+		if err != nil {
+			t.Fatalf("a release child did not become ready: %v", err)
+		}
+	case <-time.After(handshakeTimeout):
+		t.Fatal("a release child never became ready")
+	}
+}
+
+func (c *releaseChild) sendGo(t *testing.T) {
+	t.Helper()
+	if _, err := fmt.Fprintln(c.start, "GO"); err != nil {
+		t.Fatalf("send GO to a release child: %v", err)
+	}
+	if err := c.start.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPoolReleaseChildProcess is the body of a release child; a normal run
+// skips it. It parks at its first identity check, which precedes every read of
+// the owner, until the parent has seen every child ready and sends GO.
+func TestPoolReleaseChildProcess(t *testing.T) {
+	root := os.Getenv(releaseChildRootEnv)
+	if root == "" {
+		t.Skip("body of the release children of TestPoolConcurrentReleaseOfOneClosedNamespaceAcrossProcesses")
+	}
+	if err := runReleaseChild(root, os.Getenv(releaseChildIDEnv), os.Getenv(releaseChildOwnerEnv)); err != nil {
+		fmt.Fprintf(os.Stderr, "release child: %v\n", err)
+		os.Exit(exitWorkerFailed)
+	}
+}
+
+func runReleaseChild(root, id, owner string) error {
+	pool, err := NewPoolWithIdentity(root, id)
+	if err != nil {
+		return err
+	}
+	ns, err := NewNamespace(owner)
+	if err != nil {
+		return err
+	}
+	var once sync.Once
+	handshake := ""
+	pool.faults.at = func(point poolPoint, _ string) {
+		if point == pointIdentityChecked {
+			once.Do(func() { handshake = helperHandshake() })
+		}
+	}
+	releaseErr := pool.ReleaseOwner(context.Background(), ns)
+	if handshake != "go" {
+		return errors.Join(fmt.Errorf("start handshake ended %q; want go", handshake), releaseErr)
+	}
+	return releaseErr
+}
+
+func TestPoolConcurrentReleaseOfOneClosedNamespaceAcrossProcesses(t *testing.T) {
+	f := newReleaseFixture(t)
+	for round := range releaseRounds {
+		owner := fmt.Sprintf("closed-%d", round)
+		f.bindClosed(owner)
+		children := make([]*releaseChild, releaseChildren)
+		for i := range children {
+			children[i] = startReleaseChild(t, f.rig.pool.root, f.rig.id, owner)
+		}
+		for _, child := range children {
+			child.awaitReady(t)
+		}
+		for _, child := range children {
+			child.sendGo(t)
+		}
+		for i, child := range children {
+			if outcome := child.process.wait(t); outcome.Exit != 0 {
+				t.Fatalf("round %d release child %d exited %d: %s", round, i, outcome.Exit, outcome.Stderr)
+			}
+		}
+		f.requireReleased(owner, []*Pool{f.rig.pool})
+		f.requireIdleImagesReclaimedBy(owner)
+	}
+	f.releaseLiving()
+	f.rig.rec.note("concurrent-release-processes", "%d rounds x %d processes released one closed namespace of %d views while parked together inside ReleaseOwner: every process exited 0 and the final uncontended release left only the living owner's image", releaseRounds, releaseChildren, closedViews)
+}

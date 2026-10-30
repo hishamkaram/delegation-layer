@@ -97,6 +97,7 @@
       "go:strconv",
       "go:strings",
       "go:sync",
+      "go:sync/atomic",
       "go:syscall",
       "go:time",
       "go:unicode/utf8"

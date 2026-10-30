@@ -749,7 +749,13 @@ have no placement and keep their private copy.
   generation lease nor queue identity held. A full generation first calls it
   with no candidates, before the queue endpoint is captured, and it retries
   closed custody for every ordinary task listed by `taskdir` `TaskIDs`, so a
-  removed row, lost callback, or stopped queue cannot strand custody. Each
+  removed row, lost callback, or stopped queue cannot strand custody. Up to
+  four of those task releases run at once over one store, in inventory order;
+  none starts after its worker observes cancellation, and every started
+  release is joined before the store closes and the phase returns. A pool's
+  view removal is not interruptible, so a phase at its deadline may wait for
+  up to four removals in flight, where a serial pass waited for at most one;
+  that overrun has no bound in seconds. Each
   capture then prepares evidence under queue identity, hands a deep copy of its
   candidates to the releaser, and removal reacquires both leases for fresh
   revalidation. Candidates, task-directory names, outcomes, and row absence are
