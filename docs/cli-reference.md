@@ -741,8 +741,19 @@ published config or endpoint still requires the migration flow below.
 An extremely deep `--root` can exceed the limit even with the shorter name; see
 [Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
 
-`delegate-run` normally resolves beside `delegate`. Use the absolute global
-`--runner` option for a source-build layout or a custom integration.
+`delegate-run` normally resolves beside `delegate`, and Delegate uses its
+managed runner automatically: omit `--runner` for ordinary dispatch and
+continuation. The absolute global `--runner` option is an advanced override for
+a source-build layout or a custom integration, and an explicit value is always a
+custom runner, even when it names the bundled worker. A managed workspace
+(`--isolation` or `--workspace`) cannot use a custom runner, and `continue`
+refuses a `--runner` that differs from the predecessor's recorded runner (an
+equal value is accepted). Each refusal is an `invalid_request` with
+`reason_code` `managed_workspace_runner_conflict` or
+`continuation_runner_conflict`. Omit `--runner` and repeat the request only
+when `failure.next_action` is `correct_request`; otherwise follow the returned
+guidance.
+`status` and `collect` do not use the override.
 
 When a saved binding points to the private state-rooted supervisor, `status`,
 `cancel`, and continuation checks reuse it when a compatible daemon is already

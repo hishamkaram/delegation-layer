@@ -17,6 +17,9 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 		return dispatchFailure(result, DispatchValidate, "validate-request", err)
 	}
 	result.Root = root
+	if err = workspaces.RequireManagedRunner(WorkspaceDispatchRequest(request)); err != nil {
+		return dispatchFailure(result, DispatchWorkspace, "prepare-workspace", err)
+	}
 	store, err := options.openStore(root, true)
 	if err != nil {
 		return dispatchFailure(result, DispatchOpenState, "open-state", err)

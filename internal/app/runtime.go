@@ -49,7 +49,7 @@ Commands:
 Global flags:
   --root ABS              State root (default: user config directory)
   --pueue-config ABS      Initial supervisor configuration
-  --runner ABS            Runner executable for dispatch
+  --runner ABS            Advanced custom runner override; omit for the automatic runner
 
 Supervisor recovery:
   supervisor status --json

@@ -32,7 +32,14 @@ follow `failure.next_action`. A `provider_unavailable` failure whose cause is
 a capability the recorded launch requires and the installed provider CLI no
 longer offers adds `failure.reason_code: "provider_capability_changed"` and a
 fixed detail in `error`; its exit code and `stop_and_report` guidance are
-unchanged. With `task_record: "unknown"`, existence could
+unchanged. A `--runner` that contradicts the runner its command needs is an
+`invalid_request` with `failure.reason_code`
+`managed_workspace_runner_conflict` (managed workspace; stage
+`prepare-workspace`) or `continuation_runner_conflict` (`continue`; stage
+`validate-continuation`), exit `2`, and a fixed `error` that says to omit
+`--runner`. It carries `next_action: "correct_request"` with
+`task_record: "not_created"`; with a caller-supplied `--id` the record stays
+`unknown` and the guidance is `stop_and_report`. With `task_record: "unknown"`, existence could
 not be proven; follow the returned stop guidance and do not dispatch again.
 
 ### Resource pressure

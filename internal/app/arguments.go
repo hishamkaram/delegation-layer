@@ -97,7 +97,7 @@ func ParseArguments(args []string) (Arguments, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
 	fs.StringVar(&a.PueueConfig, "pueue-config", "", "absolute initial supervisor configuration")
-	fs.StringVar(&a.Runner, "runner", "", "absolute runner executable")
+	fs.StringVar(&a.Runner, "runner", "", "absolute custom runner executable (advanced override; omit for the automatic runner)")
 	watch := "0s"
 	registerCommandFlags(fs, &a, &watch)
 	ordered, err := orderFlags(fs, rest)

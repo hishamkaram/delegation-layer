@@ -85,6 +85,12 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 // executable is inspected, so migration does not silently bind a different
 // user configuration. When inspection remains in flight, the returned client
 // owns the pending command and must be closed with CloseAfterPending.
+//
+// A saved private pair also authenticates its recorded daemon from the
+// current bytes, so the binding is as complete as the one the task recorded.
+// Changed installation provenance remains observable; the strict mutation
+// gates own the exact comparison and refuse it. External references keep a
+// client-only binding and never require their recorded daemon file.
 func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
 	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
 		return nil, err
@@ -99,6 +105,11 @@ func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (
 	}
 	if !task.SameSupervisorIdentity(client.Binding(), saved) {
 		return client, ErrBinding
+	}
+	if _, private := privateStateRoot(saved.ConfigPath); private && saved.DaemonExecutable != "" {
+		if err = attachPrivateDaemon(client, saved.DaemonExecutable); err != nil {
+			return client, err
+		}
 	}
 	return client, nil
 }
