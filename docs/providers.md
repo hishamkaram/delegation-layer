@@ -378,6 +378,18 @@ admitted before message scope existed and treat every message after the
 caller's result as a root message. Each is replay-only, is never a fresh
 default, and is not a recheck source.
 
+The retained projection revisions share the current version strings
+(read-only `native-permissions-v6`, workspace-write `native-permissions-v7`) and
+differ by digest: read-only
+`d750a584e223e4c80f2cc165c6ee4cc6d7b664b26a740119671990c966cc36cb` and
+workspace-write
+`35853e32272b55b35b2276309ae7f57909d2d462ebed65b88e30f26f62616f11`. They were
+sealed before failed final requests and quota exhaustion were classified. They
+frame follow-up answers like the current revisions, but they keep a failed final
+request malformed and never report a quota. Each is replay-only, is never a fresh
+default, and is neither a recovery source nor a recovery target. A version and
+digest identify a recorded predicate; they do not pin a provider release.
+
 A new continuation task is distinct from reconstruction of its predecessor.
 The predecessor's task record, metadata, and launch plan are never modified and
 keep rebuilding under their recorded predicate, including each retained
@@ -385,8 +397,8 @@ digest above. In an ordinary noninteractive continuation, only the new
 successor task selects the current predicate of the same mode and launch shape,
 and only when the predecessor is a native print record sealed under the
 pre-attribution revision (read-only `native-permissions-v3`, workspace-write
-`native-permissions-v4`) or under the retained scoped, unscoped, or principal-only advisory digest of its
-mode. Other records passed through this successor hook retain their recorded
+`native-permissions-v4`) or under the retained scoped, unscoped,
+principal-only advisory, or projection digest of its mode. Other records passed through this successor hook retain their recorded
 predicate. Interactive continuation instead builds the current interactive
 profile in the caller's current environment while preserving the exact recorded
 session. A successor takes its filtered launch values, writable roots, and
@@ -603,16 +615,23 @@ CCR's foreground exit and sealed Claude stream must both indicate success.
 The new CCR contracts use `ccr-foreground-v7` and `ccr-foreground-v7-modeled`,
 with the same
 advisory wire and Claude follow-up attribution rules as `claude:print`. The
-retained `ccr-foreground-v6` and modeled variant keep their exact embedded
+retained read-only route-preserving `ccr-foreground-v7` projection revision
+shares the current version and differs by digest
+`c70936cf9a3b1a247ffd12403675dbc714bec8bb0a4179e85b6f348d918cf0cf`. It embeds
+Claude's projection contract, so it frames follow-up answers but keeps a failed
+final request malformed and never reports a quota. It is replay-only. No other
+mode or launch shape, including the modeled variant, has a projection revision.
+The retained `ccr-foreground-v6` and modeled variant keep their exact embedded
 Claude contract and principal-only replay; `ccr-foreground-v5` keeps its recorded multi-result
 interpretation under the scoped Claude attribution policy and strict wire;
 `ccr-foreground-v4` and earlier keep their recorded single-result
 interpretation. An ordinary exact-session continuation of a `v4`, `v5`, or `v6`
-predecessor selects the new `v7` revision of the same launch shape for
-the new task only. An offline recheck of a route-preserving
+predecessor, or of the read-only route-preserving projection `v7` predecessor,
+selects the current `v7` revision of the same launch shape for the new task
+only; the predecessor record stays unchanged. An offline recheck of a route-preserving
 revision uses the current route-preserving revision; modeled and older
 revisions use the current modeled revision. The principal-only `v6` and
-`v6-modeled` revisions are not recheck sources.
+`v6-modeled` revisions and the projection `v7` revision are not recheck sources.
 CCR reserves exit status `77` for unavailable configured provider credentials.
 With an empty sealed stdout stream and no capture error, Delegate reports
 `authentication-unavailable`; it does not infer an HTTP status or repair the
