@@ -356,8 +356,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                     self.observed.add(task_id)
                     if len(self.observed) <= self.status_snapshot_owners:
                         with self.client_call_log.open("a") as calls:
-                            calls.write("managed-runner-observation\tclient\t"
-                                        "-c /fixture/pueue.yml status --json\n")
+                            calls.write(json.dumps(
+                                {"v": 1, "phase": "managed-runner-observation", "role": "client",
+                                 "argv": ["-c", "/fixture/pueue.yml", "status", "--json"]},
+                                separators=(",", ":")) + "\n")
             response = {"task_id": task_id,
                         "admission": self.upgraded_admission if upgraded else "admitted",
                         "liveness": "running", "supervisor": {

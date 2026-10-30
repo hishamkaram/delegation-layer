@@ -184,7 +184,7 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None
         else:
             try:
                 shutdown_pending_private_supervisor(
-                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.base_token, disposal=disposal
+                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.capture_token, disposal=disposal
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -203,7 +203,7 @@ def shutdown_captured_predecessor(cleanup_errors, lifetime, pending, *, disposal
             target,
             pending["env"],
             task_ids=tuple(pending["task_ids"]),
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
             disposal=disposal,
         )
         if disposition not in (PREDECESSOR_SHUT_DOWN, PREDECESSOR_ALREADY_CLOSED):
@@ -291,7 +291,7 @@ def shutdown_primary_supervisor(
                     timeout=shutdown_remaining(deadline),
                     state=cleanup_state,
                     task_ids=cleanup_task_ids,
-                    capture_root=lifetime.base_token,
+                    capture_root=lifetime.capture_token,
                     disposal=disposal,
                 )
             except BaseException as cleanup_error:

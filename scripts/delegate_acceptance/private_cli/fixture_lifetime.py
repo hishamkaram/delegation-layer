@@ -39,6 +39,9 @@ class FixtureLifetime:
     old_layout_owned: tuple[OwnedDirectory, ...] = ()
     base: Path | None = None
     base_token: OwnedDirectory | None = None
+    # Private control capture files live in this owned child, never directly
+    # in base: base is an ancestor of the provider execution views.
+    capture_token: OwnedDirectory | None = None
     inspection_process: subprocess.Popen[str] | None = None
     env: dict[str, str] = field(default_factory=dict)
     private_config: Path | None = None

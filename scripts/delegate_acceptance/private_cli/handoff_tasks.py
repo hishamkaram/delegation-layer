@@ -1,6 +1,7 @@
 """Private handoff task command I/O."""
 
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_OBSERVATION_PHASE
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
 import hashlib
@@ -25,6 +26,7 @@ class HandoffTaskCommands:
         waiting_brief,
         receipts,
         capture_root,
+        client_call_log,
         run_receipt,
         waiter_directory,
         lease_nonce,
@@ -37,6 +39,7 @@ class HandoffTaskCommands:
         self.waiting_brief = waiting_brief
         self.receipts = receipts
         self.capture_root = capture_root
+        self.client_call_log = client_call_log
         self.run_receipt = run_receipt
         self.waiter_directory = waiter_directory
         self.lease_nonce = lease_nonce
@@ -48,8 +51,17 @@ class HandoffTaskCommands:
         return path.name
 
     def external_client_calls(self):
-        calls = wrapper_call_records(self.capture_root.directory / "old-client-starts-calls", "client", "old")
-        return [record for record in calls if str(self.external_config) in json.dumps(record, sort_keys=True)]
+        """Compact old-client calls whose leading Pueue config is exactly this case's external config."""
+        return wrapper_call_records(self.client_call_log, "client", "old", config=self.external_config)
+
+    def external_observation_baseline(self):
+        """Return the external calls before handoff; the selector must already see this harness's status read."""
+        calls = self.external_client_calls()
+        require(
+            any(call["phase"] == EXTERNAL_OBSERVATION_PHASE and call["command"] == "status" for call in calls),
+            "external call baseline did not select the harness's own external status observation",
+        )
+        return calls
 
     def dispatch_fixture(self, task_id, command_prefix, receipt_name):
         response = run_json(

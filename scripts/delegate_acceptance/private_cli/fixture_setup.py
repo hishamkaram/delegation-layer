@@ -39,6 +39,9 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     )
     lifetime.base_token = lifetime.ownership.adopt_created("private CLI acceptance root", base_path, acceptance_parent)
     lifetime.base = lifetime.base_token.directory
+    lifetime.capture_token = lifetime.ownership.create(
+        "private control captures", lifetime.base / "private-control-captures", lifetime.base
+    )
     state_parent, temporary_root = prepare_state_parent(args, lifetime, run_receipt)
     lifetime.private_config = state_parent / "state" / ".supervisor" / "pueue.yml"
     lifetime.gate = lifetime.base / "blocker-gate"

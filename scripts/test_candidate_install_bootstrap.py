@@ -762,7 +762,8 @@ class PendingSupervisorCloserTests(unittest.TestCase):
                       supervisor.shutdown_pending_private_supervisor)
         self.assertIs(bootstrap.shutdown_pending_private_supervisor,
                       supervisor.shutdown_pending_private_supervisor)
-        lifetime = SimpleNamespace(supervisor_cleanups=self.ledger, base_token="capture-token")
+        lifetime = SimpleNamespace(
+            supervisor_cleanups=self.ledger, base_token="root-token", capture_token="capture-token")
         errors = []
         disposal = object()
         with mock.patch.object(finalization, "shutdown_pending_private_supervisor",

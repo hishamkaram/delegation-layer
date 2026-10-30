@@ -23,7 +23,7 @@ def run_capacity_scenario(
             lifetime.private_config,
             lifetime.env,
             phase="supervisor-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         )
         .get("groups", {})
         .get("default", {})
@@ -35,7 +35,7 @@ def run_capacity_scenario(
     # The initial task was confirmed created before this scenario, and capacity
     # records only created dispatches, so the attempted IDs are created records.
     lifetime.primary_observer = public_status_observer(
-        delegate, fixture.state, lifetime.env, capture_root=lifetime.base_token
+        delegate, fixture.state, lifetime.env, capture_root=lifetime.capture_token
     )
     upgraded_tasks, status_bytes = verify_current_installation_upgrade(
         delegate=delegate,
@@ -56,7 +56,7 @@ def run_capacity_scenario(
         lease_nonce=lease_nonce,
         client_call_log=lifetime.base / "old-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
         run_receipt=run_receipt,
     )
     # The upgrade probe has already removed every old-layout token;
@@ -68,7 +68,7 @@ def run_capacity_scenario(
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
         observe=lifetime.primary_observer,
     )
     record_capacity_scenario(

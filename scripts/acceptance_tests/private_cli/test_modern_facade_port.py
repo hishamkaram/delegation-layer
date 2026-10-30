@@ -24,6 +24,9 @@ class ModernFacadePortTests(unittest.TestCase):
             ownership=self.fixture.owner,
             base=root,
             base_token=self.fixture.root,
+            capture_token=self.fixture.owner.create(
+                "private control captures", root / "private-control-captures", root
+            ),
             env=self.fixture.processes.environment,
             private_config=self.fixture.supervisor / "pueue.yml",
             gate=root / "gate",
@@ -86,7 +89,7 @@ class ModernFacadePortTests(unittest.TestCase):
         self.assertIs(result, evidence)
         self.assertEqual(self.lifetime.attempted_task_ids, ["b" * 32, "c" * 32])
         self.assertEqual(len(observed), 1)
-        self.assertIs(shutdown.call_args.kwargs["capture_root"], self.fixture.root)
+        self.assertIs(shutdown.call_args.kwargs["capture_root"], self.lifetime.capture_token)
         self.assertEqual(shutdown.call_args.kwargs["state"], self.fixture.state)
         self.assertEqual(shutdown.call_args.kwargs["task_ids"], tuple(self.lifetime.attempted_task_ids))
         self.receipt.add_details.assert_called_once_with(modern_binary_contention=evidence)

@@ -107,7 +107,8 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.client = self.directory / "pueue"
         self.client.write_text("fixture client", encoding="utf-8")
         self.lifetime = FixtureLifetime(
-            base=self.base, base_token=self.capture_root, env={}, private_config=self.config,
+            base=self.base, base_token=self.capture_root, capture_token=self.capture_root, env={},
+            private_config=self.config,
             managed_state_roots=[(self.state, [TASK_ID])], attempted_task_ids=[TASK_ID],
         )
         self.calls = []

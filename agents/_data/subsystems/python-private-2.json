@@ -368,6 +368,7 @@
     "layer": "runtime",
     "imports": [
       "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.configuration",
       "py:delegate_acceptance.private_cli.supervisor",
       "py:json"
     ]
@@ -631,9 +632,14 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "runtime",
     "imports": [
+      "py:delegate_acceptance.private_cli.wrapper_policy",
       "py:hashlib",
+      "py:json",
+      "py:os",
       "py:pathlib",
-      "py:shlex"
+      "py:shlex",
+      "py:stat",
+      "py:sys"
     ]
   }
 ]

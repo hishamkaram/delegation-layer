@@ -596,5 +596,64 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_capture_layout",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.resources",
+      "py:delegate_acceptance.private_cli.capacity_entry",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_setup",
+      "py:delegate_acceptance.private_cli.handoff",
+      "py:delegate_acceptance.private_cli.initial",
+      "py:delegate_acceptance.private_cli.legacy",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.scenario_entry",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.upgrade",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:ast",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:time",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_wrapper_evidence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.handoff",
+      "py:delegate_acceptance.private_cli.handoff_tasks",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:shlex",
+      "py:shutil",
+      "py:sys",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]

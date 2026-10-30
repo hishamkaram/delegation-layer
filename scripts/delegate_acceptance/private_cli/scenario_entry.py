@@ -48,7 +48,8 @@ def run_recovery_scenario(lease_nonce, lifetime, response_directory, run_receipt
         real_client=fixture.pueue_binary,
         real_daemon=fixture.pueued_binary,
         supervisor_cleanups=lifetime.supervisor_cleanups,
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
+        fixture_base=lifetime.base,
     )
     run_receipt.stage("supervisor-upgrade-recovery-proved")
 
@@ -70,7 +71,7 @@ def run_stop_scenario(lease_nonce, lifetime, response_directory, run_receipt, fi
         lease_nonce=lease_nonce,
         run_receipt=run_receipt,
         attempted_task_ids=lifetime.attempted_task_ids,
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     wrapper_calls = wrapper_call_records(
         lifetime.base / "old-client-starts-calls", "client", "old"
@@ -205,7 +206,8 @@ def run_external_cases(
             attempted_task_ids=case_task_ids,
             external_root_token=external_root_token,
             external_process_root_token=external_process_root_token,
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
+            client_call_log=lifetime.base / "old-client-starts-calls",
             handoff_action=handoff_action,
             case_label=case_label,
             handoff_cases=handoff_cases,

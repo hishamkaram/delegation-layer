@@ -1,6 +1,7 @@
 """Private handoff external supervisor control I/O."""
 
 import json
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_OBSERVATION_PHASE
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_command
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.directories.policy import require
@@ -52,7 +53,7 @@ class ExternalSupervisorControl:
                 self.client,
                 self.external_config,
                 self.env,
-                phase="external-supervisor-observation",
+                phase=EXTERNAL_OBSERVATION_PHASE,
                 capture_root=self.capture_root,
             )
         except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):

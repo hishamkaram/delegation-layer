@@ -44,7 +44,7 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
         supervisor_cleanups=lifetime.supervisor_cleanups,
         run_receipt=run_receipt,
         managed_state_roots=lifetime.managed_state_roots,
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
 
     inspection_group = "delegation-inspection-" + dispatch["root_id"]
@@ -69,7 +69,7 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
             models_args,
             receipt=response_directory / "models-initial.json",
             phase="inspection-worker",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         )
         if initial_models.get("status") != "available" or [
             model.get("id") for model in initial_models.get("models", [])
@@ -123,7 +123,7 @@ def dispatch_initial_task(args, fixture, lifetime, response_directory, run_recei
         ],
         receipt=response_directory / "dispatch-initial.json",
         phase="ordinary-dispatch",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if dispatch.get("task_id") != task_id or ("task_record" in dispatch and dispatch.get("task_record") != "created"):
         raise RuntimeError(
@@ -138,7 +138,7 @@ def dispatch_initial_task(args, fixture, lifetime, response_directory, run_recei
         ["--root", str(fixture.state), "status", task_id, "--json"],
         receipt=response_directory / "status-initial.json",
         phase="ordinary-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if first_status.get("task_id") != task_id:
         raise RuntimeError("status did not observe the dispatched task")
@@ -150,7 +150,7 @@ def dispatch_initial_task(args, fixture, lifetime, response_directory, run_recei
         timeout=COLLECT_TIMEOUT_SECONDS,
         receipt=response_directory / "collect-initial.json",
         phase="ordinary-collection",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("delegate did not publish the successful fixture result")

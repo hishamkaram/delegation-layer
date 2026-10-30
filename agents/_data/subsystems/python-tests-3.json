@@ -381,17 +381,6 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.private_cli.test_private_wrapper_evidence",
-    "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_private_cli",
-      "py:pathlib",
-      "py:tempfile",
-      "py:unittest"
-    ]
-  },
-  {
     "name": "py:acceptance_tests.private_cli.test_task_status_receipt",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",

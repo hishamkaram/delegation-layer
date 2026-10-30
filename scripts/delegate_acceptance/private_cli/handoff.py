@@ -8,6 +8,7 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_TASK_COUNT
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_OBSERVATION_PHASE
 from scripts.delegate_acceptance.private_cli.noexec_state import require_alternate_exec_custody
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
@@ -65,6 +66,7 @@ class HandoffCase:
     external_root_token: OwnedDirectory
     external_process_root_token: OwnedDirectory
     capture_root: OwnedDirectory
+    client_call_log: Path
     handoff_action: str
     case_label: str
     handoff_cases: dict[str, dict[str, object]]
@@ -104,6 +106,7 @@ def run_external_inspection_handoff_acceptance(
     external_process_root_token,
     *,
     capture_root,
+    client_call_log,
     handoff_action,
     case_label,
     handoff_cases,
@@ -128,6 +131,7 @@ def run_external_inspection_handoff_acceptance(
             external_root_token=external_root_token,
             external_process_root_token=external_process_root_token,
             capture_root=capture_root,
+            client_call_log=client_call_log,
             handoff_action=handoff_action,
             case_label=case_label,
             handoff_cases=handoff_cases,
@@ -334,17 +338,10 @@ def _initialize_handoff_case(case, resources):
     record_evidence()
     waiting_brief = Path(case.state).parent / "external-handoff-waiting-brief.md"
     task_commands = HandoffTaskCommands(
-        delegate=case.delegate,
-        env=case.env,
-        state=case.state,
-        workspace=case.workspace,
-        waiting_brief=waiting_brief,
-        receipts=receipts,
-        capture_root=case.capture_root,
-        run_receipt=case.run_receipt,
-        waiter_directory=case.waiter_directory,
-        lease_nonce=case.lease_nonce,
-        external_config=external_config,
+        delegate=case.delegate, env=case.env, state=case.state, workspace=case.workspace,
+        waiting_brief=waiting_brief, receipts=receipts, capture_root=case.capture_root,
+        client_call_log=case.client_call_log, run_receipt=case.run_receipt, waiter_directory=case.waiter_directory,
+        lease_nonce=case.lease_nonce, external_config=external_config,
     )
     supervisor_control = ExternalSupervisorControl(
         external_processes=resources.external_processes,
@@ -457,7 +454,7 @@ def _observe_external_task(case, legacy_request, old_response, old_task_id, supe
         case.client,
         supervisor_control.external_config,
         case.env,
-        phase="external-supervisor-observation",
+        phase=EXTERNAL_OBSERVATION_PHASE,
         capture_root=case.capture_root,
     )
     external_before_name = task_commands.write_snapshot("pueue-external-before-migrate.json", external_before)
@@ -467,7 +464,7 @@ def _observe_external_task(case, legacy_request, old_response, old_task_id, supe
         old_row_before is not None and pueue_state(old_row_before) == "Running",
         "external task was not running before migration",
     )
-    external_calls_before = task_commands.external_client_calls()
+    external_calls_before = task_commands.external_observation_baseline()
     return (
         old_meta_path,
         old_meta_bytes,
@@ -555,7 +552,7 @@ def _observe_handoff_transition(
         case.client,
         supervisor_control.external_config,
         case.env,
-        phase="external-supervisor-observation",
+        phase=EXTERNAL_OBSERVATION_PHASE,
         capture_root=case.capture_root,
     )
     external_after_name = task_commands.write_snapshot("pueue-external-after-migrate.json", external_after)
@@ -747,7 +744,7 @@ def _start_external_task(case, evidence, resources, supervisor_control, task_com
     case.attempted_task_ids.append(old_task_id)
     old_response = task_commands.dispatch_fixture(old_task_id, task_commands.external_prefix, "dispatch-external.json")
     old_specs, resources.old_cohort = task_commands.live_cohort(
-        old_response, case.client, supervisor_control.external_config, "external-supervisor-observation"
+        old_response, case.client, supervisor_control.external_config, EXTERNAL_OBSERVATION_PHASE
     )
     case.run_receipt.update_counts(running_task_count=1, live_lease_count=1)
     (

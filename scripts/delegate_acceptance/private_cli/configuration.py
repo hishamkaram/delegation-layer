@@ -5,6 +5,10 @@
 TASK_BUDGET = "2m"
 
 
+# The harness's own direct external queue observations; the handoff baseline must select one.
+EXTERNAL_OBSERVATION_PHASE = "external-supervisor-observation"
+
+
 COLLECT_WATCH = "150s"
 
 

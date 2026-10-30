@@ -349,6 +349,7 @@ class NoexecCaseFlowTests(unittest.TestCase):
                 response_directory=self.responses, provider_fixture=self.root / "pi", lease_nonce="n" * 32,
                 run_receipt=self.receipt, attempted_task_ids=self.task_ids, external_root_token=self.external_root,
                 external_process_root_token=self.process_root, capture_root=self.capture_root,
+                client_call_log=self.root / "old-client-starts-calls",
                 handoff_action=EXTERNAL_NOEXEC_STATE_SCENARIO, case_label=EXTERNAL_NOEXEC_STATE_SCENARIO,
                 handoff_cases=self.cases,
             )
