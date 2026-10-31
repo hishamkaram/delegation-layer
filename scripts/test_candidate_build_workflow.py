@@ -51,6 +51,18 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertRegex(dispatch, rf"{name}:\n(?:        .*\n)*?        default: false\n(?:        .*\n)*?        type: boolean\n")
         self.assertIn("  push:\n    branches: [\"main\"]", self.source)
 
+    def test_each_node_version_has_one_package_check_per_host(self):
+        package = job_text(self.source, "skill-package")
+        self.assertIn("os: [ubuntu-24.04, macos-15]", package)
+        self.assertIn("node-version: '18.x'", package)
+        self.assertNotIn("node-version: '22.x'", package)
+        self.assertEqual(package.count("run: make skill-package-check"), 1)
+        for name in ("gate-linux", "gate-macos"):
+            with self.subTest(job=name):
+                gate = job_text(self.source, name)
+                self.assertIn("node-version: '22.x'", gate)
+                self.assertEqual(gate.count("run: make check"), 1)
+
     def test_one_ordinary_pr_or_main_run_builds_the_distribution(self):
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split())
         for requirement in ("github.event_name == 'workflow_dispatch'", "inputs.build_candidate",

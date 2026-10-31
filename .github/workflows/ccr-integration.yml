@@ -59,5 +59,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ccr-integration-${{ runner.os }}
-          path: ~/ccr-integration-evidence/success.json
+          # Existing public control records preserve refusals without raw streams or profiles.
+          path: |
+            ~/ccr-integration-evidence/success.json
+            ~/ccr-integration-evidence/*-dispatch-attempt.json
+            ~/ccr-integration-evidence/*-continue-attempt.json
+            ~/ccr-integration-evidence/failure-diagnostics.json
+            ~/ccr-integration-evidence/failure-cleanup.json
+            ~/ccr-integration-evidence/failure-cleanup-expired.json
           if-no-files-found: warn

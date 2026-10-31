@@ -36,12 +36,10 @@
     "imports": [
       "py:__future__",
       "py:acceptance_tests.release_fixture",
-      "py:base64",
       "py:contextlib",
       "py:dataclasses",
       "py:delegate_acceptance.processes.contracts",
       "py:delegate_acceptance.processes.operations",
-      "py:hashlib",
       "py:io",
       "py:os",
       "py:pathlib",
