@@ -52,9 +52,16 @@ func TestRuntimeCapabilityRejectsRequiredHelpOverflow(t *testing.T) {
 }
 
 func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
-	root := t.TempDir()
+	installed := t.TempDir()
+	root := filepath.Join(t.TempDir(), "installed")
+	if err := os.Symlink(installed, root); err != nil {
+		t.Fatal(err)
+	}
 	path := writeRuntimeCLI(t, root, "--sandbox")
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox"})
+	if definition.Executable == path {
+		t.Fatalf("fixture did not resolve the installed path alias: %q", path)
+	}
 	// A compatible provider update replaces the installed file after
 	// discovery. The probe runs the installed executable; no byte gate refuses.
 	updated := filepath.Join(root, "provider-cli.updated")
@@ -66,8 +73,8 @@ func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	facts, err := runRuntimeProbe(t, definition)
-	if err != nil || facts.Executable != path || facts.SHA256 != "" {
-		t.Fatalf("compatible update refused: facts=%+v err=%v", facts, err)
+	if err != nil || facts != (provider.RuntimeFacts{Executable: definition.Executable}) {
+		t.Fatalf("compatible update probe: facts=%+v input=%q resolved=%q err=%v", facts, path, definition.Executable, err)
 	}
 	if invoked := runtimeCLIInvocations(t, root); invoked != "updated:--help\n" {
 		t.Fatalf("provider invocations = %q, want the installed update's help exchange", invoked)
