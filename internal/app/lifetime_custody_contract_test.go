@@ -112,22 +112,17 @@ func custodyContractPlacement(fill string) *task.LifetimeCustodyPlacement {
 	}
 }
 
-// custodyContractProbe observes the guardian's selection, scope, and worker
+// custodyContractProbe observes the guardian's scope and worker
 // boundaries against the production store at each boundary.
 type custodyContractProbe struct {
-	store     custodyContractStore
-	placement *task.LifetimeCustodyPlacement
-	err       error
-	onScope   func()
+	store   custodyContractStore
+	onScope func()
 	// cleanup is set by run before its guardian starts.
 	cleanup *custodyFixtureCleanup
 
-	mu                   sync.Mutex
-	events               []string
-	selections           int
-	intentAtSelect       bool
-	registrationAtSelect bool
-	registrationAtStart  *task.LifetimeRegistrationRecord
+	mu                  sync.Mutex
+	events              []string
+	registrationAtStart *task.LifetimeRegistrationRecord
 }
 
 func (p *custodyContractProbe) add(event string) {
@@ -136,22 +131,10 @@ func (p *custodyContractProbe) add(event string) {
 	p.mu.Unlock()
 }
 
-func (p *custodyContractProbe) snapshot() (events []string, selections int) {
+func (p *custodyContractProbe) snapshot() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return slices.Clone(p.events), p.selections
-}
-
-func (p *custodyContractProbe) selectPlacement(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
-	_, intentErr := p.store.records.ReadLifetimeIntentContext(ctx)
-	_, registrationErr := p.store.records.ReadLifetimeRegistrationContext(ctx)
-	p.mu.Lock()
-	p.selections++
-	p.intentAtSelect = intentErr == nil
-	p.registrationAtSelect = !task.RecordAbsent(registrationErr)
-	p.mu.Unlock()
-	p.add("select")
-	return p.placement, p.err
+	return slices.Clone(p.events)
 }
 
 type custodyContractScope struct {
@@ -165,7 +148,6 @@ func (s custodyContractScope) DestroyEmpty() error {
 }
 
 func (p *custodyContractProbe) configure(options *guardian.Options) {
-	options.SelectPlacement = p.selectPlacement
 	create := options.ScopeFactory
 	options.ScopeFactory = func(plan lifetime.Plan) (guardian.Scope, error) {
 		p.add("scope")

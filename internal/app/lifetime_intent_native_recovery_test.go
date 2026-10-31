@@ -19,21 +19,20 @@ import (
 const nativeIntentGuardianLimit = time.Minute
 
 var (
-	errNativeIntentPlacement = errors.New("native intent placement sentinel")
-	errNativeIntentScopeRan  = errors.New("native intent scope creation must not run")
+	errNativeIntentScope     = errors.New("native intent scope factory sentinel")
 	errNativeIntentWorkerRan = errors.New("native intent worker start must not run")
 )
 
 // TestStatusRecoversNativeIntentOnlyGuardianFailure composes a production
-// guardian that fails custody placement after persisting its native intent
+// guardian whose scope factory fails after persisting its native intent
 // with the public status command. Only the Pueue transport is a fixture; the
 // plan, boot identity, records, owner lease, and recovery are production code.
 func TestStatusRecoversNativeIntentOnlyGuardianFailure(t *testing.T) {
 	fixture := newRebootFixture(t, rebootSetup{stage: rebootLifetimeNone})
 	td := fixture.td
-	runErr, selected := runNativeIntentGuardian(t, fixture)
-	if !errors.Is(runErr, errNativeIntentPlacement) || !selected {
-		t.Fatalf("guardian error = %v selected=%t, want placement sentinel after selection", runErr, selected)
+	runErr, scopeAttempted := runNativeIntentGuardian(t, fixture)
+	if !errors.Is(runErr, errNativeIntentScope) || !scopeAttempted {
+		t.Fatalf("guardian error = %v scopeAttempted=%t, want scope factory sentinel", runErr, scopeAttempted)
 	}
 	intent := requireNativeIntentOnly(t, fixture)
 	if _, err := guardian.ReadClosureProof(t.Context(), td); !errors.Is(err, guardian.ErrProofPending) {
@@ -59,9 +58,9 @@ func TestStatusRecoversNativeIntentOnlyGuardianFailure(t *testing.T) {
 	}
 }
 
-// runNativeIntentGuardian runs one production guardian whose placement
-// selector fails after the intent is durable. Scope creation and worker start
-// are tripwires; neither may be reached.
+// runNativeIntentGuardian runs one production guardian whose scope factory
+// fails after the intent is durable, before creating a native scope. Worker
+// start remains a tripwire.
 func runNativeIntentGuardian(t *testing.T, fixture *rebootFixture) (error, bool) {
 	t.Helper()
 	td := fixture.td
@@ -71,7 +70,7 @@ func runNativeIntentGuardian(t *testing.T, fixture *rebootFixture) (error, bool)
 			t.Errorf("close guardian control pipe: %v", err)
 		}
 	})
-	selected := false
+	scopeAttempted := false
 	owner, err := guardian.New(guardian.Options{
 		RootID:   fixture.store.RootID,
 		TaskID:   fixture.req.TaskID,
@@ -86,19 +85,15 @@ func runNativeIntentGuardian(t *testing.T, fixture *rebootFixture) (error, bool)
 		Worker:     exec.Command(fixture.runner),
 		Connection: connection,
 		ScopeFactory: func(lifetime.Plan) (guardian.Scope, error) {
-			t.Error(errNativeIntentScopeRan)
-			return nil, errNativeIntentScopeRan
+			scopeAttempted = true
+			if intent, readErr := td.ReadLifetimeIntentContext(t.Context()); readErr != nil || intent == nil {
+				t.Errorf("scope attempted before durable intent: %+v err=%v", intent, readErr)
+			}
+			return nil, errNativeIntentScope
 		},
 		StartWorker: func(*exec.Cmd) error {
 			t.Error(errNativeIntentWorkerRan)
 			return errNativeIntentWorkerRan
-		},
-		SelectPlacement: func(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
-			selected = true
-			if intent, readErr := td.ReadLifetimeIntentContext(ctx); readErr != nil || intent == nil {
-				t.Errorf("placement selected before durable intent: %+v err=%v", intent, readErr)
-			}
-			return nil, errNativeIntentPlacement
 		},
 	})
 	if err != nil {
@@ -106,7 +101,7 @@ func runNativeIntentGuardian(t *testing.T, fixture *rebootFixture) (error, bool)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), nativeIntentGuardianLimit)
 	defer cancel()
-	return owner.Run(ctx), selected
+	return owner.Run(ctx), scopeAttempted
 }
 
 // requireNativeIntentOnly proves the guardian left exactly its actual native

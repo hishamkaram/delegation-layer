@@ -1,7 +1,7 @@
 package execution
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,9 +74,9 @@ type directRun struct {
 
 // run launches the task once. refresh installs a runtime preflight that
 // returns the replacement plan; started records each Start's command path.
-func (p installedProvider) run(binder CommandBinder, refresh bool) directRun {
+func (p installedProvider) run(refresh bool) directRun {
 	run := directRun{}
-	options := Options{Binder: binder, Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
+	options := Options{Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
 		run.started = append(run.started, cmd.Path)
 		return cmd.Start()
 	}}}
@@ -93,33 +93,23 @@ func (p installedProvider) run(binder CommandBinder, refresh bool) directRun {
 // TestQueuedProviderUpdateLaunchesRefreshedInstalledExecutable replaces the
 // retired initial-binding deferral tests: nothing is bound before preflight,
 // and the one Start runs the installed replacement directly, with no copy,
-// no provider digest, and no binder involvement.
+// and no provider digest.
 func TestQueuedProviderUpdateLaunchesRefreshedInstalledExecutable(t *testing.T) {
 	for _, change := range queuedProviderChanges {
-		for _, supplied := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/supplied=%t", change.name, supplied), func(t *testing.T) {
-				provider := installedProviderTask(t)
-				binder := &recordingBinder{failAt: 1}
-				var port CommandBinder
-				if supplied {
-					port = binder
-				}
-				change.apply(t, provider.admitted)
-				run := provider.run(port, true)
-				assertSuccess(t, run.result)
-				if run.preflights != 1 || !slices.Equal(run.started, []string{provider.refreshed.Executable}) {
-					t.Fatalf("preflight=%d starts=%q, want one preflight and one direct Start of %s", run.preflights, run.started, provider.refreshed.Executable)
-				}
-				if got := string(payload(t, provider.td, run.result.Outcome)); got != "replacement\n" {
-					t.Fatalf("provider output %q, want the replacement", got)
-				}
-				if binder.calls() != 0 {
-					t.Fatalf("provider launch used the supplied binder: %+v", binder.requests)
-				}
-				assertObservedRuntimeEvidence(t, provider.td, provider.refreshed.ProviderRuntime)
-				assertNoTaskViews(t, provider.temporary)
-			})
-		}
+		t.Run(change.name, func(t *testing.T) {
+			provider := installedProviderTask(t)
+			change.apply(t, provider.admitted)
+			run := provider.run(true)
+			assertSuccess(t, run.result)
+			if run.preflights != 1 || !slices.Equal(run.started, []string{provider.refreshed.Executable}) {
+				t.Fatalf("preflight=%d starts=%q, want one preflight and one direct Start of %s", run.preflights, run.started, provider.refreshed.Executable)
+			}
+			if got := string(payload(t, provider.td, run.result.Outcome)); got != "replacement\n" {
+				t.Fatalf("provider output %q, want the replacement", got)
+			}
+			assertObservedRuntimeEvidence(t, provider.td, provider.refreshed.ProviderRuntime)
+			assertNoTaskViews(t, provider.temporary)
+		})
 	}
 }
 
@@ -133,7 +123,7 @@ func TestCompatibleUpdateWithoutRefreshRunsInstalledBytes(t *testing.T) {
 		t.Run(change.name, func(t *testing.T) {
 			provider := installedProviderTask(t)
 			change.apply(t, provider.admitted)
-			run := provider.run(nil, false)
+			run := provider.run(false)
 			if !slices.Equal(run.started, []string{provider.admitted}) {
 				t.Fatalf("starts=%q, want one direct Start of the admitted path", run.started)
 			}
@@ -162,37 +152,33 @@ func readSeal(t *testing.T, provider installedProvider) task.ProviderExitRecord 
 	return seal
 }
 
-// TestRunConstructsDirectProviderCommandWithoutBinderOrCopy replaces the
-// retired supplied-binder provider binding tests. The provider command is the
-// installed path with the exact arguments; a supplied binder still binds an
-// integrity-bound helper inside preflight, and a helper refusal is a sealed
-// start failure with no provider Start and no fallback.
-func TestRunConstructsDirectProviderCommandWithoutBinderOrCopy(t *testing.T) {
-	helper, err := os.Executable()
-	require(t, err)
-	helper, err = filepath.EvalSymlinks(helper)
-	require(t, err)
-	helperBytes, err := os.ReadFile(helper)
-	require(t, err)
+// The provider runs at its installed path with exact arguments and environment.
+// Helper binding still verifies admitted bytes; refusal seals a start failure
+// without a provider Start or fallback.
+func TestRunConstructsDirectProviderCommandWithoutCopy(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		binder *recordingBinder
-		want   error
+		name string
+		want error
 	}{
-		{name: "helper-bound", binder: &recordingBinder{}},
-		{name: "helper-refused", binder: &recordingBinder{failAt: 1}, want: errRecordingBinder},
-		{name: "helper-without-command", binder: &recordingBinder{empty: true}, want: errInvalidBoundCommand},
+		{name: "helper-bound"},
+		{name: "helper-bad-digest", want: verifiedexec.ErrAdmittedExecutableChanged},
+		{name: "helper-missing", want: os.ErrNotExist},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture, temporary := binderTask(t)
+			request := helperCommandRequest(t, temporary)
+			switch test.name {
+			case "helper-bad-digest":
+				request.SHA256 = strings.Repeat("0", 64)
+			case "helper-missing":
+				request.Executable = filepath.Join(temporary, "private-missing-helper")
+			}
 			var started *exec.Cmd
+			var bindingErr error
 			result := Run(fixture.td, fixture.permit, fixture.plan, Options{
-				Binder: test.binder,
 				PreflightPlan: func(scope PreflightScope, plan Plan) (Plan, error) {
-					command, bindErr := scope.BindCommand(verifiedexec.CommandRequest{
-						Executable: helper, SHA256: task.ComputeSHA256(helperBytes),
-						Directory: temporary, Environment: []string{"TMPDIR=" + temporary}, Args: []string{"-test.run=^$"},
-					})
+					command, bindErr := scope.BindCommand(request)
+					bindingErr = bindErr
 					if bindErr != nil {
 						return Plan{}, bindErr
 					}
@@ -203,11 +189,11 @@ func TestRunConstructsDirectProviderCommandWithoutBinderOrCopy(t *testing.T) {
 					return cmd.Start()
 				}},
 			})
-			if test.binder.calls() != 1 || test.binder.requests[0].Executable != helper {
-				t.Fatalf("binder requests = %+v, want only the helper", test.binder.requests)
+			if !errors.Is(bindingErr, test.want) {
+				t.Fatalf("helper binding error = %v, want %v", bindingErr, test.want)
 			}
 			if test.want != nil {
-				assertHelperRefusalSealed(t, fixture, result, started, test.want)
+				assertHelperRefusalSealed(t, fixture, result, started, bindingErr)
 			} else {
 				assertSuccess(t, result)
 				assertDirectProviderCommand(t, fixture.plan, started)
@@ -232,11 +218,11 @@ func assertHelperRefusalSealed(t *testing.T, fixture binderTaskFixture, result R
 }
 
 // assertDirectProviderCommand proves the started command is the installed
-// executable itself, with the exact plan arguments and directory.
+// executable itself, with the exact plan arguments, directory and environment.
 func assertDirectProviderCommand(t *testing.T, plan Plan, started *exec.Cmd) {
 	t.Helper()
 	if started == nil || started.Path != plan.Executable || started.Args[0] != plan.Executable ||
-		!slices.Equal(started.Args[1:], plan.Arguments) || started.Dir != plan.Directory {
-		t.Fatalf("provider command is not the installed executable with exact arguments: %+v", started)
+		!slices.Equal(started.Args[1:], plan.Arguments) || started.Dir != plan.Directory || !slices.Equal(started.Env, plan.Environment) {
+		t.Fatalf("provider command is not the installed executable with exact arguments and environment: %+v", started)
 	}
 }

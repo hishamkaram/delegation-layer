@@ -22,25 +22,6 @@ func lifetimeGuardianTestPlacement(fill string) *task.LifetimeCustodyPlacement {
 	}
 }
 
-// lifetimeGuardianTestSelector counts selections on the Run goroutine. Tests
-// read the count only after Run has returned through runDone.
-type lifetimeGuardianTestSelector struct {
-	timeline  *lifetimeGuardianTestTimeline
-	placement *task.LifetimeCustodyPlacement
-	err       error
-	calls     int
-	before    func(context.Context)
-}
-
-func (s *lifetimeGuardianTestSelector) selectPlacement(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
-	s.calls++
-	s.timeline.add("select")
-	if s.before != nil {
-		s.before(ctx)
-	}
-	return s.placement, s.err
-}
-
 func (r *lifetimeGuardianTestRecords) registrationFactsSnapshot() []taskdir.LifetimeRegistrationFacts {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -55,17 +36,12 @@ func (r *lifetimeGuardianTestRecords) setExistingRegistration(record *task.Lifet
 
 func newLifetimeGuardianPlacementFixture(
 	t *testing.T,
-	selector *lifetimeGuardianTestSelector,
 	configure func(*Options, *lifetimeGuardianTestRecords),
 ) *lifetimeGuardianTestFixture {
 	t.Helper()
 	return newLifetimeGuardianTestFixtureWithOptions(t, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil,
 		func(options *Options) {
 			records := lifetimeGuardianTestRecordsFromOptions(t, options)
-			if selector != nil {
-				selector.timeline = records.timeline
-				options.SelectPlacement = selector.selectPlacement
-			}
 			if configure != nil {
 				configure(options, records)
 			}
@@ -89,38 +65,25 @@ func requireLifetimeGuardianPlacement(t *testing.T, label string, got, want *tas
 	}
 }
 
-func TestLifetimeGuardianSelectsPlacementAfterIntentBeforeScope(t *testing.T) {
-	selected := lifetimeGuardianTestPlacement("a")
-	want := selected.Clone()
-	selector := &lifetimeGuardianTestSelector{placement: selected}
-	f := newLifetimeGuardianPlacementFixture(t, selector, func(options *Options, _ *lifetimeGuardianTestRecords) {
-		create := options.ScopeFactory
-		options.ScopeFactory = func(plan lifetime.Plan) (Scope, error) {
-			// The selector's object belongs to the selector after it returns.
-			selected.PoolID = strings.Repeat("f", 64)
-			return create(plan)
-		}
-	})
+func TestLifetimeGuardianRegistersWithoutPlacementAfterIntentBeforeScope(t *testing.T) {
+	f := newLifetimeGuardianPlacementFixture(t, nil)
 	completeLifetimeGuardianPlacementRun(t, f)
-	if selector.calls != 1 {
-		t.Fatalf("placement selections = %d, want 1", selector.calls)
-	}
-	assertTimelineOrder(t, f.timeline.snapshot(), "acquire", "intent", "select", "scope", "registration", "worker-start")
+	assertTimelineOrder(t, f.timeline.snapshot(), "acquire", "intent", "scope", "registration", "worker-start")
 	facts := f.records.registrationFactsSnapshot()
 	if len(facts) != 1 {
 		t.Fatalf("registration writes = %d, want 1", len(facts))
 	}
-	requireLifetimeGuardianPlacement(t, "registered", facts[0].CustodyPlacement, want)
-	if facts[0].CustodyPlacement == selected || facts[0].CustodyPlacement == f.guardian.placement {
-		t.Fatal("registration facts alias the selector result or guardian placement")
-	}
+	requireLifetimeGuardianPlacement(t, "registered", facts[0].CustodyPlacement, nil)
+	requireLifetimeGuardianPlacement(t, "guardian", f.guardian.placement, nil)
 }
 
 func TestLifetimeGuardianPassesFreshPlacementOnEveryRegistrationWrite(t *testing.T) {
 	wantErr := errors.New("registration acknowledgement failed")
 	want := lifetimeGuardianTestPlacement("a")
-	selector := &lifetimeGuardianTestSelector{placement: want.Clone()}
-	f := newLifetimeGuardianPlacementFixture(t, selector, func(_ *Options, records *lifetimeGuardianTestRecords) {
+	f := newLifetimeGuardianPlacementFixture(t, func(options *Options, records *lifetimeGuardianTestRecords) {
+		existing := matchingLifetimeGuardianTestRegistration(options, "test-scope")
+		existing.CustodyPlacement = want.Clone()
+		records.existingRegistration = existing
 		records.registrationErrors = []error{wantErr, nil}
 		records.registrationCommitOnError = true
 	})
@@ -148,30 +111,21 @@ func TestLifetimeGuardianPassesFreshPlacementOnEveryRegistrationWrite(t *testing
 	}
 }
 
-func TestLifetimeGuardianExistingRegistrationPlacementIsNeverReselected(t *testing.T) {
+func TestLifetimeGuardianExistingRegistrationPlacementIsPreserved(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		existing *task.LifetimeCustodyPlacement
-		selector bool
 	}{
-		{name: "populated", existing: lifetimeGuardianTestPlacement("a"), selector: true},
-		{name: "nil", selector: true},
-		{name: "populated without selector", existing: lifetimeGuardianTestPlacement("a")},
+		{name: "populated", existing: lifetimeGuardianTestPlacement("a")},
+		{name: "nil"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var selector *lifetimeGuardianTestSelector
-			if tc.selector {
-				selector = &lifetimeGuardianTestSelector{placement: lifetimeGuardianTestPlacement("b")}
-			}
-			f := newLifetimeGuardianPlacementFixture(t, selector, func(options *Options, records *lifetimeGuardianTestRecords) {
+			f := newLifetimeGuardianPlacementFixture(t, func(options *Options, records *lifetimeGuardianTestRecords) {
 				existing := matchingLifetimeGuardianTestRegistration(options, "test-scope")
 				existing.CustodyPlacement = tc.existing.Clone()
 				records.existingRegistration = existing
 			})
 			completeLifetimeGuardianPlacementRun(t, f)
-			if selector != nil && selector.calls != 0 {
-				t.Fatalf("placement selections over an existing registration = %d, want 0", selector.calls)
-			}
 			facts := f.records.registrationFactsSnapshot()
 			if len(facts) != 1 {
 				t.Fatalf("registration writes = %d, want 1", len(facts))
@@ -182,47 +136,54 @@ func TestLifetimeGuardianExistingRegistrationPlacementIsNeverReselected(t *testi
 	}
 }
 
-func TestLifetimeGuardianPlacementSelectionRefusalCreatesNoScope(t *testing.T) {
-	wantErr := errors.New("custody pool unavailable")
-	invalid := lifetimeGuardianTestPlacement("a")
-	invalid.Version = 2
-	relative := lifetimeGuardianTestPlacement("a")
-	relative.PoolRoot = "pool"
-	for _, tc := range []struct {
-		name      string
-		placement *task.LifetimeCustodyPlacement
-		err       error
-		cancel    bool
-		want      error
-	}{
-		{name: "selector error", err: wantErr, want: wantErr},
-		{name: "nil placement", want: errLifetimeGuardianInvalid},
-		{name: "unsupported version", placement: invalid, want: task.ErrUnsupportedSchema},
-		{name: "relative root", placement: relative, want: task.ErrIdentityMismatch},
-		{name: "canceled run", placement: lifetimeGuardianTestPlacement("a"), cancel: true, want: context.Canceled},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			runContext, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			selector := &lifetimeGuardianTestSelector{placement: tc.placement, err: tc.err}
-			if tc.cancel {
-				selector.before = func(context.Context) { cancel() }
-			}
-			f := newLifetimeGuardianTestFixtureWithOptionsAndContext(t, runContext, lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget), nil, lifetime.KindProcessGroup,
-				lifetime.AssuranceCooperative, nil, nil, func(options *Options) {
-					selector.timeline = lifetimeGuardianTestRecordsFromOptions(t, options).timeline
-					options.SelectPlacement = selector.selectPlacement
-				})
-			if err := f.waitRun(t); !errors.Is(err, tc.want) {
-				t.Fatalf("Run error = %v, want %v", err, tc.want)
-			}
-			requireLifetimeGuardianNoScope(t, f)
-			if selector.calls != 1 {
-				t.Fatalf("placement selections = %d, want 1", selector.calls)
-			}
-			assertTimelineOrder(t, f.timeline.snapshot(), "acquire", "intent", "select", "release")
+func TestLifetimeGuardianCanceledPlacementReadCreatesNoScope(t *testing.T) {
+	runContext, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(t, runContext, lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget), nil, lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative, nil, nil, func(options *Options) {
+			options.Records = cancelPlacementReadRecords{lifetimeGuardianTestRecords: lifetimeGuardianTestRecordsFromOptions(t, options), cancel: cancel}
 		})
+	if err := f.waitRun(t); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want cancellation", err)
 	}
+	requireLifetimeGuardianNoScope(t, f)
+	assertTimelineOrder(t, f.timeline.snapshot(), "acquire", "intent", "release")
+}
+
+type cancelPlacementReadRecords struct {
+	*lifetimeGuardianTestRecords
+	cancel context.CancelFunc
+}
+
+func (r cancelPlacementReadRecords) ReadLifetimeRegistrationContext(ctx context.Context) (*task.LifetimeRegistrationRecord, error) {
+	r.cancel()
+	return r.lifetimeGuardianTestRecords.ReadLifetimeRegistrationContext(ctx)
+}
+
+// The reader may retain its record. The resolver must take its own placement
+// snapshot even when the reader itself does not clone.
+func TestLifetimeGuardianPlacementClonesRegistrationReaderResult(t *testing.T) {
+	want := lifetimeGuardianTestPlacement("a")
+	registration := &task.LifetimeRegistrationRecord{CustodyPlacement: want.Clone()}
+	g := &Guardian{options: Options{Records: placementReaderRecords{registration: registration}}}
+	placement, err := g.resolvePlacement(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement == registration.CustodyPlacement {
+		t.Fatal("resolved placement aliases the registration reader's result")
+	}
+	registration.CustodyPlacement.PoolID = strings.Repeat("f", 64)
+	requireLifetimeGuardianPlacement(t, "resolved snapshot", placement, want)
+}
+
+type placementReaderRecords struct {
+	Records
+	registration *task.LifetimeRegistrationRecord
+}
+
+func (r placementReaderRecords) ReadLifetimeRegistrationContext(context.Context) (*task.LifetimeRegistrationRecord, error) {
+	return r.registration, nil
 }
 
 func requireLifetimeGuardianNoScope(t *testing.T, f *lifetimeGuardianTestFixture) {
@@ -254,30 +215,15 @@ func TestLifetimeGuardianRegistrationPreReadFaultCreatesNoScope(t *testing.T) {
 		{name: "nil record", configure: func(r *lifetimeGuardianTestRecords) { r.registrationReadNil = true }, want: task.ErrEvidenceFault},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			selector := &lifetimeGuardianTestSelector{placement: lifetimeGuardianTestPlacement("a")}
-			f := newLifetimeGuardianPlacementFixture(t, selector, func(_ *Options, records *lifetimeGuardianTestRecords) {
+			f := newLifetimeGuardianPlacementFixture(t, func(_ *Options, records *lifetimeGuardianTestRecords) {
 				tc.configure(records)
 			})
 			if err := f.waitRun(t); !errors.Is(err, tc.want) {
 				t.Fatalf("Run error = %v, want %v", err, tc.want)
 			}
-			if selector.calls != 0 {
-				t.Fatalf("placement selections after unreadable registration = %d, want 0", selector.calls)
-			}
 			requireLifetimeGuardianNoScope(t, f)
 		})
 	}
-}
-
-func TestLifetimeGuardianRegistrationPreReadRunsWithoutSelector(t *testing.T) {
-	readErr := errors.New("registration read failed")
-	f := newLifetimeGuardianPlacementFixture(t, nil, func(_ *Options, records *lifetimeGuardianTestRecords) {
-		records.registrationReadErr = readErr
-	})
-	if err := f.waitRun(t); !errors.Is(err, readErr) {
-		t.Fatalf("Run error = %v, want registration read failure", err)
-	}
-	requireLifetimeGuardianNoScope(t, f)
 }
 
 // A registration that names this exact native scope publishes it, whatever
@@ -301,11 +247,10 @@ func TestLifetimeGuardianForeignPlacementKeepsRegisteredScopeResident(t *testing
 
 func testLifetimeGuardianForeignPlacementResident(t *testing.T, writeErr, want error) {
 	t.Helper()
-	own := lifetimeGuardianTestPlacement("a")
+	var own *task.LifetimeCustodyPlacement
 	retryEntered, retryRelease := make(chan struct{}), make(chan struct{})
 	var retryOnce sync.Once
-	selector := &lifetimeGuardianTestSelector{placement: own.Clone()}
-	f := newLifetimeGuardianPlacementFixture(t, selector, func(options *Options, records *lifetimeGuardianTestRecords) {
+	f := newLifetimeGuardianPlacementFixture(t, func(options *Options, records *lifetimeGuardianTestRecords) {
 		records.registrationPlacement = lifetimeGuardianTestPlacement("b")
 		records.registrationErr = writeErr
 		records.registrationCommitOnError = true
@@ -344,9 +289,6 @@ func testLifetimeGuardianForeignPlacementResident(t *testing.T, writeErr, want e
 	if destroy, release := f.scope.disposalCounts(); destroy != 1 || release != 1 {
 		t.Fatalf("resolved registration disposal = destroy %d release %d, want 1/1", destroy, release)
 	}
-	if selector.calls != 1 {
-		t.Fatalf("placement selections = %d, want 1", selector.calls)
-	}
 }
 
 // requireLifetimeGuardianResidentScope proves the scope is retained without
@@ -370,13 +312,14 @@ func requireLifetimeGuardianResidentScope(t *testing.T, f *lifetimeGuardianTestF
 func TestLifetimeGuardianDifferentNativeScopeWithPlacementStillDisposes(t *testing.T) {
 	wantErr := errors.New("registration write failed")
 	placement := lifetimeGuardianTestPlacement("a")
-	selector := &lifetimeGuardianTestSelector{placement: placement.Clone()}
-	f := newLifetimeGuardianPlacementFixture(t, selector, func(options *Options, records *lifetimeGuardianTestRecords) {
+	f := newLifetimeGuardianPlacementFixture(t, func(options *Options, records *lifetimeGuardianTestRecords) {
 		records.registrationErr = wantErr
-		selector.before = func(context.Context) {
+		create := options.ScopeFactory
+		options.ScopeFactory = func(plan lifetime.Plan) (Scope, error) {
 			foreign := matchingLifetimeGuardianTestRegistration(options, "different-scope")
 			foreign.CustodyPlacement = placement.Clone()
 			records.setExistingRegistration(foreign)
+			return create(plan)
 		}
 	})
 	err := f.waitRun(t)
@@ -389,27 +332,25 @@ func TestLifetimeGuardianDifferentNativeScopeWithPlacementStillDisposes(t *testi
 	if destroy, release := f.scope.disposalCounts(); destroy != 1 || release != 1 {
 		t.Fatalf("different native registration disposal = destroy %d release %d, want 1/1", destroy, release)
 	}
-	assertTimelineOrder(t, f.timeline.snapshot(), "select", "scope", "registration", "scope-destroy", "scope-release", "release")
+	assertTimelineOrder(t, f.timeline.snapshot(), "intent", "scope", "registration", "scope-destroy", "scope-release", "release")
 }
 
-func TestLifetimeGuardianScopeCollisionSelectsPlacementOnce(t *testing.T) {
+func TestLifetimeGuardianScopeCollisionKeepsNewRegistrationUnplaced(t *testing.T) {
 	for _, terminal := range []bool{false, true} {
 		name := "retry"
 		if terminal {
 			name = "terminal recovery"
 		}
 		t.Run(name, func(t *testing.T) {
-			testLifetimeGuardianScopeCollisionSelection(t, terminal)
+			testLifetimeGuardianScopeCollisionPlacement(t, terminal)
 		})
 	}
 }
 
-func testLifetimeGuardianScopeCollisionSelection(t *testing.T, terminal bool) {
+func testLifetimeGuardianScopeCollisionPlacement(t *testing.T, terminal bool) {
 	t.Helper()
-	placement := lifetimeGuardianTestPlacement("a")
-	selector := &lifetimeGuardianTestSelector{placement: placement.Clone()}
 	scopeCalls := 0
-	f := newLifetimeGuardianPlacementFixture(t, selector, func(options *Options, records *lifetimeGuardianTestRecords) {
+	f := newLifetimeGuardianPlacementFixture(t, func(options *Options, records *lifetimeGuardianTestRecords) {
 		create := options.ScopeFactory
 		options.ScopeFactory = func(plan lifetime.Plan) (Scope, error) {
 			scopeCalls++
@@ -440,39 +381,7 @@ func testLifetimeGuardianScopeCollisionSelection(t *testing.T, terminal bool) {
 		if scopeCalls != 2 || len(facts) != 1 {
 			t.Fatalf("collision retry = scope calls %d registrations %d, want 2/1", scopeCalls, len(facts))
 		}
-		requireLifetimeGuardianPlacement(t, "registered", facts[0].CustodyPlacement, placement)
-	}
-	if selector.calls != 1 {
-		t.Fatalf("placement selections across a scope collision = %d, want 1", selector.calls)
-	}
-}
-
-func TestLifetimeGuardianPlacementSelectorOwnerBoundary(t *testing.T) {
-	for _, tc := range []struct {
-		ownerKind string
-		refused   bool
-	}{
-		{ownerKind: task.LifetimeOwnerTask},
-		{ownerKind: task.LifetimeOwnerInspection},
-		{ownerKind: task.LifetimeOwnerWorkspace, refused: true},
-	} {
-		t.Run(tc.ownerKind, func(t *testing.T) {
-			fixture, deadline := newLifetimeGuardianTestFixtureState(t, lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget), nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil)
-			t.Cleanup(func() {
-				closeWorkspaceGuardianTestConnection(t, fixture.serverConn)
-				closeWorkspaceGuardianTestConnection(t, fixture.clientConn)
-			})
-			options := lifetimeGuardianTestOptions(fixture, deadline)
-			options.OwnerKind = tc.ownerKind
-			if _, err := New(options); err != nil {
-				t.Fatalf("New without a selector: %v", err)
-			}
-			options.SelectPlacement = (&lifetimeGuardianTestSelector{timeline: fixture.timeline}).selectPlacement
-			_, err := New(options)
-			if tc.refused != errors.Is(err, errLifetimeGuardianInvalid) || (!tc.refused && err != nil) {
-				t.Fatalf("New with a selector for %s = %v, refused want %t", tc.ownerKind, err, tc.refused)
-			}
-		})
+		requireLifetimeGuardianPlacement(t, "registered", facts[0].CustodyPlacement, nil)
 	}
 }
 

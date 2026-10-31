@@ -1,12 +1,10 @@
 package execution
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -15,48 +13,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-// recordingBinder stands in for an owner-installed helper binder. It records
-// each request with its context and either refuses the failAt-th request
-// (1-based), returns no command when empty is set, or binds through a private
-// copy so the returned view is observable and removed by Command.Close.
-type recordingBinder struct {
-	mu       sync.Mutex
-	failAt   int
-	empty    bool
-	requests []verifiedexec.CommandRequest
-	contexts []context.Context
-}
-
-var errRecordingBinder = errors.New("supplied binder refused")
-
-func (b *recordingBinder) BindCommand(ctx context.Context, request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.requests = append(b.requests, request)
-	b.contexts = append(b.contexts, ctx)
-	if len(b.requests) == b.failAt {
-		return nil, errRecordingBinder
-	}
-	if b.empty {
-		return nil, nil
-	}
-	return verifiedexec.NewCommandFromRequest(request)
-}
-
-func (b *recordingBinder) calls() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.requests)
-}
-
 type binderTaskFixture struct {
 	td     *taskdir.TaskDir
 	permit *taskdir.StartPermit
 	plan   Plan
 }
 
-// binderTask selects a private TMPDIR for every view of the task, so a view
-// made outside the supplied binder, or one left behind, is observable.
+// binderTask selects a private TMPDIR so every helper view is observable.
 func binderTask(t *testing.T) (binderTaskFixture, string) {
 	t.Helper()
 	temporary, err := filepath.EvalSymlinks(t.TempDir())
@@ -82,71 +45,39 @@ func assertNoTaskViews(t *testing.T, temporary string) {
 	}
 }
 
-func TestSupervisedScopeBindsThroughSuppliedBinder(t *testing.T) {
+func helperCommandRequest(t *testing.T, temporary string) verifiedexec.CommandRequest {
+	t.Helper()
 	executable, err := os.Executable()
 	require(t, err)
 	executable, err = filepath.EvalSymlinks(executable)
 	require(t, err)
 	data, err := os.ReadFile(executable)
 	require(t, err)
-	temporary, err := filepath.EvalSymlinks(t.TempDir())
-	require(t, err)
-	request := verifiedexec.CommandRequest{
+	return verifiedexec.CommandRequest{
 		Executable: executable, SHA256: task.ComputeSHA256(data),
 		Directory: temporary, Environment: []string{"TMPDIR=" + temporary}, Args: []string{"-test.run=^$"},
 	}
-	for _, test := range []struct {
-		name   string
-		binder *recordingBinder
-		want   error
-	}{
-		{name: "binds", binder: &recordingBinder{}},
-		{name: "refuses", binder: &recordingBinder{failAt: 1}, want: errRecordingBinder},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var scopeContext context.Context
-			workErr, stopErr := RunSupervised(time.Now().Add(time.Minute), SupervisedOptions{Stopper: unexpectedBinderStop(t), Binder: test.binder}, func(scope PreflightScope) error {
-				scopeContext = scope.Context()
-				command, bindErr := scope.BindCommand(request)
-				if bindErr != nil {
-					return bindErr
-				}
-				if command.Cmd.Args[0] != executable || !slices.Equal(command.Cmd.Args[1:], request.Args) {
-					t.Errorf("bound command arguments = %q", command.Cmd.Args)
-				}
-				return command.Close()
-			})
-			if !errors.Is(workErr, test.want) || (test.want == nil && workErr != nil) || stopErr != nil {
-				t.Fatalf("work=%v stop=%v, want %v", workErr, stopErr, test.want)
-			}
-			if test.binder.calls() != 1 || test.binder.contexts[0] != scopeContext || !slices.Equal(test.binder.requests[0].Args, request.Args) {
-				t.Fatal("supervised scope did not bind through the supplied binder with its context")
-			}
-			assertNoTaskViews(t, temporary)
-		})
-	}
 }
 
-func TestScopeWithoutBinderKeepsPrivateCopy(t *testing.T) {
-	executable, err := os.Executable()
-	require(t, err)
-	executable, err = filepath.EvalSymlinks(executable)
-	require(t, err)
-	data, err := os.ReadFile(executable)
-	require(t, err)
+func TestScopeKeepsVerifiedPrivateCopy(t *testing.T) {
 	temporary, err := filepath.EvalSymlinks(t.TempDir())
 	require(t, err)
+	request := helperCommandRequest(t, temporary)
 	workErr, stopErr := RunSupervised(time.Now().Add(time.Minute), SupervisedOptions{Stopper: unexpectedBinderStop(t)}, func(scope PreflightScope) error {
-		command, bindErr := scope.BindCommand(verifiedexec.CommandRequest{
-			Executable: executable, SHA256: task.ComputeSHA256(data),
-			Directory: temporary, Environment: []string{"TMPDIR=" + temporary},
-		})
+		command, bindErr := scope.BindCommand(request)
 		if bindErr != nil {
 			return bindErr
 		}
 		entries, readErr := os.ReadDir(temporary)
-		if readErr != nil || len(entries) != 1 || command.Cmd.Path == executable {
-			t.Errorf("default binding is not a private copy under TMPDIR: entries=%v path=%q err=%v", entries, command.Cmd.Path, readErr)
+		if readErr != nil || len(entries) != 1 || command.Cmd.Path == request.Executable {
+			t.Errorf("binding is not a private copy under TMPDIR: entries=%v path=%q err=%v", entries, command.Cmd.Path, readErr)
+		}
+		data, readErr := os.ReadFile(command.Cmd.Path)
+		if readErr != nil || task.ComputeSHA256(data) != request.SHA256 {
+			t.Errorf("helper copy does not hold the admitted bytes: %v", readErr)
+		}
+		if command.Cmd.Args[0] != request.Executable || !slices.Equal(command.Cmd.Args[1:], request.Args) {
+			t.Errorf("bound command lost its arguments: %q", command.Cmd.Args)
 		}
 		return command.Close()
 	})

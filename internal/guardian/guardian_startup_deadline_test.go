@@ -32,20 +32,13 @@ var (
 	errStartupCompetitorNotHeld  = errors.New("competing control transaction ended before holding its lock")
 )
 
-// A background Run still persists intent, selects placement and registers
+// A background Run still persists intent and registers
 // under the immutable business deadline.
 func TestLifetimeGuardianStartupUsesImmutableDeadlineUnderBackgroundRun(t *testing.T) {
-	var selectedDeadline time.Time
-	var selectedBounded bool
 	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		t, context.Background(), lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget),
 		nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil,
-		func(options *Options) {
-			options.SelectPlacement = func(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
-				selectedDeadline, selectedBounded = ctx.Deadline()
-				return lifetimeGuardianTestPlacement("a"), nil
-			}
-		},
+		nil,
 	)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
 	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
@@ -57,9 +50,6 @@ func TestLifetimeGuardianStartupUsesImmutableDeadlineUnderBackgroundRun(t *testi
 	intentContext, registrationContext, _, _ := f.records.boundaryWriteContexts()
 	requireStartupContextDeadline(t, "intent", intentContext, deadline)
 	requireStartupContextDeadline(t, "registration", registrationContext, deadline)
-	if !selectedBounded || !selectedDeadline.Equal(deadline) {
-		t.Fatalf("placement selection deadline = %v bounded=%t, want %v", selectedDeadline, selectedBounded, deadline)
-	}
 }
 
 // An earlier caller deadline still bounds startup persistence.

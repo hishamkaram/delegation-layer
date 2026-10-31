@@ -5,7 +5,7 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _optional_hex_digest, require
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.tasks.runtime_metadata import validate_provider_runtime_metadata
 from scripts.delegate_acceptance.evidence.files import read_json
@@ -111,7 +111,7 @@ def validate_effective_policy(
     policy = effective.get("policy")
     pending_runtime = "runtime_preflight_sha256" in meta
     require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            (policy.get("runtime_sha256") == "" or _hex_digest(policy.get("runtime_sha256"))),
+            _optional_hex_digest(policy.get("runtime_sha256")),
             f"{name} effective policy binding mismatch")
     profile_revision = policy.get("profile_revision")
     require(isinstance(profile_revision, str) and profile_revision,

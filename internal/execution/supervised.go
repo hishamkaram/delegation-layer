@@ -19,7 +19,6 @@ type PreflightScope struct {
 	authorize func() error
 	start     func(func() error) error
 	lifetime  Lifetime
-	binder    CommandBinder
 }
 
 // Context carries the existing owner's absolute deadline, without another timer.
@@ -58,13 +57,12 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	return s.Start(func() error { return s.lifetime.StartCommand(cmd, start) })
 }
 
-// BindCommand binds one integrity-bound native helper command through the
-// owner's binder with the scope's deadline context; a scope without a binder
-// makes the helper's private verified copy. The caller owns the returned
-// command and closes it after Wait, or after a refused start. Provider CLI
-// commands are constructed directly and never bound.
+// BindCommand makes a private verified copy of one integrity-bound native
+// helper. The caller owns the returned command and closes it after Wait, or
+// after a refused start. Provider CLI commands are constructed directly and
+// never bound. Binding does not authorize a start; StartCommand owns that gate.
 func (s PreflightScope) BindCommand(request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
-	return bindCommand(s.ctx, s.binder, request)
+	return verifiedexec.NewCommandFromRequest(request)
 }
 
 // FinishCommand lets the guardian drain residual descendants after the owned
@@ -104,7 +102,6 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 		authorize: func() error { return b.authorize(opts, "preflight-authorized") },
 		start:     func(start func() error) error { return b.authorizeAndStart(opts, start) },
 		lifetime:  opts.Lifetime,
-		binder:    opts.Binder,
 	}
 	if err := scope.Authorize(); err != nil {
 		return Plan{}, err
@@ -118,10 +115,6 @@ type SupervisedOptions struct {
 	Clock    Clock
 	Stopper  Stopper
 	Lifetime Lifetime
-	// Binder binds integrity-bound native helper commands started through the
-	// scope. Nil keeps the helper's private copy that Command.Close removes.
-	// Provider CLI commands never use it.
-	Binder CommandBinder
 }
 
 // RunSupervised runs finite inspection work inside an existing supervisor job.
@@ -133,7 +126,7 @@ func RunSupervised(deadline time.Time, opts SupervisedOptions, work func(Preflig
 	if deadline.IsZero() || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
-	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, Binder: opts.Binder}
+	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime}
 	budget := armBudgetUntil(executionOptions.clock(), deadline, executionOptions)
 	workErr = budget.runScoped(executionOptions, work)
 	if workErr == nil {

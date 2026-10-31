@@ -224,7 +224,7 @@ func (c *custodyFixtureCleanup) removeOwnedConflict(ctx context.Context) error {
 // residentAttempts requires the held lease, a scope neither started nor
 // destroyed, and observed registration writes none of which was acknowledged.
 func (c *custodyFixtureCleanup) residentAttempts() ([]custodyRegistrationAttempt, error) {
-	events, _ := c.probe.snapshot()
+	events := c.probe.snapshot()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -276,7 +276,7 @@ func TestCustodyFixtureCleanupHealsResidentConflictAtTeardown(t *testing.T) {
 		for _, requestAtScope := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/request_at_scope=%t", name, requestAtScope), func(t *testing.T) {
 				s := open(t)
-				probe := &custodyContractProbe{store: s, placement: custodyContractPlacement("a")}
+				probe := &custodyContractProbe{store: s}
 				var runErr error
 				t.Run("resident at teardown", func(t *testing.T) {
 					leaveCustodyConflictResident(t, probe, requestAtScope, &runErr)
@@ -287,7 +287,7 @@ func TestCustodyFixtureCleanupHealsResidentConflictAtTeardown(t *testing.T) {
 				requireCustodyRecordAbsent(t, "registration", s.records.ReadLifetimeRegistrationContext)
 				requireCustodyRecordAbsent(t, "termination", s.records.ReadLifetimeTerminationContext)
 				requireCustodyRecordAbsent(t, "worker", s.records.ReadLifetimeWorkerContext)
-				if events, _ := probe.snapshot(); !slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
+				if events := probe.snapshot(); !slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
 					t.Fatalf("healed conflict events = %v, want unregistered disposal without worker", events)
 				}
 			})

@@ -19,38 +19,37 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func TestLifetimeCustodyPlacementRegistersBeforeWorkerThroughProductionStores(t *testing.T) {
+func TestLifetimeCustodyNewRegistrationIsUnplacedBeforeWorkerThroughProductionStores(t *testing.T) {
 	for name, open := range custodyContractStores() {
 		t.Run(name, func(t *testing.T) {
 			s := open(t)
-			want := custodyContractPlacement("a")
-			selected := want.Clone()
-			probe := &custodyContractProbe{store: s, placement: selected}
-			// The selector's object belongs to the selector once it returns.
-			probe.onScope = func() { selected.PoolID = strings.Repeat("f", 64) }
+			probe := &custodyContractProbe{store: s}
+			probe.onScope = func() {
+				if intent, err := s.records.ReadLifetimeIntentContext(t.Context()); err != nil || intent == nil {
+					t.Errorf("scope created before durable intent: %+v, %v", intent, err)
+				}
+				if _, err := s.records.ReadLifetimeRegistrationContext(t.Context()); !task.RecordAbsent(err) {
+					t.Errorf("registration before scope creation = %v, want clean absence", err)
+				}
+			}
 			completeCustodyContractRun(t, probe.run(t, nil))
 
-			events, selections := probe.snapshot()
-			if selections != 1 || !probe.intentAtSelect || probe.registrationAtSelect {
-				t.Fatalf("selection = %d calls, intent present %t, registration present %t; want 1/true/false",
-					selections, probe.intentAtSelect, probe.registrationAtSelect)
-			}
-			requireCustodyEventOrder(t, events, "select", "scope", "worker-start")
+			requireCustodyEventOrder(t, probe.snapshot(), "scope", "worker-start")
 			if probe.registrationAtStart == nil {
 				t.Fatal("worker started before a durable registration")
 			}
-			requireCustodyPlacement(t, "registration at worker start", probe.registrationAtStart.CustodyPlacement, want)
+			requireCustodyPlacement(t, "registration at worker start", probe.registrationAtStart.CustodyPlacement, nil)
 			registration, published := readCustodyContractRegistration(t, s)
-			requireCustodyPlacement(t, "persisted", registration.CustodyPlacement, want)
-			if !bytes.Contains(published, []byte(`"custody_placement":{"version":1,`)) {
-				t.Fatalf("published registration lacks placement: %s", published)
+			requireCustodyPlacement(t, "persisted", registration.CustodyPlacement, nil)
+			if bytes.Contains(published, []byte("custody_placement")) {
+				t.Fatalf("new registration gained a placement: %s", published)
 			}
 			requireCustodyWorkerBinding(t, s, published)
 		})
 	}
 }
 
-func TestLifetimeCustodyRegistrationWithoutSelectorKeepsLegacyBytes(t *testing.T) {
+func TestLifetimeCustodyUnplacedRegistrationKeepsLegacyBytes(t *testing.T) {
 	for name, open := range custodyContractStores() {
 		t.Run(name, func(t *testing.T) {
 			s := open(t)
@@ -58,7 +57,7 @@ func TestLifetimeCustodyRegistrationWithoutSelectorKeepsLegacyBytes(t *testing.T
 				s.records, s.acquire, nil))
 			registration, published := readCustodyContractRegistration(t, s)
 			if registration.CustodyPlacement != nil || bytes.Contains(published, []byte("custody_placement")) {
-				t.Fatalf("registration without a selector gained a placement: %s", published)
+				t.Fatalf("unplaced registration gained a placement: %s", published)
 			}
 			canonical, err := task.MarshalCanonical(*registration)
 			if err != nil {
@@ -72,7 +71,7 @@ func TestLifetimeCustodyRegistrationWithoutSelectorKeepsLegacyBytes(t *testing.T
 	}
 }
 
-func TestLifetimeCustodyExistingRegistrationIsNeverReselected(t *testing.T) {
+func TestLifetimeCustodyExistingRegistrationKeepsPlacementAndBytes(t *testing.T) {
 	for name, open := range custodyContractStores() {
 		for _, existing := range []*task.LifetimeCustodyPlacement{custodyContractPlacement("a"), nil} {
 			label := "nil"
@@ -86,11 +85,8 @@ func TestLifetimeCustodyExistingRegistrationIsNeverReselected(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				probe := &custodyContractProbe{store: s, placement: custodyContractPlacement("b")}
+				probe := &custodyContractProbe{store: s}
 				completeCustodyContractRun(t, probe.run(t, nil))
-				if _, selections := probe.snapshot(); selections != 0 {
-					t.Fatalf("placement selections over an existing registration = %d, want 0", selections)
-				}
 				registration, published := readCustodyContractRegistration(t, s)
 				if !bytes.Equal(published, before) {
 					t.Fatalf("existing registration was rewritten:\n got %s\nwant %s", published, before)
@@ -102,46 +98,15 @@ func TestLifetimeCustodyExistingRegistrationIsNeverReselected(t *testing.T) {
 	}
 }
 
-func TestLifetimeCustodySelectionRefusalLeavesNoScope(t *testing.T) {
-	wantErr := errors.New("custody pool unavailable")
-	invalid := custodyContractPlacement("a")
-	invalid.Version = 2
-	for name, open := range custodyContractStores() {
-		for _, tc := range []struct {
-			label     string
-			placement *task.LifetimeCustodyPlacement
-			err       error
-			want      error
-		}{
-			{label: "selector error", err: wantErr, want: wantErr},
-			{label: "invalid placement", placement: invalid, want: task.ErrUnsupportedSchema},
-		} {
-			t.Run(name+"/"+tc.label, func(t *testing.T) {
-				s := open(t)
-				probe := &custodyContractProbe{store: s, placement: tc.placement, err: tc.err}
-				if err := probe.run(t, nil).WaitRun(t); !errors.Is(err, tc.want) {
-					t.Fatalf("guardian error = %v, want %v", err, tc.want)
-				}
-				events, selections := probe.snapshot()
-				if selections != 1 || slices.Contains(events, "scope") || slices.Contains(events, "worker-start") {
-					t.Fatalf("refused selection events = %v after %d selections", events, selections)
-				}
-				requireCustodyRecordAbsent(t, "registration", s.records.ReadLifetimeRegistrationContext)
-				requireCustodyRecordAbsent(t, "worker", s.records.ReadLifetimeWorkerContext)
-			})
-		}
-	}
-}
-
 func TestLifetimeCustodyPostLinkRegistrationFailureFinalizesPublishedRecord(t *testing.T) {
 	for name, open := range custodyContractStores() {
 		t.Run(name, func(t *testing.T) {
 			s := open(t)
+			requireCustodyRecordAbsent(t, "registration", s.records.ReadLifetimeRegistrationContext)
 			fault := &lifetimeContractPostLinkFault{target: filepath.Base(s.registrationPath)}
 			s.store.SetFaultInjector(fault)
 			t.Cleanup(func() { s.store.SetFaultInjector(nil) })
-			want := custodyContractPlacement("a")
-			probe := &custodyContractProbe{store: s, placement: want.Clone()}
+			probe := &custodyContractProbe{store: s}
 			if err := probe.run(t, nil).WaitRun(t); err == nil {
 				t.Fatal("guardian succeeded after an ambiguous registration write")
 			}
@@ -149,30 +114,32 @@ func TestLifetimeCustodyPostLinkRegistrationFailureFinalizesPublishedRecord(t *t
 				t.Fatal("production store did not exercise the ambiguous registration write")
 			}
 			registration, _ := readCustodyContractRegistration(t, s)
-			requireCustodyPlacement(t, "published", registration.CustodyPlacement, want)
+			requireCustodyPlacement(t, "published", registration.CustodyPlacement, nil)
 			termination, err := s.records.ReadLifetimeTerminationContext(t.Context())
 			if err != nil || !termination.ScopeEmpty || termination.Cause != task.LifetimeTerminationRecovery {
 				t.Fatalf("termination = %+v, err %v; want empty recovery termination", termination, err)
 			}
 			requireCustodyRecordAbsent(t, "worker", s.records.ReadLifetimeWorkerContext)
-			events, selections := probe.snapshot()
-			if selections != 1 || slices.Contains(events, "worker-start") || !slices.Contains(events, "scope-destroy") {
-				t.Fatalf("ambiguous registration events = %v after %d selections", events, selections)
+			events := probe.snapshot()
+			if slices.Contains(events, "worker-start") || !slices.Contains(events, "scope-destroy") {
+				t.Fatalf("ambiguous registration events = %v, want disposal without worker", events)
 			}
 		})
 	}
 }
 
-func TestLifetimeCustodyScopeCollisionSelectsOnce(t *testing.T) {
+func TestLifetimeCustodyScopeCollisionPublishesNewUnplacedRegistration(t *testing.T) {
 	for name, open := range custodyContractStores() {
 		t.Run(name, func(t *testing.T) {
 			s := open(t)
-			want := custodyContractPlacement("a")
-			probe := &custodyContractProbe{store: s, placement: want.Clone()}
+			requireCustodyRecordAbsent(t, "registration", s.records.ReadLifetimeRegistrationContext)
+			probe := &custodyContractProbe{store: s}
 			collisions := 0
+			scopeCalls := 0
 			fixture := probe.run(t, func(options *guardian.Options) {
 				create := options.ScopeFactory
 				options.ScopeFactory = func(plan lifetime.Plan) (guardian.Scope, error) {
+					scopeCalls++
 					if collisions == 0 {
 						collisions++
 						return nil, lifetime.ErrScopeExists
@@ -181,11 +148,11 @@ func TestLifetimeCustodyScopeCollisionSelectsOnce(t *testing.T) {
 				}
 			})
 			completeCustodyContractRun(t, fixture)
-			if _, selections := probe.snapshot(); selections != 1 || collisions != 1 {
-				t.Fatalf("selections %d over %d collisions, want 1/1", selections, collisions)
+			if scopeCalls != 2 || collisions != 1 {
+				t.Fatalf("scope calls %d over %d collisions, want 2/1", scopeCalls, collisions)
 			}
 			registration, published := readCustodyContractRegistration(t, s)
-			requireCustodyPlacement(t, "registered after collision", registration.CustodyPlacement, want)
+			requireCustodyPlacement(t, "registered after collision", registration.CustodyPlacement, nil)
 			requireCustodyWorkerBinding(t, s, published)
 		})
 	}
@@ -196,7 +163,7 @@ func TestLifetimeCustodyDifferentNativeRegistrationDisposesOnlyNewScope(t *testi
 		t.Run(name, func(t *testing.T) {
 			s := open(t)
 			placement := custodyContractPlacement("a")
-			probe := &custodyContractProbe{store: s, placement: placement.Clone()}
+			probe := &custodyContractProbe{store: s}
 			probe.onScope = func() { recordForeignCustodyRegistration(t, s, "foreign-scope", placement) }
 			if err := probe.run(t, nil).WaitRun(t); !errors.Is(err, task.ErrIdentityMismatch) {
 				t.Fatalf("guardian error = %v, want identity mismatch", err)
@@ -207,7 +174,7 @@ func TestLifetimeCustodyDifferentNativeRegistrationDisposesOnlyNewScope(t *testi
 			}
 			requireCustodyRecordAbsent(t, "termination", s.records.ReadLifetimeTerminationContext)
 			requireCustodyRecordAbsent(t, "worker", s.records.ReadLifetimeWorkerContext)
-			if events, _ := probe.snapshot(); !slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
+			if events := probe.snapshot(); !slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
 				t.Fatalf("different native registration events = %v, want disposal without worker", events)
 			}
 		})
@@ -227,7 +194,7 @@ func TestLifetimeCustodySameScopeForeignPlacementStaysResident(t *testing.T) {
 
 func testLifetimeCustodySameScopeForeignPlacement(t *testing.T, s custodyContractStore) {
 	t.Helper()
-	probe := &custodyContractProbe{store: s, placement: custodyContractPlacement("a")}
+	probe := &custodyContractProbe{store: s}
 	probe.onScope = func() { recordForeignCustodyRegistration(t, s, "test-scope", custodyContractPlacement("b")) }
 	entered, release := make(chan struct{}), make(chan struct{})
 	var enteredOnce sync.Once
@@ -258,7 +225,7 @@ func testLifetimeCustodySameScopeForeignPlacement(t *testing.T, s custodyContrac
 	requireCustodyPlacement(t, "foreign", registration.CustodyPlacement, custodyContractPlacement("b"))
 	requireCustodyRecordAbsent(t, "termination", s.records.ReadLifetimeTerminationContext)
 	requireCustodyRecordAbsent(t, "worker", s.records.ReadLifetimeWorkerContext)
-	if events, _ := probe.snapshot(); slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
+	if events := probe.snapshot(); slices.Contains(events, "scope-destroy") || slices.Contains(events, "worker-start") {
 		t.Fatalf("foreign placement events = %v, want resident scope without worker", events)
 	}
 	if err := os.Remove(s.registrationPath); err != nil {
@@ -269,7 +236,7 @@ func testLifetimeCustodySameScopeForeignPlacement(t *testing.T, s custodyContrac
 	if !errors.Is(err, task.ErrEvidenceFault) || !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("guardian error = %v, want evidence fault and identity mismatch", err)
 	}
-	if events, _ := probe.snapshot(); !slices.Contains(events, "scope-destroy") {
+	if events := probe.snapshot(); !slices.Contains(events, "scope-destroy") {
 		t.Fatalf("resolved foreign placement events = %v, want disposal", events)
 	}
 }

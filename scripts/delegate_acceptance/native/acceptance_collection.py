@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import digest, read_json
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _optional_hex_digest, _task_identity, require
 from scripts.delegate_acceptance.inspections.binding import INSPECTION_GROUP_PREFIX
 from scripts.delegate_acceptance.native.binding_policy import _validate_bound_provider_record
 from scripts.delegate_acceptance.native.diagnostics import _rejection_diagnostic_summary
@@ -435,7 +435,6 @@ def _validate_task_policy(owner, task_id: str, meta: dict[str, object]) -> dict[
     identity = acceptance._provider_bindings.identity_for(task_id)
     require(isinstance(identity, Mapping),
             f"task {task_id} admitted provider runtime identity is unavailable")
-    pending_runtime = "runtime_preflight_sha256" in meta
     require(meta.get("containment") == acceptance.mode,
             f"task {task_id} metadata containment changed")
     effective = meta.get("effective_config")
@@ -443,8 +442,7 @@ def _validate_task_policy(owner, task_id: str, meta: dict[str, object]) -> dict[
     require(isinstance(effective, dict) and effective.get("containment") == acceptance.mode and
             isinstance(effective.get("digest"), str) and
             isinstance(policy, dict) and policy.get("workspace") == str(acceptance.workspace) and
-            (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
-             else policy.get("runtime_sha256") == identity["sha256"]),
+            _optional_hex_digest(policy.get("runtime_sha256")),
             f"task {task_id} effective policy binding is invalid")
     if acceptance.provider == "antigravity:print":
         expected_approval = "plan" if acceptance.mode == "read-only" else "always-proceed"

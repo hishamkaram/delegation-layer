@@ -53,8 +53,7 @@ func (g *Guardian) prepareRunScope(ctx context.Context) (string, Scope, error) {
 
 // resolvePlacement fixes the custody placement this run registers. A committed
 // registration is the only placement authority once it exists, including its
-// nil placement, so the selector runs only after a confirmed clean absence and
-// at most once per run. A scope collision never selects again.
+// nil placement. A confirmed clean absence leaves new registrations unplaced.
 func (g *Guardian) resolvePlacement(ctx context.Context) (*task.LifetimeCustodyPlacement, error) {
 	registration, err := g.options.Records.ReadLifetimeRegistrationContext(ctx)
 	if err == nil {
@@ -66,21 +65,7 @@ func (g *Guardian) resolvePlacement(ctx context.Context) (*task.LifetimeCustodyP
 	if !task.RecordAbsent(err) {
 		return nil, fmt.Errorf("read lifetime registration before custody placement: %w", err)
 	}
-	if g.options.SelectPlacement == nil {
-		return nil, nil
-	}
-	selected, err := g.options.SelectPlacement(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("select lifetime custody placement: %w", err)
-	}
-	if err = ctx.Err(); err != nil {
-		return nil, fmt.Errorf("select lifetime custody placement: %w", err)
-	}
-	placement := selected.Clone()
-	if err = task.ValidateLifetimeCustodyPlacement(placement); err != nil {
-		return nil, fmt.Errorf("%w: selected lifetime custody placement: %w", errLifetimeGuardianInvalid, err)
-	}
-	return placement, nil
+	return nil, nil
 }
 
 func (g *Guardian) bindAndRecordRunScope(ctx context.Context, bootID string) error {

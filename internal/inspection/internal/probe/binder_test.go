@@ -15,53 +15,34 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-// probeTestBinder stands in for an owner-installed binder. It records each
-// request and its context, and either refuses the failAt-th request (1-based)
-// or binds through a private copy, so its views are observable and removed by
-// Command.Close.
-type probeTestBinder struct {
-	mu       sync.Mutex
-	failAt   int
-	requests []verifiedexec.CommandRequest
-	contexts []context.Context
-}
-
-var errProbeTestBinder = errors.New("private-binder-refusal")
-
-func (b *probeTestBinder) BindCommand(ctx context.Context, request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
-	b.mu.Lock()
-	b.requests = append(b.requests, request)
-	b.contexts = append(b.contexts, ctx)
-	refuse := len(b.requests) == b.failAt
-	b.mu.Unlock()
-	if refuse {
-		return nil, errProbeTestBinder
-	}
-	return verifiedexec.NewCommandFromRequest(request)
-}
-
-func (b *probeTestBinder) arguments() [][]string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	arguments := make([][]string, 0, len(b.requests))
-	for _, request := range b.requests {
-		arguments = append(arguments, request.Args)
-	}
-	return arguments
-}
-
-// probeStartLifetime counts the OS starts the scope admits.
+// probeStartLifetime observes commands at the existing lifetime start boundary.
+// Only helpers have an admitted digest and a private view; providers run directly.
 type probeStartLifetime struct {
-	mu     sync.Mutex
-	starts int
+	t          *testing.T
+	definition provider.InspectionDefinition
+	mu         sync.Mutex
+	started    [][]string
 }
 
-func (l *probeStartLifetime) StartCommand(_ *exec.Cmd, start func() error) error {
+func (l *probeStartLifetime) StartCommand(cmd *exec.Cmd, start func() error) error {
+	definition := l.definition
+	if definition.ProviderExecutable() {
+		if cmd.Path != definition.Executable || cmd.Args[0] != definition.Executable {
+			l.t.Errorf("provider command is not the installed executable: %q %q", cmd.Path, cmd.Args)
+		}
+	} else {
+		assertImmutableVerifiedView(l.t, cmd.Path, definition.Executable, definition.ExecutableSHA256)
+		if cmd.Args[0] != definition.Executable {
+			l.t.Errorf("helper command lost its admitted argument zero: %q", cmd.Args)
+		}
+	}
+	if cmd.Dir != definition.Directory || !slices.Equal(cmd.Env, definition.Environment) {
+		l.t.Errorf("command lost its launch directory or environment: dir=%q env=%q", cmd.Dir, cmd.Env)
+	}
 	l.mu.Lock()
-	l.starts++
+	l.started = append(l.started, slices.Clone(cmd.Args[1:]))
 	l.mu.Unlock()
 	return start()
 }
@@ -70,18 +51,15 @@ func (*probeStartLifetime) FinishCommand(context.Context, *exec.Cmd) error { ret
 func (*probeStartLifetime) Terminate(context.Context) error                { return nil }
 func (*probeStartLifetime) CloseTask(context.Context) error                { return nil }
 
-func (l *probeStartLifetime) count() int {
+func (l *probeStartLifetime) arguments() [][]string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.starts
+	return slices.Clone(l.started)
 }
 
 type probeBinderRoute struct {
-	name string
-	// started is every command the scope admits; bound is the subset that
-	// passes through the binder. Provider CLI commands are never bound.
+	name    string
 	started [][]string
-	bound   [][]string
 	build   func(t *testing.T, directory, temporary string) provider.InspectionDefinition
 }
 
@@ -100,89 +78,81 @@ func probeBinderRoutes() []probeBinderRoute {
 		{
 			name:    "native-helper-capture",
 			started: [][]string{{"-c", "printf native"}},
-			bound:   [][]string{{"-c", "printf native"}},
 			build:   binderHelperDefinition,
 		},
 	}
 }
 
-// TestInspectBindsOnlyNativeHelperCommandsThroughTheScopeBinder replaces the
-// retired rule that every probe command, including the provider CLI, was bound
-// to admitted bytes. Integrity-bound native helpers still bind; the installed
-// provider runs directly, so a supplied binder never sees it.
-func TestInspectBindsOnlyNativeHelperCommandsThroughTheScopeBinder(t *testing.T) {
+func TestInspectCopiesOnlyNativeHelperCommands(t *testing.T) {
 	for _, route := range probeBinderRoutes() {
 		t.Run(route.name, func(t *testing.T) {
 			temporary := binderTemporaryDirectory(t)
 			definition := route.build(t, t.TempDir(), temporary)
-			binder := &probeTestBinder{}
-			lifetime := &probeStartLifetime{}
+			lifetime := &probeStartLifetime{t: t, definition: definition}
 			deadline := time.Now().Add(time.Minute)
-			workErr, stopErr := execution.RunSupervised(deadline, execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime, Binder: binder}, func(scope execution.PreflightScope) error {
+			workErr, stopErr := execution.RunSupervised(deadline, execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
 				_, err := Inspect(scope, definition)
 				return err
 			})
 			if workErr != nil || stopErr != nil {
 				t.Fatalf("inspection failed: work=%v stop=%v", workErr, stopErr)
 			}
-			if got := binder.arguments(); !slices.EqualFunc(got, route.bound, slices.Equal) {
-				t.Fatalf("binder requests = %q, want %q", got, route.bound)
-			}
-			assertScopeBindings(t, binder, definition, deadline)
-			if lifetime.count() != len(route.started) {
-				t.Fatalf("starts = %d, want %d", lifetime.count(), len(route.started))
+			if got := lifetime.arguments(); !slices.EqualFunc(got, route.started, slices.Equal) {
+				t.Fatalf("started arguments = %q, want %q", got, route.started)
 			}
 			assertNoVerifiedViews(t, temporary)
 		})
 	}
 }
 
-// assertScopeBindings checks that every binding carried the launch identity
-// and one scope context: the supervised deadline, expired once the scope's
-// callback returned.
-func assertScopeBindings(t *testing.T, binder *probeTestBinder, definition provider.InspectionDefinition, deadline time.Time) {
-	t.Helper()
-	for index, request := range binder.requests {
-		if request.Executable != definition.Executable || request.SHA256 != definition.ExecutableSHA256 ||
-			request.Directory != definition.Directory || !slices.Equal(request.Environment, definition.Environment) {
-			t.Fatalf("binder request %d lost the launch identity: %+v", index, request)
-		}
-		ctx := binder.contexts[index]
-		actual, finite := ctx.Deadline()
-		if ctx != binder.contexts[0] || !finite || !actual.Equal(deadline) || ctx.Err() == nil {
-			t.Fatalf("binder request %d did not receive the expired scope deadline context", index)
-		}
-	}
-}
-
-func TestInspectRefusesSuppliedBinderFaultWithoutStartOrFallback(t *testing.T) {
-	for _, route := range probeBinderRoutes() {
-		if len(route.bound) == 0 {
-			continue
-		}
-		t.Run(route.name, func(t *testing.T) {
-			temporary := binderTemporaryDirectory(t)
-			definition := route.build(t, t.TempDir(), temporary)
-			binder := &probeTestBinder{failAt: 1}
-			lifetime := &probeStartLifetime{}
-			workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime, Binder: binder}, func(scope execution.PreflightScope) error {
-				_, err := Inspect(scope, definition)
-				return err
+// Both the inspection entrypoint and native capture refuse real helper faults.
+// The latter reaches binding directly rather than the inspection fingerprint gate.
+func TestInspectRefusesInvalidHelperWithoutStartOrFallback(t *testing.T) {
+	for _, fault := range []string{"bad-digest", "missing-helper"} {
+		for _, entry := range []string{"inspect", "native-capture"} {
+			t.Run(fault+"/"+entry, func(t *testing.T) {
+				assertInvalidHelperRefused(t, fault, entry)
 			})
-			if !errors.Is(workErr, errNativeInspection) || stopErr != nil || strings.Contains(workErr.Error(), "private-") {
-				t.Fatalf("binder refusal result: work=%v stop=%v, want %v", workErr, stopErr, errNativeInspection)
-			}
-			if len(binder.requests) != 1 || lifetime.count() != 0 {
-				t.Fatalf("binder requests = %d starts = %d: a refused binding must not start or fall back", len(binder.requests), lifetime.count())
-			}
-			assertNoVerifiedViews(t, temporary)
-		})
+		}
 	}
+}
+
+func assertInvalidHelperRefused(t *testing.T, fault, entry string) {
+	t.Helper()
+	temporary := binderTemporaryDirectory(t)
+	definition := binderHelperDefinition(t, t.TempDir(), temporary)
+	if fault == "bad-digest" {
+		definition.ExecutableSHA256 = strings.Repeat("0", 64)
+	} else {
+		definition.Executable = filepath.Join(temporary, "private-missing-helper")
+	}
+	lifetime := &probeStartLifetime{t: t, definition: definition}
+	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
+		var data []byte
+		var err error
+		if entry == "inspect" {
+			data, err = Inspect(scope, definition)
+		} else {
+			data, err = runNative(scope, definition, nativeHooks{})
+		}
+		defer clear(data)
+		if data != nil {
+			t.Error("refused helper returned inspection data")
+		}
+		return err
+	})
+	if !errors.Is(workErr, errNativeInspection) || stopErr != nil || workErr.Error() != errNativeInspection.Error() {
+		t.Fatalf("helper refusal result: work=%v stop=%v, want sanitized %v", workErr, stopErr, errNativeInspection)
+	}
+	if got := lifetime.arguments(); len(got) != 0 {
+		t.Fatalf("refused helper started or fell back: %q", got)
+	}
+	assertNoVerifiedViews(t, temporary)
 }
 
 // binderTemporaryDirectory is the TMPDIR selected for the probe commands. A
-// private copy made outside the supplied binder would leave its view here
-// while the command is open; every view must be gone when inspection returns.
+// private copy leaves its view here while open; every view must be gone when
+// inspection returns.
 func binderTemporaryDirectory(t *testing.T) string {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())

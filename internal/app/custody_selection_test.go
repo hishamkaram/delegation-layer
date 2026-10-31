@@ -55,10 +55,9 @@ func TestLegacyCustodyReleasesOnlyAfterGuardianClosure(t *testing.T) {
 				t.Fatalf("%T is not a closure record family", s.records)
 			}
 			placement := newCustodyTestPlacement(t)
+			seedCustodyContractRegistration(t, s, "test-scope", placement)
 			fixture := guardianfixture.NewRecordFixture(t, s.rootID, s.taskID, s.ownerKind, s.deadline, s.records, s.acquire,
-				func(options *guardian.Options) {
-					options.SelectPlacement = func(context.Context) (*task.LifetimeCustodyPlacement, error) { return placement, nil }
-				})
+				nil)
 			fixture.Hello(t)
 			registration, _ := readCustodyContractRegistration(t, s)
 			bindCustodyTestView(t, registration)

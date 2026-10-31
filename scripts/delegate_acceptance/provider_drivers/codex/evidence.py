@@ -6,7 +6,7 @@ from copy import deepcopy
 import re
 from pathlib import Path
 
-from scripts.delegate_acceptance.evidence.validation import _hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import _optional_hex_digest, require
 from scripts.delegate_acceptance.tasks.runtime_metadata import validate_provider_runtime_metadata
 from scripts.delegate_acceptance.tasks.publication import snapshot
 from scripts.delegate_acceptance.evidence.files import digest, read_json
@@ -210,7 +210,7 @@ def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
             f"{name} effective read-only policy is absent")
     policy = effective.get("policy")
     require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            (policy.get("runtime_sha256") == "" or _hex_digest(policy.get("runtime_sha256"))),
+            _optional_hex_digest(policy.get("runtime_sha256")),
             f"{name} persisted Codex runtime policy is incomplete")
     profile_revision = policy.get("profile_revision")
     require(profile_revision == revision,

@@ -145,11 +145,6 @@ type Options struct {
 	Clock         Clock
 	Stopper       Stopper
 	Lifetime      Lifetime
-	// Binder binds integrity-bound native helper commands started through
-	// PreflightScope. Nil keeps the helper's private copy that Command.Close
-	// removes. The provider command never uses it: it runs the installed
-	// executable directly.
-	Binder CommandBinder
 	// Deadline is the immutable outer guardian deadline. A zero value retains
 	// the legacy duration-relative clock. A supplied deadline may shorten but
 	// never extend the admitted task budget.

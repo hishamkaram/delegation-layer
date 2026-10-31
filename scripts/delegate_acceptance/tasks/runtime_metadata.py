@@ -5,7 +5,7 @@ from __future__ import annotations
 import unicodedata
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _optional_hex_digest, require
 from scripts.delegate_acceptance.paths.policy import _raw_clean_absolute_path
 
 
@@ -54,7 +54,7 @@ def _provider_runtime_identity(evidence: object, phase: str,
             f"{label} {phase} version exceeds the terminal evidence bound")
     require(not any(unicodedata.category(character) == "Cc" for character in version),
             f"{label} {phase} version contains control characters")
-    require(sha256 == "" or _hex_digest(sha256), f"{label} {phase} digest is invalid")
+    require(_optional_hex_digest(sha256), f"{label} {phase} digest is invalid")
     return {"executable": executable, "version": version, "sha256": sha256}
 
 

@@ -22,10 +22,11 @@ Provider-specific launch options remain validated by the actual provider turn;
 this avoids rejecting current CLIs whose noninteractive help output omits or
 truncates forwarded options.
 
-A reported version is an optional diagnostic and never a readiness condition.
-It is recorded only when a required exchange supplies valid bounded text, and it
-is not checked against a hardcoded release, semver range, web lookup, or binary
-allowlist or hash. An absent or invalid diagnostic is omitted, not an error. If a probe is rejected, inspect the bounded reason class in the
+Current runtime probes record the resolved executable path without collecting
+a version or binary hash. Historical records may retain valid version or hash
+diagnostics; they never impose a hardcoded release, semver range, web lookup,
+or binary allowlist requirement. Malformed populated diagnostics in stored
+evidence are reported as errors. If a probe is rejected, inspect the bounded reason class in the
 control response and compare the selected CLI's current help output with the
 profile's declared runtime flags.
 
