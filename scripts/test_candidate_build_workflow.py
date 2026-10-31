@@ -1,4 +1,4 @@
-"""Contract tests for the manual development-candidate jobs in the CI workflow."""
+"""Distribution jobs preserve the requested source and install their producer's bytes."""
 
 from pathlib import Path
 import re
@@ -6,6 +6,7 @@ import unittest
 
 
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
+SOURCE_COMMIT = "${{ github.event.pull_request.head.sha || github.sha }}"
 UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 EXISTING_JOBS = ("skill-package", "gate-linux", "gate-macos")
 SETUP_ACTIONS = ("actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
@@ -56,6 +57,7 @@ class CandidateWorkflowTests(unittest.TestCase):
                             "github.ref_type == 'branch'"):
             self.assertIn(requirement, condition)
         self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", condition)
         self.assertIn("github.event_name == 'push'", condition)
         self.assertNotIn("github.ref != 'refs/heads/main'", condition)
         self.assertNotIn("needs:", self.job)
@@ -67,16 +69,18 @@ class CandidateWorkflowTests(unittest.TestCase):
         checkout = self.steps["Checkout repository"]
         self.assertIn("persist-credentials: false", checkout)
         self.assertIn("fetch-depth: 0", checkout)
+        self.assertIn(f"ref: {SOURCE_COMMIT}", checkout)
 
     def test_build_step_passes_exact_expectations_and_no_credentials(self):
         build = self.steps["Build the candidate from the clean committed checkout"]
-        for argument in ('--version "${candidate_version}"', '--commit "${GITHUB_SHA}"',
-                         '--base-commit "${CANDIDATE_BASE_COMMIT:-$GITHUB_SHA}"', '--repository "${GITHUB_REPOSITORY}"',
+        for argument in ('--version "${candidate_version}"', '--commit "${CANDIDATE_COMMIT}"',
+                         '--base-commit "${CANDIDATE_BASE_COMMIT:-$CANDIDATE_COMMIT}"', '--repository "${GITHUB_REPOSITORY}"',
                          '--goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser"'):
             self.assertIn(argument, build)
         self.assertIn("scripts/build_development_candidate.py build", build)
         self.assertEqual(re.findall(r"^          (\w+): ", build.split("env:", 1)[1].split("run:", 1)[0], re.M),
-                         ["CANDIDATE_VERSION", "CANDIDATE_BASE_COMMIT"])
+                         ["CANDIDATE_VERSION", "CANDIDATE_BASE_COMMIT", "CANDIDATE_COMMIT"])
+        self.assertIn(f"CANDIDATE_COMMIT: {SOURCE_COMMIT}", build)
         self.assertLess(self.job.index("make tools"), self.job.index("make tool-versions"))
         self.assertLess(self.job.index("make tool-versions"), self.job.index("build_development_candidate.py build"))
 
@@ -124,6 +128,7 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
                             "github.event_name == 'push'"):
             self.assertIn(requirement, condition)
         self.assertNotIn("always()", condition)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", condition)
 
     def test_matrix_is_the_two_hosts_by_three_channels_and_fails_independently(self):
         strategy = self.job.split("    strategy:\n", 1)[1].split("    steps:", 1)[0]
@@ -150,7 +155,7 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
 
     def test_checkout_is_the_built_source_commit_without_credentials(self):
         checkout = self.steps["Checkout the source commit the candidate was built from"]
-        for setting in ("ref: ${{ github.sha }}", "fetch-depth: 0", "persist-credentials: false"):
+        for setting in (f"ref: {SOURCE_COMMIT}", "fetch-depth: 0", "persist-credentials: false"):
             self.assertIn(setting, checkout)
         for action in SETUP_ACTIONS:
             self.assertIn(f"uses: {action}\n", self.job)

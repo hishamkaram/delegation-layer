@@ -346,7 +346,9 @@ jobs:
   development-candidate:
     name: Distribution build
     if: >-
-      ${{ github.event_name == 'pull_request' || github.event_name == 'push' ||
+      ${{ (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -358,6 +360,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -387,12 +390,13 @@ jobs:
         env:
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           CANDIDATE_BASE_COMMIT: ${{ inputs.candidate_base_commit }}
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           candidate_version="${CANDIDATE_VERSION:-$(node -p 'require("./package.json").version')}"
           python3 scripts/build_development_candidate.py build \
           --version "${candidate_version}" \
-          --commit "${GITHUB_SHA}" \
-          --base-commit "${CANDIDATE_BASE_COMMIT:-$GITHUB_SHA}" \
+          --commit "${CANDIDATE_COMMIT}" \
+          --base-commit "${CANDIDATE_BASE_COMMIT:-$CANDIDATE_COMMIT}" \
           --repository "${GITHUB_REPOSITORY}" \
           --goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser" \
           --work-dir "${RUNNER_TEMP}/candidate-work" \
@@ -423,7 +427,9 @@ jobs:
     name: Distribution install (${{ matrix.os }}, ${{ matrix.channel }})
     needs: development-candidate
     if: >-
-      ${{ github.event_name == 'pull_request' || github.event_name == 'push' ||
+      ${{ (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -446,7 +452,7 @@ jobs:
       - name: Checkout the source commit the candidate was built from
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

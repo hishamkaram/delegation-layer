@@ -180,6 +180,11 @@ artifact by artifact_id; it does not rebuild, repack or regenerate the npm
 package or formula. Keep the source package version aligned with the release.
 Allowing the package job on main is not direct development or automatic publish.
 
+PR distribution jobs build and install the PR head commit, rather than GitHub's
+temporary merge commit. They run for same-repository PRs; fork PRs retain the
+ordinary gates. Main builds always run the distribution install checks before
+their artifacts can be published.
+
 Publication validates the trusted workflow/run/source, successful build/install
 chain, artifact digest/expiry/archive contents and version before mutation.
 Reruns use full job history so unchanged successful jobs can be reused, while
