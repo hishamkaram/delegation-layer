@@ -94,7 +94,7 @@ func createSchedule(ctx context.Context, store contract.Store, definition contra
 
 func mergeScheduleClose(result *commandResult, closeFn func() error) {
 	mergeCommandClose(result, closeFn)
-	if result.code == 1 && result.response.Schedule != nil {
+	if result.code == 1 && result.response.Schedule != nil && (result.response.Schedule.State == contract.StateEnabled || result.response.Schedule.NextAction == "inspect_schedule") {
 		result.response.Schedule.NextAction = "inspect_schedule"
 	}
 }

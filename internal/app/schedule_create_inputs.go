@@ -57,7 +57,7 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 	if _, err = contract.MarshalRequest(request); err != nil {
 		return scheduleCreateInput{}, invalidScheduleInput(err)
 	}
-	brief, err := readScheduleBrief(a.Brief)
+	brief, err := readScheduleBrief(a.Brief, tasklifecycle.ReadBrief)
 	if err != nil {
 		return scheduleCreateInput{}, err
 	}
@@ -91,22 +91,51 @@ func classifyScheduleDirectoryError(err error) error {
 	return err
 }
 
-func readScheduleBrief(path string) ([]byte, error) {
+func readScheduleBrief(path string, readBrief func(string) ([]byte, error)) ([]byte, error) {
 	briefPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 	length, err := config.ValidateBriefFile(briefPath)
 	if err != nil {
-		if errors.Is(err, config.ErrBriefNotFound) || errors.Is(err, config.ErrBriefNotRegular) || errors.Is(err, config.ErrBriefTooLarge) {
-			return nil, invalidScheduleInput(err)
-		}
-		return nil, err
+		return nil, classifyScheduleBriefError(err)
 	}
 	if length == 0 {
 		return nil, invalidScheduleInput(errors.New("brief must be nonempty"))
 	}
-	return tasklifecycle.ReadBrief(briefPath)
+	brief, err := readBrief(briefPath)
+	return brief, classifyScheduleBriefError(err)
+}
+
+func classifyScheduleBriefError(err error) error {
+	if scheduleBriefInputError(err) {
+		return invalidScheduleInput(err)
+	}
+	return err
+}
+
+// A joined storage or cleanup fault remains operational even beside a known
+// invalid-brief marker. Wrappers and every cause are kept in the returned error.
+func scheduleBriefInputError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !scheduleBriefInputError(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return scheduleBriefInputError(wrapped.Unwrap())
+	}
+	return errors.Is(err, config.ErrBriefNotFound) || errors.Is(err, config.ErrBriefNotRegular) || errors.Is(err, config.ErrBriefTooLarge) || errors.Is(err, task.ErrControlRecordTooBig)
 }
 
 func captureScheduleIdentity(requested string, now func() time.Time, newID func() (string, error)) (string, time.Time, error) {
