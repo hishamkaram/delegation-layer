@@ -391,7 +391,8 @@ class InspectionHarnessTests(unittest.TestCase):
                 with self.assertRaises(AcceptanceFailure):
                     provider_common.validate_provider_runtime_metadata(changed)
 
-    def test_provider_runtime_metadata_keeps_legacy_diagnostic_argument(self):
+    # The historical test ID is part of the relocation contract.
+    def test_provider_runtime_metadata_keeps_historical_version_equality(self):
         """Legacy observed_version calls preserve authoritative historical metadata."""
         meta = {
             "provider_executable": "/fixture/provider",
