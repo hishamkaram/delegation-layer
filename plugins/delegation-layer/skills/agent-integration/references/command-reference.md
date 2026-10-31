@@ -20,6 +20,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `recheck TASK --json` | Reassess eligible evidence offline | None |
 | `reply`, `steer`, `events` | [Active interaction](interaction.md) | No new launch |
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
+| `schedule` | [Recurring definitions](#schedules) | None; runtime scheduling is ongoing |
 
 Prefix every task command with `delegate --root ROOT`, using the same
 explicit root across invocations.
@@ -67,6 +68,62 @@ Omit `--runner`: Delegate selects its managed worker. A custom override
 conflicting with managed workspaces or a predecessor returns `invalid_request`
 with `managed_workspace_runner_conflict` or `continuation_runner_conflict`.
 Correct it only under the returned task-creation guidance.
+
+## Schedules
+
+These commands manage saved definitions. They do not start a scheduler, launch
+a provider, or prove that a task ran. Recurring execution is still ongoing work.
+
+```text
+delegate --root ROOT schedule create --brief FILE --cwd ABS \
+  (--auto | --provider ID) --cron 'MIN HOUR DOM MONTH DOW' \
+  [--timezone ZONE] [--id SCHEDULE_ID] [--model MODEL] [--effort EFFORT] \
+  [--permission MODE] [--budget DURATION] [--native-timeout DURATION] \
+  [--review-target TARGET] --json
+delegate --root ROOT schedule list [--after SCHEDULE_ID] [--limit N] --json
+delegate --root ROOT schedule show SCHEDULE_ID --json
+delegate --root ROOT schedule pause SCHEDULE_ID --json
+delegate --root ROOT schedule resume SCHEDULE_ID --json
+delegate --root ROOT schedule delete SCHEDULE_ID --json
+```
+
+- Requested provider options remain as supplied, including omissions. Creation
+  validates inputs without checking provider installation, authentication or
+  readiness. It does not create a managed workspace. Interactive requests,
+  continuation/session options and supervisor/runner overrides are unsupported.
+- Cron has five fields and minute precision. Lists, ranges, steps and month/day
+  names are supported. Sunday is `0` or `SUN`, not `7`. `N/step` runs from `N`
+  through that field's maximum. Descriptors such as `@daily`, seconds, years,
+  embedded timezones, `?` and Quartz extensions are unsupported.
+- Day-of-month and weekday restrictions follow the cron parser: when both fields
+  are restricted, either may match. `*` or `*/1` makes both fields necessary;
+  patterned steps such as `*/2` and full restricted ranges retain the either-field
+  behavior. Choose explicit fields for the intended recurrence.
+- `--timezone` accepts a named zone such as `Europe/Berlin` or `UTC`. Omission
+  captures the host/process zone at creation. Later host changes do not change
+  it. An empty value or `Local` is invalid; if automatic resolution fails,
+  supply the zone explicitly.
+- Missing dates/local times are skipped without moving the appointment or
+  disabling the definition. February 29 runs in leap years. A repeated local
+  minute runs only at its first chronological occurrence. Warnings are advisory;
+  they do not predict every future timezone change.
+- Definitions are immutable. Pause blocks future admissions; resume skips the
+  interval from the stored cursor through now without catch-up. A clock behind
+  the cursor leaves that cursor unchanged. Delete is terminal and retains
+  history. Pause/delete do not cancel an active occurrence.
+- Only create initializes absent schedule storage. An absent store lists as
+  empty; show/state commands report not found. List defaults to 50 rows, at most
+  100, including paused/deleted definitions. Use the returned cursor to page.
+- Create/state responses are compact. Show returns saved requested choices and
+  brief metadata, not brief contents, with a 2 MiB response limit. Keep the ID
+  when output or storage reports uncertainty; inspect it with show rather than
+  submitting another create. Reusing an existing ID conflicts.
+
+Handler results use exit `0` for success/advisory warnings, `2` for invalid
+input/state transitions and `1` for not-found, conflicts or operational failures.
+`--json` applies to handler responses; argument/usage errors retain the CLI's
+normal stderr behavior. A valid rule with no future occurrence in the supported
+timestamp range has a distinct range error, not a claim of permanent invalidity.
 
 ## Codex review
 

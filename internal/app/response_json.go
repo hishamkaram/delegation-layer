@@ -30,14 +30,18 @@ func writeJSON(w io.Writer, response Response) error {
 	if err != nil {
 		return err
 	}
-	if len(data) > MaxJSONResponseBytes {
+	limit := MaxJSONResponseBytes
+	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.Request != nil {
+		limit = 2 << 20
+	}
+	if len(data) > limit {
 		for budget := 4096; budget >= 0; budget /= 2 {
 			candidate := truncateDiagnostics(response, budget)
 			data, err = encodeJSONResponse(candidate)
 			if err != nil {
 				return err
 			}
-			if len(data) <= MaxJSONResponseBytes {
+			if len(data) <= limit {
 				break
 			}
 			if budget == 0 {
@@ -45,7 +49,7 @@ func writeJSON(w io.Writer, response Response) error {
 			}
 		}
 	}
-	if len(data) > MaxJSONResponseBytes {
+	if len(data) > limit {
 		return ErrJSONResponseTooLarge
 	}
 	return writeAll(w, data)

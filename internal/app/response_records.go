@@ -14,9 +14,8 @@ const (
 	// OutputSchemaVersion is the stable public control-response schema.
 	OutputSchemaVersion = 1
 	defaultPublisher    = "delegate"
-	// MaxJSONResponseBytes bounds each complete public JSON response. The
-	// writer preserves the response's authority fields and shortens only
-	// diagnostic text when the encoded response would exceed this bound.
+	// MaxJSONResponseBytes is the ordinary public JSON response bound; schedule
+	// show has its own bound. Only diagnostic text may be shortened to fit.
 	MaxJSONResponseBytes = task.MaxControlRecordSize
 )
 
@@ -69,6 +68,10 @@ type Response struct {
 	// empty page as [] there while every other command omits the field.
 	Checkpoints      *[]workspacescore.CheckpointDescription `json:"checkpoints,omitempty"`
 	CheckpointCursor string                                  `json:"checkpoint_cursor,omitempty"`
+	Schedule         *ScheduleResponse                       `json:"schedule,omitempty"`
+	Schedules        *[]ScheduleListRow                      `json:"schedules,omitempty"`
+	ScheduleCursor   string                                  `json:"schedule_cursor,omitempty"`
+	ScheduleWarnings []ScheduleWarning                       `json:"schedule_warnings,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without
