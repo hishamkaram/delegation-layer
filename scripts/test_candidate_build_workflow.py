@@ -8,7 +8,7 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
 SOURCE_COMMIT = "${{ github.event.pull_request.head.sha || github.sha }}"
 UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
-EXISTING_JOBS = ("skill-package", "gate-linux", "gate-macos")
+EXISTING_JOBS = ("skill-package-linux", "skill-package-macos", "gate-linux", "gate-macos")
 SETUP_ACTIONS = ("actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
                  "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
                  "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020")
@@ -33,15 +33,23 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.job = job_text(self.source, "development-candidate")
         self.steps = steps(self.job)
 
-    def test_existing_gate_jobs_remain_unconditional(self):
-        for name in EXISTING_JOBS:
-            with self.subTest(job=name):
-                header = job_text(self.source, name).split("    steps:", 1)[0]
-                self.assertNotIn("\n    if:", header)
+    def test_required_jobs_keep_fixed_names_and_native_jobs_select_before_allocation(self):
+        names = {"skill-package-linux": "Agent skill package (ubuntu-24.04)",
+                 "skill-package-macos": "Agent skill package (macos-15)",
+                 "gate-linux": "Gate (Linux ubuntu-24.04)",
+                 "gate-macos": "Gate (macOS macos-15)"}
+        for job, name in names.items():
+            with self.subTest(job=job):
+                header = job_text(self.source, job).split("    steps:", 1)[0]
+                self.assertIn(f"name: {name}\n", header)
+                self.assertNotIn("matrix", header)
                 self.assertNotIn("candidate", header)
+        for job in ("skill-package-macos", "gate-macos"):
+            header = job_text(self.source, job).split("    steps:", 1)[0]
+            self.assertIn("needs: changes", header)
+            self.assertIn("if: ${{ needs.changes.outputs.full == 'true' }}", header)
         self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, "gate-linux"))
         self.assertIn("runs-on: macos-15", job_text(self.source, "gate-macos"))
-        self.assertIn("os: [ubuntu-24.04, macos-15]", job_text(self.source, "skill-package"))
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
@@ -52,18 +60,18 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertIn("  push:\n    branches: [\"main\"]", self.source)
 
     def test_each_node_version_has_one_package_check_per_host(self):
-        package = job_text(self.source, "skill-package")
-        self.assertIn("os: [ubuntu-24.04, macos-15]", package)
-        self.assertIn("node-version: '18.x'", package)
-        self.assertNotIn("node-version: '22.x'", package)
-        self.assertEqual(package.count("run: make skill-package-check"), 1)
+        for name in ("skill-package-linux", "skill-package-macos"):
+            package = job_text(self.source, name)
+            self.assertIn("node-version: '18.x'", package)
+            self.assertNotIn("node-version: '22.x'", package)
+            self.assertEqual(package.count("run: make skill-package-check"), 1)
         for name in ("gate-linux", "gate-macos"):
             with self.subTest(job=name):
                 gate = job_text(self.source, name)
                 self.assertIn("node-version: '22.x'", gate)
-                self.assertEqual(gate.count("run: make check"), 1)
+                self.assertEqual(len(re.findall(r"^        run: make check$", gate, re.M)), 1)
 
-    def test_one_ordinary_pr_or_main_run_builds_the_distribution(self):
+    def test_full_pr_or_main_and_explicit_manual_candidate_build_the_distribution(self):
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split())
         for requirement in ("github.event_name == 'workflow_dispatch'", "inputs.build_candidate",
                             "github.ref_type == 'branch'"):
@@ -72,7 +80,8 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", condition)
         self.assertIn("github.event_name == 'push'", condition)
         self.assertNotIn("github.ref != 'refs/heads/main'", condition)
-        self.assertNotIn("needs:", self.job)
+        self.assertIn("needs: changes", self.job)
+        self.assertIn("needs.changes.outputs.full == 'true'", condition)
 
     def test_job_is_read_only_and_never_publishes_or_tags(self):
         self.assertIn("    permissions:\n      contents: read\n", self.job)
@@ -130,7 +139,8 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
     def test_no_gate_depends_on_the_candidate_jobs(self):
         for name in (*EXISTING_JOBS, "development-candidate"):
             with self.subTest(job=name):
-                self.assertNotIn("needs:", job_text(self.source, name))
+                header = job_text(self.source, name).split("    steps:", 1)[0]
+                self.assertNotIn("needs: development-candidate", header)
 
     def test_installs_follow_every_distribution_build(self):
         self.assertIn("    needs: development-candidate\n", self.job)

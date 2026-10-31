@@ -670,6 +670,7 @@
     "owner": "py:test_skill_examples",
     "layer": "test",
     "imports": [
+      "py:itertools",
       "py:json",
       "py:os",
       "py:pathlib",

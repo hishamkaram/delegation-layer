@@ -27,13 +27,35 @@ permissions:
   contents: read
 
 jobs:
-  skill-package:
-    name: Agent skill package (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
+  changes:
+    name: Change scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+    steps:
+      - name: Checkout complete change history
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Select checks from the complete change
+        id: scope
+        env:
+          CHANGE_EVENT: ${{ github.event_name }}
+          CHANGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CHANGE_HEAD: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: >-
+          python3 scripts/ci_scope.py --event "$CHANGE_EVENT"
+          --base "$CHANGE_BASE" --head "$CHANGE_HEAD" --output "$GITHUB_OUTPUT"
+
+  skill-package-linux:
+    name: Agent skill package (ubuntu-24.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -47,11 +69,37 @@ jobs:
       - name: Check the installable skill package on Node 18
         run: make skill-package-check
 
+  skill-package-macos:
+    name: Agent skill package (macos-15)
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Set up minimum Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '18.x'
+      - name: Check the installable skill package on Node 18
+        run: make skill-package-check
+
   gate-linux:
     name: Gate (Linux ubuntu-24.04)
+    needs: changes
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - name: Require a valid check selection
+        env:
+          SELECTION_RESULT: ${{ needs.changes.result }}
+          FULL: ${{ needs.changes.outputs.full }}
+        run: |
+          test "$SELECTION_RESULT" = success || { echo 'Change selection did not succeed'; exit 1; }
+          case "$FULL" in true|false) ;; *) echo 'Change selection returned an invalid scope'; exit 1 ;; esac
+
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -69,11 +117,13 @@ jobs:
           python-version: '3.12'
 
       - name: Set up minimum Node.js for collector checks
+        if: ${{ needs.changes.outputs.full == 'true' }}
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '18.x'
 
       - name: Check the JavaScript collector on Node 18
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           GOTOOLCHAIN: local
         run: go test -race -count=1 ./internal/maintainability -run '^TestJavaScript'
@@ -91,13 +141,20 @@ jobs:
           python3 --version
 
       - name: Install tools
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make tools
 
       - name: Run gate checks
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make check
+
+      - name: Check documentation, skills and diagrams
+        if: ${{ needs.changes.outputs.full == 'false' }}
+        run: make check-docs
 
       - name: Prove selected native lifetime backend
         id: native_lifetime
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
@@ -115,34 +172,40 @@ jobs:
           if-no-files-found: error
 
       - name: Run protocol acceptance
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-protocol
 
       - name: Install pinned supervisor test binaries
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: ./scripts/install-test-supervisor.sh
 
       - name: Prove private supervisor bootstrap through delegate CLI
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
 
       - name: Prove external inspection handoff through delegate CLI
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-supervisor-handoff
 
       - name: Prove private supervisor upgrade recovery through delegate CLI
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-supervisor-upgrade-recovery
 
       - name: Prove default user and budget stops through delegate CLI
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli-default-stop
 
       - name: Retain allowlisted private CLI acceptance receipts
-        if: always()
+        if: ${{ always() && needs.changes.outputs.full == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: private-cli-receipts-${{ runner.os }}-${{ github.run_attempt }}
@@ -154,6 +217,7 @@ jobs:
 
       - name: Prove managed workspace fixtures through delegate CLI
         id: workspaces
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
@@ -173,6 +237,7 @@ jobs:
 
       - name: Run supervisor acceptance
         id: supervisor
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
@@ -193,6 +258,8 @@ jobs:
 
   gate-macos:
     name: Gate (macOS macos-15)
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -337,11 +404,12 @@ jobs:
 
   development-candidate:
     name: Distribution build
+    needs: changes
     if: >-
-      ${{ (github.event_name == 'pull_request' &&
+      ${{ needs.changes.outputs.full == 'true' && ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
+      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -506,3 +574,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
           overwrite: false
+
+  ccr:
+    name: CCR integration
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    uses: ./.github/workflows/ccr-integration.yml

@@ -1,8 +1,7 @@
 # Product boundary
 
-This brief is the normative product direction. Read it before proposing a design,
-a guarantee, or a restriction. The active implementation plan tracks where the
-current code still differs; this brief does not claim those differences are fixed.
+This brief owns product direction. Read it before proposing a design,
+guarantee or restriction. Implemented behavior belongs in the current guides.
 
 ## What Delegate is
 
@@ -29,11 +28,14 @@ them, and it adds no independent provider policy engine.
 
 - Preserve the requested provider, model, effort, native permission mode, and
   workspace exactly. Discovery is advisory.
-- Provider CLIs change fast. Do not hash provider executables, keep private copies,
-  build image pools, mirror installations, or gate on provider release versions.
-  The immutability required of Delegate-owned records does not extend to external
-  mutable tools.
-- A reported version is an optional diagnostic, never a readiness condition.
+- Delegate identifies the installed provider executable by path metadata only
+  and does not read its contents. Required native CLI behavior determines
+  compatibility. Provider release numbers are optional diagnostics.
+- Launch the installed tool in place with its native configuration and sessions.
+  Provider installations remain external to Delegate's managed state and
+  user/provider-owned. Delegate owns its own installation, supervisor identities,
+  task state and evidence. Documented native configuration/session reads needed
+  for permissions or continuation remain part of the adapter contract.
 - Accept additive, compatible CLI changes. Fail clearly when required behavior is
   actually missing, or when execution, authentication, protocol, or session
   handling really fails.

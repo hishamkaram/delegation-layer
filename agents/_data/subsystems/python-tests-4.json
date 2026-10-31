@@ -1,5 +1,21 @@
 [
   {
+    "name": "py:test_ci_scope",
+    "owner": "py:ci_scope",
+    "layer": "test",
+    "imports": [
+      "py:ci_scope",
+      "py:os",
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:test_candidate_build_workflow",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:test_check_workflow",
     "owner": "py:test_check_workflow",
     "layer": "test",

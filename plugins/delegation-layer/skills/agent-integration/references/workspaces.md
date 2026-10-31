@@ -323,3 +323,36 @@ reviews a commit. An uncommitted review does not cover changes already committed
 by the worker. Do not pass a tree reference as a branch or assume a native
 target reviews the complete delegated turn. Preserve an explicitly requested
 native review target and state its scope.
+
+## Checkpoint response
+
+Checkpoint commands use the versioned envelope with `command: "checkpoint"`
+and no `task_id` or `outcome`. The response fields are:
+
+```text
+checkpoint: {
+  id?, operation_id?,
+  current?: CheckpointDescription,
+  operation?: CheckpointRemovalDescription,
+  reason_code?, next_action?
+}
+checkpoints: [CheckpointDescription]   (list only; [] when empty)
+checkpoint_cursor?: string             (list only; next --after value)
+
+CheckpointDescription: id, selection ("ordinary" | "managed"), workspace_id?,
+  cwd?, state ("pending" | "checkpointed" | "unavailable"), reason_code?,
+  snapshot_ref?, commit_oid?, usable, removal?: CheckpointRemovalDescription
+CheckpointRemovalDescription: operation_id, attempts, state
+  ("pending" | "removed" | "nothing_to_remove" | "unavailable"), reason_code?
+```
+
+Creation `state` records immutable history; `usable` is derived availability,
+true only for a checkpointed creation without a registered removal attempt.
+A retained candidate can have commit/ref fields even when unavailable; those
+fields alone never authorize a fork. `current.removal` is the latest attempt;
+`operation` is the selected attempt, whose own result controls its exit.
+`attempts` counts all registered removal attempts.
+
+Acknowledged IDs survive later read faults; unreadable descriptions are omitted.
+Apply [checkpoint results](result-handling.md#checkpoint-results) to the whole
+response and exit, preserving nested and command-level reasons separately.

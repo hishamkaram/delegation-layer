@@ -1,5 +1,20 @@
 [
   {
+    "name": "py:ci_scope",
+    "owner": "py:ci_scope",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:dataclasses",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:subprocess",
+      "py:sys"
+    ]
+  },
+  {
     "name": "py:maintainability.python_facts",
     "owner": "py:maintainability.python_facts",
     "layer": "tool",

@@ -7,403 +7,154 @@ description: Use Delegate for work assigned to another agent, model, or separate
 
 ## When to use
 
-Use this skill before selecting a provider-specific plugin or launching an
-external harness to do work. Requests such as “ask Codex to review this”,
-“get Antigravity’s opinion”, and “have Claude investigate” are external
-collaboration even when the user never mentions Delegate. The same applies
-when you decide external expertise is useful to fulfill the user's task.
-These names are examples; discover supported destinations through the CLI.
-A destination name identifies who should do the work; it does not by itself
-select a provider-specific skill, plugin, or direct CLI integration.
-“Claude Code Router” and “CCR” mean `ccr:print`, not ordinary Claude Code.
-For that request, use Delegate with a CCR model alias; a Claude-specific skill
-or subscription model does not fulfill the requested route.
+Load this skill before choosing tools for work assigned to an external agent,
+model, or separate harness session, including collaboration you choose.
+A named CLI identifies the destination; discover its provider ID through
+Delegate. “CCR” or “Claude Code Router” means `ccr:print`; read
+[CCR guidance](references/ccr.md).
 
-Ordinary subagents within the current harness remain available. Naming the
-current harness (for example, “have Claude investigate” while using Claude)
-also permits native delegation unless the user requests a separate session.
-A separate CLI session uses Delegate even when its brand matches yours. A subagent
-or plugin that calls an external harness is still external collaboration and
-uses Delegate. Merely discussing a provider, editing documentation about it,
-or troubleshooting its installation does not trigger delegation. Respect an
-explicit user choice of another integration; this skill does not override it.
+Ordinary subagents inside the current harness remain available, even when that
+harness is named. A separate CLI session uses Delegate, including another
+instance of your current harness. Discussing, documenting, or configuring a
+tool is local work. Respect an explicit user choice of another integration.
 
-The local `delegate` CLI is the integration surface for external work. Do not
-replace it with a provider command, a provider-specific plugin, or an API call.
-Do not inspect, authenticate, install, or repair provider CLIs to bypass a
-Delegate blocker.
+## Boundaries
 
-A reported blocker is a valid final response to a delegation request. It does
-not turn that request into an environment-repair task. The supervisor recovery
-exception is `failure.code: "supervisor_upgrade_required"` with
-`next_action: "run_supervisor_migrate"`: run Delegate's own
-`supervisor migrate` command once with the exact same state root, then retry the
-exact original admission command once only when migration succeeds. Preserve
-its argv and intent: `dispatch` remains `dispatch`, and `continue` remains
-`continue`. The migration response field `next_action: "retry_dispatch"` is a
-protocol name for this command-neutral retry; it never authorizes replacing a
-failed `continue` with a fresh dispatch. This is internal Delegate recovery,
-not Pueue administration. Never run `pueue`, `pueued`, socket inspection,
-process searches, root deletion, or a provider CLI during recovery. Executable
-path or hash drift alone is handled by normal adoption and does not require
-this command.
-Managed admission also permits the two explicit `watch_workspace` responses
-in the task-record table below. They keep the exact admission command and
-inputs, including `continue`; they do not authorize environment repair.
-When a response says `failure.next_action: "stop_and_report"`, that attempt is
-finished. Include its failure in your final response without opening a
-clarification dialog to choose a fallback. For `task_record: not_created`,
-identify the requested destination and include the saved JSON failure response
-verbatim. A `task_id` can be returned even when no task record was created. Do
-not infer that an unavailable provider is uninstalled or unauthenticated. Do
-not append inferred state paths or provider-setup diagnoses, run diagnostic
-commands, or use another integration.
-Troubleshooting requires a separate user request. Other independently requested
-tasks may proceed; the failed attempt must remain reported as failed or blocked.
-
-## Rules
-
-1. Check whether `delegate` is already installed. A plugin SessionStart hook
-   normally bootstraps the self-contained CLI when it is missing. This skill
-   never installs or repairs the CLI itself. If `delegate` is still missing or
-   unusable, report the bootstrap failure and stop; never fall back to a native
-   provider command.
-2. Preserve a named harness or provider, even when the user supplied a natural
-   name rather than a provider ID. Use `dispatch --auto` when none was chosen.
-   Provider selection, executable checks, compatibility checks, authentication
-   gates, and supervisor admission belong inside Delegation Layer.
-3. Give every turn an absolute workspace, an explicit permission mode, and a
-   finite budget. Keep the state root outside the workspace. Reuse a supplied
-   `DELEGATE_ROOT` for all providers and tasks; do not invent per-provider or
-   per-task state roots. Task IDs separate work within that root. Managed Git
-   workspaces are optional; read [managed workspace guidance](references/workspaces.md)
-   before creating or attaching one.
-4. Use `--json` and save each response separately with its requested destination,
-   model, effort, workspace, and returned `task_id`. Never merge concurrent
-   responses into an unlabeled output stream. Read `admission`, `liveness`,
-   `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
-   and `error` as separate fields.
-   Delegate owns the supervisor lifecycle. Never install, configure, start,
-   inspect, or repair Pueue, and never poll a task unless the response says its
-   `task_record` is `created`.
-5. Observe tasks only through Delegate `status`, `collect`, or `events`.
-   Do not run `ps`, `pgrep`, process-tree searches, or supervisor commands to
-   monitor delegated work. Pending output is normal startup or work in progress;
-   empty `pending_requests` means keep collecting, not diagnose the environment.
-   Environment diagnostics require a separately requested troubleshooting task.
-   Keep collection in the
-   foreground until all requested tasks reach a terminal result or an explicit
-   blocker. Do not end a headless turn promising a background notification.
-   Pending publication (exit 3) means keep waiting, not success. When the JSON
-   reports `pending.kind: "lifetime-finalization"`, the resident guardian still
-   owns cleanup; keep observing that same task without supervisor repair,
-   process commands, redispatch, or provider fallback. When the JSON
-   includes an outstanding `interaction.pending_requests` batch, follow
-   [active-task interaction](references/interaction.md) before waiting again. Only detach
-   when the user explicitly requests it, retaining the exact task IDs.
-   Collection may reconcile the saved Pueue binding and recover the guardian
-   lifetime only for an already-requested stop. A queue-row end alone cannot
-   publish terminal facts; collection never launches a provider or retries a
-   task.
-6. If `failure.next_action` is `recheck`, follow
-   [offline recovery](references/result-handling.md#offline-recovery) once for
-   that task. Rechecking saved evidence does not run the provider again.
-   Otherwise, report a rejected result without redispatching or reading raw
-   output as an answer.
-7. If a task is timed out and its JSON says `continuation.resumable: true`, use
-   `continue --task TASK_ID`, optionally with a new `--brief`. Do not create a
-   fresh unrelated dispatch to replace a resumable task. The one other automatic
-   route is an `interrupted` task from `status` or `collect`, and only when
-   `failure.code` is `"task_interrupted"`, `failure.next_action` is
-   `"continue_task"`, and `continuation.resumable` is `true`; see
-   [interrupted turn](references/continuation.md#interrupted-turn). A
-   cancellation, `stop_and_report`, or failed admission always takes precedence
-   over `resumable: true`.
-8. Treat `blocked` authentication as unresolved. Do not call it compatible,
-   successful, or failed provider behavior, and do not invent login commands.
-9. Never put credentials, tokens, or unrestricted provider output in a brief,
-   option, receipt, or agent message.
-10. Permission modes select provider-native behavior, not an independent sandbox.
-    Providers load their own configuration and extensions. If a task is rejected,
-    report delegate's evidence; do not assume the user's configuration is faulty
-    or remove MCP servers, plugins, settings, or credentials to make it pass.
-11. The model chooses ordinary-task fan-out by issuing independent `dispatch`
-    commands concurrently. There is no fixed task-count cap, but Delegate
-    refuses a new request while the host shows confirmed resource pressure (see
-    the `resource_pressure` row below). Use this for independent investigation, debate, review,
-    or provider comparison. For independent parallel writes, choose
-    `--isolation git-worktree` automatically unless the user explicitly chooses
-    shared coordination; the model chooses fan-out and task scope. A read-only
-    review may attach a retained workspace with `--workspace ID`. To fork a
-    worker from current uncommitted content, follow
-    [checkpoint before fork](references/workspaces.md#checkpoint-before-fork):
-    fork only from a `checkpointed`, `usable` checkpoint commit. If your own
-    turn holds the workspace, do not wait or retry through `--cwd`; report so
-    the Lead checkpoints after your turn closes.
-
-For an explicit Codex code review, use the discoverable `codex:review` profile
-with one persisted target: `--review-target uncommitted`,
-`--review-target base:BRANCH`, or `--review-target commit:SHA`. It is read-only
-and does not support `--interactive`, continuation, or workspace-write. Use
-ordinary `codex:exec` when the request is a general investigation or asks the
-provider to edit files; the review profile is for Codex's native review
-operation and keeps the reviewed Git state explicit. The brief is retained as
-task evidence; the review target supplies Codex's review scope because its
-native command does not accept a prompt with the target flag.
-For a complete managed-workspace turn, review the recorded initial base against
-its captured tree through an ordinary read-only task. Include both sealed refs
-and an explicit `git diff BASE TREE` scope. A native `uncommitted` review covers
-current staged, unstaged, and untracked changes; it excludes worker commits.
-Do not pass a tree as a native branch target. Preserve an explicitly requested
-native review target and state its narrower scope. See [workspace review
-guidance](references/workspaces.md#recovery-and-review-scope).
+- Preserve the requested destination, exact model ID, effort, permissions,
+  workspace, and state root. Do not guess ambiguous model IDs.
+- Delegate owns task lifecycle and evidence. Providers and users own their CLI
+  installations, accounts, settings, extensions, and native sessions.
+- Permissions request native behavior, not an independent sandbox.
+  `workspace-write` authorizes unattended commands and edits; native access
+  can extend beyond the workspace.
+- Report a Delegate blocker without provider commands, plugins, API fallback,
+  setup diagnosis, or configuration changes. A `stop_and_report` ends that
+  attempt; keep it reported while independent requests may proceed.
+  Troubleshooting needs a separate request.
+- Observe through Delegate `status`, `collect`, or `events`; do not use
+  process searches or Pueue commands. Delegate manages its supervisor.
+- Keep credentials and unrestricted private provider output out of briefs,
+  options, control responses, and messages.
 
 ## Operating procedure
 
 ### 1. Verify the control CLI
 
-Run a quick local check:
-
 ```sh
 command -v delegate && delegate --version
 ```
 
-If discovery fails, report that Delegation Layer is missing. If the version
-command fails, report that the installed CLI is unusable. Stop in either case.
-Do not substitute a provider command.
+If missing or unusable, report and stop. This skill does not install or repair
+the CLI. A trusted plugin startup hook normally handles bootstrap.
 
 ### 2. Discover only when useful
 
-If no destination was named, use automatic selection directly. If the user
-named a harness (for example, “Codex”), resolve its exact provider ID from:
+If no destination was named, use `--auto`. Otherwise resolve the named
+destination through `providers --json` and preserve it with `--provider`.
+Read [providers and capabilities](references/command-reference.md#providers-and-capabilities)
+for discovery and required options. Catalog support is not host readiness;
+a normal task needs no separate preflight.
 
-```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" providers --json
-```
+Keep provider defaults when model/effort were not requested and are not
+required. For an explicit choice or natural-language model name, read
+[model selection](references/command-reference.md#choosing-models-and-effort).
+An exact requested ID passes unchanged even when discovery omits it. Ask for
+an exact ID only when a name remains ambiguous.
 
-Use the matching catalog ID with `--provider`; do not silently substitute
-`--auto` or another provider. If the name is ambiguous, clarify the intended
-destination. If it is absent, report that this build does not support it.
-The catalog is not proof that a provider is installed, authenticated, or ready.
-Dispatch performs admission checks; a separate preflight is not needed for a
-normal task. For an explicitly requested readiness check, see
-[preflight guidance](references/command-reference.md#checking-readiness).
-
-The catalog and `capabilities` response expose supported permission modes,
-request options, continuation, native interaction, and the read-only mechanism. A read-only
-capability with `containment: "provider-owned"` selects the provider's native
-behavior but is not an independent delegate-owned sandbox. This is separate
-from guardian-owned process-lifetime containment. Static discovery
-does not prove authentication or live acceptance; use the dispatch or live
-acceptance result for that evidence.
-
-Read `required_options` in provider discovery before dispatch. Supply every
-required option; a provider's optional defaults do not replace required inputs.
-For CCR / Claude Code Router or a CCR model request, read
-[CCR model selection](references/ccr.md). A CCR route is external collaboration
-even when you are already using Claude. Do not assume every open-source model
-name belongs to CCR; clarify only if discovery leaves the destination ambiguous.
-
-Keep provider defaults when no model or effort was requested and neither is required. When an explicit
-choice is needed, read [model and effort guidance](references/command-reference.md#choosing-models-and-effort).
-Pass exact requested model IDs and effort values unchanged through Delegate's
-public `--model` and `--effort` fields; discovery is advisory, never an allowlist.
-For a natural-language model name, resolve one exact ID through discovery. If
-it remains ambiguous or discovery is unavailable, ask for the exact model ID;
-do not turn a display name into a guessed alias. An explicit ID needs no such
-clarification just because it is absent from discovery.
-
-For planning, consultation, debate, or other external work that may need
-answers or guidance while it runs, read [active-task interaction](references/interaction.md)
-and use `--interactive` when supported. Answer known facts yourself; ask the
-user for missing preferences, authorization, or scope. Keep ordinary native
-subagents available under the same-harness rule above.
+For work likely to need questions or guidance, read
+[interaction](references/interaction.md) and use `--interactive` when supported.
+For explicit native Codex review, read
+[review scope](references/command-reference.md#codex-review).
 
 ### 3. Prepare separate paths and a finite brief
 
-Use an existing task brief when one is supplied. Otherwise create a bounded
-brief file that contains the requested work and its acceptance criteria. Keep
-the state root outside the workspace and provider-writable trees (which can
-include the system temporary directory). Use `DELEGATE_ROOT` when supplied.
-Pass a regular file path for `--brief`, not shell process substitution such as
-`<(...)` or an ephemeral `/dev/fd/...` path.
+Use a supplied brief or write the worker's bounded assignment and acceptance
+criteria to a regular file. Do not copy the orchestration request or ask workers
+to recruit others unless recursive delegation was requested.
 
-Run path preparation and dispatch in **one shell/tool invocation**, as shown
-below. Shell variables may disappear between tool calls. For later commands,
-use the actual saved absolute paths or assign them again in that invocation;
-never pass an empty `--root`, `--brief`, or `--cwd`.
+Keep the state root outside provider-writable workspaces, provider runtime
+directories, and temporary trees they may write. For every task command pass
+`--root "${DELEGATE_ROOT:-$HOME/delegation-state}"` directly in that shell
+invocation. If the user explicitly requests another root, use that exact path
+consistently. Task IDs separate tasks; do not invent per-task roots.
 
-Write the brief as the **worker’s own assignment**, not a copy of the
-orchestration request. For “consult another agent about X”, tell the worker
-“Investigate X and return your findings; you are the assigned worker, do not
-delegate this assignment.” Keep dispatching, answering questions, and
-collecting results in the lead session unless recursive delegation was
-explicitly requested.
+Prepare paths and dispatch in one tool invocation; shell variables may not
+persist between calls. Use saved absolute paths in later calls. Do not use
+process substitution or ephemeral `/dev/fd` paths for briefs.
 
-Replace the example brief below with that bounded worker assignment. Do not place the state
-root inside the workspace or place secrets in either path’s task data. Keep it
-outside provider configuration and runtime directories as well. If delegate
-rejects a caller-supplied state root, report the placement error rather than
-silently replacing that root. For every task command, use
-`--root "${DELEGATE_ROOT:-$HOME/delegation-state}"` as shown below. This reads the supplied root in each shell call and uses the
-same default when none was supplied; no root setup or new directory choice is
-needed. If the user explicitly requests another root, substitute that exact
-absolute path consistently. Do not change provider settings or switch roots
-when waiting, replying, steering, or continuing.
+For independent parallel writes, choose managed worktrees unless the user
+explicitly chooses shared coordination. Read
+[workspaces](references/workspaces.md) before creating or attaching one.
+To fork current uncommitted content, the Lead follows
+[checkpoint before fork](references/workspaces.md#checkpoint-before-fork).
+A worker must not checkpoint a workspace its own turn holds.
 
 ### 4. Dispatch one bounded turn
 
-Use automatic selection unless the user named a destination.
-For a named harness or provider resolved in step 2, replace `--auto` with `--provider PROVIDER_ID`; never
-combine the two.
+Use the [read-only task example](examples/read-only-task.md), or its
+[authorized write variation](examples/workspace-write-task.md). The
+[command reference](references/command-reference.md#dispatch) owns flags and defaults.
 
-Capture the dispatch exit code with `if`, as below. This prints the response
-even when dispatch fails and the surrounding shell has `set -e` enabled.
+Capture each response and exit status once in the original invocation.
+Never dispatch again to recover output or discover the prior exit code.
+Keep concurrent requests independently associated; see
+[parallel reviews and debates](references/collaboration.md).
 
-```sh
-WORKSPACE="$PWD"
-BRIEF="$(mktemp)"
-RESPONSE="$(mktemp)"
-cat >"$BRIEF" <<'EOF'
-Describe the delegated task, the files or behavior to change, and the checks
-that must pass. Keep the response concise and report validation evidence.
-EOF
-printf 'Saved response: %s\n' "$RESPONSE"
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
-  --brief "$BRIEF" \
-  --cwd "$WORKSPACE" \
-  --permission read-only \
-  --budget 30m \
-  --json >"$RESPONSE"; then
-  dispatch_exit=0
-else
-  dispatch_exit=$?
-fi
-cat "$RESPONSE"
-printf '\nDispatch exit: %s; saved response: %s\n' "$dispatch_exit" "$RESPONSE"
-```
-
-For an authorized code change, use `--permission workspace-write`; this requests
-unattended native tool execution, including shell commands and file edits.
-The provider may allow access beyond the selected workspace. Delegate supplies
-the native approval options; do not add provider flags or call its CLI yourself.
-Keep the budget finite. A successful dispatch means the request was durably admitted;
-it does not mean the delegated work finished.
-
-For independent work, the model may run several complete `dispatch` commands
-concurrently. Keep each task's brief, workspace, permission, and task ID
-independent. Do not configure Pueue or wait for one task before dispatching the
-next solely to serialize ordinary work. Inspect each returned task separately
-with `status` and `collect`. Use independent tool calls or separate response
-files, never background commands writing to the same stdout. Read
-[parallel reviews and debates](references/collaboration.md) when coordinating
-multiple participants or challenge rounds.
-
-Capture the response and exit status in the **original** dispatch invocation,
-as above. Read the saved response if you need it again. Never repeat dispatch
-to obtain its exit code, recover output, or confirm that it worked: each call
-can create new paid work. Once a response says `task_record: created`, save its
-`task_id` and switch to observation. A missing exit code does not undo admission.
-
-Save the exact `task_id` from the JSON response. Apply this decision separately
-for **each attempt**, including requests issued together:
-
-| Response | Next action |
-|---|---|
-| Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
-| `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
-| `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
-| `task_record: not_created`, `failure.code: workspace_provision_pending` or `workspace_busy`, and `failure.next_action: watch_workspace` | Follow [managed workspace recovery](references/result-handling.md#managed-workspace-results) using the same root and workspace. Once ready, retry the exact admission command and inputs. A failed `continue` remains that same `continue`, never a new dispatch. |
-| `task_record: not_created`, `failure.code: resource_pressure`, `failure.next_action: retry_later`, and `failure.retry_after_seconds: 30` | Delegate checked the host and confirmed resource pressure, so no ordinary task record was created and no provider task is running for this attempt. Do not poll or observe a task. Choose one: report the refusal and stop, or wait at least 30 seconds in the foreground and retry the exact original admission argv once. A `continue` stays that same `continue`. If the retry is refused again, report and stop. Never loop, retry in the background, schedule a retry, or run Pueue or process commands. The 30 seconds is advice, not a guarantee that the retry will pass. |
-| `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
-| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. An optional `resource_admission` object with `status: unknown` and `warnings` only means a resource metric could not be read; the task was admitted. Keep the warning with your report, observe that same task with `status` and `collect`, and do not redispatch. |
-| `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
-
-`resource_admission` is optional. Its `status` is `clear`, `pressure`, or `unknown`, and `warnings` is a short list of bounded entries with `code`, optional `metric`, `reason_code`, and `message`. An unknown metric adds a warning and never refuses by itself, but confirmed pressure on an independent metric still refuses. The check runs only for a new dispatch or `continue`; `status`, `collect`, `cancel`, and the recovery of an existing task are not checked or refused.
-
-One attempt's `stop_and_report` does not prevent correcting another independent
-request's usage error. Keep the failed attempt reported as failed. With an
-explicit task ID, absence can race another dispatch creating the same ID;
-never retry that uncertain ID or run Pueue commands.
+**Before any observation or retry, read and apply
+[task creation](references/result-handling.md#task-creation).**
+A task ID alone is not creation. That reference owns admission decisions,
+including the same-root supervisor migration exception, workspace waits,
+resource refusals, and uncertain creation. A failed continuation retains its
+original command and intent.
 
 ### 5. Observe and collect
 
-Use the same state root and task ID. Each command below resolves the root
-in its own shell call, so it does not depend on a previous shell variable:
+Follow [observation decisions](references/result-handling.md#observe-and-collect)
+with the same root and created task ID:
 
 ```sh
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
 ```
 
-Check `status` first: if it is `timed_out` or `interrupted`, follow step 6 even
-when publication is pending or unknown and no outcome is present. If `interaction.pending_requests` is
-nonempty and the interaction is not closed, answer the questions using
-[active-task interaction](references/interaction.md) before collecting again.
-Otherwise, if `collect` exits with code `3` because publication is still
-pending, wait a short interval and run
-`collect` again. Do not dispatch again. Continue until
-the response has a terminal `outcome` or a bounded operational error that
-requires the caller’s attention.
-
-Accept a result only when the terminal outcome is present and its publication
-is committed. A rejected outcome is terminal evidence and must be reported as
-rejected. Payload and raw output are returned as validated descriptors; do not
-copy unrestricted provider output into the control response.
+Apply the owning decision order before waiting: terminal outcomes and concrete
+errors, cancellation/timeout/interruption, interaction, then pending
+observation. Keep collection in the foreground until completion or a reported
+blocker; detach only when requested and retain the exact task IDs and root.
+A pending watch is not success. Read the complete validated answer and check
+the requested deliverables before claiming completion.
 
 ### 6. Continue a timed out or interrupted turn
 
-When `status` or `collect` reports `timed_out` or `interrupted`, read
-[continuation and timeout recovery](references/continuation.md). Unless a
-cancellation or `stop_and_report` applies, a `timed_out` task with
-`continuation.resumable: true` may use `continue --task TASK_ID`. An
-`interrupted` task may use it only under all three conditions in rule 7;
-otherwise report it. When continuing, use the original state root and a finite
-budget, then observe the returned successor ID. Do not
-wait indefinitely for pending publication or restart the task as an unrelated
-dispatch. If continuation is unavailable, report its reason, except the busy
-managed-workspace case in [continuation and timeout
-recovery](references/continuation.md). Apply the same
-`failure` and `task_record` decisions as for dispatch; never repeat an uncertain
-successor creation.
+Read [continuation](references/continuation.md) for eligibility, cancellation
+precedence, and exact-session follow-up. Preserve the root and finite budget,
+then apply [task creation](references/result-handling.md#task-creation) to the
+successor response. Never replace an uncertain or failed continuation with a
+fresh dispatch.
 
 ## Comparisons, debate, and follow-up
 
-Choose a finite scope and number of rounds appropriate to the user's request.
-For independent opinions, dispatch separate briefs to the chosen destinations
-and collect each result. Summarize the relevant findings as task data in the
-next brief; do not forward credentials or unrestricted output. Use a supported
-`continue` for an exact-session follow-up, or a new bounded task for an
-independent question. Preserve which agent supplied each finding, explain
-agreements and disagreements, and stop at the agreed scope or a blocker.
-An external worker should perform its assigned work; do not ask it to recursively
-recruit more agents unless that is explicitly part of the task.
+Choose a finite scope and number of rounds. Collect each participant's actual
+result before giving it to another participant as challenge material. Keep
+attribution and failed/blocked requests visible. Use each participant's own
+predecessor for an exact-session follow-up. The
+[collaboration reference](references/collaboration.md) owns coordination examples.
 
 ## Details when needed
 
-- Read [command reference](references/command-reference.md) when choosing
-  model/effort options or another public command.
-- Read [result handling](references/result-handling.md) when interpreting
-  admission, publication, authentication, errors, or exit codes.
-- Read [continuation](references/continuation.md) for timeout or interruption
-  recovery or an exact-session follow-up.
-- Read [managed workspaces](references/workspaces.md) for optional Git
-  worktrees, capture, review scope, release, and forgetting, and
-  [Git checkpoints](references/workspaces.md#git-checkpoints) before creating,
-  observing, forking from, or removing a checkpoint.
-- Use [read-only example](examples/read-only-task.md),
-  [write example](examples/workspace-write-task.md),
-  [JSON examples](examples/json-results.md), and
-  [managed workspace example](examples/managed-workspace.md) when constructing
-  a task or parsing unfamiliar output. Do not load every reference for a
-  routine dispatch.
+- [Commands and discovery](references/command-reference.md)
+- [Task/result decisions](references/result-handling.md), including conditional offline recheck
+- [Continuation](references/continuation.md)
+- [Interaction](references/interaction.md)
+- [Managed workspaces and checkpoints](references/workspaces.md)
+- [Managed workspace example](examples/managed-workspace.md)
+- [JSON examples](examples/json-results.md)
 
 ## Completion report
 
-Build the report from observed CLI responses and collected evidence. Copy
-returned values; do not reconstruct paths from example commands or shell
-defaults. Omit unobserved configuration details.
-
-Report the original task ID, selected provider ID when the CLI returns one,
-the final admission/liveness/publication fields, the terminal outcome and
-evidence descriptors, and any continuation or blocked-authentication state.
+Use observed responses and validated evidence. Report each original task ID,
+returned provider ID, admission/liveness/publication fields, terminal outcome,
+evidence descriptors, and any successor or blocked authentication state.
+For a `not_created` stop, name the requested destination and include its
+saved JSON failure verbatim. Do not infer installation, authentication,
+configuration, or paths from a failure.
