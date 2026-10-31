@@ -591,7 +591,7 @@ func optionsForSavedBinding(saved task.SupervisorRef, options Options) (Options,
 func bindPrivateTransitionClient(ctx context.Context, clientPath, daemonPath, configPath string, options Options, cleanupSuccessful bool) (*Client, PrivateEndpointObservation, error) {
 	client, err := Bind(ctx, clientPath, configPath, options)
 	if err != nil {
-		return nil, PrivateEndpointObservation{}, err
+		return nil, PrivateEndpointObservation{}, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if err = attachPrivateDaemon(client, daemonPath); err != nil {
 		return nil, PrivateEndpointObservation{}, errors.Join(err, client.Close())

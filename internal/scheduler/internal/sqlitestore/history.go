@@ -10,16 +10,19 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// RecordSkip stores the span and advances the cursor to its end in one
-// compare-and-set transaction.
+// RecordSkip stores the span and advances the cursor to its end for an enabled
+// schedule in one compare-and-set transaction.
 func (s *Store) RecordSkip(ctx context.Context, skip contract.Skip) error {
 	if err := contract.ValidateSkip(skip); err != nil {
 		return err
 	}
 	return s.transact(ctx, s.currentGuard, func(ctx context.Context, tx *sql.Tx) error {
-		_, cursor, err := scheduleState(ctx, tx, skip.ScheduleID)
+		state, cursor, err := scheduleState(ctx, tx, skip.ScheduleID)
 		if err != nil {
 			return err
+		}
+		if state != contract.StateEnabled {
+			return fmt.Errorf("%w: schedule %s is %s", contract.ErrConflict, skip.ScheduleID, state)
 		}
 		if err := insertSkipSpan(ctx, tx, skip.ScheduleID, cursor, skip.ExpectedCursor, skip.Span); err != nil {
 			return err

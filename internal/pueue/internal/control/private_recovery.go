@@ -602,7 +602,7 @@ func recoverPrivateRecoveryBinding(ctx context.Context, stateRoot string, saved 
 func bindPrivateRecoveryClient(ctx context.Context, record privateRecoveryBindingRecord, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, bool, error) {
 	client, err := Bind(ctx, clientExecutable, record.ConfigPath, options)
 	if err != nil {
-		return nil, false, true, err
+		return nil, false, true, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if client.Binding().Endpoint != saved.Endpoint {
 		return nil, false, true, errors.Join(ErrBinding, client.Close())

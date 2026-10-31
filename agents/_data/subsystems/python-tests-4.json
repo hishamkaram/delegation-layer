@@ -484,5 +484,33 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:test_scheduler_acceptance",
+    "owner": "py:test_scheduler_acceptance",
+    "layer": "test",
+    "imports": [
+      "py:contextlib",
+      "py:dataclasses",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.scheduler_acceptance",
+      "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_occurrences",
+      "py:delegate_acceptance.private_cli.scheduler_service",
+      "py:fcntl",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sqlite3",
+      "py:subprocess",
+      "py:tempfile",
+      "py:time",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]

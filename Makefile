@@ -178,6 +178,16 @@ acceptance-private-cli: build
 		--dispatch-workers 4 \
 		--output "$$receipt_dir/receipt.json"
 
+.PHONY: acceptance-scheduler
+acceptance-scheduler: build supervisor-fixtures
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/scheduler-acceptance.XXXXXX"); \
+	echo "Scheduler acceptance output: $$receipt_dir/results"; \
+	python3 scripts/acceptance_scheduler.py \
+		--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--output "$$receipt_dir/results"
+
 acceptance-private-cli-default-stop: build
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Default stop acceptance evidence: $$receipt_dir/receipt.json"; \

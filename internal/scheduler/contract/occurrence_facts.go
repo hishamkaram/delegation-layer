@@ -41,7 +41,9 @@ type ReleaseKind string
 const (
 	// ReleaseNotCreated: admission did not create the task; Ref is its code.
 	ReleaseNotCreated ReleaseKind = "not_created"
-	// ReleaseClosed: the task's lifetime closed; Ref is the closure SHA-256.
+	// ReleaseClosed: canonical execution closure or a lifecycle-owned permanent
+	// fenced-never-started disposition; Ref is the validated existing record's
+	// SHA-256. A reference alone does not prove either disposition.
 	ReleaseClosed ReleaseKind = "closed"
 )
 

@@ -519,6 +519,10 @@ func bindSavedEndpointMigration(ctx context.Context, saved task.SupervisorRef, c
 	}
 	migration, err := Bind(ctx, current.runtimeBinding.ClientExecutable, migrationPath, current.options)
 	if err != nil {
+		if migration != nil {
+			migration.cleanup = cleanup
+			return nil, errors.Join(err, migration.CloseAfterPending(err))
+		}
 		return nil, errors.Join(err, retainCleanupUntil(cleanup, err))
 	}
 	if migration.Binding().Endpoint != saved.Endpoint {

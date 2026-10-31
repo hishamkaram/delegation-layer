@@ -123,6 +123,11 @@ func (p *StopPermit) Release() error {
 }
 
 func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (_ *StopPermit, resultErr error) {
+	// Automatic abandonment requires the conditional admission/lifetime/run
+	// transaction; the general stop path cannot assert never-started facts.
+	if cause == task.StopCauseAutomaticAbandonment {
+		return nil, task.ErrInvalidPermit
+	}
 	if err := task.ValidateStopRequestID(requestID); err != nil {
 		return nil, err
 	}

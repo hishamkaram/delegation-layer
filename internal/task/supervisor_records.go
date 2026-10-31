@@ -5,6 +5,17 @@ import (
 	"fmt"
 )
 
+// StopCauseAutomaticAbandonment permanently closes admission for a task that
+// the lifecycle owner proved never started. It is neither a user cancellation
+// nor an expired execution budget.
+const StopCauseAutomaticAbandonment = "automatic-abandonment"
+
+// PermanentLaunchRefusalCause excludes budget requests: their deadline alone
+// does not revoke launch permission for an otherwise unstarted task.
+func PermanentLaunchRefusalCause(cause string) bool {
+	return cause == "user" || cause == StopCauseAutomaticAbandonment
+}
+
 func validateBoundRecord(schema int, root, id, spec, meta string) error {
 	if schema != SchemaVersion {
 		return ErrUnsupportedSchema
@@ -86,6 +97,11 @@ func validateStopDeadline(r *StopRequestRecord) error {
 			return ErrIdentityMismatch
 		}
 		return validateTimestamp(r.Deadline)
+	case StopCauseAutomaticAbandonment:
+		if r.NumericTaskID != nil {
+			return ErrIdentityMismatch
+		}
+		fallthrough
 	case "user":
 		if r.RequestID == "budget" || r.Deadline != "" {
 			return ErrIdentityMismatch

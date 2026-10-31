@@ -82,6 +82,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | --- | --- |
 | `make acceptance-private-cli` | Current CLI/private-supervisor bootstrap, dispatch/status/collect and 200-running-task capacity with finite provider fixtures. |
 | `make acceptance-private-cli-default-stop` | User and budget stop behavior. |
+| `make acceptance-scheduler` | Native scheduler ticks and service-stop isolation using finite fixtures and an available systemd user manager or launchd. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |

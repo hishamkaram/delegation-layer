@@ -245,6 +245,16 @@
     ]
   },
   {
+    "name": "py:acceptance_scheduler",
+    "owner": "py:acceptance_scheduler",
+    "layer": "tool",
+    "imports": [
+      "py:delegate_acceptance.private_cli.scheduler_acceptance",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
     "name": "py:acceptance_skill_routing",
     "owner": "py:acceptance_skill_routing",
     "layer": "runtime",
