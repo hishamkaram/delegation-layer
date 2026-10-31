@@ -1,6 +1,6 @@
 // Package scheduler constructs the recurring-schedule scheduler's storage for
 // one state root. It is unrelated to the pueue supervisor that runs admitted
-// tasks. Ordinary task commands never import it.
+// tasks. Ordinary task commands do not open this optional storage.
 package scheduler
 
 import (

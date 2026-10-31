@@ -43,6 +43,7 @@ Commands:
   supervisor    Inspect or migrate Delegate's private supervisor
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
+  schedule      Manage recurring definitions (execution is ongoing work)
   help          Show this help message
   version       Print version information
 
@@ -74,6 +75,12 @@ Git checkpoints (optional):
   checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
   Creation names exactly one target. --operation selects an acknowledged
   removal attempt; without it status observes the creation and latest removal.
+
+Recurring definitions:
+  schedule create --brief FILE --cwd ABS (--provider ID | --auto) --cron RULE [--timezone ZONE] --json
+  schedule list [--after ID] [--limit N] --json
+  schedule show|pause|resume|delete ID --json
+  Saving a definition does not start a scheduler or launch a provider.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -229,7 +236,10 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 		return 0
 	}
 
-	normalized := deps.normalized()
+	normalized := deps
+	if parsed.Command != "schedule" {
+		normalized = deps.normalized()
+	}
 	if parsed.Command == "providers" {
 		return runProviders(parsed.JSON, stdout, stderr, normalized.Catalog)
 	}
@@ -242,17 +252,24 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	result := runCommand(parsed, normalized)
 	if parsed.JSON {
 		if err = writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
-			return 1
+			return scheduleOutputFailure(stderr, result.response, err)
 		}
 	} else {
 		if err = writeHumanResponse(stdout, result.response); err != nil {
-			return 1
+			return scheduleOutputFailure(stderr, result.response, err)
 		}
 		if result.err != nil {
 			return writeCLIError(stderr, commandPresentationError(parsed.Command, result), result.code)
 		}
 	}
 	return result.code
+}
+
+func scheduleOutputFailure(stderr io.Writer, response Response, err error) int {
+	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.ID != "" {
+		return writeCLIError(stderr, fmt.Errorf("writing schedule output for %s: %w; inspect with schedule show %s", response.Schedule.ID, err, response.Schedule.ID), 1)
+	}
+	return 1
 }
 
 func runCommand(a Arguments, deps Dependencies) commandResult {
@@ -281,6 +298,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return workspaceCommand(a, deps)
 	case "checkpoint":
 		return checkpointCommand(a, deps)
+	case "schedule":
+		return scheduleCommand(a, deps.storeDependencies())
 	default:
 		return commandResult{response: newResponse(a.Command), code: 2, err: fmt.Errorf("unknown command %q", a.Command)}
 	}

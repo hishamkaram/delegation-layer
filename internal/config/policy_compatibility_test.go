@@ -62,6 +62,7 @@ func TestPolicyCompatibilityAliasesPreserveConstantsAndErrorIdentity(t *testing.
 		{name: "brief not found", legacy: ErrBriefNotFound, pure: policy.ErrBriefNotFound},
 		{name: "brief not regular", legacy: ErrBriefNotRegular, pure: policy.ErrBriefNotRegular},
 		{name: "brief too large", legacy: ErrBriefTooLarge, pure: policy.ErrBriefTooLarge},
+		{name: "brief empty", legacy: ErrBriefEmpty, pure: policy.ErrBriefEmpty},
 	}
 	for _, tc := range errorPairs {
 		if !errors.Is(tc.legacy, tc.pure) || !errors.Is(tc.pure, tc.legacy) {

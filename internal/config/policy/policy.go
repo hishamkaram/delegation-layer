@@ -39,6 +39,7 @@ var (
 	ErrBriefNotFound        = errors.New("brief file not found")
 	ErrBriefNotRegular      = errors.New("brief must be a regular file")
 	ErrBriefTooLarge        = errors.New("brief file exceeds 8 MiB limit")
+	ErrBriefEmpty           = errors.New("brief must be nonempty")
 )
 
 // ParseBudget parses and validates a finite positive duration.

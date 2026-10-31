@@ -20,39 +20,64 @@ import (
 )
 
 func TestAwaitInspectionRejectsFailedPrivateTerminalEventAfterCurrentQueueReconciliation(t *testing.T) {
-	store := supervisorfixture.NewInspectionStore(t)
-	supervisor, statusCalls, unfilteredStatusCalls := newTerminalEventInspectionSupervisorWithEnvironment(t, store)
-	operation, job := admissionfixture.NewTerminalInspectionCleanupOperation(t, store, supervisor, inspection.ResultEligible, true)
-	ctx, cancel := context.WithTimeout(t.Context(), inspection.AdmissionTimeout)
-	defer cancel()
+	// Observe the real persisted wake before running its controlled owner; host
+	// scheduling is not a five-second cleanup contract.
+	supervisor := newTerminalEventClockSupervisor(t)
+	runTerminalEventClockBubble(t, supervisor, func(t *testing.T, scope *terminalEventClockScope) {
+		probe, baseline := misleadingTerminalEventInspection(t, supervisor)
+		ctx, cancel := context.WithTimeout(scope.ctx, inspection.AdmissionTimeout)
+		defer cancel()
+		facts, err := awaitInspectionWithSubmissionState(ctx, probe.operation, supervisor.client, inspectionSubmissionState{})
+		if facts != nil || !errors.Is(err, ErrInspectionWorkerUnavailable) {
+			t.Fatalf("failed terminal event admission facts=%s err=%v", facts, err)
+		}
+		requireFailedInspectionObservation(t, ctx, probe.operation)
+		journal := readPublicationJournal(t, supervisor.store.Root)
+		if journal.Requested != baseline.journal.Requested+1 || journal.Attempted != baseline.journal.Attempted || journal.FullRequested != baseline.journal.FullRequested {
+			t.Fatalf("admission did not hand off one unattempted candidate wake: journal=%+v baseline=%+v", journal, baseline.journal)
+		}
+		runInspectionMaintenanceBatch(t, ctx, supervisor.client, supervisor.launches.Load(), 1)
+		removals, readErr := os.ReadFile(filepath.Join(supervisor.store.Root, ".supervisor", "terminal-event-removals"))
+		if readErr != nil || string(removals) != "7\n" {
+			t.Fatalf("failed-row cleanup removals=%q err=%v, want 7", removals, readErr)
+		}
+		requireTerminalEventClockCleanup(t, ctx, supervisor, baseline, 1, 2, probe.job.ID)
+		requireFailedInspectionObservation(t, ctx, probe.operation)
+	})
+}
 
+// misleadingTerminalEventInspection records a successful callback for a failed
+// queue row, with the original operation format and no extra lifetime evidence.
+func misleadingTerminalEventInspection(t *testing.T, supervisor terminalEventClockSupervisor) (terminalEventClockInspection, terminalEventClockBaseline) {
+	t.Helper()
+	operation, job := admissionfixture.NewTerminalInspectionCleanupOperation(t, supervisor.store, supervisor.client, inspection.ResultEligible, true)
+	// Setup belongs to the test lifetime, before the bounded admission phase.
+	ctx := t.Context()
 	if err := operation.RecordReceiptContext(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	job.Succeeded = false
-	admissionfixture.WriteTerminalEventStatus(t, store, job, admissionfixture.TerminalEventDoneState(job.Succeeded))
-	if err := supervisor.RegisterPrivateTerminalEvent(ctx, job.ID); err != nil {
+	admissionfixture.WriteTerminalEventStatus(t, supervisor.store, job, admissionfixture.TerminalEventDoneState(job.Succeeded))
+	if err := supervisor.client.RegisterPrivateTerminalEvent(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, enabledErr := supervisor.PrivateTerminalEventsEnabled(ctx); enabledErr != nil || !enabled {
+	if enabled, enabledErr := supervisor.client.PrivateTerminalEventsEnabled(ctx); enabledErr != nil || !enabled {
 		t.Fatalf("terminal events enabled=%t err=%v", enabled, enabledErr)
 	}
-	if err := pueue.RecordPrivateTerminalEvent(ctx, store.Root, job.ID, "0"); err != nil {
+	baseline := requireTerminalEventClockBaseline(t, supervisor, job.ID)
+	if err := pueue.RecordPrivateTerminalEvent(ctx, supervisor.store.Root, job.ID, "0"); err != nil {
 		t.Fatal(err)
 	}
-	if event, found, readErr := supervisor.ReadPrivateTerminalEvent(ctx, job.ID); readErr != nil || !found || !event.Succeeded {
+	if event, found, readErr := supervisor.client.ReadPrivateTerminalEvent(ctx, job.ID); readErr != nil || !found || !event.Succeeded {
 		t.Fatalf("successful callback hint for failed row = %+v found=%t err=%v", event, found, readErr)
 	}
-	facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{})
-	if facts != nil || !errors.Is(err, ErrInspectionWorkerUnavailable) {
-		t.Fatalf("failed terminal event admission facts=%s err=%v", facts, err)
-	}
-	removals := filepath.Join(store.Root, ".supervisor", "terminal-event-removals")
-	admissionfixture.WaitForTestPath(t, removals)
-	admissionfixture.WaitForPrivateQueueMaintenanceIdle(t, t.Context(), supervisor)
-	assertTerminalMaintenanceStatusCalls(t, statusCalls.Load(), unfilteredStatusCalls.Load(), 3)
+	return terminalEventClockInspection{operation: operation, job: job}, baseline
+}
+
+func requireFailedInspectionObservation(t *testing.T, ctx context.Context, operation *inspection.Operation) {
+	t.Helper()
 	if _, succeeded, readErr := operation.ReadWorkerResultContext(ctx); readErr != nil || succeeded {
-		t.Fatalf("failed terminal event did not persist failed worker observation: succeeded=%t err=%v", succeeded, readErr)
+		t.Fatalf("failed observation was not retained: succeeded=%t err=%v", succeeded, readErr)
 	}
 }
 

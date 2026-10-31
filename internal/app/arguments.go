@@ -57,6 +57,15 @@ type Arguments struct {
 	CheckpointLimit       int
 	CheckpointBudget      string
 
+	// Schedule values record the requested definition and list cursor only.
+	ScheduleAction      string
+	ScheduleID          string
+	ScheduleCron        string
+	ScheduleTimezone    string
+	ScheduleTimezoneSet bool
+	ScheduleAfter       string
+	ScheduleLimit       int
+
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
 	// public argv; continuation admission must reuse that exact authority.
@@ -84,6 +93,9 @@ func ParseArguments(args []string) (Arguments, error) {
 	}
 	if command == "checkpoint" {
 		return parseCheckpointArguments(a, rest)
+	}
+	if command == "schedule" {
+		return parseScheduleArguments(a, rest)
 	}
 	if command == "supervisor" {
 		var action string
@@ -157,7 +169,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}

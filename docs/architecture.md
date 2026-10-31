@@ -31,7 +31,7 @@ own shared public procedures and response decisions.
 | `internal/execution` | Provider start, input transport, capture, wait and sealing. |
 | `internal/workspaces` | Optional workspace provisioning, reservations, capture and release. |
 | `internal/resourceadmission` | Invocation-local host observations and the new-task pressure decision. |
-| `internal/scheduler` | Optional schedule-storage foundation; no scheduler service currently dispatches tasks. |
+| `internal/scheduler` | Schedule storage and recurrence policy; the scheduler service is not yet implemented. |
 
 Consumer-owned interfaces keep decisions independent of storage and OS details.
 The [maintainability contract](../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
@@ -268,8 +268,12 @@ See [discovery and model selection](../skills/agent-integration/references/comma
 
 ## Scheduler storage
 
-Recurring background scheduling is ongoing. Its optional storage foundation
-exists, but no scheduler service or scheduling command currently dispatches work.
+Recurring background scheduling is ongoing. The
+[schedule commands](../skills/agent-integration/references/command-reference.md#schedules)
+manage definitions without launching providers. No scheduler service dispatches
+timed work yet. Recurrence calculation is isolated in
+`internal/scheduler/recurrence`; the application composes it with the storage
+interface and keeps provider preparation in the existing execution path.
 Ordinary dispatch, status and collect do not depend on the database.
 
 The scheduler owner lease alone may initialize or migrate

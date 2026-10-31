@@ -43,7 +43,7 @@ func ReadBrief(path string) (data []byte, resultErr error) {
 		return nil, errors.New("brief changed while it was being read")
 	}
 	if len(data) == 0 {
-		return nil, errors.New("brief must be nonempty")
+		return nil, config.ErrBriefEmpty
 	}
 	return data, nil
 }

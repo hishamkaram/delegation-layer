@@ -1,6 +1,6 @@
 # CLI reference
 
-This page indexes task commands and owns operator supervisor configuration.
+This page indexes task and schedule commands and owns operator supervisor configuration.
 The packaged [command reference](../skills/agent-integration/references/command-reference.md)
 is the shared syntax/default owner; [result handling](../skills/agent-integration/references/result-handling.md)
 owns JSON decisions and exit codes.
@@ -21,6 +21,7 @@ Use `delegate help` for the installed build's command surface.
 | `recheck` | [Offline evidence recovery](../skills/agent-integration/references/result-handling.md#offline-recovery) |
 | `reply`, `steer`, `events` | [Interaction](../skills/agent-integration/references/interaction.md) |
 | `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
+| `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
 Global paths must be absolute. The CLI's default root is the user's

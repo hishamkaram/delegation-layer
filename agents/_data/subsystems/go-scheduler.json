@@ -1,5 +1,40 @@
 [
   {
+    "name": "go:internal/scheduler/recurrence",
+    "owner": "go:internal/scheduler",
+    "layer": "runtime",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:github.com/go-co-op/gocron/v2",
+      "go:internal/scheduler/contract",
+      "go:math",
+      "go:os",
+      "go:path/filepath",
+      "go:regexp",
+      "go:strings",
+      "go:time",
+      "go:unicode"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/recurrence#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:encoding/binary",
+      "go:errors",
+      "go:github.com/go-co-op/gocron/v2",
+      "go:internal/scheduler/contract",
+      "go:math",
+      "go:os",
+      "go:path/filepath",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
     "name": "go:internal/scheduler/contract",
     "owner": "go:internal/scheduler",
     "layer": "pure",

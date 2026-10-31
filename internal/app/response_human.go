@@ -11,7 +11,9 @@ import (
 
 func writeHumanResponse(w io.Writer, response Response) error {
 	var output strings.Builder
-	writeHumanSummary(&output, response)
+	if response.Command != "schedule" {
+		writeHumanSummary(&output, response)
+	}
 	writeHumanResourceAdmission(&output, response.ResourceAdmission)
 	writeHumanSupervisor(&output, response.SupervisorControl)
 	writeHumanContinuation(&output, response.Continuation)
@@ -22,8 +24,14 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	writeHumanStops(&output, response.Stop, response.Stops)
 	writeHumanWorkspaceResponse(&output, response)
 	writeHumanCheckpointResponse(&output, response)
+	if err := writeHumanScheduleResponse(&output, response); err != nil {
+		return err
+	}
 	if err := writeHumanInteraction(&output, response); err != nil {
 		return err
+	}
+	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.Request != nil && output.Len() > 2<<20 {
+		return ErrJSONResponseTooLarge
 	}
 	return writeAll(w, []byte(output.String()))
 }
