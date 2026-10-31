@@ -235,6 +235,9 @@ func (c *Client) CloseAfterPending(err error) error {
 	if c == nil {
 		return nil
 	}
+	if c.options.WaitForPendingClose {
+		return c.Close()
+	}
 	c.beginBackgroundClose()
 	cleanup := c.takeCleanup()
 	if len(pendingHandles(err)) == 0 {

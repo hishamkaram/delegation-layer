@@ -22,6 +22,7 @@ Use `delegate help` for the installed build's command surface.
 | `reply`, `steer`, `events` | [Interaction](../skills/agent-integration/references/interaction.md) |
 | `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
 | `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
+| `scheduler run` | [Independent scheduler](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
 Global paths must be absolute. The CLI's default root is the user's
@@ -29,6 +30,28 @@ configuration directory joined with `delegation-layer`; integration examples
 pass an explicit root so each invocation uses the same one.
 `--pueue-config ABS` or `DELEGATE_PUEUE_CONFIG` selects an external compatible
 supervisor for advanced integrations.
+
+## Scheduler hosting
+
+The [scheduler reference](../skills/agent-integration/references/command-reference.md#scheduler-runtime)
+owns command syntax and timing/budget behavior. Use an existing per-user service
+host when scheduling must outlive an interactive agent session; the command does
+not install a service, enable login/reboot startup or send notifications.
+
+The host must stop the scheduler process without terminating its independently
+supervised tasks. For orderly stop on systemd 255, use `Delegate=yes`,
+`ExitType=cgroup`, `KillMode=process`, `SendSIGKILL=no`, `TimeoutStopSec=infinity`
+and `Restart=no`. Request `systemctl --user --no-block stop UNIT` while its main
+process is live. The scheduler exits, while the unit can stay `deactivating`
+until its independent tasks and private supervisor exit; restarting that unit
+waits behind the outstanding stop. This is not a guarantee for host crashes or
+forced teardown. See [systemd service lifetime](https://www.freedesktop.org/software/systemd/man/255/systemd.service.html#ExitType=).
+A macOS LaunchAgent runs in the logged-in user's `gui/UID` domain with
+`AbandonProcessGroup=true` so independent process groups survive.
+Service stop joins pending admissions and
+control work without a shutdown-time guarantee. An already accepted admission
+may finish during stop; the service does not wait for every admitted task to finish.
+Provider settings/accounts remain owned by the user and provider CLI.
 
 ## Dispatch
 

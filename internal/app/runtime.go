@@ -43,7 +43,8 @@ Commands:
   supervisor    Inspect or migrate Delegate's private supervisor
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
-  schedule      Manage recurring definitions (execution is ongoing work)
+  schedule      Manage recurring definitions
+  scheduler     Run the independent local scheduler
   help          Show this help message
   version       Print version information
 
@@ -81,6 +82,11 @@ Recurring definitions:
   schedule list [--after ID] [--limit N] --json
   schedule show|pause|resume|delete ID --json
   Saving a definition does not start a scheduler or launch a provider.
+
+Independent scheduler:
+  scheduler run [--root ABS] [--pueue-config ABS] [--runner ABS]
+  Runs in the foreground until interrupted. Use an external service host for
+  caller-independent operation. Existing admitted tasks continue after it stops.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -218,10 +224,7 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	deps = deps.withCapturedEnvironment()
 	parsed, err := ParseArguments(args)
 	if err != nil {
-		if _, writeErr := fmt.Fprintf(stderr, "error: %v\n\n%s", err, UsageText); writeErr != nil {
-			return 1
-		}
-		return 2
+		return argumentUsageError(stderr, err)
 	}
 	if parsed.Command == "help" {
 		if _, err = io.WriteString(stdout, UsageText); err != nil {
@@ -249,13 +252,44 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	if parsed.Command == "models" {
 		return runModels(parsed, stdout, normalized)
 	}
-	result := runCommand(parsed, normalized)
+	var result commandResult
+	if parsed.Command == "scheduler" {
+		result = runScheduler(context.Background(), parsed, normalized, stderr)
+	} else {
+		result = runCommand(parsed, normalized)
+	}
+	return presentCommandResult(parsed, result, stdout, stderr)
+}
+
+// RunContext supplies only the resident scheduler's admission/stop lifetime.
+// An already-owned task invocation settles independently before shutdown joins.
+// Ordinary finite commands keep Run's established lifetime and behavior.
+func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	parsed, err := ParseArguments(args)
+	if err != nil {
+		return argumentUsageError(stderr, err)
+	}
+	if parsed.Command != "scheduler" {
+		return writeCLIError(stderr, errors.New("context execution requires scheduler run"), 2)
+	}
+	result := runScheduler(ctx, parsed, deps.withCapturedEnvironment().normalized(), stderr)
+	return presentCommandResult(parsed, result, stdout, stderr)
+}
+
+func argumentUsageError(stderr io.Writer, err error) int {
+	if _, writeErr := fmt.Fprintf(stderr, "error: %v\n\n%s", err, UsageText); writeErr != nil {
+		return 1
+	}
+	return 2
+}
+
+func presentCommandResult(parsed Arguments, result commandResult, stdout, stderr io.Writer) int {
 	if parsed.JSON {
-		if err = writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
+		if err := writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
 			return scheduleOutputFailure(stderr, result.response, err)
 		}
 	} else {
-		if err = writeHumanResponse(stdout, result.response); err != nil {
+		if err := writeHumanResponse(stdout, result.response); err != nil {
 			return scheduleOutputFailure(stderr, result.response, err)
 		}
 		if result.err != nil {

@@ -1,5 +1,44 @@
 [
   {
+    "name": "go:internal/scheduler/runtime",
+    "owner": "go:internal/scheduler",
+    "layer": "application",
+    "imports": [
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/scheduler/contract",
+      "go:internal/scheduler/recurrence",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:io/fs",
+      "go:sort",
+      "go:sync",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/runtime#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/scheduler",
+      "go:internal/scheduler/contract",
+      "go:internal/scheduler/recurrence",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:sync/atomic",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
     "name": "go:internal/scheduler/recurrence",
     "owner": "go:internal/scheduler",
     "layer": "runtime",

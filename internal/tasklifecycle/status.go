@@ -33,7 +33,11 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 	submission, err := td.ReadSubmission()
 	if errors.Is(err, os.ErrNotExist) {
 		result.Admission, result.AdmissionObserved = task.AdmissionNotAdmitted, true
-		return result, nil
+		// An unsubmitted task can carry a permanent automatic refusal. Expose
+		// its truthful cause without inventing execution or terminal outcome.
+		result.Stops, err = ReadTimeoutRecords(td)
+		result.StopsRead = err == nil
+		return result, err
 	}
 	if err != nil {
 		return result, err

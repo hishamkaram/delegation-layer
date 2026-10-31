@@ -339,7 +339,7 @@ func verifyExpectedPrivateBinding(ctx context.Context, clientPath, daemonPath, c
 	}
 	bound, err := Bind(ctx, clientPath, configPath, options)
 	if err != nil {
-		return err
+		return errors.Join(err, bound.CloseAfterPending(err))
 	}
 	if err := attachPrivateDaemon(bound, daemonPath); err != nil {
 		return err

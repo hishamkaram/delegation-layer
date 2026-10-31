@@ -22,6 +22,7 @@ type Arguments struct {
 	After                uint64
 	Command              string
 	SupervisorAction     string
+	SchedulerAction      string
 	Root                 string
 	PueueConfig          string
 	Runner               string
@@ -105,6 +106,12 @@ func ParseArguments(args []string) (Arguments, error) {
 		}
 		a.SupervisorAction = action
 	}
+	if command == "scheduler" {
+		a.SchedulerAction, rest, err = parseSupervisorAction(rest)
+		if err != nil {
+			return Arguments{}, errors.New("scheduler requires run")
+		}
+	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
@@ -169,7 +176,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -188,7 +195,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
-	if a.Command == "supervisor" {
+	if a.Command == "supervisor" || a.Command == "scheduler" {
 		return
 	}
 	if a.Command == "collect" || a.Command == "events" {
@@ -300,6 +307,11 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 		return validateNoPositional(a.Command, positional)
 	case "supervisor":
 		return a.validateSupervisor(positional)
+	case "scheduler":
+		if a.SchedulerAction != "run" {
+			return errors.New("scheduler requires run")
+		}
+		return validateNoPositional("scheduler run", positional)
 	case "models":
 		return a.validateModels(positional)
 	case "capabilities":

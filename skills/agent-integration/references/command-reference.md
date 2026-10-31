@@ -20,7 +20,8 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `recheck TASK --json` | Reassess eligible evidence offline | None |
 | `reply`, `steer`, `events` | [Active interaction](interaction.md) | No new launch |
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
-| `schedule` | [Recurring definitions](#schedules) | None; runtime scheduling is ongoing |
+| `schedule` | [Recurring definitions](#schedules) | None |
+| `scheduler run` | [Independent scheduler](#scheduler-runtime) | Admits due occurrences through normal dispatch |
 
 Prefix every task command with `delegate --root ROOT`, using the same
 explicit root across invocations.
@@ -72,7 +73,8 @@ Correct it only under the returned task-creation guidance.
 ## Schedules
 
 These commands manage saved definitions. They do not start a scheduler, launch
-a provider, or prove that a task ran. Recurring execution is still ongoing work.
+a provider, or prove that a task ran. Start the [scheduler](#scheduler-runtime)
+separately to execute due occurrences.
 
 ```text
 delegate --root ROOT schedule create --brief FILE --cwd ABS \
@@ -124,6 +126,37 @@ input/state transitions and `1` for not-found, conflicts or operational failures
 `--json` applies to handler responses; argument/usage errors retain the CLI's
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
+
+## Scheduler runtime
+
+```text
+delegate --root ROOT scheduler run [--pueue-config ABS] [--runner ABS] [--json]
+```
+
+This foreground command requires existing schedule storage. One process owns
+each root; a second fails busy. It uses the service launch environment and the
+saved requested provider choices. Saving a definition never starts the service.
+See [operator hosting](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#scheduler-hosting).
+
+Startup skips past appointments. Expired, overlapping or capacity-limited
+appointments are skipped with a recorded reason; no catch-up queue or automatic
+retry/continuation is added. Pause/delete prevent new claims, without canceling
+already claimed tasks. Results remain available through task status/collect;
+schedule history queries are separate ongoing work.
+
+Each appointment starts a fresh leader with its saved budget or the normal
+provider default. Overlap protection covers that leader. Independently admitted
+Delegate workers keep their own budgets; provider-native in-session subagents do
+not acquire independent Delegate lifetimes. The workflow owns saved progress,
+worker IDs and deduplication; unknown acknowledgment is not permission to resend.
+
+Interrupting the service joins its admission/control work before releasing its
+owner lease. Accepted lifecycle calls settle independently of the stop signal;
+there is no shutdown-time guarantee. Already admitted tasks continue under their
+own supervisors. The
+service reports bounded identifiers/codes on stderr; `--json` selects the final
+command response, not an event stream or daemon-control protocol. Uncertain task
+evidence blocks only its schedule until the existing owners can prove closure.
 
 ## Codex review
 

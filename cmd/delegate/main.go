@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/hishamkaram/delegation-layer/internal/app"
 )
@@ -13,6 +16,11 @@ var version = "dev"
 const usageText = app.UsageText
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if parsed, err := app.ParseArguments(args); err == nil && parsed.Command == "scheduler" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return app.RunContext(ctx, args, stdout, stderr, app.Dependencies{PublisherVersion: version})
+	}
 	return app.Run(args, stdout, stderr, app.Dependencies{PublisherVersion: version})
 }
 

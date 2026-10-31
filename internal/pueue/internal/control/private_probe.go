@@ -422,7 +422,7 @@ func preparePrivateClient(ctx context.Context, stateRoot string, options Options
 		client, observation, err = bindPrivateTransitionClient(ctx, clientPath, daemonPath, configPath, options, cleanupSuccessful)
 	}
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, nil); err != nil {
 		return nil, failPrivateTransitionClient(client, observation, err)

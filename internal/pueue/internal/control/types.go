@@ -41,6 +41,11 @@ type Options struct {
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext
 	Environment        []string
+	// WaitForPendingClose is selected by a resident application owner that must
+	// join retained command/maintenance work before returning its admission slot
+	// or lease. It reuses Close's natural completion boundary; ordinary finite
+	// CLI observers keep asynchronous CloseAfterPending behavior by default.
+	WaitForPendingClose bool
 	// ControlOwnerExecutable is the delegate-run executable that owns a
 	// supervisor control process after the invoking CLI stops observing it.
 	// Empty keeps the in-process owner used by focused package tests and
