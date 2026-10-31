@@ -37,6 +37,7 @@ var (
 	ErrBriefNotFound        = policy.ErrBriefNotFound
 	ErrBriefNotRegular      = policy.ErrBriefNotRegular
 	ErrBriefTooLarge        = policy.ErrBriefTooLarge
+	ErrBriefEmpty           = policy.ErrBriefEmpty
 )
 
 // ParseBudget preserves the legacy configuration package entry point.

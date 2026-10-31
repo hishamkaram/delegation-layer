@@ -101,7 +101,7 @@ func readScheduleBrief(path string, readBrief func(string) ([]byte, error)) ([]b
 		return nil, classifyScheduleBriefError(err)
 	}
 	if length == 0 {
-		return nil, invalidScheduleInput(errors.New("brief must be nonempty"))
+		return nil, invalidScheduleInput(config.ErrBriefEmpty)
 	}
 	brief, err := readBrief(briefPath)
 	return brief, classifyScheduleBriefError(err)
@@ -135,7 +135,7 @@ func scheduleBriefInputError(err error) bool {
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		return scheduleBriefInputError(wrapped.Unwrap())
 	}
-	return errors.Is(err, config.ErrBriefNotFound) || errors.Is(err, config.ErrBriefNotRegular) || errors.Is(err, config.ErrBriefTooLarge) || errors.Is(err, task.ErrControlRecordTooBig)
+	return errors.Is(err, config.ErrBriefNotFound) || errors.Is(err, config.ErrBriefNotRegular) || errors.Is(err, config.ErrBriefTooLarge) || errors.Is(err, config.ErrBriefEmpty) || errors.Is(err, task.ErrControlRecordTooBig)
 }
 
 func captureScheduleIdentity(requested string, now func() time.Time, newID func() (string, error)) (string, time.Time, error) {

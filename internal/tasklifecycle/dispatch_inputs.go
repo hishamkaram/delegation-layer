@@ -49,7 +49,7 @@ func dispatchInputs(a DispatchRequest) (root, cwd string, brief []byte, err erro
 	}
 	if a.BriefBytes != nil {
 		if len(a.BriefBytes) == 0 {
-			return "", "", nil, errors.New("brief must be nonempty")
+			return "", "", nil, config.ErrBriefEmpty
 		}
 		brief = append([]byte(nil), a.BriefBytes...)
 		if len(brief) > task.MaxBriefSize {

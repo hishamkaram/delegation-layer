@@ -30,6 +30,9 @@ func scheduleBriefErrorCases() []scheduleBriefErrorCase {
 		{name: "too large", want: config.ErrBriefTooLarge, change: func(path string) error {
 			return os.Truncate(path, task.MaxBriefSize+1)
 		}},
+		{name: "empty", want: config.ErrBriefEmpty, change: func(path string) error {
+			return os.Truncate(path, 0)
+		}},
 	}
 }
 

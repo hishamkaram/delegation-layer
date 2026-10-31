@@ -59,3 +59,15 @@ func writeAppTestFile(t *testing.T, path string, data []byte) {
 		t.Fatal(err)
 	}
 }
+
+func TestEmptyBriefHasSharedInputIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.md")
+	writeAppTestFile(t, path, nil)
+	if data, err := ReadBrief(path); len(data) != 0 || !errors.Is(err, config.ErrBriefEmpty) {
+		t.Fatalf("empty file bytes=%q err=%v; want empty-brief identity", data, err)
+	}
+	request := DispatchRequest{Root: filepath.Join(t.TempDir(), "state"), Cwd: t.TempDir(), BriefBytes: []byte{}}
+	if _, _, _, err := dispatchInputs(request); !errors.Is(err, config.ErrBriefEmpty) {
+		t.Fatalf("empty supplied brief err=%v; want empty-brief identity", err)
+	}
+}
