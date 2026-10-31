@@ -9,9 +9,9 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import digest, path_present, read_json, write_json
+from scripts.delegate_acceptance.evidence.files import path_present, read_json, write_json
 from scripts.delegate_acceptance.evidence.records import parse_json_output, status_jobs
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _task_identity, require
 from scripts.delegate_acceptance.native.constants import NATIVE_DISCOVERY_ENVIRONMENT
 from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.fixtures import bounded_text
@@ -181,8 +181,7 @@ def model_discovery_intent(owner) -> ModelDiscoveryIntent:
         cwd=str(acceptance.workspace), definition_revision=MODEL_DISCOVERY_DEFINITION_REVISION,
         budget=MODEL_DISCOVERY_TASK_BUDGET, budget_nanos=MODEL_DISCOVERY_TASK_BUDGET_NANOS,
         brief_sha256=hashlib.sha256(MODEL_DISCOVERY_BRIEF).hexdigest(),
-        helper_executable=str(acceptance.provider_executable),
-        helper_sha256=digest(acceptance.provider_executable))
+        helper_executable=str(acceptance.provider_executable))
 
 def discover_models(owner) -> None:
     """Record advisory model facts through the already-running supervisor."""
@@ -260,8 +259,7 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
     binding = request["binding"]
     helper_executable = binding.get("helper_executable")
     require(binding.get("definition_revision") == MODEL_DISCOVERY_DEFINITION_REVISION and
-            helper_executable == str(acceptance.provider_executable) and
-            _hex_digest(binding.get("helper_sha256")),
+            helper_executable == str(acceptance.provider_executable),
             "model discovery provider binding changed")
     task = request["task"]
     discovery_mode = PROFILES[acceptance.provider]["modes"][0]

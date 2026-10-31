@@ -13,11 +13,10 @@ from dataclasses import dataclass
 import json
 import re
 
-from ..evidence.digests import sha
 from .candidate_codec import VERSION_RE, revision, text
 from .candidate_manifest import (
-    REPOSITORY_RE, ArtifactEntry, BuildInputs, CandidateLocator, CandidateManifest, SourceIdentity,
-    Toolchains, encode_locator, expected_inventory, npm_package_path, parse_manifest,
+    REPOSITORY_RE, ArtifactEntry, BuildInputs, CandidateManifest, SourceIdentity,
+    Toolchains, expected_inventory, npm_package_path,
 )
 from .contract import VerificationError
 
@@ -162,20 +161,9 @@ def build_manifest(request: BuildRequest, *, tree: str, inputs: BuildInputs,
         build=inputs, artifacts=artifacts)
 
 
-def build_inputs(*, harness_commit: str, harness_sha256: str, config_sha256: str, go_sum_sha256: str,
+def build_inputs(*, config_sha256: str, go_sum_sha256: str,
                  go: str, goreleaser: str, python: str, node: str) -> BuildInputs:
     return BuildInputs(
-        harness_commit=harness_commit, harness_sha256=harness_sha256,
         goreleaser_config_sha256=config_sha256,
         go_sum_sha256=go_sum_sha256,
         toolchains=Toolchains(go=go, goreleaser=goreleaser, python=python, node=node))
-
-
-def locator_bytes(*, repository: str, run_id: int, run_attempt: int, artifact_id: int,
-                  artifact_digest: str, manifest: bytes) -> bytes:
-    """Encode the external locator for an uploaded payload; the manifest never names itself."""
-    parse_manifest(manifest)
-    digest = artifact_digest.removeprefix("sha256:")
-    return encode_locator(CandidateLocator(
-        repository=repository, run_id=run_id, run_attempt=run_attempt, artifact_id=artifact_id,
-        artifact_archive_sha256=digest, manifest_sha256=sha(manifest)))

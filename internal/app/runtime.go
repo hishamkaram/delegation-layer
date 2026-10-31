@@ -49,7 +49,7 @@ Commands:
 Global flags:
   --root ABS              State root (default: user config directory)
   --pueue-config ABS      Initial supervisor configuration
-  --runner ABS            Runner executable for dispatch
+  --runner ABS            Advanced custom runner override; omit for the automatic runner
 
 Supervisor recovery:
   supervisor status --json
@@ -196,6 +196,9 @@ func (d Dependencies) normalized() Dependencies {
 	}
 	if d.SupervisorOptions.PrivateTerminalEvidencePreparer == nil {
 		d.SupervisorOptions.PrivateTerminalEvidencePreparer = preparePrivateTerminalEvidence
+	}
+	if d.SupervisorOptions.PrivateTerminalCustodyReleaser == nil {
+		d.SupervisorOptions.PrivateTerminalCustodyReleaser = releasePrivateTerminalCustody
 	}
 	if d.SupervisorOptions.PrivateMigrationAuthorizer == nil {
 		d.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue

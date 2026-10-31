@@ -118,6 +118,17 @@ type lifetimeGuardianTestRecords struct {
 	launchContextDeadline     time.Time
 	terminationRecordContext  context.Context
 	terminationReadContext    context.Context
+
+	// registrationReadErrAfterWrite arms registrationReadErr at the first
+	// registration write, after the guardian's pre-scope placement read.
+	registrationReadErrAfterWrite error
+	// registrationPlacement, when set, replaces the echoed placement to model
+	// a foreign same-scope registration.
+	registrationPlacement *task.LifetimeCustodyPlacement
+	// registrationCommitOnError publishes a failed registration write.
+	registrationCommitOnError bool
+	// registrationReadNil models a reader that returns neither record nor error.
+	registrationReadNil bool
 }
 
 func (r *lifetimeGuardianTestRecords) ReadLifetimeIntentContext(ctx context.Context) (*task.LifetimeIntentRecord, error) {
@@ -173,10 +184,14 @@ func (r *lifetimeGuardianTestRecords) ReadLifetimeRegistrationContext(ctx contex
 	if r.registrationReadErr != nil {
 		return nil, r.registrationReadErr
 	}
+	if r.registrationReadNil {
+		return nil, nil
+	}
 	if r.existingRegistration == nil {
 		return nil, os.ErrNotExist
 	}
 	record := *r.existingRegistration
+	record.CustodyPlacement = record.CustodyPlacement.Clone()
 	return &record, nil
 }
 
@@ -211,10 +226,18 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistrationContext(ctx cont
 		return nil, err
 	}
 	r.registrations = append(r.registrations, facts)
+	if r.registrationReadErrAfterWrite != nil {
+		r.registrationReadErr = r.registrationReadErrAfterWrite
+		r.registrationReadErrAfterWrite = nil
+	}
 	err := r.registrationErr
 	if len(r.registrationErrors) > 0 {
 		err = r.registrationErrors[0]
 		r.registrationErrors = r.registrationErrors[1:]
+	}
+	placement := facts.CustodyPlacement.Clone()
+	if r.registrationPlacement != nil {
+		placement = r.registrationPlacement.Clone()
 	}
 	record := &task.LifetimeRegistrationRecord{
 		RootID:    lifetimeGuardianTestRootID,
@@ -225,9 +248,13 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistrationContext(ctx cont
 		ScopeID:   facts.ScopeID,
 		BootID:    facts.BootID,
 		Deadline:  facts.Deadline.UTC().Format(time.RFC3339Nano),
+
+		CustodyPlacement: placement,
 	}
-	if err == nil {
-		r.existingRegistration = record
+	if err == nil || r.registrationCommitOnError {
+		stored := *record
+		stored.CustodyPlacement = placement.Clone()
+		r.existingRegistration = &stored
 	}
 	r.mu.Unlock()
 	r.timeline.add("registration")
@@ -628,6 +655,37 @@ func (w *lifetimeGuardianTestWorker) counts() (start, wait int) {
 	return w.startCalls, w.waitCalls
 }
 
+const (
+	// lifetimeGuardianScenarioBudget caps one fixture scenario. It is a fixture
+	// choice, not a runtime requirement: it is far above any scenario's real
+	// cost so that host load cannot expire a call that has no timeout contract.
+	lifetimeGuardianScenarioBudget = 10 * time.Minute
+	// lifetimeGuardianScenarioReserve is kept free before the test binary's own
+	// deadline so fixture cleanup and the Run join finish inside it.
+	lifetimeGuardianScenarioReserve = 30 * time.Second
+	// lifetimeGuardianCleanupWatchdogMargin extends the guardian's own cleanup
+	// budget before the fixture reports a stuck Run. The report never releases
+	// anything: cleanup keeps waiting for Run to exit.
+	lifetimeGuardianCleanupWatchdogMargin = 5 * time.Second
+)
+
+// lifetimeGuardianScenarioDeadline returns the one finite, non-renewing
+// deadline of a real-clock fixture scenario: now plus budget, bounded by the
+// test binary's deadline less the cleanup reserve. A caller whose scenario runs
+// on a fake clock (a synctest bubble, where t.Deadline panics) computes its own
+// deadline on that clock instead; the two clock domains are never mixed.
+func lifetimeGuardianScenarioDeadline(t *testing.T, budget time.Duration) time.Time {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	if testDeadline, bounded := t.Deadline(); bounded {
+		limit := testDeadline.Add(-lifetimeGuardianScenarioReserve)
+		if limit.Before(deadline) {
+			return limit
+		}
+	}
+	return deadline
+}
+
 type lifetimeGuardianTestFixture struct {
 	guardian       *Guardian
 	client         *lifetimeCodec
@@ -643,6 +701,9 @@ type lifetimeGuardianTestFixture struct {
 	runDone        chan error
 	runExited      chan struct{}
 	cleanupRelease chan struct{}
+	// scenarioDeadline is chosen by the fixture's caller in its own clock
+	// domain and bounds every client call and Run join of the scenario.
+	scenarioDeadline time.Time
 }
 
 func newLifetimeGuardianTestFixture(t *testing.T) *lifetimeGuardianTestFixture {
@@ -681,12 +742,16 @@ func newLifetimeGuardianTestFixtureWithOptions(
 	setup func(*lifetimeGuardianTestScope),
 	configure func(*Options),
 ) *lifetimeGuardianTestFixture {
-	return newLifetimeGuardianTestFixtureWithOptionsAndContext(t, t.Context(), startErr, kind, assurance, callback, setup, configure)
+	return newLifetimeGuardianTestFixtureWithOptionsAndContext(
+		t, t.Context(), lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget),
+		startErr, kind, assurance, callback, setup, configure,
+	)
 }
 
 func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 	t *testing.T,
 	runContext context.Context,
+	scenarioDeadline time.Time,
 	startErr error,
 	kind lifetime.Kind,
 	assurance lifetime.Assurance,
@@ -698,7 +763,7 @@ func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 	if runContext == nil {
 		t.Fatal("lifetime guardian test run context is required")
 	}
-	fixture, deadline := newLifetimeGuardianTestFixtureState(t, startErr, kind, assurance, callback, setup)
+	fixture, deadline := newLifetimeGuardianTestFixtureState(t, scenarioDeadline, startErr, kind, assurance, callback, setup)
 	options := lifetimeGuardianTestOptions(fixture, deadline)
 	if configure != nil {
 		configure(&options)
@@ -709,6 +774,7 @@ func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 
 func newLifetimeGuardianTestFixtureState(
 	t *testing.T,
+	scenarioDeadline time.Time,
 	startErr error,
 	kind lifetime.Kind,
 	assurance lifetime.Assurance,
@@ -716,6 +782,9 @@ func newLifetimeGuardianTestFixtureState(
 	setup func(*lifetimeGuardianTestScope),
 ) (*lifetimeGuardianTestFixture, time.Time) {
 	t.Helper()
+	if scenarioDeadline.IsZero() {
+		t.Fatal("lifetime guardian test scenario deadline is required")
+	}
 	serverConn, clientConn := net.Pipe()
 	timeline := &lifetimeGuardianTestTimeline{}
 	owner := &lifetimeGuardianTestOwner{timeline: timeline}
@@ -747,6 +816,8 @@ func newLifetimeGuardianTestFixtureState(
 		timeline:       timeline,
 		now:            deadline.Add(-time.Minute),
 		cleanupRelease: cleanupRelease,
+
+		scenarioDeadline: scenarioDeadline,
 	}
 	ownerKind := task.LifetimeOwnerTask
 	if callback != nil {
@@ -840,7 +911,7 @@ func startLifetimeGuardianTestRun(
 		}
 		select {
 		case <-fixture.runExited:
-		case <-time.After(2 * time.Second):
+		case <-time.After(options.CleanupTimeout + lifetimeGuardianCleanupWatchdogMargin):
 			t.Error("lifetime guardian test fixture did not stop during cleanup")
 			// Retain fixture ownership until Run exits. Returning here would let
 			// later cleanups mutate or close the store while the guardian uses it.

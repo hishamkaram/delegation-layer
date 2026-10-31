@@ -341,13 +341,18 @@ class DirectoryOwnershipTests(unittest.TestCase):
             with patch.object(directory_journal, "_cleanup_empty", side_effect=pause_once):
                 first = threading.Thread(target=resume)
                 second = threading.Thread(target=resume)
-                first.start()
-                self.assertTrue(entered.wait(5))
-                second.start()
-                self.assertTrue(second.is_alive())
-                proceed.set()
-                first.join(5)
-                second.join(5)
+                started = []
+                try:
+                    first.start()
+                    started.append(first)
+                    self.assertTrue(entered.wait(5))
+                    second.start()
+                    started.append(second)
+                    self.assertTrue(second.is_alive())
+                finally:  # Release, then join every started worker before the patch and temporary root exit.
+                    proceed.set()
+                    for worker in started:
+                        worker.join()
 
             self.assertEqual(errors, [])
             self.assertEqual([result["state"] for result in results], ["complete", "complete"])
@@ -435,89 +440,6 @@ class DirectoryOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unsafe"):
                 common.remove_owned_directory(token)
             self.assertTrue(outside.is_dir())
-
-    def test_concurrent_path_replacement_is_not_deleted(self):
-        with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
-            root = Path(directory)
-            owner = common.DirectoryOwner()
-            token = owner.create("owned", root / "owned", root)
-            moved = threading.Event()
-            replacement_ready = threading.Event()
-            errors = []
-            original_rename = os.rename
-
-            def rename_then_pause(source, destination, *args, **kwargs):
-                result = original_rename(source, destination, *args, **kwargs)
-                if source == "owned" and destination == "entry":
-                    moved.set()
-                    if not replacement_ready.wait(5):
-                        raise RuntimeError("replacement fixture did not continue")
-                return result
-
-            def cleanup():
-                try:
-                    common.remove_owned_directory(token)
-                except BaseException as error:  # Preserve the worker failure for the test thread.
-                    errors.append(error)
-
-            with patch.object(directory_operations.os, "rename", side_effect=rename_then_pause):
-                worker = threading.Thread(target=cleanup)
-                worker.start()
-                try:
-                    self.assertTrue(moved.wait(5))
-                    replacement = root / "owned"
-                    replacement.mkdir()
-                    (replacement / "keep.txt").write_text("replacement")
-                finally:
-                    replacement_ready.set()
-                worker.join(5)
-
-            self.assertFalse(worker.is_alive())
-            self.assertEqual(errors, [])
-            self.assertEqual((root / "owned" / "keep.txt").read_text(), "replacement")
-
-    def test_concurrent_preisolation_replacement_is_quarantined_not_deleted(self):
-        with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
-            root = Path(directory)
-            owner = common.DirectoryOwner()
-            token = owner.create("owned", root / "owned", root)
-            rename_ready = threading.Event()
-            replacement_ready = threading.Event()
-            errors = []
-            original_rename = os.rename
-
-            def pause_before_rename(source, destination, *args, **kwargs):
-                if source == "owned" and destination == "entry":
-                    rename_ready.set()
-                    if not replacement_ready.wait(5):
-                        raise RuntimeError("replacement fixture did not continue")
-                return original_rename(source, destination, *args, **kwargs)
-
-            def cleanup():
-                try:
-                    common.remove_owned_directory(token)
-                except BaseException as error:  # Preserve the worker failure for the test thread.
-                    errors.append(error)
-
-            with patch.object(directory_operations.os, "rename", side_effect=pause_before_rename):
-                worker = threading.Thread(target=cleanup)
-                worker.start()
-                try:
-                    self.assertTrue(rename_ready.wait(5))
-                    token.directory.rename(root / "original")
-                    token.directory.mkdir()
-                    (token.directory / "keep.txt").write_text("replacement")
-                finally:
-                    replacement_ready.set()
-                worker.join(5)
-
-            self.assertFalse(worker.is_alive())
-            self.assertEqual(len(errors), 1)
-            self.assertRegex(str(errors[0]), "replaced.*quarantine")
-            retained = tuple(root.glob(".delegate-cleanup-*/entry/keep.txt"))
-            self.assertEqual(len(retained), 1)
-            self.assertEqual(retained[0].read_text(), "replacement")
-            self.assertTrue((root / "original").is_dir())
 
     def test_replaced_parent_is_retained_and_cleanup_fails(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:

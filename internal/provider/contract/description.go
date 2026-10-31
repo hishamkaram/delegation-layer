@@ -2,9 +2,10 @@ package contract
 
 import "github.com/hishamkaram/delegation-layer/internal/task"
 
-// RuntimeCapability describes the command-level checks performed when a
-// launch profile is prepared. VersionArgs selects the provider's version
-// command and defaults to ["--version"] when empty; HelpArgs are prepended
+// RuntimeCapability describes the command-level contract of a launch
+// profile's capability probe. VersionArgs is stored contract data that keeps
+// capability digests stable; it is never executed, so preflight never depends
+// on a version command. HelpArgs are prepended
 // before --help (for example, Codex uses ["exec"]); RequiredFlags are the
 // flags the adapter puts in its argv. These are requirements, not a release
 // manifest.

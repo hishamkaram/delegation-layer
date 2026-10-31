@@ -25,10 +25,15 @@ func runtimeRequirementsForRequest(request task.TaskRecord) commonprovider.Runti
 
 // runtimeRequirementsForPredicate keeps the admitted probe attached to its
 // native predicate. Only references created with the relaxed probe use the
-// current stable flag set; older references retain their original check.
+// current stable flag set; older references retain their original check. The
+// frozen advisory print and interactive revisions and the frozen projection
+// print revisions were admitted with the relaxed probe. Probe eligibility is
+// independent of recovery: none is a recheck source.
 func runtimeRequirementsForPredicate(request task.TaskRecord, reference task.PredicateRef) commonprovider.RuntimeCapability {
-	if reference.Equal(ReferenceForMode(request.Mode)) || reference.Equal(scopedReference(request.Mode)) || reference.Equal(preAttributionReferenceForMode(request.Mode)) ||
-		isUnscopedReference(request.Mode, reference) || reference.Equal(interactionReference(request.Mode)) || reference.Equal(scopedInteractionReference(request.Mode)) ||
+	if reference.Equal(ReferenceForMode(request.Mode)) || reference.Equal(projectionReference(request.Mode)) || reference.Equal(advisoryReference(request.Mode)) ||
+		reference.Equal(scopedReference(request.Mode)) || reference.Equal(preAttributionReferenceForMode(request.Mode)) ||
+		isUnscopedReference(request.Mode, reference) || reference.Equal(interactionReference(request.Mode)) || reference.Equal(advisoryInteractionReference(request.Mode)) ||
+		reference.Equal(scopedInteractionReference(request.Mode)) ||
 		reference.Equal(unscopedInteractionReference(request.Mode)) || reference.Equal(preAttributionInteractionReference(request.Mode)) {
 		return runtimeRequirementsForRequest(request)
 	}

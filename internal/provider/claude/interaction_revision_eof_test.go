@@ -67,7 +67,7 @@ func interactiveProfileFor(t *testing.T, mode string, reference task.PredicateRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: fresh.Inspection.Executable, SHA256: fresh.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: fresh.Inspection.Executable, SHA256: fresh.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,8 +138,15 @@ func newEOFRevision(t *testing.T, label, mode string, reference task.PredicateRe
 // Complete() against want for the stream that follows the closed invocation.
 func (r eofRevision) require(t *testing.T, tail []string, want eofExpectation) {
 	t.Helper()
-	got, answer := evaluateInteractiveTrace(t, r.sealed, append(closedInteractiveTrace(r.mode), tail...))
-	if got.Verdict != want.sealed || (got.Verdict == task.VerdictCommitted) != (answer == tracePrincipalText) {
+	lines := append(closedInteractiveTrace(r.mode), tail...)
+	got, answer := evaluateInteractiveTrace(t, r.sealed, lines)
+	// Only the current revision frames accepted follow-up answers; every
+	// retained revision publishes the principal alone.
+	wantAnswer := tracePrincipalText
+	if r.sealed.Reference().Equal(interactionReference(r.mode)) {
+		wantAnswer = expectedResponses(t, lines)
+	}
+	if got.Verdict != want.sealed || (got.Verdict == task.VerdictCommitted) != (answer == wantAnswer) {
 		t.Fatalf("%s sealed=%+v answer=%q want %s", r.label, got, answer, want.sealed)
 	}
 	err := completeAfter(t, r.profile, r.mode, tail)
@@ -150,15 +157,17 @@ func (r eofRevision) require(t *testing.T, tail []string, want eofExpectation) {
 
 // TestInteractiveRevisionsDifferOnlyInEndOfStreamSettlement pins the frozen
 // interactive-v4 end-of-stream rule beside the strict rule of the retained
-// interactive-v5 and the current interactive-v6, in both permission modes.
-// Each revision is reached through its exact reference: the recorded profile
-// reconstruction for the retained ones and fresh preparation for v6.
+// interactive-v5 and interactive-v6 and the current interactive-v7, in both
+// permission modes. Each revision is reached through its exact reference: the
+// recorded profile reconstruction for the retained ones and fresh preparation
+// for v7.
 func TestInteractiveRevisionsDifferOnlyInEndOfStreamSettlement(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
 		unscoped := newEOFRevision(t, "interactive-v4", mode, unscopedInteractionReference(mode))
 		strict := []eofRevision{
 			newEOFRevision(t, "interactive-v5", mode, scopedInteractionReference(mode)),
-			newEOFRevision(t, "interactive-v6", mode, interactionReference(mode)),
+			newEOFRevision(t, "interactive-v6", mode, advisoryInteractionReference(mode)),
+			newEOFRevision(t, "interactive-v7", mode, interactionReference(mode)),
 		}
 		for _, tc := range eofRevisionCases(mode) {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {

@@ -32,7 +32,7 @@ PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home(
 def expected_codex_inspection_binding(
         *, pueue: Path, config: Path, base: Path, config_digest: str,
         runner: Path, workspace: Path, environment: dict[str, str],
-        provider: Path, provider_digest: str,
+        provider: Path,
         pueue_version: str) -> dict[str, object]:
     """Build the expected runtime-only inspection binding from setup sources."""
     values = sorted(key + "=" + environment[key]
@@ -40,14 +40,14 @@ def expected_codex_inspection_binding(
     definition = {
         "revision": RUNTIME_INSPECTION_REVISION,
         "executable": str(provider),
-        "executable_sha256": provider_digest,
+        "executable_sha256": "",
         "arguments": None,
         "directory": str(workspace),
         "environment": values,
         "output_limit": 1 << 20,
         "runtime": {
             "executable": str(provider),
-            "executable_sha256": provider_digest,
+            "executable_sha256": "",
             "directory": str(workspace),
             "environment": values,
             "help_args": RUNTIME_HELP_ARGS,
@@ -59,7 +59,7 @@ def expected_codex_inspection_binding(
         "definition_sha256": sha(canonical_go_json(definition)),
         "capability_sha256": runtime_capability_sha(definition),
         "helper_executable": str(provider),
-        "helper_sha256": provider_digest,
+        "helper_sha256": "",
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
         "runner_ownership": "custom",

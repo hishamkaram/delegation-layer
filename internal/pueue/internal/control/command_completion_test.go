@@ -168,16 +168,20 @@ func TestControlOwnerProcessClassifiesStatusCompletion(t *testing.T) {
 		{name: "truncated status", script: `printf '{"tasks"'; exit 1`, id: "efefefefefefefefefefefefefefefef", want: commandCompletionOperational},
 	} {
 		executable := finiteExecutable(t, testCase.script)
-		for path, start := range map[string]func(*exec.Cmd) *Pending{
-			"owner": func(command *exec.Cmd) *Pending {
-				return startControlOwnerTest(t, command, testCase.id, FixtureVersion)
+		for path, start := range map[string]func(*testing.T, *exec.Cmd) *Pending{
+			"owner": func(t *testing.T, command *exec.Cmd) *Pending {
+				pending := startControlOwnerTest(t, command, testCase.id, FixtureVersion)
+				awaitControlOwnerTest(t, pending)
+				return pending
 			},
-			"direct": func(command *exec.Cmd) *Pending { return startOwnedCaptured(command, "", nil, FixtureVersion) },
+			"direct": func(_ *testing.T, command *exec.Cmd) *Pending {
+				return startOwnedCaptured(command, "", nil, FixtureVersion)
+			},
 		} {
 			t.Run(testCase.name+"/"+path, func(t *testing.T) {
 				command := exec.Command(executable)
 				command.Dir = filepath.Dir(executable)
-				result, err := observeCommand(t.Context(), start(command), 2*time.Second)
+				result, err := observeCommand(t.Context(), start(t, command), 2*time.Second)
 				if err == nil || !result.Started || result.ExitCode != 1 {
 					t.Fatalf("status result = %+v, %v", result, err)
 				}

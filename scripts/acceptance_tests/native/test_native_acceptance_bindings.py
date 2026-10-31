@@ -270,6 +270,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 self.assertIs(validator_type.call_args.kwargs["managed_runner"], True)
                 self.assertEqual(validator_type.call_args.kwargs["runner_placement"], BUNDLE_RUNNER)
 
+                journal["request"]["binding"]["helper_sha256"] = ""
+                operation._validate_model_discovery_evidence(status, model_group)
+
                 journal["request"]["binding"]["helper_executable"] = str(foreign.resolve())
                 with self.assertRaisesRegex(gate.AcceptanceFailure,
                                             "model discovery provider binding changed"):
@@ -651,3 +654,117 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertEqual(operation.root_id, root)
         self.assertEqual(operation.tasks, {"fresh": task})
         self.assertEqual(operation.numeric_ids, {task: 7})
+
+
+class NativeFailureReceiptBudgetTests(unittest.TestCase):
+    """Every failed or blocked entry receipt records its operation's request and persisted budget."""
+
+    # (provider, permission, scenario) -> (--budget argument, persisted canonical budget)
+    BUDGETS = {
+        ("codex:review", "read-only", "read-only"): (None, "1h0m0s"),
+        ("codex:exec", "read-only", "read-only"): ("5m", "5m0s"),
+        ("pi:json", "read-only", "read-only"): ("5m", "5m0s"),
+    }
+    DISPOSITIONS = (
+        ("returned", 1, "failed", "FAIL", False),
+        ("returned", 2, "BLOCKED", "BLOCKED", True),
+        (gate.AcceptanceFailure("provider rejected the task"), 1, "failed", "FAIL", False),
+        (gate.BlockedFailure("authentication unavailable"), 2, "BLOCKED", "BLOCKED", True),
+        (RuntimeError("unexpected harness failure"), 1, "failed", "FAIL", False),
+    )
+
+    def _definition(self, provider: str, permission: str, scenario: str):
+        return next(definition for definition in native_evidence.EXPECTED_CASES
+                    if (definition.provider, definition.permission, definition.scenario) ==
+                    (provider, permission, scenario))
+
+    def _failed_entry_receipt(self, definition, outcome, code: int, status: str, row_status: str,
+                              blocked: bool, *arguments: str) -> dict[str, object]:
+        """Run the public entry over a prepared case and return its validated failure receipt."""
+        with tempfile.TemporaryDirectory(prefix="native-failure-budget-") as directory:
+            root = physical_test_root(directory) / "aggregate"
+            (root / native_evidence.CASE_ROOT_NAME).mkdir(parents=True)
+            prepared = native_evidence.prepare_case_directory(root, definition.case_id)
+            finalized = []
+
+            class Run:
+                model_discovery_summary = None
+                model_discovery_exit_code = code
+
+                def run(self):
+                    if not isinstance(outcome, str):
+                        raise outcome
+                    return code
+
+                def finalize(self, success, *, blocked=False):
+                    finalized.append((success, blocked))
+                    return True
+
+                def publish_success(self, *, expected_gate):
+                    raise AssertionError("failure published success")
+
+            with patch.object(output_impl, "reject_tmp"), \
+                    patch.object(entry, "NativeAcceptance", return_value=Run()), \
+                    patch("sys.stderr"), patch("sys.stdout"):
+                exit_code = entry.main([
+                    "--provider", definition.provider, "--permission", definition.permission,
+                    "--scenario", definition.scenario, "--output", str(prepared), *arguments,
+                ])
+
+            self.assertEqual(exit_code, code)
+            self.assertEqual(finalized, [(False, blocked)])
+            receipt = gate.read_json(prepared / "failure.json")
+            self.assertEqual(receipt["status"], status)
+            self.assertEqual((receipt["requested_model"], receipt["requested_effort"]), (None, None))
+            # The native evidence reader accepts the receipt as this case's source.
+            source, digest, error = native_evidence._read_case_source(prepared, row_status)
+            self.assertIsNone(error)
+            self.assertEqual(source, receipt)
+            self.assertEqual(digest, gate.digest(prepared / "failure.json"))
+            return receipt
+
+    def test_entry_failure_and_blocked_receipts_bind_the_case_budget(self):
+        for (provider, permission, scenario), (requested, canonical) in self.BUDGETS.items():
+            definition = self._definition(provider, permission, scenario)
+            for outcome, code, status, row_status, blocked in self.DISPOSITIONS:
+                label = outcome if isinstance(outcome, str) else type(outcome).__name__
+                with self.subTest(provider=provider, outcome=label, code=code):
+                    receipt = self._failed_entry_receipt(
+                        definition, outcome, code, status, row_status, blocked)
+                    self.assertFalse(receipt.get("discover_models", False))
+                    self.assertEqual((receipt["task_budget"], receipt["canonical_task_budget"]),
+                                     (requested, canonical))
+
+    @staticmethod
+    def _discovery_success_receipt(provider: str) -> dict[str, object]:
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.provider = provider
+        operation.mode = "read-only"
+        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.model_discovery_summary = {"status": "available"}
+        operation.model_discovery_exit_code = 0
+        operation.discover_models = lambda: None
+        operation.shutdown = lambda: None
+        operation.native_mode_receipt = lambda: {}
+        operation.lifecycle_receipt = lambda: {}
+        assert operation._run_model_discovery() == 0
+        return operation.success_receipt
+
+    def test_model_discovery_receipts_bind_the_discovery_operation_budget_on_every_exit(self):
+        # `delegate models` runs one bounded inspection whose persisted request
+        # the discovery binding requires to be exactly 5m0s, for every provider.
+        self.assertEqual((gate.MODEL_DISCOVERY_TASK_BUDGET, gate.MODEL_DISCOVERY_TASK_BUDGET_NANOS),
+                         ("5m0s", 300_000_000_000))
+        for provider, permission, scenario in self.BUDGETS:
+            definition = self._definition(provider, permission, scenario)
+            success = self._discovery_success_receipt(provider)
+            self.assertEqual(success["canonical_task_budget"], gate.MODEL_DISCOVERY_TASK_BUDGET)
+            for outcome, code, status, row_status, blocked in self.DISPOSITIONS:
+                label = outcome if isinstance(outcome, str) else type(outcome).__name__
+                with self.subTest(provider=provider, outcome=label, code=code):
+                    receipt = self._failed_entry_receipt(
+                        definition, outcome, code, status, row_status, blocked, "--discover-models")
+                    self.assertIs(receipt["discover_models"], True)
+                    self.assertEqual(
+                        (receipt["task_budget"], receipt["canonical_task_budget"]),
+                        (success["task_budget"], success["canonical_task_budget"]))

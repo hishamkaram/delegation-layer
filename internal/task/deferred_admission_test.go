@@ -41,15 +41,15 @@ func TestMetaRecordRejectsInvalidPendingRuntimePreflightCombinations(t *testing.
 		mutate func(*MetaRecord)
 	}{
 		{
-			name: "empty version without marker",
+			name: "blank version without marker",
 			mutate: func(meta *MetaRecord) {
-				meta.ProviderVersion = ""
+				meta.ProviderVersion = " "
 			},
 		},
 		{
-			name: "empty digest with marker",
+			name: "blank version with environment marker",
 			mutate: func(meta *MetaRecord) {
-				meta.ProviderVersion = ""
+				meta.ProviderVersion = " "
 				meta.EnvironmentRecorded = true
 			},
 		},

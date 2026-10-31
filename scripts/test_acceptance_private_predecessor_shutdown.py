@@ -81,9 +81,10 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.state = self.fixture.state
         supervisor = self.state / ".supervisor"
         runtime = supervisor / "run"
-        runtime.mkdir(parents=True)
+        supervisor.mkdir(mode=0o700)
+        runtime.mkdir(mode=0o700)
         for name in ("transition.lock", "bootstrap.lock"):
-            (supervisor / name).touch()
+            (supervisor / name).touch(mode=0o600)
         self.endpoint = runtime / "pueue.sock"
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(self.listener.close)
@@ -106,7 +107,8 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.client = self.directory / "pueue"
         self.client.write_text("fixture client", encoding="utf-8")
         self.lifetime = FixtureLifetime(
-            base=self.base, base_token=self.capture_root, env={}, private_config=self.config,
+            base=self.base, base_token=self.capture_root, capture_token=self.capture_root, env={},
+            private_config=self.config,
             managed_state_roots=[(self.state, [TASK_ID])], attempted_task_ids=[TASK_ID],
         )
         self.calls = []

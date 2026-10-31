@@ -71,7 +71,7 @@ def run_legacy_scenario(
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     wrapper_calls = (
         wrapper_call_records(lifetime.base / "old-client-starts-calls", "client", "old")
@@ -132,7 +132,7 @@ def queue_legacy_task(fixture, initial, legacy_mode, lifetime, response_director
         ],
         receipt=response_directory / "dispatch-queued.json",
         phase="ordinary-dispatch",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if queued_dispatch.get("task_id") != queued_task_id or queued_dispatch.get("admission") != "admitted":
         raise RuntimeError("legacy CLI did not admit the task that should remain queued")
@@ -143,7 +143,7 @@ def queue_legacy_task(fixture, initial, legacy_mode, lifetime, response_director
             lifetime.private_config,
             lifetime.env,
             phase="supervisor-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         ),
         queued_label,
     )
@@ -164,7 +164,7 @@ def queue_legacy_task(fixture, initial, legacy_mode, lifetime, response_director
             lifetime.private_config,
             lifetime.env,
             phase="inspection-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         )
         .get("tasks", {})
         .values()
@@ -199,7 +199,7 @@ def queue_legacy_inspection(initial, lifetime, previous_inspection_labels):
             str(inspection_blocker),
         ],
         phase="inspection-worker",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     wait_for_pueue_state(
         lifetime.old_libexec / "pueue",
@@ -208,7 +208,7 @@ def queue_legacy_inspection(initial, lifetime, previous_inspection_labels):
         "inspection-upgrade-blocker",
         "Running",
         phase="inspection-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     lifetime.inspection_process = start_legacy_inspection(
         lifetime.old_install / "delegate", initial.models_args, lifetime.env
@@ -222,7 +222,7 @@ def queue_legacy_inspection(initial, lifetime, previous_inspection_labels):
         previous_inspection_labels,
         lifetime.inspection_process,
         phase="inspection-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     inspection_label = inspection_row["label"]
     inspection_task_id = inspection_label[len(initial.inspection_prefix) :]
@@ -254,7 +254,7 @@ def repair_legacy_queued_task(fixture, lifetime, old_runner_path, queued_label, 
         ["--root", str(fixture.state), "status", queued_task_id, "--json"],
         receipt=response_directory / "status-queued-after-upgrade.json",
         phase="managed-runner-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if repaired_status.get("task_id") != queued_task_id:
         raise RuntimeError("upgraded status did not observe the queued legacy task")
@@ -264,7 +264,7 @@ def repair_legacy_queued_task(fixture, lifetime, old_runner_path, queued_label, 
             lifetime.private_config,
             lifetime.env,
             phase="supervisor-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         ),
         queued_label,
     )
@@ -300,7 +300,7 @@ def validate_legacy_inspection(
             lifetime.private_config,
             lifetime.env,
             phase="inspection-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         ),
         inspection_label,
     )
@@ -361,7 +361,7 @@ def collect_legacy_workers(
             lifetime.private_config,
             lifetime.env,
             phase="supervisor-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         ),
         queued_label,
     )
@@ -379,7 +379,7 @@ def collect_legacy_workers(
         lifetime.env,
         ["start", "--group", "default"],
         phase="supervisor-control",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     lifetime.gate.touch(mode=0o600)
     queued_collected = run_json(
@@ -389,7 +389,7 @@ def collect_legacy_workers(
         timeout=COLLECT_TIMEOUT_SECONDS,
         receipt=response_directory / "collect-queued.json",
         phase="managed-runner-collection",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if queued_collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("upgraded CLI did not run and collect the migrated legacy queued task")
@@ -399,7 +399,7 @@ def collect_legacy_workers(
         ["--root", str(fixture.state), "status", initial.task_id, "--json"],
         receipt=response_directory / "status-upgraded.json",
         phase="ordinary-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if upgraded_status.get("task_id") != initial.task_id:
         raise RuntimeError("upgraded CLI could not recover the earlier task supervisor binding")
@@ -420,7 +420,7 @@ def complete_legacy_package_removal(fixture, initial, lifetime, response_directo
         initial.models_args,
         receipt=response_directory / "models-upgraded.json",
         phase="inspection-worker",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if state_root_models.get("status") != "available" or [
         model.get("id") for model in state_root_models.get("models", [])
@@ -457,7 +457,7 @@ def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state
         ],
         receipt=response_directory / "dispatch-upgraded.json",
         phase="ordinary-dispatch",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if upgraded_dispatch.get("task_id") != upgraded_task_id or upgraded_dispatch.get("admission") != "admitted":
         raise RuntimeError("upgraded CLI did not dispatch through the existing private supervisor")
@@ -466,7 +466,7 @@ def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state
         lifetime.private_config,
         lifetime.env,
         phase="supervisor-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     default_group = upgraded_snapshot.get("groups", {}).get("default", {})
     if default_group.get("parallel_tasks") != 0:
@@ -481,7 +481,7 @@ def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state
         timeout=COLLECT_TIMEOUT_SECONDS,
         receipt=response_directory / "collect-upgraded.json",
         phase="ordinary-collection",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if upgraded_collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("upgraded CLI did not collect the successful second task")
@@ -508,7 +508,7 @@ def restart_upgraded_supervisor(fixture, initial, lifetime, response_directory):
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     restarted_task_id = uuid.uuid4().hex
     lifetime.attempted_task_ids.append(restarted_task_id)
@@ -535,7 +535,7 @@ def restart_upgraded_supervisor(fixture, initial, lifetime, response_directory):
         ],
         receipt=response_directory / "dispatch-restarted.json",
         phase="restart-dispatch",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if restarted_dispatch.get("task_id") != restarted_task_id or restarted_dispatch.get("admission") != "admitted":
         raise RuntimeError("upgraded CLI did not restart the private supervisor after it stopped")
@@ -546,7 +546,7 @@ def restart_upgraded_supervisor(fixture, initial, lifetime, response_directory):
         timeout=COLLECT_TIMEOUT_SECONDS,
         receipt=response_directory / "collect-restarted.json",
         phase="restart-collection",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if restarted_collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("upgraded CLI did not collect the task after restarting its supervisor")
@@ -571,14 +571,14 @@ def pause_legacy_queue(lifetime):
         lifetime.env,
         ["pause", "--group", "default"],
         phase="supervisor-control",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     paused_snapshot = pueue_snapshot(
         old_pueue,
         lifetime.private_config,
         lifetime.env,
         phase="supervisor-observation",
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     if paused_snapshot.get("groups", {}).get("default", {}).get("status") != "Paused":
         raise RuntimeError("private default group did not pause for the migration fixture")

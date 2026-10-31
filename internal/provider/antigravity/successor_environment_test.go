@@ -347,7 +347,7 @@ func (c currentSuccessorEnvironment) finalizeSuccessor(t *testing.T, request tas
 	}
 	c.requireCurrentLaunch(t, "successor", candidate, meta)
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
-		Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture",
+		Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -519,8 +519,11 @@ func requireAdmittedCurrentLaunch(t *testing.T, current currentSuccessorEnvironm
 		!slices.Equal(prepared.Effective.Policy.WritableRoots, candidate.WritableRoots) {
 		t.Errorf("admitted successor plan environment/executable/roots diverge from the inspected current launch")
 	}
-	if prepared.RuntimePreflightSHA256 == meta.RuntimePreflightSHA256 || prepared.Effective.Policy.RuntimeSHA256 == meta.EffectiveConfig.Policy.RuntimeSHA256 {
+	if prepared.RuntimePreflightSHA256 == meta.RuntimePreflightSHA256 {
 		t.Errorf("admitted successor reused the predecessor's runtime proof")
+	}
+	if prepared.Effective.Policy.RuntimeSHA256 != "" {
+		t.Errorf("admitted successor recorded a provider executable digest %q; provider bytes are never fingerprinted", prepared.Effective.Policy.RuntimeSHA256)
 	}
 	if want, err := commonprovider.RuntimeCapabilityDigest(*candidate.Inspection); err != nil || prepared.RuntimePreflightSHA256 != want {
 		t.Errorf("runtime preflight %q, want a digest of the current inspection %q (err=%v)", prepared.RuntimePreflightSHA256, want, err)

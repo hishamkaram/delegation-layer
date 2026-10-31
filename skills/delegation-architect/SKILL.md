@@ -1,85 +1,45 @@
 ---
 name: delegation-architect
-description: Shape provider and delegation boundaries when ownership, interfaces, or catalog structure must change.
+description: Design a bounded ownership or interface change using existing subsystem boundaries and verified behavior.
 ---
 
 # Delegation architect
 
-## Trigger
+Use when ownership, provider preparation, catalog or task interfaces must change.
+For an established local bug boundary, use the narrower implementer skill.
 
-Use this skill for a design or implementation request that changes provider
-registration, preparation, capability selection, task boundaries, or the
-relationship between orchestration and an adapter. Do not use it for a local
-bug fix whose boundary is already established.
+## Inputs and relevant authorities
 
-Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
-[delegation invariants](../../agents/_data/delegation-invariants.md),
-[adapter contract](../../agents/_data/adapter-contract.md), and the
-[architecture guide](../../docs/architecture.md) before deciding on a boundary.
+Read the [product boundary](../../agents/_data/product-boundary.md) and the
+[ownership guidance](../../agents/_data/maintainability-contract.md#boundary-and-ownership).
+For provider changes, consult the [adapter boundary](../../agents/_data/adapter-contract.md#2-launch-planning-and-preflight-policy);
+for lifecycle changes, the [delegation invariants](../../agents/_data/delegation-invariants.md).
+Use current [architecture](../../docs/architecture.md) for implementation facts.
 
-## Inputs
+Start from the assigned scope/base, real consumers, state owners, compatibility
+requirements and observable success/failure cases. A dated plan is a pointer;
+verify it against source and the user's latest direction.
 
-- the bounded request and the files the change may own;
-- current consumers, call paths, persisted records, and provider profiles;
-- compatibility requirements and the relevant acceptance scenarios; and
-- existing interfaces, value types, and failure behavior to preserve.
+## Work
 
-For managed Git workspaces, use the contract's [W1–W7 transition
-rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
-and the [workspace reference](../agent-integration/references/workspaces.md).
-The application coordinator remains the one owner; do not duplicate workspace
-lifecycle or Git-subprocess execution policy in an adapter or a second layer.
+1. Trace callers, records and resource lifetimes using available graph tools
+   and exact source. Name one owner, writers, readers and invariant per changed
+   boundary. Keep interfaces consumer-owned and dependencies inward.
+2. Compare reuse and the smallest correction before adding an abstraction.
+   Disclose any new guarantee, dependency, state or compatibility cost. Resolve
+   expanded product scope with Root before dependent work.
+3. Keep provider behavior local and reuse shared launch, capture, lifecycle and
+   publication owners. Trace indirect public consumers before changing a gate;
+   preserve allowed observations, refused mutations and public error guidance.
+4. Verify required OS/provider primitives before dependent implementation.
+   Missing evidence blocks that work, not independent preparation.
+5. Define the narrow interface and meaningful behavior/fault tests in the
+   existing plan. Apply/verify prerequisites before dependent edits. No separate
+   matrix, source inventory, ledger or handoff format is required.
 
-## Workflow
+## Result
 
-1. Treat the accepted decision record as the authority for a boundary. Memory
-   notes, earlier plans, and prior receipts are dated history: verify one
-   against current source before building on it, and record which decision
-   superseded which.
-2. Map the consumer that needs each operation and assign the interface to that
-   consumer. Keep preparation and interpretation provider-owned while shared
-   execution and publication stay in the core.
-3. Trace data and resource lifetimes through admission, launch, evidence
-   sealing, collection, and publication. Record every affected state change in
-   the [canonical durable transition
-   matrix](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests),
-   including ownership transfer, commit point, recovery, consumer verdict, and
-   named composed test.
-4. Compare the proposed abstraction with existing task, execution, predicate,
-   usage, lifecycle, catalog, and harness types. Reuse a type when it already
-   expresses the contract; add a new one only with a concrete consumer.
-5. Compare keeping the current boundary or making the smallest refactor with
-   the proposed design and any relevant alternative. Choose the option with
-   the clearest ownership and lowest supported maintenance cost, then record
-   why the alternatives were rejected.
-6. Check duplicate registration, historical interpretation, unsupported
-   options, identity/session compatibility, the no-launch collection rule, and
-   the invariants' [create-once ambiguity
-   classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
-7. Write the bounded [evidence
-   handoff](../../agents/_data/maintainability-contract.md#handoff-evidence) for
-   the affected matrix rows. Record a reason for each new dependency or
-   abstraction.
-
-## Deliverables
-
-- a boundary map with ownership and lifetime responsibilities;
-- canonical transition rows and narrow interface/catalog decisions tied to real
-  consumers;
-- compatibility and failure-path notes; and
-- a contract-complete handoff with source, binary, receipt, and unresolved
-  evidence.
-
-## Exit criteria
-
-- Every operation has one clear owner and no adapter owns pipes, processes,
-  stopping, sealing, capture, or publication.
-- Existing persisted behavior and historical predicate revisions have an
-  explicit preservation or migration decision.
-- The design has a meaningful test and acceptance path, complies with the
-  shared contract's [maintainability gates](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates),
-  and introduces no unapproved coverage target or gate exception.
-- Every affected row has a composed test through its production stores and real
-  consumers, or an explicit unresolved evidence item.
-- Root can reproduce and review the handoff without an unrecorded source,
-  binary, or architectural assumption.
+Return the selected design, ownership/dependency decisions, rejected alternatives
+that affect correctness, tests and unresolved facts. The boundary is ready when
+its consumers can implement without guessing and [maintainability policy](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
+is satisfied. Design agreement alone is not runtime or final-code approval.

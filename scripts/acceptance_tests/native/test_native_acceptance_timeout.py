@@ -651,7 +651,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             object(), Path("/delegate"), Path("/runner"), Path("/pueue"),
             Path("/base"), Path("/state"), Path("/evidence"), runner_poll_seconds=5)
         native = gate.NativeAcceptanceTaskOps(SimpleNamespace(
-            processes=object(), delegate=Path("/delegate"), runner=Path("/runner"),
+            provider="codex:exec", processes=object(), delegate=Path("/delegate"), runner=Path("/runner"),
             pueue=Path("/pueue"), base=Path("/base"), state=Path("/state"),
             output=Path("/evidence")))
         with patch("scripts.delegate_acceptance.tasks.operations.wait_runner_terminal", observer):
@@ -696,6 +696,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             pueue.write_text(f"#!/bin/sh\nexec cat '{root / 'status.json'}'\n")
             pueue.chmod(0o700)
             owner = SimpleNamespace(
+                provider="codex:exec",
                 processes=gate.Processes(root / "processes", {"PATH": "/usr/bin:/bin"}),
                 delegate=pueue, runner=pueue, pueue=pueue, base=root, state=root / "state",
                 output=root / "evidence")

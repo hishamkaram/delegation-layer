@@ -28,17 +28,15 @@ from scripts.delegate_acceptance.processes.contracts import (
 )
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.release_verification import candidate_build
-from scripts.delegate_acceptance.release_verification.candidate_build import HARNESS_SEEDS
 from scripts.delegate_acceptance.release_verification.candidate_build_artifacts import BuildContext
 from scripts.delegate_acceptance.release_verification.candidate_build_plan import (
     BuildRequest, build_inputs, build_manifest,
 )
 from scripts.delegate_acceptance.release_verification.candidate_build_source import child_environment
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    MANIFEST_PATH, ArtifactKind, encode_manifest, expected_inventory, parse_locator, parse_manifest,
+    MANIFEST_PATH, ArtifactKind, encode_manifest, expected_inventory, parse_manifest,
 )
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.source import fingerprint_sources
 
 
 PAYLOAD_NAMES = sorted([path for path, _kind, _os, _arch in expected_inventory(support.VERSION)]
@@ -65,10 +63,6 @@ class SuccessTests(FixtureCase):
         self.assertEqual((manifest.version, manifest.build_tag), ("0.1.37", "v0.1.37"))
         self.assertEqual((manifest.source.commit, manifest.source.tree, manifest.source.base_commit),
                          (self.fixture.head, self.fixture.tree, self.fixture.base))
-        self.assertEqual(manifest.build.harness_commit, self.fixture.head)
-        harness = fingerprint_sources(self.fixture.repository, HARNESS_SEEDS)
-        self.assertEqual(manifest.build.harness_sha256, harness["sha256"])
-        self.assertEqual(self.receipt()["harness"]["sha256"], manifest.build.harness_sha256)
         toolchains = manifest.build.toolchains
         self.assertEqual((toolchains.go, toolchains.goreleaser, toolchains.node), ("1.27.3", "2.18.1", "22.11.0"))
         self.assertRegex(toolchains.python, r"^\d+\.\d+\.\d+$")
@@ -97,8 +91,6 @@ class SuccessTests(FixtureCase):
         flat = [word for record in receipt["commands"] for word in record["argv"]]
         for forbidden in ("push", "--snapshot", "--skip=validate", "gh", "attestation", "-buildvcs=false"):
             self.assertNotIn(forbidden, flat)
-        self.assertRegex(receipt["harness"]["sha256"], r"^[0-9a-f]{64}$")
-        self.assertGreater(receipt["harness"]["file_count"], 0)
         self.assertEqual(receipt["manifest_sha256"],
                          sha((self.scratch / "payload" / "candidate-manifest.json").read_bytes()))
 
@@ -132,7 +124,6 @@ class SuccessTests(FixtureCase):
         for name in PAYLOAD_NAMES:
             self.assertEqual((self.scratch / "payload" / name).read_bytes(),
                              (second / "payload" / name).read_bytes(), name)
-        self.assertEqual(self.receipt()["harness"], json.loads((second / "receipt.json").read_text())["harness"])
 
 
 class RefusalTests(FixtureCase):
@@ -778,40 +769,6 @@ class EnvironmentTests(unittest.TestCase):
                 self.assertEqual(environment.get("GIT_NO_REPLACE_OBJECTS"), "1")
 
 
-class LocatorTests(FixtureCase):
-    def locate(self, *, digest="sha256:" + "a" * 64, manifest=None, output=None):
-        manifest = manifest or self.scratch / "payload" / "candidate-manifest.json"
-        output = output or self.scratch / "locator.json"
-        arguments = ["locator", "--repository", "hishamkaram/delegation-layer", "--run-id", "901",
-                     "--run-attempt", "1", "--artifact-id", "77", "--artifact-digest", digest,
-                     "--manifest", str(manifest), "--output", str(output)]
-        return self.run_builder(*arguments)
-
-    def test_locator_binds_uploaded_artifact_and_manifest_bytes_outside_the_payload(self):
-        self.assertEqual(self.build().exit_code, 0)
-        result = self.locate()
-        self.assertEqual((result.exit_code, result.output), (0, ""))
-        locator = parse_locator((self.scratch / "locator.json").read_bytes())
-        manifest_bytes = (self.scratch / "payload" / "candidate-manifest.json").read_bytes()
-        self.assertEqual((locator.artifact_id, locator.artifact_archive_sha256), (77, "a" * 64))
-        self.assertEqual(locator.candidate_id, sha(manifest_bytes))
-        self.assertNotIn("locator.json", [path.name for path in (self.scratch / "payload").iterdir()])
-
-    def test_malformed_digest_tampered_manifest_and_existing_output_are_refused(self):
-        self.assertEqual(self.build().exit_code, 0)
-        refused = self.locate(digest="sha256:xyz")
-        self.assertEqual(refused.exit_code, 1)
-        tampered = self.scratch / "tampered.json"
-        tampered.write_bytes((self.scratch / "payload" / "candidate-manifest.json").read_bytes() + b" ")
-        self.assertEqual(self.locate(manifest=tampered).exit_code, 1)
-        self.assertFalse((self.scratch / "locator.json").exists())
-        (self.scratch / "existing.json").write_text("keep")
-        overwrite = self.locate(output=self.scratch / "existing.json")
-        self.assertIn("candidate_output_unwritable", overwrite.output)
-        self.assertEqual((self.scratch / "existing.json").read_text(), "keep")
-
-
-
 class PayloadInventoryTests(unittest.TestCase):
     """The finished payload holds exactly the canonical inventory and its manifest."""
 
@@ -827,7 +784,7 @@ class PayloadInventoryTests(unittest.TestCase):
             data = f"{path} payload bytes\n".encode()
             (output / path).write_bytes(data)
             files[path] = (len(data), sha(data))
-        inputs = build_inputs(harness_commit=request.commit, harness_sha256="3" * 64, config_sha256="1" * 64,
+        inputs = build_inputs(config_sha256="1" * 64,
                               go_sum_sha256="2" * 64, go="1.27.3", goreleaser="2.18.1", python="3.12.13",
                               node="22.11.0")
         self.manifest = encode_manifest(build_manifest(request, tree="b2" * 20, inputs=inputs, files=files))

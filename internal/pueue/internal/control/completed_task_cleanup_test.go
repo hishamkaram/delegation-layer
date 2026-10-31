@@ -17,7 +17,8 @@ import (
 // that label's prepared rows, or an empty queue when none exist, and an
 // unfiltered query returns every prepared row. Every status and remove argv
 // is logged. A status-hold marker delays the response past the observation
-// window.
+// window. A prepared label-status-next directory replaces the label responses
+// once the first label query has been answered.
 const labelFilterCleanupScript = `#!/bin/sh
 set -eu
 base=${2%/*}
@@ -34,7 +35,11 @@ if [ -d "$base/label-status" ]; then
       case "${5-}" in
         label=*)
           rows="$base/label-status/${5#label=}.json"
-          if [ -f "$rows" ]; then cat "$rows"; else printf '%s\n' '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":1}}}'; fi ;;
+          if [ -f "$rows" ]; then cat "$rows"; else printf '%s\n' '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":1}}}'; fi
+          if [ -d "$base/label-status-next" ]; then
+            rm -r "$base/label-status"
+            mv "$base/label-status-next" "$base/label-status"
+          fi ;;
         *) cat "$base/all-status.json" ;;
       esac
       exit 0 ;;
@@ -98,6 +103,18 @@ func cleanupTestStatusJob(t *testing.T, row cleanupTestRow) map[string]any {
 // install writes the unfiltered queue and each label's filtered response.
 func (fixture labelFilterCleanupFixture) install(t *testing.T, rows ...cleanupTestRow) {
 	t.Helper()
+	fixture.installLabelStatus(t, "label-status", rows)
+}
+
+// installAfterFirstQuery stages the label responses that replace the
+// installed ones once the first label query has been answered.
+func (fixture labelFilterCleanupFixture) installAfterFirstQuery(t *testing.T, rows ...cleanupTestRow) {
+	t.Helper()
+	fixture.installLabelStatus(t, "label-status-next", rows)
+}
+
+func (fixture labelFilterCleanupFixture) installLabelStatus(t *testing.T, directory string, rows []cleanupTestRow) {
+	t.Helper()
 	all := map[string]any{}
 	byLabel := map[string]map[string]any{}
 	for _, row := range rows {
@@ -110,10 +127,12 @@ func (fixture labelFilterCleanupFixture) install(t *testing.T, rows ...cleanupTe
 		byLabel[row.label][key] = job
 	}
 	groups := map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 1}}
-	makePrivateTestDirectory(t, filepath.Join(fixture.base, "label-status"))
-	writePrivateTestFile(t, filepath.Join(fixture.base, "all-status.json"), string(statusTestPayload(t, all, groups)))
+	makePrivateTestDirectory(t, filepath.Join(fixture.base, directory))
+	if directory == "label-status" {
+		writePrivateTestFile(t, filepath.Join(fixture.base, "all-status.json"), string(statusTestPayload(t, all, groups)))
+	}
 	for label, jobs := range byLabel {
-		writePrivateTestFile(t, filepath.Join(fixture.base, "label-status", label+".json"), string(statusTestPayload(t, jobs, groups)))
+		writePrivateTestFile(t, filepath.Join(fixture.base, directory, label+".json"), string(statusTestPayload(t, jobs, groups)))
 	}
 }
 
@@ -132,10 +151,12 @@ func (fixture labelFilterCleanupFixture) commands(t *testing.T) [][]string {
 
 // TestCompletedTaskCleanupUsesOnlyExactLabelFacts drives one cleanup attempt
 // per state against a supervisor that honors the exact label filter. Only the
-// filtered query is issued. An absent label is a clean logical fact that
-// leaves the unrelated occupant of the saved numeric ID untouched; duplicate,
-// mismatched, and unended rows stay unknown; a running row defers; only the
-// exact ended row is removed. The legacy projection keeps its markers.
+// filtered query is issued: once under the shared lease, and once more under
+// the exclusive lease whenever a label row was returned. An absent label is a
+// clean logical fact that leaves the unrelated occupant of the saved numeric
+// ID untouched; duplicate, mismatched, and unended rows stay unknown; a
+// running row defers; only the exact ended row is removed. The legacy
+// projection keeps its markers.
 func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 	foreign := Identity{RootID: strings.Repeat("f", 32), TaskID: strings.Repeat("4", 32)}.Label()
 	cases := []struct {
@@ -143,25 +164,26 @@ func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 		rows    func(label string) []cleanupTestRow
 		want    CompletedTaskCleanup
 		legacy  error
+		queries int
 		removed bool
 	}{
-		{name: "unrelated occupant at saved ID", want: CompletedTaskLogicalLabelAbsent, legacy: ErrUnknown, rows: func(string) []cleanupTestRow {
+		{name: "unrelated occupant at saved ID", want: CompletedTaskLogicalLabelAbsent, legacy: ErrUnknown, queries: 1, rows: func(string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: foreign, state: StateEnded}}
 		}},
-		{name: "no label rows", want: CompletedTaskLogicalLabelAbsent, legacy: ErrUnknown, rows: func(string) []cleanupTestRow { return nil }},
-		{name: "duplicate exact labels", legacy: ErrUnknown, rows: func(label string) []cleanupTestRow {
+		{name: "no label rows", want: CompletedTaskLogicalLabelAbsent, legacy: ErrUnknown, queries: 1, rows: func(string) []cleanupTestRow { return nil }},
+		{name: "duplicate exact labels", legacy: ErrUnknown, queries: 2, rows: func(label string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: label, state: StateEnded}, {id: 4, label: label, state: StateEnded}}
 		}},
-		{name: "exact label at another ID", legacy: ErrUnknown, rows: func(label string) []cleanupTestRow {
+		{name: "exact label at another ID", legacy: ErrUnknown, queries: 2, rows: func(label string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: foreign, state: StateEnded}, {id: 5, label: label, state: StateEnded}}
 		}},
-		{name: "exact row not ended", legacy: ErrUnknown, rows: func(label string) []cleanupTestRow {
+		{name: "exact row not ended", legacy: ErrUnknown, queries: 2, rows: func(label string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: label, state: StateStashed}}
 		}},
-		{name: "exact row running", want: CompletedTaskCleanupDeferred, legacy: ErrCleanupDeferred, rows: func(label string) []cleanupTestRow {
+		{name: "exact row running", want: CompletedTaskCleanupDeferred, legacy: ErrCleanupDeferred, queries: 2, rows: func(label string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: label, state: StateRunning}}
 		}},
-		{name: "exact row ended", want: CompletedTaskRemoved, removed: true, rows: func(label string) []cleanupTestRow {
+		{name: "exact row ended", want: CompletedTaskRemoved, queries: 2, removed: true, rows: func(label string) []cleanupTestRow {
 			return []cleanupTestRow{{id: 3, label: label, state: StateEnded}, {id: 4, label: foreign, state: StateEnded}}
 		}},
 	}
@@ -173,7 +195,7 @@ func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 			if disposition != testCase.want || (testCase.want == 0) != errors.Is(err, ErrUnknown) || (testCase.want != 0 && err != nil) {
 				t.Fatalf("attempt = %d, %v; want disposition %d", disposition, err, testCase.want)
 			}
-			assertCleanupTestCommands(t, typed, testCase.removed)
+			assertCleanupTestCommands(t, typed, testCase.queries, testCase.removed)
 
 			legacy := newLabelFilterCleanupFixture(t, Options{ObservationTimeout: 10 * time.Second})
 			legacy.install(t, testCase.rows(legacy.identity.Label())...)
@@ -183,7 +205,7 @@ func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 			if !errors.Is(err, testCase.legacy) || (testCase.want != 0 && !bareCleanupMarker(err)) {
 				t.Fatalf("legacy projection = %v, want %v", err, testCase.legacy)
 			}
-			assertCleanupTestCommands(t, legacy, testCase.removed)
+			assertCleanupTestCommands(t, legacy, testCase.queries, testCase.removed)
 		})
 	}
 }
@@ -195,11 +217,15 @@ func bareCleanupMarker(err error) bool {
 	return !joined && errors.Unwrap(err) == nil
 }
 
-// assertCleanupTestCommands requires exactly one filtered status query, no
-// unfiltered scan, and a removal of saved ID 3 only when expected.
-func assertCleanupTestCommands(t *testing.T, fixture labelFilterCleanupFixture, removed bool) {
+// assertCleanupTestCommands requires exactly the given number of filtered
+// status queries, no unfiltered scan, and a removal of saved ID 3 only when
+// expected.
+func assertCleanupTestCommands(t *testing.T, fixture labelFilterCleanupFixture, queries int, removed bool) {
 	t.Helper()
-	want := [][]string{{"status", "--json", "label=" + fixture.identity.Label()}}
+	var want [][]string
+	for range queries {
+		want = append(want, []string{"status", "--json", "label=" + fixture.identity.Label()})
+	}
 	if removed {
 		want = append(want, []string{"remove", "3"})
 	}
@@ -224,7 +250,7 @@ func TestCompletedTaskCleanupMasksDispositionOnOperationalFault(t *testing.T) {
 		if disposition != 0 || err == nil {
 			t.Fatalf("timed-out cleanup = %d, %v; want an operational error", disposition, err)
 		}
-		assertCleanupTestCommands(t, fixture, false)
+		assertCleanupTestCommands(t, fixture, 1, false)
 	})
 	t.Run("release fault beside disposition", func(t *testing.T) {
 		releaseErr := closedBootstrapLockReleaseFault(t)

@@ -39,8 +39,8 @@ def _validate_bound_provider_record(
         _exact_keys(evidence, {
             "schema_version", "root_id", "task_id", "spec_sha256",
             "meta_sha256", "started_at", "diagnostic_nanos",
-            "provider_executable", "provider_version", "provider_sha256",
-        }, label=label)
+            "provider_executable",
+        }, optional={"provider_version", "provider_sha256"}, label=label)
     else:
         raise AcceptanceFailure(f"{label} has no supported envelope")
     require(type(evidence.get("schema_version")) is int and

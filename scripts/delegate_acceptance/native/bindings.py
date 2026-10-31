@@ -6,8 +6,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from scripts.delegate_acceptance.evidence.validation import _hex_digest, _task_identity, require
-from scripts.delegate_acceptance.tasks.runtime_metadata import validate_provider_runtime_metadata
+from scripts.delegate_acceptance.evidence.validation import _task_identity, require
+from scripts.delegate_acceptance.tasks.runtime_metadata import (
+    _provider_runtime_identity, validate_provider_runtime_metadata,
+)
 
 
 class ProviderRuntimeBindings:
@@ -35,18 +37,14 @@ class ProviderRuntimeBindings:
             require("runtime_preflight_sha256" not in meta,
                     f"task {task_id} pending provider runtime has no launch evidence")
             executable = meta.get("provider_executable")
-            version = meta.get("provider_version")
             effective = meta.get("effective_config")
             policy = effective.get("policy") if isinstance(effective, dict) else None
-            runtime_sha256 = policy.get("runtime_sha256") if isinstance(policy, dict) else None
-            require(isinstance(executable, str) and isinstance(version, str) and
-                    executable == str(provider_executable) and _hex_digest(runtime_sha256),
+            require(executable == str(provider_executable),
                     f"task {task_id} has no admitted provider runtime identity")
-            identity = {
-                "executable": executable,
-                "version": version,
-                "sha256": runtime_sha256,
-            }
+            historical = dict(meta)
+            if isinstance(policy, dict) and "runtime_sha256" in policy:
+                historical["provider_sha256"] = policy["runtime_sha256"]
+            identity = _provider_runtime_identity(historical, "admitted", f"task {task_id}")
         require(isinstance(identity, dict),
                 f"task {task_id} provider runtime identity is unavailable")
         existing = self._by_task_id.get(task_id)

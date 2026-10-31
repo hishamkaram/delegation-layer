@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -427,17 +429,43 @@ func (probe *privateMaintenanceLaunchProbe) assert(t *testing.T, wantRoot string
 }
 
 func TestAwaitCompletedInspectionObservationConsumesPendingStatusResult(t *testing.T) {
+	gate := newHeldStatusGate()
+	fixture := newPendingStatusResultFixture(t, gate)
+	pending := admissionfixture.AssertRetainedInspectionPending(t, fixture.observeErr)
+	if fixture.observation.Pending != pending {
+		gate.release()
+		t.Fatalf("exact observation did not expose its retained result: observation=%+v err=%v", fixture.observation, fixture.observeErr)
+	}
+	gate.release()
+	facts, err := awaitCompletedInspectionObservation(
+		fixture.operation, fixture.client, errors.Join(inspection.ErrAdmissionExpired, fixture.observeErr),
+	)
+	if err != nil || string(facts) != "{\"eligible\":true}\n" {
+		t.Fatalf("pending status result was not accepted: facts=%s err=%v", facts, err)
+	}
+	assertInspectionStatusCommandCount(t, fixture.logPath, 1)
+}
+
+type pendingStatusResultFixture struct {
+	operation   *inspection.Operation
+	client      *pueue.Client
+	logPath     string
+	observation pueue.InspectionObservation
+	observeErr  error
+}
+
+// newPendingStatusResultFixture returns an exact status observation whose
+// caller expired while the completed status command is held by gate.
+func newPendingStatusResultFixture(t *testing.T, gate *heldStatusGate) pendingStatusResultFixture {
+	t.Helper()
 	store := supervisorfixture.NewInspectionStore(t)
 	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
 	ctx := newInspectionDeadlineContext(t.Context())
-	released := make(chan struct{})
-	release := sync.OnceFunc(func() { close(released) })
-	t.Cleanup(release)
-	client := admissionfixture.NewObservedInspectionTestClient(t, bound, logPath, 10*time.Second, func(event pueue.CommandEvent) {
+	client := newHeldStatusClient(t, bound, logPath, gate, func(event pueue.CommandEvent) {
 		if event.Stage == "completed" && slices.Contains(event.Argv, "status") {
 			ctx.Expire()
-			<-released
 		}
+		gate.observe(event)
 	})
 	operation := admissionfixture.NewInspectionPollTestOperation(t, store, client)
 	completeInspectionPollTestOperation(t, operation)
@@ -448,67 +476,374 @@ func TestAwaitCompletedInspectionObservationConsumesPendingStatusResult(t *testi
 
 	identity := operation.Request().SupervisorIdentity()
 	observation, observeErr := client.ReconcileInspection(ctx, identity)
-	pending := admissionfixture.AssertRetainedInspectionPending(t, observeErr)
-	if observation.Pending != pending {
-		release()
-		t.Fatalf("exact observation did not expose its retained result: observation=%+v err=%v", observation, observeErr)
+	return pendingStatusResultFixture{
+		operation: operation, client: client, logPath: logPath,
+		observation: observation, observeErr: observeErr,
 	}
-	release()
-	facts, err := awaitCompletedInspectionObservation(
-		operation, client, errors.Join(inspection.ErrAdmissionExpired, observeErr),
-	)
-	if err != nil || string(facts) != "{\"eligible\":true}\n" {
-		t.Fatalf("pending status result was not accepted: facts=%s err=%v", facts, err)
-	}
-	assertInspectionStatusCommandCount(t, logPath, 1)
 }
 
 func TestObserveCompletedInspectionRetainsGraceProbeAfterCallerExpiry(t *testing.T) {
+	gate := newHeldStatusGate()
+	fixture := newGraceProbeFixture(t, gate)
+	// Arm the finite caller deadline only after every fixture is published, so
+	// slow setup cannot consume the window this probe exercises.
+	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
+	done := fixture.startGraceProbe(t, ctx, cancel)
+	if err := gate.awaitEntered(done, 5*time.Second); err != nil {
+		t.Fatalf("%v; caller context: %v", err, ctx.Err())
+	}
+	ctx.Expire()
+	got := awaitGraceProbeReturn(t, done)
+	pending := admissionfixture.AssertRetainedInspectionPending(t, got.err)
+	if got.facts != nil || !errors.Is(got.err, context.DeadlineExceeded) || !errors.Is(got.err, pueue.ErrInFlight) {
+		t.Fatalf("expired grace dropped its in-flight supervisor probe: facts=%s err=%v", got.facts, got.err)
+	}
+	gate.release()
+	admissionfixture.DrainInspectionPending(t, pending)
+	assertInspectionStatusCommandCount(t, fixture.logPath, 1)
+}
+
+func TestGraceProbeHandshakeReportsEarlyProbeReturn(t *testing.T) {
+	gate := newHeldStatusGate()
+	fixture := newGraceProbeFixture(t, gate)
+	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
+	// A caller deadline spent before observation starts must surface as the
+	// probe's own error, not as a watchdog miss that hides it.
+	ctx.Expire()
+	done := fixture.startGraceProbe(t, ctx, cancel)
+	if err := gate.awaitEntered(done, 5*time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("handshake hid the probe's early return: %v", err)
+	}
+}
+
+func TestHeldProbeCleanupHoldsResourcesUntilProbeExits(t *testing.T) {
+	owner := newCleanupRecorder()
+	gate := newHeldStatusGate()
+	var probeReturned atomic.Bool
+	resourceSawProbeReturned := make(chan bool, 1)
+	// Registered before the probe, so it runs after the probe cleanup, like the
+	// client and journal fixture cleanups.
+	owner.Cleanup(func() { resourceSawProbeReturned <- probeReturned.Load() })
+	held := make(chan struct{})
+	releaseProbe := sync.OnceFunc(func() { close(held) })
+	cancelled := make(chan struct{})
+	startHeldProbe(owner, gate, sync.OnceFunc(func() { close(cancelled) }), func() (json.RawMessage, error) {
+		// Ignores cancellation and the status gate, forcing the join watchdog.
+		<-held
+		probeReturned.Store(true)
+		return nil, context.Canceled
+	})
+	cleaned := make(chan struct{})
+	go func() {
+		defer close(cleaned)
+		owner.runCleanups()
+	}()
+	t.Cleanup(func() {
+		releaseProbe()
+		<-cleaned
+	})
+
+	reportTimer := time.NewTimer(2 * heldProbeJoinWatchdog)
+	defer reportTimer.Stop()
+	select {
+	case <-owner.reported:
+	case <-reportTimer.C:
+		t.Fatal("probe cleanup never reported its join watchdog")
+	}
+	// Green ordering is proven by probeReturned below; this window only gives
+	// an unjoined cleanup the chance to advance while the probe is still held.
+	settle := time.NewTimer(time.Second)
+	defer settle.Stop()
+	select {
+	case sawReturned := <-resourceSawProbeReturned:
+		t.Fatalf("resource cleanup advanced while the probe was still held: probe returned=%t", sawReturned)
+	case <-settle.C:
+	}
+	assertClosed(t, cancelled, "probe cleanup reached its watchdog without cancelling the caller")
+	assertClosed(t, gate.released, "probe cleanup did not release the held status after its watchdog")
+	releaseProbe()
+	joinTimer := time.NewTimer(heldProbeJoinWatchdog)
+	defer joinTimer.Stop()
+	select {
+	case sawReturned := <-resourceSawProbeReturned:
+		if !sawReturned {
+			t.Fatal("resource cleanup ran before the probe exited")
+		}
+	case <-joinTimer.C:
+		t.Fatal("resource cleanup did not advance after the probe exited")
+	}
+	if errs := owner.reportedErrors(); len(errs) != 1 || !strings.Contains(errs[0], "probe did not return") {
+		t.Fatalf("join watchdog diagnostics=%q", errs)
+	}
+}
+
+func assertClosed(t *testing.T, signal <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-signal:
+	default:
+		t.Fatal(message)
+	}
+}
+
+// cleanupRecorder implements heldProbeOwner. The test runs the recorded
+// cleanups itself in testing's LIFO order and observes reported errors.
+type cleanupRecorder struct {
+	reported chan struct{}
+	report   func()
+
+	mu       sync.Mutex
+	cleanups []func()
+	errors   []string
+}
+
+func newCleanupRecorder() *cleanupRecorder {
+	recorder := &cleanupRecorder{reported: make(chan struct{})}
+	recorder.report = sync.OnceFunc(func() { close(recorder.reported) })
+	return recorder
+}
+
+func (recorder *cleanupRecorder) Helper() {}
+
+func (recorder *cleanupRecorder) Cleanup(cleanup func()) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.cleanups = append(recorder.cleanups, cleanup)
+}
+
+func (recorder *cleanupRecorder) Error(args ...any) {
+	recorder.mu.Lock()
+	recorder.errors = append(recorder.errors, fmt.Sprint(args...))
+	recorder.mu.Unlock()
+	recorder.report()
+}
+
+func (recorder *cleanupRecorder) runCleanups() {
+	recorder.mu.Lock()
+	cleanups := slices.Clone(recorder.cleanups)
+	recorder.mu.Unlock()
+	for _, cleanup := range slices.Backward(cleanups) {
+		cleanup()
+	}
+}
+
+func (recorder *cleanupRecorder) reportedErrors() []string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return slices.Clone(recorder.errors)
+}
+
+func TestHeldStatusCleanupReleasesBeforeClientClose(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hold func(*testing.T, *heldStatusGate)
+	}{
+		{name: "grace probe", hold: holdGraceProbeStatus},
+		{name: "pending status result", hold: holdPendingStatusResult},
+		{name: "await poll caller deadline", hold: holdAwaitPollStatus},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertHeldStatusCleanupIsFinite(t, tc.hold)
+		})
+	}
+}
+
+// assertHeldStatusCleanupIsFinite leaves a subtest while its status command is
+// held, as an assertion failure would, and bounds only the cleanup phase. On
+// timeout it releases the observer itself so the red path stays finite.
+func assertHeldStatusCleanupIsFinite(t *testing.T, hold func(*testing.T, *heldStatusGate)) {
+	t.Helper()
+	gate := newHeldStatusGate()
+	exiting := make(chan struct{})
+	finished := make(chan bool, 1)
+	go func() {
+		finished <- t.Run("exit while status is held", func(t *testing.T) {
+			hold(t, gate)
+			// Only registered cleanup may release the observer before client.Close.
+			close(exiting)
+		})
+	}()
+	select {
+	case <-exiting:
+	case passed := <-finished:
+		t.Fatalf("subtest ended before holding its status command: passed=%t", passed)
+	}
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	select {
+	case passed := <-finished:
+		if !passed {
+			t.Fatal("held-status cleanup failed")
+		}
+	case <-timer.C:
+		gate.release()
+		<-finished
+		t.Fatal("cleanup closed the client before releasing its held status observer")
+	}
+}
+
+func holdGraceProbeStatus(t *testing.T, gate *heldStatusGate) {
+	t.Helper()
+	fixture := newGraceProbeFixture(t, gate)
+	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
+	done := fixture.startGraceProbe(t, ctx, cancel)
+	if err := gate.awaitEntered(done, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func holdPendingStatusResult(t *testing.T, gate *heldStatusGate) {
+	t.Helper()
+	fixture := newPendingStatusResultFixture(t, gate)
+	admissionfixture.AssertRetainedInspectionPending(t, fixture.observeErr)
+}
+
+// heldStatusGate holds the observed status command at its completed stage,
+// before the transport completes its Pending, until the test releases it.
+type heldStatusGate struct {
+	entered  chan struct{}
+	released chan struct{}
+	enter    func()
+	release  func()
+
+	mu     sync.Mutex
+	stages []string
+}
+
+func newHeldStatusGate() *heldStatusGate {
+	gate := &heldStatusGate{entered: make(chan struct{}), released: make(chan struct{})}
+	gate.enter = sync.OnceFunc(func() { close(gate.entered) })
+	gate.release = sync.OnceFunc(func() { close(gate.released) })
+	return gate
+}
+
+func (gate *heldStatusGate) observe(event pueue.CommandEvent) {
+	if !slices.Contains(event.Argv, "status") {
+		return
+	}
+	gate.mu.Lock()
+	gate.stages = append(gate.stages, event.Stage)
+	gate.mu.Unlock()
+	if event.Stage == "completed" {
+		gate.enter()
+		<-gate.released
+	}
+}
+
+func (gate *heldStatusGate) observedStages() []string {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	return slices.Clone(gate.stages)
+}
+
+// awaitEntered also selects an already-returned probe so an early failure
+// reports its own error instead of waiting for the watchdog.
+func (gate *heldStatusGate) awaitEntered(done <-chan heldProbeResult, watchdog time.Duration) error {
+	timer := time.NewTimer(watchdog)
+	defer timer.Stop()
+	select {
+	case <-gate.entered:
+		return nil
+	case got := <-done:
+		return fmt.Errorf("grace probe returned before its status command was held: facts=%s status stages=%v: %w", got.facts, gate.observedStages(), got.err)
+	case <-timer.C:
+		return fmt.Errorf("grace probe did not reach retained completion within %s: status stages=%v", watchdog, gate.observedStages())
+	}
+}
+
+type heldProbeResult struct {
+	facts json.RawMessage
+	err   error
+}
+
+type graceProbeFixture struct {
+	operation *inspection.Operation
+	client    *pueue.Client
+	logPath   string
+	gate      *heldStatusGate
+}
+
+func newGraceProbeFixture(t *testing.T, gate *heldStatusGate) graceProbeFixture {
+	t.Helper()
 	store := supervisorfixture.NewInspectionStore(t)
 	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
-	ctx, cancel := admissionfixture.NewControllableDeadlineContext(t.Context(), 10*time.Second)
-	defer cancel()
-	entered := make(chan struct{})
-	released := make(chan struct{})
-	release := sync.OnceFunc(func() { close(released) })
-	t.Cleanup(release)
-	signalEntered := sync.OnceFunc(func() { close(entered) })
-	client := admissionfixture.NewObservedInspectionTestClient(t, bound, logPath, 10*time.Second, func(event pueue.CommandEvent) {
-		if event.Stage == "completed" && slices.Contains(event.Argv, "status") {
-			signalEntered()
-			<-released
-		}
-	})
+	client := newHeldStatusClient(t, bound, logPath, gate, gate.observe)
 	operation := admissionfixture.NewInspectionPollTestOperation(t, store, client)
 	completeInspectionPollTestOperation(t, operation)
 	admissionfixture.CompleteInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	admissionfixture.WriteInspectionPollTestStatus(t, filepath.Join(filepath.Dir(logPath), "status.json"), operation, false)
+	return graceProbeFixture{operation: operation, client: client, logPath: logPath, gate: gate}
+}
 
-	type result struct {
-		facts json.RawMessage
-		err   error
-	}
-	done := make(chan result, 1)
+// newHeldStatusClient registers gate.release after the client, so LIFO cleanup
+// releases a held observer before client.Close waits for that command's Pending.
+func newHeldStatusClient(t *testing.T, bound *pueue.Client, logPath string, gate *heldStatusGate, observer func(pueue.CommandEvent)) *pueue.Client {
+	t.Helper()
+	client := admissionfixture.NewObservedInspectionTestClient(t, bound, logPath, 10*time.Second, observer)
+	t.Cleanup(gate.release)
+	return client
+}
+
+func (fixture graceProbeFixture) startGraceProbe(t *testing.T, ctx *admissionfixture.ControllableDeadlineContext, cancel func()) <-chan heldProbeResult {
+	t.Helper()
+	return startHeldProbe(t, fixture.gate, cancel, func() (json.RawMessage, error) {
+		return observeCompletedInspection(ctx, fixture.operation, fixture.client, nil)
+	})
+}
+
+// heldProbeJoinWatchdog bounds the silent wait for a cancelled probe; it is a
+// diagnostic deadline, not permission to continue cleanup without the probe.
+const heldProbeJoinWatchdog = 10 * time.Second
+
+// heldProbeOwner is the part of *testing.T that startHeldProbe uses, so a test
+// can drive its cleanup ordering with a recorder.
+type heldProbeOwner interface {
+	Helper()
+	Cleanup(func())
+	Error(args ...any)
+}
+
+// startHeldProbe runs probe on its own goroutine. Its cleanup, registered after
+// the fixture, cancels the caller and joins the probe before the held command
+// is released by the client fixture and the client and journal fixtures close.
+// After the watchdog it reports, releases the held status so a probe waiting on
+// that command can finish, and still waits for the exact probe to exit.
+func startHeldProbe(t heldProbeOwner, gate *heldStatusGate, cancel func(), probe func() (json.RawMessage, error)) <-chan heldProbeResult {
+	t.Helper()
+	done := make(chan heldProbeResult, 1)
+	exited := make(chan struct{})
 	go func() {
-		facts, err := observeCompletedInspection(ctx, operation, client, nil)
-		done <- result{facts: facts, err: err}
+		defer close(exited)
+		facts, err := probe()
+		done <- heldProbeResult{facts: facts, err: err}
 	}()
+	t.Cleanup(func() {
+		cancel()
+		timer := time.NewTimer(heldProbeJoinWatchdog)
+		defer timer.Stop()
+		select {
+		case <-exited:
+			return
+		case <-timer.C:
+		}
+		gate.release()
+		t.Error("probe did not return after its caller was cancelled; released its held status and holding cleanup until it exits")
+		<-exited
+	})
+	return done
+}
+
+func awaitGraceProbeReturn(t *testing.T, done <-chan heldProbeResult) heldProbeResult {
+	t.Helper()
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
 	select {
-	case <-entered:
-		ctx.Expire()
-	case <-time.After(5 * time.Second):
-		t.Fatal("grace probe did not reach retained completion")
+	case got := <-done:
+		return got
+	case <-timer.C:
+		t.Fatal("grace probe did not return after its caller deadline")
+		return heldProbeResult{}
 	}
-	got := <-done
-	facts, err := got.facts, got.err
-	pending := admissionfixture.AssertRetainedInspectionPending(t, err)
-	if facts != nil || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, pueue.ErrInFlight) {
-		release()
-		t.Fatalf("expired grace dropped its in-flight supervisor probe: facts=%s err=%v", facts, err)
-	}
-	release()
-	admissionfixture.DrainInspectionPending(t, pending)
-	assertInspectionStatusCommandCount(t, logPath, 1)
 }
 
 func TestTimelyCompletedInspectionEvidenceRequiresTermination(t *testing.T) {

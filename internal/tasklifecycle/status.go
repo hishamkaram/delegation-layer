@@ -81,7 +81,6 @@ func observeTerminalStatus(root string, td *taskdir.TaskDir, options SupervisorO
 	if err != nil {
 		return err
 	}
-	supervisorcore.CleanupCompletedTaskFromSaved(root, td, meta, options.Options, options.Lookup)
 	if records, recordsErr := ReadTimeoutRecords(td); recordsErr == nil {
 		// The outcome stays authoritative when optional timeout metadata
 		// is malformed or stale.

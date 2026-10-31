@@ -79,7 +79,7 @@ func TestCurrentCCRReferencesPublishPrincipalAnswerAfterNativeFollowUp(t *testin
 			t.Fatal(resolveErr)
 		}
 		result, answer := evaluateCCRTrace(t, interpreter, ccrFollowUpTrace())
-		if result.Verdict != task.VerdictCommitted || answer != "principal answer" || result.Session == nil || result.Session.Provider != Provider {
+		if result.Verdict != task.VerdictCommitted || answer != ccrFollowUpPayload || result.Session == nil || result.Session.Provider != Provider {
 			t.Fatalf("%s interpretation=%+v answer=%q", reference.Version, result, answer)
 		}
 	}
@@ -109,7 +109,7 @@ func TestPreAttributionCCRSealRecoversToAttributedTargetWithoutRewriting(t *test
 	input.ExpectedSession = task.SessionExpectation{Required: true, ID: ccrAttributionSession}
 	var answer bytes.Buffer
 	result, err := recovery.Recover(input, raw, &answer)
-	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "principal answer" || !input.Seal.Predicate.Equal(source) {
+	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != ccrFollowUpPayload || !input.Seal.Predicate.Equal(source) {
 		t.Fatalf("recovery=%+v answer=%q err=%v seal=%+v", result, answer.String(), err, input.Seal.Predicate)
 	}
 }
@@ -137,13 +137,11 @@ func TestExistingPreAttributionCCRProfilesRetainTheirLaunchContract(t *testing.T
 		if prepareErr != nil {
 			t.Fatal(prepareErr)
 		}
-		if _, finalErr := existing.Finalize(routeFacts(t, existing, !test.resumeRoute), time.Now()); !errors.Is(finalErr, commonprovider.ErrProfileUnavailable) {
-			t.Fatalf("%s accepted the other route proof: %v", test.reference.Version, finalErr)
-		}
 		rebuilt, finalErr := existing.Finalize(routeFacts(t, existing, test.resumeRoute), time.Now())
 		if finalErr != nil || !rebuilt.Plan.Predicate.Equal(test.reference) {
 			t.Fatalf("%s reconstruction changed predicate=%+v err=%v", test.reference.Version, rebuilt.Plan.Predicate, finalErr)
 		}
+		requireOppositeRouteCapability(t, test.reference.Version, existing, rebuilt, test.resumeRoute)
 	}
 	predecessor := testRequest()
 	successor := predecessor
@@ -184,7 +182,7 @@ func requireNestedScopeRouting(t *testing.T, registry predicate.Registry, mode s
 		}
 		return
 	}
-	if result.Verdict != task.VerdictCommitted || answer != "principal answer" {
+	if result.Verdict != task.VerdictCommitted || answer != ccrFollowUpPayload {
 		t.Fatalf("%s/%s nested messages interpretation=%+v answer=%q", mode, reference.Version, result, answer)
 	}
 	for _, invalid := range []string{`,"parent_tool_use_id":""`, `,"parent_tool_use_id":7`, `,"parent_tool_use_id":{}`} {

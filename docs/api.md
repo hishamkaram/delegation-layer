@@ -28,7 +28,18 @@ A `task_id` can be allocated, or supplied with `--id`, without a task being
 created. Only `task_record: "created"` names a task: keep that ID as the only
 handle for later `status`, `collect`, and `continue` calls. With
 `task_record: "not_created"`, no task exists, so there is nothing to poll;
-follow `failure.next_action`. With `task_record: "unknown"`, existence could
+follow `failure.next_action`. A `provider_unavailable` failure whose cause is
+a capability the recorded launch requires and the installed provider CLI no
+longer offers adds `failure.reason_code: "provider_capability_changed"` and a
+fixed detail in `error`; its exit code and `stop_and_report` guidance are
+unchanged. A `--runner` that contradicts the runner its command needs is an
+`invalid_request` with `failure.reason_code`
+`managed_workspace_runner_conflict` (managed workspace; stage
+`prepare-workspace`) or `continuation_runner_conflict` (`continue`; stage
+`validate-continuation`), exit `2`, and a fixed `error` that says to omit
+`--runner`. It carries `next_action: "correct_request"` with
+`task_record: "not_created"`; with a caller-supplied `--id` the record stays
+`unknown` and the guidance is `stop_and_report`. With `task_record: "unknown"`, existence could
 not be proven; follow the returned stop guidance and do not dispatch again.
 
 ### Resource pressure
@@ -216,8 +227,9 @@ runtime metadata. Read the command output for the current complete contract:
 
 Catalog entries expose `supported_options` and any `required_options` using
 Delegate's public request names. `interaction` describes native clarification
-and steering support. `runtime` identifies the version/help commands and
-required public flags; these are requirements, not observations of this host.
+and steering support. `runtime` identifies help arguments and required public
+flags; these are requirements, not observations of this host. A retained
+`version_args` member is historical contract data and is not executed.
 See the [provider guide](providers.md) for the current profile table.
 
 The catalog describes compiled support. It does not claim that the executable
@@ -226,10 +238,10 @@ runtime-only dispatch records the static contract; the supervised worker
 checks the current executable before provider execution. Inspection-backed
 admission retains its runtime checks. See
 [ownership boundaries](architecture.md#ownership-boundaries). The started and
-sealed evidence records the final executable identity and observed version.
-The version is descriptive evidence; flags, executable identity, and
-behavior predicates establish compatibility without a web release lookup or
-semver allowlist.
+sealed evidence records the final executable path. The current runtime probe
+leaves version and provider SHA-256 diagnostics empty. Flags and behavior
+predicates establish compatibility without a provider hash, a web release
+lookup, or a semver allowlist.
 
 ## Model discovery contract
 
@@ -336,16 +348,18 @@ acceptance boundary observes it.
 ```
 
 For inspection-backed admission, successful runtime preparation can return a
-dispatch `capability` object with `status: "ready"`,
-`verification: "runtime"`, the observed version, and the executable digest.
+dispatch `capability` object with `status: "ready"` and
+`verification: "runtime"`. The optional `version` and `executable_sha256`
+members remain absent for the current probe, whose version and SHA-256 facts
+are empty. It neither extracts version text nor computes a provider executable
+digest. Evidence from earlier releases can hold a populated value; it is
+validated when present, malformed evidence is still rejected, and a valid
+old value is history that never authorizes a launch. A version never gates
+readiness. A required exchange that actually fails or exceeds its capture bound
+is still an error.
 Managed runtime-only admission instead returns `status: "unknown"` with
 `verification: "catalog"`; its fresh probe runs in the supervised worker, so
 collect the task outcome to establish execution and completion.
-The observed version is omitted from this projection if its diagnostic text is
-unusually large. Terminal launch evidence has its own bounded storage field;
-if a refreshed version cannot fit that field, runtime preparation rejects it
-before the provider starts. This is a record-size safeguard, not a release-version
-compatibility check.
 A ready runtime projection proves only the bounded compatibility probe for
 that admission boundary. A catalog projection proves no host verification.
 Live acceptance remains separate: `passed` requires authenticated provider

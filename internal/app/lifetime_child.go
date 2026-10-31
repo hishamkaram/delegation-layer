@@ -52,6 +52,12 @@ func openLifetimeChild(parsed runnerArguments, records lifetimeRegistrationReade
 	if err != nil {
 		return nil, task.ErrEvidenceFault
 	}
+	// Validate legacy cleanup coordinates before opening the scope or sending Hello.
+	// They never select the provider executable or require a new placement.
+	_, err = recordedLifetimeCustody(registration)
+	if err != nil {
+		return nil, err
+	}
 	bootID, err := lifetime.BootID()
 	if err != nil || bootID != registration.BootID {
 		return nil, errors.Join(task.ErrIdentityMismatch, err)

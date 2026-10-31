@@ -192,7 +192,10 @@ func TestOwnedInvocationExactStdinAndNoRelaunch(t *testing.T) {
 	}
 }
 
-func TestInvocationUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
+// TestInvocationRunsInstalledExecutableAfterPathReplacement replaces the
+// retired private-copy guarantee: Start runs the installed file at the
+// resolved path, so a replacement completed before Start is what runs.
+func TestInvocationRunsInstalledExecutableAfterPathReplacement(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -204,24 +207,23 @@ func TestInvocationUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
 			t.Fatal(writeErr)
 		}
 	}
-	originalBytes, err := os.ReadFile(original)
-	require(t, err)
-	originalDigest := task.ComputeSHA256(originalBytes)
 	td, permit, plan, _ := fixtureTaskWithPlan(t, "echo", func(meta *task.MetaRecord, plan *Plan) {
 		meta.ProviderExecutable = original
 		plan.Executable = original
-		plan.ExecutableSHA256 = originalDigest
+		plan.ExecutableSHA256 = ""
 		plan.Arguments = nil
 	})
+	startedPath := ""
 	r := Run(td, permit, plan, Options{Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
 		if err := os.Rename(replacement, original); err != nil {
 			return err
 		}
+		startedPath = cmd.Path
 		return cmd.Start()
 	}}})
 	assertSuccess(t, r)
-	if got := string(payload(t, td, r.Outcome)); got != "original\n" {
-		t.Fatalf("replacement executable ran: %q", got)
+	if got := string(payload(t, td, r.Outcome)); got != "replacement\n" || startedPath != original {
+		t.Fatalf("installed executable did not run directly: output=%q path=%q", got, startedPath)
 	}
 }
 

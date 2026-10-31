@@ -136,8 +136,9 @@ type Options struct {
 	// start-failed capture/sealing; it never abandons the consumed start permit.
 	Preflight func(PreflightScope) error
 	// PreflightPlan performs the same finite validation and may return the
-	// current launch plan after runtime capability inspection. The returned
-	// plan is verified and materialized only after this callback succeeds.
+	// current launch plan after runtime capability inspection. The one
+	// provider command is constructed from the returned plan only after this
+	// callback succeeds.
 	// Pending runtime admission requires this callback to clear the preflight
 	// marker and supply a complete observed ProviderRuntime identity.
 	PreflightPlan func(PreflightScope, Plan) (Plan, error)

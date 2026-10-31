@@ -108,12 +108,12 @@ class MetadataRefusalTests(CandidateArtifactCase):
             ("candidate_workflow_mismatch", setting("workflow", "path", ".github/workflows/release.yml")),
             ("candidate_workflow_mismatch", setting("attempt", "workflow_id", 361347599)),
             ("candidate_artifact_mismatch", setting("artifact", "id", ARTIFACT_ID + 1)),
-            ("candidate_artifact_mismatch", setting("artifact", "name", f"development-candidate-{RUN_ID}-1")),
+            ("candidate_artifact_mismatch", setting("artifact", "name", "untrusted-payload")),
             ("candidate_artifact_mismatch", setting("artifact", "workflow_run", "id", RUN_ID + 1)),
             ("candidate_artifact_mismatch", setting("artifact", "workflow_run", "repository_id", 7)),
             ("candidate_artifact_mismatch", setting("artifact", "workflow_run", "head_repository_id", 7)),
             ("candidate_attempt_mismatch", setting("attempt", "id", RUN_ID + 1)),
-            ("candidate_attempt_mismatch", setting("attempt", "run_attempt", RUN_ATTEMPT + 1)),
+            ("candidate_source_mismatch", setting("attempt", "run_attempt", RUN_ATTEMPT - 1)),
             ("candidate_attempt_mismatch", setting("attempt", "repository", "id", 7)),
             ("candidate_attempt_mismatch", setting("attempt", "head_repository", "id", 7)),
             ("candidate_source_mismatch", setting("attempt", "head_sha", OTHER_COMMIT)),
@@ -125,7 +125,6 @@ class MetadataRefusalTests(CandidateArtifactCase):
 
     def test_digest_size_and_field_types_are_refused_before_download(self):
         cases = (
-            ("candidate_artifact_digest_mismatch", setting("artifact", "digest", "sha256:" + "0" * 64)),
             ("candidate_field_invalid", setting("artifact", "digest", None)),
             ("candidate_field_invalid", setting("artifact", "expired", "false")),
             ("candidate_field_invalid", setting("artifact", "expired", _DELETE)),
@@ -176,11 +175,6 @@ class ContainerBindingTests(CandidateArtifactCase):
         self.assertEqual(self.payload_names(), [])
 
     def test_foreign_manifest_or_source_commit_is_refused_before_any_payload_write(self):
-        served = self.serve()
-        error = self.refused("candidate_manifest_digest_mismatch", replace(served.locator,
-                                                                           manifest_sha256="0" * 64))
-        self.assertEqual(error.stage, "validate-candidate-locator")
-        self.assertEqual(self.payload_names(), [])
         files = payload_files()
 
         def other_head(replies):

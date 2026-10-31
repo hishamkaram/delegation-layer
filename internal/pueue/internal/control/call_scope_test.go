@@ -20,11 +20,16 @@ var errCallCompletedBeforeEntry = errors.New("call completed before entry")
 // and is never renewed. Cleanup is registered at construction, so it runs
 // before the earlier-registered fixture cleanups: it cancels every context,
 // then releases every barrier, then joins every call in start order and
-// settles any pending command a call returned.
+// settles any pending command a call returned. The final deadline is only a
+// watchdog: its expiry is reported, but cleanup still waits for each call and
+// returned Pending to finish naturally, so no later fixture cleanup can
+// remove what they still use.
 type testCallScope struct {
 	t      *testing.T
 	cutoff time.Time
 	final  time.Time
+	// report records a failure without stopping cleanup; it is t.Error.
+	report func(message string)
 
 	cancels  []context.CancelFunc
 	releases []func()
@@ -52,7 +57,7 @@ func (lockCallResult) pendingCommand() *Pending { return nil }
 func newTestCallScope(t *testing.T, options Options) *testCallScope {
 	t.Helper()
 	cutoff := time.Now().Add(PrivateControlTimeout(options))
-	scope := &testCallScope{t: t, cutoff: cutoff, final: cutoff.Add(observationBound(options))}
+	scope := &testCallScope{t: t, cutoff: cutoff, final: cutoff.Add(observationBound(options)), report: func(message string) { t.Error(message) }}
 	t.Cleanup(scope.cleanup)
 	return scope
 }
@@ -109,11 +114,16 @@ func startTestCall[T pendingResult](s *testCallScope, run func() T) *testCall[T]
 	call := &testCall[T]{done: make(chan struct{})}
 	s.joins = append(s.joins, func() {
 		if !waitUntil(call.done, s.final) {
-			s.t.Error("test call did not join before the cleanup deadline")
+			s.report("test call did not join before the cleanup deadline")
+			<-call.done
+		}
+		pending := call.result.pendingCommand()
+		if pending == nil {
 			return
 		}
-		if pending := call.result.pendingCommand(); pending != nil && !awaitPendingNaturally(pending, time.Until(s.final)) {
-			s.t.Error("pending command did not complete before the cleanup deadline")
+		if !waitUntil(pending.Done(), s.final) {
+			s.report("pending command did not complete before the cleanup deadline")
+			<-pending.Done()
 		}
 	})
 	go func() {
@@ -166,8 +176,14 @@ func awaitLockCall(s *testCallScope, call *testCall[lockCallResult], what string
 	}
 }
 
-// waitUntil reports whether done closed before the absolute deadline.
+// waitUntil reports whether done closed before the absolute deadline. A
+// completion already visible wins over a deadline that has also passed.
 func waitUntil(done <-chan struct{}, deadline time.Time) bool {
+	select {
+	case <-done:
+		return true
+	default:
+	}
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {

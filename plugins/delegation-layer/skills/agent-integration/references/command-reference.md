@@ -35,6 +35,14 @@ the failed command's exact root. A successful response names its next action
 `retry_dispatch`, but the original command and argv remain authoritative:
 retry `dispatch` as `dispatch` or `continue` as `continue`, exactly once.
 
+Delegate selects its managed runner automatically, so omit `--runner` on
+`dispatch` and `continue`. `--runner` is an advanced custom-runner override: a
+managed workspace (`--isolation` or `--workspace`) and a `continue` whose
+runner differs from the predecessor's both return `invalid_request` with
+`reason_code` `managed_workspace_runner_conflict` or
+`continuation_runner_conflict`. Remove `--runner` and repeat the request when
+`next_action` is `correct_request`.
+
 The bundled supervisor is managed by the released CLI under the state root.
 Collection remains observational. Provider authentication remains the
 provider’s own responsibility and is never performed by this skill.

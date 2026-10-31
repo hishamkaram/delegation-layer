@@ -236,12 +236,6 @@
     ]
   },
   {
-    "name": "py:delegate_acceptance.native.constants",
-    "owner": "py:delegate_acceptance.native",
-    "layer": "pure",
-    "imports": []
-  },
-  {
     "name": "py:delegate_acceptance.native.diagnostics",
     "owner": "py:delegate_acceptance.native",
     "layer": "runtime",
@@ -407,6 +401,7 @@
       "py:delegate_acceptance.native_evidence.block_reason",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.proof",
       "py:delegate_acceptance.native_evidence.validation",
       "py:pathlib"
     ]
@@ -421,7 +416,6 @@
       "py:delegate_acceptance.native_evidence.aggregate",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.directories",
-      "py:delegate_acceptance.native_evidence.staging",
       "py:delegate_acceptance.native_evidence.validation",
       "py:json",
       "py:os",
@@ -496,26 +490,6 @@
       "py:os",
       "py:pathlib",
       "py:re"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.native_evidence.staging",
-    "owner": "py:delegate_acceptance.native_evidence",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:collections.abc",
-      "py:dataclasses",
-      "py:delegate_acceptance.directories.journal",
-      "py:delegate_acceptance.native_evidence.candidate_proof",
-      "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.filesystem",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_evidence.public_stage",
-      "py:delegate_acceptance.native_evidence.stage_publication",
-      "py:delegate_acceptance.native_evidence.validation",
-      "py:json",
-      "py:pathlib"
     ]
   },
   {
@@ -655,37 +629,6 @@
     ]
   },
   {
-    "name": "py:delegate_acceptance.release_verification.native_remote_history",
-    "owner": "py:delegate_acceptance.release_verification",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:dataclasses",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:delegate_acceptance.release_verification.native_reports",
-      "py:io",
-      "py:json",
-      "py:re",
-      "py:zipfile"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.release_verification.native_submission",
-    "owner": "py:delegate_acceptance.release_verification",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:dataclasses",
-      "py:delegate_acceptance.release_verification.assets",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:hashlib",
-      "py:re"
-    ]
-  },
-  {
     "name": "py:delegate_acceptance.release_verification.github",
     "owner": "py:delegate_acceptance.release_verification",
     "layer": "runtime",
@@ -703,97 +646,6 @@
       "py:os",
       "py:pathlib",
       "py:re"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.release_verification.native_hosted",
-    "owner": "py:delegate_acceptance.release_verification",
-    "layer": "application",
-    "imports": [
-      "py:__future__",
-      "py:argparse",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_evidence.public_validation",
-      "py:delegate_acceptance.release_verification.assets",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.filesystem",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_archive",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:delegate_acceptance.release_verification.native_remote_history",
-      "py:delegate_acceptance.release_verification.native_reports",
-      "py:delegate_acceptance.release_verification.native_submission",
-      "py:json",
-      "py:os",
-      "py:pathlib"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.release_verification.native_archive",
-    "owner": "py:delegate_acceptance.release_verification",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.directories.operations",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.release_verification.assets",
-      "py:delegate_acceptance.release_verification.commands",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_submission",
-      "py:delegate_acceptance.release_verification.source",
-      "py:pathlib"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.native_evidence.public_projection",
-    "owner": "py:delegate_acceptance.native_evidence",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.evidence.files",
-      "py:delegate_acceptance.native_evidence.block_reason",
-      "py:delegate_acceptance.native_evidence.candidate_proof",
-      "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_evidence.public_stage",
-      "py:delegate_acceptance.native_evidence.public_validation",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:json",
-      "py:pathlib"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.native_evidence.public_stage",
-    "owner": "py:delegate_acceptance.native_evidence",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:dataclasses",
-      "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.filesystem",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:os",
-      "py:pathlib",
-      "py:re",
-      "py:stat"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.native_evidence.stage_publication",
-    "owner": "py:delegate_acceptance.native_evidence",
-    "layer": "runtime",
-    "imports": [
-      "py:__future__",
-      "py:dataclasses",
-      "py:delegate_acceptance.directories.journal",
-      "py:delegate_acceptance.directories.operations",
-      "py:delegate_acceptance.evidence.files",
-      "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.filesystem",
-      "py:os",
-      "py:pathlib",
-      "py:stat"
     ]
   }
 ]

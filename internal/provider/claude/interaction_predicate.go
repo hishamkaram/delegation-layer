@@ -30,12 +30,29 @@ const unscopedInteractionContract = "Claude stream-json host clarification v4: o
 // admission. Its bytes are retained for exact replay and reconstruction.
 const scopedInteractionContract = "Claude stream-json host clarification v5: one initial user input; exact native session; one initial system/init, with one identical repeated init permitted after each leading acknowledgement before root messages and, after the principal result, only at the start of a follow-up cycle before that cycle's root messages; AskUserQuestion answers only; never authorize other tools; a root tool_result resolves a pending question and a nested agent tool_result never does; input closes after the principal result, idle session, settled tracked agents, and settled follow-up cycles and batches, the closure is sticky, and end of stream requires the current session to be idle with no unsettled tracked agent, question, cycle, or batch; provider-native follow-ups after input closure remain evidence; completion attribution: the first result that is not a leading acknowledgement answers the caller turn with origin absent or human and result_index 0 when present, or the next consecutive index after leading acknowledgements, later results need consecutive result_index and origin task-notification without subkind, terminal_reason when present is completed, queued_turn_count when present is 0, an empty follow-up settles only as a documented zero-turn batch acknowledgement before its answering result, and follow-up failures, refusals, or unsettled cycles reject; leading acknowledgements: before the caller's result, results with origin task-notification without subkind that are successful, have an empty string result, num_turns explicitly 0, and consecutive result_index from 0, placed after the initial init and before any root message since that init or the previous acknowledgement, are accepted; they never answer, contribute usage or cost, or close the input, a failed, refused, aborted, or queued one always rejects, with its canonical refusal unless a higher-priority malformed or incomplete fault takes precedence, a stream of only acknowledgements is incomplete, and any other shape is malformed; message scope: a complete assistant or user message whose parent_tool_use_id is absent or null is a root message and, after a result, opens a follow-up cycle that its attributed result must close; a message whose parent_tool_use_id is a nonblank string of at most 1024 bytes without NUL or invalid UTF-8 is a nested agent message that stays structurally validated and session-bound but never opens, advances, or settles a cycle or batch, resolves a pending question, is selected as an answer, or affects accounting; any other parent_tool_use_id value, including an empty, blank, oversized, mistyped, or case-aliased field, is malformed before or after the principal result; only the principal result is selected; offset-streamed sealed records without a native event-size ceiling; stable runtime probe requires only --print; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
 
-// interactionContract binds fresh interactive tasks to the same advisory
-// completion reducer and wire as print evidence, stated inline; only question
-// transport and closure differ. Its interactive-v6 text is the frozen
-// interactive-v5 bytes with advisoryInteractionEdits applied.
-func interactionContract() string {
+// advisoryInteractionContract is the frozen principal-only interactive-v6
+// revision: the frozen interactive-v5 bytes with advisoryInteractionEdits
+// applied. It is replay-only.
+func advisoryInteractionContract() string {
 	return applyContractEdits(scopedInteractionContract, advisoryInteractionEdits())
+}
+
+// interactionContract binds fresh interactive tasks to the same follow-up
+// completion reducer, projection, and wire as print evidence, stated inline;
+// only question transport and closure differ. Its interactive-v7 text is the
+// frozen interactive-v6 bytes with followUpInteractionEdits applied.
+func interactionContract() string {
+	return applyContractEdits(advisoryInteractionContract(), followUpInteractionEdits())
+}
+
+// followUpInteractionEdits derive interactive-v7 from the frozen
+// interactive-v6 bytes: the revision label and the shared follow-up selection
+// and failed-request policy in place of principal-only selection.
+func followUpInteractionEdits() []contractEdit {
+	return []contractEdit{
+		{"host clarification v6:", "host clarification v7:"},
+		{"; only the principal result is selected; advisory wire:", "; " + followUpSelectionPolicy + "; advisory wire:"},
+	}
 }
 
 // advisoryInteractionEdits are the ordered clause edits that derive the
@@ -62,18 +79,30 @@ type interactionInterpreter struct {
 	historical bool
 	reference  *task.PredicateRef
 	// completion is the reducer bound to this revision's identity: the current
-	// revision is advisory, interactive-v5 keeps its scoped attribution,
+	// revision projects follow-ups, interactive-v6 keeps its principal-only
+	// advisory policy, interactive-v5 keeps its scoped attribution,
 	// interactive-v4 its unscoped attribution, and the zero value is the frozen
 	// single-result policy.
 	completion completionPolicy
 }
 
 func newInteractionInterpreter(mode string) predicate.Interpreter {
-	return interactionInterpreter{mode: mode, completion: advisoryScopedCompletion}
+	return interactionInterpreter{mode: mode, completion: advisoryFollowUpCompletion}
 }
 
 func interactionReference(mode string) task.PredicateRef {
-	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v6", SHA256: task.ComputeSHA256([]byte(interactionContract() + mode + "\n"))}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v7", SHA256: task.ComputeSHA256([]byte(interactionContract() + mode + "\n"))}
+}
+
+// advisoryInteractionReference is the frozen interactive-v6 revision, which
+// keeps its principal-only advisory completion for exact replay.
+func advisoryInteractionReference(mode string) task.PredicateRef {
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v6", SHA256: task.ComputeSHA256([]byte(advisoryInteractionContract() + mode + "\n"))}
+}
+
+func newAdvisoryInteractionInterpreter(mode string) predicate.Interpreter {
+	reference := advisoryInteractionReference(mode)
+	return interactionInterpreter{mode: mode, reference: &reference, completion: advisoryScopedCompletion}
 }
 
 // scopedInteractionReference is the frozen interactive-v5 revision, which
@@ -153,10 +182,10 @@ func (v interactionInterpreter) evaluateAgainst(input predicate.Input, raw predi
 		p.state.attribution.finish(&p.state)
 	}
 	if !interactionStreamComplete(semantic, p.Complete()) {
-		return v.incompleteInteractionResult(p), nil
+		return v.incompleteInteractionResult(input, p), nil
 	}
 	if refusal := refusalFor(input, p.state); refusal != "" {
-		return v.refusedInteractionResult(refusal, p), nil
+		return v.refusedInteractionResult(input, refusal, p), nil
 	}
 	if err := v.writeInteractionAnswer(raw, p, out); err != nil {
 		return task.Interpretation{}, err
@@ -224,17 +253,17 @@ func (v interactionInterpreter) readCurrentInteractionStdout(raw predicate.Evide
 func (v interactionInterpreter) writeInteractionAnswer(raw predicate.Evidence, p *claudeInteraction, out io.Writer) error {
 	if !v.historical {
 		return raw.Read(predicate.Stdout, func(reader io.Reader) error {
-			return copyClaudeSpans(reader, p.state.result.currentAnswer.spans, out)
+			return writeClaudeCurrentAnswer(reader, p.state, v.completion, out)
 		})
 	}
 	return writeAnswer(out, []byte(p.state.result.answer))
 }
 
-func (v interactionInterpreter) incompleteInteractionResult(p *claudeInteraction) task.Interpretation {
+func (v interactionInterpreter) incompleteInteractionResult(input predicate.Input, p *claudeInteraction) task.Interpretation {
 	// Without a caller result, only a failed leading acknowledgement of the
 	// scoped policy can have recorded a refusal; keep its canonical class.
 	if refusal := p.state.attribution.completionRefusal(); !p.state.resultSeen && refusal != "" {
-		return v.refusedInteractionResult(refusal, p)
+		return v.refusedInteractionResult(input, refusal, p)
 	}
 	result := rejectedWithUsage(refusalIncomplete, nil)
 	if !v.historical {
@@ -244,10 +273,10 @@ func (v interactionInterpreter) incompleteInteractionResult(p *claudeInteraction
 	return result
 }
 
-func (v interactionInterpreter) refusedInteractionResult(refusal string, p *claudeInteraction) task.Interpretation {
+func (v interactionInterpreter) refusedInteractionResult(input predicate.Input, refusal string, p *claudeInteraction) task.Interpretation {
 	result := rejectedWithUsage(refusal, claudeCurrentUsageMetadata(p.state, task.UsageReliabilityUnreliable))
 	if !v.historical {
-		result.Diagnostics = append(result.Diagnostics, claudeRefusalDiagnostic(refusal, p.state))
+		result.Diagnostics = append(result.Diagnostics, claudeRejectionDiagnostic(input, p.state, refusal, Provider))
 		result.Diagnostics = append(result.Diagnostics, claudeCurrentUsageWarning(p.state)...)
 	}
 	return result
@@ -263,8 +292,10 @@ func (v interactionInterpreter) committedInteractionResult(p *claudeInteraction)
 
 func (v interactionInterpreter) Target() task.PredicateRef { return v.Reference() }
 
-// CanRecover makes the current advisory interactive parser the single
-// recovery target for every earlier interactive revision of this mode.
+// CanRecover makes the current follow-up interactive parser the single
+// recovery target for every earlier interactive revision of this mode whose
+// rejected evidence it can accept. The frozen principal-only interactive-v6
+// shares the current verdict rules, so it is never a source.
 func (v interactionInterpreter) CanRecover(source task.PredicateRef) bool {
 	if v.historical || v.reference != nil {
 		return false

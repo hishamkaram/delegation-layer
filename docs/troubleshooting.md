@@ -7,22 +7,26 @@ provider answer text.
 ## Provider is not found or runtime verification fails
 
 Managed runtime-only tasks resolve the executable before admission, then check
-version and help inside the admitted task. When `task_record` is `created`,
+help and the declared flags inside the admitted task. When `task_record` is `created`,
 observe that task with `status` and `collect`; do not dispatch it again.
 Admission alone does not prove runtime compatibility, authentication, or completion.
 
 Check that the executable is on the dispatch process's `PATH`, is a regular
 executable file, and can run in the requested workspace. Delegation Layer
-invokes the provider's version and help commands and checks the stable runtime
-flags declared by the selected profile. A missing declared flag or an
-unreadable executable is a capability failure, not a release-version failure.
+invokes the provider's help command and checks the stable runtime flags
+declared by the selected profile; it does not run a separate version command.
+A missing declared flag or an unreadable executable is a capability failure,
+not a release-version failure. A CLI that has no `--version` command is still
+usable.
 Provider-specific launch options remain validated by the actual provider turn;
 this avoids rejecting current CLIs whose noninteractive help output omits or
 truncates forwarded options.
 
-The observed version is evidence for diagnostics and task binding only. It is
-not checked against a hardcoded release, semver range, web lookup, or binary
-allowlist. If a probe is rejected, inspect the bounded reason class in the
+Current runtime probes record the resolved executable path without collecting
+a version or binary hash. Historical records may retain valid version or hash
+diagnostics; they never impose a hardcoded release, semver range, web lookup,
+or binary allowlist requirement. Malformed populated diagnostics in stored
+evidence are reported as errors. If a probe is rejected, inspect the bounded reason class in the
 control response and compare the selected CLI's current help output with the
 profile's declared runtime flags.
 
@@ -209,11 +213,16 @@ and queue behavior match the supported schema, including additive fields that
 do not change the required lifecycle data. A Pueue release upgrade alone does
 not require changing the state root or installing a matching version.
 
-Provider executable upgrades are handled by the runner's fresh preflight. If
-the current CLI still passes its version/help and declared runtime checks, the
-runner refreshes the launch plan and starts that current executable. A changed
-task policy, workspace, writable root, predicate, or artifact contract remains
-a refusal because those fields are admission-bound.
+Provider executable upgrades are handled by the runner's fresh preflight. The
+runner resolves the installed CLI in the task's saved lookup environment. If
+that CLI still passes its help and declared runtime checks, the runner builds
+the launch plan from it and starts it directly. A changed path, version, or
+bytes is not a refusal. A changed task policy, workspace, writable root,
+predicate, or artifact contract remains a refusal because those fields are
+admission-bound. If the provider is replaced or removed between the check and
+the process start, the task reports the operating-system or provider error. A
+started or possibly started task is never retried and never continues in a
+fresh session.
 
 A legacy private supervisor binding without daemon identity can be recovered
 when delegate resolves a matching executable pair and verifies the saved
@@ -272,11 +281,14 @@ ambiguous, unrelated, or unproven inspection rows remain available
 without blocking cleanup of validated rows. Failed removal retains the
 candidate for a later terminal trigger to retry, so no Pueue command or
 state-file editing is required.
-`status` and `collect` also request removal of their task's exact recorded row
-after a terminal outcome exists. A runner can publish that outcome shortly
-before Pueue marks its row ended; Delegate leaves that still-running row intact
-and defers removal to later private maintenance. Cleanup errors do not change
-that outcome.
+`status` and `collect` never remove a private row themselves. When their task's
+exact ended row is still present, or its closed custody is still pending, they
+durably request a full private maintenance pass. When they can, they also
+start the independent maintenance owner; otherwise the request waits for a
+later terminal callback or admission. A failed pass is retried only after a
+new request, so re-running `status` or `collect` on the same root, while the
+row or custody is still pending, records that request. Maintenance
+errors are logged on stderr and do not change the outcome or exit code.
 An explicit external `--pueue-config` is never cleaned by these paths.
 
 If an admission command (`dispatch` or `continue`) cannot use the current
@@ -509,6 +521,40 @@ rejected outcome is retained for audit. Exit `4` means the newer interpreter
 still rejects the evidence; exit `1` or `2` means an operational error or an
 ineligible request. Preserve those diagnostics rather than relaunching paid work,
 editing task records, or extracting a plausible answer from raw logs.
+
+## Recorded executable custody is unavailable
+
+This applies only to a task or inspection whose lifetime registration records a
+custody placement written by an earlier development build. New runs record no
+placement, and a registration without one is normal, not an error. If the
+recorded pool is missing, replaced, foreign, aliased, or otherwise unavailable,
+Delegate keeps the custody and reports the concrete cause; this is conservative
+retention, not a task failure. The guardian logs
+`delegate: lifetime custody release deferred: ...` on stderr, and the
+authoritative task outcome, publication, and exit code are unchanged. For a
+private supervisor, the guardian also requests a full maintenance pass; a
+later elected pass that consumes it retries the release; `status` and `collect` request another pass while
+closed custody is still pending. For an external supervisor, `status` and
+`collect` retry the release themselves; their own fault is logged as
+`delegate: task maintenance observation deferred: ...`. An ended inspection row whose custody
+is still pending is kept in the supervisor queue; a later maintenance pass
+retries it. Once the pool is usable again, run `status` or `collect` on the
+same root.
+
+- Do not delete, move, replace, or recreate the pool directory recorded in the
+  registration, and do not edit the task or lifetime records. Delegate does not
+  reselect a pool for an existing task, does not delete the root, and a missing
+  pool is not treated as released. No command repairs it.
+- Release needs both the exact recorded pool identity and canonical lifetime
+  closure. A pending or unproven closure releases nothing.
+
+An external supervisor may run with a state directory on a `noexec` mount. New
+runs execute the installed provider in place and write no provider executable
+copy, so there is no custody pool to relocate and no `TMPDIR` fallback. The
+private bundled supervisor is stored under the state root and cannot run from a
+`noexec` state root. See
+[legacy executable custody](architecture.md#legacy-executable-custody-cleanup-only)
+and [installed provider execution](architecture.md#installed-provider-execution).
 
 ## Collection fails after a successful run
 

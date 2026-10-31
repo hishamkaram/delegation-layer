@@ -16,7 +16,36 @@ import (
 const (
 	capacityTestStartedAt = "2026-01-02T03:04:05Z"
 	formerLaunchLimit     = 64
+
+	// scenarioCap bounds a scenario that issues many durable operations; it
+	// is far above the observed loaded runtime and below the default
+	// `go test` timeout. scenarioCleanupReserve is left for store and
+	// directory cleanup before the test binary's own deadline.
+	scenarioCap            = 10 * time.Minute
+	scenarioCleanupReserve = 10 * time.Second
 )
+
+// scenarioDeadline is the one finite deadline of a multi-operation scenario:
+// min(now+scenarioCap, t.Deadline()-scenarioCleanupReserve).
+func scenarioDeadline(t *testing.T) time.Time {
+	t.Helper()
+	deadline := time.Now().Add(scenarioCap)
+	if limit, ok := t.Deadline(); ok {
+		if reserved := limit.Add(-scenarioCleanupReserve); reserved.Before(deadline) {
+			deadline = reserved
+		}
+	}
+	return deadline
+}
+
+// scenarioContext carries scenarioDeadline into every operation of a scenario
+// so no call falls back to the short per-operation persistence timeout.
+func scenarioContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithDeadline(t.Context(), scenarioDeadline(t))
+	t.Cleanup(cancel)
+	return ctx
+}
 
 func registeredCapacityTask(t testing.TB) (*TaskDir, string) {
 	t.Helper()
@@ -252,22 +281,22 @@ func openCapacityControlLifetime(t testing.TB, store *Store, operationID string)
 	return control, lifetime
 }
 
-func registerCapacityControlLifetime(t testing.TB, lifetime *ControlLifetime) string {
+func registerCapacityControlLifetime(ctx context.Context, t testing.TB, lifetime *ControlLifetime) string {
 	t.Helper()
 	deadline := lifetime.deadline
-	if _, err := lifetime.RecordLifetimeIntentContext(context.Background(), LifetimeIntentFacts{
+	if _, err := lifetime.RecordLifetimeIntentContext(ctx, LifetimeIntentFacts{
 		ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative,
 		ScopePlan: "control-capacity-plan", BootID: "control-boot", Deadline: deadline,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lifetime.RecordLifetimeRegistrationContext(context.Background(), LifetimeRegistrationFacts{
+	if _, err := lifetime.RecordLifetimeRegistrationContext(ctx, LifetimeRegistrationFacts{
 		ScopeKind: task.LifetimeScopeProcessGroup, Assurance: task.LifetimeAssuranceCooperative,
 		ScopeID: "control-capacity-group", BootID: "control-boot", Deadline: deadline,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	digest, err := lifetime.LifetimeRegistrationDigest()
+	digest, err := lifetime.LifetimeRegistrationDigestContext(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,16 +305,17 @@ func registerCapacityControlLifetime(t testing.TB, lifetime *ControlLifetime) st
 
 func TestControlLifetimeLaunchesPersistBeyondFormerLimit(t *testing.T) {
 	_, lifetime := newCapacityControlLifetime(t)
-	registerCapacityControlLifetime(t, lifetime)
+	ctx := scenarioContext(t)
+	registerCapacityControlLifetime(ctx, t, lifetime)
 	count := uint64(formerLaunchLimit + 6)
 	for sequence := uint64(1); sequence <= count; sequence++ {
-		if _, err := lifetime.RecordLifetimeLaunch(LifetimeLaunchFacts{Sequence: sequence, PID: 1000 + int(sequence), ProcessStart: fmt.Sprintf("control-start-%d", sequence), PGID: 1000 + int(sequence)}); err != nil {
+		if _, err := lifetime.RecordLifetimeLaunchContext(ctx, LifetimeLaunchFacts{Sequence: sequence, PID: 1000 + int(sequence), ProcessStart: fmt.Sprintf("control-start-%d", sequence), PGID: 1000 + int(sequence)}); err != nil {
 			t.Fatalf("record launch %d: %v", sequence, err)
 		}
 	}
-	launches, err := lifetime.ReadLifetimeLaunches()
+	launches, err := lifetime.ReadLifetimeLaunchesContext(ctx)
 	must(t, err)
-	termination, err := lifetime.RecordLifetimeTermination(task.LifetimeTerminationRecovery)
+	termination, err := lifetime.RecordLifetimeTerminationContext(ctx, task.LifetimeTerminationRecovery)
 	must(t, err)
 	digest, err := task.LifetimeLaunchSetDigest(launches)
 	must(t, err)
@@ -352,7 +382,7 @@ func TestControlLifetimeLaunchVerifyPrecedesCapacity(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			control, lifetime := newCapacityControlLifetime(t)
-			digest := registerCapacityControlLifetime(t, lifetime)
+			digest := registerCapacityControlLifetime(context.Background(), t, lifetime)
 			data, err := task.MarshalCanonical(controlCapacityLaunch(lifetime, digest, 1))
 			must(t, err)
 			path := filepath.Join(control.dir, controlLifetimeLaunchName(1))
@@ -366,7 +396,7 @@ func TestControlLifetimeLaunchVerifyPrecedesCapacity(t *testing.T) {
 
 func TestControlLifetimeLaunchInventoryRefusesGapAfterLaterRecord(t *testing.T) {
 	control, lifetime := newCapacityControlLifetime(t)
-	digest := registerCapacityControlLifetime(t, lifetime)
+	digest := registerCapacityControlLifetime(context.Background(), t, lifetime)
 	putCapacityControlLaunch(t, control, controlCapacityLaunch(lifetime, digest, 1), 1)
 	putCapacityControlLaunch(t, control, controlCapacityLaunch(lifetime, digest, 3), 3)
 	if _, err := lifetime.ReadLifetimeLaunches(); !errors.Is(err, task.ErrIdentityMismatch) {
@@ -382,7 +412,7 @@ func TestControlLifetimeLaunchInventoryRefusesGapAfterLaterRecord(t *testing.T) 
 // twice, and a new record beyond it is refused before publication.
 func TestControlLifetimeLaunchesEnforceAggregateBytesOnce(t *testing.T) {
 	control, lifetime := newCapacityControlLifetime(t)
-	digest := registerCapacityControlLifetime(t, lifetime)
+	digest := registerCapacityControlLifetime(context.Background(), t, lifetime)
 	startedAt := timestamp()
 	for sequence := uint64(1); sequence <= formerLaunchLimit; sequence++ {
 		record := controlCapacityLaunch(lifetime, digest, sequence)

@@ -64,7 +64,7 @@ BUILD_RECORDS=(
     "build linux/arm64 dist/delegate-linux-arm64/delegate-run"
 )
 GATES_BEFORE_BUILD=(
-    "go test" "go run" "python3 scripts/verify_skills.py" sha256sum
+    "go run" "python3 scripts/verify_skills.py" sha256sum
     "python3 scripts/verify_acceptance_ownership.py" check-plugin-package
     check-skill-package "go run" "golangci-lint config" goreleaser "go vet"
     "golangci-lint run" verify-gates verify-tooling-regressions "go test"

@@ -71,6 +71,7 @@ supervisor operations.
 | `internal/admission` | Required provider inspection and admission evidence | `inspection/contract` is pure; inspection journals and probes have sealed implementations. |
 | `internal/tasklifecycle` | Ordinary turn creation, reuse, submission, observation, and control | Admission supplies validated profiles; task storage and the guardian retain their own journal and lifetime authority. |
 | `internal/workspaces` | Managed workspace use, capture, release, and recovery | `workspace/contract` is pure; sealed Git and journal implementations execute its operations. |
+| `internal/scheduler` | Optional recurring-schedule storage for one state root | `scheduler/contract` holds pure values, rules, and the `Store` port; the `scheduler` facade adds `Open` and the owner lease; a sealed SQLite adapter is the only database writer. |
 
 Interfaces belong to the consumer that needs them. Passing a primitive or a
 recovery operation across a boundary does not transfer policy ownership.
@@ -123,18 +124,28 @@ ambient values. Static model-discovery callbacks are unchanged.
 Managed runtime-only tasks are admitted from their static request and provider
 contract. Immutable metadata records `runtime_preflight_sha256` and an empty
 `provider_version`; it does not claim runtime compatibility. Each task's runner
-checks version and help inside its guardian-owned lifetime before provider
-execution. The final executable, observed version, and digest belong to the
-started and sealed task evidence. There is no shared admission capability
+checks help and the declared flags inside its guardian-owned lifetime before
+provider execution. The final executable path belongs to the started and sealed
+task evidence; current runtime probes leave version and provider SHA-256
+diagnostics empty. There is no shared admission capability
 cache or second runtime-only inspection worker.
 
 Native policy projections, model discovery, custom runners, and historical
-tasks retain their admission inspection contract. The inspection worker's
+tasks retain their admission inspection contract. At a queued task's start, the
+fresh native projection must canonically equal the admission proof unless the
+provider candidate supplies a pure refreshed-facts decision. Core consults that
+decision only for two well-formed runtime envelopes with valid native objects,
+maps its typed refusal to a fixed evidence fault, and treats any other answer
+as a contract fault. Acceptance covers only the native facts: the finalizer
+receives the fresh observation, the stored proof is never rewritten, and the
+finalized profile must still match the recorded environment, roots, policy,
+predicate, and artifacts. CCR supplies the decision only for a modeled record,
+which ignores an added `--resume-route`. The inspection worker's
 non-secret facts are passed to the profile finalizer, which records the
-observed version and effective policy in metadata. The inspection binding keeps
+observed facts and effective policy in metadata. The inspection binding keeps
 the same environment for a queued worker, including when a private daemon is
-reused for another task. The version is an observation; advertised behavior
-and the executable identity decide compatibility. New profiles record native
+reused for another task. The path and any version are local observations, not
+provider attestation; advertised behavior decides compatibility. New profiles record native
 permission selections without inventorying provider configuration. MCP servers,
 hooks, plugins, skills, and authentication are owned by the provider CLI.
 Workspace-write asks for unattended native tool execution; it does not add a
@@ -180,12 +191,13 @@ ancestor search, and no copy of the predecessor's configuration, profile, or
 authentication. No continuation modifies predecessor evidence.
 
 Immediately before a provider process may start, the runner performs a fresh
-capability inspection and receives a current launch plan. A provider path,
-reported version, or executable digest may therefore change after admission
-when the current CLI still satisfies the adapter's version/help and declared
-runtime contract. The runner keeps the admitted task request, predicate, permission,
-workspace, writable roots, policy sources, and declared artifacts fixed; a
-change to any of those contracts is rejected before launch.
+capability inspection and receives a current launch plan. A provider path or
+reported version may therefore change after admission when the current CLI
+still satisfies the adapter's help and declared runtime contract; provider
+bytes are never compared. The runner keeps the admitted task request, predicate,
+permission, workspace, writable roots, policy sources, and declared artifacts
+fixed; a change to any of those contracts is rejected before launch. See
+[installed provider execution](#installed-provider-execution).
 
 ### Runtime-only transition ownership
 
@@ -198,10 +210,10 @@ change to any of those contracts is rejected before launch.
 ### Managed Git workspace lifecycle
 
 Managed Git workspaces are optional and have one application-level coordinator
-as their usage owner. The canonical W1–W7 rows cover committed-base intent,
+as their usage owner. Its lifecycle covers committed-base intent,
 checkout registration, usage reservation, provider closure, Git-content capture,
-release, and explicit forgetting; see the [maintainability transition
-matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+release, and explicit forgetting; see the [workspace boundary
+guidance](../agents/_data/maintainability-contract.md#managed-workspace-changes)
 and the [agent-facing workspace reference](../skills/agent-integration/references/workspaces.md).
 Ordinary non-Git dispatch remains on the existing path.
 
@@ -262,8 +274,8 @@ Failed workspace helpers retain a bounded `error.txt` artifact when its bytes ca
 be durably written. Public responses expose descriptors; they do not inline that
 diagnostic. File closure and directory synchronization precede result publication.
 
-Git checkpoints reuse the same workspace-operation runtime; see rows CP1–CP7
-of the [transition matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+Git checkpoints reuse the same workspace-operation runtime; see the
+[workspace boundary](../agents/_data/maintainability-contract.md#managed-workspace-changes)
 and the [checkpoint guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints).
 The workspaces coordinator (`internal/workspaces`) owns admission,
 scheduling, qualification, removal registration, and description. The Git
@@ -418,6 +430,44 @@ has no ticket; it exposes the complete current snapshot, including inspection
 rows with missing candidates. Durable task and inspection journals
 remain the sole authority for every removal. A later callback or accepted
 terminal observation wakes a retry for rows retained by an earlier failed pass.
+A failed attempt never re-runs itself; it waits for a new positive wake.
+For terminal maintenance, a private root whose binding predates the
+logical-identity record is adopted inside the asynchronous maintenance helper
+(`RunQueueMaintenance`), not by a public observer, under the bootstrap EX lease, from the existing config, recorded daemon identity, and
+resolved executable pair. It never creates a config, starts or restarts a
+queue, or relaxes a hash check; a refusal keeps the wake pending. Adoption goes
+through the existing `PreparePrivateWithLock`, whose status-overflow cleanup of
+authorized successful rows can still run under that EX lease. Migration keeps
+the relevant inspection rows, so a later full pass can retry their custody.
+Adoption enters only an existing bootstrap lock: a deleted root, a root without
+`.supervisor`, or a missing bootstrap lock returns
+`ErrPrivateSupervisorNotInitialized` and creates nothing. The callback recorder
+likewise enters only an existing terminal-event lock, recovers interrupted
+stages under it, and rechecks its ticket there; a missing lock records no
+candidate and the helper requests a full wake. Ticket publication still
+provisions that lock.
+
+Canonical lifetime closure and empty custody do not prove that elected
+maintenance finished: Pueue 4.0.4's shutdown waits for task children, not
+callback helpers (upstream source, not a native observation). The
+acceptance harness's final disposal (`finalize_fixture`, the workspace context
+cleanup, and the candidate-install bootstrap, which shares one value across its
+shutdown and canonical owned-root removal) therefore owns one `DisposalLeases`
+value from each authorized shutdown through exact root deletion. Per root it
+first opens the existing `transition.lock` and `bootstrap.lock` without creating
+them, and only then opens or creates `queue-maintenance.lock`, so a refused root
+is left exactly as found. It flocks `queue-maintenance.lock`, then
+`transition.lock`, then `bootstrap.lock` EX
+within the caller's existing deadline, waits for readiness outside the current
+root's lease, and releases only that root's lease before its custody wait;
+roots it already shut down stay held through deletion. The remover refuses a
+managed root that still has `.supervisor` without that held lease and rechecks
+closure and custody under it. The lease excludes elected maintenance only; it
+does not prove that callback helpers exited, so a late write or deletion fault
+retains the root and reports an error. A lease release fault at teardown is a
+cleanup error: `finalize_fixture` still writes its one FAIL receipt with the
+original failure and the actual removed or retained root state. Mid-scenario
+shutdowns and historical fixture seeding keep the transition lease alone.
 
 A queue writer publishes intent under its dedicated owner lock before waiting
 for exclusive queue identity. New readers check that intent before and while
@@ -496,9 +546,10 @@ per-completion control-plane fan-out. The runner then
 reconstructs the recorded profile and refuses to start if the fresh profile no
 longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the
-evidence. The final provider executable, observed version, and digest are also
-written to `provider.started.json` and `provider.exit`, so a runtime upgrade
-remains reconstructable without rewriting immutable `meta.json`.
+evidence. The final provider executable path is also written to
+`provider.started.json` and `provider.exit`; current runtime probes leave the
+optional version and provider SHA-256 diagnostics empty, so a runtime
+upgrade remains reconstructable without rewriting immutable `meta.json`.
 
 The guardian holds one lifetime-owner lease across the complete native
 transition. It records a deterministic scope intent before creating the scope,
@@ -588,12 +639,27 @@ An exact status command that exits transiently is retried only within the
 immutable admission window and its cause is retained if that window expires.
 Malformed status, schema, output-limit, binding, identity, and evidence faults
 remain immediate failures rather than retry signals.
-`status` and `collect` can also remove the exact recorded row of their terminal
-task. A terminal outcome may precede the Pueue row's ended state while the
-runner exits, so Delegate defers that exact running row to later maintenance
-instead of removing it. Cleanup failures are maintenance-only; durable task
-outcomes remain authoritative. External `--pueue-config` installations are
-never cleaned.
+For a private supervisor, the maintenance step of `status` and `collect` is an
+observer (`internal/app/task_maintenance.go`). It reads its own task's closed
+recorded-custody hint (present only for a run with a recorded placement) and reconciles its exact published row read-only; it never
+removes a row, binds the supervisor for mutation, or releases custody. A
+positive hint (closed custody still pending, or the exact ended row still
+present) durably requests one full maintenance generation. It publishes that
+wake in the guardian's fresh cancel-independent phase bounded by
+`pueue.DefaultObservationTimeout` (5 seconds), separate from its own 10-second
+observation bound, so an exhausted observation cannot drop the wake; this can
+add up to 5 seconds and renews no provider, task, or native budget. The observer then
+attempts to start the existing independent maintenance owner only when it holds
+a published-row client and a maintenance launcher; otherwise the durable wake
+waits for a later callback or admission to consume it. When neither the
+custody hint nor the exact row hint is positive, the observer requests
+nothing. This optional maintenance step adds no supervisor probe or repair;
+the command's own task observation is unchanged. A task with a validated saved external binding has no elected
+owner, so its observer keeps the synchronous custody retry and never cleans
+rows; a malformed saved binding classifies nothing and never falls back to that
+external path. Maintenance faults are logged warnings; the command's outcome,
+payload, JSON, and exit code are unchanged. External `--pueue-config`
+installations are never cleaned.
 
 The private supervisor's ordinary default group uses Pueue's unlimited
 parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing
@@ -642,6 +708,134 @@ length with the recorded identity, so a truncated or same-length changed brief
 is a concrete identity fault. Only the continuation brief read returns the
 bytes, as a caller-owned copy. Execution independently hashes the exact
 read-only descriptor it hands to the provider.
+
+## Installed provider execution
+
+The [product boundary](../agents/_data/product-boundary.md) owns this
+contract; this section describes how the lifecycle applies it. The provider
+CLI, its installation, updates, accounts, and native sessions belong to the
+provider and the user. Delegate owns the request contract, the consumed launch
+permit, process `Start`/`Wait`, the guardian, deadlines, containment, session
+bookkeeping, and sealed evidence.
+
+- **Fresh resolution.** At launch the runner resolves the installed CLI in the
+  authorized lookup environment saved with the task. The observer's ambient
+  `PATH` and an older absolute path in `meta.json` are not authority, and
+  `meta.json` stays immutable.
+- **One direct command.** After a successful fresh preflight, the existing
+  execution owner builds one unstarted command from the resolved path and the
+  exact arguments, environment, and workspace. The operating system handles
+  interpreter lines, and installed sibling and ancestor assets resolve in place.
+  There is no shell wrapper, provider-executable hash, copy, hard link,
+  installation mirror, or image pool.
+- **What stays exact.** Model, effort, native permission mode, workspace,
+  session, input, and output contracts are preserved. The start permit is
+  consumed once, and nothing retries a start that may have happened.
+- **Compatible updates.** A path, version, or byte change after admission is not
+  by itself a failure. A missing executable, an operating-system launch error, a
+  missing required flag, an authentication or protocol error, or a native resume
+  failure is reported as that distinct error. A continuation never falls back to
+  a fresh session.
+- **Retired guarantee.** Delegate does not promise that the bytes probed are the
+  bytes executed. An update between the probe and `Start` is surfaced as the
+  actual launch result, not prevented.
+- **Evidence.** The started and sealed records carry the resolved path. Current
+  runtime probes leave version and provider SHA-256 diagnostics empty and do not
+  extract version text from help or protocol output. Records written earlier
+  can carry a populated version or executable SHA-256. A present value is validated like any other recorded
+  field, and malformed evidence is still rejected. A valid old observation is
+  history only: it does not pin the current installed provider and never
+  authorizes a launch. Delegate-owned digests are unchanged.
+
+## Legacy executable custody (cleanup only)
+
+Earlier development builds placed provider executables in a verified image pool
+and recorded the placement. New runs create no placement, image, or view and
+select no pool. This section applies only to a lifetime registration that
+already records a `custody_placement` (`pool_root`, `pool_id`), and it keeps the
+existing cleanup behavior for it. `internal/verifiedexec` still owns the
+filesystem under such a recorded pool.
+
+- **Placement owner.** The create-once lifetime registration holds the optional
+  version-1 `custody_placement`. It is the only authority for an existing
+  placement: the worker, `status`, `collect`, and cleanup read it and never
+  select, create, or recreate a pool (`internal/guardian/registration.go`,
+  `internal/app/custody.go`). A registration with no placement is the normal
+  state of a new run and is not invalid; it has nothing to release and never
+  blocks a launch.
+- **Release.** The recorded pool identity and canonical native closure govern
+  release. Closure is proven only by the canonical journal reader
+  (`guardian.ReadClosureProof`); a dead process, an unheld lock, or an inherited
+  descriptor is never evidence, and pending closure releases nothing. Every
+  guardian post-run step starts only after its run has finalized, and a run
+  without closure records, such as a workspace operation, has none. An
+  ordinary private task's guardian never releases views itself
+  (`handOffGuardianLifetimeCustody` in `internal/app/task_maintenance.go`).
+  It makes a read-only check, bounded at 10 seconds, that closure is proven
+  and views remain. When they do, or when the check faults, it persists one
+  full maintenance wake and then explicitly launches the existing independent
+  maintenance owner with its normalized runner executable and captured
+  environment. It does not depend on the terminal callback. That owner's
+  elected pass, described below, releases the custody under the same closure
+  and pool authority. Pending closure or released custody requests nothing.
+  The wake and the launch each run in their own cancel-independent phase
+  bounded by `pueue.DefaultObservationTimeout` (5 seconds). Both are
+  best-effort: a fault is logged and never falls back to a direct release,
+  and a published wake stays durable for a later owner.
+  Inspection and external guardians keep their direct post-run release,
+  bounded at 10 seconds. A private inspection's release fault persists a full
+  maintenance wake the same way. For an external task, the next `status` or
+  `collect` retries the release synchronously. No custody step renews a
+  provider, task, or native budget, and a custody fault never rewrites the task
+  outcome or the guardian's result.
+- **Private maintenance custody.** The elected private maintenance owner
+  (`internal/pueue/internal/control/private_queue_cleanup.go`) calls the
+  application releaser `releasePrivateTerminalCustody` with neither the
+  generation lease nor queue identity held. A full generation first calls it
+  with no candidates, before the queue endpoint is captured, and it retries
+  closed custody for every ordinary task listed by `taskdir` `TaskIDs`, so a
+  removed row, lost callback, or stopped queue cannot strand custody. Up to
+  four of those task releases run at once over one store, in inventory order;
+  none starts after its worker observes cancellation, and every started
+  release is joined before the store closes and the phase returns. A pool's
+  view removal is not interruptible, so a phase at its deadline may wait for
+  up to four removals in flight, where a serial pass waited for at most one;
+  that overrun has no bound in seconds. Each
+  capture then prepares evidence under queue identity, hands a deep copy of its
+  candidates to the releaser, and removal reacquires both leases for fresh
+  revalidation. Candidates, task-directory names, outcomes, and row absence are
+  discovery only; the exact recorded pool and canonical closure remain the only
+  release authority. A custody fault fails the attempt without withholding
+  other authorized rows; a later positive wake retries it.
+- **Inspection cleanup.** After an ended inspection row's lifetime evidence
+  validates, maintenance releases its closed custody. Removing that row, once
+  its terminal evidence also validates, additionally requires that no custody
+  remains pending, so an unavailable pool retains only that row until a later
+  pass. This availability gate applies only to removing an ended inspection
+  row. It does not gate active-task or task-row cleanup, native evidence
+  validation, or explicit migration.
+- **Unresolved pools.** A missing, replaced, foreign, aliased, or otherwise
+  unavailable recorded pool stays unresolved and retained with its concrete
+  cause. Delegate does not repair it, reselect another pool, delete the root,
+  migrate it, or treat a missing pool as released. Older strict binaries decode
+  records without unknown fields, so they are not guaranteed to read a
+  registration that carries a placement.
+- **Footprint.** Existing images stay until no view links them; idle reclaim
+  then removes them best-effort after a release. There is no TTL and no
+  background service, so the footprint of an unreleased owner persists until
+  canonical release.
+- **Noexec scope.** No pool location is selected and there is no `noexec`
+  fallback. A noexec state directory used with an external supervisor stays
+  supported because new runs do not execute provider copies from it. A private
+  bundled supervisor pair is stored below the state root (`.supervisor`,
+  `internal/supervisor/pair_publication.go`), so it cannot run from a noexec
+  state root. The packaged worker and private supervisor keep their existing
+  executable requirements.
+- **Threat model.** Cleanup checks are a static check of a private directory
+  owned by the current user: canonical path, no alias, and the
+  recorded identity marker. They do not defend against a hostile process of the
+  same user mutating the pool concurrently, a physically cloned disk, or power
+  loss.
 
 ## Native output and derived recovery
 
@@ -764,10 +958,32 @@ other path or later.
 ## Runtime discovery
 
 Provider registration is static and cheap. Host compatibility is dynamic: the
-adapter locates its executable, checks that it is executable, runs version and
-help, and verifies the stable flags it can observe reliably. This accommodates
-provider releases that change their version number or omit forwarded options
+adapter locates its executable, checks that it is executable, runs the required
+help command, and verifies the stable flags it can observe reliably. No version
+command is run. This accommodates provider releases that change their version
+number or omit forwarded options
 from pipe-based help output while preserving the runtime entrypoint contract.
+
+Three identifiers stay separate. A recorded provider version is an optional
+historical diagnostic; the current runtime probe leaves it empty. It is never
+an admission allowlist and never selects a parser. A negotiated protocol version,
+such as OpenCode's ACP `protocolVersion`, is a capability that must be negotiated before a session
+starts. The Delegate interpretation revision is a predicate reference's
+`Version` and `SHA256`: the immutable local identity of how sealed output is
+interpreted. It changes only when Delegate's interpretation changes, for
+example when Claude's current revisions began publishing every accepted root
+answer and reporting a correlated quota failure. A provider release alone never
+changes it, and every saved task replays under its recorded revision. When a
+candidate carries a runtime probe, a queued or retried task may run a newer
+executable or version after a fresh probe while its recorded policy and
+predicate stay bound (`internal/admission/profile_binding_policy.go`). A
+candidate without a runtime probe, such as a custom or legacy binding, keeps
+exact matching; no binding upgrades automatically. A CCR modeled record on a
+CCR that newly advertises `--resume-route` keeps its recorded modeled argv and
+predicate; only that one-direction addition is accepted, and a route-preserving
+record whose CCR stops advertising the flag is still refused. A native proof
+showed modeled session and model preservation on a route-capable CCR, but no
+real CCR release upgrade between admission and launch has been observed.
 
 The implemented `delegate models` command is a separate advisory path. It
 reuses the state-rooted supervisor and runs one bounded native model inspection
@@ -778,6 +994,49 @@ provider task. Its `complete` flag describes model enumeration; null effort
 metadata remains distinguishable from an explicitly empty list. Discovery is
 never used as an admission allowlist, and model facts are not treated as proof
 that an account can execute a listed model.
+
+## Scheduler storage
+
+Only the storage foundation of the recurring-schedule scheduler exists. No
+command, service, or task dispatch uses it yet; the scheduling behavior that
+will build on it is deferred. It is unrelated to the pueue supervisor that runs
+admitted tasks.
+
+- **Location and creation.** The optional database is
+  `<root>/.scheduler/schedules.sqlite`. Only the exclusive scheduler owner
+  lease may create or migrate it. `Open` never creates or migrates, takes no
+  lease, and reports a missing or uninitialized database as not found. The
+  directory and file must be owned by the current user, private (`0700` and
+  `0600`), and not a symbolic link.
+- **Schema.** Version 1 is the only version. Initialization takes an empty or
+  absent file from `user_version` 0 to 1 in one transaction. It creates four
+  `STRICT` tables: root metadata, schedules, occurrences, and skip spans. A
+  partial unique index allows at most one unreleased occurrence per schedule.
+  Every operation on an initialized database first verifies the exact schema
+  objects and that the stored root identity matches the state root, before it
+  touches domain data. Initialization instead checks that the file is eligible,
+  then creates the schema, the root metadata row, and the version in one
+  transaction, and verifies the result before it commits. A newer or foreign
+  database is refused, never repaired.
+- **Authority.** The immutable task files stay the authority for every task's
+  outcome. Stored observations are a cache and never authorize a launch.
+  Ordinary dispatch, status, and collect do not depend on the database. There
+  is no backfill from existing tasks and no relocation of task state.
+- **Writes.** Each `Store` method is one short immediate transaction on a
+  single reserved connection; no SQL handle or caller transaction crosses the
+  port. Any error can leave the commit outcome unknown, so callers re-read
+  before acting. Only `ClaimNewlyCommitted` from a successful `ClaimAndArm`
+  authorizes one invocation. `ClaimExisting` and `ClaimUnknown` never authorize
+  invocation, even when a later readback finds the row. Connections set `foreign_keys`, `synchronous=EXTRA`, and a
+  busy timeout, plus `fullfsync` on Darwin, and every transaction verifies them.
+- **Journal mode.** The adapter requires the SQLite default rollback journal
+  (`DELETE`). It verifies the mode and refuses anything else; it never converts
+  a database. A refusal changes no data, but stock SQLite may still recover or
+  checkpoint the file when it opens and closes it.
+
+The [module registry](../agents/_data/subsystems.json) enforces the package
+boundaries. This design makes no exactly-once or power-loss guarantee beyond
+what SQLite documents for these settings.
 
 ## Failure and recovery
 

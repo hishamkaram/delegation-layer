@@ -27,7 +27,6 @@ func routeFacts(t *testing.T, candidate commonprovider.ProfileCandidate, resumeR
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
 		Executable: candidate.Inspection.Executable,
 		SHA256:     candidate.Inspection.ExecutableSHA256,
-		Version:    "fixture",
 	}, native)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +42,6 @@ func legacyFacts(t *testing.T, candidate commonprovider.ProfileCandidate) json.R
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
 		Executable: candidate.Inspection.Executable,
 		SHA256:     candidate.Inspection.ExecutableSHA256,
-		Version:    "fixture",
 	}, json.RawMessage(`{"forwarded_flags_verified":true}`))
 	if err != nil {
 		t.Fatal(err)

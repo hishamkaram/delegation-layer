@@ -92,7 +92,7 @@ func evaluateWriteTrace(t *testing.T, v predicate.Interpreter, lines []string) (
 
 func TestAttributedCompletionPublishesPrincipalAnswerFromNativeFollowUpTrace(t *testing.T) {
 	interpretation, answer := evaluateWriteTrace(t, NewWorkspaceWriteInterpreter(), nativeFollowUpTrace())
-	if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText || len(interpretation.Diagnostics) != 0 {
+	if interpretation.Verdict != task.VerdictCommitted || answer != expectedResponses(t, nativeFollowUpTrace()) || len(interpretation.Diagnostics) != 0 {
 		t.Fatalf("interpretation=%+v answer=%q", interpretation, answer)
 	}
 	if interpretation.Session == nil || *interpretation.Session != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) {
@@ -127,7 +127,7 @@ func TestPreAttributionRevisionStillRejectsNativeFollowUpTrace(t *testing.T) {
 			t.Fatalf("%s pre-attribution replay changed: %+v answer=%q", mode, interpretation, answer)
 		}
 		current, currentAnswer := evaluateWriteTrace(t, NewInterpreter(mode), lines)
-		if current.Verdict != task.VerdictCommitted || currentAnswer != tracePrincipalText {
+		if current.Verdict != task.VerdictCommitted || currentAnswer != expectedResponses(t, lines) {
 			t.Fatalf("%s attributed interpretation=%+v answer=%q", mode, current, currentAnswer)
 		}
 	}
@@ -148,7 +148,7 @@ func TestAttributedRecoveryReassessesPreAttributionSealWithoutRewriting(t *testi
 	input := predicate.Input{Seal: claudeTestSealForPredicate(stdout, source), ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
 	var answer bytes.Buffer
 	interpretation, err := recovery.Recover(input, &claudeTestEvidence{stdout: stdout}, &answer)
-	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != tracePrincipalText {
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != expectedResponses(t, nativeFollowUpTrace()) {
 		t.Fatalf("recovery interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
 	}
 	if !input.Seal.Predicate.Equal(source) || !bytes.Equal(stdout, original) {
@@ -227,7 +227,11 @@ func requireRevisionVerdicts(t *testing.T, lines func() []string, want, advisory
 		interpretation, answer := evaluateWriteTrace(t, revision.interpreter, lines())
 		version := revision.interpreter.Reference().Version
 		if revision.want == committedPrincipal {
-			if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
+			wantAnswer := tracePrincipalText
+			if revision.interpreter.Reference().Equal(WorkspaceWriteReference()) {
+				wantAnswer = expectedResponses(t, lines())
+			}
+			if interpretation.Verdict != task.VerdictCommitted || answer != wantAnswer {
 				t.Fatalf("%s interpretation=%+v answer=%q", version, interpretation, answer)
 			}
 			continue
@@ -267,7 +271,7 @@ func TestAttributedCompletionAcceptsSingleAndBatchedResults(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			interpretation, answer := evaluateWriteTrace(t, NewWorkspaceWriteInterpreter(), test.lines)
-			if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
+			if interpretation.Verdict != task.VerdictCommitted || answer != expectedResponses(t, test.lines) {
 				t.Fatalf("interpretation=%+v answer=%q", interpretation, answer)
 			}
 		})
@@ -345,7 +349,7 @@ func TestEmptyFollowUpsSettleOnlyAsZeroTurnBatchAcknowledgements(t *testing.T) {
 func TestFollowUpUsageFaultsWarnWithoutReplacingPrincipalAnswer(t *testing.T) {
 	badUsage := strings.Replace(attributedResultLine("x", notificationAttribution(2), 1, "0.5157"), `"usage":{"input_tokens":12,"output_tokens":8}`, `"usage":"unavailable"`, 1)
 	interpretation, answer := evaluateWriteTrace(t, NewWorkspaceWriteInterpreter(), withTraceLine(traceSecondFollowUp, badUsage)(nativeFollowUpTrace()))
-	if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText || len(interpretation.Diagnostics) != 1 || interpretation.Diagnostics[0].Code != "optional_usage_unavailable" {
+	if interpretation.Verdict != task.VerdictCommitted || answer != expectedResponses(t, withTraceLine(traceSecondFollowUp, badUsage)(nativeFollowUpTrace())) || len(interpretation.Diagnostics) != 1 || interpretation.Diagnostics[0].Code != "optional_usage_unavailable" {
 		t.Fatalf("interpretation=%+v answer=%q", interpretation, answer)
 	}
 	for _, usage := range interpretation.Usage {
@@ -382,7 +386,7 @@ func TestAttributedContractVersionsCompletionPolicy(t *testing.T) {
 			t.Fatalf("pre-attribution digest changed: %+v want=%s", test.ref, test.want)
 		}
 	}
-	if ReferenceForMode(Mode).Version != "native-permissions-v5" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v6" ||
+	if ReferenceForMode(Mode).Version != "native-permissions-v6" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v7" ||
 		scopedReference(Mode).Version != "native-permissions-v4" || scopedReference(WorkspaceWriteMode).Version != "native-permissions-v5" {
 		t.Fatalf("attributed versions=%+v %+v", ReferenceForMode(Mode), ReferenceForMode(WorkspaceWriteMode))
 	}
@@ -428,7 +432,7 @@ func requireFrozenReconstruction(t *testing.T, request task.TaskRecord, currentR
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: fresh.Inspection.Executable, SHA256: fresh.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: fresh.Inspection.Executable, SHA256: fresh.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

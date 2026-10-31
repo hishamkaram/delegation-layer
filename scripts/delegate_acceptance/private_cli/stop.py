@@ -4,6 +4,7 @@ from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_B
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_TASK_BUDGET
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_TASK_COUNT
+from scripts.delegate_acceptance.lifetime.identity import _lifetime_record_name
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
@@ -11,6 +12,9 @@ from pathlib import Path
 from scripts.delegate_acceptance.private_cli.admission import await_created_task_ended
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
+from scripts.delegate_acceptance.private_cli.stop_policy import budget_closure_evidence
+from scripts.delegate_acceptance.private_cli.stop_policy import budget_closure_watch_seconds
+from scripts.delegate_acceptance.private_cli.stop_policy import budget_deadline_ns
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_closure_evidence
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_dispatch_evidence
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_lease_evidence
@@ -35,6 +39,7 @@ def default_stop_live_lease(client, config, env, state, response, waiter_directo
         client, config, env, label, "Running", phase="default-stop-observation", capture_root=capture_root
     )
     deadline = time.monotonic() + 30
+    termination = state / "tasks" / task_id / "lifetime" / _lifetime_record_name("task", "termination")
     while True:
         specifications = lease_candidate_specifications(
             capacity_lease_specifications(state, [response], waiter_directory, lease_nonce)
@@ -49,6 +54,9 @@ def default_stop_live_lease(client, config, env, state, response, waiter_directo
                 cohort,
                 {"observed_at_unix_ns": lease_observed, "acquire_elapsed_ns": max(0, lease_observed - lease_started)},
             )
+        # Presence only: a failure observation, never closure or success authority.
+        if termination.exists() or termination.is_symlink():
+            raise RuntimeError("termination record appeared before live lease: " + task_id)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RuntimeError(
@@ -75,7 +83,7 @@ def run_default_stop_acceptance(
     *,
     capture_root,
 ):
-    """Exercise default user-stop and sub-second budget termination on live fixtures."""
+    """Exercise default user-stop and finite-budget termination on live fixtures."""
     waiting_brief = brief.with_name("default-stop-waiting-brief.md")
     waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
     waiting_brief.chmod(0o600)
@@ -187,11 +195,16 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
         run_receipt.increment("admitted_task_count")
         return response
 
-    def close_task(response, cause, status_receipt, expected_user_stop=None):
+    def close_task(response, cause, status_receipt, expected_user_stop=None, *, closure_watch=30, budget_deadline=None):
+        # The watch is only an upper bound; canonical closure alone grants success or cleanup authority.
         task_id = response["task_id"]
-        closure = await_managed_lifetime_closure(state, (task_id,), timeout=30)
+        closure = await_managed_lifetime_closure(state, (task_id,), timeout=closure_watch)
         task_closure = closure.get("tasks", {}).get(task_id)
-        closure_evidence = default_stop_closure_evidence(task_closure, task_id, cause)
+        closure_evidence = (
+            budget_closure_evidence(task_closure, task_id, budget_deadline)
+            if budget_deadline is not None
+            else default_stop_closure_evidence(task_closure, task_id, cause)
+        )
         status, queue_observation = await_created_task_ended(
             delegate,
             state,
@@ -308,8 +321,15 @@ def _prove_default_budget_stop(
     )
     run_receipt.update_counts(running_task_count=1, live_lease_count=1)
     with budget_cohort:
+        # Computed once from the recorded deadline; policy errors stay inside the cohort so release scope holds.
+        recorded_deadline = budget_specification["deadline"]
+        deadline_ns = budget_deadline_ns(recorded_deadline, budget_lease["observed_at_unix_ns"], budget_task_id)
         budget_status, budget_closure, budget_queue_observation = close_task(
-            budget_dispatch, "budget", "status-default-stop-budget.json"
+            budget_dispatch,
+            "budget",
+            "status-default-stop-budget.json",
+            closure_watch=budget_closure_watch_seconds(deadline_ns, time.time_ns()),
+            budget_deadline=recorded_deadline,
         )
         budget_row = default_stop_status_row(budget_status, "budget")
         if budget_row.get("cause") != "budget" or budget_row.get("terminated") is not True:

@@ -18,7 +18,6 @@ from scripts import native_acceptance_evidence as evidence
 from scripts import test_native_acceptance_evidence as evidence_tests
 from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
 from scripts.delegate_acceptance.native.constants import PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO
-from scripts.delegate_acceptance.native_evidence import public_contract
 from scripts.delegate_acceptance.native_evidence import supplemental
 from scripts.delegate_acceptance.native_evidence.contract import EXPECTED_CASES, EvidenceError
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
@@ -208,7 +207,6 @@ class SupplementalValidationTests(unittest.TestCase):
         rows = supplemental.supplemental_cases()
         self.assertEqual(len(rows), 12)
         self.assertEqual(len(EXPECTED_CASES), 17)
-        self.assertEqual(public_contract.CASE_IDS, tuple(case.case_id for case in EXPECTED_CASES))
         self.assertTrue(set(rows) <= set(EXPECTED_CASES))
         self.assertEqual({(case.permission, case.scenario) for case in rows},
                          {("workspace-write", "write"), ("read-only", "read-only")})

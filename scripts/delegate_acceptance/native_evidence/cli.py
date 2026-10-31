@@ -20,9 +20,6 @@ from .contract import (
 from .directories import (
     prepare_case_directory,
 )
-from .staging import (
-    stage_evidence,
-)
 from .validation import (
     validate_aggregate_receipt,
 )
@@ -47,13 +44,6 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--receipt", required=True)
     validate.add_argument("--tag")
     validate.add_argument("--source-revision")
-    stage = commands.add_parser("stage")
-    stage.add_argument("--aggregate-receipt", required=True)
-    stage.add_argument("--output", required=True)
-    stage.add_argument("--archive-receipt")
-    stage.add_argument("--native-receipt")
-    stage.add_argument("--tag")
-    stage.add_argument("--source-revision")
     return parser
 
 
@@ -82,20 +72,6 @@ def _command(argv: list[str]) -> int:
             "status": value["status"], "case_count": value["case_count"],
             "sha256": digest,
         }, sort_keys=True))
-        return 0
-    if args.command == "stage":
-        source_revision = _parse_optional_revision(
-            args.source_revision if args.source_revision is not None
-            else os.environ.get("DELEGATE_ACCEPTANCE_SOURCE_REVISION"),
-        )
-        manifest = stage_evidence(
-            Path(args.aggregate_receipt), Path(args.output),
-            archive_receipt=Path(args.archive_receipt) if args.archive_receipt else None,
-            native_receipt=Path(args.native_receipt) if args.native_receipt else None,
-            expected_tag=args.tag or os.environ.get("DELEGATE_ACCEPTANCE_TAG") or None,
-            expected_source_revision=source_revision,
-        )
-        print(json.dumps({"output": str(Path(args.output).absolute()), **manifest}, sort_keys=True))
         return 0
     root = Path(args.aggregate_root).absolute()
     matrix = Path(args.matrix).absolute() if args.matrix else root / CASE_MATRIX_NAME

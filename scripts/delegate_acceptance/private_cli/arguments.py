@@ -11,6 +11,8 @@ from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_S
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_TASK_COUNT
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_TASK_COUNT
 from scripts.delegate_acceptance.private_cli.configuration import SUPERVISOR_UPGRADE_RECOVERY_SCENARIO
 from scripts.delegate_acceptance.private_cli.contention_policy import (
     MODERN_CONTENTION_SCENARIO, MODERN_CONTENTION_TASK_COUNT,
@@ -32,6 +34,7 @@ def parse_arguments():
             "capacity",
             DEFAULT_STOP_SCENARIO,
             EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+            EXTERNAL_NOEXEC_STATE_SCENARIO,
             SUPERVISOR_UPGRADE_RECOVERY_SCENARIO,
             MODERN_CONTENTION_SCENARIO,
         ),
@@ -46,7 +49,14 @@ def parse_arguments():
     parser.add_argument(
         "--runtime-only", action="store_true", help="exercise a root without a legacy model-discovery group journal"
     )
+    parser.add_argument(
+        "--noexec-state-parent", type=Path, help="caller-owned noexec directory that holds the scenario state root"
+    )
     args = parser.parse_args()
+    if (args.noexec_state_parent is not None) != (args.scenario == EXTERNAL_NOEXEC_STATE_SCENARIO):
+        parser.error(
+            "--noexec-state-parent is required by, and only valid for, --scenario %s" % EXTERNAL_NOEXEC_STATE_SCENARIO
+        )
     if args.scenario == MODERN_CONTENTION_SCENARIO:
         if (args.parallel_tasks != MODERN_CONTENTION_TASK_COUNT
                 or args.upgraded_delegate is None or args.upgraded_runner is None):
@@ -76,6 +86,8 @@ def parse_arguments():
             parser.error(
                 "--scenario %s does not accept upgraded installation arguments" % EXTERNAL_INSPECTION_HANDOFF_SCENARIO
             )
+    elif args.scenario == EXTERNAL_NOEXEC_STATE_SCENARIO:
+        _validate_noexec_state_arguments(args, parser)
     elif args.scenario == SUPERVISOR_UPGRADE_RECOVERY_SCENARIO:
         if args.parallel_tasks != 2 or args.runtime_only or args.upgraded_delegate or args.upgraded_runner:
             parser.error("supervisor-upgrade-recovery requires two tasks and the current packaged installation")
@@ -85,6 +97,19 @@ def parse_arguments():
         parser.error("--dispatch-workers must be positive")
     dispatch_workers = min(args.parallel_tasks, args.dispatch_workers or DEFAULT_DISPATCH_WORKERS)
     return args, dispatch_workers, parser
+
+
+def _validate_noexec_state_arguments(args, parser):
+    if args.parallel_tasks != EXTERNAL_NOEXEC_STATE_TASK_COUNT:
+        parser.error(
+            "--parallel-tasks must be exactly %d for the %s scenario"
+            % (EXTERNAL_NOEXEC_STATE_TASK_COUNT, EXTERNAL_NOEXEC_STATE_SCENARIO)
+        )
+    if args.runtime_only or args.upgraded_delegate is not None or args.upgraded_runner is not None:
+        parser.error(
+            "--scenario %s requires an inspection journal and the current installation only"
+            % EXTERNAL_NOEXEC_STATE_SCENARIO
+        )
 
 
 def prepare_receipt(args, dispatch_workers, parser):

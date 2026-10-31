@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import posixpath
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.limits import MAX_CONTROL_BYTES
@@ -56,6 +57,35 @@ def _validate_lifetime_intent(
     return scope_kind, assurance, intent_created
 
 
+CUSTODY_PLACEMENT_FIELDS = frozenset({"version", "pool_root", "pool_id"})
+CUSTODY_PLACEMENT_VERSION = 1
+
+
+def validate_custody_placement(placement: object, label: str) -> dict[str, object]:
+    """Check an optional registration's custody placement against Go's lexical contract.
+
+    Mirrors task.ValidateLifetimeCustodyPlacement: exactly the three keys, integer
+    version 1, a nonblank NUL-free absolute path that is already clean (Go's
+    IsCanonicalCwd), and a 64-lowercase-hex pool id. It never consults the
+    filesystem, so a pool that no longer exists is still a valid observation.
+    """
+    require(isinstance(placement, dict), f"{label} is not an object")
+    _exact_keys(placement, CUSTODY_PLACEMENT_FIELDS, label=label)
+    require(type(placement["version"]) is int and placement["version"] == CUSTODY_PLACEMENT_VERSION,
+            f"{label} version is unsupported")
+    pool_root = placement["pool_root"]
+    require(isinstance(pool_root, str), f"{label} pool root is not text")
+    require(_clean_absolute_path(pool_root), f"{label} pool root is not a clean absolute path")
+    require(_hex_digest(placement["pool_id"]), f"{label} pool id is not 64 lowercase hex")
+    return placement
+
+
+def _clean_absolute_path(value: str) -> bool:
+    # Go's filepath.Clean keeps one leading slash where POSIX normpath keeps two.
+    return ("\x00" not in value and value.startswith("/") and not value.startswith("//") and
+            posixpath.normpath(value) == value)
+
+
 def _validate_lifetime_registration(
         *, assurance: str,
         evidence: str,
@@ -73,7 +103,11 @@ def _validate_lifetime_registration(
     _exact_keys(registration, {
         "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
         "scope_kind", "assurance", "scope_id", "boot_id", "deadline", "created_at",
-    }, label=f"{evidence} lifetime registration for {task}")
+    }, {"custody_placement"}, label=f"{evidence} lifetime registration for {task}")
+    if "custody_placement" in registration:
+        # The generic Go control-store record carries a placement for any owner kind.
+        validate_custody_placement(
+            registration["custody_placement"], f"{evidence} lifetime registration custody placement for {task}")
     require(type(registration.get("schema_version")) is int and
             registration["schema_version"] == 1 and
             registration.get("root_id") == root and registration.get("task_id") == task and

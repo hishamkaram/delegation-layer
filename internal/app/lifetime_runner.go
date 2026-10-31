@@ -14,6 +14,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -25,13 +27,21 @@ import (
 const lifetimeChildFD = 3
 
 type lifetimeGuardianRunState struct {
-	ownerKind      string
-	records        guardian.Records
-	acquireOwner   func(context.Context) (guardian.Owner, error)
-	reconcileOwned func(context.Context) error
-	userStop       func() (bool, error)
-	deadline       time.Time
-	closeOwner     func() error
+	ownerKind string
+	records   guardian.Records
+	// closure reads the same journal family for the post-run custody release.
+	// Workspace runs leave it nil because they have no custody placement.
+	closure guardian.ClosureRecords
+	// privateSupervisor classifies the saved validated binding. An ordinary
+	// private run hands closed custody to the elected maintenance owner; a
+	// private inspection's release fault persists a full maintenance wake; an
+	// external one is retried by the next observer of the same records.
+	privateSupervisor bool
+	acquireOwner      func(context.Context) (guardian.Owner, error)
+	reconcileOwned    func(context.Context) error
+	userStop          func() (bool, error)
+	deadline          time.Time
+	closeOwner        func() error
 }
 
 func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) (lifetimeGuardianRunState, error) {
@@ -46,6 +56,8 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		}
 		state.ownerKind = task.LifetimeOwnerInspection
 		state.records = operation
+		state.closure = operation
+		state.privateSupervisor = pueue.IsPrivateConfig(store.Root, operation.Request().Binding.Supervisor.ConfigPath)
 		state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 			return operation.AcquireLifetimeOwner(ctx)
 		}
@@ -61,7 +73,7 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 	if err != nil {
 		return lifetimeGuardianRunState{}, err
 	}
-	req, _, preparedErr := td.PreparedRecords()
+	req, meta, preparedErr := td.PreparedRecords()
 	if preparedErr != nil {
 		return lifetimeGuardianRunState{}, errors.Join(preparedErr, td.Close())
 	}
@@ -69,6 +81,8 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		return lifetimeGuardianRunState{}, errors.Join(task.ErrEvidenceFault, td.Close())
 	}
 	state.records = td
+	state.closure = td
+	state.privateSupervisor = pueue.IsPrivateConfig(store.Root, meta.SupervisorConfig.ConfigPath)
 	state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 		return td.AcquireLifetimeOwner(ctx)
 	}
@@ -163,12 +177,27 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	if err != nil {
 		return err
 	}
-	guardianErr := runGuardianWithWorkspaceCompletion(lifetimeOwner, store, parsed, deps)
+	guardianErr := runGuardianWithWorkspaceCompletion(lifetimeOwner, state, store, parsed, deps)
 	return errors.Join(guardianErr, inheritedCloseErr)
 }
 
-func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
+func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state lifetimeGuardianRunState, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
 	guardianErr := lifetimeOwner.Run(context.Background())
+	if state.closure != nil {
+		// Act on whatever closure the run proved, even after a run error; a
+		// custody fault never replaces the guardian's own result. Any private
+		// recovery wake is durable before either return below. Only ordinary
+		// private custody moves to the elected maintenance owner, launched with
+		// the normalized executable and the captured scope.
+		if state.privateSupervisor && !parsed.Inspection {
+			options := supervisorcore.OptionsForEnvironment(deps.SupervisorOptions, deps.withCapturedEnvironment().Environment)
+			if err := handOffGuardianLifetimeCustody(store.Root, state.closure, options); err != nil {
+				log.Printf("delegate: lifetime custody handoff deferred: %v", err)
+			}
+		} else {
+			releaseGuardianLifetimeCustody(store.Root, state.closure, state.privateSupervisor)
+		}
+	}
 	if parsed.Inspection {
 		return guardianErr
 	}
@@ -257,4 +286,7 @@ var (
 	_ guardian.Records = (*taskdir.TaskDir)(nil)
 	_ guardian.Records = (*inspection.Operation)(nil)
 	_ guardian.Records = (*workspace.Operation)(nil)
+
+	_ guardian.ClosureRecords = (*taskdir.TaskDir)(nil)
+	_ guardian.ClosureRecords = (*inspection.Operation)(nil)
 )

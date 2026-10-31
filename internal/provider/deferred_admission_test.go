@@ -153,8 +153,9 @@ func TestPreparedProfileDeferredAdmissionRejectsInventedObservation(t *testing.T
 			},
 		},
 		{
-			name: "missing preflight digest",
+			name: "missing preflight digest with pending plan marker",
 			mutate: func(profile *PreparedProfile) {
+				profile.Plan.RuntimePreflightSHA256 = profile.RuntimePreflightSHA256
 				profile.RuntimePreflightSHA256 = ""
 			},
 		},
@@ -203,6 +204,29 @@ func TestPreparedProfileDeferredAdmissionRejectsInventedObservation(t *testing.T
 				t.Fatal("invalid pending profile was accepted")
 			}
 		})
+	}
+}
+
+// TestFinalizedProfileAcceptsPathOnlyObservation proves the observed version
+// and digest are optional: a completed preflight that observed only the
+// installed path validates, while a malformed present digest still refuses.
+func TestFinalizedProfileAcceptsPathOnlyObservation(t *testing.T) {
+	fixture := newDeferredAdmissionFixture(t)
+	profile := cloneCandidateProfile(fixture.finalized)
+	profile.ObservedVersion = ""
+	profile.Plan.ExecutableSHA256 = ""
+	profile.Plan.ProviderRuntime = task.ProviderRuntimeIdentity{Executable: profile.Plan.Executable}
+	if err := profile.Validate(fixture.request); err != nil {
+		t.Fatalf("path-only finalized profile was refused: %v", err)
+	}
+	pending := cloneCandidateProfile(fixture.pending)
+	pending.Plan.ExecutableSHA256 = ""
+	if err := pending.ValidateAdmission(fixture.request); err != nil {
+		t.Fatalf("pending profile without a provider digest was refused: %v", err)
+	}
+	pending.Plan.ExecutableSHA256 = "invalid"
+	if err := pending.ValidateAdmission(fixture.request); err == nil {
+		t.Fatal("malformed present provider digest was accepted")
 	}
 }
 

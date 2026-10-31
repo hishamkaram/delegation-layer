@@ -2,6 +2,7 @@ package admission
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestRuntimeInspectionBindingKeepsCapabilityContractAcrossIdentityRefresh(t *testing.T) {
@@ -70,7 +72,11 @@ func TestRuntimeInspectionBindingKeepsCapabilityContractAcrossIdentityRefresh(t 
 	}
 }
 
-func TestAdmissionRejectsCompletedRuntimeProofAfterIdentityDrift(t *testing.T) {
+// TestAdmissionReusesCompletedRuntimeProofAcrossProviderUpdate replaces the
+// retired provider identity drift rejection. A completed capability proof is
+// historical evidence: a provider-only change keeps the same journal unchanged
+// and never reruns it, while a changed worker identity is still refused.
+func TestAdmissionReusesCompletedRuntimeProofAcrossProviderUpdate(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	supervisor, _ := supervisorfixture.NewBlockingSupervisor(t, store.RootID)
@@ -85,8 +91,39 @@ func TestAdmissionRejectsCompletedRuntimeProofAfterIdentityDrift(t *testing.T) {
 		Environment:        []string{"LANG=C"},
 		Supervisor:         supervisor.Binding(),
 	}
+	proof := completeRuntimeOperation(t, store, request, oldBinding)
+	currentBinding := oldBinding
+	currentBinding.DefinitionSHA256 = strings.Repeat("e", 64)
+	currentBinding.HelperExecutable = "/opt/provider/next/provider"
+	currentBinding.HelperSHA256 = ""
+	replayed, err := OpenInspectionOperationContext(t.Context(), store, request, currentBinding, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("completed proof was refused after a provider-only change: %v", err)
+	}
+	replayedProof, err := replayed.ReadProofContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(replayed.Request().Binding, oldBinding) || string(replayedProof) != string(proof) {
+		t.Fatalf("completed proof was rewritten: binding=%+v", replayed.Request().Binding)
+	}
+	if err = replayed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	workerChanged := currentBinding
+	workerChanged.WorkerSHA256 = strings.Repeat("f", 64)
+	refused, err := OpenInspectionOperationContext(t.Context(), store, request, workerChanged, time.Now().UTC())
+	if refused != nil || !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("completed proof crossed a worker identity change: operation=%v err=%v", refused, err)
+	}
+}
+
+// completeRuntimeOperation records one completed admission inspection for
+// binding and returns its sealed proof.
+func completeRuntimeOperation(t *testing.T, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding) json.RawMessage {
+	t.Helper()
 	openedAt := time.Now().UTC()
-	operation, err := inspection.OpenOperation(store, request, oldBinding, openedAt)
+	operation, err := inspection.OpenOperation(store, request, binding, openedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,20 +150,14 @@ func TestAdmissionRejectsCompletedRuntimeProofAfterIdentityDrift(t *testing.T) {
 	if err = operation.RecordWorkerSuccess(17); err != nil {
 		t.Fatal(err)
 	}
-	currentBinding := oldBinding
-	currentBinding.DefinitionSHA256 = strings.Repeat("e", 64)
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err = rejectCompletedRuntimeIdentityDrift(canceled, operation, oldBinding, currentBinding); !errors.Is(err, context.Canceled) {
-		t.Fatalf("runtime drift check discarded caller cancellation: %v", err)
+	proof, err := operation.ReadProofContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := OpenInspectionOperationContext(t.Context(), store, request, currentBinding, time.Now().UTC())
-	if replayed != nil || !errors.Is(err, task.ErrEvidenceFault) {
-		t.Fatalf("completed runtime proof crossed identity drift: operation=%v err=%v", replayed, err)
-	}
+	return proof
 }
 
 func TestAdmissionReplayReprobesIncompleteMarkerlessRuntimeAfterRefresh(t *testing.T) {

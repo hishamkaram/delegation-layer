@@ -58,7 +58,7 @@ case "${3-}" in
     if [ "${4-}" = "--help" ]; then
       printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
     else
-      if [ "${FAKE_ENQUEUE_DELAY:-}" != "" ]; then sleep "$FAKE_ENQUEUE_DELAY"; fi
+      if [ "${FAKE_ENQUEUE_GATE:-}" != "" ]; then while [ ! -f "$FAKE_ENQUEUE_GATE" ]; do sleep 0.01; done; elif [ "${FAKE_ENQUEUE_DELAY:-}" != "" ]; then sleep "$FAKE_ENQUEUE_DELAY"; fi
       case "$mode" in
         enqueue-refuse) printf '%s\n' 'refused' >&2; exit 7 ;;
         *) exit 0 ;;

@@ -669,7 +669,7 @@ def run_prepared_modern_contention(
         lifetime.env,
         state=installed.state,
         task_ids=tuple(lifetime.attempted_task_ids),
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
     )
     run_receipt.add_details(modern_binary_contention=evidence)
     run_receipt.update_counts(

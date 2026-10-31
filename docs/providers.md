@@ -66,64 +66,85 @@ format changes do not become false admission failures.
 
 ## Shared compatibility behavior
 
-Before a task is admitted, the selected adapter resolves a canonical regular
-executable and records its static identity and required capability contract.
-For managed runtime-only tasks, admission records that runtime verification is
-pending. The task's supervised runner performs the runtime probe before the
-provider task starts:
+Delegation Layer runs the provider CLI the user installed, as a normal process
+under its existing supervision. The CLI, its updates, accounts, settings,
+extensions, and native sessions belong to the provider and the user; the
+[product boundary](../agents/_data/product-boundary.md) owns that division.
+Delegation Layer does not hash, copy, hard-link, mirror, or pin provider
+executables, and it keeps no provider release or version allowlist.
 
-1. invokes the provider-declared version command (defaulting to `--version`)
-   and accepts any nonempty, valid
-   reported version that fits the bounded durable evidence record;
-2. invokes the provider help command, including any profile-specific subcommand;
-3. checks the stable public flags declared by the adapter; and
-4. fingerprints the executable again before the profile is finalized.
+Before a task is admitted, the selected adapter resolves a regular executable
+and records its path and required capability contract. For managed runtime-only
+tasks, admission records that runtime verification is pending. The task's
+supervised runner performs the runtime probe before the provider task starts:
 
-This detects missing commands, non-executable files, and incompatible flag
-changes without pinning a release number or binary hash. A reported version
-is valid when it is trimmed nonempty UTF-8 text without control characters and
-fits the bounded durable evidence record; no semantic-version pattern is
-required. A newer provider build is accepted when it preserves the command
-capabilities the adapter needs.
+1. invokes the provider help command, including any profile-specific
+   subcommand; and
+2. checks the stable public flags declared by the adapter.
 
-The runner uses a fresh inspection result to build the launch plan it will
-actually execute. A provider can be upgraded or relinked between admission and
-launch when the new executable passes the current capability probe. The task's
-requested mode, policy, workspace, writable roots, predicate, environment
-contract, and input/output declarations remain immutable and are still matched
-exactly before the process starts. The final executable, observed version, and
-digest are recorded in the started and sealed task evidence.
+There is no standalone version command and no executable fingerprint. The probe
+detects missing commands, non-executable files, and incompatible flag changes
+without pinning a release number or binary hash. A newer provider build is
+accepted when it preserves the command capabilities the adapter needs.
+
+The runner resolves the installed CLI in the authorized lookup environment saved
+with the task, then builds the launch from that fresh observation. The
+observer's ambient `PATH` and an older absolute path recorded in the admission
+metadata are not authority: a provider can be upgraded, relinked, or moved
+between admission and launch when the current CLI passes the probe. The task's
+requested provider, model, effort, native permission mode, workspace, writable
+roots, predicate, environment contract, and input/output declarations remain
+immutable and are still matched exactly before the process starts. The resolved
+executable path is recorded in the started and sealed task evidence.
+
+Delegation Layer does not promise that the bytes it probed are the bytes the
+operating system executes. A provider update between the probe and the process
+start can be observed inconsistently or surface as an operating-system or
+provider error. That error is reported as it happened; the launch permit is
+already consumed, so there is no automatic retry, fallback executable, or fresh
+session.
+
+A reported version is an optional diagnostic and never a readiness condition.
+The current runtime probe records only the resolved executable path. Its version
+and SHA-256 members remain empty; it does not extract version text from help or
+protocol output. A required exchange that actually fails, times out, or exceeds
+its capture bound is still an error. Evidence written by earlier releases can
+carry a populated version or executable SHA-256. A present value is validated like any other recorded field,
+and malformed evidence is still rejected. A valid old observation is history
+only: it does not pin the current installed provider and never authorizes a
+launch.
 
 Native policy projections, custom runners, and historical tasks retain their
 admission inspection requirements. Runtime-only tasks do not share capability
 observations: every task's fresh preflight is required, even when unchanged
-launcher bytes load an updated runtime payload.
+launcher bytes load an updated runtime payload. Digests that Delegation Layer
+owns, such as the capability contract, task and artifact evidence, and the
+release, worker, and bundled supervisor identities, are unchanged.
 
 The same compatibility rule applies to the private Pueue boundary: delegate
 checks the required queue behavior and fields, accepts nonempty observed Pueue
 version output and additive status fields, and keeps the bundled artifact pin
 only for reproducible packaging.
 
-The observed version is descriptive evidence stored with the task. It does not
-authorize a release by itself, and Delegation Layer does not query a web release
-list or maintain a semver allowlist. The version-size bound is a durable-record
-safety limit, not a release compatibility check; an observation that exceeds it
-is rejected before provider execution. Terminal launch evidence
-uses the same bound so publication remains durable. The inspection definition and
-executable digest bind each capability result to the checked command. The runner
-checks the current runtime before launch. Probe failures expose only a bounded reason
-class, such as a missing required flag or executable identity drift, and never
-provider output or process diagnostics.
+The observed path and any version are local task observations, not provider
+attestation, and Delegation Layer does not query a web release list. The
+version-size bound is a durable-record safety limit, not a release
+compatibility check. The inspection definition and capability digest bind each
+capability result to the checked command. The runner checks the current runtime
+before launch. Probe failures expose only a bounded reason class, such as a
+missing required flag or an unusable executable, and never provider output or
+process diagnostics.
 
 The probe does not replace provider behavior validation. Each adapter still
 requires its expected output shape, task and session identity, authentication
 result, and output artifact integrity. The recorded effective configuration binds
-the selected native mode and executable, not the contents of provider settings.
+the selected native mode and executable path, not the contents of provider
+settings.
 
 When dispatch returns a capability projection, `status: "ready"` means the
-shared probe observed the required behavior and executable identity for that
-admission boundary. A live acceptance receipt remains separate: authenticated
-proof is `passed`, and unavailable authentication is `blocked` and neutral.
+shared probe observed the required behavior at that admission boundary. A live
+acceptance receipt remains separate: authenticated proof is `passed`, and
+unavailable authentication is `blocked` and neutral.
 
 ## Live acceptance
 
@@ -257,11 +278,21 @@ the exact recorded provider session.
 
 Claude can finish background work after the caller's turn and answer each
 completion with a synthetic follow-up turn in the same invocation. The
-published answer is the first result, which must answer the caller's turn: its
+principal result must answer the caller's turn: its
 `origin` is absent or `human`. Later results are accepted only when every
 result carries consecutive `result_index` values and each later result has
-`origin.kind` `task-notification` without a `subkind`. Follow-up answers are
-never published. A failed caller result stays rejected. A failed follow-up, a
+`origin.kind` `task-notification` without a `subkind`. The new ordinary
+completion contract publishes the principal plus every accepted nonempty root
+follow-up answer in native index order. Without an answer-bearing follow-up,
+the principal payload remains byte-exact. With follow-ups, presentation begins
+with `[delegate responses v1]` and a newline. Each section has the header
+`[delegate response result_index=N origin=caller|task-notification bytes=K]`,
+a newline, exactly K decoded UTF-8 bytes, and a newline separator. Original
+indexes, identical bodies, whitespace, and trailing newlines are preserved.
+Lengths delimit bodies even if they contain forged headers; the prefix alone
+is not machine authority, because an ordinary single answer can contain it.
+Empty acknowledgements and nested assistant text are not sections. The whole
+stream is validated before projection; later failure rejects the entire payload. A failed caller result stays rejected. A failed follow-up, a
 repeated `system/init` with a different session or permission mode, another
 origin such as a scheduled trigger or peer message, a missing or duplicate
 counter, or an unfinished follow-up at EOF also rejects. On every result,
@@ -277,6 +308,25 @@ only as a coalesced batch acknowledgement with `num_turns` `0`, and a later
 non-empty follow-up must answer that batch before EOF. Main-agent usage comes
 from the caller's result; the cumulative cost comes from the last accepted
 result and is never summed.
+
+The new ordinary revisions, including the new CCR revisions, also classify the
+documented failed final request, a result with `subtype` `success` and
+`is_error` `true`, as a provider failure instead of malformed output; it still
+rejects and is never published. When the latest same-session
+`rate_limit_event` after `system/init` has a `rate_limit_info` object whose
+`status` is exactly `rejected`, and the next root result is that failed request
+with `terminal_reason` `api_error`, the rejection reports diagnostic
+`provider_quota_exhausted` with field `rate_limit_info` and the fixed message
+"Claude reported that its usage quota was exhausted." The diagnostic never
+includes the reset time, window, overage reason, or provider error text. Each
+root result resets the correlation, so an earlier rejection never describes a
+later failure. A warning status, any other or unknown status, or an absent,
+null, mistyped, or ambiguous `rate_limit_info` never rejects a stream by itself
+and leaves the generic `provider_failed` diagnostic. A capture fault, malformed
+stream, or identity mismatch never reports a quota. The quota diagnostic does
+not add a retry, a CLI flag, or a task schema field. The current interactive
+revision applies the same rules. Frozen revisions, including `interactive-v6`,
+keep their recorded diagnostics.
 
 A resumed session can also answer old background completions before it
 reaches the caller's turn, with leading acknowledgements: results with
@@ -311,8 +361,13 @@ batch, is never an answer, and does not affect accounting. Any other value
 (empty, blank, oversized, not a string, or a case-aliased key) is malformed, before
 or after the caller's result. The id itself is opaque and is not tracked.
 
-The current `claude:print` revisions are read-only `native-permissions-v5`
-and workspace-write `native-permissions-v6`. They use an advisory wire:
+The new ordinary `claude:print` revisions are read-only `native-permissions-v6`
+and workspace-write `native-permissions-v7`. These source contracts require a
+new build; they do not describe an already installed binary. The retained
+advisory read-only `native-permissions-v5` and workspace-write
+`native-permissions-v6` keep their exact principal-only replay behavior.
+Interactive tasks use the separate `interactive-v7` revision described below.
+All use an advisory wire:
 `session_id` and the native permission mode are the only `system/init`
 authority. Other init metadata, such as the CLI version, `cwd`, model, tools,
 and MCP servers, is advisory, is never defaulted, and may change on a repeated
@@ -329,7 +384,11 @@ the strict wire and the identical repeated-`system/init` rule they were sealed
 under. Each is replay-only and is never a fresh default. An offline recheck
 reassesses a scoped revision, like each other eligible earlier revision,
 directly under the current revision of its mode without changing the original
-outcome.
+outcome. The principal-only advisory revisions (read-only
+`native-permissions-v5`, workspace-write `native-permissions-v6`) are not
+recheck sources: the current revisions reject the same evidence they reject,
+so a recheck could only reject again. A rejected advisory task therefore keeps
+`stop_and_report` guidance.
 
 The retained unscoped revisions share those version strings and differ by
 digest: the read-only `native-permissions-v4` digest
@@ -340,6 +399,18 @@ admitted before message scope existed and treat every message after the
 caller's result as a root message. Each is replay-only, is never a fresh
 default, and is not a recheck source.
 
+The retained projection revisions share the current version strings
+(read-only `native-permissions-v6`, workspace-write `native-permissions-v7`) and
+differ by digest: read-only
+`d750a584e223e4c80f2cc165c6ee4cc6d7b664b26a740119671990c966cc36cb` and
+workspace-write
+`35853e32272b55b35b2276309ae7f57909d2d462ebed65b88e30f26f62616f11`. They were
+sealed before failed final requests and quota exhaustion were classified. They
+frame follow-up answers like the current revisions, but they keep a failed final
+request malformed and never report a quota. Each is replay-only, is never a fresh
+default, and is neither a recovery source nor a recovery target. A version and
+digest identify a recorded predicate; they do not pin a provider release.
+
 A new continuation task is distinct from reconstruction of its predecessor.
 The predecessor's task record, metadata, and launch plan are never modified and
 keep rebuilding under their recorded predicate, including each retained
@@ -347,8 +418,8 @@ digest above. In an ordinary noninteractive continuation, only the new
 successor task selects the current predicate of the same mode and launch shape,
 and only when the predecessor is a native print record sealed under the
 pre-attribution revision (read-only `native-permissions-v3`, workspace-write
-`native-permissions-v4`) or under the retained scoped or unscoped digest of its
-mode. Other records passed through this successor hook retain their recorded
+`native-permissions-v4`) or under the retained scoped, unscoped,
+principal-only advisory, or projection digest of its mode. Other records passed through this successor hook retain their recorded
 predicate. Interactive continuation instead builds the current interactive
 profile in the caller's current environment while preserving the exact recorded
 session. A successor takes its filtered launch values, writable roots, and
@@ -369,15 +440,29 @@ published interactive answer follows the same caller-result and message-scope
 rules; a nested agent's `tool_result` never resolves a root question. Input
 closure is sticky, but the stream completes only when the session is idle again
 with no unsettled agent, question, cycle, or batch. Follow-up turns that arrive
-after input closure remain evidence. `interactive-v6` is the current revision
-and applies the same advisory wire, repeated-`system/init`, and
-`unsupported-completion` rules as the current print revisions.
+after input closure remain evidence. `interactive-v7` is the current revision.
+It applies the same advisory wire, repeated-`system/init`,
+`unsupported-completion`, follow-up answer projection, failed-request, and
+quota-diagnostic rules as the new ordinary print revisions. The live
+completion reducer and the sealed predicate both use the reference recorded at
+admission. A follow-up that arrives after input closure is therefore part of
+the published answer when the stream settles. The source evidence is one native
+Claude 2.1.310 interactive workspace-write task sealed as `interactive-v6`. Its
+caller result (`result_index` 0) was published alone, and the later
+`task-notification` result (`result_index` 1) that carried the background
+output was left out. The `interactive-v7` regression fixtures follow the
+sanitized shape of that stream. They do not replay the provider's bytes.
+`interactive-v6` is retained for replay with its principal-only answer and
+recorded diagnostics; existing `interactive-v6` tasks keep that interpretation.
+An interactive continuation builds the current interactive profile, so a new
+continuation turn uses `interactive-v7`.
 `interactive-v5` is retained for replay under its scoped attribution and
 strict wire. `interactive-v4` is retained for replay under its unscoped
 attribution (every message after a result opens a follow-up cycle) and its
 original end-of-stream rule (input closure plus the principal result, with no
 idle re-check of the session). `interactive-v1` through `interactive-v5`
-recheck under `interactive-v6`. Public help checks do
+recheck under `interactive-v7`; the principal-only `interactive-v6` is not a
+recheck source for the same reason as the advisory print revisions. Public help checks do
 not prove the SDK control protocol; its initialization and structured events are
 validated during the task.
 
@@ -418,8 +503,7 @@ speaks JSON-RPC 2.0 over standard input and output. Fresh tasks record profile
 revision `opencode-acp-v1` and predicate `acp-v2`. The adapter passes no other
 argument. The process starts in the canonical workspace, and the workspace,
 agent, model, effort, and session travel in protocol requests. The runtime probe
-validates `opencode --version` and requires `opencode acp --help` to succeed;
-no ACP flag allowlist is required. Help proves no protocol
+requires `opencode acp --help` to succeed; no ACP flag allowlist is required. Help proves no protocol
 behavior, so every task validates the handshake, each configuration
 acknowledgement, and the terminal response.
 
@@ -535,17 +619,39 @@ that would change the recorded route. A historical modeled `--model` alias or
 provider-only record resolves the alias through the caller's configuration and
 does not promise a retained route.
 
+The CCR launch help projection records whether `--resume-route` is advertised.
+A route-preserving record requires it: if the installed CCR no longer
+advertises the flag, a continuation exits `2` with `failure.code:
+"provider_unavailable"`, `failure.reason_code:
+"provider_capability_changed"`, and `stop_and_report`, and a queued task is
+sealed as rejected without launching, with a refusal stating that the provider
+inspection facts changed after admission. A modeled record never uses the flag,
+so a CCR that gains it keeps the recorded modeled argv and predicate, for a
+queued task and a continuation alike; Delegate never switches a modeled record
+to the route launch. Admission and the stored inspection proof are not
+rewritten. Every other inspected change still refuses the queued task.
+
 CCR's foreground exit and sealed Claude stream must both indicate success.
-Fresh CCR tasks use the current `ccr-foreground-v6` revision, with the same
+The new CCR contracts use `ccr-foreground-v7` and `ccr-foreground-v7-modeled`,
+with the same
 advisory wire and Claude follow-up attribution rules as `claude:print`. The
-retained `ccr-foreground-v5` revision keeps its recorded multi-result
+retained read-only route-preserving `ccr-foreground-v7` projection revision
+shares the current version and differs by digest
+`c70936cf9a3b1a247ffd12403675dbc714bec8bb0a4179e85b6f348d918cf0cf`. It embeds
+Claude's projection contract, so it frames follow-up answers but keeps a failed
+final request malformed and never reports a quota. It is replay-only. No other
+mode or launch shape, including the modeled variant, has a projection revision.
+The retained `ccr-foreground-v6` and modeled variant keep their exact embedded
+Claude contract and principal-only replay; `ccr-foreground-v5` keeps its recorded multi-result
 interpretation under the scoped Claude attribution policy and strict wire;
 `ccr-foreground-v4` and earlier keep their recorded single-result
-interpretation. An ordinary exact-session continuation of a `v4` or `v5`
-predecessor selects the current `v6` revision of the same launch shape for
-the new task only. An offline recheck of a route-preserving
+interpretation. An ordinary exact-session continuation of a `v4`, `v5`, or `v6`
+predecessor, or of the read-only route-preserving projection `v7` predecessor,
+selects the current `v7` revision of the same launch shape for the new task
+only; the predecessor record stays unchanged. An offline recheck of a route-preserving
 revision uses the current route-preserving revision; modeled and older
-revisions use the current modeled revision.
+revisions use the current modeled revision. The principal-only `v6` and
+`v6-modeled` revisions and the projection `v7` revision are not recheck sources.
 CCR reserves exit status `77` for unavailable configured provider credentials.
 With an empty sealed stdout stream and no capture error, Delegate reports
 `authentication-unavailable`; it does not infer an HTTP status or repair the

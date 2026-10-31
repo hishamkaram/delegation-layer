@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,7 @@ func TestControlOwnerReturnsNaturalCommandResult(t *testing.T) {
 	command := exec.Command(executable)
 	command.Dir = filepath.Dir(executable)
 	pending := startControlOwnerTest(t, command, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "")
+	awaitControlOwnerTest(t, pending)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatalf("external owner result: %+v: %v", result, err)
@@ -87,6 +89,7 @@ func TestControlOwnerReturnsStatusSnapshot(t *testing.T) {
 	command := exec.Command(executable, payload)
 	command.Dir = filepath.Dir(executable)
 	pending := startControlOwnerTest(t, command, "cccccccccccccccccccccccccccccccc", FixtureVersion)
+	awaitControlOwnerTest(t, pending)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -117,9 +120,9 @@ func TestControlOwnerPreservesUnknownStatus(t *testing.T) {
 	executable := finiteExecutable(t, "cat \"$1\"")
 	command := exec.Command(executable, statusCaptureTestPayloadFile(t, data))
 	command.Dir = filepath.Dir(executable)
-	result, err := observeCommand(t.Context(), startControlOwnerTest(
-		t, command, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", FixtureVersion,
-	), 2*time.Second)
+	pending := startControlOwnerTest(t, command, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", FixtureVersion)
+	awaitControlOwnerTest(t, pending)
+	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +137,7 @@ func TestControlOwnerPreservesCompletedRefusal(t *testing.T) {
 	command := exec.Command(executable)
 	command.Dir = filepath.Dir(executable)
 	pending := startControlOwnerTest(t, command, "dddddddddddddddddddddddddddddddd", "")
+	awaitControlOwnerTest(t, pending)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err == nil || !completedExit(err) || result.ExitCode != 7 {
 		t.Fatalf("completed refusal = %+v, %v", result, err)
@@ -185,6 +189,62 @@ func TestControlOwnerAndGenerationLeaseSurviveCallerExit(t *testing.T) {
 	}
 }
 
+// TestControlOwnerTestHelperJoinsOwnerBeforeEarlierCleanup checks that
+// startControlOwnerTest joins the owner inside the calling test's lifetime:
+// after the release, which follows the subtest's context cancellation, and
+// before cleanups registered earlier, such as fixture directories. A helper
+// without the join still passes whenever completion wins the race to the
+// earlier cleanup, so this is not a deterministic mutation test. The parent
+// cleanup owns the release and the final reap on every path, and runs before
+// the fixture directories are removed.
+func TestControlOwnerTestHelperJoinsOwnerBeforeEarlierCleanup(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release")
+	var releaseErr error
+	releaseOnce := sync.OnceFunc(func() { releaseErr = os.WriteFile(release, []byte("release"), 0o600) })
+	// The release marker alone orders completion. The bounded poll count keeps
+	// the child finite when the release never appears; the interval is only
+	// cadence and does not bound wall-clock time.
+	const releasePollInterval = 20 * time.Millisecond
+	releasePolls := strconv.Itoa(int(controlOwnerTestStartupTimeout / releasePollInterval))
+	executable := finiteExecutable(t, "remaining=$2\nwhile [ ! -e \"$1\" ]; do\n\tif [ \"$remaining\" -le 0 ]; then exit 1; fi\n\tremaining=$((remaining - 1))\n\tsleep \"$3\"\ndone")
+	var pending *Pending
+	t.Cleanup(func() {
+		releaseOnce()
+		if releaseErr != nil {
+			t.Errorf("release owner fixture: %v", releaseErr)
+		}
+		if pending == nil {
+			return
+		}
+		if !awaitPendingNaturally(pending, controlOwnerTestStartupTimeout) {
+			t.Errorf("external control owner remained in flight %s after release", controlOwnerTestStartupTimeout)
+		}
+		<-pending.Done()
+	})
+	t.Run("owner", func(t *testing.T) {
+		t.Cleanup(func() {
+			if pending == nil {
+				return
+			}
+			select {
+			case <-pending.Done():
+			default:
+				t.Error("owner completion was not joined before an earlier cleanup")
+			}
+		})
+		context.AfterFunc(t.Context(), releaseOnce)
+		command := exec.Command(executable, release, releasePolls, strconv.FormatFloat(releasePollInterval.Seconds(), 'f', -1, 64))
+		command.Dir = filepath.Dir(executable)
+		pending = startControlOwnerTest(t, command, "acacacacacacacacacacacacacacacac", "")
+	})
+	if pending == nil {
+		return
+	}
+	if result, done := pending.Result(); !done || !result.Started || result.ExitCode != 0 || result.Err != nil {
+		t.Errorf("released owner result = %+v, done = %t", result, done)
+	}
+}
+
 func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVersion string) *Pending {
 	t.Helper()
 	started := make(chan struct{}, 1)
@@ -193,6 +253,16 @@ func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVer
 			started <- struct{}{}
 		}
 	}, statusVersion)
+	// The owner child is finite, so join its sole completion before earlier
+	// cleanups such as the fixture's TempDir run. The join cannot use t.Context,
+	// which is canceled before cleanups; the bounded wait only reports a stuck
+	// owner, and the package watchdog remains the last resort.
+	t.Cleanup(func() {
+		if !awaitPendingNaturally(pending, controlOwnerTestStartupTimeout) {
+			t.Errorf("external control owner remained in flight %s after the test ended", controlOwnerTestStartupTimeout)
+		}
+		<-pending.Done()
+	})
 	timer := time.NewTimer(controlOwnerTestStartupTimeout)
 	defer timer.Stop()
 	select {
@@ -207,6 +277,19 @@ func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVer
 	case <-timer.C:
 		t.Fatal("external control owner did not start the command")
 		return nil
+	}
+}
+
+// awaitControlOwnerTest is setup for tests that assert an owner's terminal
+// result. It waits for the canonical completion, so the caller's later
+// observation retrieves an already completed result; that observation no
+// longer measures completion latency. The guard only fails a stuck owner; it
+// does not judge the command's error, and startControlOwnerTest's cleanup still
+// joins the owner before teardown.
+func awaitControlOwnerTest(t *testing.T, pending *Pending) {
+	t.Helper()
+	if !awaitPendingNaturally(pending, controlOwnerTestStartupTimeout) {
+		t.Fatalf("external control owner did not complete within %s", controlOwnerTestStartupTimeout)
 	}
 }
 

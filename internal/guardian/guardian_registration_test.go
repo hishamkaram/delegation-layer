@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
@@ -289,7 +290,7 @@ func TestLifetimeGuardianRegistrationReadFailureRetainsScope(t *testing.T) {
 		func(options *Options) {
 			records := lifetimeGuardianTestRecordsFromOptions(t, options)
 			records.registrationErr = wantErr
-			records.registrationReadErr = wantReadErr
+			records.registrationReadErrAfterWrite = wantReadErr
 			options.FinalizationBackoff = func(ctx context.Context, _ time.Duration) error {
 				retryOnce.Do(func() { close(retryEntered) })
 				select {
@@ -342,7 +343,7 @@ func TestLifetimeGuardianMarkedRegistrationAbsenceRetainsScope(t *testing.T) {
 		func(options *Options) {
 			records := lifetimeGuardianTestRecordsFromOptions(t, options)
 			records.registrationErr = wantErr
-			records.registrationReadErr = wantReadErr
+			records.registrationReadErrAfterWrite = wantReadErr
 			options.FinalizationBackoff = func(ctx context.Context, _ time.Duration) error {
 				retryOnce.Do(func() { close(retryEntered) })
 				select {
@@ -639,56 +640,64 @@ func TestLifetimeGuardianWaitPublicationRetriesBeforeReleasingAuthority(t *testi
 }
 
 func TestLifetimeGuardianDeadlineRetriesTerminationBeforeWorkerWait(t *testing.T) {
-	f := newLifetimeGuardianTestFixtureWithOptions(
-		t,
-		nil,
-		lifetime.KindProcessGroup,
-		lifetime.AssuranceCooperative,
-		nil,
-		func(scope *lifetimeGuardianTestScope) {
-			scope.emptyResults = []bool{false, false, false, false, false, true}
-			scope.terminateErrors = []error{
-				lifetime.ErrUnverifiableLaunch,
-				lifetime.ErrUnverifiableLaunch,
-				nil,
-			}
-		},
-		func(options *Options) {
-			options.Deadline = time.Now().Add(500 * time.Millisecond)
-			options.Now = time.Now
-			options.CleanupTimeout = 100 * time.Millisecond
-		},
-	)
-	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
-	if err := f.waitForWorker(t); err != nil {
-		t.Fatal(err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		// The bubble's fake clock drives the 500ms deadline, the finalization
+		// retries and the cleanup budget; every channel, pipe and run context is
+		// created inside it. The scenario deadline is on that same clock.
+		start := time.Now()
+		f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+			t,
+			t.Context(),
+			start.Add(lifetimeGuardianScenarioBudget),
+			nil,
+			lifetime.KindProcessGroup,
+			lifetime.AssuranceCooperative,
+			nil,
+			func(scope *lifetimeGuardianTestScope) {
+				scope.emptyResults = []bool{false, false, false, false, false, true}
+				scope.terminateErrors = []error{
+					lifetime.ErrUnverifiableLaunch,
+					lifetime.ErrUnverifiableLaunch,
+					nil,
+				}
+			},
+			func(options *Options) {
+				options.Deadline = start.Add(500 * time.Millisecond)
+				options.Now = time.Now
+				options.CleanupTimeout = 100 * time.Millisecond
+			},
+		)
+		f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+		if err := f.waitForWorker(t); err != nil {
+			t.Fatal(err)
+		}
 
-	terminationDeadline := time.Now().Add(2 * time.Second)
-	for len(f.records.terminationCauses()) == 0 && time.Now().Before(terminationDeadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if causes := f.records.terminationCauses(); len(causes) != 1 || causes[0] != task.LifetimeTerminationBudget {
-		t.Fatalf("termination causes before worker release = %v, want [%s]", causes, task.LifetimeTerminationBudget)
-	}
-	if waits := f.records.recordedWorkerWaits(); len(waits) != 0 {
-		t.Fatalf("worker Wait was recorded before worker release: %+v", waits)
-	}
-	events := f.timeline.snapshot()
-	if timelineIndex(events, "worker-exited") >= 0 || timelineIndex(events, "scope-destroy") >= 0 || timelineIndex(events, "release") >= 0 {
-		t.Fatalf("guardian released worker or scope before exact Wait: %v", events)
-	}
-	empty, terminate, _ := f.scope.counts()
-	if empty != 6 || terminate != 3 {
-		t.Fatalf("deadline finalization calls empty=%d terminate=%d, want 6/3", empty, terminate)
-	}
+		terminationDeadline := time.Now().Add(2 * time.Second)
+		for len(f.records.terminationCauses()) == 0 && time.Now().Before(terminationDeadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if causes := f.records.terminationCauses(); len(causes) != 1 || causes[0] != task.LifetimeTerminationBudget {
+			t.Fatalf("termination causes before worker release = %v, want [%s]", causes, task.LifetimeTerminationBudget)
+		}
+		if waits := f.records.recordedWorkerWaits(); len(waits) != 0 {
+			t.Fatalf("worker Wait was recorded before worker release: %+v", waits)
+		}
+		events := f.timeline.snapshot()
+		if timelineIndex(events, "worker-exited") >= 0 || timelineIndex(events, "scope-destroy") >= 0 || timelineIndex(events, "release") >= 0 {
+			t.Fatalf("guardian released worker or scope before exact Wait: %v", events)
+		}
+		empty, terminate, _ := f.scope.counts()
+		if empty != 6 || terminate != 3 {
+			t.Fatalf("deadline finalization calls empty=%d terminate=%d, want 6/3", empty, terminate)
+		}
 
-	f.worker.release()
-	err := f.waitRun(t)
-	if !errors.Is(err, errLifetimeGuardianDeadline) {
-		t.Fatalf("Run error = %v, want deadline", err)
-	}
-	assertTimelineOrder(t, f.timeline.snapshot(), "termination-record", "worker-exited", "worker-wait-record", "scope-destroy", "scope-release", "release")
+		f.worker.release()
+		err := f.waitRun(t)
+		if !errors.Is(err, errLifetimeGuardianDeadline) {
+			t.Fatalf("Run error = %v, want deadline", err)
+		}
+		assertTimelineOrder(t, f.timeline.snapshot(), "termination-record", "worker-exited", "worker-wait-record", "scope-destroy", "scope-release", "release")
+	})
 }
 
 func TestReleaseLifetimeScopeRetriesTransientFailure(t *testing.T) {

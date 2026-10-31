@@ -21,6 +21,9 @@ const RuntimeInspectionRevision = contract.RuntimeInspectionRevision
 
 // RuntimeProbeDefinition is the data-only description of a provider CLI
 // capability probe. The inspection worker owns every process started from it.
+// ExecutableSHA256 is an optional historical observation and is never
+// verified. VersionArgs is stored contract data that keeps historical
+// definition and capability digests reconstructable; it is never executed.
 type RuntimeProbeDefinition struct {
 	Executable       string   `json:"executable"`
 	ExecutableSHA256 string   `json:"executable_sha256"`
@@ -104,7 +107,7 @@ func RuntimeInspectionContractDigest(definition InspectionDefinition) (string, e
 		},
 		Remote: snapshot.Remote,
 	}
-	if snapshot.Executable == snapshot.Runtime.Executable && snapshot.ExecutableSHA256 == snapshot.Runtime.ExecutableSHA256 {
+	if snapshot.ProviderExecutable() {
 		// Some legacy mixed definitions add a native projection to the runtime
 		// command without changing the top-level executable fields. Those fields
 		// are provider identity, not native inspection contract.
@@ -152,7 +155,9 @@ func NewRuntimeInspectionDefinition(info CLIInfo, directory string, environment 
 
 // RuntimeFacts are the nonsecret observations returned by one supervised
 // capability probe. Version is whatever valid text the CLI reported; it is
-// never compared with a hardcoded release or binary hash.
+// never compared with a hardcoded release or binary hash. Version and SHA256
+// are optional observations: their JSON members stay present, and an empty
+// value means the observation was not made.
 type RuntimeFacts struct {
 	Executable       string `json:"executable"`
 	Version          string `json:"version"`
@@ -174,7 +179,7 @@ func ValidateRuntimeFacts(facts RuntimeFacts) error {
 	if !filepath.IsAbs(facts.Executable) || filepath.Clean(facts.Executable) != facts.Executable {
 		return errors.New("runtime fact executable is not a clean absolute path")
 	}
-	if err := task.ValidateSHA256(facts.SHA256); err != nil {
+	if err := ValidateOptionalExecutableSHA256(facts.SHA256); err != nil {
 		return fmt.Errorf("runtime fact executable digest: %w", err)
 	}
 	if facts.CapabilitySHA256 != "" {
@@ -182,18 +187,20 @@ func ValidateRuntimeFacts(facts RuntimeFacts) error {
 			return fmt.Errorf("runtime fact capability digest: %w", err)
 		}
 	}
-	if err := validateRuntimeVersion(facts.Version); err != nil {
-		return err
-	}
-	if len(facts.Version) > task.MaxProviderRuntimeEvidenceVersionBytes {
-		return fmt.Errorf("runtime fact version exceeds durable evidence bound")
+	if facts.Version != "" {
+		if err := validateRuntimeVersion(facts.Version); err != nil {
+			return err
+		}
+		if len(facts.Version) > task.MaxProviderRuntimeEvidenceVersionBytes {
+			return fmt.Errorf("runtime fact version exceeds durable evidence bound")
+		}
 	}
 	return nil
 }
 
 func validateRuntimeVersion(version string) error {
 	if strings.TrimSpace(version) == "" || !utf8.ValidString(version) {
-		return errors.New("runtime fact version is empty or invalid UTF-8")
+		return errors.New("runtime fact version is blank or invalid UTF-8")
 	}
 	for _, character := range version {
 		if character < 0x20 || character == 0x7f {

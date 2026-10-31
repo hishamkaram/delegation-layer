@@ -77,15 +77,34 @@ func (fixture nativePrivateSupervisorFixture) bind(t *testing.T) (*Client, error
 // absent endpoint is never closure by itself; its refusal stays attached to
 // a failed wait.
 func stopNativePrivateSupervisor(ctx context.Context, client *Client, process privateProcessIdentity) error {
+	refusal, err := beginNativePrivateSupervisorStop(ctx, client)
+	if err != nil {
+		return err
+	}
+	return awaitNativePrivateSupervisorStop(ctx, client, process, refusal)
+}
+
+// beginNativePrivateSupervisorStop observes the client's exact endpoint and
+// asks a daemon that still answers there to shut down. It returns the
+// endpoint refusal, if any, for the later wait to keep; any other observation
+// or shutdown fault is the error.
+func beginNativePrivateSupervisorStop(ctx context.Context, client *Client) (refusal, err error) {
 	reachable, refusal := client.Reachable(ctx)
 	if refusal != nil && !errors.Is(refusal, ErrPrivateEndpointRefused) {
-		return refusal
+		return nil, refusal
 	}
 	if reachable {
-		if err := client.Shutdown(ctx); err != nil {
-			return err
+		if err = client.Shutdown(ctx); err != nil {
+			return nil, err
 		}
 	}
+	return refusal, nil
+}
+
+// awaitNativePrivateSupervisorStop claims closure only after the canonical
+// wait proves both the endpoint and the given process gone. A failed wait
+// keeps the refusal observed when the stop began.
+func awaitNativePrivateSupervisorStop(ctx context.Context, client *Client, process privateProcessIdentity, refusal error) error {
 	if err := client.waitUnavailableWithProcess(ctx, process); err != nil {
 		return errors.Join(err, refusal)
 	}

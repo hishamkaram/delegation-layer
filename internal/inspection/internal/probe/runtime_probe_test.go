@@ -11,7 +11,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
-	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 type runtimeTestStopper struct{}
@@ -20,31 +19,71 @@ func (runtimeTestStopper) PrepareBudget(time.Time) (execution.BudgetRequest, err
 	return func(context.Context) error { return nil }, nil
 }
 
-func TestRuntimeCapabilityAcceptsArbitraryVersionWhenFlagsExist(t *testing.T) {
+func TestRuntimeCapabilityNeverRunsVersionCommand(t *testing.T) {
 	root := t.TempDir()
-	path := writeRuntimeCLI(t, root, "provider 99.42.7 (nightly)", "--sandbox --output")
+	path := writeRuntimeCLI(t, root, "--sandbox --output")
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox", "--output"})
 	facts, err := runRuntimeProbe(t, definition)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("usable CLI without a version command was refused: %v", err)
 	}
-	if facts.Version != "provider 99.42.7 (nightly)" || facts.Executable != definition.Executable {
-		t.Fatalf("unexpected runtime facts: %+v", facts)
+	if facts != (provider.RuntimeFacts{Executable: definition.Executable}) {
+		t.Fatalf("runtime facts = %+v, want path-only observation", facts)
+	}
+	if invoked := runtimeCLIInvocations(t, root); invoked != "--help\n" {
+		t.Fatalf("provider invocations = %q, want only the required help exchange", invoked)
 	}
 }
 
-func TestRuntimeCapabilityRejectsVersionThatCannotFitDurableEvidence(t *testing.T) {
+func TestRuntimeCapabilityRejectsRequiredHelpOverflow(t *testing.T) {
 	root := t.TempDir()
-	path := writeRuntimeCLI(t, root, strings.Repeat("v", task.MaxProviderRuntimeEvidenceVersionBytes+1), "--sandbox")
+	path := writeRuntimeCLI(t, root, "--sandbox "+strings.Repeat("x", 64))
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox"})
-	if _, err := runRuntimeProbe(t, definition); err == nil || !strings.Contains(err.Error(), "invalid-runtime-facts") {
-		t.Fatalf("unrecordable runtime version result=%v, want invalid-runtime-facts", err)
+	var probeErr error
+	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{
+		Stopper: runtimeTestStopper{},
+	}, func(scope execution.PreflightScope) error {
+		_, probeErr = InspectRuntime(scope, *definition.Runtime, 16)
+		return probeErr
+	})
+	if probeErr == nil || !strings.Contains(probeErr.Error(), "help-command") || errors.Join(workErr, stopErr) == nil {
+		t.Fatalf("required help overflow result=%v work=%v stop=%v, want help-command failure", probeErr, workErr, stopErr)
+	}
+}
+
+func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
+	installed := t.TempDir()
+	root := filepath.Join(t.TempDir(), "installed")
+	if err := os.Symlink(installed, root); err != nil {
+		t.Fatal(err)
+	}
+	path := writeRuntimeCLI(t, root, "--sandbox")
+	definition := runtimeDefinition(t, root, path, []string{"--sandbox"})
+	if definition.Executable == path {
+		t.Fatalf("fixture did not resolve the installed path alias: %q", path)
+	}
+	// A compatible provider update replaces the installed file after
+	// discovery. The probe runs the installed executable; no byte gate refuses.
+	updated := filepath.Join(root, "provider-cli.updated")
+	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"updated:$*\" >>" + filepath.Join(root, "invocations") + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '--sandbox --new-flag' ;;\n  *) exit 64 ;;\nesac\n"
+	if err := os.WriteFile(updated, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(updated, path); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := runRuntimeProbe(t, definition)
+	if err != nil || facts != (provider.RuntimeFacts{Executable: definition.Executable}) {
+		t.Fatalf("compatible update probe: facts=%+v input=%q resolved=%q err=%v", facts, path, definition.Executable, err)
+	}
+	if invoked := runtimeCLIInvocations(t, root); invoked != "updated:--help\n" {
+		t.Fatalf("provider invocations = %q, want the installed update's help exchange", invoked)
 	}
 }
 
 func TestRuntimeCapabilityDigestSeparatesContractFromExecutableIdentity(t *testing.T) {
 	root := t.TempDir()
-	firstPath := writeRuntimeCLI(t, root, "provider 1.0.0", "--sandbox --output")
+	firstPath := writeRuntimeCLI(t, root, "--sandbox --output")
 	secondPath := filepath.Join(root, "provider-cli-next")
 	data, err := os.ReadFile(firstPath)
 	if err != nil {
@@ -78,7 +117,7 @@ func TestRuntimeCapabilityDigestSeparatesContractFromExecutableIdentity(t *testi
 
 func TestRuntimeCapabilityRejectsMissingRequiredFlag(t *testing.T) {
 	root := t.TempDir()
-	path := writeRuntimeCLI(t, root, "provider 2.0.0", "--sandbox")
+	path := writeRuntimeCLI(t, root, "--sandbox")
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox", "--missing"})
 	if _, err := runRuntimeProbe(t, definition); err == nil {
 		t.Fatal("missing required flag was accepted")
@@ -113,15 +152,26 @@ func runtimeDefinition(t *testing.T, directory, path string, requiredFlags []str
 	return definition
 }
 
-func writeRuntimeCLI(t *testing.T, directory, version, help string) string {
+// writeRuntimeCLI installs a provider fixture that answers --help, logs every
+// invocation, and rejects every other command, including --version.
+func writeRuntimeCLI(t *testing.T, directory, help string) string {
 	t.Helper()
+	if strings.ContainsAny(help, "\x00\n'") {
+		t.Fatal("test CLI help contains unsupported characters")
+	}
 	path := filepath.Join(directory, "provider-cli")
-	script := "#!/bin/sh\nset -eu\ncase \"${1-}\" in\n  --version) printf '%s\\n' '" + version + "' ;;\n  --help) printf '%s\\n' '" + help + "' ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >>" + filepath.Join(directory, "invocations") + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '" + help + "' ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if strings.ContainsAny(version+help, "\x00\n") {
-		t.Fatal("test CLI inputs contain unsupported control characters")
-	}
 	return path
+}
+
+func runtimeCLIInvocations(t *testing.T, directory string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(directory, "invocations"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

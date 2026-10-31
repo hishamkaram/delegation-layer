@@ -68,9 +68,9 @@ from scripts.delegate_acceptance.native.timeouts import (
 from scripts.delegate_acceptance.native.constants import (
     PROFILES,
     PI_SESSION_MISS_SCENARIO,
-    TASK_BUDGET,
-    CANONICAL_TASK_BUDGET,
-    TASK_BUDGET_NANOS,
+    TASK_BUDGET as TASK_BUDGET,
+    CANONICAL_TASK_BUDGET as CANONICAL_TASK_BUDGET,
+    TASK_BUDGET_NANOS as TASK_BUDGET_NANOS,
     WATCH_SECONDS,
     TIMEOUT_RESUME_SOURCE_BUDGET as TIMEOUT_RESUME_SOURCE_BUDGET,
     CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET as CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
@@ -525,11 +525,11 @@ class NativeAcceptance:
 
     def dispatch_argv(self, task_id: str, brief: Path,
                       predecessor: str | None = None,
-                      budget: str = TASK_BUDGET) -> list[object]:
+                      budget: str | None = None) -> list[object]:
         return acceptance_dispatch.dispatch_argv(self, task_id, brief, predecessor, budget)
 
     def dispatch(self, name: str, brief: Path, predecessor: str | None = None,
-                 budget: str = TASK_BUDGET, *, environment: dict[str, str] | None = None) -> str:
+                 budget: str | None = None, *, environment: dict[str, str] | None = None) -> str:
         return acceptance_dispatch.dispatch(self, name, brief, predecessor, budget, environment=environment)
 
     def continue_task(self, name: str, brief: Path, predecessor: str, *,
@@ -648,8 +648,8 @@ class NativeAcceptance:
 
     def _request_binding(self, task_id: str, require_launch_evidence: bool = False,
                          require_started_evidence: bool = False,
-                         budget: str = CANONICAL_TASK_BUDGET,
-                         budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
+                         budget: str | None = None,
+                         budget_nanos: int | None = None) -> tuple[
             Path, dict[str, object], dict[str, object], str, str, Path]:
         return acceptance_collection._request_binding(self, task_id, require_launch_evidence, require_started_evidence, budget, budget_nanos)
 

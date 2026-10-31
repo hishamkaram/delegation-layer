@@ -3,7 +3,6 @@ package workspaces
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -17,8 +16,8 @@ func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.St
 	if a.Isolation == "" && a.WorkspaceID == "" {
 		return nil, cwd, RejectUnmanagedPath(cwd)
 	}
-	if a.RunnerOwnership != task.RunnerOwnershipManaged {
-		return nil, "", fmt.Errorf("%w: managed workspaces require the managed delegate-run runner", task.ErrInvalidPermit)
+	if err := RequireManagedRunner(a); err != nil {
+		return nil, "", err
 	}
 	if err := deps.ValidateGitEnvironment(); err != nil {
 		return nil, "", err

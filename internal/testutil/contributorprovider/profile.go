@@ -97,7 +97,7 @@ func Prepare(request task.TaskRecord, environment []string) (commonprovider.Prep
 	}
 	// Prepare is retained for deterministic fixture unit tests. Production and
 	// acceptance composition use PrepareCandidate, whose finalizer receives the
-	// supervised CLI-reported version.
+	// supervised path-only runtime observation.
 	identity.Version = fixture.RuntimeVersion
 	runtimeDir, err := resolveRuntimeDirectory(environment)
 	if err != nil {
@@ -233,12 +233,15 @@ func validatePriorSession(prior task.PriorSession) error {
 	return nil
 }
 
+// validateIdentity applies the canonical provider runtime observation rule:
+// the resolved executable is required; version and digest are optional
+// observations validated only when present.
 func validateIdentity(identity runtimeIdentity) error {
-	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable || strings.TrimSpace(identity.Version) == "" {
+	if identity.Executable == "" {
 		return fmt.Errorf("%w: executable identity is incomplete", ErrUnsupportedProfile)
 	}
-	if err := task.ValidateSHA256(identity.SHA256); err != nil {
-		return fmt.Errorf("%w: executable identity digest: %w", ErrUnsupportedProfile, err)
+	if err := task.ValidateProviderRuntimeIdentity(task.ProviderRuntimeIdentity{Executable: identity.Executable, Version: identity.Version, SHA256: identity.SHA256}); err != nil {
+		return fmt.Errorf("%w: executable identity: %w", ErrUnsupportedProfile, err)
 	}
 	return nil
 }
@@ -247,7 +250,7 @@ func validateStaticIdentity(identity runtimeIdentity) error {
 	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable {
 		return fmt.Errorf("%w: executable identity is incomplete", ErrUnsupportedProfile)
 	}
-	if err := task.ValidateSHA256(identity.SHA256); err != nil {
+	if err := commonprovider.ValidateOptionalExecutableSHA256(identity.SHA256); err != nil {
 		return fmt.Errorf("%w: executable identity digest: %w", ErrUnsupportedProfile, err)
 	}
 	return nil

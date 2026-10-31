@@ -80,8 +80,11 @@ def _validate_inspection_binding(value: object, label: str) -> None:
     _exact_keys(value, _INSPECTION_BINDING_KEYS, _INSPECTION_BINDING_OPTIONAL_KEYS, label)
     require(isinstance(value.get("definition_revision"), str) and
             value["definition_revision"], f"{label} definition revision is invalid")
-    for key in ("definition_sha256", "helper_sha256", "worker_sha256"):
+    for key in ("definition_sha256", "worker_sha256"):
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
+    helper_sha256 = value["helper_sha256"]
+    require(helper_sha256 == "" or _hex_digest(helper_sha256),
+            f"{label} helper_sha256 is invalid")
     if "capability_sha256" in value:
         require(_hex_digest(value["capability_sha256"]), f"{label} capability_sha256 is invalid")
     if "runner_ownership" in value:

@@ -2,21 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from ..native_evidence.contract import EvidenceError, canonical_json
-from ..native_evidence.public_contract import PublicProofError, parse_json
 from .contract import HEX_SHA256, REVISION_RE, VerificationError
 
 
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
-
-
-IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-
-
-# Opaque identities produced by other owners, such as invocation and resource IDs.
-OPAQUE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def encode_record(value: dict[str, object], stage: str) -> bytes:
@@ -25,6 +18,19 @@ def encode_record(value: dict[str, object], stage: str) -> bytes:
         return canonical_json(value)
     except (EvidenceError, RecursionError):
         raise VerificationError("candidate_record_unencodable", stage) from None
+
+
+def _unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("non-finite JSON constant")
 
 
 def load_record(data: bytes, *, max_bytes: int, stage: str) -> dict[str, object]:
@@ -37,8 +43,9 @@ def load_record(data: bytes, *, max_bytes: int, stage: str) -> dict[str, object]
     if len(data) > max_bytes:
         raise VerificationError("candidate_record_too_large", stage)
     try:
-        value = parse_json(data)
-    except PublicProofError:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_pairs,
+                           parse_constant=_reject_constant)
+    except (ValueError, UnicodeError, RecursionError):
         raise VerificationError("candidate_record_invalid", stage) from None
     if not isinstance(value, dict) or encode_record(value, stage) != data:
         raise VerificationError("candidate_record_not_canonical", stage)
@@ -80,22 +87,7 @@ def positive_int(value: object, stage: str) -> int:
     return value
 
 
-def non_negative_int(value: object, stage: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise VerificationError("candidate_field_invalid", stage)
-    return value
-
-
 def object_list(value: object, *, max_items: int, stage: str) -> list[object]:
     if not isinstance(value, list) or len(value) > max_items:
         raise VerificationError("candidate_field_invalid", stage)
     return value
-
-
-def identifier_tuple(value: object, *, max_items: int, stage: str) -> tuple[str, ...]:
-    """Return a sorted, duplicate-free tuple of bounded identifiers."""
-    items = tuple(text(item, IDENTIFIER_RE, stage)
-                  for item in object_list(value, max_items=max_items, stage=stage))
-    if list(items) != sorted(set(items)):
-        raise VerificationError("candidate_field_invalid", stage)
-    return items

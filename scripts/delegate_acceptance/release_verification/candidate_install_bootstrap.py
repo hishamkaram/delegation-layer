@@ -9,7 +9,11 @@ daemon and endpoint shutdown. Its children run through that core's identity-pinn
 file capture, not ConsumerPorts.run.
 
 One local DirectoryOwner lifetime covers the root's creation, setup, the turn, failure
-diagnostics and its single disposal. The intended root path is recorded before creation;
+diagnostics and its single disposal. One DisposalLeases owner spans the same lifetime: the
+shared core's authorized shutdown takes the state root's disposal lease through it, and the
+lease stays held through the canonical owned-root removal, so no elected maintenance owner or
+late callback helper can recreate the deleted root through a provisioning path. The lease is
+released only after that removal. The intended root path is recorded before creation;
 the creation token's own identity record is copied into the private facts right after
 creation, so a later pathname replacement cannot change it. Only a verified turn removes
 the root. Any failure keeps it: the original fault, any cleanup or release fault, the
@@ -27,15 +31,16 @@ from pathlib import Path
 import os
 import secrets
 import shutil
+import time
 from ..directories.journal import directory_identity_record
-from ..directories.operations import (
-    DirectoryOwner, OwnedDirectory, release_owned_directories, rollback_owned_directories,
-)
+from ..directories.operations import DirectoryOwner, OwnedDirectory, release_owned_directories
 from ..private_cli.fixtures import install_pi_fixture
+from ..private_cli.leases import DisposalLeases
 from ..private_cli.packaged_defaults import (
     INSTALLED_BINARIES, InstalledBootstrap, InstalledDefaults, isolated_default_state_path,
     prove_installed_default_bootstrap,
 )
+from ..private_cli.root_cleanup import remove_private_acceptance_root
 from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor
 from .candidate_install_contract import BOOTSTRAP_SHUTDOWN, BootstrapObservation, BootstrapTarget
 from .contract import BinaryDigests, VerificationError
@@ -67,23 +72,29 @@ class InstalledBootstrapProbe:
 
     def __call__(self, target: BootstrapTarget) -> BootstrapObservation:
         owner = DirectoryOwner()
+        disposal = DisposalLeases()
         root = self.parent / f"{ROOT_PREFIX}{secrets.token_hex(4)}"
         # The intent is recorded before the fallible creation; it grants no authority.
         facts: dict[str, object] = {"status": "partial", "parent": str(self.parent), "root": str(root)}
         self.receipt["candidate_install"]["bootstrap"] = facts
         self.locations["bootstrap_root"] = root
         ledger: list[dict] = []
+        token = None
         capture = None
         observation = None
+        managed_roots: tuple[tuple[Path, tuple[str, ...]], ...] = ()
         try:
             try:
                 token = owner.create("candidate bootstrap root", root, self.parent)
                 facts["root_identity"] = directory_identity_record(token)
                 capture = owner.create("candidate bootstrap captures", root / "c", root)
-                observation = _observation(_run(owner, capture, root=root, target=target, ledger=ledger,
-                                                facts=facts))
+                state, closed = _run(owner, capture, root=root, target=target, ledger=ledger, facts=facts,
+                                     disposal=disposal)
+                observation = _observation(closed)
+                managed_roots = ((state, (closed.task_id,)),)
             except Exception as primary:
-                refusal = _retained_failure(primary, capture=capture, ledger=ledger, facts=facts)
+                refusal = _retained_failure(primary, capture=capture, ledger=ledger, facts=facts,
+                                            disposal=disposal)
                 if refusal is None:
                     raise
                 raise refusal from primary
@@ -93,7 +104,8 @@ class InstalledBootstrapProbe:
                 _publish_unresolved(ledger, facts)
                 raise
         finally:
-            _dispose(owner, verified=observation is not None, facts=facts)
+            _dispose(owner, token, disposal=disposal, managed_roots=managed_roots,
+                     verified=observation is not None, facts=facts)
         facts.update({"status": "verified", "root_id": observation.root_id, "task_id": observation.task_id})
         return observation
 
@@ -108,20 +120,42 @@ def _observation(result: InstalledBootstrap) -> BootstrapObservation:
         shutdown=BOOTSTRAP_SHUTDOWN)
 
 
-def _dispose(owner: DirectoryOwner, *, verified: bool, facts: dict[str, object]) -> None:
+def _dispose(owner: DirectoryOwner, root_token: OwnedDirectory | None, *, disposal: DisposalLeases,
+             managed_roots: tuple[tuple[Path, tuple[str, ...]], ...], verified: bool,
+             facts: dict[str, object]) -> None:
     """The local owner's one disposal: only a verified turn removes the root; anything else retains it.
+
+    The disposal owner's lease is released after this removal, never before it. A lease release
+    fault is recorded; it fails a verified turn as a cleanup fault and never replaces a propagating one.
+    """
+    entries = owner.transfer()
+    try:
+        _remove_or_retain(entries, root_token, disposal=disposal, managed_roots=managed_roots,
+                          verified=verified, facts=facts)
+    finally:
+        lease_released = _release_leases(disposal, facts)
+    if not lease_released and verified:
+        facts["status"] = "cleanup-failed"
+        raise VerificationError("candidate_bootstrap_cleanup_failed", STAGE) from None
+
+
+def _remove_or_retain(entries: tuple[OwnedDirectory, ...], root_token: OwnedDirectory | None, *,
+                      disposal: DisposalLeases, managed_roots: tuple[tuple[Path, tuple[str, ...]], ...],
+                      verified: bool, facts: dict[str, object]) -> None:
+    """Remove the exact owned root of a verified turn under the held lease; otherwise retain every directory.
 
     Every token leaves the owner first, so no later step consumes one twice; after a partial
     removal only the still-unconsumed pins are released. A release fault is recorded and never
     replaces the propagating fault; an interrupted disposal is recorded and keeps propagating.
     """
-    entries = owner.transfer()
     if not verified:
         facts["root_disposition"] = "retained"
         _release_unconsumed(entries, facts)
         return
     try:
-        rollback_owned_directories(entries)
+        # The shutdown already holds the lease; a root not yet held gets one attempt per lock, no wait.
+        remove_private_acceptance_root(root_token, entries, managed_roots, disposal=disposal,
+                                       deadline=time.monotonic())
     except (OSError, RuntimeError) as error:
         facts.update({"status": "cleanup-failed", "root_disposition": "retained", "disposal_failure": _fault(error)})
         _release_unconsumed(entries, facts)
@@ -132,6 +166,19 @@ def _dispose(owner: DirectoryOwner, *, verified: bool, facts: dict[str, object])
         _release_unconsumed(entries, facts)
         raise
     facts["root_disposition"] = "removed"
+
+
+def _release_leases(disposal: DisposalLeases, facts: dict[str, object]) -> bool:
+    """Release every held root lease; record a fault and return False, keep propagating an interrupt."""
+    try:
+        disposal.release_all()
+    except OSError as error:
+        facts["lease_release_failure"] = _fault(error)
+        return False
+    except BaseException as interrupted:
+        facts["lease_release_failure"] = {"type": type(interrupted).__name__}
+        raise
+    return True
 
 
 def _release_unconsumed(entries: tuple[OwnedDirectory, ...], facts: dict[str, object]) -> None:
@@ -148,7 +195,9 @@ def _release_unconsumed(entries: tuple[OwnedDirectory, ...], facts: dict[str, ob
 
 
 def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: BootstrapTarget,
-         ledger: list[dict], facts: dict[str, object]) -> InstalledBootstrap:
+         ledger: list[dict], facts: dict[str, object],
+         disposal: DisposalLeases) -> tuple[Path, InstalledBootstrap]:
+    """Run the shared core for one installed root; return its state root with the closed turn."""
     home, providers, workspace, responses = (
         owner.create(label, root / name, root).directory for label, name in (
             ("candidate bootstrap home", "h"), ("candidate bootstrap providers", "p"),
@@ -168,7 +217,9 @@ def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: 
         digests=tuple((name, digests[name]) for name in INSTALLED_BINARIES), env=env,
         state=isolated_default_state_path(home), workspace=workspace, brief=brief, response_directory=responses)
     facts["state"] = str(installed.state)
-    return prove_installed_default_bootstrap(installed, supervisor_cleanups=ledger, capture_root=capture)
+    closed = prove_installed_default_bootstrap(
+        installed, supervisor_cleanups=ledger, capture_root=capture, disposal=disposal)
+    return installed.state, closed
 
 
 def _fault(error: BaseException) -> dict[str, str]:
@@ -179,8 +230,12 @@ def _fault(error: BaseException) -> dict[str, str]:
 
 
 def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
-                      ledger: list[dict], facts: dict[str, object]) -> VerificationError | None:
+                      ledger: list[dict], facts: dict[str, object],
+                      disposal: DisposalLeases) -> VerificationError | None:
     """Record the original fault and shut down each pending supervisor once; the root's disposal is the caller's.
+
+    Each shutdown runs under the verification's ``disposal`` owner: a lease the failed shutdown already
+    took is reused, never reopened, since a second open of a held flock conflicts with this process's own.
 
     Returns the refusal to raise, or None when ``primary`` is itself the refusal. An
     interrupted shutdown is recorded with the ledger and keeps propagating.
@@ -190,7 +245,8 @@ def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
     facts["cleanup_failures"] = cleanup_faults
     for pending in tuple(ledger):
         try:
-            if capture is None or shutdown_pending_private_supervisor(pending, ledger, capture_root=capture) is None:
+            if capture is None or shutdown_pending_private_supervisor(
+                    pending, ledger, capture_root=capture, disposal=disposal) is None:
                 cleanup_faults.append({"type": "SupervisorUnverified", "message": "no shutdown was verified"})
         except Exception as cleanup_error:
             cleanup_faults.append(_fault(cleanup_error))

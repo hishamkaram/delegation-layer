@@ -81,7 +81,7 @@ def payload_files(**overrides: bytes) -> dict[str, bytes]:
 def manifest_bytes(files: dict[str, bytes], *, commit: str = COMMIT) -> bytes:
     """The canonical producer's manifest of exactly these files."""
     request = BuildRequest(version=VERSION, commit=commit, base_commit=BASE, repository=REPOSITORY)
-    inputs = build_inputs(harness_commit=commit, harness_sha256="3" * 64, config_sha256="1" * 64,
+    inputs = build_inputs(config_sha256="1" * 64,
                           go_sum_sha256="2" * 64, go="1.27.3", goreleaser="2.18.1",
                           python="3.12.13", node="22.11.0")
     observed = {path: (len(data), sha(data)) for path, data in files.items()}
@@ -167,7 +167,7 @@ ENDPOINTS = {
     "repository": f"repos/{REPOSITORY}",
     "workflow": f"repos/{REPOSITORY}/actions/workflows/ci.yml",
     "artifact": f"repos/{REPOSITORY}/actions/artifacts/{ARTIFACT_ID}",
-    "attempt": f"repos/{REPOSITORY}/actions/runs/{RUN_ID}/attempts/{RUN_ATTEMPT}",
+    "attempt": f"repos/{REPOSITORY}/actions/runs/{RUN_ID}",
 }
 DOWNLOAD = f"repos/{REPOSITORY}/actions/artifacts/{ARTIFACT_ID}/zip"
 FULL_SEQUENCE = [*ENDPOINTS.values(), DOWNLOAD]
@@ -266,7 +266,8 @@ class CandidateArtifactCase(unittest.TestCase):
             return real(argv, *arguments, **options)
 
         with patch.object(github, "run_bounded_command", side_effect=launch):
-            return load_candidate_artifact(client, target, container=container, payload=payload)
+            return load_candidate_artifact(client, target.artifact_id, repository=target.repository,
+                                           container=container, payload=payload)
 
     def refused(self, code: str, target: CandidateLocator, **destinations: Path) -> VerificationError:
         with self.assertRaises(VerificationError) as caught:

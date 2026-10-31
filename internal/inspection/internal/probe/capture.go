@@ -19,9 +19,13 @@ type nativeHooks struct {
 	wait  func(*exec.Cmd) error
 }
 
-// nativeScope preserves the private runNative signature while making the
-// execution package the single owner of the command lifetime boundary.
-type nativeScope = execution.CommandScope
+// nativeScope is the private runNative boundary: the execution package owns
+// the command lifetime and the binding decision; execution.PreflightScope
+// satisfies both.
+type nativeScope interface {
+	execution.CommandScope
+	commandBinder
+}
 
 // runNative is private to the supervised inspection lifetime. The scope owns
 // the final start gate and guardian registration. Cancellation refuses a new
@@ -39,13 +43,13 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	if _, finite := ctx.Deadline(); !finite || ctx.Err() != nil {
 		return nil, errNativeInspection
 	}
-	// A nil Stdin makes the child receive finite EOF. The command is bound to
-	// the executable observed during admission before the final Start gate.
-	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
+	// A nil Stdin makes the child receive finite EOF. A native helper is bound
+	// to its admitted bytes before the final Start gate; the installed provider
+	// CLI runs directly at its resolved path.
+	cmd, verified, err := nativeCommand(scope, definition)
 	if err != nil {
 		return nil, errNativeInspection
 	}
-	cmd.Dir, cmd.Env = definition.Directory, definition.Environment
 	stdout := boundedNativeBuffer{
 		remaining: definition.OutputLimit,
 		retain:    true,
@@ -64,6 +68,21 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 		return nil, errNativeInspection
 	}
 	return stdout.bytes, nil
+}
+
+// nativeCommand selects the command for the definition's executable role.
+// The returned verified binding is nil for the provider CLI; its methods are
+// nil-safe, so callers release and close it uniformly.
+func nativeCommand(scope nativeScope, definition provider.InspectionDefinition) (*exec.Cmd, *verifiedCommandFiles, error) {
+	if definition.ProviderExecutable() {
+		return newProviderCommand(definition.Executable, definition.Directory, definition.Environment, definition.Arguments...), nil, nil
+	}
+	cmd, verified, err := newVerifiedCommand(scope, definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd.Dir, cmd.Env = definition.Directory, definition.Environment
+	return cmd, verified, nil
 }
 
 func (h nativeHooks) startCommand(cmd *exec.Cmd) error {

@@ -41,18 +41,13 @@ def _static_digest(context: BuildContext, relative: str) -> str:
     return sha(_bounded_file_bytes(context.clone / relative, MAX_SOURCE_FILE, "build_input_unreadable"))
 
 
-def observe_build_inputs(context: BuildContext, *, python: str, harness_sha256: str) -> BuildInputs:
-    """Observe all four toolchains and the static configuration of the frozen clone.
-
-    ``harness_sha256`` is the one fingerprint the caller computed for this build.
-    """
+def observe_build_inputs(context: BuildContext, *, python: str) -> BuildInputs:
+    """Observe all four toolchains and the static configuration of the source clone."""
     pin = parse_go_pin(_bounded_file_bytes(context.clone / ".go-version", 64, "go_pin_unreadable"))
     go = parse_go_version(_version_output(context, "go-version", ["go", "version"]))
     require_pinned_go(go, pin)
     _require_go_under_goroot(context)
     return build_inputs(
-        harness_commit=context.request.commit,
-        harness_sha256=harness_sha256,
         config_sha256=_static_digest(context, ".goreleaser.yaml"),
         go_sum_sha256=_static_digest(context, "go.sum"),
         go=go,

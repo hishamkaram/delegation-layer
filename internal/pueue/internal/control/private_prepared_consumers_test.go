@@ -62,18 +62,33 @@ func TestPreparedMigrationRefusesAdmissionAtLiveEndpoint(t *testing.T) {
 	assertBusyPreparedPrivateObservation(t, fixture)
 }
 
+// preparedPrivateRemovalTasks writes the completed row present and, for the
+// absent variant, then removes it, so the generation guard must refuse before
+// any label observation could report logical absence.
+var preparedPrivateRemovalTasks = []struct {
+	name  string
+	write func(*testing.T, string) Identity
+}{
+	{name: "row-present", write: writeCompletedPrivateRemovalTask},
+	{name: "row-absent", write: writeAbsentPrivateRemovalTask},
+}
+
 func TestPreparedMigrationRefusesCompletedTaskRemovalFromHeldClient(t *testing.T) {
-	fixture := newBusyPreparedPrivateObservation(t)
-	identity := writeCompletedPrivateRemovalTask(t, fixture.stateRoot)
-	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
-	err := fixture.legacy.RemoveCompletedTask(t.Context(), identity)
-	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Errorf("held client removed a completed task during prepared migration: %v", err)
+	for _, removal := range preparedPrivateRemovalTasks {
+		t.Run(removal.name, func(t *testing.T) {
+			fixture := newBusyPreparedPrivateObservation(t)
+			identity := removal.write(t, fixture.stateRoot)
+			before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+			err := fixture.legacy.RemoveCompletedTask(t.Context(), identity)
+			if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+				t.Errorf("held client removed a completed task during prepared migration: %v", err)
+			}
+			if _, statErr := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Errorf("prepared migration permitted a remove command: %v", statErr)
+			}
+			assertPreparedPrivateObservationUnchanged(t, fixture, before)
+		})
 	}
-	if _, statErr := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("prepared migration permitted a remove command: %v", statErr)
-	}
-	assertPreparedPrivateObservationUnchanged(t, fixture, before)
 }
 
 func writeCompletedPrivateRemovalTask(t *testing.T, root string) Identity {
@@ -94,27 +109,39 @@ func writeCompletedPrivateRemovalTask(t *testing.T, root string) Identity {
 	}
 }
 
+func writeAbsentPrivateRemovalTask(t *testing.T, root string) Identity {
+	t.Helper()
+	identity := writeCompletedPrivateRemovalTask(t, root)
+	status := statusTestPayload(t, map[string]any{}, map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 0}})
+	writePrivateSuccessorTestBytes(t, filepath.Join(root, privateSupervisorDirectory, "test-status.json"), status)
+	return identity
+}
+
 func TestPreparedMigrationRefusesCompletedTaskRemovalThroughRecoveryAlias(t *testing.T) {
-	fixture := newBusyPreparedPrivateObservation(t)
-	binding := fixture.legacy.Binding()
-	client, _, found, err := recoverPrivateRecoveryBinding(t.Context(), fixture.stateRoot, binding, binding.ClientExecutable, binding.DaemonExecutable, fixture.legacy.options)
-	if err != nil || !found || client == nil {
-		t.Fatalf("recover prepared alias client: found=%t client=%v err=%v", found, client, err)
+	for _, removal := range preparedPrivateRemovalTasks {
+		t.Run(removal.name, func(t *testing.T) {
+			fixture := newBusyPreparedPrivateObservation(t)
+			binding := fixture.legacy.Binding()
+			client, _, found, err := recoverPrivateRecoveryBinding(t.Context(), fixture.stateRoot, binding, binding.ClientExecutable, binding.DaemonExecutable, fixture.legacy.options)
+			if err != nil || !found || client == nil {
+				t.Fatalf("recover prepared alias client: found=%t client=%v err=%v", found, client, err)
+			}
+			t.Cleanup(func() {
+				if closeErr := client.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			})
+			if client.RuntimeBinding().ConfigPath != privateRecoveryConfigPath(fixture.stateRoot) {
+				t.Fatal("fixture did not exercise the retained recovery alias")
+			}
+			identity := removal.write(t, fixture.stateRoot)
+			before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+			if err = client.RemoveCompletedTask(t.Context(), identity); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+				t.Errorf("alias cleanup did not defer incomplete migration: %v", err)
+			}
+			assertPreparedPrivateObservationUnchanged(t, fixture, before)
+		})
 	}
-	t.Cleanup(func() {
-		if closeErr := client.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	if client.RuntimeBinding().ConfigPath != privateRecoveryConfigPath(fixture.stateRoot) {
-		t.Fatal("fixture did not exercise the retained recovery alias")
-	}
-	identity := writeCompletedPrivateRemovalTask(t, fixture.stateRoot)
-	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
-	if err = client.RemoveCompletedTask(t.Context(), identity); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Errorf("alias cleanup did not defer incomplete migration: %v", err)
-	}
-	assertPreparedPrivateObservationUnchanged(t, fixture, before)
 }
 
 func TestCompletedSuccessorAllowsCleanupThroughRecoveredPair(t *testing.T) {

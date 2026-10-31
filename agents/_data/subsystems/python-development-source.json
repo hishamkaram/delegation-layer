@@ -1,73 +1,18 @@
 [
   {
-    "name": "py:acceptance_tests.test_candidate_source_inventory",
-    "owner": "py:acceptance_tests.test_candidate_source_inventory",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.candidate_fixtures",
-      "py:delegate_acceptance.evidence.digests",
-      "py:delegate_acceptance.release_verification.candidate_attempts",
-      "py:delegate_acceptance.release_verification.candidate_manifest",
-      "py:delegate_acceptance.release_verification.candidate_source_inventory",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:json",
-      "py:unittest"
-    ]
-  },
-  {
-    "name": "py:delegate_acceptance.release_verification.candidate_source_inventory",
-    "owner": "py:delegate_acceptance.release_verification",
-    "layer": "pure",
-    "imports": [
-      "py:__future__",
-      "py:dataclasses",
-      "py:delegate_acceptance.evidence.digests",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.release_verification.candidate_attempts",
-      "py:delegate_acceptance.release_verification.candidate_codec",
-      "py:delegate_acceptance.release_verification.candidate_manifest",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:posixpath",
-      "py:re"
-    ]
-  },
-  {
     "name": "py:delegate_acceptance.release_verification.candidate_source_observation",
     "owner": "py:delegate_acceptance.release_verification",
     "layer": "runtime",
     "imports": [
       "py:__future__",
       "py:collections.abc",
+      "py:dataclasses",
       "py:delegate_acceptance.release_verification.candidate_build_source",
       "py:delegate_acceptance.release_verification.candidate_codec",
-      "py:delegate_acceptance.release_verification.candidate_manifest",
-      "py:delegate_acceptance.release_verification.candidate_source_inventory",
       "py:delegate_acceptance.release_verification.commands",
       "py:delegate_acceptance.release_verification.contract",
-      "py:pathlib"
-    ]
-  },
-  {
-    "name": "py:test_candidate_source_observation",
-    "owner": "py:test_candidate_source_observation",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.release_fixture",
-      "py:delegate_acceptance.release_verification.candidate_attempts",
-      "py:delegate_acceptance.release_verification.candidate_build_source",
-      "py:delegate_acceptance.release_verification.candidate_manifest",
-      "py:delegate_acceptance.release_verification.candidate_source_inventory",
-      "py:delegate_acceptance.release_verification.candidate_source_observation",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:hashlib",
-      "py:json",
-      "py:os",
       "py:pathlib",
-      "py:sys",
-      "py:test_candidate_build_support",
-      "py:unittest"
+      "py:re"
     ]
   },
   {

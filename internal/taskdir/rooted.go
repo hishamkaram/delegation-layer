@@ -23,26 +23,59 @@ func (s *Store) relative(path string) (string, error) {
 	return rel, nil
 }
 
+// PrivateStatVerdict is the private-state decision over one stat result.
+type PrivateStatVerdict uint8
+
+const (
+	// PrivateStatAccepted: owned by the effective user, exactly the private
+	// mode, and the expected type.
+	PrivateStatAccepted PrivateStatVerdict = iota
+	// PrivateStatUnsafeOwnerOrMode: another owner, a permission other than
+	// exactly 0600 for a file or 0700 for a directory, or a setuid, setgid, or
+	// sticky bit.
+	PrivateStatUnsafeOwnerOrMode
+	// PrivateStatUnexpectedType: not the expected regular file or directory.
+	PrivateStatUnexpectedType
+)
+
+// CheckPrivateStat decides whether stat describes private state of the
+// expected kind owned by effective user euid. Owner and mode are judged before
+// type. Callers keep their own observation (Fstat or Lstat) and their own
+// errors for each verdict.
+func CheckPrivateStat(stat *unix.Stat_t, euid int, directory bool) PrivateStatVerdict {
+	// Stat_t.Mode is uint16 on Darwin and uint32 on Linux; widening is exact.
+	mode := uint32(stat.Mode)
+	kind, perm := uint32(unix.S_IFREG), uint32(0o600)
+	if directory {
+		kind, perm = unix.S_IFDIR, 0o700
+	}
+	if int64(stat.Uid) != int64(euid) || mode&0o7777 != perm {
+		return PrivateStatUnsafeOwnerOrMode
+	}
+	if mode&unix.S_IFMT != kind {
+		return PrivateStatUnexpectedType
+	}
+	return PrivateStatAccepted
+}
+
 func validatePrivateFile(f *os.File, directory bool) error {
-	info, err := f.Stat()
-	if err != nil {
+	if _, err := f.Stat(); err != nil {
 		return err
 	}
 	var st unix.Stat_t
-	if err = unix.Fstat(int(f.Fd()), &st); err != nil {
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		return err
 	}
-	expectedMode := os.FileMode(0o600)
-	if directory {
-		expectedMode = 0o700
-	}
-	if st.Uid != uint32(os.Geteuid()) || info.Mode().Perm() != expectedMode || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+	switch CheckPrivateStat(&st, os.Geteuid(), directory) {
+	case PrivateStatAccepted:
+		return nil
+	case PrivateStatUnexpectedType:
+		return fmt.Errorf("%w: unexpected file type on %s", task.ErrEvidenceFault, f.Name())
+	case PrivateStatUnsafeOwnerOrMode:
+		return fmt.Errorf("%w: unsafe owner or mode on %s", task.ErrEvidenceFault, f.Name())
+	default:
 		return fmt.Errorf("%w: unsafe owner or mode on %s", task.ErrEvidenceFault, f.Name())
 	}
-	if directory && !info.IsDir() || !directory && !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: unexpected file type on %s", task.ErrEvidenceFault, f.Name())
-	}
-	return nil
 }
 
 func (s *Store) openDir(path string) (*os.File, error) {

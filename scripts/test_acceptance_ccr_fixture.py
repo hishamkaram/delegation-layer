@@ -416,5 +416,18 @@ class FixturePublicationTests(unittest.TestCase):
             run.publish_success(expected_gate=gate.FIXTURE_GATE)
 
 
+class FixtureWorkflowTests(unittest.TestCase):
+    def test_ci_retains_only_existing_public_control_records(self):
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/ccr-integration.yml"
+        upload = workflow.read_text().split("      - name: Retain sanitized result\n", 1)[1]
+        section = upload.split("          path:", 1)[1].split("          if-no-files-found:", 1)[0]
+        paths = {line.strip() for line in section.splitlines() if line.strip() not in ("", "|")}
+        root = "~/ccr-integration-evidence"
+        self.assertEqual(paths, {f"{root}/{name}" for name in (
+            "success.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
+            "failure-diagnostics.json", "failure-cleanup.json", "failure-cleanup-expired.json")})
+        self.assertIn("if: always()", upload)
+
+
 if __name__ == "__main__":
     unittest.main()

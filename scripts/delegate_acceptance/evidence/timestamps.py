@@ -30,6 +30,15 @@ def _canonical_timestamp(value: object, label: str) -> tuple[datetime, int]:
     return parsed, nanoseconds % 1000
 
 
+_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _timestamp_unix_ns(value: tuple[datetime, int]) -> int:
+    """Exact integer Unix nanoseconds of a parsed canonical timestamp, keeping sub-microsecond precision."""
+    delta = value[0] - _UNIX_EPOCH
+    return ((delta.days * 86400 + delta.seconds) * 1_000_000 + delta.microseconds) * 1000 + value[1]
+
+
 def _timestamp_at_or_after(left: tuple[datetime, int], right: tuple[datetime, int]) -> bool:
     return left[0] > right[0] or (left[0] == right[0] and left[1] >= right[1])
 

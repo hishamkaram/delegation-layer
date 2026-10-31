@@ -56,7 +56,7 @@ func emptyConfigSources(paths []string) ([]task.PolicySourceDigest, error) {
 }
 
 func sealPolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, runtimeSHA256 string) (task.EffectiveConfig, error) {
-	if err := task.ValidateSHA256(runtimeSHA256); err != nil {
+	if err := commonprovider.ValidateOptionalExecutableSHA256(runtimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	sources = slices.Clone(sources)

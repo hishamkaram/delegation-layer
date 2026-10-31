@@ -25,6 +25,15 @@ def record_invocation_error(receipt, args, error, captured):
         "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         "stderr_tail": output_tail(stderr),
     }
+    command = getattr(error, "cmd", None)
+    if command is not None:
+        evidence["command"] = [str(part) for part in command]
+    process_pid = getattr(error, "process_pid", None)
+    if process_pid is not None:
+        evidence["direct_process"] = {"pid": process_pid, "provenance": "subprocess.Popen.pid"}
+    capture_paths = getattr(error, "capture_paths", ())
+    if capture_paths:
+        evidence["capture_paths"] = list(capture_paths)
     retained_paths = getattr(error, "retained_capture_paths", ())
     if retained_paths:
         evidence["capture_failure"] = {
@@ -39,12 +48,25 @@ def record_invocation_error(receipt, args, error, captured):
 
 
 def run_json(
-    delegate, env, args, expected=(0,), timeout=45, receipt=None, phase=None, *, capture_root, capture_response=False
+    delegate,
+    env,
+    args,
+    expected=(0,),
+    timeout=45,
+    receipt=None,
+    phase=None,
+    *,
+    capture_root,
+    capture_response=False,
+    deadline=None,
 ):
+    """Run one Delegate control command; pass ``timeout=None`` with an absolute ``deadline`` instead."""
     captured = None
     try:
         command_env = phase_environment(env, phase) if phase is not None else env
-        captured = run_captured_command([str(delegate), *args], command_env, timeout, capture_root=capture_root)
+        captured = run_captured_command(
+            [str(delegate), *args], command_env, timeout, capture_root=capture_root, deadline=deadline
+        )
         result = subprocess.CompletedProcess(
             captured.args, captured.returncode, captured.stdout.decode("utf-8"), captured.stderr.decode("utf-8")
         )

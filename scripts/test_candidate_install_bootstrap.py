@@ -10,6 +10,7 @@ exercise real children.
 from __future__ import annotations
 
 import errno
+import fcntl
 from pathlib import Path
 import os
 import sys
@@ -24,10 +25,13 @@ if __package__ in {None, ""}:
 from scripts.acceptance_tests import candidate_fixtures as fx
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
 from scripts.delegate_acceptance.directories import operations
-from scripts.delegate_acceptance.private_cli import capture, finalization, supervisor
+from scripts.delegate_acceptance.private_cli import capture, finalization, leases, root_cleanup, supervisor
 from scripts.delegate_acceptance.private_cli.packaged_defaults import (
-    INSTALLED_BINARIES, InstalledBootstrap, isolated_default_state_path,
+    INSTALLED_BINARIES, AdmittedTask, InstalledBootstrap, isolated_default_state_path, register_installed_default,
+    shutdown_installed_default,
 )
+from scripts.delegate_acceptance.processes.observation import wait_until
+from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.release_verification import candidate_install_bootstrap as bootstrap
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
     BOOTSTRAP_SHUTDOWN, BootstrapTarget,
@@ -37,6 +41,8 @@ from scripts.delegate_acceptance.release_verification.contract import Verificati
 
 ROOT_ID = "1" * 32
 TASK_ID = "2" * 32
+# The canonical validator, kept to refuse a state root that is gone; cases otherwise replace its closure read.
+REAL_AUTHORIZE = root_cleanup.authorize_managed_lifetime_closure
 
 
 class ProbeCase(unittest.TestCase):
@@ -47,9 +53,9 @@ class ProbeCase(unittest.TestCase):
         self.spawns: list[dict[str, str]] = []
         self.commands: list[list[str]] = []
         self.on_spawn = None
-        guard = mock.patch.object(capture.subprocess, "Popen", self.no_spawn)
-        guard.start()
-        self.addCleanup(guard.stop)
+        self.guard = mock.patch.object(capture.subprocess, "Popen", self.no_spawn)
+        self.guard.start()
+        self.addCleanup(self.guard.stop)
         self.parent = self.tree.root / "home"
         self.installed = self.tree.root / "install" / "bin"
         self.parent.mkdir()
@@ -66,6 +72,18 @@ class ProbeCase(unittest.TestCase):
         self.probe = bootstrap.InstalledBootstrapProbe(receipt=self.receipt, locations=self.locations,
                                                        parent=self.parent)
         self.installs: list = []
+        self.disposals: list = []
+        # A closed turn's closure record is Go-written; its read is the one edge replaced for the removal.
+        closure = mock.patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=CLOSURE)
+        closure.start()
+        self.addCleanup(closure.stop)
+
+    def make_state(self, installed) -> None:
+        """The private state root a closed turn leaves: its supervisor directory with the three lock files."""
+        for name in ("transition.lock", "bootstrap.lock", ELECTION):
+            path = installed.state / ".supervisor" / name
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.touch(mode=0o600)
 
     def facts(self) -> dict:
         return self.receipt["candidate_install"]["bootstrap"]
@@ -111,8 +129,9 @@ class ProbeCase(unittest.TestCase):
 
     def core(self, outcome):
         """Replace the shared core: record its inputs, then return or raise ``outcome(installed, ledger)``."""
-        def run(installed, *, supervisor_cleanups, capture_root):
+        def run(installed, *, supervisor_cleanups, capture_root, disposal=None):
             self.installs.append((installed, capture_root))
+            self.disposals.append(disposal)
             return outcome(installed, supervisor_cleanups)
         return mock.patch.object(bootstrap, "prove_installed_default_bootstrap", run)
 
@@ -157,7 +176,11 @@ class SuccessTests(ProbeCase):
             root_id=ROOT_ID, task_id=TASK_ID, delegate_sha256="4" * 64, runner_sha256="5" * 64,
             client_sha256="6" * 64, daemon_sha256="7" * 64, outcome="committed", worker_result="success",
             termination_cause="completed", scope_empty=True)
-        with self.core(lambda _installed, _ledger: result):
+        def closed(installed, _ledger):
+            self.make_state(installed)
+            return result
+
+        with self.core(closed):
             observation = self.probe(self.target)
         self.assertEqual(observation, fx.bootstrap(fx.NATIVE_BINARIES))
         self.assertEqual(observation.shutdown, BOOTSTRAP_SHUTDOWN)
@@ -321,6 +344,7 @@ class OwnershipTests(ProbeCase):
             termination_cause="completed", scope_empty=True)
 
         def run(installed, ledger):
+            self.make_state(installed)
             if outcome is not None:
                 outcome(installed)
             return result
@@ -357,6 +381,273 @@ class OwnershipTests(ProbeCase):
         self.assertNotIn("release_failure", facts)
         self.assertTrue(self.locations["bootstrap_root"].is_dir())
         self.assertEqual(self.spawns, [])
+
+
+HOLDER = """
+import fcntl, os, sys, time
+descriptor = os.open(sys.argv[1], os.O_RDWR | os.O_NOFOLLOW)
+fcntl.flock(descriptor, fcntl.LOCK_EX)
+open(sys.argv[2], "x").close()
+deadline = time.monotonic() + 30
+while not os.path.exists(sys.argv[3]):
+    if time.monotonic() >= deadline:
+        sys.exit(3)
+    time.sleep(0.01)
+"""
+ELECTION = leases.DISPOSAL_ELECTION_LOCK
+CLOSURE = {"root_id": ROOT_ID, "inspections": {}, "tasks": {
+    TASK_ID: {"worker_wait": {"result": "success"}, "termination": {"cause": "completed", "scope_empty": True}}}}
+BARRIER_SECONDS = 10
+
+
+def election_free(state: Path) -> bool:
+    """Probe the election lock from a fresh open; this process's own held lease reads as busy too."""
+    descriptor = os.open(state / ".supervisor" / ELECTION, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(descriptor)
+
+
+class DisposalLeaseTests(ProbeCase):
+    """One DisposalLeases owner spans the verification: held from authorized shutdown through the owned delete.
+
+    The shutdown, the lease flocks, the owned root and its canonical remover are real; only the closure
+    read and the daemon stop are replaced. The capture launch guard is lifted for the one owned child.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.guard.stop()
+        self.processes = Processes(self.tree.root / "processes", {"PATH": "/usr/bin:/bin"})
+        self.holders = 0
+        self.opened: list[Path] = []
+        real_open = leases._open_held_disposal
+
+        def counted_open(state):
+            self.opened.append(state)
+            return real_open(state)
+
+        for patcher in (
+                mock.patch.object(leases, "_open_held_disposal", counted_open),
+                mock.patch.object(supervisor, "authorize_managed_lifetime_closure", return_value=CLOSURE),
+                mock.patch.object(supervisor, "shutdown_observed_supervisor"),
+                mock.patch.object(supervisor, "private_shutdown_evidence", return_value=(1, Path("endpoint"), None)),
+                mock.patch.object(supervisor, "shutdown_custody_roots", return_value=())):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def closed_turn(self, installed, ledger, *, disposal, after=None, config=False) -> InstalledBootstrap:
+        """The shared core's shutdown step on a real state root: registered, authorized, shut down, entry dropped.
+
+        ``config`` also writes the private config a dispatched supervisor has, which its pending closer requires.
+        """
+        cleanup = register_installed_default(installed, ledger)
+        self.make_state(installed)
+        if config:
+            installed.config.write_text("fixture\n")
+        admitted = AdmittedTask(root_id=ROOT_ID, task_id=TASK_ID, commands={}, pair=self.installed)
+        task = shutdown_installed_default(
+            installed, admitted, cleanup, ledger, capture_root=None, disposal=disposal)
+        if after is not None:
+            after(installed, disposal)
+        return InstalledBootstrap(
+            root_id=ROOT_ID, task_id=TASK_ID, delegate_sha256="4" * 64, runner_sha256="5" * 64,
+            client_sha256="6" * 64, daemon_sha256="7" * 64, outcome="committed",
+            worker_result=task["worker_wait"]["result"], termination_cause="completed", scope_empty=True)
+
+    def shut_down_core(self, *, after=None):
+        def run(installed, *, supervisor_cleanups, capture_root, disposal=None):
+            self.disposals.append(disposal)
+            return self.closed_turn(installed, supervisor_cleanups, disposal=disposal, after=after)
+        return mock.patch.object(bootstrap, "prove_installed_default_bootstrap", run)
+
+    def hold_election(self, state: Path):
+        """Start an owned child that holds the state's election lock until released; return its release."""
+        self.holders += 1
+        ready = self.tree.root / f"ready-{self.holders}"
+        release = self.tree.root / f"release-{self.holders}"
+        lock = state / ".supervisor" / ELECTION
+        lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock.touch(mode=0o600)
+        process = self.processes.start(
+            "election-holder", [sys.executable, "-I", "-c", HOLDER, lock, ready, release], self.tree.root)
+
+        def stop() -> None:
+            release.touch()
+            process.wait(timeout=BARRIER_SECONDS)
+
+        self.addCleanup(stop)
+        wait_until(lambda: ready.exists() or process.poll() is not None, BARRIER_SECONDS, "election holder entry")
+        self.assertTrue(ready.exists(), "the election holder exited before holding the lock")
+        return stop
+
+    def test_the_lease_taken_at_shutdown_is_held_through_the_owned_delete_without_reopening(self):
+        at_delete: list[tuple[bool, bool]] = []
+        real_remove = root_cleanup.remove_private_acceptance_root
+
+        def observed(token, entries, managed_state_roots=(), *, disposal=None, deadline=None):
+            (state, _task_ids), = managed_state_roots
+            at_delete.append((disposal.holds(state), election_free(state)))
+            return real_remove(token, entries, managed_state_roots, disposal=disposal, deadline=deadline)
+
+        with self.shut_down_core(), mock.patch.object(
+                bootstrap, "remove_private_acceptance_root", observed, create=True):
+            observation = self.probe(self.target)
+        self.assertEqual(observation.task_id, TASK_ID)
+        self.assertEqual(at_delete, [(True, False)])
+        self.assertEqual(len(self.disposals), 1)
+        (state,) = self.opened
+        self.assertEqual(state, isolated_default_state_path(self.locations["bootstrap_root"] / "h"))
+        self.assertFalse(self.locations["bootstrap_root"].exists())
+        self.assertEqual((self.facts()["status"], self.facts()["root_disposition"]), ("verified", "removed"))
+        self.assertFalse(self.owner().holds(state))
+
+    def test_an_owned_child_holding_the_election_refuses_the_delete_and_retains_the_root(self):
+        stops = []
+
+        def hold_late(installed, disposal):
+            if disposal is not None:
+                disposal.release(installed.state)
+            stops.append(self.hold_election(installed.state))
+
+        before = open_descriptors()
+        with self.shut_down_core(after=hold_late), self.assertRaises(VerificationError) as caught:
+            self.probe(self.target)
+        error = caught.exception
+        for stop in stops:
+            stop()
+        self.assertEqual(open_descriptors(), before, "the probe left owned directory pins open")
+        self.assertEqual(error.code, "candidate_bootstrap_cleanup_failed")
+        facts = self.facts()
+        self.assertEqual((facts["status"], facts["root_disposition"]), ("cleanup-failed", "retained"))
+        self.assertIn("disposal lease " + ELECTION, facts["disposal_failure"]["message"])
+        root = self.locations["bootstrap_root"]
+        self.assertTrue(all((root / name).is_dir() for name in ("c", "h", "p", "w", "r")))
+        self.assertFalse(self.owner().holds(isolated_default_state_path(root / "h")))
+
+    def test_a_state_root_renamed_after_the_core_returns_is_refused_and_the_root_is_retained(self):
+        sibling = []
+
+        def rename_state(installed, _disposal):
+            sibling.append(installed.state.with_name("delegation-layer-moved"))
+            os.rename(installed.state, sibling[0])
+
+        with self.shut_down_core(after=rename_state), mock.patch.object(
+                root_cleanup, "authorize_managed_lifetime_closure", REAL_AUTHORIZE):
+            error = self.call(VerificationError)
+        self.assertEqual(error.code, "candidate_bootstrap_cleanup_failed")
+        facts = self.facts()
+        self.assertEqual((facts["status"], facts["root_disposition"]), ("cleanup-failed", "retained"))
+        self.assertEqual(facts["disposal_failure"]["type"], "AcceptanceFailure")
+        self.assertNotIn("task_id", facts)
+        self.assertTrue((sibling[0] / ".supervisor").is_dir())
+        root = self.locations["bootstrap_root"]
+        self.assertTrue(all((root / name).is_dir() for name in ("c", "h", "p", "w", "r")))
+
+    def test_a_daemon_stop_fault_after_acquisition_recovers_under_the_exact_held_lease(self):
+        conflicts: list[str] = []
+        real_wait = leases.wait_until
+
+        def bounded_wait(predicate, **kwargs):
+            """A fresh transition-lock open conflicts with this process's own held lease; bound it, do not wait."""
+            if not predicate():
+                conflicts.append(kwargs["description"])
+                raise TimeoutError("fresh lock open conflicted with the probe's own held lease")
+            return real_wait(lambda: True, **kwargs)
+
+        stops = iter((RuntimeError("daemon stop failed"), None))
+
+        def stop_daemon(*_args, **_kwargs):
+            outcome = next(stops)
+            if outcome is not None:
+                raise outcome
+
+        def failing_core(installed, *, supervisor_cleanups, capture_root, disposal=None):
+            self.disposals.append(disposal)
+            return self.closed_turn(installed, supervisor_cleanups, disposal=disposal, config=True)
+
+        with mock.patch.object(bootstrap, "prove_installed_default_bootstrap", failing_core), \
+                mock.patch.object(supervisor, "shutdown_observed_supervisor", stop_daemon), \
+                mock.patch.object(leases, "wait_until", bounded_wait):
+            error = self.call(VerificationError)
+        self.assertEqual(conflicts, [])
+        self.assertEqual(error.code, "candidate_bootstrap_failed")
+        facts = self.facts()
+        self.assertEqual(facts["failure"], {"type": "RuntimeError", "message": "daemon stop failed"})
+        self.assertNotIn("cleanup_failures", facts)
+        self.assertNotIn("unresolved_ownership", facts)
+        self.assertEqual(self.opened, [isolated_default_state_path(self.locations["bootstrap_root"] / "h")])
+        self.assertEqual(facts["root_disposition"], "retained")
+        self.assertTrue(self.locations["bootstrap_root"].is_dir())
+        self.assertFalse(self.owner().holds(self.opened[0]))
+        self.assertTrue(election_free(self.opened[0]))
+
+    def test_a_failed_attempt_keeps_the_root_and_its_original_fault_and_frees_the_lease(self):
+        def failed(_installed, _disposal):
+            raise RuntimeError("collect did not publish success")
+
+        with self.shut_down_core(after=failed):
+            error = self.call(VerificationError)
+        self.assertEqual(error.code, "candidate_bootstrap_failed")
+        facts = self.facts()
+        self.assertEqual(facts["failure"], {"type": "RuntimeError", "message": "collect did not publish success"})
+        self.assertEqual(facts["root_disposition"], "retained")
+        root = self.locations["bootstrap_root"]
+        self.assertTrue(root.is_dir())
+        state = isolated_default_state_path(root / "h")
+        self.assertTrue(election_free(state))
+        self.assertFalse(self.owner().holds(state))
+
+    def test_an_interrupted_attempt_keeps_the_root_and_frees_the_lease(self):
+        def interrupted(_installed, _disposal):
+            raise KeyboardInterrupt
+
+        with self.shut_down_core(after=interrupted):
+            self.call(KeyboardInterrupt)
+        self.assertEqual((self.facts()["status"], self.facts()["root_disposition"]), ("interrupted", "retained"))
+        state = isolated_default_state_path(self.locations["bootstrap_root"] / "h")
+        self.assertTrue(election_free(state))
+        self.assertFalse(self.owner().holds(state))
+
+    def owner(self) -> leases.DisposalLeases:
+        """The one disposal owner the probe passed to the shared core."""
+        self.assertEqual(len(self.disposals), 1)
+        self.assertIsInstance(self.disposals[0], leases.DisposalLeases)
+        return self.disposals[0]
+
+    def failing_release(self):
+        real = leases.DisposalLeases.release_all
+
+        def release_all(owner):
+            real(owner)
+            raise OSError(errno.EIO, "close failed")
+        return mock.patch.object(leases.DisposalLeases, "release_all", release_all)
+
+    def test_a_lease_close_fault_after_the_delete_reports_cleanup_failed_with_the_actual_removal(self):
+        with self.shut_down_core(), self.failing_release():
+            error = self.call(VerificationError)
+        self.assertEqual(error.code, "candidate_bootstrap_cleanup_failed")
+        facts = self.facts()
+        self.assertEqual((facts["status"], facts["root_disposition"]), ("cleanup-failed", "removed"))
+        self.assertEqual(facts["lease_release_failure"]["type"], "OSError")
+        self.assertFalse(self.locations["bootstrap_root"].exists())
+
+    def test_a_lease_close_fault_never_replaces_the_original_failure(self):
+        def failed(_installed, _disposal):
+            raise RuntimeError("collect did not publish success")
+
+        with self.shut_down_core(after=failed), self.failing_release():
+            error = self.call(VerificationError)
+        self.assertEqual(error.code, "candidate_bootstrap_failed")
+        facts = self.facts()
+        self.assertEqual(facts["failure"]["message"], "collect did not publish success")
+        self.assertEqual(facts["root_disposition"], "retained")
+        self.assertEqual(facts["lease_release_failure"]["type"], "OSError")
+        self.assertTrue(self.locations["bootstrap_root"].is_dir())
 
 
 class FailureTests(ProbeCase):
@@ -396,6 +687,7 @@ class FailureTests(ProbeCase):
                 bootstrap, "shutdown_pending_private_supervisor", side_effect=OSError("shutdown refused")) as closer:
             root = self.assertRetained("candidate_bootstrap_unresolved")
         self.assertEqual(closer.call_args.kwargs["capture_root"].directory, root / "c")
+        self.assertIsInstance(closer.call_args.kwargs["disposal"], leases.DisposalLeases)
         facts = self.facts()
         self.assertEqual(facts["failure"]["message"], "collect did not publish success")
         self.assertEqual(facts["cleanup_failures"], [{"type": "OSError", "message": "shutdown refused"}])
@@ -408,7 +700,7 @@ class FailureTests(ProbeCase):
             self.pending(installed, ledger, config=True)
             raise RuntimeError("status observed a different task")
 
-        def closed(pending, ledger, *, capture_root):
+        def closed(pending, ledger, *, capture_root, disposal):
             ledger.remove(pending)
             return {"root_id": ROOT_ID, "tasks": {}}
 
@@ -470,12 +762,15 @@ class PendingSupervisorCloserTests(unittest.TestCase):
                       supervisor.shutdown_pending_private_supervisor)
         self.assertIs(bootstrap.shutdown_pending_private_supervisor,
                       supervisor.shutdown_pending_private_supervisor)
-        lifetime = SimpleNamespace(supervisor_cleanups=self.ledger, base_token="capture-token")
+        lifetime = SimpleNamespace(
+            supervisor_cleanups=self.ledger, base_token="root-token", capture_token="capture-token")
         errors = []
+        disposal = object()
         with mock.patch.object(finalization, "shutdown_pending_private_supervisor",
                                side_effect=RuntimeError("unverified")) as closer:
-            self.assertEqual(finalization.shutdown_supplemental_supervisors(errors, lifetime), frozenset())
-        closer.assert_called_once_with(self.pending, self.ledger, capture_root="capture-token")
+            self.assertEqual(
+                finalization.shutdown_supplemental_supervisors(errors, lifetime, disposal=disposal), frozenset())
+        closer.assert_called_once_with(self.pending, self.ledger, capture_root="capture-token", disposal=disposal)
         self.assertEqual(len(errors), 1)
         self.assertIn("packaged default supervisor shutdown remained unverified", str(errors[0]))
 

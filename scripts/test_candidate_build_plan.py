@@ -10,7 +10,7 @@ if __package__ in {None, ""}:
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.release_verification import candidate_build_plan as plan
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    ArtifactKind, encode_manifest, expected_inventory, parse_locator, parse_manifest,
+    ArtifactKind, encode_manifest, expected_inventory, parse_manifest,
 )
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 
@@ -31,7 +31,7 @@ def refused(test, code, function, *arguments, **keywords):
 
 
 def inputs():
-    return plan.build_inputs(harness_commit=COMMIT, harness_sha256="3" * 64, config_sha256="1" * 64, go_sum_sha256="2" * 64,
+    return plan.build_inputs(config_sha256="1" * 64, go_sum_sha256="2" * 64,
                              go="1.27.3", goreleaser="2.18.1", python="3.12.13", node="22.11.0")
 
 
@@ -130,8 +130,6 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual((manifest.version, manifest.build_tag), ("0.1.37", "v0.1.37"))
         self.assertEqual((manifest.source.commit, manifest.source.tree, manifest.source.base_commit),
                          (COMMIT, TREE, BASE))
-        self.assertEqual(manifest.build.harness_commit, COMMIT)
-        self.assertEqual(manifest.build.harness_sha256, "3" * 64)
         self.assertEqual(manifest.build.toolchains.go, "1.27.3")
         self.assertEqual([entry.kind for entry in manifest.artifacts].count(ArtifactKind.ARCHIVE), 4)
         self.assertEqual(parse_manifest(encode_manifest(manifest)), manifest)
@@ -149,36 +147,6 @@ class ManifestTests(unittest.TestCase):
     def test_wrong_version_inventory_is_refused(self):
         refused(self, "candidate_files_mismatch", plan.build_manifest, REQUEST, tree=TREE,
                 inputs=inputs(), files=files("0.1.36"))
-
-
-class LocatorTests(unittest.TestCase):
-    def manifest_bytes(self):
-        return encode_manifest(plan.build_manifest(REQUEST, tree=TREE, inputs=inputs(), files=files()))
-
-    def locator(self, **changes):
-        values = {"repository": "hishamkaram/delegation-layer", "run_id": 901, "run_attempt": 1,
-                  "artifact_id": 77, "artifact_digest": "sha256:" + "f" * 64,
-                  "manifest": self.manifest_bytes(), **changes}
-        return plan.locator_bytes(**values)
-
-    def test_locator_binds_container_and_manifest_digests_outside_the_manifest(self):
-        manifest = self.manifest_bytes()
-        locator = parse_locator(self.locator(manifest=manifest))
-        self.assertEqual((locator.run_id, locator.run_attempt, locator.artifact_id), (901, 1, 77))
-        self.assertEqual(locator.artifact_archive_sha256, "f" * 64)
-        self.assertEqual(locator.manifest_sha256, sha(manifest))
-        self.assertNotIn(b"f" * 64, manifest)
-        self.assertNotIn(sha(manifest).encode(), manifest)
-
-    def test_bare_digest_is_accepted_and_malformed_inputs_refused(self):
-        self.assertEqual(parse_locator(self.locator(artifact_digest="a" * 64)).artifact_archive_sha256,
-                         "a" * 64)
-        for changes in ({"artifact_digest": "sha256:xyz"}, {"artifact_digest": "A" * 64},
-                        {"artifact_id": 0}, {"run_id": True}, {"repository": "bad repo"},
-                        {"manifest": self.manifest_bytes() + b"\n"}, {"manifest": b"{}"}):
-            with self.subTest(changes=changes):
-                with self.assertRaises(VerificationError):
-                    self.locator(**changes)
 
 
 if __name__ == "__main__":

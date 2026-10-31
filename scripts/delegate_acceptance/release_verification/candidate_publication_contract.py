@@ -1,16 +1,8 @@
-"""Candidate publication reference, promotion statement, release body and delivery decisions.
+"""Pure exact-byte delivery decisions for a CI distribution.
 
-This module reads no storage, network, process or clock and stores no state.
-The canonical manifest and locator own the artifact inventory;
-``candidate_readiness`` owns readiness, the freeze authorization and
-source-tree equality; ``candidate_history`` owns the freeze record. This module
-owns only the external publication reference encoding, the truthful promotion
-statement and its release body, the exact verification block that carries that
-body under human release notes, the monotonic delivery version rule, and the
-decision whether one delivery step acts, skips or refuses given a positive
-destination observation. Release notes are presentation: no value here grants
-launch or publication authority. A transport or command failure is an I/O error and is
-never represented as absence.
+The subject is the manifest and GitHub-derived artifact identity. It carries
+no approval or mutable state. Destination readers supply positive observations;
+these functions decide whether the existing GitHub/npm/tap edge acts or skips.
 """
 
 from __future__ import annotations
@@ -19,158 +11,52 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ..evidence.digests import sha
-from .candidate_codec import VERSION_RE, encode_record, exact_fields, load_record, revision, sha256_hex, text
-from .candidate_history import PublicationAuthorization
+from .candidate_codec import VERSION_RE, text
 from .candidate_manifest import (
-    MANIFEST_PATH, ArtifactEntry, ArtifactKind, CandidateManifest, payload_paths,
+    MANIFEST_PATH, ArtifactEntry, ArtifactKind, CandidateLocator, CandidateManifest, encode_manifest, payload_paths,
 )
-from .candidate_readiness import BoundCandidate, PublicationSource, publication_source
 from .contract import HEX_SHA256, VerificationError
 from .published_contract import NPM_PACKAGE, PackageIdentity, git_blob_sha, npm_integrity, npm_shasum
-
-
-REFERENCE_STAGE = "validate-candidate-reference"
-
-
-PROMOTION_STAGE = "validate-candidate-promotion"
 
 
 STAGE = "decide-candidate-delivery"
 
 
-# The largest canonical reference (three 64-hex values) is 250 bytes; this bounds decoding only.
-MAX_REFERENCE_BYTES = 256
-
-
-PROMOTION_SCHEMA_VERSION = 1
-
-
-PROMOTION_KIND = "delegation-layer-candidate-promotion"
-
-
-_REFERENCE_FIELDS = frozenset({"candidate_id", "freeze_commit", "merged_commit"})
-
-
 @dataclass(frozen=True)
-class CandidateReference:
-    """The exact publication dispatch input: which candidate, which freeze, which merge.
-
-    It is untrusted data. A reader must still validate the committed freeze at
-    the pinned store and the merge on main before relying on any field.
-    """
-
-    candidate_id: str
-    freeze_commit: str
-    merged_commit: str
-
-    def __post_init__(self) -> None:
-        sha256_hex(self.candidate_id, REFERENCE_STAGE)
-        revision(self.freeze_commit, REFERENCE_STAGE)
-        revision(self.merged_commit, REFERENCE_STAGE)
-
-
-def encode_reference(reference: CandidateReference) -> bytes:
-    return encode_record({
-        "candidate_id": reference.candidate_id, "freeze_commit": reference.freeze_commit,
-        "merged_commit": reference.merged_commit,
-    }, REFERENCE_STAGE)
-
-
-def parse_reference(data: bytes) -> CandidateReference:
-    """Accept only the canonical encoding of exactly the three reference fields."""
-    value = load_record(data, max_bytes=MAX_REFERENCE_BYTES, stage=REFERENCE_STAGE)
-    fields = exact_fields(value, _REFERENCE_FIELDS, REFERENCE_STAGE)
-    return CandidateReference(candidate_id=fields["candidate_id"], freeze_commit=fields["freeze_commit"],
-                              merged_commit=fields["merged_commit"])
-
-
-@dataclass(frozen=True)
-class PromotionSubject:
-    """One delivered payload file and the digest of its exact bytes."""
-
+class ReleaseFile:
     name: str
     sha256: str
 
 
 @dataclass(frozen=True)
-class CandidatePromotion:
-    """Which exact candidate bytes a squash merge publishes, and nothing more.
-
-    The candidate's original build (commit, tree, base) and the merge (commit,
-    tree) stay separate facts. The statement claims identity and delivery; it
-    never claims that the promoting run built the bytes. Construction checks
-    only that the supplied values describe one candidate. It neither authorizes
-    publication nor selects a freeze; tree equality belongs to
-    ``publication_source``.
-    """
-
-    reference: CandidateReference
-    candidate: BoundCandidate
-    freeze: PublicationAuthorization
-    source: PublicationSource
+class ReleaseSubject:
+    """The exact distribution and its observed CI artifact identity."""
+    locator: CandidateLocator
+    manifest: CandidateManifest
 
     def __post_init__(self) -> None:
-        if (not isinstance(self.reference, CandidateReference)
-                or not isinstance(self.candidate, BoundCandidate)
-                or not isinstance(self.freeze, PublicationAuthorization)
-                or not isinstance(self.source, PublicationSource)):
-            raise VerificationError("candidate_promotion_invalid", PROMOTION_STAGE)
-        built = self.candidate.manifest.source
-        if (self.reference.candidate_id != self.candidate.candidate_id
-                or self.reference.merged_commit != self.source.merged_commit):
-            raise VerificationError("candidate_reference_mismatch", PROMOTION_STAGE)
-        if (self.freeze.candidate_id, self.freeze.source_commit, self.freeze.source_tree) != (
-                self.candidate.candidate_id, built.commit, built.tree):
-            raise VerificationError("candidate_promotion_freeze_mismatch", PROMOTION_STAGE)
-        canonical = publication_source(manifest=self.candidate.manifest,
-                                       merged_commit=self.source.merged_commit,
-                                       merged_tree=self.source.tree)
-        if canonical != self.source:
-            raise VerificationError("candidate_promotion_source_mismatch", PROMOTION_STAGE)
+        if (not isinstance(self.locator, CandidateLocator) or not isinstance(self.manifest, CandidateManifest)
+                or sha(encode_manifest(self.manifest)) != self.locator.manifest_sha256):
+            raise VerificationError("distribution_subject_mismatch", STAGE)
 
     @property
-    def subjects(self) -> tuple[PromotionSubject, ...]:
-        """Every payload file in canonical order, digests read from the bound manifest."""
-        manifest = self.candidate.manifest
-        digests = {entry.path: entry.sha256 for entry in manifest.artifacts}
-        digests[MANIFEST_PATH] = self.candidate.locator.manifest_sha256
-        return tuple(PromotionSubject(name=path, sha256=digests[path])
-                     for path in payload_paths(manifest.version))
+    def subjects(self) -> tuple[ReleaseFile, ...]:
+        digests = {entry.path: entry.sha256 for entry in self.manifest.artifacts}
+        digests[MANIFEST_PATH] = self.locator.manifest_sha256
+        return tuple(ReleaseFile(name, digests[name]) for name in payload_paths(self.manifest.version))
 
 
-def encode_promotion(promotion: CandidatePromotion) -> bytes:
-    """Return the deterministic promotion predicate; subjects belong to the enclosing statement."""
-    locator = promotion.candidate.locator
-    built = promotion.candidate.manifest.source
-    return encode_record({
-        "schema_version": PROMOTION_SCHEMA_VERSION, "kind": PROMOTION_KIND,
-        "candidate_id": promotion.candidate.candidate_id,
-        "locator": {
-            "repository": locator.repository, "run_id": locator.run_id, "run_attempt": locator.run_attempt,
-            "artifact_id": locator.artifact_id, "artifact_archive_sha256": locator.artifact_archive_sha256,
-            "manifest_sha256": locator.manifest_sha256,
-        },
-        "freeze": {"commit": promotion.reference.freeze_commit, "record_sha256": promotion.freeze.sha256},
-        "original_build": {"commit": built.commit, "tree": built.tree, "base_commit": built.base_commit},
-        "merged": {"commit": promotion.source.merged_commit, "tree": promotion.source.tree},
-    }, PROMOTION_STAGE)
-
-
-RELEASE_BODY_TITLE = "Development candidate promotion"
-
-
-def release_body(promotion: CandidatePromotion) -> str:
-    """Return the canonical release text: the predicate and every subject digest.
-
-    The body restates ``encode_promotion`` and ``subjects`` verbatim and adds no
-    fact of its own. It is the whole legacy release body and the exact content
-    of ``verification_block``. It grants no authority; readers still validate
-    the freeze and the merge.
-    """
-    predicate = encode_promotion(promotion).decode("utf-8").removesuffix("\n")
-    digests = tuple(f"{subject.sha256}  {subject.name}" for subject in promotion.subjects)
-    return "\n".join((RELEASE_BODY_TITLE, "", "Promotion predicate (canonical JSON):", predicate, "",
-                      "Payload SHA-256 digests:", *digests))
+def release_body(promotion: ReleaseSubject) -> str:
+    """Human-readable CI provenance and exact delivered file digests."""
+    locator = promotion.locator
+    return "\n".join((
+        "Built distribution",
+        f"Source: {promotion.manifest.source.commit}",
+        f"CI: https://github.com/{locator.repository}/actions/runs/{locator.run_id}",
+        f"Artifact: {locator.artifact_id} (producer attempt {locator.run_attempt})",
+        "",
+        *(f"{item.sha256}  {item.name}" for item in promotion.subjects),
+    ))
 
 
 # The verification block's reserved summary; it appears exactly once in an accepted composed body.
@@ -188,7 +74,7 @@ def verification_block(canonical: str) -> str:
     return _VERIFICATION_OPENER + canonical + _VERIFICATION_CLOSER
 
 
-def release_text(notes: object, promotion: CandidatePromotion) -> str:
+def release_text(notes: object, promotion: ReleaseSubject) -> str:
     """Compose untrusted human ``notes`` first and the exact verification block last.
 
     The notes are presentation only. They must be non-blank text that does not
@@ -290,7 +176,7 @@ class ReleasePlan:
         return not (self.create_draft or self.upload or self.publish)
 
 
-def decide_release(*, promotion: CandidatePromotion, observed: ObservedRelease | Absent,
+def decide_release(*, promotion: ReleaseSubject, observed: ObservedRelease | Absent,
                    resume_published: bool) -> ReleasePlan:
     """Complete only missing assets of a matching release; refuse any other difference.
 
@@ -301,9 +187,9 @@ def decide_release(*, promotion: CandidatePromotion, observed: ObservedRelease |
     if observed is Absent.ABSENT:
         _refuse_resume_mutation(resume_published)
         return ReleasePlan(create_draft=True, upload=tuple(expected), publish=True)
-    if (observed.tag, observed.prerelease) != (promotion.candidate.manifest.build_tag, False):
+    if (observed.tag, observed.prerelease) != (promotion.manifest.build_tag, False):
         raise VerificationError("candidate_release_identity_mismatch", STAGE)
-    if observed.target_commit != promotion.source.merged_commit:
+    if observed.target_commit != promotion.manifest.source.commit:
         raise VerificationError("candidate_release_target_mismatch", STAGE)
     if not release_body_matches(observed.body, release_body(promotion)):
         raise VerificationError("candidate_release_body_mismatch", STAGE)

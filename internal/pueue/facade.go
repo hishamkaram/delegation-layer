@@ -195,6 +195,10 @@ func WithBootstrapLockContext(ctx context.Context, stateRoot string, callback fu
 	return control.WithBootstrapLockContext(ctx, stateRoot, callback)
 }
 
+func WithExistingBootstrapLockContext(ctx context.Context, stateRoot string, callback func(context.Context) error) error {
+	return control.WithExistingBootstrapLockContext(ctx, stateRoot, callback)
+}
+
 func TryWithPrivateTransition(ctx context.Context, stateRoot string, callback func() error) (bool, error) {
 	return control.TryWithPrivateTransition(ctx, stateRoot, callback)
 }
@@ -464,12 +468,13 @@ var (
 )
 
 type (
-	Options                 = control.Options
-	PrivateQueueCleanupPlan = control.PrivateQueueCleanupPlan
-	CommandEvent            = control.CommandEvent
-	Identity                = control.Identity
-	Launch                  = control.Launch
-	State                   = control.State
+	Options                     = control.Options
+	PrivateQueueCleanupPlan     = control.PrivateQueueCleanupPlan
+	PrivateTerminalCustodyScope = control.PrivateTerminalCustodyScope
+	CommandEvent                = control.CommandEvent
+	Identity                    = control.Identity
+	Launch                      = control.Launch
+	State                       = control.State
 )
 
 const (

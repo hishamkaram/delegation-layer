@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,16 +24,19 @@ const providerRecheckAnswer = "principal answer"
 
 // providerRecheckSource is one sealed historical Claude-stream predicate
 // whose recorded interpretation rejects provider-native follow-up evidence
-// that the current advisory revision accepts.
+// that the current follow-up revision accepts.
 type providerRecheckSource struct {
 	provider    string
 	interactive bool
 	// opaqueContent adds an unknown content block to the root follow-up
 	// message. The frozen scoped revisions accept the neutral follow-up cycle
-	// and reject only that block; the current advisory revisions accept both.
+	// and reject only that block; the current follow-up revisions accept both.
 	opaqueContent bool
-	reference     task.PredicateRef
-	target        task.PredicateRef
+	// refusedPrincipal makes the caller's result a provider refusal, which
+	// every revision rejects.
+	refusedPrincipal bool
+	reference        task.PredicateRef
+	target           task.PredicateRef
 }
 
 // isScopedRecheckSource reports whether reference is one of the eight frozen
@@ -56,40 +60,115 @@ func isScopedRecheckSource(reference task.PredicateRef) bool {
 }
 
 // isCurrentRecheckTarget reports whether reference is one of the eight exact
-// current advisory revisions: print native-permissions-v5 (read-only) and -v6
-// (write), interactive-v6, and CCR v6 and v6-modeled.
+// current follow-up revisions: print native-permissions-v6 (read-only) and -v7
+// (write), interactive-v7, and CCR v7 and v7-modeled.
 func isCurrentRecheckTarget(reference task.PredicateRef) bool {
 	switch reference.Version + "@" + reference.SHA256 {
-	case "native-permissions-v5@a4f38219dcb1a105cf20c75f54341effde2310b6a15f61665a3b597eaa205fa8",
-		"native-permissions-v6@7b64659e74a5b11e4717b5f942efa577544c2dd0730479e0f47a05ff0402bd8b",
-		"interactive-v6@f06decd5719453bb8282dcb464befef53e0511e63b05ca71cf78b32bc622876c",
-		"interactive-v6@2e7aeed42a66ad48127010a0591187a83a39c58a02973b1037542052020b2b95",
-		"ccr-foreground-v6@7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf",
-		"ccr-foreground-v6@fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd",
-		"ccr-foreground-v6-modeled@fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa",
-		"ccr-foreground-v6-modeled@b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e":
+	case "native-permissions-v6@ad2a736b3818a894ff05cf199232b5f3ca68b12a3adedf46162a34ee13b4529e",
+		"native-permissions-v7@59e9269aec10199c1d2f1aa1dbc96e3722323a9a5280441afd71befd9835585c",
+		"interactive-v7@5ced78e26beaa8dce20007741b0d802093fb290f86cef312a247b5797806ae9a",
+		"interactive-v7@dafdd1952e3b31110f3a63c4478819a26020b3c0692722e0bfde79d78898778d",
+		"ccr-foreground-v7@7447125836ee96e2d8d16760d4dcb90c78d619bf75ef50f6343a012ffaf213cb",
+		"ccr-foreground-v7@568f56184cec02f9a853099eaf2a4b3b827baec1df97af735013d02b53ae6a6d",
+		"ccr-foreground-v7-modeled@92e13e9d0405eb9b097a78289d9e5e3b017c62f54e48dec8cb1627840732c647",
+		"ccr-foreground-v7-modeled@e61c42768544e0e79fa71a31cf5594ae31d2ad4115aa18b33c7584956b32f32d":
 		return true
 	default:
 		return false
 	}
 }
 
-// TestHistoricalClaudeStreamRechecksRecoverPrincipalThroughProductionStores
+// retainedAdvisorySources are the eight frozen principal-only advisory
+// revisions that were current before follow-up projection: print
+// native-permissions-v5 (read-only) and -v6 (write), interactive-v6, and CCR v6
+// and v6-modeled, each identified by its exact digest.
+func retainedAdvisorySources(t *testing.T) []providerRecheckSource {
+	t.Helper()
+	claudeRegistration, ccrRegistration := claude.Registration(), ccr.Registration()
+	var sources []providerRecheckSource
+	for _, spec := range []struct {
+		registration          commonprovider.Registration
+		mode, version, digest string
+	}{
+		{claudeRegistration, config.ModeReadOnly, "native-permissions-v5", "a4f38219dcb1a105cf20c75f54341effde2310b6a15f61665a3b597eaa205fa8"},
+		{claudeRegistration, config.ModeWorkspaceWrite, "native-permissions-v6", "7b64659e74a5b11e4717b5f942efa577544c2dd0730479e0f47a05ff0402bd8b"},
+		{claudeRegistration, config.ModeReadOnly, "interactive-v6", "f06decd5719453bb8282dcb464befef53e0511e63b05ca71cf78b32bc622876c"},
+		{claudeRegistration, config.ModeWorkspaceWrite, "interactive-v6", "2e7aeed42a66ad48127010a0591187a83a39c58a02973b1037542052020b2b95"},
+		{ccrRegistration, config.ModeReadOnly, "ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"},
+		{ccrRegistration, config.ModeWorkspaceWrite, "ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"},
+		{ccrRegistration, config.ModeReadOnly, "ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"},
+		{ccrRegistration, config.ModeWorkspaceWrite, "ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"},
+	} {
+		sources = append(sources, providerRecheckSource{
+			provider: spec.registration.Description.ID, interactive: strings.HasPrefix(spec.version, "interactive-"),
+			reference: exactReference(t, spec.registration, spec.mode, spec.version, spec.digest),
+		})
+	}
+	return sources
+}
+
+// expectedCurrentClaudeStreamAnswer is an independent oracle for the current
+// Claude-stream revisions over a valid fixture stream: every nonempty root
+// result is an answer; one answer is published exactly, and several are framed
+// in stream order with their decoded UTF-8 byte lengths.
+func expectedCurrentClaudeStreamAnswer(t *testing.T, stdout string) string {
+	t.Helper()
+	type answer struct {
+		index        int
+		origin, body string
+	}
+	var answers []answer
+	for line := range strings.SplitSeq(strings.TrimSuffix(stdout, "\n"), "\n") {
+		var record struct {
+			Type   string `json:"type"`
+			Result string `json:"result"`
+			Index  int    `json:"result_index"`
+			Origin *struct {
+				Kind string `json:"kind"`
+			} `json:"origin"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record.Type != "result" || record.Result == "" {
+			continue
+		}
+		origin := "caller"
+		if record.Origin != nil {
+			origin = record.Origin.Kind
+		}
+		answers = append(answers, answer{index: record.Index, origin: origin, body: record.Result})
+	}
+	if len(answers) == 1 {
+		return answers[0].body
+	}
+	var framed strings.Builder
+	framed.WriteString("[delegate responses v1]\n")
+	for _, a := range answers {
+		fmt.Fprintf(&framed, "[delegate response result_index=%d origin=%s bytes=%d]\n%s\n", a.index, a.origin, len(a.body), a.body)
+	}
+	return framed.String()
+}
+
+// TestHistoricalClaudeStreamRechecksRecoverCurrentAnswerThroughProductionStores
 // seals each eligible source in a production task store, publishes its
-// original rejection, then runs the public recheck command twice.
-func TestHistoricalClaudeStreamRechecksRecoverPrincipalThroughProductionStores(t *testing.T) {
+// original rejection, then runs the public recheck command twice. The derived
+// answer is the current target's: every accepted root answer, framed.
+func TestHistoricalClaudeStreamRechecksRecoverCurrentAnswerThroughProductionStores(t *testing.T) {
 	registry := NativeCatalog().Registry()
 	sources := providerRecheckSources(t, registry)
 	for _, source := range sources {
 		t.Run(source.provider+"/"+source.reference.Mode+"/"+source.reference.Version, func(t *testing.T) {
 			root, taskID := sealedProviderRecheckTask(t, registry, source)
+			// Answer bodies never carry the session, so a fixed one suffices.
+			want := expectedCurrentClaudeStreamAnswer(t, providerRecheckStdout(source, "00000000-0000-0000-0000-000000000000"))
 			first := runRecheckTestCommand(t, registry, root, taskID, "recheck", 0)
-			assertRecoveredResponse(t, first, source.target, providerRecheckAnswer)
+			assertRecoveredResponse(t, first, source.target, want)
 			cached := runRecheckTestCommand(t, registry, root, taskID, "recheck", 0)
 			if cached.Recheck == nil || cached.Recheck.AssessmentID != first.Recheck.AssessmentID || cached.Recheck.Target != source.target {
 				t.Fatalf("cached recheck changed: first=%+v cached=%+v", first.Recheck, cached.Recheck)
 			}
-			assertRecoveredResponse(t, cached, source.target, providerRecheckAnswer)
+			assertRecoveredResponse(t, cached, source.target, want)
 			if collect := runRecheckTestCommand(t, registry, root, taskID, "collect", 4); collect.Publication != task.PublicationRejected.String() {
 				t.Fatalf("original rejection changed: %+v", collect)
 			}
@@ -241,8 +320,9 @@ func createProviderRecheckTask(t *testing.T, store *taskdir.Store, taskID string
 // input closure. Every revision before the scoped one, including the unscoped
 // interactive-v4, rejects it. With opaqueContent the root follow-up message
 // also carries an unknown content block, which every frozen revision including
-// the scoped ones rejects; the current advisory revisions publish the
-// principal answer from either stream.
+// the scoped ones rejects; the current follow-up revisions publish every root
+// answer from either stream. With refusedPrincipal the caller's result is a
+// provider refusal that every revision rejects.
 func providerRecheckStdout(source providerRecheckSource, session string) string {
 	permission := "plan"
 	if source.reference.Mode == config.ModeWorkspaceWrite {
@@ -250,7 +330,11 @@ func providerRecheckStdout(source providerRecheckSource, session string) string 
 	}
 	init := fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":"fixture","apiKeySource":"none","cwd":"/workspace","tools":["Read"],"mcp_servers":[],"model":"fixture","permissionMode":%q}`, session, permission)
 	result := `{"type":"result","subtype":"success","is_error":false,"result":%q,"stop_reason":"end_turn","session_id":%q,"terminal_reason":"completed","queued_turn_count":0,"num_turns":1%s}`
-	lines := []string{init, fmt.Sprintf(result, providerRecheckAnswer, session, `,"result_index":0`)}
+	principal := fmt.Sprintf(result, providerRecheckAnswer, session, `,"result_index":0`)
+	if source.refusedPrincipal {
+		principal = strings.Replace(principal, `"stop_reason":"end_turn"`, `"stop_reason":"refusal"`, 1)
+	}
+	lines := []string{init, principal}
 	if source.interactive {
 		lines = append(lines, `{"type":"system","subtype":"session_state_changed","state":"idle"}`)
 	}
@@ -285,7 +369,7 @@ func TestProviderRecheckFixtureKeepsSealedEvidenceImmutable(t *testing.T) {
 // TestScopedRecheckSourcesRejectOnlyOpaqueContent keeps the frozen scoped
 // semantics visible: each scoped source publishes the principal answer from
 // the neutral follow-up cycle, so its recheck rejection above comes only from
-// the unknown content block the current advisory revision accepts.
+// the unknown content block the current follow-up revision accepts.
 func TestScopedRecheckSourcesRejectOnlyOpaqueContent(t *testing.T) {
 	registry := NativeCatalog().Registry()
 	for _, source := range providerRecheckSources(t, registry) {
@@ -301,6 +385,29 @@ func TestScopedRecheckSourcesRejectOnlyOpaqueContent(t *testing.T) {
 			answer, err := os.ReadFile(filepath.Join(root, "tasks", taskID, outcome.Payload.Basename))
 			if err != nil || string(answer) != providerRecheckAnswer {
 				t.Fatalf("scoped source answer=%q err=%v, want %q", answer, err, providerRecheckAnswer)
+			}
+		})
+	}
+}
+
+// TestRetainedAdvisoryRejectionsDoNotAdvertiseRecheck keeps collect's guidance
+// for the frozen advisory revisions. The current follow-up revisions share
+// their verdict rules and differ only in answer projection, the failed-request
+// class, and the quota diagnostic, so no rejected advisory evidence is
+// recoverable: such a source must not resolve a recovery target, and collect
+// must keep stop_and_report instead of offering a recheck that re-rejects.
+func TestRetainedAdvisoryRejectionsDoNotAdvertiseRecheck(t *testing.T) {
+	registry := NativeCatalog().Registry()
+	for _, source := range retainedAdvisorySources(t) {
+		t.Run(source.provider+"/"+source.reference.Mode+"/"+source.reference.Version, func(t *testing.T) {
+			if recovery, err := registry.ResolveRecovery(source.reference); err == nil {
+				t.Errorf("frozen advisory source offers recovery target %+v", recovery.Target())
+			}
+			source.refusedPrincipal = true
+			root, taskID := sealedProviderRecheckTask(t, registry, source)
+			collect := runRecheckTestCommand(t, registry, root, taskID, "collect", 4)
+			if collect.Failure == nil || collect.Failure.NextAction != "stop_and_report" {
+				t.Fatalf("rejected advisory task advertises %+v, want stop_and_report", collect.Failure)
 			}
 		})
 	}

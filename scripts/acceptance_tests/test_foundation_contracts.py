@@ -1,9 +1,5 @@
-"""Compatibility and import contracts for the shared foundation extraction."""
+"""Canonical state ownership and import behavior of the shared foundation."""
 
-import ast
-import hashlib
-import importlib
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -17,61 +13,6 @@ from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
 class FoundationContractTests(unittest.TestCase):
-    def setUp(self):
-        fixture_path = Path(__file__).with_name("shared_foundation_contract.json")
-        self.contract = json.loads(fixture_path.read_text(encoding="utf-8"))
-
-    def defining_node(self, value):
-        module = importlib.import_module(value.__module__)
-        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-        return next(node for node in tree.body
-                    if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-                    and node.name == value.__name__)
-
-    def test_every_baseline_export_and_callable_signature_is_preserved(self):
-        for module_name, contract in self.contract["modules"].items():
-            module = importlib.import_module("scripts." + module_name)
-            for name in contract["public_exports"]:
-                with self.subTest(module=module_name, export=name):
-                    self.assertTrue(hasattr(module, name))
-            for name, expected in contract["functions"].items():
-                with self.subTest(module=module_name, function=name):
-                    node = self.defining_node(getattr(module, name))
-                    arguments = node.args
-                    if module_name == "acceptance_provider_common" and name in {
-                            "_validate_managed_lifetime", "_validate_lifetime_absence_completion",
-                            "_inspection_exit_authority"}:
-                        self.assertEqual(arguments.args, [])
-                        self.assertIsNone(arguments.vararg)
-                        self.assertIsNone(arguments.kwarg)
-                        first_default = next((index for index, value in enumerate(arguments.kw_defaults)
-                                              if value is not None), len(arguments.kw_defaults))
-                        self.assertTrue(all(value is not None
-                                            for value in arguments.kw_defaults[first_default:]))
-                        arguments.args = arguments.kwonlyargs
-                        arguments.defaults = arguments.kw_defaults[first_default:]
-                        arguments.kwonlyargs = []
-                        arguments.kw_defaults = []
-                    self.assertEqual(ast.dump(arguments), expected)
-            for name, methods in contract["classes"].items():
-                node = self.defining_node(getattr(module, name))
-                actual = {method.name: ast.dump(method.args) for method in node.body
-                          if isinstance(method, ast.FunctionDef)}
-                with self.subTest(module=module_name, owner=name):
-                    self.assertEqual(actual, methods)
-
-    def test_frozen_registry_methods_keep_their_baseline_statements(self):
-        for module_name, contract in self.contract["modules"].items():
-            module = importlib.import_module("scripts." + module_name)
-            for name, methods in contract["frozen_methods"].items():
-                node = self.defining_node(getattr(module, name))
-                actual = {method.name: method for method in node.body
-                          if isinstance(method, ast.FunctionDef)}
-                for method, expected in methods.items():
-                    with self.subTest(owner=name, method=method):
-                        digest = hashlib.sha256(ast.dump(actual[method]).encode()).hexdigest()
-                        self.assertEqual(digest, expected)
-
     def test_facades_alias_the_same_canonical_state_owners(self):
         self.assertIs(supervisor.Process, Process)
         self.assertIs(supervisor.Processes, Processes)

@@ -32,6 +32,16 @@ type ProfileCandidate struct {
 	// request and predicate, never from runtime observations.
 	Admit    func() (PreparedProfile, error)
 	Finalize func(facts json.RawMessage, now time.Time) (PreparedProfile, error)
+	// AcceptRefreshedNativeFacts optionally decides whether a fresh native
+	// projection that differs from the admission proof still supports the
+	// launch this candidate records. Core calls it only for a mixed native and
+	// runtime inspection, after both envelopes decode with runtime facts and
+	// both projections are valid JSON objects; it receives their canonical
+	// bytes. It is pure, returns nil or only NativeFactsRefusalError values,
+	// and cannot relax anything else. Nil keeps exact canonical equality. An
+	// accepted difference never rewrites the stored facts: Finalize receives
+	// the fresh observation unchanged.
+	AcceptRefreshedNativeFacts func(stored, fresh json.RawMessage) error
 }
 
 // AdmissionProfile is the single boundary for a runtime-only static profile.

@@ -1,6 +1,5 @@
 """GitHub transport uses the canonical bounded owner without logging secrets."""
 
-import base64
 import contextlib
 import errno
 from functools import partial
@@ -15,7 +14,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.native_evidence.public_contract import MAX_PUBLIC_ZIP_BYTES
 from scripts.delegate_acceptance.processes import operations
 from scripts.delegate_acceptance.processes.contracts import (
     BoundedCommandError, BoundedCommandResult, CommandFailure,
@@ -433,14 +431,13 @@ class GitHubJsonBodyTests(FakeGhCase):
         self.assertEqual(record["body_sha256"], hashlib.sha256(encoded.encode()).hexdigest())
         self.assert_no_secret(argv, self.receipt)
 
-    def test_largest_supported_proof_fits_a_base64_git_blob_request(self):
-        # Capacity only: the bytes are a pattern, not a semantic proof. If the public
-        # proof bound grows past this transport's cap, this test fails before a PR does.
-        proof = (bytes(range(256)) * (MAX_PUBLIC_ZIP_BYTES // 256 + 1))[:MAX_PUBLIC_ZIP_BYTES]
-        body = {"content": base64.b64encode(proof).decode("ascii"), "encoding": "base64"}
+    def test_request_at_transport_bound_uses_the_owned_input_file(self):
+        # Distribution archives are streamed downloads, not JSON request bodies.
+        overhead = len(json.dumps({"content": ""}, separators=(",", ":")))
+        body = {"content": "x" * (github.MAX_REQUEST_BODY - overhead)}
         encoded = json.dumps(body, allow_nan=False, sort_keys=True, separators=(",", ":"))
-        self.assertLess(len(encoded), github.MAX_REQUEST_BODY)
-        self.assertEqual(self.send(body, endpoint="repos/owner/repo/git/blobs"), {"ok": True})
+        self.assertEqual(len(encoded), github.MAX_REQUEST_BODY)
+        self.assertEqual(self.send(body), {"ok": True})
         invocation = self.invocation()
         self.assertEqual(invocation["body"], encoded)
         argv = invocation["argv"]

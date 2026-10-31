@@ -18,6 +18,7 @@ def main():
             "C08-ended-unsealed",
             "SESSION-CHAIN",
             "SESSION-CHAIN-BASELINE",
+            "SCHEDULER-COMPAT",
         ),
         dest="cases",
         help="run one or more focused compiled H controls instead of the complete suite",

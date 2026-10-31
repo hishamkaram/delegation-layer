@@ -1,96 +1,46 @@
 ---
 name: go-implementer
-description: Implement a bounded Go change while preserving delegation contracts, compatibility, and the repository quality gate.
+description: Implement a bounded Go behavior change with meaningful tests and preserved subsystem ownership.
 ---
 
 # Go implementer
 
-## Trigger
-
-Use this skill when implementing an assigned Go runtime, catalog, adapter, or
-shared preparation change. The assignment must name an owned file boundary and
-an observable behavior. Use [go-test-writer](../go-test-writer/SKILL.md) when
-the primary work is test design, and [go-concurrency](../go-concurrency/SKILL.md)
-when lifetimes or races are the primary risk.
-
-Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
-[delegation invariants](../../agents/_data/delegation-invariants.md),
-[adapter contract](../../agents/_data/adapter-contract.md), and
-[code-quality floor](../../agents/_data/code-quality-floor.md).
-
-For supervisor changes, apply the recovery and verification section of the
-[shared contract](../../agents/_data/maintainability-contract.md#recovery-and-verification).
-For process, supervisor, endpoint, or cleanup changes, also apply its
-[native portability proof](../../agents/_data/maintainability-contract.md#native-portability-proof).
+Use for an assigned runtime, catalog, adapter or preparation change. Use the
+test-writer skill for test design or concurrency skill for lifetime/race work.
 
 ## Inputs
 
-- the bounded implementation handoff, affected canonical transition row IDs,
-  and fixed interface contract;
-- Root's [initial
-  brief](../../agents/_data/maintainability-contract.md#delivery-slices-and-the-initial-brief)
-  for the slice;
-- exact owned files, affected consumers, and compatibility constraints;
-- existing error and persistence behavior;
-- deterministic fixtures or mocks for the relevant success and failure paths.
+An exact base, owned files, stable interface prerequisites, behavior/non-goals,
+real consumers and done condition. Confirm the tools this assignment needs in
+your launch context. A setup failure is blocked, not a passing check or reason
+to repair global configuration.
 
-## Workflow
+Read [module boundaries](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
+and the [quality floor](../../agents/_data/code-quality-floor.md). Consult
+[adapter rules](../../agents/_data/adapter-contract.md) only for provider work,
+and [lifecycle tests](../../agents/_data/maintainability-contract.md#lifecycle-tests)
+for changed durable or process behavior.
 
-1. Confirm the base revision, owned files, and interface prerequisites. Each
-   prerequisite needs its post-image applied in your checkout with evidence
-   there; it need not be merged. Confirm in your own launch context that the
-   tools you rely on run, and keep a setup failure apart from an expected-red
-   test (see the contract's [worker check
-   levels](../../agents/_data/maintainability-contract.md#worker-check-levels)).
-   If the assignment explicitly requests a patch proposal, deliver the proposal
-   and label it as one: it leaves owned files unchanged and is not
-   implementation-complete.
-2. Read the named contracts and inspect the relevant consumers before editing.
-   Preserve unrelated worktree changes and keep the change inside its assigned
-   boundary.
-3. Implement the smallest consumer-owned interface that carries the required
-   data. Keep provider argument/configuration/identity interpretation local to
-   the provider and shared process/evidence/publication mechanics in the core.
-4. Preserve context propagation within each execution lifetime, wrapped error
-   identity, durable record semantics, nullable usage values, and explicit
-   unsupported-option failures. For every create-once record, apply the
-   invariants' [ambiguous-write
-   classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
-5. Update the [canonical transition
-   rows](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests)
-   and add their named composed tests through each affected production store and
-   real consumer. Use fakes only for isolated protocol ordering; avoid tests
-   that merely mirror implementation branches.
-   Keep shared lifecycle policy OS-neutral and isolate only primitives whose
-   semantics differ; do not emulate one supported kernel to claim another.
-6. Run `make fmt-check`, the affected focused tests, and `make verify-skills`;
-   require `make verify-maintainability-strict` and the applicable project gate
-   before peer review. A documentation-only assignment needs only the checks it
-   touches, not the Go toolchain. A staged checkpoint names any blocked shared
-   gate and remains incomplete. Do not suppress a linter or weaken an assertion
-   to obtain a pass.
+## Work
 
-## Deliverables
+1. Inspect the affected callers and tests. Preserve others' edits. Confirm an
+   upstream post-image is applied and checked before dependent implementation.
+2. Name the state owner/invariant; keep data, decisions and I/O separate. Use
+   existing values and consumer-owned ports. Do not extract a helper that just
+   passes an entire local state through a long positional argument list.
+3. Preserve contexts, wrapped errors, persisted behavior, permissions and
+   session identity. Use canonical transactions, resolvers and finalizers.
+4. Add meaningful success/failure regressions. Prove a bug test fails for its
+   intended assertion; unrelated compile/setup failures are not expected red.
+5. Run formatting and affected tests, with race detection for concurrent paths.
+   Run relevant maintainability checks when boundaries change. Do not invoke
+   unchanged full aggregates after their focused subsets merely for another pass.
 
-- the bounded Go implementation and any necessary fixtures, or the requested
-  patch proposal;
-- the exact changed post-images (paths and digests), not only the owned files;
-- tests that prove the changed behavior and important failure paths; and
-- the contract's [evidence
-  handoff](../../agents/_data/maintainability-contract.md#handoff-evidence),
-  naming the exact snapshot, binaries, commands, receipts, and known limits.
+## Result
 
-## Exit criteria
-
-- The implementation compiles and the affected tests pass with race detection
-  where the project gate requires it.
-- Every affected supported OS has native evidence for its changed runtime path;
-  cross-build success is recorded only as a build result.
-- The [canonical forbidden-signal
-  policy](../../agents/_data/delegation-invariants.md#forbidden-signal-policy),
-  global provider configuration boundary, paid-work at-most-once rule, and core
-  ownership boundary remain intact.
-- Error context, identity/session matching, sealing/publication authority, and
-  backward compatibility are covered by evidence.
-- The worktree contains no planning-document, commit, PR, or merge mutation
-  outside the assignment.
+Deliver actual changes when assigned implementation; a patch proposal is not
+implementation completion. Report changed files, commands/results and blockers
+concisely to Root. Root owns shared integration, Git and final checks/review.
+No contributor fingerprint manifest, handoff index or receipt is required.
+Changed OS primitives need [native validation](../../agents/_data/maintainability-contract.md#native-platform-checks)
+before claiming supported-host behavior.

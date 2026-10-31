@@ -76,6 +76,7 @@ def capacity_lease_specifications(state, responses, waiter_directory, lease_nonc
                 "assurance": registration["assurance"],
                 "scope_plan_sha256": hashlib.sha256(intent["scope_plan"].encode()).hexdigest(),
                 "scope_id_sha256": hashlib.sha256(registration["scope_id"].encode()).hexdigest(),
+                "deadline": intent.get("deadline"),
             }
         )
     pids = [specification["pid"] for specification in specifications]

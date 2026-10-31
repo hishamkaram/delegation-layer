@@ -512,6 +512,9 @@ func (c Catalog) candidate(request task.TaskRecord, environment []string, prepar
 	if candidate.Finalize == nil {
 		return ProfileCandidate{}, fmt.Errorf("%w: missing candidate finalizer", ErrProfileUnavailable)
 	}
+	if candidate.AcceptRefreshedNativeFacts != nil && (candidate.Inspection == nil || candidate.Inspection.Runtime == nil || candidate.Inspection.RuntimeOnly()) {
+		return ProfileCandidate{}, fmt.Errorf("%w: a refreshed native facts decision requires a mixed native and runtime inspection", ErrProfileUnavailable)
+	}
 	candidate.WritableRoots = slices.Clone(candidate.WritableRoots)
 	if candidate.Inspection != nil {
 		definition, _, snapshotErr := candidate.Inspection.Snapshot()

@@ -28,15 +28,7 @@ from scripts.delegate_acceptance.release_verification import candidate_install a
 from scripts.delegate_acceptance.release_verification import published_homebrew
 from scripts.delegate_acceptance.release_verification.assets import exercise_default_path, inspect_binaries
 from scripts.delegate_acceptance.release_verification.candidate_install_brew import observe_brew_install
-from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    ArtifactRef, BootstrapTarget, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest, HarnessIdentity, InstallChannel,
-    InstallProof, ManifestArtifactBinding, RequestRecord, SourceFileBinding, encode_install_proof, encode_install_witness,
-    read_install_proof,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    ArtifactEntry, ArtifactKind, BuildInputs, CandidateManifest, SourceIdentity, Toolchains, encode_manifest,
-    expected_inventory,
-)
+from scripts.delegate_acceptance.release_verification.candidate_install_contract import BootstrapTarget, CandidateFiles, CandidateInstallRequest
 from scripts.delegate_acceptance.release_verification import commands
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import (
@@ -57,6 +49,9 @@ DARWIN = {"os": "Darwin", "kernel": "24.0.0", "arch": "arm64"}
 LINUX = {"os": "Linux", "kernel": "6.8.0", "arch": "amd64"}
 UNSUPPORTED = {"os": "FreeBSD", "kernel": "14.1", "arch": "amd64"}
 FORMULA = b'class DelegationLayer < Formula\n  url "https://example.invalid/unpublished.tar.gz"\nend\n'
+# Current Homebrew advertises ``trust`` and refuses an untrusted tap formula; legacy Brew lacks the command.
+CURRENT_COMMANDS = b"cache\ncommands\ninfo\ninstall\ntap-new\ntest\ntrust\nuntrust\n"
+LEGACY_COMMANDS = b"cache\ncommands\ninfo\ninstall\ntap-new\ntest\n"
 
 
 class BrewPorts:
@@ -79,7 +74,9 @@ class BrewPorts:
                 return self.execute(receipt, name, argv, env, capture=capture, timeout=timeout, cwd=cwd)
             receipt["commands"].append({"name": name, "argv": argv, "exit_code": 0})
             handler = self.overrides.get(name) or getattr(self.case, "brew_" + name.replace("-", "_"), None)
-            return b"" if handler is None else handler(argv, env)
+            if handler is None:
+                raise AssertionError("unmodelled brew child: " + name)
+            return handler(argv, env)
 
         return self.case.tree.observe_operation(child)
 
@@ -116,6 +113,8 @@ class BrewCase(unittest.TestCase):
         self.layout = install.open_workspace(owner=self.tree.owner, parent=root / "runner", receipt=self.receipt)
         self.recording = BrewPorts(self)
         self.probe = RecordingProbe()
+        self.commands = CURRENT_COMMANDS
+        self.trusted: dict[str, set[str]] = {}  # private HOME -> exactly granted formula specs
         # Only the prefix value moves into the tree; which OS has a prefix stays the real policy.
         patch = mock.patch.object(published_homebrew, "homebrew_prefixes",
                                   lambda os_name: (str(self.prefix),) if homebrew_prefixes(os_name) else ())
@@ -138,14 +137,42 @@ class BrewCase(unittest.TestCase):
             self.observe(request)
         self.assertEqual(caught.exception.code, code)
 
+    def tearDown_case(self) -> None:
+        """Give each subtest a fresh workspace and tap; the fixture tree still owns all of it.
+
+        A child the tree holds unresolved may still use the tap, so nothing is reset beneath it.
+        """
+        self.assertIsNone(self.tree.unresolved, "no reset beneath an unresolved child")
+        self.recording = BrewPorts(self)
+        self.receipt = new_receipt("candidate-install", TAG, "a" * 40)
+        self.layout = install.open_workspace(owner=self.tree.owner, parent=self.tree.root / "runner",
+                                             receipt=self.receipt)
+        if self.tap_dir.exists():
+            shutil.rmtree(self.tap_dir)
+
     def cache_file(self, env) -> Path:
         return Path(env["HOMEBREW_CACHE"]) / "downloads" / f"0123--delegation-layer-{VERSION}.tar.gz"
 
     def brew_homebrew_prefix(self, argv, env):
         return f"{self.prefix}\n".encode()
 
+    def brew_homebrew_taps(self, argv, env):
+        return b""
+
     def brew_homebrew_installed(self, argv, env):
         return b"git\n"
+
+    def brew_candidate_brew_commands(self, argv, env):
+        return self.commands
+
+    def brew_candidate_brew_trust(self, argv, env):
+        if (self.tap_dir / "Formula" / "delegation-layer.rb").read_bytes() != FORMULA:
+            raise VerificationError("command_failed", "candidate-brew-trust")
+        self.trusted.setdefault(env["HOME"], set()).add(argv[-1])
+        return b""
+
+    def brew_candidate_brew_test(self, argv, env):
+        return b""
 
     def brew_candidate_brew_tap_new(self, argv, env):
         self.tap_dir.mkdir(parents=True)
@@ -155,6 +182,8 @@ class BrewCase(unittest.TestCase):
         return f"{self.tap_dir}\n".encode()
 
     def brew_candidate_brew_cache_path(self, argv, env):
+        if b"trust" in self.commands.split() and argv[-1] not in self.trusted.get(env["HOME"], ()):
+            raise VerificationError("command_failed", "candidate-brew-cache-path")  # untrusted tap formula
         return f"{self.cache_file(env)}\n".encode()
 
     def brew_candidate_brew_install(self, argv, env):
@@ -190,10 +219,12 @@ class ObservationTest(BrewCase):
         self.assertEqual(dict(observation.binaries), {name: sha(data) for name, data in self.binaries.items()})
         self.assertEqual((observation.delegate_version, observation.default_state), (VERSION, EXPECTED_DEFAULT_STATE))
         names = self.recording.names()
-        self.assertEqual(names[:4], ["homebrew-prefix", "homebrew-taps", "homebrew-installed", "candidate-brew-tap-new"])
-        self.assertEqual(names[4:], [
-            "candidate-brew-tap-repository", "candidate-brew-cache-path", "candidate-brew-install",
-            "candidate-brew-info", "candidate-brew-keg", "delegate-version", "pueue-version", "pueued-version",
+        self.assertEqual(names[:5], ["homebrew-prefix", "homebrew-taps", "homebrew-installed",
+                                     "candidate-brew-commands", "candidate-brew-tap-new"])
+        self.assertEqual(names[5:], [
+            "candidate-brew-tap-repository", "candidate-brew-trust", "candidate-brew-cache-path",
+            "candidate-brew-install", "candidate-brew-info", "candidate-brew-keg", "delegate-version", "pueue-version",
+            "pueued-version",
             "delegate-providers", "delegate-capabilities", "delegate-default-supervisor-status",
             "candidate-brew-test"])
         argv = {name: argv for name, argv, _env in self.recording.calls}
@@ -282,6 +313,70 @@ class ObservationTest(BrewCase):
         self.assertNotIn("delegate-version", self.recording.names())
 
 
+class TrustTest(BrewCase):
+    """Current Brew trusts only the exact validated formula, in the private HOME, before the cache query."""
+
+    def observe_or_fail(self):
+        try:
+            return self.observe()
+        except VerificationError as error:
+            self.fail(f"current Homebrew observation failed: {error.code} at {error.stage}")
+
+    def test_the_exact_formula_is_trusted_in_the_private_home_after_validation_and_before_the_cache(self):
+        self.observe_or_fail()
+        calls = self.recording.brew_calls()
+        names = [name for name, _argv, _env in calls]
+        argv = {name: argv for name, argv, _env in calls}
+        spec = self.receipt["candidate_brew"]["spec"]
+        self.assertEqual(argv["candidate-brew-commands"], [str(self.brew), "commands", "--quiet"])
+        self.assertEqual(argv["candidate-brew-trust"], [str(self.brew), "trust", "--formula", spec])
+        self.assertLess(names.index("candidate-brew-commands"), names.index("candidate-brew-tap-new"))
+        self.assertEqual(names[names.index("candidate-brew-tap-repository") + 1:][:2],
+                         ["candidate-brew-trust", "candidate-brew-cache-path"])
+        self.assertEqual([name for name in names if "trust" in name], ["candidate-brew-trust"])
+        self.assertFalse(any("--version" in arguments or "--tap" in arguments for arguments in argv.values()))
+        homes = {env["HOME"] for _name, _argv, env in calls}
+        self.assertEqual(len(homes), 1)
+        (home,) = homes
+        self.assertTrue(Path(home).is_relative_to(self.layout.root))
+        self.assertEqual(self.trusted, {home: {spec}})
+        self.assertEqual(self.receipt["candidate_brew"].get("trust"), "formula")
+
+    def test_legacy_brew_without_trust_installs_without_a_trust_call(self):
+        self.commands = LEGACY_COMMANDS
+        self.observe_or_fail()
+        self.assertNotIn("candidate-brew-trust", self.recording.names())
+        self.assertEqual(self.receipt["candidate_brew"].get("trust"), "not-advertised")
+        self.assertEqual(self.trusted, {})
+
+    def test_an_unusable_command_inventory_stops_before_the_tap_cache_or_install(self):
+        def failed(argv, env):
+            raise VerificationError("command_failed", "candidate-brew-commands")
+
+        cases = {"failed": (failed, "command_failed"), "empty": (b"", "homebrew_commands_invalid"),
+                 "undecodable": (b"install\ntap-new\n\xff\n", "homebrew_commands_invalid"),
+                 "no tap-new": (b"install\ntrust\n", "homebrew_commands_invalid"),
+                 "no install": (b"installer\ntap-new\ntrust\n", "homebrew_commands_invalid")}
+        for label, (reply, code) in cases.items():
+            with self.subTest(label):
+                self.tearDown_case()
+                self.recording.overrides["candidate-brew-commands"] = (
+                    reply if callable(reply) else lambda argv, env, reply=reply: reply)
+                self.assertCode(code)
+                self.assertEqual(self.recording.names()[-1], "candidate-brew-commands")
+                self.assertFalse(self.tap_dir.exists())
+
+    def test_a_trust_fault_stops_before_the_cache_and_install_and_keeps_the_tap(self):
+        def refused(argv, env):
+            raise VerificationError("command_failed", "candidate-brew-trust")
+
+        self.recording.overrides["candidate-brew-trust"] = refused
+        self.assertCode("command_failed")
+        self.assertEqual(self.recording.names()[-1], "candidate-brew-trust")
+        self.assertEqual(self.receipt["candidate_brew"].get("trust"), "pending")
+        self.assertEqual((self.tap_dir / "Formula" / "delegation-layer.rb").read_bytes(), FORMULA)
+
+
 class RefusalTest(BrewCase):
     def test_non_fresh_homebrew_is_refused_before_the_tap_exists(self):
         self.recording.overrides["homebrew-installed"] = lambda argv, env: b"delegation-layer\n"
@@ -315,19 +410,6 @@ class RefusalTest(BrewCase):
                 self.assertCode("homebrew_cache_unexpected")
                 self.assertNotIn("candidate-brew-install", self.recording.names())
                 self.assertEqual(list(self.outside.iterdir()), [])
-
-    def tearDown_case(self) -> None:
-        """Give each subtest a fresh workspace and tap; the fixture tree still owns all of it.
-
-        A child the tree holds unresolved may still use the tap, so nothing is reset beneath it.
-        """
-        self.assertIsNone(self.tree.unresolved, "no reset beneath an unresolved child")
-        self.recording = BrewPorts(self)
-        self.receipt = new_receipt("candidate-install", TAG, "a" * 40)
-        self.layout = install.open_workspace(owner=self.tree.owner, parent=self.tree.root / "runner",
-                                             receipt=self.receipt)
-        if self.tap_dir.exists():
-            shutil.rmtree(self.tap_dir)
 
     def test_a_reset_after_an_unresolved_child_refuses_and_keeps_the_tap(self):
         injected = BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT)
@@ -573,64 +655,6 @@ class FixtureLifetimeTest(BrewCase):
         self.assertEqual(launches.call_count, 0)
         self.tree.remove_retained()
         self.assertFalse(self.tree.root.exists())
-
-
-class ProofRoundTripTest(BrewCase):
-    """A real Brew observation encodes into a witness the canonical reader accepts."""
-
-    def manifest(self) -> CandidateManifest:
-        entries = []
-        for path, kind, os_name, arch in expected_inventory(VERSION):
-            data = FORMULA if kind is ArtifactKind.HOMEBREW_FORMULA else None
-            if kind is ArtifactKind.ARCHIVE and (os_name, arch) == ("Darwin", "arm64"):
-                data = self.archive.read_bytes()
-            entries.append(ArtifactEntry(path, kind, os_name, arch, len(data) if data else 1,
-                                         sha(data) if data else "0" * 64))
-        return CandidateManifest(VERSION, TAG, SourceIdentity("a" * 40, "b" * 40, "c" * 40),
-                                 BuildInputs("d" * 40, "1" * 64, "2" * 64, "3" * 64,
-                                             Toolchains("1.24.0", "2.0.0", "3.12.0", "22.0.0")),
-                                 tuple(entries))
-
-    def evidence(self, **changes):
-        manifest = self.manifest()
-        observation = self.observe()
-        facts = CandidateInstallFacts(TAG, (("archive", sha(self.archive.read_bytes())), ("formula", sha(FORMULA))),
-                                      (observation,), platform=("Darwin", "arm64"))
-        witness = encode_install_witness(facts)
-        refs = {entry.kind: ArtifactRef(entry.kind, entry.path, entry.sha256) for entry in manifest.artifacts
-                if entry.kind is ArtifactKind.HOMEBREW_FORMULA or (entry.os, entry.arch) == ("Darwin", "arm64")}
-        consumed = tuple(sorted((refs[ArtifactKind.ARCHIVE], refs[ArtifactKind.HOMEBREW_FORMULA]),
-                                key=lambda ref: ref.path))
-        fields = {
-            "candidate_id": sha(encode_manifest(manifest)), "os": "Darwin", "arch": "arm64",
-            "channel": InstallChannel.BREW, "consumed": consumed,
-            "installer": ManifestArtifactBinding(refs[ArtifactKind.HOMEBREW_FORMULA]),
-            "harness": HarnessIdentity("e" * 40, "4" * 64),
-            "binaries": parse_binary_digests(dict(observation.binaries), "test"),
-            "delegate_version": observation.delegate_version, "default_state": observation.default_state,
-            "bootstrap": observation.bootstrap, "witness_sha256": sha(witness), **changes}
-        return manifest, InstallProof(**fields), witness, facts
-
-    def read(self, manifest, proof, witness):
-        return read_install_proof(encode_install_proof(proof), witness, manifest=manifest, installer_source=None,
-                                  repository=REPO)
-
-    def test_brew_observation_round_trips_through_the_canonical_reader(self):
-        manifest, proof, witness, _facts = self.evidence()
-        self.assertEqual(self.read(manifest, proof, witness), proof)
-
-    def test_reader_refuses_requests_a_source_binding_or_another_default_state(self):
-        manifest, proof, _witness, facts = self.evidence()
-        fetched = replace(facts.installs[0], requests=(RequestRecord("served", "https://example.invalid/x"),))
-        forged = encode_install_witness(replace(facts, installs=(fetched,)))
-        with self.assertRaises(VerificationError) as caught:
-            self.read(manifest, InstallProof(**{**proof.__dict__, "witness_sha256": sha(forged)}), forged)
-        self.assertEqual(caught.exception.code, "install_witness_mismatch")
-        for changes in ({"installer": SourceFileBinding("a" * 40, "install.sh", "5" * 64)},
-                        {"default_state": ("present", "not_initialized", "absent")}):
-            with self.subTest(changes=list(changes)), self.assertRaises(VerificationError) as caught:
-                InstallProof(**{**proof.__dict__, **changes})
-            self.assertEqual(caught.exception.code, "install_proof_invalid")
 
 
 class LegacyDefaultPathTest(unittest.TestCase):

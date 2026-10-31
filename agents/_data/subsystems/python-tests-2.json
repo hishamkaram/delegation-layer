@@ -220,6 +220,10 @@
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.inspection.fixtures",
       "py:copy",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.lifetime.policy",
+      "py:json",
       "py:pathlib",
       "py:shutil",
       "py:types",
@@ -337,11 +341,8 @@
     "owner": "py:delegate_acceptance.native_evidence",
     "layer": "test",
     "imports": [
-      "py:delegate_acceptance.directories.journal",
-      "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.filesystem",
-      "py:delegate_acceptance.native_evidence.stage_publication",
       "py:native_acceptance_evidence",
       "py:os",
       "py:pathlib",
@@ -355,19 +356,23 @@
     "owner": "py:delegate_acceptance.native_evidence",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.native.support",
+      "py:copy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.native.acceptance_operations",
+      "py:delegate_acceptance.native.bindings",
       "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.proof",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
       "py:unittest"
     ]
   },
   {
     "name": "py:acceptance_tests.private_cli",
     "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": []
-  },
-  {
-    "name": "py:acceptance_tests.provider_drivers",
-    "owner": "py:delegate_acceptance.provider_drivers",
     "layer": "test",
     "imports": []
   },
@@ -456,33 +461,15 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.provider_drivers.test_entrypoint_imports",
-    "owner": "py:delegate_acceptance.provider_drivers",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:os",
-      "py:pathlib",
-      "py:subprocess",
-      "py:sys",
-      "py:tempfile",
-      "py:unittest"
-    ]
-  },
-  {
     "name": "py:acceptance_tests.test_foundation_contracts",
     "owner": "py:delegate_acceptance",
     "layer": "test",
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
-      "py:ast",
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.tasks.operations",
-      "py:hashlib",
-      "py:importlib",
-      "py:json",
       "py:pathlib",
       "py:subprocess",
       "py:sys",
@@ -731,6 +718,65 @@
       "py:pathlib",
       "py:tempfile",
       "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_disposal_lease",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:contextlib",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:threading",
+      "py:time",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_disposal_readiness",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:contextlib",
+      "py:delegate_acceptance.evidence.encoding",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.disposal_observer",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.noexec_state",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:shutil",
+      "py:tempfile",
+      "py:threading",
+      "py:time",
+      "py:unittest",
+      "py:unittest.mock"
     ]
   }
 ]

@@ -68,9 +68,14 @@ def run_pending_package_upgrade(
     attempted_task_ids,
     *,
     capture_root,
+    fixture_base,
 ):
-    """Interrupt a real migration, remove its seeded legacy package, and resume."""
-    base = capture_root.directory
+    """Interrupt a real migration, remove its seeded legacy package, and resume.
+
+    The pending package, legacy control config and retarget markers live in
+    ``fixture_base``; ``capture_root`` holds only control command captures.
+    """
+    base = fixture_base
     package_owner = DirectoryOwner()
     try:
         pending_libexec, active, legacy_config, original_config, legacy_cleanup = stage_pending_package(
@@ -148,6 +153,7 @@ def run_supervisor_upgrade_recovery(
     supervisor_cleanups,
     *,
     capture_root,
+    fixture_base,
 ):
     """Prove seeded historical path splits and removed-package recovery with real Pueue."""
     evidence = {"historical_state": "seeded-provenance", "tasks": []}
@@ -185,6 +191,7 @@ def run_supervisor_upgrade_recovery(
         dispatch=dispatch,
         env=env,
         evidence=evidence,
+        fixture_base=fixture_base,
         gate=gate,
         historical=historical,
         historical_directory=historical_directory,
@@ -494,6 +501,7 @@ def finish_upgrade_recovery(
     dispatch,
     env,
     evidence,
+    fixture_base,
     gate,
     historical,
     historical_directory,
@@ -542,6 +550,7 @@ def finish_upgrade_recovery(
         supervisor_cleanups=supervisor_cleanups,
         attempted_task_ids=attempted_task_ids,
         capture_root=capture_root,
+        fixture_base=fixture_base,
     )
     collect(historical, "upgrade-history-after-retarget")
     require(snapshot(historical_directory) == history, "explicit retarget mutated historical task evidence")

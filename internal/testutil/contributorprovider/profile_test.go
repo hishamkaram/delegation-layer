@@ -142,7 +142,8 @@ func TestPrepareRejectsWorkspaceRuntimeOverlapAndIdentityDrift(t *testing.T) {
 		deps prepareDependencies
 	}{
 		{name: "workspace runtime overlap", deps: prepareDependencies{Identity: identity, RuntimeDir: workspace}},
-		{name: "missing version", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, SHA256: identity.SHA256}, RuntimeDir: runtimeDir}},
+		{name: "blank version", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, Version: " ", SHA256: identity.SHA256}, RuntimeDir: runtimeDir}},
+		{name: "malformed digest", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, SHA256: "invalid"}, RuntimeDir: runtimeDir}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,6 +155,17 @@ func TestPrepareRejectsWorkspaceRuntimeOverlapAndIdentityDrift(t *testing.T) {
 	changedDigest := runtimeIdentity{Executable: identity.Executable, Version: identity.Version, SHA256: strings.Repeat("f", 64)}
 	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: changedDigest, RuntimeDir: runtimeDir}); err != nil {
 		t.Fatalf("valid runtime digest change was rejected: %v", err)
+	}
+	if err := validateStaticIdentity(runtimeIdentity{Executable: identity.Executable}); err != nil {
+		t.Fatalf("static discovery without a provider digest was refused: %v", err)
+	}
+	if err := validateStaticIdentity(runtimeIdentity{Executable: identity.Executable, SHA256: "invalid"}); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("malformed present provider digest was accepted: %v", err)
+	}
+	// A current supervised probe observes only the installed path.
+	profile, err := prepareWithDependencies(request, prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable}, RuntimeDir: runtimeDir})
+	if err != nil || profile.ObservedVersion != "" || profile.Effective.Policy.RuntimeSHA256 != "" {
+		t.Fatalf("path-only runtime observation was refused or embellished: profile=%+v err=%v", profile, err)
 	}
 }
 

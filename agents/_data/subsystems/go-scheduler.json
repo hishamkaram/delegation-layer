@@ -1,0 +1,171 @@
+[
+  {
+    "name": "go:internal/scheduler/contract",
+    "owner": "go:internal/scheduler",
+    "layer": "pure",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config/policy",
+      "go:internal/task",
+      "go:math",
+      "go:regexp",
+      "go:time",
+      "go:unicode",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/contract#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:errors",
+      "go:internal/config/policy",
+      "go:internal/task",
+      "go:math",
+      "go:reflect",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler",
+    "owner": "go:internal/scheduler",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/scheduler/contract",
+      "go:internal/scheduler/internal/sqlitestore",
+      "go:internal/taskdir",
+      "go:os",
+      "go:path/filepath",
+      "go:sync"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:database/sql",
+      "go:encoding/hex",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/scheduler/contract",
+      "go:internal/scheduler/internal/sqlitestore",
+      "go:internal/scheduler/internal/testchild",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:io/fs",
+      "go:modernc.org/sqlite",
+      "go:modernc.org/sqlite/lib",
+      "go:net/url",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/internal/sqlitestore",
+    "owner": "go:internal/scheduler",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:database/sql",
+      "go:database/sql/driver",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/scheduler/contract",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:io/fs",
+      "go:math",
+      "go:modernc.org/sqlite",
+      "go:modernc.org/sqlite/lib",
+      "go:net/url",
+      "go:os",
+      "go:path/filepath",
+      "go:runtime",
+      "go:strconv",
+      "go:strings",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/internal/sqlitestore#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:database/sql",
+      "go:database/sql/driver",
+      "go:errors",
+      "go:fmt",
+      "go:internal/scheduler/contract",
+      "go:internal/scheduler/internal/testchild",
+      "go:internal/task",
+      "go:io/fs",
+      "go:modernc.org/sqlite",
+      "go:net/url",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:runtime",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:sync/atomic",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/internal/testchild",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:bufio",
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/scheduler/internal/testchild#test",
+    "owner": "go:internal/scheduler",
+    "layer": "test",
+    "imports": [
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:testing",
+      "go:time"
+    ]
+  }
+]

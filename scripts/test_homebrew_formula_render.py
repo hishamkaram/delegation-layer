@@ -1,11 +1,9 @@
-"""Tests for the Homebrew formula renderer CLI and the publisher that reuses it."""
+"""Tests for the offline Homebrew formula renderer CLI and child closure."""
 
 from __future__ import annotations
 
-import base64
 import contextlib
 from dataclasses import dataclass
-import hashlib
 import io
 import os
 from pathlib import Path
@@ -25,13 +23,12 @@ from scripts.delegate_acceptance.processes.operations import run_bounded_command
 
 SCRIPTS = Path(__file__).resolve().parent
 RENDERER = SCRIPTS / "render-homebrew-formula.sh"
-PUBLISHER = SCRIPTS / "publish-homebrew-formula.sh"
 TAG = "v1.2.3"
 PLATFORMS = ("Darwin_amd64", "Darwin_arm64", "Linux_amd64", "Linux_arm64")
 DIGESTS = {platform: f"{index:064x}" for index, platform in enumerate(PLATFORMS, start=10)}
 OTHER_ASSET = f"{'e' * 64}  delegation-layer_1.2.3_sbom.json"
 REJECTING_TOOL = "#!/bin/sh\necho called >>\"$(dirname \"$0\")/called\"\nexit 99\n"
-# Every renderer, publisher and Ruby child is finite: one deadline and one bound for both streams.
+# Every renderer and Ruby child is finite: one deadline and one bound for both streams.
 CHILD_TIMEOUT_SECONDS = 60
 CHILD_OUTPUT_LIMIT = 64 * 1024
 FIXTURE_PREFIX = "homebrew-formula-test"
@@ -246,83 +243,6 @@ class RefusalTests(RendererFixture):
         result = self.run_child(["bash", str(RENDERER), TAG], self.environment())
         self.assertEqual((result.returncode, result.stdout), (2, ""))
         self.assertIn("usage: render-homebrew-formula.sh", result.stderr)
-
-
-FAKE_GH = """#!/bin/sh
-printf '%s\\n' "$*" >>"$FAKE_LOG/gh.log"
-case "$*" in
-  *releases/tags/*) printf '%s\\n' "$FAKE_TAG" ;;
-  *commits/*) printf '%s\\n' "$FAKE_COMMIT" ;;
-  "attestation verify"*) ;;
-  *--method\\ PUT*) for argument in "$@"; do
-      case "$argument" in content=*) printf '%s' "${argument#content=}" >"$FAKE_LOG/put-content" ;; esac
-    done ;;
-  *) exit 1 ;;
-esac
-"""
-FAKE_CURL = """#!/bin/sh
-while [ $# -gt 0 ]; do
-  case "$1" in --output) output="$2"; shift ;; *) url="$1" ;; esac
-  shift
-done
-printf '%s\\n' "$url" >>"$FAKE_LOG/curl.log"
-cp "$FAKE_ASSETS/$(basename "$url")" "$output"
-"""
-
-
-class PublisherTests(RendererFixture):
-    def stage_release(self, mismatched_archive=None):
-        assets = self.root / "assets"
-        assets.mkdir()
-        lines = [OTHER_ASSET]
-        for platform in PLATFORMS:
-            content = f"fixture archive {platform}".encode()
-            (assets / archive(platform)).write_bytes(content)
-            lines.append(f"{hashlib.sha256(content).hexdigest()}  {archive(platform)}")
-        if mismatched_archive:
-            (assets / archive(mismatched_archive)).write_bytes(b"tampered")
-        (assets / "checksums.txt").write_text("".join(f"{line}\n" for line in lines))
-        for name, body in (("curl", FAKE_CURL), ("gh", FAKE_GH)):
-            (self.fakebin / name).write_text(body)
-        return assets
-
-    def publish(self, assets, **extra):
-        environment = self.environment(FAKE_LOG=str(self.root), FAKE_ASSETS=str(assets), FAKE_TAG=TAG,
-                                       FAKE_COMMIT="c" * 40, HOMEBREW_TAP_TOKEN="fixture-not-a-credential",
-                                       **extra)
-        return self.run_child(["bash", str(PUBLISHER), TAG], environment)
-
-    def test_publishes_the_renderer_bytes_after_verifying_every_archive(self):
-        assets = self.stage_release()
-        result = self.publish(assets)
-        self.assertEqual((result.returncode, result.stderr), (0, ""))
-        published = base64.b64decode((self.root / "put-content").read_text()).decode()
-        rendered = self.render(TAG, assets / "checksums.txt")
-        self.assertEqual(rendered.returncode, 0, rendered.stderr)
-        self.assertEqual(published, rendered.stdout)
-        attestations = (self.root / "gh.log").read_text().count("attestation verify")
-        self.assertEqual(attestations, len(PLATFORMS))
-
-    def test_archive_digest_mismatch_blocks_publication(self):
-        result = self.publish(self.stage_release(mismatched_archive="Linux_arm64"))
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"checksum mismatch for {archive('Linux_arm64')}", result.stderr)
-        self.assertFalse((self.root / "put-content").exists())
-
-    def test_invalid_repository_override_is_refused_before_any_network_call(self):
-        result = self.publish(self.stage_release(), DELEGATION_LAYER_REPOSITORY="not a repository")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("owner/repository required", result.stderr)
-        self.assertFalse((self.root / "gh.log").exists())
-        self.assertFalse((self.root / "curl.log").exists())
-
-    def test_missing_token_is_refused_before_any_network_call(self):
-        assets = self.stage_release()
-        environment = self.environment(FAKE_LOG=str(self.root), FAKE_ASSETS=str(assets))
-        result = self.run_child(["bash", str(PUBLISHER), TAG], environment)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("HOMEBREW_TAP_TOKEN is required", result.stderr)
-        self.assertFalse((self.root / "gh.log").exists())
 
 
 class ChildClosureControlTests(RendererFixture):

@@ -43,8 +43,11 @@ type Binding struct {
 	// CapabilitySHA256 covers the runtime command contract without binding the
 	// provider executable path or bytes. It is optional for historical journals;
 	// those are re-probed before a provider launch.
-	CapabilitySHA256    string             `json:"capability_sha256,omitempty"`
-	HelperExecutable    string             `json:"helper_executable"`
+	CapabilitySHA256 string `json:"capability_sha256,omitempty"`
+	HelperExecutable string `json:"helper_executable"`
+	// HelperSHA256 is empty when the inspected executable is the installed
+	// provider CLI, whose bytes are never fingerprinted. A native helper's
+	// definition requires its digest, and admission binds this field to it.
 	HelperSHA256        string             `json:"helper_sha256"`
 	WorkerExecutable    string             `json:"worker_executable"`
 	WorkerSHA256        string             `json:"worker_sha256"`
@@ -148,13 +151,13 @@ func ValidateBinding(binding Binding) error {
 			return err
 		}
 	}
-	for name, value := range map[string]string{
-		"inspection helper digest": binding.HelperSHA256,
-		"inspection worker digest": binding.WorkerSHA256,
-	} {
-		if err := task.ValidateSHA256(value); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+	if binding.HelperSHA256 != "" {
+		if err := task.ValidateSHA256(binding.HelperSHA256); err != nil {
+			return fmt.Errorf("inspection helper digest: %w", err)
 		}
+	}
+	if err := task.ValidateSHA256(binding.WorkerSHA256); err != nil {
+		return fmt.Errorf("inspection worker digest: %w", err)
 	}
 	if err := task.ValidateFreshSupervisorRef(binding.Supervisor); err != nil {
 		return fmt.Errorf("inspection supervisor binding: %w", err)

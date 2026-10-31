@@ -23,8 +23,8 @@ func ccrAdvisoryTrace() string {
 }
 
 // TestCurrentCCRReferencesBindTheAdvisoryPolicy evaluates the same advisory
-// trace through every CCR revision: the current v6 references publish the
-// principal answer, while the frozen v5 references keep their strict wire.
+// trace through every CCR revision: the current v7 references publish the
+// framed follow-up payload, while the frozen v5 references keep their strict wire.
 func TestCurrentCCRReferencesBindTheAdvisoryPolicy(t *testing.T) {
 	registry, err := predicate.New(Registration().Interpreters...)
 	if err != nil {
@@ -44,7 +44,7 @@ func TestCurrentCCRReferencesBindTheAdvisoryPolicy(t *testing.T) {
 			t.Fatal(resolveErr)
 		}
 		result, answer := evaluateCCRTrace(t, interpreter, ccrAdvisoryTrace())
-		if test.commit != (result.Verdict == task.VerdictCommitted && answer == "principal answer") ||
+		if test.commit != (result.Verdict == task.VerdictCommitted && answer == ccrFollowUpPayload) ||
 			(!test.commit && (result.Refusal != "invalid-output" || answer != "")) {
 			t.Fatalf("%s interpretation=%+v answer=%q", test.reference.Version, result, answer)
 		}
@@ -96,7 +96,7 @@ func TestScopedCCRSealsRecoverToCurrentTargetsWithoutRewriting(t *testing.T) {
 		input.ExpectedSession = task.SessionExpectation{Required: true, ID: ccrAttributionSession}
 		var answer strings.Builder
 		result, recoverErr := recovery.Recover(input, raw, &answer)
-		if recoverErr != nil || result.Verdict != task.VerdictCommitted || answer.String() != "principal answer" || !input.Seal.Predicate.Equal(source) {
+		if recoverErr != nil || result.Verdict != task.VerdictCommitted || answer.String() != ccrFollowUpPayload || !input.Seal.Predicate.Equal(source) {
 			t.Fatalf("%s recovery=%+v answer=%q err=%v", source.Version, result, answer.String(), recoverErr)
 		}
 		frozen, resolveErr := registry.Resolve(source)

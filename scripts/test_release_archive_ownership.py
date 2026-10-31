@@ -28,8 +28,8 @@ from scripts.delegate_acceptance.processes.contracts import BoundedCommandError,
 from scripts import test_verify_release_archive as archive
 
 
-def attestation(argv: list[str]) -> bool:
-    return argv[:3] == ["gh", "attestation", "verify"]
+def delegate_version(argv: list[str]) -> bool:
+    return Path(argv[0]).name == "delegate" and argv[1:2] == ["version"]
 
 
 class StartFault:
@@ -68,11 +68,11 @@ class ReleaseArchiveOwnershipTests(unittest.TestCase):
             with patch.object(subprocess, "Popen", side_effect=fault):
                 self.assertEqual(fixture.verify(), 1)
             failure = fixture.load_receipt()["failure"]
-        self.assertEqual((failure["code"], failure["stage"]), (code.value, "github-attestation-verify"))
+        self.assertEqual((failure["code"], failure["stage"]), (code.value, "delegate-version"))
 
     def test_unknown_child_wait_retains_the_fixture_until_closure_is_proven(self):
         fixture = archive.ReleaseArchiveVerificationTests()
-        fault = StartFault(attestation, subprocess.TimeoutExpired(["gh"], 0))
+        fault = StartFault(delegate_version, subprocess.TimeoutExpired(["delegate"], 0))
         self.verify_with(fixture, fault, CommandFailure.TIMEOUT)
         self.assertTrue(fixture.root.is_dir(), "an unknown child Wait must retain the archive fixture")
         error = fixture.tree.unresolved
@@ -88,7 +88,7 @@ class ReleaseArchiveOwnershipTests(unittest.TestCase):
         outer = FixtureTree.open(prefix="release-archive-container", label="release archive container")
         self.addCleanup(outer.dispose)
         fixture = archive.ReleaseArchiveVerificationTests(parent=outer.root, containing=(outer,))
-        fault = StartFault(attestation, subprocess.TimeoutExpired(["gh"], 0))
+        fault = StartFault(delegate_version, subprocess.TimeoutExpired(["delegate"], 0))
         self.verify_with(fixture, fault, CommandFailure.TIMEOUT)
         self.assertEqual(fixture.root.parent, outer.root)
         self.assertIsNotNone(outer.unresolved, "a containing owner must observe the placed fixture child")
@@ -104,7 +104,7 @@ class ReleaseArchiveOwnershipTests(unittest.TestCase):
 
     def test_closed_child_failure_removes_the_fixture(self):
         fixture = archive.ReleaseArchiveVerificationTests()
-        fault = StartFault(attestation, FileNotFoundError("gh"))
+        fault = StartFault(delegate_version, FileNotFoundError("delegate"))
         self.verify_with(fixture, fault, CommandFailure.START_FAILED)
         self.assertIsNone(fixture.tree.unresolved)
         self.assertFalse(fixture.root.exists())

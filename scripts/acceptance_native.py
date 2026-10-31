@@ -16,7 +16,6 @@ from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native.acceptance import (
     PROFILES,
-    TASK_BUDGET,
     BlockedFailure,
     BlockReason,
     NativeAcceptance,
@@ -26,7 +25,7 @@ from scripts.delegate_acceptance.native.acceptance_discovery import (
     require_discovery,
     resolve_executable,
 )
-from scripts.delegate_acceptance.native.constants import PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO
+from scripts.delegate_acceptance.native.constants import MODEL_DISCOVERY_OPERATION_BUDGET, PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO, case_task_budget
 from scripts.delegate_acceptance.native.continuation_scope import CONTINUATION_COMMANDS
 from scripts.delegate_acceptance.native.output import choose_output as _choose_output
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor
@@ -71,6 +70,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--discover-models", action="store_true",
                         help="run advisory model discovery and stop without admitting a task")
     return parser
+
+
+def _budget_fields(args: argparse.Namespace) -> dict[str, object]:
+    """Record the operation budget: its requested label (None when omitted) and persisted value.
+
+    A discovery-only run admits no task; it records its one bounded inspection.
+    """
+    budget = (MODEL_DISCOVERY_OPERATION_BUDGET if args.discover_models
+              else case_task_budget(args.provider))
+    return {"task_budget": budget.requested, "canonical_task_budget": budget.canonical}
 
 
 def _persist_failure_receipt(output: Path | None, value: dict[str, object]) -> bool:
@@ -136,7 +145,7 @@ def _model_discovery_failure_receipt(
         "provider": args.provider,
         "mode": args.mode,
         "scenario": args.scenario,
-        "task_budget": TASK_BUDGET,
+        **_budget_fields(args),
         "requested_model": args.model,
         "requested_effort": args.effort,
         "discover_models": True,
@@ -172,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             elif not _persist_failure_receipt(output, {
                     "gate": "acceptance-native", "status": "BLOCKED" if code == 2 else "failed",
                     "provider": args.provider, "mode": args.mode, "scenario": args.scenario,
-                    "task_budget": TASK_BUDGET, "requested_model": args.model,
+                    **_budget_fields(args), "requested_model": args.model,
                     "requested_effort": args.effort,
                     "model_discovery": _sanitized_model_discovery_summary(run),
                     "no_retry": True, "credentials_in_receipt": False,
@@ -187,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     except BlockedFailure as error:
         receipt_ok = _persist_failure_receipt(output, {
             "gate": "acceptance-native", "status": "BLOCKED", "provider": args.provider,
-            "mode": args.mode, "scenario": args.scenario, "task_budget": TASK_BUDGET,
+            "mode": args.mode, "scenario": args.scenario, **_budget_fields(args),
             "requested_model": args.model, "requested_effort": args.effort,
             "discover_models": args.discover_models,
             "model_discovery": _sanitized_model_discovery_summary(run), "error": str(error),
@@ -201,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     except (AcceptanceFailure, OSError, ValueError, json.JSONDecodeError) as error:
         _persist_failure_receipt(output, {
             "gate": "acceptance-native", "status": "failed", "provider": args.provider,
-            "mode": args.mode, "scenario": args.scenario, "task_budget": TASK_BUDGET,
+            "mode": args.mode, "scenario": args.scenario, **_budget_fields(args),
             "requested_model": args.model, "requested_effort": args.effort,
             "discover_models": args.discover_models,
             "model_discovery": _sanitized_model_discovery_summary(run), "error": str(error),
@@ -212,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     except BaseException as error:
         _persist_failure_receipt(output, {
             "gate": "acceptance-native", "status": "failed", "provider": args.provider,
-            "mode": args.mode, "scenario": args.scenario, "task_budget": TASK_BUDGET,
+            "mode": args.mode, "scenario": args.scenario, **_budget_fields(args),
             "requested_model": args.model, "requested_effort": args.effort,
             "discover_models": args.discover_models,
             "model_discovery": _sanitized_model_discovery_summary(run), "error": str(error),

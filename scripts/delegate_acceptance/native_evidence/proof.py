@@ -12,11 +12,11 @@ from .contract import (
     MatrixRow,
     SAFE_TEXT,
     _compact_provider_runtime_identities,
-    _compact_provider_versions,
+    _compact_runtime_identity,
     _digest_bytes,
     _expected_task_aliases,
     _safe_proof_text,
-    _safe_runtime_executable,
+    _runtime_identity_matches,
     _source_requested_options,
     _task_identifier_values,
 )
@@ -109,6 +109,28 @@ def _task_session_bindings(source: dict[str, object]) -> list[dict[str, str]]:
     return result
 
 
+def _compact_provider_versions(raw: dict[str, object]) -> dict[str, str] | None:
+    """Qualify optional diagnostics keyed by task ID or historical task alias."""
+    value = raw.get("provider_versions")
+    if not isinstance(value, dict):
+        return None
+    identities = _compact_provider_runtime_identities(raw)
+    if identities is None:
+        return None
+    tasks = raw.get("tasks")
+    result: dict[str, str] = {}
+    for key, version in value.items():
+        if (not isinstance(key, str) or SAFE_TEXT.fullmatch(key) is None
+                or not isinstance(version, str)):
+            return None
+        task_id = key if key in identities else tasks.get(key) if isinstance(tasks, dict) else None
+        if (not isinstance(task_id, str) or task_id not in identities
+                or version != identities[task_id]["version"]):
+            return None
+        result[key] = version
+    return dict(sorted(result.items()))
+
+
 def _binary_identities(
         row: MatrixRow,
         case_directory: Path,
@@ -130,21 +152,14 @@ def _binary_identities(
                 if safe is not None:
                     versions[key] = safe
         provider_task_id = binding.get("provider_task_id")
-        provider_executable = _safe_runtime_executable(binding.get("provider_executable"))
-        provider_version = _safe_proof_text(binding.get("provider_version"))
-        provider_sha256 = binding.get("provider_sha256")
+        provider_identity = _compact_runtime_identity({
+            key: binding["provider_" + key] for key in ("executable", "version", "sha256")
+            if "provider_" + key in binding})
         if (binding.get("provider_identity_scope") == "first-admitted-task"
                 and isinstance(provider_task_id, str)
                 and re.fullmatch(r"[0-9a-f]{32}", provider_task_id) is not None
-                and provider_executable is not None and provider_version is not None
-                and isinstance(provider_sha256, str)
-                and HEX_DIGEST.fullmatch(provider_sha256) is not None):
-            provider_binding = {
-                "task_id": provider_task_id,
-                "executable": provider_executable,
-                "version": provider_version,
-                "sha256": provider_sha256,
-            }
+                and provider_identity is not None):
+            provider_binding = {"task_id": provider_task_id, **provider_identity}
     provider_runtimes = _compact_provider_runtime_identities(source) if source is not None else None
     if source is not None:
         provider_versions = _compact_provider_versions(source)
@@ -163,17 +178,17 @@ def _binary_identities(
                         and len(source_task_ids) == len(set(source_task_ids)))
     provider_binding_matches = (
         provider_binding is not None and provider_runtimes is not None
-        and provider_runtimes.get(provider_binding["task_id"]) == {
-            "executable": provider_binding["executable"],
-            "version": provider_binding["version"],
-            "sha256": provider_binding["sha256"],
-        }
+        and _runtime_identity_matches(provider_runtimes.get(provider_binding["task_id"], {}),
+                                      provider_binding)
     )
     required_hashes = {
-        "provider_sha256", "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
+        "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
     }
+    version_diagnostics_valid = (source is not None and (
+        "provider_versions" not in source or provider_versions is not None))
     state = ("complete" if binding_matches and required_hashes.issubset(hashes)
-             and runtime_coverage and provider_binding_matches else "unavailable")
+             and runtime_coverage and provider_binding_matches
+             and version_diagnostics_valid else "unavailable")
     result: dict[str, object] = {
         "state": state,
         "sha256": dict(sorted(hashes.items())),

@@ -165,6 +165,17 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "binding"):
             self.fixture.ops._validate_queue_membership(self.fixture.status(self.fixture.inspection_row()), False)
 
+    def test_expected_native_helper_digest_cannot_be_blanked(self):
+        directory = self.fixture.inspection_records()
+        request = read_json(directory / "request.json")
+        request["binding"]["helper_sha256"] = ""
+        write_json(directory / "request.json", request, replace=True)
+        self.fixture.refresh_request_links(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "binding changed from expected source"):
+            self.fixture.ops._validate_queue_membership(
+                self.fixture.status(self.fixture.inspection_row()), False)
+
     def test_native_binding_mode_reaches_failure_cleanup_and_replay(self):
         self.fixture.inspection_records()
         self.fixture.durable_ordinary_admission()

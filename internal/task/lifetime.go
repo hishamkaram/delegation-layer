@@ -74,7 +74,8 @@ type LifetimeIntentRecord struct {
 
 // LifetimeRegistrationRecord binds one task to the platform scope that owns
 // its native command descendants. The scope is registered before any native
-// command may start.
+// command may start. A nil CustodyPlacement is a registration that predates
+// custody placement and keeps its exact legacy canonical bytes.
 type LifetimeRegistrationRecord struct {
 	SchemaVersion int    `json:"schema_version"`
 	RootID        string `json:"root_id"`
@@ -87,6 +88,8 @@ type LifetimeRegistrationRecord struct {
 	BootID        string `json:"boot_id"`
 	Deadline      string `json:"deadline"`
 	CreatedAt     string `json:"created_at"`
+
+	CustodyPlacement *LifetimeCustodyPlacement `json:"custody_placement,omitempty"`
 }
 
 // LifetimeWorkerRecord binds the managed worker identity to the canonical
@@ -168,7 +171,13 @@ func ValidateLifetimeRegistrationRecord(r *LifetimeRegistrationRecord) error {
 	if err := validateTimestamp(r.Deadline); err != nil {
 		return err
 	}
-	return validateTimestamp(r.CreatedAt)
+	if err := validateTimestamp(r.CreatedAt); err != nil {
+		return err
+	}
+	if r.CustodyPlacement != nil {
+		return ValidateLifetimeCustodyPlacement(r.CustodyPlacement)
+	}
+	return nil
 }
 
 func ValidateLifetimeIntentRecord(r *LifetimeIntentRecord) error {

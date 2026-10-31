@@ -7,14 +7,33 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+// defaultInteractiveBudget is the product budget of an ordinary interactive
+// fixture task; scenarios that outlast it must ask for a longer one.
+const defaultInteractiveBudget = time.Minute
+
 func interactiveTask(t *testing.T) *TaskDir {
 	t.Helper()
+	return interactiveTaskWithBudget(t, defaultInteractiveBudget)
+}
+
+// interactiveTaskWithBudget derives the interaction deadline from the task
+// budget (StartedAt + BudgetNanos), so the request and both requested
+// configurations carry the same whole-second normalized budget.
+func interactiveTaskWithBudget(t *testing.T, budget time.Duration) *TaskDir {
+	t.Helper()
+	budget = budget.Truncate(time.Second)
+	if budget <= 0 {
+		t.Fatalf("interactive budget %s must be at least one second", budget)
+	}
 	s := testStore(t)
 	req, meta, brief := preparedInput(t, s)
+	req.BudgetNanos = int64(budget)
+	req.RequestedConfig.Budget = budget.String()
 	req.RequestedConfig.Interactive = true
 	meta.RequestedConfig = req.RequestedConfig
 	td, err := s.CreateTask(req.TaskID, req, brief, meta)
@@ -124,6 +143,39 @@ func TestInteractionDeadlineClosesObservationAndSubmission(t *testing.T) {
 	}
 }
 
+// The interaction deadline is provider StartedAt + the task budget, so a task
+// that started two minutes ago is expired under the default budget and still
+// open under a longer one.
+func TestInteractiveTaskBudgetGovernsInteractionDeadline(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		budget time.Duration
+		open   bool
+	}{
+		{name: "default budget expired", budget: defaultInteractiveBudget, open: false},
+		{name: "long budget open", budget: time.Hour, open: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			td := interactiveTaskWithBudget(t, test.budget)
+			path := filepath.Join(td.Dir, "provider.started.json")
+			var started task.ProviderStartedRecord
+			data, err := os.ReadFile(path)
+			must(t, err)
+			must(t, task.DecodeStrict(data, &started))
+			started.StartedAt = time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+			data, err = task.MarshalCanonical(started)
+			must(t, err)
+			must(t, os.WriteFile(path, data, 0o600))
+			_, err = td.SubmitInteraction(task.InteractionMessage{ID: strings.Repeat("e", 32), Kind: "steer", Text: "budgeted"})
+			if test.open {
+				must(t, err)
+			} else if !errors.Is(err, task.ErrInteractionClosed) {
+				t.Fatalf("submission after the default budget: %v", err)
+			}
+		})
+	}
+}
+
 func TestInteractionConcurrentRetryHasOneDurableMessage(t *testing.T) {
 	td := interactiveTask(t)
 	message := task.InteractionMessage{ID: strings.Repeat("d", 32), Kind: "steer", Text: "once"}
@@ -163,7 +215,7 @@ func TestInteractionConcurrentRetryHasOneDurableMessage(t *testing.T) {
 }
 
 func TestInteractionEventPagesDoNotSkipRecords(t *testing.T) {
-	td := interactiveTask(t)
+	td := interactiveTaskWithBudget(t, time.Until(scenarioDeadline(t)))
 	for index := range 105 {
 		message := task.InteractionMessage{ID: fmt.Sprintf("%032x", index), Kind: "steer", Text: "bounded"}
 		_, err := td.SubmitInteraction(message)

@@ -10,10 +10,12 @@ import tempfile
 
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
+from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import PRIVATE_ACCEPTANCE_PREFIX
 from scripts.delegate_acceptance.private_cli.configuration import SUPERVISOR_UPGRADE_RECOVERY_SCENARIO
 from scripts.delegate_acceptance.private_cli.installation import install_fixture
 from scripts.delegate_acceptance.private_cli.installation import install_package_layout
+from scripts.delegate_acceptance.private_cli.noexec_state import require_execution_refused
 from scripts.delegate_acceptance.private_cli.fixtures import install_pi_fixture
 from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
 
@@ -37,7 +39,11 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     )
     lifetime.base_token = lifetime.ownership.adopt_created("private CLI acceptance root", base_path, acceptance_parent)
     lifetime.base = lifetime.base_token.directory
-    lifetime.private_config = lifetime.base / "state" / ".supervisor" / "pueue.yml"
+    lifetime.capture_token = lifetime.ownership.create(
+        "private control captures", lifetime.base / "private-control-captures", lifetime.base
+    )
+    state_parent, temporary_root = prepare_state_parent(args, lifetime, run_receipt)
+    lifetime.private_config = state_parent / "state" / ".supervisor" / "pueue.yml"
     lifetime.gate = lifetime.base / "blocker-gate"
     waiter_directory = lifetime.base / "provider-waiters"
     old_root = lifetime.old_layout_ownership.create("old package root", lifetime.base / "old", lifetime.base).directory
@@ -53,11 +59,11 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     ).directory
     home = lifetime.ownership.create("private CLI home", lifetime.base / "home", lifetime.base).directory
     workspace = lifetime.ownership.create("private CLI workspace", lifetime.base / "workspace", lifetime.base).directory
-    state = lifetime.ownership.create("private CLI state", lifetime.base / "state", lifetime.base).directory
+    state = lifetime.ownership.create("private CLI state", state_parent / "state", state_parent).directory
     waiter_directory = lifetime.ownership.create(
         "provider waiter directory", lifetime.base / "provider-waiters", lifetime.base
     ).directory
-    if args.scenario != EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
+    if args.scenario not in (EXTERNAL_INSPECTION_HANDOFF_SCENARIO, EXTERNAL_NOEXEC_STATE_SCENARIO):
         lifetime.managed_state_roots.append((state, lifetime.attempted_task_ids))
     upgraded_install, upgraded_bin, lifetime.upgraded_libexec = install_package_layout(
         lifetime.ownership, upgraded_delegate_binary, upgraded_runner_binary, upgraded_root, True
@@ -68,7 +74,7 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     install_supervisor_wrappers(args, lifetime, old_daemon_marker, pueue_binary, pueued_binary, upgraded_daemon_marker)
     install_pi_fixture(provider_bin, lifetime.gate, waiter_directory, lease_nonce)
 
-    brief = configure_private_environment(home, lifetime, provider_bin)
+    brief = configure_private_environment(home, lifetime, provider_bin, temporary_root)
     return FixtureInstallation(
         delegate_binary=delegate_binary,
         runner_binary=runner_binary,
@@ -86,6 +92,31 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
         waiter_directory=waiter_directory,
         lease_nonce=lease_nonce,
     )
+
+
+def prepare_state_parent(args, lifetime, run_receipt):
+    """Return where the state root lives and the execution temporary root, if the scenario needs one.
+
+    A noexec state parent belongs to the caller. The harness owns, and later
+    removes, only the container it creates there and the temporary root it
+    creates beneath its own acceptance root.
+    """
+    if args.noexec_state_parent is None:
+        return lifetime.base, None
+    try:
+        parent = args.noexec_state_parent.resolve(strict=True)
+    except OSError as error:
+        raise AcceptanceBlocked("noexec-state-parent-unavailable") from error
+    temporary_root = lifetime.ownership.create(
+        "execution temporary root", lifetime.base / "tmp", lifetime.base
+    ).directory
+    container = lifetime.ownership.create(
+        "noexec private CLI state container", parent / lifetime.base.name, parent
+    ).directory
+    run_receipt.add_details(noexec_state={"state_container": str(container)})
+    probe = require_execution_refused(container, temporary_root)
+    run_receipt.add_details(noexec_state={"state_container": str(container), "probe": probe})
+    return container, temporary_root
 
 
 def install_supervisor_wrappers(args, lifetime, old_daemon_marker, pueue_binary, pueued_binary, upgraded_daemon_marker):
@@ -110,7 +141,7 @@ def install_supervisor_wrappers(args, lifetime, old_daemon_marker, pueue_binary,
         )
 
 
-def configure_private_environment(home, lifetime, provider_bin):
+def configure_private_environment(home, lifetime, provider_bin, temporary_root):
     brief = lifetime.base / "brief.md"
     brief.write_text("Reply with the requested acceptance sentence.\n")
     brief.chmod(0o600)
@@ -130,4 +161,6 @@ def configure_private_environment(home, lifetime, provider_bin):
             "LC_ALL": "C.UTF-8",
         }
     )
+    if temporary_root is not None:
+        lifetime.env["TMPDIR"] = str(temporary_root)
     return brief

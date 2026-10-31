@@ -23,6 +23,8 @@ type Guardian struct {
 	scope  Scope
 	codec  *lifetimeCodec
 	bootID string
+	// placement is resolved once before scope creation and never mutated.
+	placement *task.LifetimeCustodyPlacement
 
 	registrationRecorded   bool
 	unregisteredDisposed   bool
@@ -80,13 +82,18 @@ func (g *Guardian) runOwned(ctx context.Context) (resultErr error) {
 		return g.recoverExpiredStart(ctx)
 	}
 
-	bootID, scope, err := g.prepareRunScope(ctx)
+	// Startup persistence runs under the immutable business deadline, so a
+	// caller without a deadline never falls back to the store's short default.
+	// Owner, replay, worker, serve and finalization keep the caller's context.
+	startupCtx, cancelStartup := g.workContext(ctx)
+	defer cancelStartup()
+	bootID, scope, err := g.prepareRunScope(startupCtx)
 	if err != nil {
 		return err
 	}
 	g.scope = scope
 	g.bootID = bootID
-	if err = g.bindAndRecordRunScope(ctx, bootID); err != nil {
+	if err = g.bindAndRecordRunScope(startupCtx, bootID); err != nil {
 		return err
 	}
 	if g.deadlineReached() {

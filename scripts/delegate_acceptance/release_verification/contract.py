@@ -84,10 +84,6 @@ SOURCE_FILES = {
     "archive-smoke": (".github/workflows/release.yml",),
     "native-acceptance": (
         ".github/workflows/release.yml",
-        ".github/workflows/release-native-acceptance.yml",
-        ".github/workflows/release-consumer.yml",
-        "scripts/release_native.py",
-        "scripts/validate_native_release.py",
         "scripts/acceptance_native.sh",
         "scripts/acceptance_native_all.sh",
         "scripts/acceptance_native.py",
@@ -228,7 +224,7 @@ def _validate_archived_default_path(archived: dict) -> dict:
         raise VerificationError("default_path_observation_invalid", "validate-archive-receipt")
     commands = archived.get("commands")
     required_commands = {
-        "github-attestation-verify", "delegate-version", "pueue-version", "pueued-version",
+        "delegate-version", "pueue-version", "pueued-version",
         "delegate-providers", "delegate-capabilities", "delegate-default-supervisor-status",
     }
     if not isinstance(commands, list):

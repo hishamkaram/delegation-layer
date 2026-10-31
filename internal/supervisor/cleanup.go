@@ -22,6 +22,7 @@ func (c *Cleanup) authorizeCandidates(ctx context.Context, store *taskdir.Store,
 	}
 	close(work)
 	workers := min(len(candidates), privateQueueAuthorizationWorkers)
+	removable := c.removalGate()
 	var groupWorkers sync.WaitGroup
 	groupWorkers.Add(workers)
 	for range workers {
@@ -36,7 +37,7 @@ func (c *Cleanup) authorizeCandidates(ctx context.Context, store *taskdir.Store,
 					decisions[index].settling = c.inspectSettlingInspection(ctx, store, group, candidate.taskID, candidate.job) == nil
 					continue
 				}
-				decisions[index].remove = c.InspectEndedJob(ctx, store, group, candidate.job) == nil
+				decisions[index].remove = c.inspectEndedJob(ctx, store, group, candidate.job, removable) == nil
 			}
 		}()
 	}

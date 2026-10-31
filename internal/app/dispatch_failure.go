@@ -10,6 +10,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -32,8 +33,14 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	if supervisorFailureCode(code) {
 		failure.ReasonCode = supervisorFailureReason(err)
 	}
+	if code == "invalid_request" {
+		failure.ReasonCode = runnerRequestReason(err)
+	}
 	if pressure, ok := tasklifecycle.ResourcePressureRefusal(err); ok {
 		failure.ReasonCode = resourcePressureReason(pressure)
+	}
+	if code == "provider_unavailable" && commonprovider.NativeCapabilityUnavailable(err) {
+		failure.ReasonCode = providerCapabilityChangedReason
 	}
 	if failure.NextAction == "retry_later" {
 		failure.RetryAfterSeconds = resourceRetryAfterSeconds
@@ -43,6 +50,58 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	}
 	return failure
 }
+
+// providerCapabilityChangedReason marks an unavailable provider whose whole
+// refusal is a capability the recorded launch requires and the installed CLI
+// no longer offers. Its public detail is fixed and names no provider value.
+const providerCapabilityChangedReason = "provider_capability_changed"
+
+const providerCapabilityChangedDetail = "The installed provider CLI no longer offers a capability that this task's recorded launch requires."
+
+// Reason codes for a request whose --runner contradicts the runner ownership
+// its command needs. Each marks a whole refusal by one exact owned leaf.
+const (
+	managedWorkspaceRunnerReason = "managed_workspace_runner_conflict"
+	continuationRunnerReason     = "continuation_runner_conflict"
+)
+
+// runnerRequestReason reports the reason code of an error whose every leaf is
+// one exact runner-request refusal, or "" for any other error. A joined
+// storage, evidence, identity, or close fault fails the whole predicate.
+func runnerRequestReason(err error) string {
+	switch {
+	case task.AllErrorCauses(err, workspaces.IsManagedRunnerRequest):
+		return managedWorkspaceRunnerReason
+	case task.AllErrorCauses(err, supervisorcore.IsContinuationRunnerRequest):
+		return continuationRunnerReason
+	default:
+		return ""
+	}
+}
+
+// runnerRequestDetail is the fixed correction guidance for a runner-request
+// reason code, or "" for any other reason.
+func runnerRequestDetail(reason string) string {
+	switch reason {
+	case managedWorkspaceRunnerReason:
+		return "A managed workspace uses Delegate's automatic runner; omit --runner."
+	case continuationRunnerReason:
+		return "An explicit continuation runner must match the predecessor's recorded runner; omit --runner to select the runner automatically."
+	default:
+		return ""
+	}
+}
+
+// fixedDetailPublicError presents a refusal with its fixed detail while
+// keeping the complete command error as its cause.
+type fixedDetailPublicError struct {
+	message string
+	cause   error
+}
+
+func (e *fixedDetailPublicError) Error() string { return e.message }
+
+func (e *fixedDetailPublicError) Unwrap() error { return e.cause }
 
 // supervisorFailureCode reports the failure codes whose reason codes come
 // from supervisorFailureReason and whose detail is supervisor-specific.
@@ -120,6 +179,9 @@ func dispatchSubmissionFailureCode(err error, stage, taskRecord string) string {
 }
 
 func dispatchCauseFailureCode(err error) string {
+	if runnerRequestReason(err) != "" {
+		return "invalid_request"
+	}
 	if code := workspaceFailureCode(err); code != "" {
 		return code
 	}

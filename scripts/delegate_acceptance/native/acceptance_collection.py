@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import digest, read_json
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _optional_hex_digest, _task_identity, require
 from scripts.delegate_acceptance.inspections.binding import INSPECTION_GROUP_PREFIX
 from scripts.delegate_acceptance.native.binding_policy import _validate_bound_provider_record
 from scripts.delegate_acceptance.native.diagnostics import _rejection_diagnostic_summary
@@ -18,7 +18,7 @@ from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER,
 from scripts.delegate_acceptance.native.workspace import task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
 from scripts.delegate_acceptance.tasks.publication import verify_collected_outcome
-from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, TASK_BUDGET_NANOS, TIMEOUT_RESUME_SOURCE_BUDGET_NANOS
+from scripts.delegate_acceptance.native.constants import CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET_NANOS, case_task_budget
 
 
 def terminal_private_queue(owner, status: dict[str, object]) -> bool:
@@ -234,12 +234,18 @@ def _validate_provider_metadata_binding(
 
 def _request_binding(owner, task_id: str, require_launch_evidence: bool = False,
                      require_started_evidence: bool = False,
-                     budget: str = CANONICAL_TASK_BUDGET,
-                     budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
+                     budget: str | None = None,
+                     budget_nanos: int | None = None) -> tuple[
         Path, dict[str, object], dict[str, object], str, str, Path]:
+    """Validate the persisted request; an omitted budget pair is the provider case's contract."""
     acceptance = owner
     require(not (require_launch_evidence and require_started_evidence),
             "provider launch evidence modes are mutually exclusive")
+    require((budget is None) == (budget_nanos is None),
+            "persisted budget expectation must name both its text and nanoseconds")
+    if budget is None or budget_nanos is None:
+        case = case_task_budget(acceptance.provider)
+        budget, budget_nanos = case.canonical, case.nanos
     directory = acceptance.state / "tasks" / task_id
     require(directory.is_dir() and not directory.is_symlink(),
             f"task {task_id} directory is absent")
@@ -429,7 +435,6 @@ def _validate_task_policy(owner, task_id: str, meta: dict[str, object]) -> dict[
     identity = acceptance._provider_bindings.identity_for(task_id)
     require(isinstance(identity, Mapping),
             f"task {task_id} admitted provider runtime identity is unavailable")
-    pending_runtime = "runtime_preflight_sha256" in meta
     require(meta.get("containment") == acceptance.mode,
             f"task {task_id} metadata containment changed")
     effective = meta.get("effective_config")
@@ -437,8 +442,7 @@ def _validate_task_policy(owner, task_id: str, meta: dict[str, object]) -> dict[
     require(isinstance(effective, dict) and effective.get("containment") == acceptance.mode and
             isinstance(effective.get("digest"), str) and
             isinstance(policy, dict) and policy.get("workspace") == str(acceptance.workspace) and
-            (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
-             else policy.get("runtime_sha256") == identity["sha256"]),
+            _optional_hex_digest(policy.get("runtime_sha256")),
             f"task {task_id} effective policy binding is invalid")
     if acceptance.provider == "antigravity:print":
         expected_approval = "plan" if acceptance.mode == "read-only" else "always-proceed"

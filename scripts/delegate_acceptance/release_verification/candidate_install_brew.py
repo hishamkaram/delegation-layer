@@ -6,7 +6,9 @@ default-path child runs through ConsumerPorts.run in a credential-free environme
 HOMEBREW_LOGS lie inside the caller's workspace. The formula keeps its original release
 URL; Homebrew finds the archive only at the source cache path it reports, preseeded with the
 exact candidate bytes, so a cache miss fails. Homebrew owns the new tap, the formula file
-in it and the keg on the disposable host; nothing here adopts, uninstalls or removes them.
+in it, its trust state and the keg on the disposable host; nothing here adopts, uninstalls
+or removes them. When Brew's public command inventory advertises ``trust``, the harness asks
+Brew to trust exactly the validated candidate formula in the private HOME, never a whole tap.
 The caller's BootstrapProbe owns the children and resources of the installed fixture turn.
 """
 
@@ -87,6 +89,17 @@ def _place_formula(tap: Path, formula: Path, digest: str) -> Path:
     return target
 
 
+def _brew_commands(reply: bytes) -> frozenset[str]:
+    """Brew's public command names; the proof needs at least ``install`` and ``tap-new``."""
+    try:
+        names = frozenset(reply.decode("utf-8").split())
+    except UnicodeDecodeError:
+        raise VerificationError("homebrew_commands_invalid", STAGE) from None
+    if not {"install", "tap-new"} <= names:
+        raise VerificationError("homebrew_commands_invalid", STAGE)
+    return names
+
+
 def _cache_target(cache: Path, reported: str) -> Path:
     """Brew's reported source cache file, refused unless strictly inside the owned cache.
 
@@ -148,7 +161,7 @@ class _Brew:
 
 def _install(brew: _Brew, *, host_os: str, formula: Path, formula_sha256: str, archive: Path,
              archive_sha256: str) -> tuple[str, Path, Path]:
-    """Fresh check, unique tap, exact formula and preseeded cache, then the source install.
+    """Fresh check, command inventory, unique tap, exact formula and its trust, preseeded cache, then install.
 
     Returns the prefix supported on the observed ``host_os``, the tap formula file and the
     preseeded cache file.
@@ -156,11 +169,17 @@ def _install(brew: _Brew, *, host_os: str, formula: Path, formula_sha256: str, a
     facts: dict[str, object] = {"tap": brew.tap, "spec": brew.spec}
     brew.receipt["candidate_brew"] = facts
     prefix = facts["prefix"] = require_fresh(brew.run, brew.brew, brew.tap, host_os=host_os)
+    commands = _brew_commands(brew.run("candidate-brew-commands", [brew.brew, "commands", "--quiet"], capture=True))
+    facts["trust"] = "pending" if "trust" in commands else "not-advertised"
     brew.run("candidate-brew-tap-new", [brew.brew, "tap-new", "--no-git", brew.tap])
     tap = _real_directory(Path(brew.line("candidate-brew-tap-repository", "--repository", brew.tap)),
                           "homebrew_tap_invalid")
     tapped = _place_formula(tap, formula, formula_sha256)
     facts["tap_formula"] = str(tapped)
+    if facts["trust"] == "pending":
+        # Only the exact formula just validated, in this session's private HOME; Brew owns the grant.
+        brew.run("candidate-brew-trust", [brew.brew, "trust", "--formula", brew.spec])
+        facts["trust"] = "formula"
     cache = _cache_target(brew.layout.cache, brew.line(
         "candidate-brew-cache-path", "--cache", "--build-from-source", "--formula", brew.spec))
     cache_facts = facts["cache"] = {"path": str(cache)}  # recorded before a refusal can raise

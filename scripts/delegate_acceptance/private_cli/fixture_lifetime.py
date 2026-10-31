@@ -4,6 +4,7 @@ The entrypoint mutates this ledger as it acquires resources. Scenario and cleanu
 operations read the same handles, so a failed setup cannot lose a resource.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
@@ -38,6 +39,9 @@ class FixtureLifetime:
     old_layout_owned: tuple[OwnedDirectory, ...] = ()
     base: Path | None = None
     base_token: OwnedDirectory | None = None
+    # Private control capture files live in this owned child, never directly
+    # in base: base is an ancestor of the provider execution views.
+    capture_token: OwnedDirectory | None = None
     inspection_process: subprocess.Popen[str] | None = None
     env: dict[str, str] = field(default_factory=dict)
     private_config: Path | None = None
@@ -50,3 +54,7 @@ class FixtureLifetime:
     managed_state_roots: list[tuple[Path, list[str]]] = field(default_factory=list)
     handoff_cleanup_bindings: list[SupervisorCleanup] = field(default_factory=list)
     attempted_task_ids: list[str] = field(default_factory=list)
+    # Bound only by a composition whose selected Delegate CLI and attempted IDs
+    # are known created records for the primary root; None keeps passive cleanup.
+    # It takes a task ID and the absolute monotonic cleanup deadline.
+    primary_observer: Callable[[str, float], str] | None = None

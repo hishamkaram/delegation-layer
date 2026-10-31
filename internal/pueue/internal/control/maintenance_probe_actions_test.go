@@ -161,12 +161,16 @@ func TestInspectionMaintenanceAuthorizesOnlyRowsWithTerminalEvents(t *testing.T)
 		authorized = append([]Job(nil), jobs...)
 		return privateTerminalTriggerCleanupAuthorizer(ctx, fixture.stateRoot, client.Binding(), jobs)
 	}
-	snapshot, plan, err := client.authorizePrivateSuccessfulTasks(t.Context(), true)
+	capture, err := client.capturePrivateCleanup(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Jobs) != 2 {
-		t.Fatalf("cleanup snapshot jobs=%d, want 2 for identity revalidation", len(snapshot.Jobs))
+	plan, err := client.authorizePrivateCleanupCapture(t.Context(), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.snapshot.Jobs) != 2 {
+		t.Fatalf("cleanup snapshot jobs=%d, want 2 for identity revalidation", len(capture.snapshot.Jobs))
 	}
 	if len(authorized) != 1 || authorized[0].ID != 0 {
 		t.Fatalf("authorized candidates=%+v, want only event-backed row 0", authorized)
@@ -202,12 +206,16 @@ func TestFullMaintenanceIncludesOrdinaryAndEventlessInspectionRows(t *testing.T)
 		authorized = append([]Job(nil), jobs...)
 		return privateTerminalTriggerCleanupAuthorizer(ctx, fixture.stateRoot, client.Binding(), jobs)
 	}
-	snapshot, plan, err := client.authorizePrivateSuccessfulTasks(t.Context(), false)
+	capture, err := client.capturePrivateCleanup(t.Context(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Jobs) != 3 {
-		t.Fatalf("cleanup snapshot jobs=%d, want 3 for identity revalidation", len(snapshot.Jobs))
+	plan, err := client.authorizePrivateCleanupCapture(t.Context(), capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.snapshot.Jobs) != 3 {
+		t.Fatalf("cleanup snapshot jobs=%d, want 3 for identity revalidation", len(capture.snapshot.Jobs))
 	}
 	authorizedIDs := make([]int64, 0, len(authorized))
 	for _, job := range authorized {
@@ -249,7 +257,11 @@ func TestInspectionMaintenancePreservesDuplicateLabelEvidence(t *testing.T) {
 		authorized = append([]Job(nil), jobs...)
 		return PrivateQueueCleanupPlan{}, nil
 	}
-	if _, _, err := client.authorizePrivateSuccessfulTasks(t.Context(), true); err != nil {
+	capture, err := client.capturePrivateCleanup(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.authorizePrivateCleanupCapture(t.Context(), capture); err != nil {
 		t.Fatal(err)
 	}
 	if len(authorized) != 2 || authorized[0].Label == nil || authorized[1].Label == nil || *authorized[0].Label != label || *authorized[1].Label != label {
@@ -286,7 +298,11 @@ func TestInspectionMaintenanceWithoutConfiguredCallbackUsesExactReconciliation(t
 		authorized = append([]Job(nil), jobs...)
 		return PrivateQueueCleanupPlan{}, nil
 	}
-	if _, _, err := client.authorizePrivateSuccessfulTasks(t.Context(), true); err != nil {
+	capture, err := client.capturePrivateCleanup(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.authorizePrivateCleanupCapture(t.Context(), capture); err != nil {
 		t.Fatal(err)
 	}
 	if len(authorized) != 2 {

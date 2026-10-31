@@ -260,7 +260,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                              side_effect=self.acquire_cohort), \
                 patch.object(capacity_impl, "prove_lifetime_owner_cohort",
                              side_effect=self.prove_owner_cohort), \
-                patch.object(capacity_impl, "shutdown_private_supervisor", side_effect=self.stop), \
+                patch.object(capacity_impl, "shutdown_observed_private_supervisor", side_effect=self.stop), \
                 patch.object(private_cli.time, "sleep"), redirect_stdout(io.StringIO()):
             return private_cli.verify_current_installation_upgrade(
                 delegate=Path("/fixture/delegate"), state=self.state, workspace=self.root, brief=self.brief,
@@ -356,8 +356,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                     self.observed.add(task_id)
                     if len(self.observed) <= self.status_snapshot_owners:
                         with self.client_call_log.open("a") as calls:
-                            calls.write("managed-runner-observation\tclient\t"
-                                        "-c /fixture/pueue.yml status --json\n")
+                            calls.write(json.dumps(
+                                {"v": 1, "phase": "managed-runner-observation", "role": "client",
+                                 "argv": ["-c", "/fixture/pueue.yml", "status", "--json"]},
+                                separators=(",", ":")) + "\n")
             response = {"task_id": task_id,
                         "admission": self.upgraded_admission if upgraded else "admitted",
                         "liveness": "running", "supervisor": {

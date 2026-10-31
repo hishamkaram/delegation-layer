@@ -4,7 +4,6 @@
 # credentials, or release binary.
 #
 # Run:    render-homebrew-formula.sh vX.Y.Z CHECKSUMS_FILE   (formula on stdout)
-# Source: publish-homebrew-formula.sh reuses the functions below.
 set -euo pipefail
 
 default_repository=hishamkaram/delegation-layer

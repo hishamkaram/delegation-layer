@@ -51,6 +51,9 @@ type claudeResultCompletion struct {
 type completionFault struct {
 	refusal string
 	field   string
+	// quota marks a result the follow-up policy correlated with an exhausted
+	// quota; it never carries a provider value.
+	quota bool
 }
 
 func newCompletionFault(refusal, field string) completionFault {

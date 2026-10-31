@@ -8,9 +8,9 @@ import "github.com/hishamkaram/delegation-layer/internal/task"
 // Plan is constructed by a trusted compiled adapter, never from public raw argv.
 type Plan struct {
 	Executable string
-	// ExecutableSHA256 binds the final launch to the executable admitted by the
-	// provider inspection. Historical records may carry the same identity in
-	// effective policy details when this field is empty.
+	// ExecutableSHA256 is an optional historical provider digest. It is never
+	// verified at launch; the installed executable at Executable runs directly.
+	// When ProviderRuntime is present, both must carry the same value.
 	ExecutableSHA256 string
 	// RuntimePreflightSHA256 binds a pending plan to the immutable admission
 	// contract. Only a successful PreflightPlan may clear it before Start.

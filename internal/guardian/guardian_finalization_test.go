@@ -139,9 +139,7 @@ func TestLifetimeGuardianResidentProofRetryHoldsAuthority(t *testing.T) {
 		},
 	)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
-	if err := f.call(t, f.message(lifetimeMessageClose, 0, 0)); err == nil {
-		t.Fatal("close succeeded despite a nonempty proof")
-	}
+	f.callRefused(t, "close despite a nonempty proof", f.message(lifetimeMessageClose, 0, 0), lifetimeGuardianCodeTermination)
 	f.worker.release()
 	select {
 	case err := <-f.runDone:

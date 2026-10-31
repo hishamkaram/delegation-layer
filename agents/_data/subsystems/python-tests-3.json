@@ -18,17 +18,6 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.private_cli.fixtures",
-    "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_private_cli",
-      "py:acceptance_supervisor_common",
-      "py:pathlib",
-      "py:tempfile"
-    ]
-  },
-  {
     "name": "py:acceptance_tests.private_cli.modern_application_fixture",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
@@ -59,20 +48,6 @@
       "py:shlex",
       "py:sys",
       "py:tempfile"
-    ]
-  },
-  {
-    "name": "py:acceptance_tests.private_cli.test_compatibility",
-    "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_private_cli",
-      "py:ast",
-      "py:collections",
-      "py:importlib",
-      "py:json",
-      "py:pathlib",
-      "py:unittest"
     ]
   },
   {
@@ -392,17 +367,6 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.private_cli.test_private_wrapper_evidence",
-    "owner": "py:delegate_acceptance.private_cli",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_private_cli",
-      "py:pathlib",
-      "py:tempfile",
-      "py:unittest"
-    ]
-  },
-  {
     "name": "py:acceptance_tests.private_cli.test_task_status_receipt",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
@@ -471,153 +435,6 @@
     ]
   },
   {
-    "name": "py:test_native_hosted_validation",
-    "owner": "py:test_native_hosted_validation",
-    "layer": "test",
-    "imports": [
-      "py:argparse",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:delegate_acceptance.release_verification.native_hosted",
-      "py:delegate_acceptance.release_verification.native_remote_history",
-      "py:delegate_acceptance.release_verification.native_submission",
-      "py:json",
-      "py:os",
-      "py:pathlib",
-      "py:tempfile",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
-    "name": "py:test_native_submission",
-    "owner": "py:test_native_submission",
-    "layer": "test",
-    "imports": [
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_submission",
-      "py:hashlib",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
-    "name": "py:test_native_remote_history",
-    "owner": "py:test_native_remote_history",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:delegate_acceptance.release_verification.native_remote_history",
-      "py:delegate_acceptance.release_verification.native_reports",
-      "py:io",
-      "py:json",
-      "py:unittest",
-      "py:unittest.mock",
-      "py:zipfile"
-    ]
-  },
-  {
-    "name": "py:test_native_validation_history",
-    "owner": "py:test_native_validation_history",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:unittest"
-    ]
-  },
-  {
-    "name": "py:test_public_native_proof",
-    "owner": "py:test_public_native_proof",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.release_fixture",
-      "py:argparse",
-      "py:collections.abc",
-      "py:dataclasses",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_evidence.public_projection",
-      "py:delegate_acceptance.native_evidence.public_stage",
-      "py:delegate_acceptance.native_evidence.public_validation",
-      "py:hashlib",
-      "py:io",
-      "py:json",
-      "py:native_acceptance_evidence",
-      "py:os",
-      "py:pathlib",
-      "py:shutil",
-      "py:stat",
-      "py:struct",
-      "py:tempfile",
-      "py:test_native_acceptance_evidence",
-      "py:test_verify_release_archive",
-      "py:unittest",
-      "py:unittest.mock",
-      "py:verify_release_archive",
-      "py:zipfile"
-    ]
-  },
-  {
-    "name": "py:test_native_release_recovery",
-    "owner": "py:test_native_release_recovery",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.directories.journal",
-      "py:delegate_acceptance.directories.operations",
-      "py:delegate_acceptance.native_release.cleanup",
-      "py:delegate_acceptance.native_release.cli",
-      "py:delegate_acceptance.native_release.contract",
-      "py:delegate_acceptance.native_release.coordinator",
-      "py:delegate_acceptance.native_release.execution",
-      "py:delegate_acceptance.native_release.preflight",
-      "py:delegate_acceptance.native_release.receipt",
-      "py:delegate_acceptance.native_release.submission",
-      "py:delegate_acceptance.native_release.watching",
-      "py:delegate_acceptance.processes.contracts",
-      "py:delegate_acceptance.processes.operations",
-      "py:delegate_acceptance.release_verification.commands",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:delegate_acceptance.release_verification.native_remote_history",
-      "py:errno",
-      "py:io",
-      "py:json",
-      "py:pathlib",
-      "py:sys",
-      "py:test_native_release_support",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
-    "name": "py:test_native_release_support",
-    "owner": "py:test_native_release_support",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.release_fixture",
-      "py:delegate_acceptance.directories.journal",
-      "py:delegate_acceptance.directories.operations",
-      "py:delegate_acceptance.native_release.contract",
-      "py:delegate_acceptance.native_release.execution",
-      "py:delegate_acceptance.native_release.receipt",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
-      "py:delegate_acceptance.release_verification.native_history",
-      "py:hashlib",
-      "py:pathlib",
-      "py:unittest"
-    ]
-  },
-  {
     "name": "py:test_published_install",
     "owner": "py:test_published_install",
     "layer": "test",
@@ -667,9 +484,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_tests.release_fixture",
-      "py:base64",
       "py:contextlib",
-      "py:delegate_acceptance.native_evidence.public_contract",
       "py:delegate_acceptance.processes.contracts",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.release_verification.contract",
@@ -684,60 +499,6 @@
       "py:stat",
       "py:sys",
       "py:tracemalloc",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
-    "name": "py:test_native_release_submission",
-    "owner": "py:test_native_release_submission",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:delegate_acceptance.native_release.contract",
-      "py:delegate_acceptance.native_release.receipt",
-      "py:delegate_acceptance.native_release.submission",
-      "py:delegate_acceptance.native_release.watching",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:test_native_release_support",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
-    "name": "py:test_native_release_execution",
-    "owner": "py:test_native_release_execution",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.release_fixture",
-      "py:contextlib",
-      "py:dataclasses",
-      "py:delegate_acceptance.evidence.bounded_files",
-      "py:delegate_acceptance.evidence.files",
-      "py:delegate_acceptance.native.acceptance_discovery",
-      "py:delegate_acceptance.native_evidence.aggregate",
-      "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.directories",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_release.cli",
-      "py:delegate_acceptance.native_release.contract",
-      "py:delegate_acceptance.native_release.coordinator",
-      "py:delegate_acceptance.native_release.execution",
-      "py:delegate_acceptance.native_release.preflight",
-      "py:delegate_acceptance.native_release.receipt",
-      "py:delegate_acceptance.processes.contracts",
-      "py:delegate_acceptance.processes.operations",
-      "py:delegate_acceptance.release_verification.commands",
-      "py:delegate_acceptance.release_verification.contract",
-      "py:hashlib",
-      "py:io",
-      "py:json",
-      "py:os",
-      "py:pathlib",
-      "py:sys",
-      "py:test_native_candidate_support",
-      "py:test_native_release_support",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -762,18 +523,6 @@
     ]
   },
   {
-    "name": "py:test_release_proof_publication",
-    "owner": "py:test_release_proof_publication",
-    "layer": "test",
-    "imports": [
-      "py:delegate_acceptance.evidence.files",
-      "py:pathlib",
-      "py:tempfile",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
     "name": "py:test_release_receipt_budget",
     "owner": "py:test_release_receipt_budget",
     "layer": "test",
@@ -781,16 +530,12 @@
       "py:__future__",
       "py:acceptance_tests.release_fixture",
       "py:argparse",
+      "py:delegate_acceptance.evidence.digests",
       "py:delegate_acceptance.native_evidence.contract",
-      "py:delegate_acceptance.native_evidence.public_contract",
-      "py:delegate_acceptance.native_evidence.public_projection",
-      "py:delegate_acceptance.native_evidence.public_validation",
       "py:delegate_acceptance.release_verification.contract",
       "py:delegate_acceptance.release_verification.filesystem",
       "py:json",
-      "py:native_acceptance_evidence",
       "py:pathlib",
-      "py:test_public_native_proof",
       "py:test_verify_release_archive",
       "py:unittest",
       "py:unittest.mock",

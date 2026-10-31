@@ -96,8 +96,7 @@ class InProcessCase(unittest.TestCase):
         return BuildPaths(
             source_root=self.fixture.repository, work_dir=directory / "work",
             output_dir=directory / "payload", receipt_path=directory / "receipt.json",
-            goreleaser=self.fixture.tools / "bin" / "goreleaser", python=sys.executable,
-            harness_seeds=(f"scripts/{RENDERER}", ".goreleaser.yaml"))
+            goreleaser=self.fixture.tools / "bin" / "goreleaser", python=sys.executable)
 
     def build_in_process(self, paths: BuildPaths):
         request = BuildRequest(version=support.VERSION, commit=self.fixture.head,

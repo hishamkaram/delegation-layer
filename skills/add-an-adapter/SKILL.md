@@ -9,11 +9,10 @@ description: Add a provider adapter with runtime capability checks while preserv
 
 Use this skill for a new provider adapter or a repair to an adapter contract,
 profile, interpreter, registration, fixture, or acceptance gate. Read the
-[maintainability contract](../../agents/_data/maintainability-contract.md),
-[adapter contract](../../agents/_data/adapter-contract.md),
-[delegation invariants](../../agents/_data/delegation-invariants.md),
-[code-quality floor](../../agents/_data/code-quality-floor.md), and
-[provider guide](../../docs/providers.md) first.
+[launch boundary](../../agents/_data/adapter-contract.md#2-launch-planning-and-preflight-policy)
+and [evidence interpretation rules](../../agents/_data/adapter-contract.md#4-evidence-capture-and-publication-predicates).
+Use the [provider guide](../../docs/providers.md) for current profiles and load
+lifecycle or native guidance only when the change affects those boundaries.
 
 ## Inputs
 
@@ -77,7 +76,8 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    drift, usage scope, and historical predicate revisions. Collection must stay
    observational and must never retry paid work.
    Name Python acceptance-driver regressions `scripts/test_acceptance_<provider>.py`
-   so the shared `make test-native-harness` gate discovers them automatically.
+   for ordinary discovery. Use `make test-native-harness` as a focused target;
+   the final aggregate already includes these Python tests.
 5. Run the provider through the shipped dispatcher/runner with isolated pueue,
    finite stdin followed by EOF, existing authentication, and the exact plan
    budgets. Inspect sealed raw evidence and filesystem effects directly; do not
@@ -91,11 +91,15 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    This is distinct from rejecting a success-shaped result that fails the
    success predicate. Missing prerequisites and inconclusive controls are
    `BLOCKED`, never pass.
-7. Record sanitized platform/version/profile/predicate/configuration, task and
-   session identities, timings, commands, observations, and digests. Treat the
-   provider version and executable digest as observations bound to that task;
-   never compare them with a checked-in release value. Keep raw private
-   evidence outside the repository and let root update normative plans.
+7. Record sanitized platform/profile/predicate/configuration, task and session
+   identities, timings, commands, observations, and digests. Preserve hashes for
+   Delegate-owned task/configuration contracts, worker, supervisor, native
+   helpers, and evidence. Follow the
+   [product boundary](../../agents/_data/product-boundary.md) for external
+   providers: record the resolved provider path, with any historically reported
+   version as an optional diagnostic, never a readiness gate. Do not hash the
+   provider executable. Keep raw private evidence outside the repository and
+   let root update normative plans.
 
 ## Deliverables
 

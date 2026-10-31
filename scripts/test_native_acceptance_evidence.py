@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -561,27 +560,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(value["cases"][0]["evidence_status"], "UNRESOLVED")
         self.assertEqual(value["cases"][0]["receipt_sha256"].__class__, str)
 
-    def test_stage_manifest_contains_exact_aggregate_and_fourteen_cases(self):
-        root = self.root / "native-aggregate-stage"
-        self.build(root=root, status="PASS")
-        output = self.root / "native-acceptance-evidence"
-        manifest = evidence.stage_evidence(
-            root / evidence.AGGREGATE_RECEIPT_NAME, output,
-            expected_tag="v1.2.3", expected_source_revision="a" * 40,
-        )
-        self.assertEqual(manifest["case_count"], len(evidence.EXPECTED_CASES))
-        self.assertEqual(len(manifest["case_receipts"]), len(evidence.EXPECTED_CASES))
-        self.assertEqual(len(manifest["cleanup_journals"]), len(evidence.EXPECTED_CASES))
-        self.assertEqual(len(list((output / "case-receipts").glob("*.json"))), len(evidence.EXPECTED_CASES))
-        self.assertEqual(len(list((output / "cleanup-journals").glob("*.json"))), len(evidence.EXPECTED_CASES))
-        self.assertEqual(len(manifest["files"]), 2 * len(evidence.EXPECTED_CASES) + 2)
-        self.assertTrue((output / manifest["retention"]["plan"]["path"]).is_file())
-        shutil.rmtree(root)
-        for item in manifest["files"]:
-            self.assertTrue((output / item["path"]).is_file())
-        self.assertFalse(output.name.startswith("."))
-
-    def test_large_aggregate_replays_and_stages_with_long_native_paths(self):
+    def test_large_aggregate_replays_with_long_native_paths(self):
         root = self.root / ("native-path-" + "x" * 150) / ("nested-" + "y" * 150)
         self.build(root=root, status="PASS")
         receipt_path = root / evidence.AGGREGATE_RECEIPT_NAME
@@ -595,14 +574,6 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((code, value["status"]), (0, "PASS"))
         self.assertEqual(receipt_path.read_bytes(), original)
-        output = self.root / "staged-long-paths"
-        manifest = evidence.stage_evidence(
-            receipt_path, output,
-            expected_tag="v1.2.3", expected_source_revision="a" * 40,
-        )
-        self.assertEqual((output / evidence.AGGREGATE_RECEIPT_NAME).read_bytes(), original)
-        self.assertEqual(manifest["case_count"], len(evidence.EXPECTED_CASES))
-
     def test_oversized_aggregate_remains_bounded(self):
         receipt_path = self.root / evidence.AGGREGATE_RECEIPT_NAME
         receipt_path.write_bytes(b" " * (evidence.MAX_AGGREGATE_BYTES + 1))

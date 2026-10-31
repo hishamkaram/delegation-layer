@@ -65,9 +65,12 @@ func normalizedNativeTimeout(provider, value string, budget int64) (string, erro
 	if err := policy.ValidateProvider(provider); err != nil {
 		return "", err
 	}
-	duration, err := time.ParseDuration(value)
-	if err != nil || duration <= 0 || int64(duration) > budget {
-		return "", errors.New("native timeout must be positive and no greater than the task budget")
+	duration, err := parseNativeTimeout(value)
+	if err != nil {
+		return "", err
+	}
+	if err := checkNativeTimeoutBudget(duration, time.Duration(budget)); err != nil {
+		return "", err
 	}
 	return duration.String(), nil
 }
@@ -97,10 +100,8 @@ func validateRequestedConfig(provider string, request TaskConfig, mode string, b
 	if request.Budget != duration.String() || int64(duration) != budget {
 		return errors.New("requested budget must be normalized and match budget_nanos")
 	}
-	for _, value := range []string{request.Model, request.Effort} {
-		if strings.TrimSpace(value) != value || strings.ContainsRune(value, '\x00') {
-			return errors.New("model and effort must be nonblank literal values when supplied")
-		}
+	if err := validateModelEffort(request.Model, request.Effort); err != nil {
+		return err
 	}
 	return ValidateReviewTarget(request.ReviewTarget)
 }
@@ -150,10 +151,17 @@ func validateTaskConfiguration(r *TaskRecord) error {
 	}
 	// Saved evidence outlives the execution directory. Fresh execution authority
 	// additionally validates the current filesystem at the storage boundary.
-	if !nonblank(r.CanonicalCwd) || !filepath.IsAbs(r.CanonicalCwd) || filepath.Clean(r.CanonicalCwd) != r.CanonicalCwd {
+	if !IsCanonicalCwd(r.CanonicalCwd) {
 		return errors.New("saved task cwd must be a clean absolute path")
 	}
 	return validatePriorSession(r)
+}
+
+// IsCanonicalCwd reports whether value has the lexical shape saved as a task
+// working directory: nonblank, free of NUL bytes, absolute, and already clean.
+// It does not consult the filesystem, resolve links, or require UTF-8.
+func IsCanonicalCwd(value string) bool {
+	return nonblank(value) && filepath.IsAbs(value) && filepath.Clean(value) == value
 }
 
 func validatePriorSession(r *TaskRecord) error {
@@ -317,29 +325,40 @@ func ValidateEnvironment(values []string) error {
 
 // ValidateProviderRuntimeIdentity validates an optional final-launch
 // observation. Empty identities preserve compatibility with records written
-// before runtime identity evidence was recorded; partial identities are never
-// accepted.
+// before runtime identity evidence was recorded. A nonempty identity names its
+// resolved executable; the reported version and executable digest are optional
+// observations, validated only when present.
 func ValidateProviderRuntimeIdentity(identity ProviderRuntimeIdentity) error {
-	empty := identity.Executable == "" && identity.Version == "" && identity.SHA256 == ""
-	if empty {
+	if identity == (ProviderRuntimeIdentity{}) {
 		return nil
 	}
 	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable {
 		return errors.New("provider runtime executable must be a resolved absolute path")
 	}
-	if !nonblank(identity.Version) {
-		return errors.New("provider runtime version must be nonempty")
+	if identity.Version != "" {
+		if err := validateProviderRuntimeVersion(identity.Version); err != nil {
+			return err
+		}
 	}
-	if !utf8.ValidString(identity.Version) {
+	if identity.SHA256 != "" {
+		if err := ValidateSHA256(identity.SHA256); err != nil {
+			return fmt.Errorf("provider runtime executable digest: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateProviderRuntimeVersion(version string) error {
+	if !nonblank(version) {
+		return errors.New("provider runtime version must not be blank")
+	}
+	if !utf8.ValidString(version) {
 		return errors.New("provider runtime version must be valid UTF-8")
 	}
-	for _, character := range identity.Version {
+	for _, character := range version {
 		if unicode.IsControl(character) {
 			return errors.New("provider runtime version contains control characters")
 		}
-	}
-	if err := ValidateSHA256(identity.SHA256); err != nil {
-		return fmt.Errorf("provider runtime executable digest: %w", err)
 	}
 	return nil
 }
@@ -413,8 +432,8 @@ func validateMetaRuntimeObservation(r *MetaRecord) error {
 		}
 		return nil
 	}
-	if !nonblank(r.ProviderVersion) {
-		return errors.New("missing provider version")
+	if r.ProviderVersion != "" && !nonblank(r.ProviderVersion) {
+		return errors.New("blank provider version")
 	}
 	return nil
 }

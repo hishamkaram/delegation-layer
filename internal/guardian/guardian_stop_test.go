@@ -3,6 +3,7 @@ package guardian
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -64,6 +65,43 @@ func TestLifetimeGuardianDurableUserStopOwnsNativeTermination(t *testing.T) {
 	}
 }
 
+func TestLifetimeGuardianScenarioDeadlineIsChosenByTheCaller(t *testing.T) {
+	before := time.Now()
+	deadline := lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget)
+	if deadline.After(before.Add(lifetimeGuardianScenarioBudget + time.Minute)) {
+		t.Fatalf("scenario deadline %v exceeds the %s budget", deadline, lifetimeGuardianScenarioBudget)
+	}
+	if testDeadline, bounded := t.Deadline(); bounded && deadline.After(testDeadline.Add(-lifetimeGuardianScenarioReserve)) {
+		t.Fatalf("scenario deadline %v leaves less than %s before the test deadline %v", deadline, lifetimeGuardianScenarioReserve, testDeadline)
+	}
+	// The fixture stores the caller's deadline unchanged, even when it is not
+	// the default one.
+	chosen := time.Now().Add(3 * time.Minute)
+	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+		t, t.Context(), chosen, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil, nil,
+	)
+	assertScenarioContextDeadline(t, f, chosen)
+
+	// A bubble caller supplies a fake-clock deadline; the fixture never asks
+	// the test binary for a real one.
+	synctest.Test(t, func(t *testing.T) {
+		fake := time.Now().Add(lifetimeGuardianScenarioBudget)
+		f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+			t, t.Context(), fake, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil, nil, nil,
+		)
+		assertScenarioContextDeadline(t, f, fake)
+	})
+}
+
+func assertScenarioContextDeadline(t *testing.T, f *lifetimeGuardianTestFixture, want time.Time) {
+	t.Helper()
+	ctx, cancel := f.scenarioContext(t)
+	defer cancel()
+	if got, bounded := ctx.Deadline(); !bounded || !got.Equal(want) {
+		t.Fatalf("scenario context deadline = %v (bounded %t), want %v", got, bounded, want)
+	}
+}
+
 func TestLifetimeGuardianStopPollCadencePreservesBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -76,8 +114,11 @@ func TestLifetimeGuardianStopPollCadencePreservesBudget(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				checks := 0
-				f := newLifetimeGuardianTestFixtureWithOptions(
-					t, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil,
+				// The bubble runs on a fake clock, so its scenario deadline comes
+				// from that clock rather than from the test binary's deadline.
+				f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+					t, t.Context(), time.Now().Add(lifetimeGuardianScenarioBudget),
+					nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil,
 					func(scope *lifetimeGuardianTestScope) { scope.emptyResults = []bool{false, true} },
 					func(options *Options) {
 						options.Now = time.Now
@@ -130,11 +171,45 @@ func (f *lifetimeGuardianTestFixture) message(kind string, sequence uint64, pid 
 	}
 }
 
+// scenarioContext bounds a fixture step by the scenario's one deadline. Calls
+// that have no timeout contract use it instead of a per-call budget, which host
+// load can expire before the guardian replies.
+func (f *lifetimeGuardianTestFixture) scenarioContext(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	return context.WithDeadline(t.Context(), f.scenarioDeadline)
+}
+
 func (f *lifetimeGuardianTestFixture) call(t *testing.T, message lifetimeMessage) error {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := f.scenarioContext(t)
 	defer cancel()
 	return f.client.callContext(ctx, message)
+}
+
+// callRefusedOrClosed sends a message after which the guardian terminates and
+// then either replies with a refusal carrying code or closes the control
+// stream. The client sees the close as io.EOF while waiting for the reply, or
+// as io.ErrClosedPipe when the guardian, which also fences on the deadline by
+// itself, closed it before the client wrote. A client-side deadline is none of
+// these.
+func (f *lifetimeGuardianTestFixture) callRefusedOrClosed(t *testing.T, label string, message lifetimeMessage, code string) {
+	t.Helper()
+	err := f.call(t, message)
+	refused := "task lifetime request refused: " + code
+	if err == nil || (err.Error() != refused && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe)) {
+		t.Fatalf("%s = %v, want protocol refusal %q or a closed control stream (EOF or closed pipe)", label, err, refused)
+	}
+}
+
+// callRefused sends a message the guardian must answer with a protocol refusal
+// carrying code. A deadline, a closed stream or any other error is not a
+// refusal, so a guardian that never replies cannot satisfy it.
+func (f *lifetimeGuardianTestFixture) callRefused(t *testing.T, label string, message lifetimeMessage, code string) {
+	t.Helper()
+	err := f.call(t, message)
+	if want := "task lifetime request refused: " + code; err == nil || err.Error() != want {
+		t.Fatalf("%s = %v, want protocol refusal %q", label, err, want)
+	}
 }
 
 func (f *lifetimeGuardianTestFixture) callMust(t *testing.T, label string, message lifetimeMessage) {
@@ -146,7 +221,7 @@ func (f *lifetimeGuardianTestFixture) callMust(t *testing.T, label string, messa
 
 func (f *lifetimeGuardianTestFixture) waitRun(t *testing.T) error {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := f.scenarioContext(t)
 	defer cancel()
 	select {
 	case err := <-f.runDone:
@@ -223,6 +298,7 @@ func TestLifetimeGuardianRecordBoundariesPreserveSelectedContext(t *testing.T) {
 	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		t,
 		runContext,
+		lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget),
 		nil,
 		lifetime.KindProcessGroup,
 		lifetime.AssuranceCooperative,
@@ -254,8 +330,10 @@ func TestLifetimeGuardianRecordBoundariesPreserveSelectedContext(t *testing.T) {
 			t.Fatalf("%s record lost caller context value: %v", name, got)
 		}
 	}
-	if intentContext != runContext || registrationContext != runContext {
-		t.Fatal("initial lifetime records did not receive the state-machine context")
+	for name, ctx := range map[string]context.Context{"intent": intentContext, "registration": registrationContext} {
+		if deadline, bounded := ctx.Deadline(); !bounded || !deadline.Equal(f.guardian.options.Deadline) {
+			t.Fatalf("%s record context deadline = %v bounded=%t, want the immutable startup deadline %v", name, deadline, bounded, f.guardian.options.Deadline)
+		}
 	}
 	if workerContext.Done() != nil {
 		t.Fatal("worker identity record did not retain its non-cancelable ownership context")
@@ -269,6 +347,7 @@ func TestLifetimeGuardianTerminationUsesSameContextForAmbiguousReplay(t *testing
 	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		t,
 		runContext,
+		lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget),
 		nil,
 		lifetime.KindProcessGroup,
 		lifetime.AssuranceCooperative,
@@ -348,6 +427,7 @@ func TestLifetimeGuardianCancellationStillFinalizesResidentScope(t *testing.T) {
 	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		t,
 		runContext,
+		lifetimeGuardianScenarioDeadline(t, lifetimeGuardianScenarioBudget),
 		nil,
 		lifetime.KindProcessGroup,
 		lifetime.AssuranceCooperative,

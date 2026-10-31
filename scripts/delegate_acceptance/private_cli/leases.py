@@ -7,6 +7,7 @@ from scripts.delegate_acceptance.directories.operations import _close_parent_des
 from scripts.delegate_acceptance.directories.operations import _open_parent_directory
 from scripts.delegate_acceptance.directories.operations import remove_exact_owned_fifo
 from scripts.delegate_acceptance.directories.policy import require
+from scripts.delegate_acceptance.directories.policy import require_private_directory
 from scripts.delegate_acceptance.private_cli.configuration import LEASE_HANDSHAKE_TIMEOUT_SECONDS
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.processes.observation import wait_until
@@ -51,9 +52,31 @@ class LockedReleaseGate:
             os.close(descriptor)
 
 
+TRANSITION_LOCK_TIMEOUT_SECONDS = 30
+
+
 @contextmanager
 def private_fixture_transition(state):
-    """Serialize historical fixture seeds with the production transition owner."""
+    """Serialize historical fixture seeds with the production transition owner.
+
+    Each lock waits up to TRANSITION_LOCK_TIMEOUT_SECONDS.
+    """
+    with _transition_locks(state, lambda: TRANSITION_LOCK_TIMEOUT_SECONDS) as supervisor:
+        yield supervisor
+
+
+@contextmanager
+def private_fixture_transition_until(state, deadline):
+    """Take the same transition lease with every lock wait bounded by one monotonic deadline.
+
+    An expired deadline still makes one acquisition attempt per lock.
+    """
+    with _transition_locks(state, lambda: max(0.0, deadline - time.monotonic())) as supervisor:
+        yield supervisor
+
+
+@contextmanager
+def _transition_locks(state, lock_timeout):
     supervisor = state / ".supervisor"
     with ExitStack() as owners:
         for name in ("transition.lock", "bootstrap.lock"):
@@ -67,8 +90,204 @@ def private_fixture_transition(state):
                 except BlockingIOError:
                     return False
 
-            wait_until(acquire, timeout=30, description="historical seed lifecycle lock")
+            wait_until(acquire, timeout=lock_timeout(), description="historical seed lifecycle lock")
         yield supervisor
+
+
+DISPOSAL_ELECTION_LOCK = "queue-maintenance.lock"
+# The election lock comes first: an elected maintenance owner takes bootstrap SH
+# while it holds the election, so waiting for the election while holding
+# bootstrap EX could deadlock against it.
+DISPOSAL_LOCK_ORDER = (DISPOSAL_ELECTION_LOCK, "transition.lock", "bootstrap.lock")
+_DISPOSAL_LOCK_FLAGS = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+class _HeldDisposal:
+    """Exclusive lock descriptors for one state root, pinned to its private supervisor directory."""
+
+    def __init__(self, state, supervisor_fd, supervisor_identity):
+        self.state = state
+        self.supervisor_fd = supervisor_fd
+        self.supervisor_identity = supervisor_identity
+        # Every opened lock descriptor is owned here from its open; ``acquired`` names the flocked ones.
+        self.locks = {}
+        self.acquired = []
+
+    def require_current(self):
+        """Require the pinned directory and every held lock inode to remain at their paths."""
+        try:
+            visible = os.stat(self.state / ".supervisor", follow_symlinks=False)
+        except OSError as error:
+            raise RuntimeError("disposal lease supervisor directory is missing: " + str(self.state)) from error
+        require(
+            stat.S_ISDIR(visible.st_mode) and (visible.st_dev, visible.st_ino) == self.supervisor_identity,
+            "disposal lease supervisor directory was replaced: " + str(self.state),
+        )
+        require(tuple(self.acquired) == DISPOSAL_LOCK_ORDER, "disposal lease is incomplete: " + str(self.state))
+        for name, descriptor in self.locks.items():
+            held = os.fstat(descriptor)
+            try:
+                entry = os.stat(name, dir_fd=self.supervisor_fd, follow_symlinks=False)
+            except OSError as error:
+                raise RuntimeError("disposal lease lock is missing: " + name) from error
+            require(
+                (entry.st_dev, entry.st_ino) == (held.st_dev, held.st_ino),
+                "disposal lease lock was replaced: " + name,
+            )
+
+    def close(self):
+        descriptors = [*reversed(tuple(self.locks.values())), self.supervisor_fd]
+        self.locks = {}
+        self.acquired = []
+        self.supervisor_fd = -1
+        first_error = None
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                first_error = first_error or error
+        if first_error is not None:
+            raise first_error
+
+
+class DisposalLeases:
+    """Own every acceptance disposal lease from authorized shutdown through exact root deletion.
+
+    One instance belongs to one final-disposal consumer. Holding a root's
+    election, transition and bootstrap locks proves only that no elected
+    maintenance owner runs and none can start; it does not prove that late
+    callback helpers exited. A root already held is never reopened, because a
+    second open of a held flock conflicts with this process's own lease.
+    """
+
+    def __init__(self):
+        self._held = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _error_type, _error, _traceback):
+        self.release_all()
+
+    def holds(self, state):
+        return Path(state) in self._held
+
+    def hold(self, state, deadline):
+        """Hold the disposal locks of an existing private root, each polled until the one deadline.
+
+        An expired deadline still makes one acquisition attempt per lock. A root
+        already held is revalidated, not reacquired.
+        """
+        state = Path(state)
+        held = self._held.get(state)
+        if held is not None:
+            held.require_current()
+            return
+        held = _open_held_disposal(state)
+        try:
+            # Validate the existing lifecycle locks before the optional election lock may
+            # be created, so a refused root is left exactly as found.
+            for name in (*DISPOSAL_LOCK_ORDER[1:], DISPOSAL_ELECTION_LOCK):
+                held.locks[name] = _open_disposal_lock(held.supervisor_fd, name)
+            for name in DISPOSAL_LOCK_ORDER:
+                _acquire_disposal_lock(held.locks[name], name, deadline)
+                held.acquired.append(name)
+            held.require_current()
+        except BaseException:
+            held.close()
+            raise
+        self._held[state] = held
+
+    def require_held(self, state):
+        held = self._held.get(Path(state))
+        require(held is not None, "private state root has no held disposal lease: " + str(state))
+        held.require_current()
+
+    def release(self, state):
+        """Release one held root so its elected owner can progress; other held roots stay held."""
+        held = self._held.pop(Path(state), None)
+        if held is not None:
+            held.close()
+
+    def release_all(self):
+        """Release every held root when the disposal owner exits."""
+        held = tuple(self._held.values())
+        self._held = {}
+        first_error = None
+        for entry in reversed(held):
+            try:
+                entry.close()
+            except OSError as error:
+                first_error = first_error or error
+        if first_error is not None:
+            raise first_error
+
+
+def _open_held_disposal(state):
+    try:
+        root = os.stat(state, follow_symlinks=False)
+    except OSError as error:
+        raise RuntimeError("disposal lease state root is missing: " + str(state)) from error
+    require(stat.S_ISDIR(root.st_mode), "disposal lease state root is unsafe: " + str(state))
+    supervisor_fd, supervisor_identity = _open_parent_directory(state / ".supervisor")
+    try:
+        require_private_directory(
+            os.fstat(supervisor_fd),
+            "disposal lease supervisor directory is unsafe: " + str(state),
+            owner_uid=os.geteuid(),
+        )
+    except BaseException:
+        _close_parent_descriptor(supervisor_fd)
+        raise
+    return _HeldDisposal(state, supervisor_fd, supervisor_identity)
+
+
+def _acquire_disposal_lock(descriptor, name, deadline):
+    def acquire():
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+    wait_until(acquire, timeout=max(0.0, deadline - time.monotonic()), description="disposal lease " + name)
+
+
+def _open_disposal_lock(supervisor_fd, name):
+    """Open an existing lock, creating only a missing election lock inside the pinned directory."""
+    try:
+        descriptor = os.open(name, _DISPOSAL_LOCK_FLAGS, dir_fd=supervisor_fd)
+    except FileNotFoundError as error:
+        if name != DISPOSAL_ELECTION_LOCK:
+            raise RuntimeError("disposal lease lock is missing: " + name) from error
+        descriptor = _create_election_lock(supervisor_fd)
+    try:
+        opened = os.fstat(descriptor)
+        require(
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_uid == os.geteuid()
+            and not stat.S_IMODE(opened.st_mode) & 0o077,
+            "disposal lease lock is not a protected regular file: " + name,
+        )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _create_election_lock(supervisor_fd):
+    """Create the election lock once, as the Go owner would, then barrier its directory entry."""
+    try:
+        descriptor = os.open(DISPOSAL_ELECTION_LOCK, _DISPOSAL_LOCK_FLAGS | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=supervisor_fd)
+    except FileExistsError:
+        # A concurrent Go owner won the creation; verify its winner instead.
+        return os.open(DISPOSAL_ELECTION_LOCK, _DISPOSAL_LOCK_FLAGS, dir_fd=supervisor_fd)
+    try:
+        os.fsync(supervisor_fd)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def require_empty_fixture_waiters(waiter_directory):

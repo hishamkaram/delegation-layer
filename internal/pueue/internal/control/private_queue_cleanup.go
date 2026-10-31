@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strconv"
 	"time"
@@ -146,8 +147,27 @@ func (c *Client) cleanSuccessfulTasks(ctx context.Context, eventOnly bool) error
 	}
 }
 
+// privateCleanupCapture is one identity-protected cleanup observation: the
+// queue snapshot that removal must later revalidate and the terminal
+// candidates whose evidence was prepared from that same snapshot.
+type privateCleanupCapture struct {
+	snapshot   QueueSnapshot
+	candidates []Job
+}
+
 func (c *Client) cleanSuccessfulTasksPass(ctx context.Context, eventOnly bool) (bool, error) {
-	snapshot, plan, err := c.authorizePrivateSuccessfulTasks(ctx, eventOnly)
+	capture, err := c.capturePrivateCleanup(ctx, eventOnly)
+	if err != nil {
+		return false, err
+	}
+	return c.removeCapturedPrivateCleanup(ctx, capture)
+}
+
+// removeCapturedPrivateCleanup asks the application to authorize one capture
+// and removes only the exact rows that a fresh identity-protected snapshot
+// still shows unchanged. It reports whether the plan asked to settle.
+func (c *Client) removeCapturedPrivateCleanup(ctx context.Context, capture privateCleanupCapture) (bool, error) {
+	plan, err := c.authorizePrivateCleanupCapture(ctx, capture)
 	if err != nil {
 		return false, err
 	}
@@ -157,7 +177,7 @@ func (c *Client) cleanSuccessfulTasksPass(ctx context.Context, eventOnly bool) (
 			if snapshotErr != nil {
 				return snapshotErr
 			}
-			if validateAuthorizedTerminalRows(snapshot, current, plan.RemoveIDs) != nil {
+			if validateAuthorizedTerminalRows(capture.snapshot, current, plan.RemoveIDs) != nil {
 				return ErrCleanupAuthorization
 			}
 			return c.removeAuthorizedTerminalRows(lockedContext, current, plan.RemoveIDs)
@@ -250,43 +270,77 @@ func sameTerminalQueueJob(left, right Job) bool {
 	return *left.Label == *right.Label
 }
 
-// authorizePrivateSuccessfulTasks takes one queue snapshot and asks the
-// application-owned policy to validate its terminal rows. Evidence preparation
-// consumes the identity-protected snapshot; authorization itself is read-only
-// and runs outside that mutation lease.
-func (c *Client) authorizePrivateSuccessfulTasks(ctx context.Context, eventOnly bool) (QueueSnapshot, PrivateQueueCleanupPlan, error) {
+// capturePrivateCleanup takes one queue snapshot and prepares the evidence of
+// its terminal candidates while queue identity protects that snapshot, so
+// worker observations are published only from rows that are still current.
+func (c *Client) capturePrivateCleanup(ctx context.Context, eventOnly bool) (privateCleanupCapture, error) {
 	if c == nil {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrConfiguration
+		return privateCleanupCapture{}, ErrConfiguration
 	}
 	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
 	if !private {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrConfiguration
+		return privateCleanupCapture{}, ErrConfiguration
 	}
 	if c.options.SuccessfulCleanupAuthorizer == nil {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrCleanupAuthorization
+		return privateCleanupCapture{}, ErrCleanupAuthorization
 	}
-	var snapshot QueueSnapshot
-	var candidates []Job
+	var capture privateCleanupCapture
 	err := c.withPrivateQueueIdentityMutation(ctx, func(lockedContext context.Context) error {
 		var readErr error
-		snapshot, readErr = c.privateCleanupSnapshot(lockedContext)
+		capture.snapshot, readErr = c.privateCleanupSnapshot(lockedContext)
 		if readErr != nil {
 			return readErr
 		}
-		candidates, readErr = c.privateTerminalEventJobs(lockedContext, stateRoot, cloneQueueSnapshot(snapshot).Jobs, eventOnly)
+		capture.candidates, readErr = c.privateTerminalEventJobs(lockedContext, stateRoot, cloneQueueSnapshot(capture.snapshot).Jobs, eventOnly)
 		if readErr != nil || c.options.PrivateTerminalEvidencePreparer == nil {
 			return readErr
 		}
-		return c.options.PrivateTerminalEvidencePreparer(lockedContext, stateRoot, c.binding, candidates)
+		return c.options.PrivateTerminalEvidencePreparer(lockedContext, stateRoot, c.binding, capture.candidates)
 	})
 	if err != nil {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
+		return privateCleanupCapture{}, err
 	}
-	plan, err := c.options.SuccessfulCleanupAuthorizer(ctx, stateRoot, c.binding, candidates)
-	if err != nil {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
+	return capture, nil
+}
+
+// authorizePrivateCleanupCapture asks the application-owned policy to validate
+// the captured terminal rows. Authorization is read-only and runs outside the
+// queue identity mutation lease.
+func (c *Client) authorizePrivateCleanupCapture(ctx context.Context, capture privateCleanupCapture) (PrivateQueueCleanupPlan, error) {
+	if c == nil {
+		return PrivateQueueCleanupPlan{}, ErrConfiguration
 	}
-	return snapshot, plan, nil
+	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	if !private {
+		return PrivateQueueCleanupPlan{}, ErrConfiguration
+	}
+	if c.options.SuccessfulCleanupAuthorizer == nil {
+		return PrivateQueueCleanupPlan{}, ErrCleanupAuthorization
+	}
+	return c.options.SuccessfulCleanupAuthorizer(ctx, stateRoot, c.binding, capture.candidates)
+}
+
+// releasePrivateTerminalCustody hands one capture to the application custody
+// owner. Its caller holds neither the generation lease nor queue identity.
+func (c *Client) releasePrivateTerminalCustody(ctx context.Context, capture privateCleanupCapture, full bool) error {
+	if c == nil {
+		return ErrConfiguration
+	}
+	if c.options.PrivateTerminalCustodyReleaser == nil || (!full && len(capture.candidates) == 0) {
+		return nil
+	}
+	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	if !private {
+		return ErrConfiguration
+	}
+	// The consumer gets its own deep copy, so it cannot rewrite the capture
+	// that authorization and removal revalidation consume afterwards.
+	candidates := cloneQueueSnapshot(QueueSnapshot{Jobs: capture.candidates}).Jobs
+	scope := PrivateTerminalCustodyScope{Candidates: candidates, Full: full}
+	if err := c.options.PrivateTerminalCustodyReleaser(ctx, stateRoot, c.binding, scope); err != nil {
+		return fmt.Errorf("private terminal custody release: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) privateCleanupSnapshot(ctx context.Context) (QueueSnapshot, error) {
@@ -443,7 +497,20 @@ func (run privateQueueMaintenanceRun) attempt(ctx context.Context) (bool, error)
 func (run privateQueueMaintenanceRun) maintain(ctx context.Context) error {
 	maintenanceContext, cancel := run.maintenanceContext(ctx)
 	defer cancel()
-	return run.worker.withPrivateSupervisorLock(maintenanceContext, run.maintainLocked, run.acquireGenerationLock)
+	for {
+		pending, err := run.maintainGeneration(maintenanceContext)
+		if err != nil || !pending {
+			return err
+		}
+		// Requests published after this pass's target need a fresh queue
+		// observation. Give the completion wave one more bounded quiet window so
+		// the next pass captures the latest generation instead of scanning once
+		// per callback in a burst. The window holds no generation lease, so a
+		// waiting lifecycle transition can enter between generations.
+		if err = settlePrivateQueueMaintenanceWake(maintenanceContext, run.stateRoot); err != nil {
+			return err
+		}
+	}
 }
 
 func (run privateQueueMaintenanceRun) maintenanceContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -457,35 +524,51 @@ func (run privateQueueMaintenanceRun) acquireGenerationLock(ctx context.Context,
 	return withPublishedPrivateLockContext(ctx, root, "bootstrap.lock", run.lockMode, callback)
 }
 
-func (run privateQueueMaintenanceRun) maintainLocked(ctx context.Context) error {
-	complete, err := PrivateSupervisorMigrationComplete(run.stateRoot, run.worker.binding)
-	if err != nil {
-		return err
-	}
-	if !complete {
-		return ErrPrivateSupervisorMigrationRequired
-	}
-	for {
-		pending, err := run.maintainGeneration(ctx)
-		if err != nil || !pending {
+// withGeneration runs one protected phase of a pass under the shared
+// generation lease and revalidates the canonical generation inside it. A pass
+// releases the lease between phases, so each phase repeats this check. entered
+// is false only when a non-blocking pass found a lifecycle transition active.
+func (run privateQueueMaintenanceRun) withGeneration(ctx context.Context, phase func(context.Context) error) (entered bool, resultErr error) {
+	resultErr = run.worker.withPrivateSupervisorLock(ctx, func(lockedContext context.Context) error {
+		entered = true
+		complete, err := PrivateSupervisorMigrationComplete(run.stateRoot, run.worker.binding)
+		if err != nil {
 			return err
 		}
-		// Requests published after this pass's target need a fresh queue
-		// observation. Give the completion wave one more bounded quiet window so
-		// the next pass captures the latest generation instead of scanning once
-		// per callback in a burst.
-		if err = settlePrivateQueueMaintenanceWake(ctx, run.stateRoot); err != nil {
-			return err
+		if !complete {
+			return ErrPrivateSupervisorMigrationRequired
 		}
-	}
+		return phase(lockedContext)
+	}, run.acquireGenerationLock)
+	return entered, resultErr
 }
 
-func (run privateQueueMaintenanceRun) maintainGeneration(ctx context.Context) (bool, error) {
-	target, full, needed, err := beginPrivateQueueMaintenancePass(ctx, run.stateRoot, !run.scheduled)
-	if err != nil || !needed {
-		return false, err
+// withBegunGeneration is withGeneration for a later phase of a begun pass.
+// That pass must settle, so a skipped non-blocking acquisition is a fault
+// rather than a silent success.
+func (run privateQueueMaintenanceRun) withBegunGeneration(ctx context.Context, phase func(context.Context) error) error {
+	entered, err := run.withGeneration(ctx, phase)
+	if err == nil && !entered {
+		return errSupervisorLockBusy
 	}
-	cleanErr := run.worker.cleanSuccessfulTasks(ctx, !full)
+	return err
+}
+
+// maintainGeneration begins a pass under one generation lease. A refused,
+// skipped, or unneeded generation stays unattempted; a begun pass settles
+// unless a command is still pending.
+func (run privateQueueMaintenanceRun) maintainGeneration(ctx context.Context) (bool, error) {
+	var target uint64
+	var full, begun bool
+	_, beginErr := run.withGeneration(ctx, func(lockedContext context.Context) error {
+		var err error
+		target, full, begun, err = beginPrivateQueueMaintenancePass(lockedContext, run.stateRoot, !run.scheduled)
+		return err
+	})
+	if beginErr != nil || !begun {
+		return false, beginErr
+	}
+	cleanErr := run.cleanBegunGeneration(ctx, full)
 	if len(pendingHandles(cleanErr)) != 0 {
 		// An observer deadline does not settle the pass: the command still owns
 		// its result and may still mutate the queue. Keep this generation
@@ -500,6 +583,61 @@ func (run privateQueueMaintenanceRun) maintainGeneration(ctx context.Context) (b
 		return false, cleanErr
 	}
 	return pending, nil
+}
+
+// cleanBegunGeneration runs the phases of one begun pass and joins their
+// faults. A full-recovery generation first releases custody that needs no
+// queue observation, with neither lease held and before the endpoint is
+// verified, so a stopped supervisor cannot strand closed custody. The queue
+// capture then prepares evidence under the protected phase; a failed capture
+// hands no candidate to custody and publishes no evidence.
+func (run privateQueueMaintenanceRun) cleanBegunGeneration(ctx context.Context, full bool) error {
+	var custodyErr error
+	if full {
+		custodyErr = run.worker.releasePrivateTerminalCustody(ctx, privateCleanupCapture{}, true)
+	}
+	var capture privateCleanupCapture
+	err := run.withBegunGeneration(ctx, func(lockedContext context.Context) error {
+		var captureErr error
+		capture, captureErr = run.worker.capturePrivateCleanup(lockedContext, !full)
+		return captureErr
+	})
+	if err == nil {
+		err = run.cleanCapturedGeneration(ctx, capture, !full)
+	}
+	return errors.Join(custodyErr, err)
+}
+
+// cleanCapturedGeneration finishes the queue work of a begun pass. Custody of
+// the captured candidates runs with neither the generation lease nor queue
+// identity; removal then reacquires both and revalidates the capture, so a
+// custody fault never withholds a row that the application still authorizes.
+// A settling plan recaptures the same generation after a quiet poll that also
+// holds neither lease.
+func (run privateQueueMaintenanceRun) cleanCapturedGeneration(ctx context.Context, capture privateCleanupCapture, eventOnly bool) error {
+	for {
+		custodyErr := run.worker.releasePrivateTerminalCustody(ctx, capture, false)
+		settling := false
+		err := run.withBegunGeneration(ctx, func(lockedContext context.Context) error {
+			var removeErr error
+			settling, removeErr = run.worker.removeCapturedPrivateCleanup(lockedContext, capture)
+			return removeErr
+		})
+		if err = errors.Join(custodyErr, err); err != nil || !settling {
+			return err
+		}
+		if err = waitPrivateQueueSettlement(ctx); err != nil {
+			return err
+		}
+		err = run.withBegunGeneration(ctx, func(lockedContext context.Context) error {
+			var captureErr error
+			capture, captureErr = run.worker.capturePrivateCleanup(lockedContext, eventOnly)
+			return captureErr
+		})
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func waitPrivateQueueMaintenancePending(ctx context.Context, stateRoot string, private bool, err error) (bool, error) {

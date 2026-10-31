@@ -19,20 +19,13 @@ type modelCommandResult struct {
 }
 
 func inspectModels(scope execution.PreflightScope, definition provider.InspectionDefinition) (json.RawMessage, error) {
-	probe := provider.RuntimeProbeDefinition{Executable: definition.Executable, ExecutableSHA256: definition.ExecutableSHA256}
 	if definition.Models == nil {
 		return nil, errNativeInspection
 	}
-	probe.Directory = definition.Directory
-	probe.Environment = slices.Clone(definition.Environment)
-	probe.VersionArgs = append([]string(nil), definition.Models.Capability.VersionArgs...)
-	if len(probe.VersionArgs) == 0 && definition.Runtime != nil {
-		probe.VersionArgs = append([]string(nil), definition.Runtime.VersionArgs...)
-	}
-	probe.HelpArgs = append([]string(nil), definition.Models.Capability.HelpArgs...)
-	probe.RequiredFlags = append([]string(nil), definition.Models.Capability.RequiredFlags...)
-	if err := verifyRuntimeExecutable(probe); err != nil {
-		return nil, err
+	probe := provider.RuntimeProbeDefinition{
+		Executable: definition.Executable, Directory: definition.Directory, Environment: slices.Clone(definition.Environment),
+		HelpArgs:      append([]string(nil), definition.Models.Capability.HelpArgs...),
+		RequiredFlags: append([]string(nil), definition.Models.Capability.RequiredFlags...),
 	}
 	_, help, err := inspectRuntimeWithHelp(scope, probe, definition.OutputLimit)
 	if err != nil {
@@ -43,16 +36,13 @@ func inspectModels(scope execution.PreflightScope, definition provider.Inspectio
 	if err != nil {
 		return nil, err
 	}
-	if err = verifyRuntimeExecutable(probe); err != nil {
-		return nil, err
-	}
 	output, err := runModelCommand(scope, definition, definition.Models.Arguments, exchange, nativeHooks{})
 	if err != nil {
 		return nil, err
 	}
 	defer clear(output.stdout)
 	defer clear(output.stderr)
-	if scope.Authorize() != nil || verifyRuntimeExecutable(probe) != nil {
+	if scope.Authorize() != nil {
 		return nil, errNativeInspection
 	}
 	return projectModels(definition.Models, output, help)
@@ -92,19 +82,13 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 		stdout.discard()
 		return modelCommandResult{}, err
 	}
-	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, args...)
-	if err != nil {
-		stdout.discard()
-		stderr.discard()
-		return modelCommandResult{}, errNativeInspection
-	}
-	cmd.Dir, cmd.Env = definition.Directory, definition.Environment
+	cmd := newProviderCommand(definition.Executable, definition.Directory, definition.Environment, args...)
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	input, err := startModelCapture(stdout, stderr, exchange)
 	if err != nil {
 		stdout.discard()
 		stderr.discard()
-		return modelCommandResult{}, errors.Join(err, verified.Close())
+		return modelCommandResult{}, err
 	}
 	if input != nil {
 		cmd.Stdin = input
@@ -114,16 +98,12 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	if input != nil {
 		closeErr = errors.Join(closeErr, input.Close())
 	}
-	if startErr == nil {
-		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
-	}
 	var waitErr error
 	if startErr == nil {
 		waitErr = hooks.waitCommand(cmd)
 		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
-	closeErr = errors.Join(closeErr, verified.Close())
 	if errors.Join(startErr, closeErr, stdoutErr, stderrErr, ctx.Err()) != nil {
 		clear(stdout.buffer.bytes)
 		clear(stderr.buffer.bytes)

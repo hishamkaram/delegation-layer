@@ -104,7 +104,8 @@ class InspectionFixture:
                            legacy_model_discovery: bool = False,
                            legacy_admission: bool = False,
                            managed_exit_proof: bool = False,
-                           custom_inspection: bool = False) -> Path:
+                           custom_inspection: bool = False,
+                           helper_sha256: str = "e" * 64) -> Path:
         # Declare the expectation before restoring the seeded dispatch
         # attempt, matching the production pre-dispatch ordering.
         self.ops.dispatch_attempts.discard(TASK)
@@ -138,7 +139,7 @@ class InspectionFixture:
                 "definition_revision": revision,
                 "definition_sha256": "d" * 64,
                 "helper_executable": str(self.base / "helper"),
-                "helper_sha256": "e" * 64,
+                "helper_sha256": helper_sha256,
                 "worker_executable": str(self.placed_runner()),
                 "worker_sha256": digest(self.runner),
                 "supervisor": provider_common.supervisor_binding(

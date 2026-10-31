@@ -33,6 +33,11 @@ def _hex_digest(value: object) -> bool:
             all(character in "0123456789abcdef" for character in value))
 
 
+def _optional_hex_digest(value: object) -> bool:
+    """Permit an unobserved diagnostic, while validating populated digests."""
+    return isinstance(value, str) and (value == "" or _hex_digest(value))
+
+
 def _task_identity(value: object) -> bool:
     return (isinstance(value, str) and len(value) == 32 and
             all(character in "0123456789abcdef" for character in value))

@@ -23,7 +23,7 @@ CHECKOUT = Path(__file__).resolve().parent.parent
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--locator", type=Path, required=True)
+    parser.add_argument("--artifact-id", type=int, required=True)
     parser.add_argument("--channel", choices=tuple(CHANNELS), required=True)
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="absolute path of a new directory this invocation creates and owns")
@@ -36,7 +36,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     request = ProofRequest(
-        locator=arguments.locator, channel=CHANNELS[arguments.channel], output_dir=arguments.output_dir,
+        artifact_id=arguments.artifact_id, channel=CHANNELS[arguments.channel], output_dir=arguments.output_dir,
         checkout=CHECKOUT, github_auth=arguments.github_auth, bootstrap_parent=arguments.bootstrap_parent)
     try:
         return prove_candidate_install(request)

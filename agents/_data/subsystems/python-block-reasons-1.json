@@ -43,7 +43,6 @@
       "py:delegate_acceptance.native_evidence.cases",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.validation",
-      "py:delegate_acceptance.release_verification.candidate_readiness",
       "py:enum",
       "py:json",
       "py:native_acceptance_evidence",

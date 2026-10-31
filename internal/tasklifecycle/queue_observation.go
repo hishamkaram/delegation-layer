@@ -56,11 +56,6 @@ func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDi
 	} else {
 		response.Admission = task.AdmissionUnknown
 	}
-	if observation.State == pueue.StateEnded {
-		if inspection, inspectErr := td.Inspect(); inspectErr == nil && inspection.Outcome != nil {
-			supervisorcore.CleanupCompletedTask(ctx, root, td, client)
-		}
-	}
 	return observation, reconcileErr
 }
 

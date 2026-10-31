@@ -5,6 +5,10 @@
 TASK_BUDGET = "2m"
 
 
+# The harness's own direct external queue observations; the handoff baseline must select one.
+EXTERNAL_OBSERVATION_PHASE = "external-supervisor-observation"
+
+
 COLLECT_WATCH = "150s"
 
 
@@ -26,19 +30,25 @@ EXTERNAL_INSPECTION_HANDOFF_SCENARIO = "external-inspection-handoff"
 SUPERVISOR_UPGRADE_RECOVERY_SCENARIO = "supervisor-upgrade-recovery"
 
 
+EXTERNAL_NOEXEC_STATE_SCENARIO = "external-noexec-state"
+
+
 DEFAULT_STOP_TASK_COUNT = 2
 
 
 EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT = 2
 
 
+EXTERNAL_NOEXEC_STATE_TASK_COUNT = 1
+
+
 EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET = "5m"
 
 
-DEFAULT_STOP_TASK_BUDGET = "5s"
+DEFAULT_STOP_TASK_BUDGET = "5m"
 
 
-DEFAULT_STOP_BUDGET = "900ms"
+DEFAULT_STOP_BUDGET = "90s"
 
 
 DEFAULT_DISPATCH_WORKERS = 16

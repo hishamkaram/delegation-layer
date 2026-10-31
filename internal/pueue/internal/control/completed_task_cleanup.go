@@ -94,8 +94,11 @@ func (c *Client) attemptCompletedTaskCleanup(ctx context.Context, identity Ident
 		return completedTaskCleanupAttempt{err: err}
 	}
 	defer cancel()
+	if attempt, settled := c.observeCompletedTaskLabelAbsence(controlContext, identity); settled {
+		return attempt
+	}
 	// Pueue can reuse numeric IDs after removal. Exclude submission and other
-	// removers from the identity observation through completion of removal.
+	// removers from a fresh identity observation through completion of removal.
 	var attempt completedTaskCleanupAttempt
 	attempt.err = c.withPrivateBootstrapLock(controlContext, func(lockedContext context.Context) error {
 		var lockedErr error
@@ -105,18 +108,73 @@ func (c *Client) attemptCompletedTaskCleanup(ctx context.Context, identity Ident
 	return attempt
 }
 
-func (c *Client) removeCompletedTaskLocked(ctx context.Context, identity Identity) (CompletedTaskCleanup, error) {
+// observeCompletedTaskLabelAbsence runs the canonical cleanup selection under
+// the shared generation lease, so an already-absent label does not exclude
+// other controls. It settles the attempt only with logical absence or an
+// operational error. Any returned label row, even an ambiguous one, leaves the
+// attempt unsettled: the exclusive path selects afresh before it may remove.
+// The lease's exact refusal of an unpublished bootstrap lock also leaves it
+// unsettled, so the exclusive path provisions that lock as before.
+func (c *Client) observeCompletedTaskLabelAbsence(ctx context.Context, identity Identity) (completedTaskCleanupAttempt, bool) {
+	var attempt completedTaskCleanupAttempt
+	entered, present := false, false
+	attempt.err = c.withPrivateSupervisorLease(ctx, func(lockedContext context.Context) error {
+		entered = true
+		selection, err := c.selectCompletedTaskLabelLocked(lockedContext, identity)
+		if err != nil {
+			return err
+		}
+		if selection.rows == 0 {
+			attempt.disposition = CompletedTaskLogicalLabelAbsent
+		}
+		present = selection.rows != 0
+		return nil
+	})
+	if (attempt.err == nil && present) || privateLeaseUninitialized(entered, attempt.err) {
+		return completedTaskCleanupAttempt{}, false
+	}
+	return attempt, true
+}
+
+// privateLeaseUninitialized reports the shared lease's clean refusal of a root
+// whose bootstrap lock is not published: the callback never ran and the whole
+// error is the bare sentinel. A wrapped, joined, or custom-matching fault never
+// qualifies; the sentinel itself defines no Is method.
+func privateLeaseUninitialized(entered bool, err error) bool {
+	if entered {
+		return false
+	}
+	if _, matcher := err.(interface{ Is(error) bool }); matcher {
+		return false
+	}
+	if !errors.Is(err, ErrPrivateSupervisorNotInitialized) || errors.Unwrap(err) != nil {
+		return false
+	}
+	_, joined := err.(interface{ Unwrap() []error })
+	return !joined
+}
+
+// selectCompletedTaskLabelLocked is the canonical cleanup selection under the
+// caller's bootstrap lease: the bound runtime, the complete published
+// generation it controls, then one exact-label query. Under the shared lease
+// the selection is an observation only; removal authority requires a fresh
+// selection under the exclusive lease.
+func (c *Client) selectCompletedTaskLabelLocked(ctx context.Context, identity Identity) (labelSelection, error) {
 	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
 	if !private {
-		return 0, ErrConfiguration
+		return labelSelection{}, ErrConfiguration
 	}
 	if err := c.verify(ctx); err != nil {
-		return 0, err
+		return labelSelection{}, err
 	}
 	if err := c.authorizePrivateMutationWithLock(stateRoot); err != nil {
-		return 0, err
+		return labelSelection{}, err
 	}
-	selection, err := c.selectLabel(ctx, identity)
+	return c.selectLabel(ctx, identity)
+}
+
+func (c *Client) removeCompletedTaskLocked(ctx context.Context, identity Identity) (CompletedTaskCleanup, error) {
+	selection, err := c.selectCompletedTaskLabelLocked(ctx, identity)
 	if err != nil {
 		return 0, err
 	}

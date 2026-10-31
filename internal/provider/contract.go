@@ -99,9 +99,11 @@ func (p PreparedProfile) ValidateStatePlacement(root string) error {
 
 // Validate checks the provider-produced profile against the requested task.
 // It validates shape and identity only; the caller remains responsible for
-// process admission and launch.
+// process admission and launch. A cleared preflight marker is the completion
+// signal; ObservedVersion is an optional diagnostic and never a readiness
+// marker.
 func (p PreparedProfile) Validate(request task.TaskRecord) error {
-	if p.RuntimePreflightSHA256 != "" || p.Plan.RuntimePreflightSHA256 != "" || p.ObservedVersion == "" {
+	if p.RuntimePreflightSHA256 != "" || p.Plan.RuntimePreflightSHA256 != "" {
 		return errors.New("profile requires a completed runtime preflight")
 	}
 	return p.validateShape(request)
@@ -114,7 +116,7 @@ func (p PreparedProfile) ValidateAdmission(request task.TaskRecord) error {
 		return p.Validate(request)
 	}
 	if task.ValidateSHA256(p.RuntimePreflightSHA256) != nil || p.ObservedVersion != "" ||
-		p.Plan.ProviderRuntime != (task.ProviderRuntimeIdentity{}) || task.ValidateSHA256(p.Plan.ExecutableSHA256) != nil ||
+		p.Plan.ProviderRuntime != (task.ProviderRuntimeIdentity{}) || ValidateOptionalExecutableSHA256(p.Plan.ExecutableSHA256) != nil ||
 		(p.Plan.RuntimePreflightSHA256 != "" && p.Plan.RuntimePreflightSHA256 != p.RuntimePreflightSHA256) || p.Plan.Environment == nil {
 		return task.ErrIdentityMismatch
 	}

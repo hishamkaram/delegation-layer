@@ -1,5 +1,7 @@
 """Private CLI stop policy boundary."""
 
+from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp, _timestamp_before, _timestamp_unix_ns
+
 
 def _exact_stop_row(status, request_id):
     rows = status.get("stops") or []
@@ -109,6 +111,35 @@ def default_stop_stop_evidence(stop):
         )
         if key in stop
     }
+
+
+BUDGET_CLOSURE_ALLOWANCE_SECONDS = 30
+
+
+def budget_deadline_ns(deadline_text, lease_observed_ns, task_id):
+    """Return the recorded budget deadline in Unix ns after proving the lease was live strictly before it."""
+    deadline_ns = _timestamp_unix_ns(_canonical_timestamp(deadline_text, "budget lifetime deadline"))
+    if type(lease_observed_ns) is not int or lease_observed_ns >= deadline_ns:
+        raise RuntimeError("fixture lease was not observed live strictly before its budget deadline: " + task_id)
+    return deadline_ns
+
+
+def budget_closure_watch_seconds(deadline_ns, now_ns):
+    """Closure watch: the time left until the recorded deadline plus the existing closure allowance."""
+    return max(0, deadline_ns - now_ns) / 1_000_000_000 + BUDGET_CLOSURE_ALLOWANCE_SECONDS
+
+
+def budget_closure_evidence(closure, task_id, deadline_text):
+    """Budget closure evidence that also proves termination happened at or after the recorded deadline."""
+    evidence = default_stop_closure_evidence(closure, task_id, "budget")
+    if closure["intent"].get("deadline") != deadline_text:
+        raise RuntimeError("canonical lifetime closure deadline differs from the observed budget deadline: " + task_id)
+    deadline = _canonical_timestamp(deadline_text, "budget lifetime deadline")
+    terminated = _canonical_timestamp(closure["termination"].get("observed_at"), "budget termination observed_at")
+    if _timestamp_before(terminated, deadline):
+        raise RuntimeError("budget termination was recorded before its deadline: " + task_id)
+    evidence["budget_deadline"] = {"deadline": deadline_text, "termination_observed_at": evidence["termination"]["observed_at"]}
+    return evidence
 
 
 def default_stop_closure_evidence(closure, task_id, cause):

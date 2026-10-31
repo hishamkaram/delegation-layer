@@ -1,5 +1,7 @@
 """Each manifest artifact kind is bounded by the reader that consumes it."""
 
+import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 import sys
@@ -222,6 +224,142 @@ class ConsumerBoundaryTests(unittest.TestCase):
                 self.assertEqual((error.code, error.stage), ("candidate_file_invalid", "bounded-read"))
                 probe.assert_not_called()
                 self.assertEqual(ports.mock_calls, [])
+
+
+def mutated(data: bytes, change) -> bytes:
+    record = json.loads(data)
+    change(record)
+    return encode_record(record, "test")
+
+
+class ManifestTests(unittest.TestCase):
+    def setUp(self):
+        self.manifest = manifest()
+        self.data = encode_manifest(self.manifest)
+
+    def assertCode(self, code, function, *args):
+        with self.assertRaises(VerificationError) as caught:
+            function(*args)
+        self.assertEqual(caught.exception.code, code)
+
+    def test_round_trip_owns_exact_inventory(self):
+        self.assertEqual(parse_manifest(self.data), self.manifest)
+        paths = [entry.path for entry in self.manifest.artifacts]
+        self.assertEqual(paths, sorted([
+            "checksums.txt", "delegation-layer-0.1.37.tgz", "delegation-layer.rb",
+            "delegation-layer_0.1.37_Darwin_amd64.tar.gz", "delegation-layer_0.1.37_Darwin_arm64.tar.gz",
+            "delegation-layer_0.1.37_Linux_amd64.tar.gz", "delegation-layer_0.1.37_Linux_arm64.tar.gz",
+        ]))
+        self.assertNotIn(hashlib.sha256(self.data).hexdigest(), self.data.decode())
+
+    def test_non_canonical_and_duplicate_key_bytes_are_rejected(self):
+        pretty = json.dumps(json.loads(self.data), indent=2, sort_keys=True).encode()
+        self.assertCode("candidate_record_not_canonical", parse_manifest, pretty)
+        duplicate = self.data.replace(b'{"artifacts"', b'{"artifacts":[],"artifacts"', 1)
+        self.assertCode("candidate_record_invalid", parse_manifest, duplicate)
+        for constant in (b"NaN", b"Infinity", b"-Infinity"):
+            self.assertCode("candidate_record_invalid", parse_manifest, b'{"version":' + constant + b"}\n")
+        self.assertCode("candidate_record_invalid", parse_manifest, b"\xff")
+        self.assertCode("candidate_record_too_large", parse_manifest, b" " * (64 * 1024 + 1))
+
+    def test_unsafe_artifact_paths_are_rejected(self):
+        for path in ("../checksums.txt", "/checksums.txt", "dist\\checksums.txt", "./checksums.txt",
+                     "dist//checksums.txt", "", "check\nsums.txt"):
+            data = mutated(self.data, lambda record, path=path: record["artifacts"][0].update(path=path))
+            self.assertCode("candidate_artifact_path_invalid", parse_manifest, data)
+
+    def test_duplicate_missing_and_mislabeled_artifacts_are_rejected(self):
+        data = mutated(self.data, lambda record: record["artifacts"].insert(1, record["artifacts"][0]))
+        self.assertCode("candidate_artifact_duplicate", parse_manifest, data)
+        data = mutated(self.data, lambda record: record["artifacts"].pop())
+        self.assertCode("candidate_artifact_inventory_mismatch", parse_manifest, data)
+        data = mutated(self.data, lambda record: record["artifacts"][0].update(arch="arm64"))
+        self.assertCode("candidate_artifact_inventory_mismatch", parse_manifest, data)
+        data = mutated(self.data, lambda record: record["artifacts"][0].update(path="delegation-layer-9.9.9.tgz"))
+        self.assertCode("candidate_artifact_inventory_mismatch", parse_manifest, data)
+        data = mutated(self.data, lambda record: record["artifacts"].reverse())
+        self.assertCode("candidate_artifact_inventory_mismatch", parse_manifest, data)
+
+    def test_artifact_digest_and_size_errors_are_rejected(self):
+        for field, value in (("sha256", "A" * 64), ("sha256", "a" * 63), ("size", 0), ("size", True),
+                             ("kind", "binary")):
+            data = mutated(self.data, lambda record, f=field, v=value: record["artifacts"][0].update({f: v}))
+            self.assertCode("candidate_artifact_invalid", parse_manifest, data)
+
+    def test_identity_errors_are_rejected(self):
+        cases = (
+            ("candidate_build_tag_mismatch", lambda r: r.update(build_tag="v0.1.38")),
+            ("candidate_field_invalid", lambda r: r.update(version="v0.1.37")),
+            ("candidate_field_invalid", lambda r: r["source"].update(commit="A" * 40)),
+            ("candidate_field_invalid", lambda r: r["source"].update(tree="short")),
+            ("candidate_field_invalid", lambda r: r["build"].update(go_sum_sha256="0")),
+            ("candidate_field_invalid", lambda r: r["build"]["toolchains"].update(go="go1.27.3")),
+            ("candidate_record_fields_invalid", lambda r: r["build"]["toolchains"].pop("node")),
+            ("candidate_record_fields_invalid", lambda r: r.update(self_sha256="0" * 64)),
+            ("candidate_manifest_kind_invalid", lambda r: r.update(schema_version=1)),
+        )
+        for code, change in cases:
+            self.assertCode(code, parse_manifest, mutated(self.data, change))
+
+
+
+class DecoderBoundaryTests(unittest.TestCase):
+    """Every candidate decoder shares one strict reader and header refusal."""
+
+    def setUp(self):
+        self.records = (
+            (parse_manifest, encode_manifest(manifest()), "candidate_manifest_kind_invalid"),
+        )
+
+    def test_schema_version_must_be_exact_integer_two(self):
+        for parse, data, code in self.records:
+            self.assertEqual(json.loads(data)["schema_version"], 2)
+            parse(data)
+            for version in (True, 2.0, [2], {"version": 2}, "2", None, 0, 1):
+                changed = mutated(data, lambda record, v=version: record.update(schema_version=v))
+                with self.subTest(parse=parse.__name__, version=version):
+                    with self.assertRaises(VerificationError) as caught:
+                        parse(changed)
+                    self.assertEqual(caught.exception.code, code)
+            for kind in (["wrong"], {"kind": 1}, None):
+                changed = mutated(data, lambda record, k=kind: record.update(kind=k))
+                with self.subTest(parse=parse.__name__, kind=kind):
+                    with self.assertRaises(VerificationError) as caught:
+                        parse(changed)
+                    self.assertEqual(caught.exception.code, code)
+
+    def test_hostile_nesting_is_a_typed_refusal(self):
+        # Deeper than the interpreter's JSON decoder recursion limit; each
+        # decoder refuses with its size bound or the shared strict reader.
+        depth = 10500
+        for parse, _, _ in self.records:
+            expected = "candidate_record_invalid"
+            for nested in (b"[" * depth + b"]" * depth, b'{"a":' * depth + b"1" + b"}" * depth):
+                with self.subTest(parse=parse.__name__, shape=nested[:1]):
+                    with self.assertRaises(VerificationError) as caught:
+                        parse(nested)
+                    self.assertEqual(caught.exception.code, expected)
+
+    def test_nested_unknown_field_is_refused_by_the_schema(self):
+        for parse, data, _ in self.records:
+            nested = mutated(data, lambda record: record.update(padding=[[[[1]]]]))
+            with self.subTest(parse=parse.__name__):
+                with self.assertRaises(VerificationError) as caught:
+                    parse(nested)
+                self.assertEqual(caught.exception.code, "candidate_record_fields_invalid")
+
+    def test_brackets_inside_strings_are_ordinary_text(self):
+        data = encode_manifest(manifest())
+        quoted = mutated(data, lambda record: record["artifacts"][0].update(path='[[[[[[[[[\\"{{{{{{{{{'))
+        with self.assertRaises(VerificationError) as caught:
+            parse_manifest(quoted)
+        self.assertEqual(caught.exception.code, "candidate_artifact_path_invalid")
+
+    def test_unhashable_enum_values_are_typed_refusals(self):
+        data = encode_manifest(manifest())
+        with self.assertRaises(VerificationError) as caught:
+            parse_manifest(mutated(data, lambda record: record["artifacts"][0].update(kind=["archive"])))
+        self.assertEqual(caught.exception.code, "candidate_artifact_invalid")
 
 
 if __name__ == "__main__":

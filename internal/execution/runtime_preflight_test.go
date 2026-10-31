@@ -117,9 +117,9 @@ func TestPendingRuntimeRejectsUnfinishedPreflight(t *testing.T) {
 			plan.RuntimePreflightSHA256 = ""
 			return plan, nil
 		}},
-		{"missing-version", func(plan Plan) (Plan, error) {
+		{"blank-version", func(plan Plan) (Plan, error) {
 			plan = finalizedRuntimePlan(plan)
-			plan.ProviderRuntime.Version = ""
+			plan.ProviderRuntime.Version = " "
 			return plan, nil
 		}},
 		{"wrong-executable", func(plan Plan) (Plan, error) {

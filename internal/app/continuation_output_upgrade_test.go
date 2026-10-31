@@ -191,6 +191,19 @@ func (c outputUpgradeCase) successorStream(session string) string {
 	}
 }
 
+// successorAnswer is the exact payload the current target publishes from
+// successorStream. The Claude-stream targets frame every accepted root answer;
+// the independent oracle derives it from the stream, not from the adapter.
+func (c outputUpgradeCase) successorAnswer(t *testing.T, session string) string {
+	t.Helper()
+	switch c.provider {
+	case claude.Provider, ccr.Provider:
+		return expectedCurrentClaudeStreamAnswer(t, c.successorStream(session))
+	default:
+		return outputUpgradeAnswer
+	}
+}
+
 func outputUpgradeCases(t *testing.T) []outputUpgradeCase {
 	t.Helper()
 	readTarget := claude.ReferenceForMode(config.ModeReadOnly)
@@ -268,7 +281,7 @@ func agyOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 
 // ccrOutputUpgradeCases pins the exact CCR v4 and frozen scoped v5 sources:
 // route-preserving and modeled, each read-only and write, with their current
-// advisory v6 targets. The v5 revisions were the targets before the advisory
+// follow-up v7 targets. The v5 revisions were the targets before the advisory
 // wire projection; they are now frozen sources of the same launch shape.
 func ccrOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 	t.Helper()
@@ -285,19 +298,19 @@ func ccrOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 		{config.ModeReadOnly, true, []revision{
 			{"ccr-foreground-v4", "5c13f0e77406ce86e146532d163c5f6da74264743b1bdb6ed1ffc0f70a79f502"},
 			{"ccr-foreground-v5", "54250742f26a4f9e4fe1378d9dad1b85f5e3793d5f4ebdcf7b1ed6e3d96c3a44"},
-		}, revision{"ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"}},
+		}, revision{"ccr-foreground-v7", "7447125836ee96e2d8d16760d4dcb90c78d619bf75ef50f6343a012ffaf213cb"}},
 		{config.ModeWorkspaceWrite, true, []revision{
 			{"ccr-foreground-v4", "4816a7344a169112b9b969b1339f9b418498cbc6955816d83a046fed419d89c0"},
 			{"ccr-foreground-v5", "468b9b0e25cd7d9936ef2293197ba6b72f16ac2aa9546eac70f837b7f5fdcb59"},
-		}, revision{"ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"}},
+		}, revision{"ccr-foreground-v7", "568f56184cec02f9a853099eaf2a4b3b827baec1df97af735013d02b53ae6a6d"}},
 		{config.ModeReadOnly, false, []revision{
 			{"ccr-foreground-v4-modeled", "6051bed3c949dbf49eab6ced92226a5922f662b2c1c7053b72fbec3982fbdeb3"},
 			{"ccr-foreground-v5-modeled", "7483b129ea91cc745e5a45573df3669a7297b98b8bf43d2c1f28a3edae874f3c"},
-		}, revision{"ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"}},
+		}, revision{"ccr-foreground-v7-modeled", "92e13e9d0405eb9b097a78289d9e5e3b017c62f54e48dec8cb1627840732c647"}},
 		{config.ModeWorkspaceWrite, false, []revision{
 			{"ccr-foreground-v4-modeled", "e6d76ecf0ae8bf014713301c1ddc395481158cb7edb71d7a53e207cac79964e3"},
 			{"ccr-foreground-v5-modeled", "e8413e812488699abb7b6c1695665927dfd39d820cb54ebe380b7cb8cdf4da61"},
-		}, revision{"ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"}},
+		}, revision{"ccr-foreground-v7-modeled", "e61c42768544e0e79fa71a31cf5594ae31d2ad4115aa18b33c7584956b32f32d"}},
 	} {
 		target := exactReference(t, registration, s.mode, s.target.version, s.target.digest)
 		for _, source := range s.sources {
@@ -371,11 +384,11 @@ func TestContinuationSuccessorsReceiveCurrentOutputPredicate(t *testing.T) {
 	}
 }
 
-// TestContinuationOfCurrentPredicateKeepsPublishingPrincipalOnly runs the same
+// TestContinuationOfCurrentPredicatePublishesItsCurrentAnswer runs the same
 // public scenario for predecessors already admitted under each current target.
-// It passes today and proves the scenario's success path is satisfiable, so the
-// source cases above fail only because the successor keeps the old predicate.
-func TestContinuationOfCurrentPredicateKeepsPublishingPrincipalOnly(t *testing.T) {
+// It proves the scenario's success path is satisfiable, so the source cases
+// above fail only if the successor keeps the old predicate.
+func TestContinuationOfCurrentPredicatePublishesItsCurrentAnswer(t *testing.T) {
 	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeControlCases(t)) {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(testCase.name+"/"+entry.name, func(t *testing.T) {
@@ -500,12 +513,13 @@ func assertOutputUpgradeSuccessorCollection(t *testing.T, f *outputUpgradeFixtur
 		return
 	}
 	if outcome.Verdict != task.VerdictCommitted {
-		t.Errorf("successor collection under %+v: verdict=%q diagnostics=%+v, want committed principal-only answer", meta.Predicate, outcome.Verdict, outcome.Diagnostics)
+		t.Errorf("successor collection under %+v: verdict=%q diagnostics=%+v, want the committed current answer", meta.Predicate, outcome.Verdict, outcome.Diagnostics)
 		return
 	}
+	want := f.testCase.successorAnswer(t, f.session)
 	answer, err := os.ReadFile(filepath.Join(td.Dir, outcome.Payload.Basename))
-	if err != nil || string(answer) != outputUpgradeAnswer {
-		t.Errorf("successor answer=%q err=%v, want %q", answer, err, outputUpgradeAnswer)
+	if err != nil || string(answer) != want {
+		t.Errorf("successor answer=%q err=%v, want %q", answer, err, want)
 	}
 }
 

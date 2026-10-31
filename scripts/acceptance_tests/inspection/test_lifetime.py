@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import shutil
 import unittest
 
@@ -12,6 +13,13 @@ from scripts import acceptance_native as native_acceptance
 from scripts import acceptance_provider_common as provider_common
 from scripts.acceptance_provider_common import AcceptanceFailure
 from scripts.acceptance_supervisor_common import digest, read_json, write_json
+from scripts.delegate_acceptance.evidence.records import _read_control_record
+from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp
+from scripts.delegate_acceptance.lifetime.policy import (
+    _canonical_lifetime_launch,
+    _validate_lifetime_registration,
+    validate_custody_placement,
+)
 
 
 ROOT = "a" * 32
@@ -74,6 +82,56 @@ class InspectionHarnessTests(unittest.TestCase):
         del supervisor["daemon_sha256"]
         with self.assertRaisesRegex(AcceptanceFailure, "daemon provenance is incomplete"):
             provider_common._validate_inspection_binding(binding, "inspection binding")
+
+    def test_model_discovery_closure_accepts_an_unhashed_installed_provider(self):
+        directory = self.fixture.inspection_records(
+            include_ordinary=False, revision="model-discovery-v1",
+            managed_exit_proof=True, helper_sha256="")
+        request_bytes = (directory / "request.json").read_bytes()
+        request = read_json(directory / "request.json")
+        self.assertEqual(request["binding"]["helper_sha256"], "")
+
+        closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
+
+        proof = closure["inspections"][TASK]
+        self.assertEqual(proof["registration"]["owner_sha256"],
+                         digest(directory / "request.json"))
+        self.assertEqual(proof["worker_wait"]["result"], "success")
+        self.assertTrue(proof["termination"]["scope_empty"])
+        self.assertEqual((directory / "request.json").read_bytes(), request_bytes)
+
+    def test_inspection_binding_rejects_malformed_optional_provider_diagnostics(self):
+        directory = self.fixture.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        for value in (None, False, 0, " ", "invalid", "e" * 63, "E" * 64):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    AcceptanceFailure, "helper_sha256 is invalid"):
+                provider_common._validate_inspection_binding(
+                    dict(binding, helper_sha256=value), "inspection binding")
+        del binding["helper_sha256"]
+        with self.assertRaisesRegex(AcceptanceFailure, "missing fields"):
+            provider_common._validate_inspection_binding(binding, "inspection binding")
+
+    def test_inspection_binding_keeps_definition_and_worker_digests_required(self):
+        directory = self.fixture.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        for key in ("definition_sha256", "worker_sha256"):
+            for value in ("", None, "invalid"):
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(
+                        AcceptanceFailure, key + " is invalid"):
+                    provider_common._validate_inspection_binding(
+                        dict(binding, **{key: value}), "inspection binding")
+
+    def test_model_discovery_closure_rejects_a_malformed_provider_digest(self):
+        directory = self.fixture.inspection_records(
+            include_ordinary=False, revision="model-discovery-v1",
+            managed_exit_proof=True)
+        request = read_json(directory / "request.json")
+        request["binding"]["helper_sha256"] = "E" * 64
+        write_json(directory / "request.json", request, replace=True)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "helper_sha256 is invalid"):
+            provider_common.validate_managed_lifetime_closure(self.fixture.state)
 
     def test_managed_guardian_wait_replaces_queue_worker_observation(self):
         directory = self.fixture.inspection_records(managed_exit_proof=True)
@@ -459,6 +517,162 @@ class InspectionHarnessTests(unittest.TestCase):
 
         self.assertTrue(
             self.fixture.ops.failure_queue_finished(self.fixture.ordinary_only_status("Killed")))
+
+
+POOL_ID = "c" * 64
+PLACEMENT = {"version": 1, "pool_root": "/nonexistent/delegate/pool", "pool_id": POOL_ID}
+REGISTRATION_DIGEST = "d" * 64
+
+
+def registration_for(owner_kind, **extra):
+    return {
+        "schema_version": 1, "root_id": ROOT, "task_id": TASK, "owner_kind": owner_kind,
+        "owner_sha256": REGISTRATION_DIGEST, "scope_kind": "process-group", "assurance": "cooperative",
+        "scope_id": "scope:fixture", "boot_id": "fixture-boot", "deadline": "2026-09-15T00:01:00Z",
+        "created_at": "2026-09-15T00:00:05Z", **extra,
+    }
+
+
+def validate_registration(registration):
+    return _validate_lifetime_registration(
+        assurance="cooperative", evidence=registration["owner_kind"], intent={
+            "boot_id": "fixture-boot", "deadline": "2026-09-15T00:01:00Z",
+        }, intent_created=_canonical_timestamp("2026-09-15T00:00:04Z", "intent"),
+        owner_digest=REGISTRATION_DIGEST, owner_kind=registration["owner_kind"], recovered=False,
+        registration=registration, root=ROOT, scope_kind="process-group", task=TASK, window_deadline=None)
+
+
+def rebind_registration(lifetime, change):
+    """Rewrite the registration and re-derive every record that binds its digest."""
+    path = lifetime / "registration.json"
+    registration = read_json(path)
+    change(registration)
+    write_json(path, registration, replace=True)
+    registration_sha = digest(path)
+    for name in ("worker.json", "00000000000000000001.launch.json", "terminated.json", "worker-wait.json"):
+        record = read_json(lifetime / name)
+        record["registration_sha256"] = registration_sha
+        if name == "worker-wait.json":
+            record["worker_sha256"] = digest(lifetime / "worker.json")
+        if name == "terminated.json":
+            launch = read_json(lifetime / "00000000000000000001.launch.json")
+            record["launch_set_sha256"] = provider_common.sha(
+                provider_common.canonical_go_json([_canonical_lifetime_launch(launch, label="launch")]))
+        write_json(lifetime / name, record, replace=True)
+
+
+class CustodyPlacementRegistrationTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = InspectionFixture(self)
+
+    def placed_lifetime(self, placement=PLACEMENT):
+        directory = self.fixture.ordinary_only_admission("managed")
+        lifetime = self.fixture.managed_ordinary_lifetime(directory, wait_result="exit-error")
+        rebind_registration(lifetime, lambda record: record.update(custody_placement=deepcopy(placement)))
+        return lifetime
+
+    def closes(self):
+        return self.fixture.ops.failure_queue_finished(self.fixture.ordinary_only_status({"Failed": 17}))
+
+    def test_legacy_registrations_without_placement_keep_their_bytes_and_digests(self):
+        for owner_kind in ("task", "inspection", "workspace"):
+            with self.subTest(owner_kind=owner_kind):
+                registration = registration_for(owner_kind)
+                before = provider_common.canonical_go_json(registration)
+                validate_registration(registration)
+                self.assertEqual(provider_common.canonical_go_json(registration), before)
+                self.assertNotIn("custody_placement", registration)
+        directory = self.fixture.ordinary_only_admission("managed")
+        lifetime = self.fixture.managed_ordinary_lifetime(directory, wait_result="exit-error")
+        self.assertNotIn("custody_placement", read_json(lifetime / "registration.json"))
+        self.assertTrue(self.closes())
+
+    def test_task_and_inspection_placements_are_accepted_for_a_pool_that_does_not_exist(self):
+        for owner_kind in ("task", "inspection"):
+            with self.subTest(owner_kind=owner_kind):
+                validate_registration(registration_for(owner_kind, custody_placement=deepcopy(PLACEMENT)))
+        validate_custody_placement(deepcopy(PLACEMENT), "placement")
+        validate_custody_placement({**PLACEMENT, "pool_root": "/"}, "root placement")
+
+    def test_a_workspace_registration_with_a_valid_placement_is_accepted_and_unchanged(self):
+        registration = registration_for("workspace", custody_placement=deepcopy(PLACEMENT))
+        before = provider_common.canonical_go_json(registration)
+        validate_registration(registration)
+        self.assertEqual(provider_common.canonical_go_json(registration), before)
+        for bad in (None, {**PLACEMENT, "pool_root": "/a/./b"}, {**PLACEMENT, "extra": 1}):
+            with self.assertRaises(AcceptanceFailure):
+                validate_registration(registration_for("workspace", custody_placement=bad))
+
+    def test_invalid_placements_are_refused_by_type_version_path_id_and_keys(self):
+        cases = {"null": None, "list": [], "text": "x", "number": 1}
+        for name, value in cases.items():
+            with self.subTest(placement=name):
+                with self.assertRaisesRegex(AcceptanceFailure, "not an object"):
+                    validate_registration(registration_for("task", custody_placement=value))
+        for name, version in {"zero": 0, "two": 2, "bool": True, "text": "1", "float": 1.0, "null": None}.items():
+            self.assert_refused({"version": version}, "version is unsupported", "version " + name)
+        for name, root in {
+            "empty": "", "blank": " ", "relative": "pool", "dot segment": "/a/./b", "parent segment": "/a/../b",
+            "trailing slash": "/a/", "double slash": "/a//b", "leading double slash": "//a", "NUL": "/a\x00b",
+            "parent of root": "/..",
+        }.items():
+            self.assert_refused({"pool_root": root}, "not a clean absolute path", "root " + name)
+        for name, root in {"number": 7, "null": None, "list": ["/a"]}.items():
+            self.assert_refused({"pool_root": root}, "pool root is not text", "root " + name)
+        for name, pool_id in {
+            "uppercase": POOL_ID.upper(), "short": "c" * 63, "long": "c" * 65, "empty": "", "non-hex": "g" * 64,
+            "number": 7, "null": None,
+        }.items():
+            self.assert_refused({"pool_id": pool_id}, "pool id is not 64 lowercase hex", "id " + name)
+        for key in PLACEMENT:
+            missing = {name: value for name, value in PLACEMENT.items() if name != key}
+            with self.subTest(missing=key), self.assertRaisesRegex(AcceptanceFailure, "unknown or missing fields"):
+                validate_registration(registration_for("task", custody_placement=missing))
+        self.assert_refused({"extra": 1}, "unknown or missing fields", "extra key")
+
+    def assert_refused(self, change, pattern, name):
+        with self.subTest(case=name), self.assertRaisesRegex(AcceptanceFailure, pattern):
+            validate_registration(registration_for("task", custody_placement={**PLACEMENT, **change}))
+
+    def test_unknown_registration_fields_stay_strict_beside_a_placement(self):
+        with self.assertRaisesRegex(AcceptanceFailure, "unknown or missing fields"):
+            validate_registration(registration_for("task", custody_placement=deepcopy(PLACEMENT), pool_root="/x"))
+
+    def test_a_placed_registration_closes_through_the_canonical_chain(self):
+        self.placed_lifetime()
+        self.assertTrue(self.closes())
+
+    def test_a_malformed_placement_in_the_chain_is_refused_even_with_rebound_digests(self):
+        self.placed_lifetime({**PLACEMENT, "pool_root": "/a/./b"})
+        self.assertFalse(self.closes())
+
+    def test_tampering_the_placement_after_the_chain_was_bound_is_detected(self):
+        lifetime = self.placed_lifetime()
+        self.assertTrue(self.closes())
+        path = lifetime / "registration.json"
+        record = read_json(path)
+        record["custody_placement"]["pool_id"] = "e" * 64
+        write_json(path, record, replace=True)
+        self.assertFalse(self.closes())
+
+    def test_dropping_or_adding_a_placement_after_binding_changes_the_registration_digest(self):
+        lifetime = self.placed_lifetime()
+        placed_digest = digest(lifetime / "registration.json")
+        record = read_json(lifetime / "registration.json")
+        del record["custody_placement"]
+        write_json(lifetime / "registration.json", record, replace=True)
+        self.assertNotEqual(digest(lifetime / "registration.json"), placed_digest)
+        self.assertFalse(self.closes())
+
+    def test_a_duplicate_placement_key_is_refused_by_the_canonical_record_reader(self):
+        lifetime = self.placed_lifetime()
+        path = lifetime / "registration.json"
+        placement = json.dumps(PLACEMENT)
+        text = path.read_text()
+        path.write_text(text.rstrip().rstrip("}") + ', "custody_placement": ' + placement + "}")
+        with self.assertRaisesRegex(AcceptanceFailure, "duplicate|JSON"):
+            _read_control_record(path, "registration")
+        self.assertFalse(self.closes())
 
 
 if __name__ == "__main__":

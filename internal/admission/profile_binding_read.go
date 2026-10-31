@@ -41,7 +41,7 @@ func ValidateInspectionCandidate(ctx context.Context, operation *inspection.Oper
 }
 
 func validateMixedInspectionCandidate(ctx context.Context, operation *inspection.Operation, record inspection.RequestRecord, definition commonprovider.InspectionDefinition, digest string) error {
-	if !runtimeOwnsInspectionExecutable(definition) && (record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256) {
+	if !definition.ProviderExecutable() && (record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256) {
 		return task.ErrEvidenceFault
 	}
 	if !slices.Equal(record.Binding.Environment, definition.Environment) {
@@ -82,7 +82,7 @@ func validateHistoricalRuntimeDefinition(ctx context.Context, operation *inspect
 	runtime.Executable = facts.Runtime.Executable
 	runtime.ExecutableSHA256 = facts.Runtime.SHA256
 	replayed.Runtime = &runtime
-	if runtimeOwnsInspectionExecutable(definition) {
+	if definition.ProviderExecutable() {
 		replayed.Executable = facts.Runtime.Executable
 		replayed.ExecutableSHA256 = facts.Runtime.SHA256
 	}

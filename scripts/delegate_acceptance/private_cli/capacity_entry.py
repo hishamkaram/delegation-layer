@@ -1,10 +1,11 @@
 """Capacity scenario entry and final receipt composition."""
 
+from scripts.delegate_acceptance.private_cli.disposal_observer import public_status_observer
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from scripts.delegate_acceptance.private_cli.wrapper_policy import compact_sequence_evidence
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.wrapper_policy import require_no_startup_control_calls
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_observed_private_supervisor
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_records
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_command_counts
 
@@ -22,7 +23,7 @@ def run_capacity_scenario(
             lifetime.private_config,
             lifetime.env,
             phase="supervisor-observation",
-            capture_root=lifetime.base_token,
+            capture_root=lifetime.capture_token,
         )
         .get("groups", {})
         .get("default", {})
@@ -30,8 +31,14 @@ def run_capacity_scenario(
     if default_group.get("parallel_tasks") != 0:
         raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
     acceptance_evidence = {}
+    delegate = fixture.upgraded_install / "delegate"
+    # The initial task was confirmed created before this scenario, and capacity
+    # records only created dispatches, so the attempted IDs are created records.
+    lifetime.primary_observer = public_status_observer(
+        delegate, fixture.state, lifetime.env, capture_root=lifetime.capture_token
+    )
     upgraded_tasks, status_bytes = verify_current_installation_upgrade(
-        delegate=fixture.upgraded_install / "delegate",
+        delegate=delegate,
         state=fixture.state,
         workspace=fixture.workspace,
         brief=fixture.brief,
@@ -49,19 +56,20 @@ def run_capacity_scenario(
         lease_nonce=lease_nonce,
         client_call_log=lifetime.base / "old-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
         run_receipt=run_receipt,
     )
     # The upgrade probe has already removed every old-layout token;
     # never present those consumed handles to the final rollback.
     lifetime.old_layout_owned = ()
-    shutdown_private_supervisor(
+    shutdown_observed_private_supervisor(
         initial.initial_pair_directory / "pueue",
         lifetime.private_config,
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
-        capture_root=lifetime.base_token,
+        capture_root=lifetime.capture_token,
+        observe=lifetime.primary_observer,
     )
     record_capacity_scenario(
         acceptance_evidence=acceptance_evidence, args=args, dispatch_workers=dispatch_workers, initial=initial,

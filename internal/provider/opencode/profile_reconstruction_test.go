@@ -269,7 +269,7 @@ func requireHistoricalRunReconstruction(t *testing.T, dialect launchDialect, mod
 
 func finalizeWithFixtureRuntime(t *testing.T, candidate commonprovider.ProfileCandidate) commonprovider.PreparedProfile {
 	t.Helper()
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

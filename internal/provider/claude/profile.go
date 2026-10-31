@@ -58,16 +58,25 @@ func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRec
 }
 
 func nativePermissionForReference(mode string, reference task.PredicateRef) string {
-	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(scopedReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) ||
-		reference.Equal(previousNativeProbeReferenceForMode(mode)) || reference.Equal(historicalNativeReferenceForMode(mode)) ||
-		reference.Equal(interactionReference(mode)) || reference.Equal(scopedInteractionReference(mode)) || reference.Equal(unscopedInteractionReference(mode)) ||
-		reference.Equal(preAttributionInteractionReference(mode)) || reference.Equal(previousInteractionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
+	if isUnscopedReference(mode, reference) || slices.ContainsFunc(nativeDefaultPermissionReferences(mode), reference.Equal) {
 		return nativeDefaultPermission(mode)
 	}
 	if reference.Equal(legacyNativeReferenceForMode(mode)) {
 		return nativeHistoricalPermission(mode)
 	}
 	return ""
+}
+
+// nativeDefaultPermissionReferences lists the exact print and interactive
+// references of mode admitted with its default native permission; the
+// retained unscoped revisions are matched by isUnscopedReference.
+func nativeDefaultPermissionReferences(mode string) []task.PredicateRef {
+	return []task.PredicateRef{
+		ReferenceForMode(mode), projectionReference(mode), advisoryReference(mode), scopedReference(mode), preAttributionReferenceForMode(mode),
+		previousNativeProbeReferenceForMode(mode), historicalNativeReferenceForMode(mode),
+		interactionReference(mode), advisoryInteractionReference(mode), scopedInteractionReference(mode), unscopedInteractionReference(mode),
+		preAttributionInteractionReference(mode), previousInteractionReference(mode), historicalInteractionReference(mode),
+	}
 }
 
 func normalizeNativePreparationOptions(request task.TaskRecord, options nativePreparationOptions) (nativePreparationOptions, error) {
@@ -93,7 +102,7 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 	if request.RequestedConfig.Interactive {
 		return interactionReference(mode), []task.PredicateRef{
 			historicalInteractionReference(mode), previousInteractionReference(mode), preAttributionInteractionReference(mode),
-			unscopedInteractionReference(mode), scopedInteractionReference(mode),
+			unscopedInteractionReference(mode), scopedInteractionReference(mode), advisoryInteractionReference(mode),
 		}
 	}
 	if permissionMode == nativeHistoricalPermission(mode) {
@@ -101,7 +110,7 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 	}
 	return ReferenceForMode(mode), []task.PredicateRef{
 		historicalNativeReferenceForMode(mode), previousNativeProbeReferenceForMode(mode), preAttributionReferenceForMode(mode),
-		unscopedReference(mode), scopedReference(mode),
+		unscopedReference(mode), scopedReference(mode), advisoryReference(mode), projectionReference(mode),
 	}
 }
 
@@ -450,7 +459,7 @@ func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironm
 	if now.IsZero() || request.BudgetNanos <= 0 {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: invalid runtime inspection boundary", ErrUnsupportedProfile)
 	}
-	if err := task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
+	if err := commonprovider.ValidateOptionalExecutableSHA256(environment.RuntimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	sources = slices.Clone(sources)
@@ -498,7 +507,7 @@ func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sou
 		}
 		return cmp.Compare(a.Kind, b.Kind)
 	})
-	if err = task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
+	if err = commonprovider.ValidateOptionalExecutableSHA256(environment.RuntimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	profileRevision, approval := ProfileRevision, "dontAsk"
@@ -546,6 +555,8 @@ func nativePolicyProofSource(definitionDigest string, facts nativePolicyFacts, h
 func interactionCompletionPolicy(mode string, reference task.PredicateRef) completionPolicy {
 	switch {
 	case reference.Equal(interactionReference(mode)):
+		return advisoryFollowUpCompletion
+	case reference.Equal(advisoryInteractionReference(mode)):
 		return advisoryScopedCompletion
 	case reference.Equal(scopedInteractionReference(mode)):
 		return scopedAttributedCompletion

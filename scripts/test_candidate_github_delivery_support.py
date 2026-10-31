@@ -39,30 +39,24 @@ from scripts.delegate_acceptance.release_verification.candidate_artifact import 
 from scripts.delegate_acceptance.release_verification.candidate_github_delivery import (
     PreparedRelease, prepare_release_assets, publish_prepared_release,
 )
-from scripts.delegate_acceptance.release_verification.candidate_history import PublicationAuthorization
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
     CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, parse_manifest,
 )
 from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    CandidatePromotion, CandidateReference, release_body,
-)
-from scripts.delegate_acceptance.release_verification.candidate_readiness import (
-    BoundCandidate, publication_source,
+    ReleaseSubject, release_body,
 )
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.github import ArtifactDownload
 from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
-from scripts.test_candidate_artifact_support import (
-    COMMIT, REPOSITORY, TREE, VERSION, locator, manifest_bytes, payload_files,
-)
+from scripts.test_candidate_artifact_support import COMMIT, REPOSITORY, VERSION, locator, manifest_bytes, payload_files
 from scripts.test_release_github_transport import ObservedGitHubClient
 
 
 TAG = "v" + VERSION
 # GitHub-generated release notes as the fixture answers them; trailing whitespace is presentation.
 NOTES = "## What's Changed\r\n* Promote the candidate by @maintainer in #101\r\n\n"
-MERGED = "e5" * 20
+MERGED = COMMIT
 OTHER = "d4" * 20
 # Parent components a shell or ``gh``'s ``file#label`` syntax would misread.
 PAYLOAD_DIRECTORY = "payload dir #1 ü漢"
@@ -214,23 +208,14 @@ finish(reply)
 '''
 
 
-def promotion(files: dict[str, bytes], manifest: bytes) -> CandidatePromotion:
-    """The canonical promotion of exactly these payload bytes, merged at MERGED."""
-    candidate = BoundCandidate(locator=locator(b"container", manifest), manifest=parse_manifest(manifest))
-    freeze = PublicationAuthorization(
-        candidate_id=candidate.candidate_id, attempt=1, evidence_parent="d4" * 20, source_commit=COMMIT,
-        source_tree=TREE, proof_sha256s=("5" * 64,), install_sha256s=("6" * 64,), triage_sha256s=(),
-        review_sha256="7" * 64)
-    return CandidatePromotion(
-        reference=CandidateReference(candidate_id=candidate.candidate_id, freeze_commit="f7" * 20,
-                                     merged_commit=MERGED),
-        candidate=candidate, freeze=freeze,
-        source=publication_source(manifest=candidate.manifest, merged_commit=MERGED, merged_tree=TREE))
+def promotion(files: dict[str, bytes], manifest: bytes) -> ReleaseSubject:
+    """The exact built source and payload chosen for delivery."""
+    return ReleaseSubject(locator=locator(b"container", manifest), manifest=parse_manifest(manifest))
 
 
-def artifact(target: CandidatePromotion, payload: Path) -> CandidateArtifact:
+def artifact(target: ReleaseSubject, payload: Path) -> CandidateArtifact:
     """The loader's result for ``target`` with its payload at ``payload``; observations are inert."""
-    candidate = target.candidate
+    candidate = target
     return CandidateArtifact(
         locator=candidate.locator, manifest=candidate.manifest, repository_id=1,
         workflow=WorkflowObservation(id=2, path=CANDIDATE_WORKFLOW_PATH, state="active"),
@@ -325,7 +310,7 @@ class DeliveryCase(unittest.TestCase):
 
     def prepare(self, *, resume_published: bool = False, payload: Path | None = None,
                 bodies: Path | None = None, before_upload=None,
-                target: CandidatePromotion | None = None) -> PreparedRelease:
+                target: ReleaseSubject | None = None) -> PreparedRelease:
         chosen = self.promotion if target is None else target
         # Tag-resolver children run outside the observed client and ports.
         return self.tree.observe_operation(lambda: prepare_release_assets(

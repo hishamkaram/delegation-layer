@@ -138,9 +138,8 @@ class NativeRequestIntentTests(unittest.TestCase):
         self.assertEqual((intent.permission, intent.definition_revision, intent.budget, intent.budget_nanos),
                          (PROFILES[PROVIDER]["modes"][0], MODEL_DISCOVERY_DEFINITION_REVISION,
                           MODEL_DISCOVERY_TASK_BUDGET, MODEL_DISCOVERY_TASK_BUDGET_NANOS))
-        self.assertEqual((intent.brief_sha256, intent.helper_executable, intent.helper_sha256),
-                         (sha(b"model discovery"), str(operation.provider_executable),
-                          sha(b"helper fixture\n")))
+        self.assertEqual((intent.brief_sha256, intent.helper_executable),
+                         (sha(b"model discovery"), str(operation.provider_executable)))
         self.assertNotIn(SECRET, repr(intent))
         self.assertEqual((operation.models_root_id, operation.model_discovery_task_id), (None, None))
 
@@ -156,14 +155,13 @@ class NativeRequestIntentTests(unittest.TestCase):
         self.assertEqual(len(probe.snapshots), 1)
         self.assertIs(operation._discovery_state().intent, first)
 
-    def test_unreadable_helper_fingerprint_refuses_before_launch(self) -> None:
-        operation, probe = self.discovery(RuntimeError("must not launch"))
+    def test_discovery_does_not_read_provider_bytes_before_launch(self) -> None:
+        operation, probe = self.discovery(RuntimeError("reply lost"))
         operation.provider_executable.unlink()
-        with self.assertRaises(BaseException) as refused:
+        with self.assertRaisesRegex(RuntimeError, "reply lost"):
             operation.discover_models()
-        self.assertIsInstance(refused.exception, FileNotFoundError)
-        self.assertEqual(probe.snapshots, [])
-        self.assertIsNone(operation._discovery_state().intent)
+        self.assertEqual(len(probe.snapshots), 1)
+        self.assertIs(operation._discovery_state().intent, probe.snapshots[0])
 
 
 INVALID_INTENT = "model discovery request intent is invalid"
@@ -175,7 +173,7 @@ def intent_fields(**overrides: object) -> dict[str, object]:
         "permission": PROFILES[PROVIDER]["modes"][0], "cwd": "/workspace",
         "definition_revision": MODEL_DISCOVERY_DEFINITION_REVISION, "budget": MODEL_DISCOVERY_TASK_BUDGET,
         "budget_nanos": MODEL_DISCOVERY_TASK_BUDGET_NANOS, "brief_sha256": sha(b"model discovery"),
-        "helper_executable": "/bin/codex", "helper_sha256": sha(b"helper fixture\n")}
+        "helper_executable": "/bin/codex"}
     fields.update(overrides)
     return fields
 
@@ -191,17 +189,16 @@ class ModelDiscoveryIntentValueTests(unittest.TestCase):
     def test_intent_is_frozen(self) -> None:
         intent = ModelDiscoveryIntent(**intent_fields())
         for name, value in (("budget_nanos", 1), ("initial_entries", ("other",)),
-                            ("helper_sha256", sha(b"other"))):
+                            ("helper_executable", "/bin/other")):
             with self.subTest(field=name), self.assertRaises(FrozenInstanceError):
                 setattr(intent, name, value)
         self.assertEqual(ModelDiscoveryIntent(**intent_fields()), intent)
 
-    def test_malformed_brief_or_helper_digest_is_refused(self) -> None:
-        for name in ("brief_sha256", "helper_sha256"):
-            for digest in ("", "a" * 63, "a" * 65, "A" * 64, "g" * 64, None):
-                with self.subTest(field=name, digest=digest), \
-                        self.assertRaisesRegex(AcceptanceFailure, INVALID_INTENT):
-                    ModelDiscoveryIntent(**intent_fields(**{name: digest}))
+    def test_malformed_brief_digest_is_refused(self) -> None:
+        for digest in ("", "a" * 63, "a" * 65, "A" * 64, "g" * 64, None):
+            with self.subTest(digest=digest), \
+                    self.assertRaisesRegex(AcceptanceFailure, INVALID_INTENT):
+                ModelDiscoveryIntent(**intent_fields(brief_sha256=digest))
 
     def test_boolean_zero_or_negative_budget_is_refused(self) -> None:
         for budget in (True, False, 0, -1, -MODEL_DISCOVERY_TASK_BUDGET_NANOS):

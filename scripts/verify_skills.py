@@ -32,32 +32,24 @@ REQUIRED_SKILLS: tuple[str, ...] = (
     "add-an-adapter",
 )
 
-# These are repository-owned authority documents, so their links are stable
-# requirements. The verifier checks destinations, not whether prose mentions a
-# particular policy.
+# Require each skill's relevant authority sections, by destination and fragment,
+# without interpreting its prose or expanding the supported Markdown syntax.
 REQUIRED_AUTHORITY_LINKS: dict[str, tuple[str, ...]] = {
     "add-an-adapter": (
-        "agents/_data/maintainability-contract.md",
-        "agents/_data/adapter-contract.md",
-        "agents/_data/delegation-invariants.md",
-        "agents/_data/code-quality-floor.md",
+        "agents/_data/adapter-contract.md#2-launch-planning-and-preflight-policy",
+        "agents/_data/adapter-contract.md#4-evidence-capture-and-publication-predicates",
     ),
     "go-reviewer": (
-        "agents/_data/maintainability-contract.md",
-        "agents/_data/delegation-invariants.md",
-        "agents/_data/adapter-contract.md",
-        "agents/_data/code-quality-floor.md",
+        "agents/_data/maintainability-contract.md#review-dimensions",
+        "agents/_data/code-quality-floor.md#3-testing-and-verification-discipline",
     ),
     "live-e2e": (
-        "agents/_data/maintainability-contract.md",
-        "agents/_data/adapter-contract.md",
-        "agents/_data/delegation-invariants.md",
-        "docs/security.md",
+        "agents/_data/maintainability-contract.md#provider-checks",
+        "agents/_data/delegation-invariants.md#3-supervision-deadlines-and-forbidden-signals",
     ),
     "supervisor-architect": (
-        "agents/_data/maintainability-contract.md",
-        "agents/_data/delegation-invariants.md",
-        "docs/architecture.md",
+        "agents/_data/maintainability-contract.md#recovery-and-verification",
+        "agents/_data/delegation-invariants.md#4-supervisor-admission-ordering",
     ),
 }
 
@@ -368,10 +360,10 @@ def _validate_links(document: SkillDocument, root: Path) -> Iterator[str]:
             yield f"{document.path}:{actual_line}: local link {target!r} does not exist"
 
 
-def _local_link_paths(document: SkillDocument) -> set[Path]:
-    """Return resolved local destinations from supported inline links."""
+def _local_authority_links(document: SkillDocument) -> set[tuple[Path, str]]:
+    """Return canonical local destinations and their exact section fragments."""
 
-    paths: set[Path] = set()
+    links: set[tuple[Path, str]] = set()
     for _, raw_target, parse_error in _markdown_links(document.body):
         if parse_error is not None or raw_target is None:
             continue
@@ -383,19 +375,20 @@ def _local_link_paths(document: SkillDocument) -> set[Path]:
                 target.startswith("#") or
                 re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)):
             continue
-        local_target = target.split("#", 1)[0]
+        local_target, _, fragment = target.partition("#")
         if local_target:
-            paths.add((document.path.parent / local_target).resolve(strict=False))
-    return paths
+            links.add(((document.path.parent / local_target).resolve(strict=False), fragment))
+    return links
 
 
 def _validate_required_authority_links(
         document: SkillDocument, root: Path) -> Iterator[str]:
     required = REQUIRED_AUTHORITY_LINKS.get(document.name, ())
-    linked_paths = _local_link_paths(document)
+    linked_sections = _local_authority_links(document)
     for relative_target in required:
-        target = (root / relative_target).resolve(strict=False)
-        if target not in linked_paths:
+        relative_path, _, fragment = relative_target.partition("#")
+        target = (root / relative_path).resolve(strict=False)
+        if (target, fragment) not in linked_sections:
             yield (
                 f"{document.path}: required authoritative link to "
                 f"{relative_target!r} is missing"

@@ -49,7 +49,7 @@ from .assets import resolve_release_identity
 from .candidate_artifact import CandidateArtifact
 from .candidate_manifest import MANIFEST_PATH, PAYLOAD_MEMBER_COUNT, encode_manifest
 from .candidate_publication_contract import (
-    Absent, CandidatePromotion, ObservedRelease, ReleaseAsset, decide_release, release_text,
+    Absent, ReleaseSubject, ObservedRelease, ReleaseAsset, decide_release, release_text,
     require_latest_delivery,
 )
 from .contract import HEX_SHA256, VerificationError
@@ -110,7 +110,7 @@ class _Remote:
     tag_commit: str | Absent
 
 
-def prepare_release_assets(promotion: CandidatePromotion, artifact: CandidateArtifact, *,
+def prepare_release_assets(promotion: ReleaseSubject, artifact: CandidateArtifact, *,
                            client: GitHubClient, ports: ConsumerPorts, work_directory: Path,
                            resume_published: bool = False) -> PreparedRelease:
     """Create the draft when needed and upload only missing payload files; never tag or publish."""
@@ -140,7 +140,7 @@ def prepare_release_assets(promotion: CandidatePromotion, artifact: CandidateArt
     return _prepared(final)
 
 
-def publish_prepared_release(promotion: CandidatePromotion, prepared: PreparedRelease, *,
+def publish_prepared_release(promotion: ReleaseSubject, prepared: PreparedRelease, *,
                              client: GitHubClient, work_directory: Path,
                              resume_published: bool = False) -> PreparedRelease:
     """Create the absent tag at the merged commit, then publish the same complete draft once."""
@@ -171,14 +171,13 @@ def publish_prepared_release(promotion: CandidatePromotion, prepared: PreparedRe
     return _prepared(final)
 
 
-def _target(promotion: CandidatePromotion) -> _Target:
-    if not isinstance(promotion, CandidatePromotion):
+def _target(promotion: ReleaseSubject) -> _Target:
+    if not isinstance(promotion, ReleaseSubject):
         raise VerificationError("candidate_delivery_promotion_invalid", STAGE)
-    candidate = promotion.candidate
-    files = {entry.path: (entry.size, entry.sha256) for entry in candidate.manifest.artifacts}
-    files[MANIFEST_PATH] = (len(encode_manifest(candidate.manifest)), candidate.locator.manifest_sha256)
-    return _Target(repo=candidate.locator.repository, version=candidate.manifest.version,
-                   tag=candidate.manifest.build_tag, merged_commit=promotion.source.merged_commit, files=files)
+    files = {entry.path: (entry.size, entry.sha256) for entry in promotion.manifest.artifacts}
+    files[MANIFEST_PATH] = (len(encode_manifest(promotion.manifest)), promotion.locator.manifest_sha256)
+    return _Target(repo=promotion.locator.repository, version=promotion.manifest.version,
+                   tag=promotion.manifest.build_tag, merged_commit=promotion.manifest.source.commit, files=files)
 
 
 def _canonical_directory(path: Path) -> None:
@@ -192,11 +191,11 @@ def _canonical_directory(path: Path) -> None:
         raise VerificationError("candidate_delivery_path_invalid", STAGE)
 
 
-def _require_artifact(promotion: CandidatePromotion, artifact: CandidateArtifact, target: _Target,
+def _require_artifact(promotion: ReleaseSubject, artifact: CandidateArtifact, target: _Target,
                       work_directory: Path) -> None:
     """Bind the loaded payload to the promotion and check every exact byte before any request."""
-    if (not isinstance(artifact, CandidateArtifact) or artifact.locator != promotion.candidate.locator
-            or artifact.manifest != promotion.candidate.manifest):
+    if (not isinstance(artifact, CandidateArtifact) or artifact.locator != promotion.locator
+            or artifact.manifest != promotion.manifest):
         raise VerificationError("candidate_delivery_artifact_mismatch", STAGE)
     payload = artifact.payload
     _canonical_directory(payload)

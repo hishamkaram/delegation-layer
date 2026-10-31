@@ -194,6 +194,7 @@ func (l *ControlLifetime) RecordLifetimeRegistrationContext(ctx context.Context,
 		Deadline:      deadline,
 		CreatedAt:     timestamp(),
 	}
+	candidate.CustodyPlacement = facts.CustodyPlacement.Clone()
 	if err := validateControlLifetimeRegistration(l, candidate); err != nil {
 		return nil, err
 	}

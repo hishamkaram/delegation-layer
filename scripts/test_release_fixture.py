@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.native_release.contract import ReleaseError
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_contract import (
@@ -113,41 +112,13 @@ class FixtureTreeTests(unittest.TestCase):
                 self.assert_pins_consumed(outcome)
         self.finish_outer()
 
-    def test_incomplete_native_release_errors_retain_the_tree_and_consume_the_pins(self):
-        def observe_incomplete(tree: FixtureTree) -> None:
-            (tree.root / "evidence").write_text("child output")
-            tree.observe(ReleaseError("child_natural_completion_unproven", incomplete=True))
-
-        outcome = self.run_inner(observe_incomplete)
-        self.assertTrue(outcome.result.wasSuccessful())
-        self.assertEqual(outcome.tree.unresolved.code, "child_natural_completion_unproven")
-        self.assertEqual((outcome.tree.root / "evidence").read_text(), "child output")
-        self.assertEqual(
-            outcome.stderr,
-            f"{LABEL} retained (child_natural_completion_unproven): {outcome.tree.root}\n")
-        self.assertFalse(outcome.tree.dispose())
-        self.assert_pins_consumed(outcome)
-        self.finish_outer()
-
-    def test_complete_native_release_errors_do_not_retain_the_tree_even_with_an_ownership_code(self):
-        def observe_complete(tree: FixtureTree) -> None:
-            for code in ("release_record_object_invalid", *sorted(UNRESOLVED_OWNERSHIP_CODES)):
-                tree.observe(ReleaseError(code))
-
-        outcome = self.run_inner(observe_complete)
-        self.assertTrue(outcome.result.wasSuccessful())
-        self.assertIsNone(outcome.tree.unresolved)
-        self.assertFalse(outcome.tree.root.exists())
-        self.assertEqual(outcome.stderr, "")
-        self.assert_pins_consumed(outcome)
-
     def test_the_first_original_unresolved_error_is_kept_by_identity(self):
-        first = ReleaseError("first_incomplete", incomplete=True)
+        first = VerificationError("command_timeout", "first")
         verifier = VerificationError(sorted(UNRESOLVED_OWNERSHIP_CODES)[0], "github-api")
-        second = ReleaseError("second_incomplete", incomplete=True)
+        second = VerificationError("command_timeout", "second")
 
         def observe_many(tree: FixtureTree) -> None:
-            tree.observe(ReleaseError("closed"))
+            tree.observe(VerificationError("github_request_failed", "closed"))
             tree.observe(VerificationError("github_request_failed", "github-api"))
             self.assertIsNone(tree.unresolved)
             tree.observe(first)
@@ -169,7 +140,7 @@ class FixtureTreeTests(unittest.TestCase):
         self.assert_pins_consumed(outcome)
         self.finish_outer()
 
-    def test_verifier_policy_is_unchanged_beside_the_native_release_port(self):
+    def test_verifier_policy_uses_canonical_ownership_codes(self):
         outcome = self.run_inner(lambda tree: tree.observe(
             VerificationError("github_request_failed", "github-api")))
         self.assertIsNone(outcome.tree.unresolved)
@@ -293,7 +264,7 @@ class FixtureTreeTests(unittest.TestCase):
         earlier = VerificationError("command_timeout", "earlier child")
         shared.observe(earlier)
         later = BoundedCommandError(CommandFailure.CAPTURE_UNAVAILABLE)
-        last = ReleaseError("child_natural_completion_unproven", incomplete=True)
+        last = VerificationError("command_timeout", "child")
         self.operate(case, later, dependencies=(shared,))
         self.operate(case, last, dependencies=(fresh,))
         self.assertIs(case.unresolved, later)
@@ -306,7 +277,7 @@ class FixtureTreeTests(unittest.TestCase):
         case, shared = self.inner(), self.inner()
         for error in (BoundedCommandError(CommandFailure.START_FAILED, None),
                       BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED, -9),
-                      VerificationError("command_start_failed", "child"), ReleaseError("command_timeout"),
+                      VerificationError("command_start_failed", "child"), RuntimeError("command_timeout"),
                       OSError("not a child failure"), KeyboardInterrupt()):
             with self.subTest(error=type(error).__name__, code=str(error)):
                 self.assertEqual(self.operate(case, error, dependencies=(shared,)), [1])
@@ -372,8 +343,6 @@ class FixtureTreeTests(unittest.TestCase):
               for reason in CommandFailure),
             *((VerificationError(code, "child"), True) for code in sorted(UNRESOLVED_OWNERSHIP_CODES)),
             (VerificationError("command_start_failed", "child"), False),
-            (ReleaseError("child_natural_completion_unproven", incomplete=True), True),
-            (ReleaseError("command_timeout"), False),
         ]
         self.assertIn(True, [unproven for error, unproven in families if isinstance(error, BoundedCommandError)])
         self.assertIn(False, [unproven for error, unproven in families if isinstance(error, BoundedCommandError)])
@@ -425,7 +394,7 @@ class FixtureTreeTests(unittest.TestCase):
 
     def test_a_required_closure_keeps_any_original_exception_on_every_owner(self):
         failures: list[tuple[BaseException, str]] = [
-            (ReleaseError("release_receipt_invalid"), "release_receipt_invalid"),
+            (VerificationError("release_receipt_invalid", "receipt"), "release_receipt_invalid"),
             (VerificationError("command_start_failed", "child"), "command_start_failed"),
             (BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED, 3), "command_output_exceeded"),
             (OSError("receipt unreadable"), "OSError"),
@@ -451,7 +420,7 @@ class FixtureTreeTests(unittest.TestCase):
         closed = VerificationError("command_start_failed", "earlier closed child")
         self.operate(case, closed, dependencies=(shared,))
         self.assertEqual((case.unresolved, shared.unresolved), (None, None))
-        earlier = ReleaseError("release_receipt_invalid")
+        earlier = VerificationError("release_receipt_invalid", "receipt")
         self.operate(case, earlier, dependencies=(shared,), closure_required=True)
         self.assertIs(case.unresolved, earlier)
         later = OSError("later required failure")
@@ -469,7 +438,7 @@ class FixtureTreeTests(unittest.TestCase):
         case, shared = self.inner(), self.inner()
         for error in (OSError("not a child failure"), ValueError("malformed"), AssertionError("refusal"),
                       KeyboardInterrupt(), SystemExit(3), GeneratorExit(), BaseException("bare"),
-                      ReleaseError("release_receipt_invalid")):
+                      RuntimeError("receipt invalid")):
             with self.subTest(error=type(error).__name__):
                 case.observe(error)
                 shared.observe(error, closure_required=False)
@@ -480,7 +449,7 @@ class FixtureTreeTests(unittest.TestCase):
 
     def test_an_invalid_closure_flag_is_refused_before_the_operation_or_observation(self):
         case, other, calls = self.inner(), self.inner(), []
-        error = ReleaseError("child_natural_completion_unproven", incomplete=True)
+        error = VerificationError("command_timeout", "child")
         for flag in (1, 0, "true", None, 1.0):
             with self.subTest(flag=flag):
                 with self.assertRaises(TypeError):
