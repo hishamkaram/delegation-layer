@@ -1,5 +1,6 @@
 """Execute the shipped parallel-dispatch example with controlled responses."""
 
+import itertools
 import json
 import os
 from pathlib import Path
@@ -17,14 +18,20 @@ class CollaborationExampleTests(unittest.TestCase):
             encoding="utf-8"
         )
         example = source.split("```sh\n", 1)[1].split("```", 1)[0]
-        for shell in (("/bin/sh",), ("/bin/bash", "-e")):
+        for shell, use_alias in itertools.product(
+            (("/bin/sh",), ("/bin/bash", "-e")), (False, True)
+        ):
             for record, code in (("created", 0), ("created", 1),
                                  ("not_created", 2), ("unknown", 1)):
-                with self.subTest(shell=shell, record=record, code=code):
+                with self.subTest(shell=shell, alias=use_alias, record=record, code=code):
                     with tempfile.TemporaryDirectory(prefix="delegate-single-example-") as temp:
                         root = Path(temp)
                         workspace = root / "workspace"
                         workspace.mkdir()
+                        if use_alias:
+                            alias = root / "workspace-alias"
+                            alias.symlink_to(workspace, target_is_directory=True)
+                            workspace = alias
                         response = {"task_id": "a" * 32, "task_record": record}
                         stub = root / "delegate"
                         stub.write_text(
@@ -38,7 +45,8 @@ class CollaborationExampleTests(unittest.TestCase):
                         stub.chmod(0o700)
                         env = dict(os.environ, PATH=str(root) + os.pathsep + os.defpath)
                         env.update(
-                            TMPDIR=str(root), DELEGATE_ROOT=str(root / "state"),
+                            PWD=str(workspace), TMPDIR=str(root),
+                            DELEGATE_ROOT=str(root / "state"),
                             EXAMPLE_CALLS=str(root / "calls"), EXAMPLE_ARGV=str(root / "argv"),
                             EXAMPLE_RESPONSE=json.dumps(response), EXAMPLE_EXIT=str(code),
                         )
@@ -51,7 +59,9 @@ class CollaborationExampleTests(unittest.TestCase):
                         argv = (root / "argv").read_text().splitlines()
                         self.assertEqual(argv[:4], ["--root", str(root / "state"),
                                                    "dispatch", "--auto"])
-                        self.assertEqual(argv[argv.index("--cwd") + 1], str(workspace))
+                        emitted_workspace = Path(argv[argv.index("--cwd") + 1])
+                        self.assertTrue(emitted_workspace.is_absolute())
+                        self.assertEqual(emitted_workspace.resolve(), workspace.resolve())
                         self.assertEqual(argv[argv.index("--permission") + 1], "read-only")
                         brief = Path(argv[argv.index("--brief") + 1])
                         self.assertTrue(brief.is_file())
