@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from ..evidence.digests import sha as _digest_bytes
+from ..evidence.validation import AcceptanceFailure
+from ..tasks.runtime_metadata import _provider_runtime_identity
 from .lifetime_closure import lifetime_closure_error
 from .production_acp import production_acp_proof_error, requires_production_acp
 import json
@@ -190,23 +192,23 @@ def _source_status_matches(raw: dict[str, object], status: str) -> bool:
     }[status]
 
 
-def _compact_provider_versions(raw: dict[str, object]) -> dict[str, str] | None:
-    value = raw.get("provider_versions")
-    if not isinstance(value, dict):
-        return None
-    result: dict[str, str] = {}
-    for key, version in value.items():
-        if (isinstance(key, str) and SAFE_TEXT.fullmatch(key) is not None
-                and isinstance(version, str) and SAFE_TEXT.fullmatch(version) is not None):
-            result[key] = version
-    return dict(sorted(result.items())) or None
-
-
 def _safe_runtime_executable(value: object) -> str | None:
     if (not isinstance(value, str) or not value or len(value) > 4096
             or not posixpath.isabs(value) or any(ord(character) < 32 for character in value)):
         return None
     return value
+
+
+def _compact_runtime_identity(value: object) -> dict[str, str] | None:
+    """Project receipt keys through the canonical task diagnostic validator."""
+    if (not isinstance(value, dict) or "executable" not in value
+            or not set(value) <= {"executable", "version", "sha256"}
+            or _safe_runtime_executable(value.get("executable")) is None):
+        return None
+    try:
+        return _provider_runtime_identity({"provider_" + key: item for key, item in value.items()}, "recorded", "native receipt")
+    except AcceptanceFailure:
+        return None
 
 
 def _compact_provider_runtime_identities(
@@ -216,18 +218,17 @@ def _compact_provider_runtime_identities(
         return None
     result: dict[str, dict[str, str]] = {}
     for task_id, identity in value.items():
+        normalized = _compact_runtime_identity(identity)
         if (not isinstance(task_id, str) or re.fullmatch(r"[0-9a-f]{32}", task_id) is None
-                or not isinstance(identity, dict)
-                or set(identity) != {"executable", "version", "sha256"}):
+                or normalized is None):
             return None
-        executable = _safe_runtime_executable(identity.get("executable"))
-        version = _safe_proof_text(identity.get("version"))
-        sha256 = identity.get("sha256")
-        if executable is None or version is None or not isinstance(sha256, str) \
-                or HEX_DIGEST.fullmatch(sha256) is None:
-            return None
-        result[task_id] = {"executable": executable, "version": version, "sha256": sha256}
+        result[task_id] = normalized
     return dict(sorted(result.items()))
+
+
+def _runtime_identity_matches(left: dict[str, str], right: dict[str, str]) -> bool:
+    return left.get("executable") == right.get("executable") and all(
+        left[key] == right[key] for key in ("version", "sha256") if left.get(key) and right.get(key))
 
 
 def _safe_proof_text(value: object, *, allow_empty: bool = False) -> str | None:
@@ -583,40 +584,30 @@ def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -
         raise EvidenceError("aggregate_case_binary_task_ids_invalid")
     provider_runtimes = binaries.get("provider_runtime_identities")
     if (not isinstance(provider_runtimes, dict) or len(provider_runtimes) > 64
-            or any(not isinstance(task_id, str)
-                   or re.fullmatch(r"[0-9a-f]{32}", task_id) is None
-                   or not isinstance(identity, dict)
-                   or set(identity) != {"executable", "version", "sha256"}
-                   or _safe_runtime_executable(identity.get("executable")) is None
-                   or _safe_proof_text(identity.get("version")) is None
-                   or not isinstance(identity.get("sha256"), str)
-                   or HEX_DIGEST.fullmatch(identity["sha256"]) is None
-                   for task_id, identity in provider_runtimes.items())):
+            or (provider_runtimes and _compact_provider_runtime_identities(binaries) is None)):
         raise EvidenceError("aggregate_case_provider_runtime_identity_invalid")
+    normalized_runtimes = _compact_provider_runtime_identities(binaries) or {}
     provider_binding = binaries.get("provider_binding")
+    binding_identity = (_compact_runtime_identity({
+        key: value for key, value in provider_binding.items() if key != "task_id"})
+        if isinstance(provider_binding, dict) else None)
     if provider_binding is not None and (
             not isinstance(provider_binding, dict)
-            or set(provider_binding) != {"task_id", "executable", "version", "sha256"}
             or not isinstance(provider_binding.get("task_id"), str)
             or re.fullmatch(r"[0-9a-f]{32}", provider_binding["task_id"]) is None
-            or _safe_runtime_executable(provider_binding.get("executable")) is None
-            or _safe_proof_text(provider_binding.get("version")) is None
-            or not isinstance(provider_binding.get("sha256"), str)
-            or HEX_DIGEST.fullmatch(provider_binding["sha256"]) is None):
+            or binding_identity is None):
         raise EvidenceError("aggregate_case_provider_binding_invalid")
     if binaries.get("state") == "complete" and not {
-            "provider_sha256", "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
+            "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
     }.issubset(binaries["sha256"]):
         raise EvidenceError("aggregate_case_binary_identity_incomplete")
     if binaries.get("state") == "complete" and (
             provider_binding is None
-            or sorted(provider_runtimes) != binary_task_ids
-            or provider_runtimes.get(provider_binding["task_id"]) != {
-                "executable": provider_binding["executable"],
-                "version": provider_binding["version"],
-                "sha256": provider_binding["sha256"],
-            }
-            or binaries["sha256"].get("provider_sha256") != provider_binding["sha256"]):
+            or sorted(normalized_runtimes) != binary_task_ids
+            or not _runtime_identity_matches(
+                normalized_runtimes.get(provider_binding["task_id"], {}), binding_identity)
+            or (binding_identity["sha256"] and "provider_sha256" in binaries["sha256"]
+                and binaries["sha256"]["provider_sha256"] != binding_identity["sha256"])):
         raise EvidenceError("aggregate_case_provider_runtime_coverage_invalid")
     if case.get("binary_identities") != binaries:
         raise EvidenceError("aggregate_case_binary_identity_mismatch")

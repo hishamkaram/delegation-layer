@@ -124,61 +124,6 @@ func (r *pinnedRoot) barrier(point poolPoint, file *os.File) error {
 	return nil
 }
 
-// flushIdentity makes the marker's content and its directory entry durable.
-func (r *pinnedRoot) flushIdentity() error {
-	file, err := r.openIdentity()
-	if err != nil {
-		return err
-	}
-	fileErr := r.barrier(pointMarkerFileBarrier, file)
-	if err = errors.Join(fileErr, file.Close()); err != nil {
-		return err
-	}
-	return r.barrier(pointMarkerDirBarrier, r.dir)
-}
-
-// writeStage creates a fresh recognized stage holding the canonical marker for
-// id, mode exactly 0600, flushed and closed, and returns its name. A stage that
-// cannot be completed is left for the next Prepare or reclaim to remove under
-// the exclusive gate.
-func (r *pinnedRoot) writeStage(id string) (string, error) {
-	raw, err := encodePoolIdentity(id)
-	if err != nil {
-		return "", err
-	}
-	name, err := newIdentityStageName()
-	if err != nil {
-		return "", err
-	}
-	file, err := r.openLeaf(name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL)
-	if err != nil {
-		return "", err
-	}
-	_, writeErr := file.Write(raw)
-	if err = errors.Join(
-		unix.Fchmod(int(file.Fd()), poolIdentityMode),
-		writeErr,
-		r.barrier(pointMarkerStageBarrier, file),
-		file.Close(),
-	); err != nil {
-		return "", fmt.Errorf("write custody pool identity stage %s: %w", name, err)
-	}
-	return name, nil
-}
-
-// linkMarker publishes stage as the marker without replacing anything; an
-// existing marker is reported as fs.ErrExist.
-func (r *pinnedRoot) linkMarker(stage string) error {
-	if err := r.pool.injected(pointMarkerLink); err != nil {
-		return err
-	}
-	fd := int(r.dir.Fd())
-	if err := unix.Linkat(fd, stage, fd, poolIdentityName, 0); err != nil {
-		return fmt.Errorf("link %s: %w", r.path(poolIdentityName), err)
-	}
-	return nil
-}
-
 // sweepStages removes every recognized marker stage and flushes the root when
 // it removed any. Its caller holds the exclusive gate: no publisher that could
 // still link a stage is alive, so a recognized stage is either this caller's own
@@ -225,6 +170,43 @@ func (r *pinnedRoot) removeStage(name string) error {
 	}
 	if err := unix.Unlinkat(fd, name, 0); err != nil {
 		return fmt.Errorf("remove %s: %w", r.path(name), err)
+	}
+	return nil
+}
+
+// requireIdentity is the guard of every operation that reads or changes the pool
+// on behalf of an owner. It proves, without creating or changing anything, that
+// the recorded canonical private root holds the strictly canonical marker of the
+// identity this pool is bound to. A missing root or marker, a mismatch, an
+// alias, an unsafe owner or mode, a corrupt record and an unreadable root all
+// leave the pool unresolved with the concrete cause: the caller must not report
+// a release, reselect an identity or repair the root. An unbound pool is refused.
+func (p *Pool) requireIdentity() error {
+	if p.id == "" {
+		return errPoolUnbound
+	}
+	if err := p.proveIdentity(); err != nil {
+		return fmt.Errorf("%w: %w", errPoolIdentityUnverified, err)
+	}
+	p.at(pointIdentityChecked, "")
+	return nil
+}
+
+func (p *Pool) proveIdentity() (resultErr error) {
+	if err := p.requireCanonicalPrivateRoot(); err != nil {
+		return err
+	}
+	root, err := p.pinRoot()
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
+	id, err := root.readIdentity()
+	if err != nil {
+		return err
+	}
+	if id != p.id {
+		return fmt.Errorf("%w: %s", errPoolIdentityMismatch, p.root)
 	}
 	return nil
 }

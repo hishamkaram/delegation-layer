@@ -196,7 +196,7 @@ func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta tas
 		t.Fatal("successor candidate differs from the reconstructed candidate")
 	}
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
-		Executable: reconstructed.Inspection.Executable, SHA256: reconstructed.Inspection.ExecutableSHA256, Version: "fixture",
+		Executable: reconstructed.Inspection.Executable, SHA256: reconstructed.Inspection.ExecutableSHA256,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)

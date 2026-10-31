@@ -17,16 +17,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 )
 
 const (
-	scaleEnableEnv     = "DELEGATE_CUSTODY_PROOF"
-	proofReceiptEnv    = "DELEGATE_CUSTODY_PROOF_RECEIPT_DIR"
-	proofScratchEnv    = "DELEGATE_CUSTODY_PROOF_SCRATCH"
-	proofOtherFSEnv    = "DELEGATE_CUSTODY_PROOF_OTHER_FS_DIR"
-	proofLargeBytesEnv = "DELEGATE_CUSTODY_PROOF_LARGE_BYTES"
+	proofReceiptEnv = "DELEGATE_CUSTODY_PROOF_RECEIPT_DIR"
+	proofScratchEnv = "DELEGATE_CUSTODY_PROOF_SCRATCH"
+	proofOtherFSEnv = "DELEGATE_CUSTODY_PROOF_OTHER_FS_DIR"
 )
 
 // proofReport is the single JSON line an owned fixture child prints.
@@ -57,15 +54,6 @@ func parseReport(output []byte) (proofReport, error) {
 		return report, nil
 	}
 	return proofReport{}, errors.New("child printed no report")
-}
-
-// requireScale skips the scale tests (hundreds of children, hundreds of MB)
-// unless the operator asked for them.
-func requireScale(t *testing.T) {
-	t.Helper()
-	if os.Getenv(scaleEnableEnv) != "1" {
-		t.Skipf("scale proof not requested: set %s=1", scaleEnableEnv)
-	}
 }
 
 // scratch returns a test-owned directory below the operator's observed native
@@ -344,15 +332,6 @@ func fileDigest(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return hex.EncodeToString(hash.Sum(nil))
-}
-
-func deviceOf(t *testing.T, info os.FileInfo) uint64 {
-	t.Helper()
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		t.Fatal("no device")
-	}
-	return uint64(stat.Dev)
 }
 
 // copyFileTo copies src to dst as an owned, executable file.

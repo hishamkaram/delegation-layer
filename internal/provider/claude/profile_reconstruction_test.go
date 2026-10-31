@@ -176,7 +176,7 @@ func testPreUpgradeProfile(t *testing.T, mode string, interactive bool, referenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: freshCandidate.Inspection.Executable, SHA256: freshCandidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: freshCandidate.Inspection.Executable, SHA256: freshCandidate.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

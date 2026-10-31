@@ -48,7 +48,3 @@ func decodeRuntimeIdentity(facts commonprovider.InspectionFacts, located commonp
 	}
 	return runtimeIdentity{Executable: observed.Executable, Version: observed.Version, SHA256: observed.SHA256}, nil
 }
-
-func hashRuntimeExecutable(path string) (string, error) {
-	return commonprovider.FingerprintExecutable(path)
-}

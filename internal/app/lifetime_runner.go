@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -31,9 +32,10 @@ type lifetimeGuardianRunState struct {
 	// closure reads the same journal family for the post-run custody release.
 	// Workspace runs leave it nil because they have no custody placement.
 	closure guardian.ClosureRecords
-	// privateSupervisor classifies the saved validated binding. A private
-	// release fault persists a full maintenance wake; an external one is
-	// retried by the next observer of the same records.
+	// privateSupervisor classifies the saved validated binding. An ordinary
+	// private run hands closed custody to the elected maintenance owner; a
+	// private inspection's release fault persists a full maintenance wake; an
+	// external one is retried by the next observer of the same records.
 	privateSupervisor bool
 	acquireOwner      func(context.Context) (guardian.Owner, error)
 	reconcileOwned    func(context.Context) error
@@ -93,15 +95,6 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 	state.deadline = time.Now().Add(time.Duration(req.BudgetNanos))
 	state.closeOwner = td.Close
 	return state, nil
-}
-
-// placementSelector selects custody only for a run with closure records, so a
-// workspace run never selects one.
-func (s lifetimeGuardianRunState) placementSelector(stateRoot, rootID string, environment []string) func(context.Context) (*task.LifetimeCustodyPlacement, error) {
-	if s.closure == nil {
-		return nil
-	}
-	return newLifetimeCustodySelector(stateRoot, rootID, environment, s.deadline).selectPlacement
 }
 
 // runLifetimeGuardianMode is the composition boundary between scheduler and
@@ -180,7 +173,6 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 			inheritedCloseErr = closeErr
 			return nil
 		},
-		SelectPlacement: state.placementSelector(canonicalRoot, store.RootID, deps.Environment),
 	})
 	if err != nil {
 		return err
@@ -192,10 +184,19 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state lifetimeGuardianRunState, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
 	guardianErr := lifetimeOwner.Run(context.Background())
 	if state.closure != nil {
-		// Release whatever closure the run proved, even after a run error; a
-		// custody fault never replaces the guardian's own result. Its private
-		// recovery wake is durable before either return below.
-		releaseGuardianLifetimeCustody(store.Root, state.closure, state.privateSupervisor)
+		// Act on whatever closure the run proved, even after a run error; a
+		// custody fault never replaces the guardian's own result. Any private
+		// recovery wake is durable before either return below. Only ordinary
+		// private custody moves to the elected maintenance owner, launched with
+		// the normalized executable and the captured scope.
+		if state.privateSupervisor && !parsed.Inspection {
+			options := supervisorcore.OptionsForEnvironment(deps.SupervisorOptions, deps.withCapturedEnvironment().Environment)
+			if err := handOffGuardianLifetimeCustody(store.Root, state.closure, options); err != nil {
+				log.Printf("delegate: lifetime custody handoff deferred: %v", err)
+			}
+		} else {
+			releaseGuardianLifetimeCustody(store.Root, state.closure, state.privateSupervisor)
+		}
 	}
 	if parsed.Inspection {
 		return guardianErr

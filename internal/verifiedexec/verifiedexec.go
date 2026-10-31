@@ -41,9 +41,6 @@ type Command struct {
 	Cmd            *exec.Cmd
 	temporaryDir   string
 	temporaryFiles []string
-	// retainView is set for pool-bound commands: their view belongs to the
-	// owner's lifetime and is removed only by Pool.ReleaseOwner.
-	retainView bool
 }
 
 // ReleaseDescriptors is the hook callers run after a child has started. A
@@ -51,11 +48,9 @@ type Command struct {
 // release; its private view stays owned by Close until the child has exited.
 func (c *Command) ReleaseDescriptors() error { return nil }
 
-// Close releases what the command owns. A private-copy command removes its
-// view; the started child has already opened what it needs. A pool-bound
-// command keeps its view for Pool.ReleaseOwner and has nothing local to close.
+// Close removes the command's private view after the child has exited.
 func (c *Command) Close() error {
-	if c == nil || c.retainView {
+	if c == nil {
 		return nil
 	}
 	return c.removeView()
@@ -156,8 +151,7 @@ func NewCommandInDirectory(executable, digest, directory string, environment []s
 	return NewCommandFromRequest(CommandRequest{Executable: executable, SHA256: digest, Directory: directory, Environment: environment, Args: args})
 }
 
-// NewCommandFromRequest is the private-copy constructor behind NewCommand and
-// NewCommandInDirectory, for owners with no lifetime-owned pool.
+// NewCommandFromRequest binds the admitted helper bytes to a private view.
 func NewCommandFromRequest(request CommandRequest) (*Command, error) {
 	file, err := openAdmittedEntrypoint(request)
 	if err != nil {
@@ -165,12 +159,6 @@ func NewCommandFromRequest(request CommandRequest) (*Command, error) {
 	}
 	return request.privateBinding().newCommand(file)
 }
-
-// fileMaterializer places the admitted bytes of an open file at destination
-// inside a view and verifies them against expectedSHA256. The private
-// implementation is materializeVerifiedFile, a byte copy; the pool's
-// implementation links a verified shared image.
-type fileMaterializer func(source *os.File, destination, expectedSHA256 string) error
 
 // portableBinding is the named input of the view builder: what is bound, where
 // its per-launch view directory is created, and how files are materialized.
@@ -181,15 +169,13 @@ type portableBinding struct {
 	environment []string
 	args        []string
 	viewRoot    string
-	materialize fileMaterializer
-	retainView  bool
 }
 
 func privateBinding(executable, digest, directory string, environment, args []string) portableBinding {
 	return portableBinding{
 		executable: executable, digest: digest, directory: directory,
 		environment: environment, args: args,
-		viewRoot: environmentTemporaryRoot(environment), materialize: materializeVerifiedFile,
+		viewRoot: environmentTemporaryRoot(environment),
 	}
 }
 
@@ -205,7 +191,7 @@ func (r CommandRequest) privateBinding() portableBinding {
 // provider installation. The materialized tree is sealed read-only before the
 // command is returned, binding its path to the admitted bytes through Start.
 // A private view is unsealed and removed when the caller closes the command
-// after Start/Wait; a retained (pooled) view is removed by its owner's release.
+// after Start/Wait.
 func (b portableBinding) newCommand(file *os.File) (command *Command, resultErr error) {
 	viewRoot, err := b.absoluteViewRoot()
 	if err != nil {
@@ -240,7 +226,7 @@ func (b portableBinding) newCommand(file *os.File) (command *Command, resultErr 
 	if err = closeSource(); err != nil {
 		return nil, err
 	}
-	return &Command{Cmd: cmd, temporaryDir: temporaryDir, temporaryFiles: temporaryFiles, retainView: b.retainView}, nil
+	return &Command{Cmd: cmd, temporaryDir: temporaryDir, temporaryFiles: temporaryFiles}, nil
 }
 
 // absoluteViewRoot addresses the view root absolutely, resolved as the child
@@ -251,8 +237,7 @@ func (b portableBinding) absoluteViewRoot() (string, error) {
 }
 
 // temporaryBoundary is the user's TMPDIR as the child resolves it. It is derived
-// from the environment alone, independent of viewRoot: a pooled view lives under
-// the custody pool root, which is not the user's temporary directory.
+// from the launch environment.
 func (b portableBinding) temporaryBoundary() (string, error) {
 	return launchPath(b.directory, environmentTemporaryRoot(b.environment))
 }
@@ -271,7 +256,7 @@ func (b portableBinding) buildCommand(file *os.File, temporaryDir string) (*exec
 	if useCanonicalDarwinSystemExecutable(b.executable) {
 		return b.buildProtectedCommand(file, path, temporaryDir)
 	}
-	if err = b.materialize(file, path, b.digest); err != nil {
+	if err = materializeVerifiedFile(file, path, b.digest); err != nil {
 		return nil, nil, err
 	}
 	shebang, err := readScriptHeader(path)
@@ -304,7 +289,7 @@ func (b portableBinding) buildProtectedCommand(file *os.File, path, temporaryDir
 		cmd.Args[0] = b.executable
 		return cmd, []string{path}, nil
 	}
-	if err = b.materialize(file, path, b.digest); err != nil {
+	if err = materializeVerifiedFile(file, path, b.digest); err != nil {
 		return nil, nil, err
 	}
 	return b.buildScriptCommand(path, shebang, temporaryDir)
@@ -347,8 +332,6 @@ func (b portableBinding) requireExecutableView(temporaryDir string) error {
 
 func (b portableBinding) viewSource() string {
 	switch {
-	case b.retainView:
-		return "the custody pool root"
 	case EnvironmentValue(b.environment, "TMPDIR") != "":
 		return "TMPDIR in the launch environment"
 	default:
@@ -541,7 +524,7 @@ func (b portableBinding) materializeInterpreter(source *os.File, interpreter Inf
 		return "", nil, err
 	}
 	path = filepath.Join(moduleDirectory, filepath.Base(interpreter.Path))
-	if err := b.materialize(source, path, interpreter.SHA256); err != nil {
+	if err := materializeVerifiedFile(source, path, interpreter.SHA256); err != nil {
 		return "", nil, err
 	}
 	return path, nil, nil

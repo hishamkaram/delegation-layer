@@ -88,18 +88,3 @@ func TestPrivateScriptWhoseInterpreterIsCopiedOnANoexecTmpdirIsRefused(t *testin
 	}
 	requireNoViewLeft(t, tmp)
 }
-
-func TestPoolViewsOnAnExecRootAreUnaffectedByANoexecTmpdir(t *testing.T) {
-	tmp := existingNoexecDir(t)
-	rig := newPoolRig(t)
-	entry, digest := selfNative(t, filepath.Join(rig.dir, "fixture"))
-	t.Setenv("TMPDIR", tmp)
-	command := rig.binder("a", CommandRequest{Executable: entry, SHA256: digest, Environment: []string{"TMPDIR=" + tmp}, Args: []string{helperArg}})
-	report, err := runToCompletion(command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Marker != digest {
-		t.Fatalf("pooled launch ran %s, want %s", report.Marker, digest)
-	}
-}

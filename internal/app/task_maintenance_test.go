@@ -6,12 +6,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	lifecyclefixture "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
@@ -169,37 +172,51 @@ func TestPrivateTaskObservationRefusesUnavailableAndMalformedBindings(t *testing
 
 // TestGuardianCustodyFaultPersistsPrivateFullWake: a private run's release
 // fault persists a full wake before the guardian returns, on both the ordinary
-// and the inspection return path, and never changes the guardian's result. An
-// external run's fault creates no private queue state.
+// and the inspection return path, and never changes the guardian's result. The
+// paths diverge by design: an ordinary private run hands its custody to one
+// launched maintenance owner, while an inspection run keeps its direct release
+// and launches nothing. An external run's fault creates no private queue state.
 func TestGuardianCustodyFaultPersistsPrivateFullWake(t *testing.T) {
-	var failed *guardian.Guardian
-	wantErr := failed.Run(context.Background())
 	for _, inspectionRun := range []bool{false, true} {
 		for _, private := range []bool{false, true} {
-			store, td, request := newAppTestTask(t, false)
-			if private {
-				makePrivateSupervisorBase(t, store.Root)
-			}
-			registration := recordCustodyLifetime(t, td, newCustodyTestPlacement(t), task.LifetimeTerminationCompleted)
-			bindCustodyTestView(t, registration)
-			restore := moveCustodyTestPool(t, registration.CustodyPlacement)
-			state := lifetimeGuardianRunState{closure: td, privateSupervisor: private}
-			parsed := runnerArguments{Root: store.Root, TaskID: request.TaskID, Inspection: inspectionRun}
-			err := runGuardianWithWorkspaceCompletion(failed, state, store, parsed, Dependencies{})
+			run := newGuardianCustodyRun(t, task.LifetimeTerminationCompleted, private)
+			restore := moveCustodyTestPool(t, run.registration.CustodyPlacement)
+			launches := &guardianOwnerLaunches{}
+			run.complete(t, inspectionRun, launches.dependencies())
 			restore()
-			if err == nil || err.Error() != wantErr.Error() {
-				t.Fatalf("guardian result = %v, want unchanged %v", err, wantErr)
-			}
-			if !custodyTestPending(t, registration) {
+			if !custodyTestPending(t, run.registration) {
 				t.Fatal("a missing pool was treated as released")
 			}
 			if private {
-				requireTaskMaintenanceFullWake(t, store.Root, taskMaintenanceWake{})
-			} else if _, statErr := os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(statErr, os.ErrNotExist) {
+				requireTaskMaintenanceFullWake(t, run.store.Root, taskMaintenanceWake{})
+			} else if _, statErr := os.Lstat(filepath.Join(run.store.Root, ".supervisor")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("an external release fault created private queue state: %v", statErr)
 			}
-			closeAppTestTask(t, store, td)
+			if private && !inspectionRun {
+				launches.requireLaunchedOnce(t, run.store.Root)
+			} else {
+				launches.requireNoLaunch(t)
+			}
 		}
+	}
+}
+
+// TestGuardianDirectCustodyReleaseRemainsForInspectionAndExternalRuns: an
+// inspection run and an external run release a closed lifetime's custody
+// themselves, as before, and never request or launch a maintenance owner.
+func TestGuardianDirectCustodyReleaseRemainsForInspectionAndExternalRuns(t *testing.T) {
+	for _, path := range []struct {
+		inspectionRun, private bool
+	}{{true, true}, {false, false}, {true, false}} {
+		run := newGuardianCustodyRun(t, task.LifetimeTerminationCompleted, path.private)
+		launches := &guardianOwnerLaunches{}
+		before := readTaskMaintenanceWake(t, run.store.Root)
+		run.complete(t, path.inspectionRun, launches.dependencies())
+		if custodyTestPending(t, run.registration) {
+			t.Fatalf("%+v run did not release its closed custody directly", path)
+		}
+		requireTaskMaintenanceWakeUnchanged(t, run.store.Root, before, "a direct release")
+		launches.requireNoLaunch(t)
 	}
 }
 
@@ -323,5 +340,322 @@ func TestPrivateObserverWakeOutlivesExhaustedObservationContext(t *testing.T) {
 			}
 			requireTaskMaintenanceFullWake(t, root, taskMaintenanceWake{})
 		})
+	}
+}
+
+// handoffOwnerExecutable is the normalized maintenance executable a recorded
+// launch receives; the recorder executes nothing.
+const handoffOwnerExecutable = "/opt/delegate/bin/delegate-run"
+
+// handoffCapturedEnvironment is a guardian's captured launch scope. Only its
+// bounded control variables may reach the launched owner.
+func handoffCapturedEnvironment() []string {
+	return []string{"PATH=/captured/bin", "DELEGATE_HANDOFF_UNSCOPED=1", "HOME=/captured/home"}
+}
+
+type guardianOwnerLaunch struct {
+	executable  string
+	root        string
+	environment []string
+	bounded     bool
+}
+
+// guardianOwnerLaunches records each maintenance owner launch a guardian's
+// post-run custody step requests and starts no process. before, when set,
+// runs at the launch point; err is the launch result.
+type guardianOwnerLaunches struct {
+	before   func()
+	err      error
+	launches []guardianOwnerLaunch
+}
+
+func (l *guardianOwnerLaunches) launch(ctx context.Context, executable, root string, environment []string) error {
+	if l.before != nil {
+		l.before()
+	}
+	_, bounded := ctx.Deadline()
+	l.launches = append(l.launches, guardianOwnerLaunch{
+		executable: executable, root: root, environment: slices.Clone(environment), bounded: bounded && ctx.Err() == nil,
+	})
+	return l.err
+}
+
+// dependencies is a guardian's normalized composition with this recorder as
+// its maintenance launcher and a captured launch scope.
+func (l *guardianOwnerLaunches) dependencies() Dependencies {
+	return Dependencies{
+		Environment:       handoffCapturedEnvironment(),
+		SupervisorOptions: pueue.Options{ControlOwnerExecutable: handoffOwnerExecutable, PrivateMaintenanceLauncher: l.launch},
+	}
+}
+
+// requireLaunchedOnce requires exactly one bounded launch of the normalized
+// executable for root, with only the captured scope's bounded variables.
+func (l *guardianOwnerLaunches) requireLaunchedOnce(t *testing.T, root string) {
+	t.Helper()
+	wantEnvironment := []string{"PATH=/captured/bin", "HOME=/captured/home"}
+	if len(l.launches) != 1 {
+		t.Fatalf("maintenance owner launches = %+v, want exactly one", l.launches)
+	}
+	got := l.launches[0]
+	if got.executable != handoffOwnerExecutable || got.root != root || !slices.Equal(got.environment, wantEnvironment) || !got.bounded {
+		t.Fatalf("maintenance owner launch = %+v, want %s for %s with %q under a live bound", got, handoffOwnerExecutable, root, wantEnvironment)
+	}
+}
+
+func (l *guardianOwnerLaunches) requireNoLaunch(t *testing.T) {
+	t.Helper()
+	if len(l.launches) != 0 {
+		t.Fatalf("maintenance owner launches = %+v, want none", l.launches)
+	}
+}
+
+// guardianCustodyRun is one closed or open task lifetime with a bound view,
+// completed by a guardian whose own run failed.
+type guardianCustodyRun struct {
+	store        *taskdir.Store
+	td           *taskdir.TaskDir
+	taskID       string
+	private      bool
+	registration *task.LifetimeRegistrationRecord
+}
+
+func newGuardianCustodyRun(t *testing.T, cause string, private bool) guardianCustodyRun {
+	t.Helper()
+	store, td, request := newAppTestTask(t, false)
+	t.Cleanup(func() { closeAppTestTask(t, store, td) })
+	if private {
+		makePrivateSupervisorBase(t, store.Root)
+	}
+	registration := recordCustodyLifetime(t, td, newCustodyTestPlacement(t), cause)
+	bindCustodyTestView(t, registration)
+	return guardianCustodyRun{store: store, td: td, taskID: request.TaskID, private: private, registration: registration}
+}
+
+// complete runs the guardian's post-run composition and requires its result
+// to stay the guardian's own.
+func (r guardianCustodyRun) complete(t *testing.T, inspectionRun bool, deps Dependencies) {
+	t.Helper()
+	var failed *guardian.Guardian
+	wantErr := failed.Run(context.Background())
+	state := lifetimeGuardianRunState{closure: r.td, privateSupervisor: r.private}
+	parsed := runnerArguments{Root: r.store.Root, TaskID: r.taskID, Inspection: inspectionRun}
+	if err := runGuardianWithWorkspaceCompletion(failed, state, r.store, parsed, deps); err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("guardian result = %v, want unchanged %v", err, wantErr)
+	}
+}
+
+// TestOrdinaryPrivateGuardianHandsCustodyToLaunchedOwner: an ordinary private
+// guardian with a closed lifetime removes no view. Its full wake is durable
+// before it launches one owner with the normalized executable, its root and
+// its captured scope. That owner alone, with no terminal callback, releases
+// the exact recorded pool and drains the wake.
+func TestOrdinaryPrivateGuardianHandsCustodyToLaunchedOwner(t *testing.T) {
+	store := newBareInspectionStore(t)
+	newTerminalEventInspectionSupervisorWithEnvironment(t, store)
+	taskID := strings.Repeat("d", 32)
+	td, registration := newPlacedTaskInStore(t, store, taskID, pueue.PrivateConfigPath(store.Root), task.LifetimeTerminationCompleted)
+	run := guardianCustodyRun{store: store, td: td, taskID: taskID, private: true, registration: registration}
+	before := readTaskMaintenanceWake(t, store.Root)
+	launches := &guardianOwnerLaunches{before: func() {
+		requireTaskMaintenanceFullWake(t, store.Root, before)
+		if !custodyTestPending(t, registration) {
+			t.Error("the guardian removed views before its handoff")
+		}
+	}}
+	run.complete(t, false, launches.dependencies())
+	launches.requireLaunchedOnce(t, store.Root)
+	if !custodyTestPending(t, registration) {
+		t.Fatal("the guardian released custody directly")
+	}
+	requireTaskMaintenanceFullWake(t, store.Root, before)
+
+	owner := terminalEventMaintenanceDependencies(nil, nil)
+	if err := supervisorcore.RunQueueMaintenance(launches.launches[0].root, owner.SupervisorOptions, owner.supervisorLookup()); err != nil {
+		t.Fatal(err)
+	}
+	if custodyTestPending(t, registration) {
+		t.Fatal("the launched owner did not release the exact recorded pool")
+	}
+	if wake := readTaskMaintenanceWake(t, store.Root); wake.Attempted != wake.Requested {
+		t.Fatalf("the launched owner left a runnable wake: %+v", wake)
+	}
+}
+
+// TestOrdinaryPrivateGuardianHandoffNeverReleasesDirectly: an ordinary private
+// guardian never falls back to a direct release. Pending closure and released
+// custody request nothing; a wake publication fault launches nothing; a launch
+// fault or a missing launcher keeps the committed wake for a later owner.
+func TestOrdinaryPrivateGuardianHandoffNeverReleasesDirectly(t *testing.T) {
+	for _, row := range []struct {
+		name          string
+		cause         string
+		prepare       func(*testing.T, guardianCustodyRun, *guardianOwnerLaunches, *Dependencies)
+		pending, wake bool
+		launched      bool
+	}{
+		{name: "closure pending", cause: custodyLifetimeOpen, pending: true},
+		{name: "already released", cause: task.LifetimeTerminationCompleted, prepare: func(t *testing.T, run guardianCustodyRun, _ *guardianOwnerLaunches, _ *Dependencies) {
+			if err := releaseLifetimeCustody(t.Context(), run.td); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "wake publication fault", cause: task.LifetimeTerminationCompleted, pending: true, prepare: func(t *testing.T, run guardianCustodyRun, _ *guardianOwnerLaunches, _ *Dependencies) {
+			writeFailedFullMaintenancePass(t, run.store.Root, ^uint64(0))
+		}},
+		{name: "launch fault", cause: task.LifetimeTerminationCompleted, pending: true, wake: true, launched: true, prepare: func(_ *testing.T, _ guardianCustodyRun, launches *guardianOwnerLaunches, _ *Dependencies) {
+			launches.err = errors.New("launch refused")
+		}},
+		{name: "missing launcher", cause: task.LifetimeTerminationCompleted, pending: true, wake: true, prepare: func(_ *testing.T, _ guardianCustodyRun, _ *guardianOwnerLaunches, deps *Dependencies) {
+			deps.SupervisorOptions.PrivateMaintenanceLauncher = nil
+		}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			run := newGuardianCustodyRun(t, row.cause, true)
+			launches := &guardianOwnerLaunches{}
+			deps := launches.dependencies()
+			if row.prepare != nil {
+				row.prepare(t, run, launches, &deps)
+			}
+			before := readTaskMaintenanceWake(t, run.store.Root)
+			run.complete(t, false, deps)
+			if pending := custodyTestPending(t, run.registration); pending != row.pending {
+				t.Fatalf("custody pending = %t, want %t", pending, row.pending)
+			}
+			if row.launched {
+				launches.requireLaunchedOnce(t, run.store.Root)
+			} else {
+				launches.requireNoLaunch(t)
+			}
+			if !row.wake {
+				requireTaskMaintenanceWakeUnchanged(t, run.store.Root, before, "the guardian")
+				return
+			}
+			requireTaskMaintenanceFullWake(t, run.store.Root, before)
+			runTaskCustodyOwner(t, run.store.Root)
+			if custodyTestPending(t, run.registration) {
+				t.Fatal("a later owner did not recover the retained wake's custody")
+			}
+		})
+	}
+}
+
+// TestGuardianWithoutClosureRequestsNoCustodyHandoff: a run without closure
+// records, such as a workspace operation, neither releases, requests nor
+// launches anything for custody.
+func TestGuardianWithoutClosureRequestsNoCustodyHandoff(t *testing.T) {
+	run := newGuardianCustodyRun(t, task.LifetimeTerminationCompleted, true)
+	launches := &guardianOwnerLaunches{}
+	var failed *guardian.Guardian
+	wantErr := failed.Run(context.Background())
+	state := lifetimeGuardianRunState{privateSupervisor: true}
+	parsed := runnerArguments{Root: run.store.Root, TaskID: run.taskID}
+	if err := runGuardianWithWorkspaceCompletion(failed, state, run.store, parsed, launches.dependencies()); err == nil || err.Error() != wantErr.Error() {
+		t.Fatalf("guardian result = %v, want unchanged %v", err, wantErr)
+	}
+	if !custodyTestPending(t, run.registration) {
+		t.Fatal("a run without closure records released custody")
+	}
+	requireTaskMaintenanceWakeUnchanged(t, run.store.Root, taskMaintenanceWake{}, "a run without closure records")
+	launches.requireNoLaunch(t)
+}
+
+// substituteCustodyTestPool puts another prepared pool at the recorded root,
+// so the root exists with a different identity, and returns the restore step;
+// cleanup restores both pools if the test did not.
+func substituteCustodyTestPool(t *testing.T, placement *task.LifetimeCustodyPlacement) func() {
+	t.Helper()
+	foreign := newCustodyTestPlacement(t)
+	restoreRecorded := moveCustodyTestPool(t, placement)
+	if err := os.Rename(foreign.PoolRoot, placement.PoolRoot); err != nil {
+		t.Fatal(err)
+	}
+	restore := sync.OnceFunc(func() {
+		if err := os.Rename(placement.PoolRoot, foreign.PoolRoot); err != nil {
+			t.Error(err)
+		}
+		restoreRecorded()
+	})
+	t.Cleanup(restore)
+	return restore
+}
+
+// handoffFaultCase is one fault an ordinary private guardian's handoff must
+// report without removing a view. prepare, when set, injects the fault and
+// returns the step that restores the fixture before views are observed.
+// launchErr is the recorded launcher's result.
+type handoffFaultCase struct {
+	name      string
+	prepare   func(*testing.T, guardianCustodyRun, *pueue.Options) (restore func())
+	launchErr error
+	want      []error
+	wake      bool
+	launched  bool
+}
+
+func unchangedHandoffFixture() {}
+
+// TestGuardianCustodyHandoffReportsFaultsWithoutReleasing: a pending check
+// fault is returned beside one conservative wake and launch; a wake fault
+// launches nothing; a launch fault and a missing executable or launcher keep
+// the wake and report that no owner started. No row removes a view.
+func TestGuardianCustodyHandoffReportsFaultsWithoutReleasing(t *testing.T) {
+	launchErr := errors.New("launch refused")
+	for _, fault := range []handoffFaultCase{
+		{name: "missing pool", wake: true, launched: true, prepare: func(t *testing.T, run guardianCustodyRun, _ *pueue.Options) func() {
+			return moveCustodyTestPool(t, run.registration.CustodyPlacement)
+		}},
+		{name: "substituted pool", wake: true, launched: true, prepare: func(t *testing.T, run guardianCustodyRun, _ *pueue.Options) func() {
+			return substituteCustodyTestPool(t, run.registration.CustodyPlacement)
+		}},
+		{name: "wake publication fault", want: []error{pueue.ErrConfiguration}, prepare: func(t *testing.T, run guardianCustodyRun, _ *pueue.Options) func() {
+			writeFailedFullMaintenancePass(t, run.store.Root, ^uint64(0))
+			return unchangedHandoffFixture
+		}},
+		{name: "launch fault", launchErr: launchErr, want: []error{launchErr, errPrivateMaintenanceNotStarted}, wake: true, launched: true},
+		{name: "missing executable", want: []error{errPrivateMaintenanceNotStarted}, wake: true, prepare: func(_ *testing.T, _ guardianCustodyRun, options *pueue.Options) func() {
+			options.ControlOwnerExecutable = ""
+			return unchangedHandoffFixture
+		}},
+	} {
+		t.Run(fault.name, func(t *testing.T) { runHandoffFaultCase(t, fault) })
+	}
+}
+
+// runHandoffFaultCase runs one fault against a closed private lifetime with a
+// bound view and requires its reported causes, retained views, launch and wake.
+func runHandoffFaultCase(t *testing.T, fault handoffFaultCase) {
+	t.Helper()
+	run := newGuardianCustodyRun(t, task.LifetimeTerminationCompleted, true)
+	launches := &guardianOwnerLaunches{err: fault.launchErr}
+	deps := launches.dependencies()
+	options := supervisorcore.OptionsForEnvironment(deps.SupervisorOptions, deps.Environment)
+	restore := unchangedHandoffFixture
+	if fault.prepare != nil {
+		restore = fault.prepare(t, run, &options)
+	}
+	before := readTaskMaintenanceWake(t, run.store.Root)
+	err := handOffGuardianLifetimeCustody(run.store.Root, run.td, options)
+	restore()
+	if err == nil {
+		t.Fatal("a handoff fault was not reported")
+	}
+	for _, want := range fault.want {
+		if !errors.Is(err, want) {
+			t.Fatalf("handoff fault = %v, want %v", err, want)
+		}
+	}
+	if !custodyTestPending(t, run.registration) {
+		t.Fatal("a handoff fault removed views")
+	}
+	if fault.launched {
+		launches.requireLaunchedOnce(t, run.store.Root)
+	} else {
+		launches.requireNoLaunch(t)
+	}
+	if fault.wake {
+		requireTaskMaintenanceFullWake(t, run.store.Root, before)
+	} else {
+		requireTaskMaintenanceWakeUnchanged(t, run.store.Root, before, "a failed wake publication")
 	}
 }

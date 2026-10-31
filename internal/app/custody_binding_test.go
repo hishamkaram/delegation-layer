@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net"
 	"os"
@@ -17,45 +19,30 @@ import (
 	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-// custodyTestExecutable is a small native executable present on Linux and macOS.
-const custodyTestExecutable = "/usr/bin/true"
-
-// newCustodyTestPlacement prepares a real pool and returns its placement.
+// newCustodyTestPlacement reconstructs a legacy pool, without retaining its
+// retired creation protocol in production just to prepare cleanup fixtures.
 func newCustodyTestPlacement(t *testing.T) *task.LifetimeCustodyPlacement {
 	t.Helper()
 	root := filepath.Join(testsupportcore.CanonicalTempDir(t), "pool")
-	id, err := prepareLifetimeCustodyPool(t.Context(), root)
-	if err != nil {
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatal(err)
 	}
+	id := hex.EncodeToString(nonce[:])
+	writeCustodyTestPool(t, root, id)
 	return &task.LifetimeCustodyPlacement{Version: task.LifetimeCustodyPlacementVersion, PoolRoot: root, PoolID: id}
 }
 
-// custodyTestRequest admits a private copy of a native executable, so a view
-// mirrors only that one directory entry.
-func custodyTestRequest(t *testing.T) verifiedexec.CommandRequest {
+func writeCustodyTestPool(t *testing.T, root, id string) {
 	t.Helper()
-	contents, err := os.ReadFile(custodyTestExecutable)
-	if err != nil {
+	if err := os.MkdirAll(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(testsupportcore.CanonicalTempDir(t), "bin", "tool")
-	if err = os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
+	marker := []byte(`{"version":1,"pool_id":"` + id + `"}`)
+	if err := os.WriteFile(filepath.Join(root, ".identity"), marker, 0o600); err != nil {
 		t.Fatal(err)
-	}
-	if err = os.WriteFile(executable, contents, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	digest, err := verifiedexec.Fingerprint(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return verifiedexec.CommandRequest{
-		Executable: executable, SHA256: digest, Directory: filepath.Dir(executable),
-		Environment: []string{"PATH=/usr/bin:/bin"},
 	}
 }
 
@@ -84,23 +71,25 @@ func custodyTestRegistration(ownerKind string, placement *task.LifetimeCustodyPl
 	}
 }
 
-// bindCustodyTestView binds one view for registration's owner, as the worker
-// does, and closes only the command's local handles.
+// bindCustodyTestView reconstructs an old retained view. New workers never
+// create one; only the canonical closed owner may remove this legacy state.
 func bindCustodyTestView(t *testing.T, registration *task.LifetimeRegistrationRecord) {
 	t.Helper()
-	binder, err := lifetimeChildBinder(registration, time.Now().Add(time.Minute))
-	if err != nil {
+	custody, err := recordedLifetimeCustody(registration)
+	if err != nil || custody == nil {
+		t.Fatalf("recorded custody = %v, %v", custody, err)
+	}
+	view := filepath.Join(custody.pool.Root(), "views", custody.namespace.String(), "delegation-layer-verified-fixture")
+	if err := os.MkdirAll(view, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	request := custodyTestRequest(t)
+	if err := os.WriteFile(filepath.Join(view, "entrypoint"), []byte("legacy captured bytes"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(view, 0o500); err != nil {
+		t.Fatal(err)
+	}
 	releaseCustodyTestOwnerAtCleanup(t, registration)
-	command, err := binder.BindCommand(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = command.Close(); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // moveCustodyTestPool moves the recorded pool away, so its root is missing,
@@ -139,114 +128,80 @@ func custodyTestPending(t *testing.T, registration *task.LifetimeRegistrationRec
 	return pending
 }
 
-func TestLifetimeChildBinderRequiresPlacementByOwnerKind(t *testing.T) {
+func TestRecordedLifetimeCustodyAcceptsNewUnplacedOwners(t *testing.T) {
 	placement := custodyContractPlacement("a")
-	deadline := time.Now().Add(time.Minute)
 	for _, kind := range []string{task.LifetimeOwnerTask, task.LifetimeOwnerInspection} {
-		if _, err := lifetimeChildBinder(custodyTestRegistration(kind, nil), deadline); !errors.Is(err, errLifetimeCustodyUnplaced) || !errors.Is(err, task.ErrEvidenceFault) {
-			t.Fatalf("%s registration without placement: %v, want refusal", kind, err)
+		if custody, err := recordedLifetimeCustody(custodyTestRegistration(kind, nil)); err != nil || custody != nil {
+			t.Fatalf("%s registration without placement: %v, %v; want no custody", kind, custody, err)
 		}
-		binder, err := lifetimeChildBinder(custodyTestRegistration(kind, placement), deadline)
-		if err != nil || binder == nil {
-			t.Fatalf("%s placed registration: binder %v, error %v", kind, binder, err)
+		custody, err := recordedLifetimeCustody(custodyTestRegistration(kind, placement))
+		if err != nil || custody == nil {
+			t.Fatalf("%s legacy registration: custody %v, error %v", kind, custody, err)
 		}
-		if got, want := binder.custody.namespace.String(), strings.Repeat("1", 32)+"-"+kind+"-"+strings.Repeat("2", 32); got != want {
+		if got, want := custody.namespace.String(), strings.Repeat("1", 32)+"-"+kind+"-"+strings.Repeat("2", 32); got != want {
 			t.Fatalf("%s namespace = %q, want %q", kind, got, want)
 		}
-		if got := binder.custody.pool.Root(); got != placement.PoolRoot {
+		if got := custody.pool.Root(); got != placement.PoolRoot {
 			t.Fatalf("%s pool root = %q, want recorded %q", kind, got, placement.PoolRoot)
 		}
 	}
-	binder, err := lifetimeChildBinder(custodyTestRegistration(task.LifetimeOwnerWorkspace, nil), deadline)
-	if err != nil || binder != nil {
-		t.Fatalf("workspace registration: binder %v, error %v, want none", binder, err)
+	custody, err := recordedLifetimeCustody(custodyTestRegistration(task.LifetimeOwnerWorkspace, nil))
+	if err != nil || custody != nil {
+		t.Fatalf("workspace registration: custody %v, error %v, want none", custody, err)
 	}
-	if _, err = lifetimeChildBinder(custodyTestRegistration(task.LifetimeOwnerWorkspace, placement), deadline); !errors.Is(err, task.ErrEvidenceFault) {
+	if _, err = recordedLifetimeCustody(custodyTestRegistration(task.LifetimeOwnerWorkspace, placement)); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("workspace registration with placement: %v, want evidence fault", err)
 	}
-	if _, err = lifetimeChildBinder(custodyTestRegistration("other", placement), deadline); !errors.Is(err, task.ErrEvidenceFault) {
+	if _, err = recordedLifetimeCustody(custodyTestRegistration("other", placement)); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unknown owner kind: %v, want evidence fault", err)
 	}
 }
 
-func TestOpenedLifetimeChildBinderIsUntypedNilWithoutCustody(t *testing.T) {
-	var absent *openedLifetimeChild
-	if absent.Binder() != nil {
-		t.Fatal("nil lifetime child returned a binder; execution would skip its private copy")
-	}
-	if (&openedLifetimeChild{}).Binder() != nil {
-		t.Fatal("workspace lifetime child returned a typed-nil binder")
-	}
-}
-
-func TestLifetimeCustodyBinderBindsRecordedPoolWithinRegistrationDeadline(t *testing.T) {
+func TestLegacyCustodyViewRemainsUntilOwnerRelease(t *testing.T) {
 	placement := newCustodyTestPlacement(t)
 	registration := custodyTestRegistration(task.LifetimeOwnerTask, placement)
 	if custodyTestPending(t, registration) {
 		t.Fatal("fresh owner already has a witness")
 	}
-	// The initial provider binding receives context.Background.
 	bindCustodyTestView(t, registration)
 	if !custodyTestPending(t, registration) {
-		t.Fatal("binding did not leave its view in the recorded pool")
-	}
-
-	expired, err := lifetimeChildBinder(custodyTestRegistration(task.LifetimeOwnerInspection, placement), time.Now().Add(-time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = expired.BindCommand(context.Background(), custodyTestRequest(t)); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("bind after the registration deadline: %v, want deadline exceeded", err)
-	}
-	live, err := lifetimeChildBinder(custodyTestRegistration(task.LifetimeOwnerInspection, placement), time.Now().Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err = live.BindCommand(canceled, custodyTestRequest(t)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("bind with a canceled caller: %v, want the caller's cancellation", err)
-	}
-	if custodyTestPending(t, custodyTestRegistration(task.LifetimeOwnerInspection, placement)) {
-		t.Fatal("a refused bind created the owner's witness")
+		t.Fatal("legacy retained view has no owner witness")
 	}
 }
 
-func TestLifetimeCustodyBinderRefusesReplacedPool(t *testing.T) {
+func TestLegacyCustodyReleaseRefusesReplacedPool(t *testing.T) {
 	placement := newCustodyTestPlacement(t)
+	registration := custodyTestRegistration(task.LifetimeOwnerTask, placement)
+	custody, err := recordedLifetimeCustody(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.RemoveAll(placement.PoolRoot); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepareLifetimeCustodyPool(t.Context(), placement.PoolRoot); err != nil {
-		t.Fatal(err)
-	}
-	binder, err := lifetimeChildBinder(custodyTestRegistration(task.LifetimeOwnerTask, placement), time.Now().Add(time.Minute))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := custodyTestRequest(t)
-	if command, bindErr := binder.BindCommand(t.Context(), request); bindErr == nil {
-		t.Fatalf("bind into a replaced pool succeeded: %v", errors.Join(command.Close()))
+	writeCustodyTestPool(t, placement.PoolRoot, strings.Repeat("b", 64))
+	if err := custody.pool.ReleaseOwner(t.Context(), custody.namespace); err == nil {
+		t.Fatal("release accepted a pool whose identity was replaced")
 	}
 }
 
-func TestOpenTaskLifetimeChildRefusesUnplacedRegistrationBeforeHello(t *testing.T) {
+func TestOpenTaskLifetimeChildChecksUnplacedScopeBeforeHello(t *testing.T) {
 	store, td, request := newAppTestTask(t, false)
 	t.Cleanup(func() { closeAppTestTask(t, store, td) })
 	recordTamperedLifetimeChildRecords(t, td, time.Now().Add(time.Minute).UTC(), nil)
 	parent, childFD := newLifetimeChildTestPair(t)
 	assertLifetimeChildRejectsBeforeHello(t, parent, func() (*openedLifetimeChild, error) {
 		return openTaskLifetimeChild(runnerArguments{TaskID: request.TaskID, LifetimeChild: true, LifetimeFD: childFD}, td)
-	}, errLifetimeCustodyUnplaced)
+	}, lifetime.ErrInvalidRef)
 }
 
-func TestOpenInspectionLifetimeChildRefusesUnplacedRegistrationBeforeHello(t *testing.T) {
+func TestOpenInspectionLifetimeChildChecksUnplacedScopeBeforeHello(t *testing.T) {
 	operation := newLifetimeChildTestInspection(t)
 	recordTamperedLifetimeChildRecords(t, operation, operation.Deadline(), nil)
 	parent, childFD := newLifetimeChildTestPair(t)
 	assertLifetimeChildRejectsBeforeHello(t, parent, func() (*openedLifetimeChild, error) {
 		return openInspectionLifetimeChild(runnerArguments{TaskID: operation.Request().TaskID, LifetimeChild: true, LifetimeFD: childFD}, operation)
-	}, errLifetimeCustodyUnplaced)
+	}, lifetime.ErrInvalidRef)
 }
 
 // lifetimeChildTestRecords is the record writer shared by the task and
@@ -257,8 +212,8 @@ type lifetimeChildTestRecords interface {
 }
 
 // recordTamperedLifetimeChildRecords writes valid records whose scope does not
-// match its plan, so a child that opened the scope would fail with
-// lifetime.ErrInvalidRef rather than with a custody refusal.
+// match its plan. Custody placement is optional, but the scope must still pass
+// lifetime validation before the worker sends Hello.
 func recordTamperedLifetimeChildRecords(t *testing.T, records lifetimeChildTestRecords, deadline time.Time, placement *task.LifetimeCustodyPlacement) {
 	t.Helper()
 	bootID, err := lifetime.BootID()

@@ -77,30 +77,40 @@ func (l *probeStartLifetime) count() int {
 }
 
 type probeBinderRoute struct {
-	name     string
-	commands [][]string
-	build    func(t *testing.T, directory, temporary string) provider.InspectionDefinition
-	failure  error
+	name string
+	// started is every command the scope admits; bound is the subset that
+	// passes through the binder. Provider CLI commands are never bound.
+	started [][]string
+	bound   [][]string
+	build   func(t *testing.T, directory, temporary string) provider.InspectionDefinition
 }
 
 func probeBinderRoutes() []probeBinderRoute {
 	return []probeBinderRoute{
 		{
-			name:     "runtime-and-native-capture",
-			commands: [][]string{{"--version"}, {"--help"}, {"native"}},
-			build:    binderNativeDefinition,
-			failure:  errRuntimeProbe,
+			name:    "provider-runtime-and-native-capture",
+			started: [][]string{{"--help"}, {"native"}},
+			build:   binderNativeDefinition,
 		},
 		{
-			name:     "runtime-and-models",
-			commands: [][]string{{"--version"}, {"--help"}, {"--list-models"}},
-			build:    binderModelsDefinition,
-			failure:  errRuntimeProbe,
+			name:    "provider-models",
+			started: [][]string{{"--help"}, {"--list-models"}},
+			build:   binderModelsDefinition,
+		},
+		{
+			name:    "native-helper-capture",
+			started: [][]string{{"-c", "printf native"}},
+			bound:   [][]string{{"-c", "printf native"}},
+			build:   binderHelperDefinition,
 		},
 	}
 }
 
-func TestInspectBindsEveryNativeCommandThroughTheScopeBinder(t *testing.T) {
+// TestInspectBindsOnlyNativeHelperCommandsThroughTheScopeBinder replaces the
+// retired rule that every probe command, including the provider CLI, was bound
+// to admitted bytes. Integrity-bound native helpers still bind; the installed
+// provider runs directly, so a supplied binder never sees it.
+func TestInspectBindsOnlyNativeHelperCommandsThroughTheScopeBinder(t *testing.T) {
 	for _, route := range probeBinderRoutes() {
 		t.Run(route.name, func(t *testing.T) {
 			temporary := binderTemporaryDirectory(t)
@@ -115,12 +125,12 @@ func TestInspectBindsEveryNativeCommandThroughTheScopeBinder(t *testing.T) {
 			if workErr != nil || stopErr != nil {
 				t.Fatalf("inspection failed: work=%v stop=%v", workErr, stopErr)
 			}
-			if got := binder.arguments(); !slices.EqualFunc(got, route.commands, slices.Equal) {
-				t.Fatalf("binder requests = %q, want %q", got, route.commands)
+			if got := binder.arguments(); !slices.EqualFunc(got, route.bound, slices.Equal) {
+				t.Fatalf("binder requests = %q, want %q", got, route.bound)
 			}
 			assertScopeBindings(t, binder, definition, deadline)
-			if lifetime.count() != len(route.commands) {
-				t.Fatalf("starts = %d, want %d", lifetime.count(), len(route.commands))
+			if lifetime.count() != len(route.started) {
+				t.Fatalf("starts = %d, want %d", lifetime.count(), len(route.started))
 			}
 			assertNoVerifiedViews(t, temporary)
 		})
@@ -147,32 +157,26 @@ func assertScopeBindings(t *testing.T, binder *probeTestBinder, definition provi
 
 func TestInspectRefusesSuppliedBinderFaultWithoutStartOrFallback(t *testing.T) {
 	for _, route := range probeBinderRoutes() {
-		for failAt := 1; failAt <= len(route.commands); failAt++ {
-			t.Run(route.name+"/"+strings.Join(route.commands[failAt-1], ""), func(t *testing.T) {
-				temporary := binderTemporaryDirectory(t)
-				definition := route.build(t, t.TempDir(), temporary)
-				binder := &probeTestBinder{failAt: failAt}
-				lifetime := &probeStartLifetime{}
-				workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime, Binder: binder}, func(scope execution.PreflightScope) error {
-					_, err := Inspect(scope, definition)
-					return err
-				})
-				wantFailure := route.failure
-				if failAt == len(route.commands) {
-					wantFailure = errNativeInspection
-				}
-				if !errors.Is(workErr, wantFailure) || stopErr != nil || strings.Contains(workErr.Error(), "private-") {
-					t.Fatalf("binder refusal result: work=%v stop=%v, want %v", workErr, stopErr, wantFailure)
-				}
-				if len(binder.requests) != failAt {
-					t.Fatalf("binder requests = %d, want %d", len(binder.requests), failAt)
-				}
-				if lifetime.count() != failAt-1 {
-					t.Fatalf("starts = %d, want %d: a refused binding must not start", lifetime.count(), failAt-1)
-				}
-				assertNoVerifiedViews(t, temporary)
-			})
+		if len(route.bound) == 0 {
+			continue
 		}
+		t.Run(route.name, func(t *testing.T) {
+			temporary := binderTemporaryDirectory(t)
+			definition := route.build(t, t.TempDir(), temporary)
+			binder := &probeTestBinder{failAt: 1}
+			lifetime := &probeStartLifetime{}
+			workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime, Binder: binder}, func(scope execution.PreflightScope) error {
+				_, err := Inspect(scope, definition)
+				return err
+			})
+			if !errors.Is(workErr, errNativeInspection) || stopErr != nil || strings.Contains(workErr.Error(), "private-") {
+				t.Fatalf("binder refusal result: work=%v stop=%v, want %v", workErr, stopErr, errNativeInspection)
+			}
+			if len(binder.requests) != 1 || lifetime.count() != 0 {
+				t.Fatalf("binder requests = %d starts = %d: a refused binding must not start or fall back", len(binder.requests), lifetime.count())
+			}
+			assertNoVerifiedViews(t, temporary)
+		})
 	}
 }
 
@@ -202,7 +206,7 @@ func assertNoVerifiedViews(t *testing.T, temporary string) {
 func writeBinderCLI(t *testing.T, directory string) string {
 	t.Helper()
 	path := filepath.Join(directory, "provider-cli")
-	script := "#!/bin/sh\nset -eu\ncase \"${1-}\" in\n  --version) printf 'provider 1.0\\n' ;;\n  --help) printf '%s\\n' '--list-models' ;;\n  native) printf 'native' ;;\n  --list-models) ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\ncase \"${1-}\" in\n  --help) printf '%s\\n' '--list-models' ;;\n  native) printf 'native' ;;\n  --list-models) ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -237,4 +241,17 @@ func binderModelsDefinition(t *testing.T, directory, temporary string) provider.
 		},
 	}
 	return definition
+}
+
+// binderHelperDefinition is a native-only inspection whose executable is an
+// integrity-bound helper carrying its admitted digest.
+func binderHelperDefinition(t *testing.T, directory, temporary string) provider.InspectionDefinition {
+	t.Helper()
+	helper := locateTestHelper(t)
+	return provider.InspectionDefinition{
+		Revision: "native-helper-binder-v1", Executable: helper.Path, ExecutableSHA256: helper.SHA256,
+		Arguments: []string{"-c", "printf native"}, Directory: directory,
+		Environment: []string{"TMPDIR=" + temporary}, OutputLimit: 64,
+		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"eligible":true}`), nil },
+	}
 }

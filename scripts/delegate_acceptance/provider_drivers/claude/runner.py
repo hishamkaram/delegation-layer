@@ -71,10 +71,10 @@ class ClaudeAcceptance:
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.claude = resolve_executable(args.claude, Path(shutil.which("claude") or "/opt/homebrew/bin/claude"), "claude")
-        self.provider_version: str | None = None
+        self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = digest(self.claude)
+        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         require_discovery("claude", self.claude)
         require_discovery("pueue", self.pueue)
@@ -193,10 +193,6 @@ class ClaudeAcceptance:
             bounded_text(pueue_version.directory / "stdout", "pueue version output"), "pueue")
         self.pueued_version = observed_pueue_version(
             bounded_text(pueued_version.directory / "stdout", "pueued version output"), "pueued")
-        claude_version = self.ops.direct("claude-version", [self.claude, "--version"], timeout=15)
-        observed = (claude_version.directory / "stdout").read_text().strip()
-        require(observed, "Claude returned an empty version")
-        self.provider_version = observed
         self.inspection_binding = expected_claude_inspection_binding(
             pueue=self.pueue, config=self.pueue_config, base=self.pueue_base, config_digest=config_digest,
             workspace=self.workspace, executable=self.claude, runner=self.runner, environment=self.environment,

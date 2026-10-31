@@ -50,11 +50,18 @@ remains under the caller's supervisor controls.
 ## Native permissions and launch checks
 
 Before admission and again immediately before launch, the system compares the
-executable identity, command profile, canonical workspace, effective policy,
-input/output bindings, and session expectation. A provider upgrade observed by
-the fresh preflight is accepted when its capability check succeeds; a replacement
-during the final binding and start handoff is rejected. Provider version numbers
-are observed for evidence but are not hardcoded release constraints.
+command profile, canonical workspace, effective policy, input/output bindings,
+and session expectation, and it keeps the identities of Delegate's own worker,
+supervisor, and native helpers. It resolves the installed provider CLI in the
+task's saved lookup environment and runs it directly. A provider upgrade
+observed by the fresh preflight is accepted when its capability check succeeds.
+Provider bytes are not hashed or copied, and Delegate does not promise that the
+bytes it probed are the bytes the operating system executes: an update between
+the probe and the process start can change which installed bytes run or cause
+an operating-system or provider launch error. Such an error is reported without
+an automatic retry or fresh session.
+Provider version numbers are optional diagnostics, not release constraints.
+The [product boundary](../agents/_data/product-boundary.md) owns this division.
 
 Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
 and skills. New tasks do not rewrite these sources. A provider-specific

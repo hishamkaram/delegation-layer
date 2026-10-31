@@ -4,25 +4,26 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-// CLIInfo describes the executable selected for one task. The version and
-// digest are observations used to bind admission to the same executable; they
-// are observations only; they are never compared with a release manifest.
+// CLIInfo describes the installed executable selected for one task. Current
+// discovery records only the resolved path. SHA256 is an optional historical
+// observation: definitions reconstructed from records admitted before direct
+// launch may carry it, and current discovery always leaves it empty.
 type CLIInfo struct {
-	Path    string
-	Version string
-	SHA256  string
+	Path   string
+	SHA256 string
 }
 
-// LocateCLI resolves and fingerprints a provider executable without starting
-// it. Version and help output are observed later by the supervised inspection
-// worker immediately before the provider launch.
+// LocateCLI resolves a provider executable in the selected lookup environment
+// without starting or reading it. Help output is observed later by the
+// supervised inspection worker immediately before the provider launch.
 func LocateCLI(name string, environment []string) (CLIInfo, error) {
 	path, err := verifiedexec.LookPath(name, environment)
 	if err != nil {
@@ -31,33 +32,38 @@ func LocateCLI(name string, environment []string) (CLIInfo, error) {
 	return LocateCLIPath(path)
 }
 
-// LocateCLIPath applies the static executable checks used before a supervised
-// capability probe. It rejects aliases, special files, and non-executable
-// paths while never invoking the provider.
+// LocateCLIPath applies the static availability checks used before a
+// supervised capability probe: it resolves the canonical path and requires a
+// regular file with an execute bit. It never reads or fingerprints the
+// provider's bytes, because the user owns provider installations and updates.
 func LocateCLIPath(path string) (CLIInfo, error) {
-	info, err := verifiedexec.LocatePath(path)
+	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return CLIInfo{}, err
+		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
 	}
-	return CLIInfo{Path: info.Path, SHA256: info.SHA256}, nil
+	canonical, err := config.CanonicalizePath(absolute)
+	if err != nil {
+		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
+	}
+	info, err := os.Stat(canonical)
+	if err != nil {
+		return CLIInfo{}, fmt.Errorf("inspect provider executable: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return CLIInfo{}, errors.New("inspect provider executable: not a regular executable file")
+	}
+	return CLIInfo{Path: canonical}, nil
 }
 
-// ParseCLIVersion accepts any nonempty, valid UTF-8 text emitted on stdout by
-// a provider's --version command. It intentionally performs no release check.
-func ParseCLIVersion(output []byte) (string, error) {
-	if len(output) == 0 || !utf8.Valid(output) {
-		return "", errors.New("version output is empty or not valid UTF-8")
+// ValidateOptionalExecutableSHA256 applies the provider executable digest rule
+// shared by observations, inspection definitions, and policy details: an
+// empty digest means the bytes were not observed; a present digest must be
+// valid.
+func ValidateOptionalExecutableSHA256(digest string) error {
+	if digest == "" {
+		return nil
 	}
-	version := strings.TrimSpace(string(output))
-	if version == "" {
-		return "", errors.New("version output is empty")
-	}
-	for _, character := range version {
-		if unicode.IsControl(character) {
-			return "", errors.New("version output contains control characters")
-		}
-	}
-	return version, nil
+	return task.ValidateSHA256(digest)
 }
 
 func containsCLIFlag(output []byte, flag string) bool {
@@ -90,8 +96,8 @@ func isCLIFlagRune(value byte) bool {
 }
 
 // FingerprintExecutable reads a canonical regular executable without launching
-// it. The digest is an admission identity observation, not a release
-// constraint.
+// it. It identifies Delegate-owned workers and supervisors and integrity-bound
+// native helpers; external provider executables are never fingerprinted.
 func FingerprintExecutable(path string) (digest string, resultErr error) {
 	return verifiedexec.Fingerprint(path)
 }

@@ -117,10 +117,10 @@ class NativeRun:
         self.probe = selected_tools(REPO_ROOT)
         require_discovery("agy", self.agy)
         require_discovery("pueue", self.pueue)
-        self.provider_version: str | None = None
+        self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = digest(self.agy)
+        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.process_owner = DirectoryOwner()
@@ -161,10 +161,6 @@ class NativeRun:
                 self.pueue_base = None
             raise
         self.pueue_owned_directories = ownership.transfer()
-        self.processes.run("agy-version", [str(self.agy), "--version"], REPO_ROOT, timeout=15)
-        version = self.processes.entries[-1].output().decode().strip()
-        require(version, "agy returned an empty version")
-        self.provider_version = version
         self.processes.run("pueue-version", pueue_command(self.pueue, self.pueue_config, "--version"), REPO_ROOT,
             timeout=15)
         self.processes.run("pueued-version", [str(self.pueued), "-c", str(self.pueue_config), "--version"], REPO_ROOT,

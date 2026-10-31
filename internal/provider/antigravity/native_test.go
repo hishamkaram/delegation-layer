@@ -31,7 +31,7 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func prepareReadOnlyNativeCandidate(t *testing.T) (task.TaskRecord, commonprovid
 
 func readOnlyRuntimeFacts(t *testing.T, candidate commonprovider.ProfileCandidate) []byte {
 	t.Helper()
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

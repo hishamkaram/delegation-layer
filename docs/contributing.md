@@ -251,12 +251,17 @@ Start with the runtime-facing contract in `internal/provider/contract.go`,
 the pure facts under `internal/provider/contract/`, and the existing adapters
 under `internal/provider/`. Keep preparation free of
 provider-process launches and writes. It may perform bounded executable
-discovery and policy metadata reads; provider version/help probes and other
+discovery and policy metadata reads; provider help probes and other
 native inspection work must run through the shared core. Define the help
 command and the stable runtime flags the adapter can observe reliably. Keep
 rapidly changing or pipe-truncated forwarded options in the provider launch
 and live acceptance contract rather than turning them into a stale admission
 allowlist.
+
+Provider installations are user-owned and mutable. Do not hash or copy provider
+executables, require a standalone version command, or pin provider releases.
+Keep Delegate-owned worker, supervisor, native-helper, task, and evidence
+integrity checks intact. See the [product boundary](../agents/_data/product-boundary.md).
 
 When an output format changes, add a versioned predicate interpreter only when
 the old format must remain collectible. Preserve strict task/session identity,
@@ -272,8 +277,8 @@ adapter only projects bounded nonsecret facts.
 
 ## Validation expectations
 
-Use fake executable fixtures to prove that a newer arbitrary version is accepted
-when declared runtime flags exist, and that missing flags, missing executables, and
+Use fake executable fixtures to prove that compatible installed-provider updates
+are accepted without a version diagnostic or executable digest, and that missing flags, missing executables, and
 non-executable files are rejected. Test malformed or conflicting output at the
 predicate boundary, including model discovery status, null effort metadata,
 empty effort lists, duplicate model IDs, and exit-code mapping. Run the

@@ -1,8 +1,6 @@
 package verifiedexec
 
-// Faults of the identity protocol, injected at the production operations: every
-// barrier failure withholds the acknowledgement, a retry repairs the one
-// authoritative marker, and cleanup of stages never changes the identity.
+// Strict legacy markers and interrupted identity-stage disposal.
 
 import (
 	"context"
@@ -13,125 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
 
 var errInjectedMarkerFault = errors.New("injected marker fault")
-
-func TestPrepareFaultsWithholdTheAcknowledgementAndARetryRepairs(t *testing.T) {
-	cases := []struct {
-		point     poolPoint
-		published bool
-	}{
-		{pointMarkerStageBarrier, false},
-		{pointMarkerLink, false},
-		{pointMarkerFileBarrier, true},
-		{pointMarkerDirBarrier, true},
-	}
-	for _, tc := range cases {
-		t.Run(string(tc.point), func(t *testing.T) {
-			pool, _ := unboundPool(t)
-			reset := failAt(pool, tc.point, errInjectedMarkerFault)
-			id, err := pool.Prepare(context.Background())
-			if id != "" || !errors.Is(err, errInjectedMarkerFault) {
-				t.Fatalf("Prepare gave %q, %v; want no acknowledgement and the whole injected error", id, err)
-			}
-			if uncertain := errors.Is(err, task.ErrUncertainDurability); uncertain != tc.published {
-				t.Fatalf("uncertain durability = %v for %v; want %v", uncertain, err, tc.published)
-			}
-			_, statErr := os.Lstat(filepath.Join(pool.root, poolIdentityName))
-			if published := statErr == nil; published != tc.published {
-				t.Fatalf("marker published = %v (%v); want %v", published, statErr, tc.published)
-			}
-			var winner string
-			if tc.published {
-				winner = markerID(t, pool.root)
-			}
-			reset()
-			retried, err := pool.Prepare(context.Background())
-			if err != nil || (tc.published && retried != winner) || retried != markerID(t, pool.root) {
-				t.Fatalf("retry gave %q, %v; want the authoritative marker %q", retried, err, markerID(t, pool.root))
-			}
-			requireNoIdentityStage(t, pool.root)
-		})
-	}
-}
-
-func TestBarrierFailuresOfAnExistingWinnerAreNotAcknowledged(t *testing.T) {
-	for _, point := range []poolPoint{pointMarkerFileBarrier, pointMarkerDirBarrier} {
-		t.Run(string(point), func(t *testing.T) {
-			pool, _ := unboundPool(t)
-			want, err := pool.Prepare(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			reset := failAt(pool, point, errInjectedMarkerFault)
-			if id, repairErr := pool.Prepare(context.Background()); id != "" || !errors.Is(repairErr, errInjectedMarkerFault) {
-				t.Fatalf("repair gave %q, %v; want no acknowledgement", id, repairErr)
-			}
-			reset()
-			if id, retryErr := pool.Prepare(context.Background()); retryErr != nil || id != want {
-				t.Fatalf("retry gave %q, %v; want %q", id, retryErr, want)
-			}
-		})
-	}
-}
-
-// TestPrepareAdoptsTheWinnerOfACreateOnceRace: another publisher links its own
-// marker between this one's stage and its link. The real link then fails with
-// EEXIST and Prepare returns that winner, verified, without overwriting it.
-func TestPrepareAdoptsTheWinnerOfACreateOnceRace(t *testing.T) {
-	pool, _ := unboundPool(t)
-	foreign := strings.Repeat("b", 64)
-	pool.faults.inject = func(point poolPoint) error {
-		if point == pointMarkerLink {
-			plantMarker(t, pool.root, canonicalMarker(t, foreign), 0o600)
-		}
-		return nil
-	}
-	id, err := pool.Prepare(context.Background())
-	if err != nil || id != foreign {
-		t.Fatalf("Prepare gave %q, %v; want the winner %q", id, err, foreign)
-	}
-	if got := markerID(t, pool.root); got != foreign {
-		t.Fatalf("the marker was overwritten with %q", got)
-	}
-	requireNoIdentityStage(t, pool.root)
-}
-
-func TestPrepareRefusesACorruptWinnerWithoutReplacingIt(t *testing.T) {
-	pool, _ := unboundPool(t)
-	corrupt := []byte(`{"version":1,"pool_id":"short"}`)
-	pool.faults.inject = func(point poolPoint) error {
-		if point == pointMarkerLink {
-			plantMarker(t, pool.root, corrupt, 0o600)
-		}
-		return nil
-	}
-	if id, err := pool.Prepare(context.Background()); id != "" || !errors.Is(err, errPoolIdentityRecord) {
-		t.Fatalf("Prepare gave %q, %v; want %v", id, err, errPoolIdentityRecord)
-	}
-	if raw, err := os.ReadFile(filepath.Join(pool.root, poolIdentityName)); err != nil || string(raw) != string(corrupt) {
-		t.Fatalf("the corrupt winner was changed to %q (%v)", raw, err)
-	}
-}
-
-// TestPrepareReportsAReadbackFailureAfterTheLink: the marker is replaced by a
-// corrupt record after it was linked and before the strict read-back. The
-// failure is concrete; it is never hidden as cleanup and never acknowledged.
-func TestPrepareReportsAReadbackFailureAfterTheLink(t *testing.T) {
-	pool, _ := unboundPool(t)
-	pool.faults.inject = func(point poolPoint) error {
-		if point == pointMarkerDirBarrier {
-			plantMarker(t, pool.root, []byte("not json"), 0o600)
-		}
-		return nil
-	}
-	if id, err := pool.Prepare(context.Background()); id != "" || !errors.Is(err, errPoolIdentityRecord) {
-		t.Fatalf("Prepare gave %q, %v; want the concrete readback fault", id, err)
-	}
-}
 
 // corruptMarker is a marker the strict reader must refuse; plant replaces the
 // valid marker of a prepared root.
@@ -190,51 +73,6 @@ func replaceMarker(t *testing.T, root string, create func(path string) error) {
 	}
 }
 
-func TestPrepareRefusesAnExistingMarkerThatIsNotStrictlyCanonical(t *testing.T) {
-	for _, tc := range corruptMarkerCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			pool, _ := unboundPool(t)
-			id, err := pool.Prepare(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
-			tc.plant(t, pool.root, id)
-			before := treeSnapshot(t, pool.root)
-			again, err := pool.Prepare(context.Background())
-			if again != "" || err == nil {
-				t.Fatalf("Prepare accepted a %s marker: %q, %v", tc.name, again, err)
-			}
-			if after := treeSnapshot(t, pool.root); after != before {
-				t.Fatalf("Prepare changed a root with a %s marker:\nbefore:\n%s\nafter:\n%s", tc.name, before, after)
-			}
-		})
-	}
-}
-
-func TestStageCleanupFaultsAreLoggedAndTheIdentityStillAcknowledged(t *testing.T) {
-	for _, point := range []poolPoint{pointMarkerStageRemove, pointMarkerCleanBarrier} {
-		t.Run(string(point), func(t *testing.T) {
-			pool, log := unboundPool(t)
-			reset := failAt(pool, point, errInjectedMarkerFault)
-			id, err := pool.Prepare(context.Background())
-			if err != nil || id != markerID(t, pool.root) {
-				t.Fatalf("Prepare gave %q, %v; want the durable marker %q acknowledged", id, err, markerID(t, pool.root))
-			}
-			if !logContains(log.logged(), "identity stage cleanup failed") {
-				t.Fatalf("the cleanup fault was not logged: %q", log.logged())
-			}
-			if point == pointMarkerStageRemove && len(identityStages(t, pool.root)) != 1 {
-				t.Fatalf("the stage that could not be removed is gone: %v", identityStages(t, pool.root))
-			}
-			reset()
-			if retried, retryErr := pool.Prepare(context.Background()); retryErr != nil || retried != id {
-				t.Fatalf("retry gave %q, %v; want %q", retried, retryErr, id)
-			}
-			requireNoIdentityStage(t, pool.root)
-		})
-	}
-}
-
 // createExclusive creates a new regular file and fails if the name already
 // exists, so a fixture name that aliases another one is an error, never a rewrite.
 func createExclusive(path string, content []byte) error {
@@ -250,10 +88,8 @@ func createExclusive(path string, content []byte) error {
 // and exactly 32 lowercase hex digits. Everything else, and a recognized name
 // that is not a plain file of this user, is preserved and reported.
 func TestSweepRemovesOnlyRecognizedAbandonedStages(t *testing.T) {
-	pool, log := unboundPool(t)
-	if _, err := pool.Prepare(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	rig := newPoolRig(t)
+	pool := rig.pool
 	nonce := strings.Repeat("a", identityStageNonceLen)
 	recognized := poolIdentityStagePrefix + nonce
 	preserved := []string{
@@ -281,9 +117,10 @@ func TestSweepRemovesOnlyRecognizedAbandonedStages(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(pool.root, preserved[5])); err != nil {
 		t.Fatal(err)
 	}
-	id, err := pool.Prepare(context.Background())
-	if err != nil || id != markerID(t, pool.root) {
-		t.Fatalf("Prepare gave %q, %v", id, err)
+	pool.maintain(context.Background(), true)
+	_, _, err := pool.reclaimIdle(context.Background())
+	if !errors.Is(err, errPoolIdentityStage) {
+		t.Fatalf("reclaim gave %v; want invalid stage refusal", err)
 	}
 	names := rootNames(t, pool.root)
 	if slices.Contains(names, recognized) {
@@ -297,8 +134,8 @@ func TestSweepRemovesOnlyRecognizedAbandonedStages(t *testing.T) {
 	if raw, readErr := os.ReadFile(outside); readErr != nil || string(raw) != "keep" {
 		t.Fatalf("the sweep reached through a symlink: %q %v", raw, readErr)
 	}
-	if !logContains(log.logged(), "identity stage cleanup failed") {
-		t.Fatalf("the unremovable recognized names were not reported: %q", log.logged())
+	if !logContains(rig.logged(), "idle image reclaim failed") {
+		t.Fatalf("the unremovable recognized names were not reported: %q", rig.logged())
 	}
 }
 
@@ -329,5 +166,69 @@ func TestIdleReclaimSweepsMarkerStagesOnlyWhileHoldingTheGate(t *testing.T) {
 	requireNoIdentityStage(t, rig.pool.root)
 	if got := markerID(t, rig.pool.root); got != rig.id {
 		t.Fatalf("reclaim changed the identity to %q", got)
+	}
+}
+
+func TestStageCleanupFaultsAreLoggedWithoutChangingReleaseAndRetry(t *testing.T) {
+	for _, point := range []poolPoint{pointMarkerStageRemove, pointMarkerCleanBarrier} {
+		t.Run(string(point), func(t *testing.T) {
+			checkStageCleanupFault(t, point)
+		})
+	}
+}
+
+func TestReleaseSweepsLegacyIdentityTwinWithoutChangingMarker(t *testing.T) {
+	rig := newPoolRig(t)
+	marker := filepath.Join(rig.pool.root, poolIdentityName)
+	before, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(rig.pool.root, poolIdentityStagePrefix+strings.Repeat("e", identityStageNonceLen))
+	if err = os.Link(marker, stage); err != nil {
+		t.Fatal(err)
+	}
+	if err = rig.pool.ReleaseOwner(context.Background(), rig.ns("ghost")); err != nil {
+		t.Fatal(err)
+	}
+	requireNoIdentityStage(t, rig.pool.root)
+	after, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) || markerID(t, rig.pool.root) != rig.id {
+		t.Fatal("removing the interrupted stage changed the canonical marker")
+	}
+}
+
+func checkStageCleanupFault(t *testing.T, point poolPoint) {
+	t.Helper()
+	rig := newPoolRig(t)
+	entry, digest := plainEntry(t, rig.dir, "stage-fault")
+	rig.seedView("a", plainRequest(entry, digest))
+	stage := filepath.Join(rig.pool.root, poolIdentityStagePrefix+strings.Repeat("d", identityStageNonceLen))
+	if err := createExclusive(stage, canonicalMarker(t, rig.id)); err != nil {
+		t.Fatal(err)
+	}
+	reset := failAt(rig.pool, point, errInjectedMarkerFault)
+	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
+		t.Fatalf("stage cleanup changed the release outcome: %v", err)
+	}
+	if rig.pending("a") {
+		t.Fatal("release kept the witness")
+	}
+	if !logContains(rig.logged(), "idle image reclaim failed") {
+		t.Fatalf("cleanup fault not logged: %v", rig.logged())
+	}
+	if point == pointMarkerStageRemove && len(identityStages(t, rig.pool.root)) != 1 {
+		t.Fatal("failed removal lost the stage")
+	}
+	reset()
+	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
+		t.Fatal(err)
+	}
+	requireNoIdentityStage(t, rig.pool.root)
+	if got := markerID(t, rig.pool.root); got != rig.id {
+		t.Fatalf("identity changed to %s", got)
 	}
 }

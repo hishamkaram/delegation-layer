@@ -18,8 +18,6 @@ import (
 type openedLifetimeChild struct {
 	control  *guardian.WorkerClient
 	deadline time.Time
-	// binder is nil only for a workspace registration.
-	binder *lifetimeCustodyBinder
 }
 
 type lifetimeRegistrationReader interface {
@@ -54,8 +52,9 @@ func openLifetimeChild(parsed runnerArguments, records lifetimeRegistrationReade
 	if err != nil {
 		return nil, task.ErrEvidenceFault
 	}
-	// NewWorkerClient sends Hello, so the binding decision precedes the scope.
-	binder, err := lifetimeChildBinder(registration, deadline)
+	// Validate legacy cleanup coordinates before opening the scope or sending Hello.
+	// They never select the provider executable or require a new placement.
+	_, err = recordedLifetimeCustody(registration)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +82,7 @@ func openLifetimeChild(parsed runnerArguments, records lifetimeRegistrationReade
 	if err != nil {
 		return nil, errors.Join(err, conn.Close(), guardian.ReleaseScopeUncanceled(context.Background(), scope))
 	}
-	return &openedLifetimeChild{control: client, deadline: deadline, binder: binder}, nil
+	return &openedLifetimeChild{control: client, deadline: deadline}, nil
 }
 
 func readLifetimeChildRecords(records lifetimeRegistrationReader) (*task.LifetimeRegistrationRecord, *task.LifetimeIntentRecord, error) {
@@ -131,15 +130,6 @@ func (c *openedLifetimeChild) Lifetime() execution.Lifetime {
 		return nil
 	}
 	return c.control
-}
-
-// Binder is the recorded custody binder. A nil child or a workspace child has
-// none, so execution keeps its private copy; the result is an untyped nil then.
-func (c *openedLifetimeChild) Binder() execution.CommandBinder {
-	if c == nil || c.binder == nil {
-		return nil
-	}
-	return c.binder
 }
 
 func (c *openedLifetimeChild) Deadline() time.Time {

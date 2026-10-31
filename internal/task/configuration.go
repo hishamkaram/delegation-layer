@@ -325,29 +325,40 @@ func ValidateEnvironment(values []string) error {
 
 // ValidateProviderRuntimeIdentity validates an optional final-launch
 // observation. Empty identities preserve compatibility with records written
-// before runtime identity evidence was recorded; partial identities are never
-// accepted.
+// before runtime identity evidence was recorded. A nonempty identity names its
+// resolved executable; the reported version and executable digest are optional
+// observations, validated only when present.
 func ValidateProviderRuntimeIdentity(identity ProviderRuntimeIdentity) error {
-	empty := identity.Executable == "" && identity.Version == "" && identity.SHA256 == ""
-	if empty {
+	if identity == (ProviderRuntimeIdentity{}) {
 		return nil
 	}
 	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable {
 		return errors.New("provider runtime executable must be a resolved absolute path")
 	}
-	if !nonblank(identity.Version) {
-		return errors.New("provider runtime version must be nonempty")
+	if identity.Version != "" {
+		if err := validateProviderRuntimeVersion(identity.Version); err != nil {
+			return err
+		}
 	}
-	if !utf8.ValidString(identity.Version) {
+	if identity.SHA256 != "" {
+		if err := ValidateSHA256(identity.SHA256); err != nil {
+			return fmt.Errorf("provider runtime executable digest: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateProviderRuntimeVersion(version string) error {
+	if !nonblank(version) {
+		return errors.New("provider runtime version must not be blank")
+	}
+	if !utf8.ValidString(version) {
 		return errors.New("provider runtime version must be valid UTF-8")
 	}
-	for _, character := range identity.Version {
+	for _, character := range version {
 		if unicode.IsControl(character) {
 			return errors.New("provider runtime version contains control characters")
 		}
-	}
-	if err := ValidateSHA256(identity.SHA256); err != nil {
-		return fmt.Errorf("provider runtime executable digest: %w", err)
 	}
 	return nil
 }
@@ -421,8 +432,8 @@ func validateMetaRuntimeObservation(r *MetaRecord) error {
 		}
 		return nil
 	}
-	if !nonblank(r.ProviderVersion) {
-		return errors.New("missing provider version")
+	if r.ProviderVersion != "" && !nonblank(r.ProviderVersion) {
+		return errors.New("blank provider version")
 	}
 	return nil
 }

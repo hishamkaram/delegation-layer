@@ -3,7 +3,7 @@ package verifiedexec
 // Binder-agnostic custody matrix: native, shell and Node entrypoints, and their
 // interpreters, are mutated after bind (and after Start) and must keep running
 // the admitted bytes. The same assertions run against the legacy private-copy
-// constructors and against the pool, through a bindFunc.
+// constructors through a bindFunc.
 
 import (
 	"errors"

@@ -53,25 +53,21 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	for i := range f.entries {
 		f.entries[i], f.digests[i] = plainEntry(t, f.rig.dir, fmt.Sprintf("release-%d", i))
 	}
-	f.rig.binder("living", plainRequest(f.entries[0], f.digests[0]))
+	f.rig.seedView("living", plainRequest(f.entries[0], f.digests[0]))
 	return f
 }
 
 // bindClosed leaves owner as a closed owner does: one view per image, every
 // command closed. Close only closes local handles, so the views stay.
 func (f *releaseFixture) bindClosed(owner string) {
-	t := f.rig.t
-	t.Helper()
+	f.rig.t.Helper()
 	for i := range f.entries {
-		command, err := f.rig.pool.Bind(context.Background(), f.rig.ns(owner), plainRequest(f.entries[i], f.digests[i]))
-		if err != nil {
-			t.Fatalf("setup blocked: bind %s for %s: %v", f.entries[i], owner, err)
-		}
-		if err = errors.Join(requireViewHoldsDigest(command, f.digests[i]), command.Close()); err != nil {
-			t.Fatalf("setup blocked: close the command of %s: %v", owner, err)
-		}
+		f.rig.seedView(owner, plainRequest(f.entries[i], f.digests[i]))
 	}
 	f.rig.requireViewDirs(owner, closedViews)
+	for _, entry := range f.entries {
+		f.rig.requireViewsLinkImages(owner, entry)
+	}
 }
 
 // requireReleased asserts what every caller's return must have established:
@@ -115,7 +111,10 @@ func (f *releaseFixture) releaseLiving() {
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("living")); err != nil {
 		rig.t.Fatal(err)
 	}
-	rig.requireNothingBound()
+	rig.requireImagesDir(0)
+	if entries, err := os.ReadDir(rig.pool.viewsPath()); err != nil || len(entries) != 0 {
+		rig.t.Fatalf("released pool still holds views: %v (%v)", entries, err)
+	}
 }
 
 // siblingPools returns n pool handles on the rig's root and identity, each its

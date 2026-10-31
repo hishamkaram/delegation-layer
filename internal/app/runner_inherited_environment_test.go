@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -96,6 +97,7 @@ func readRunnerPayload(t *testing.T, fixture *runnerRefreshFixture, outcome *tas
 }
 
 func TestRunRunnerEnvShebangResolvesInterpreterFromSelectedScope(t *testing.T) {
+	t.Setenv(runnerScopeMarker, "ambient")
 	script := "#!/usr/bin/env sh\nprintf 'marker=%s\\n' \"${" + runnerScopeMarker + "-unset}\"\n"
 	caller := []string{runnerScopeMarker + "=caller", "PATH=/usr/bin:/bin"}
 	payload, _ := runRunnerScopeProbe(t, runnerRefreshOptions{ProviderScript: script}, nil, caller)
@@ -103,24 +105,39 @@ func TestRunRunnerEnvShebangResolvesInterpreterFromSelectedScope(t *testing.T) {
 		t.Fatalf("env-shebang provider marker = %q, want caller scope", payload)
 	}
 
-	fixture := newRunnerRefreshFixtureWith(t, runnerRefreshOptions{ProviderScript: script, Environment: []string{}, EnvironmentRecorded: true})
+	payload, _ = runRunnerScopeProbe(t, runnerRefreshOptions{
+		ProviderScript: script, Environment: []string{}, EnvironmentRecorded: true,
+	}, nil, caller)
+	if !strings.Contains(payload, "marker=unset\n") {
+		t.Fatalf("recorded empty scope inherited a caller or ambient marker: %q", payload)
+	}
+
+	emptyPath := testsupportcore.CanonicalTempDir(t)
+	selected := []string{"PATH=" + emptyPath}
+	fixture := newRunnerRefreshFixtureWith(t, runnerRefreshOptions{
+		ProviderScript: script, Environment: selected, EnvironmentRecorded: true,
+	})
 	defer fixture.close(t)
 	recordRunnerSupervisorReceipt(t, fixture, 7)
 	deps := Dependencies{
-		ResourceChecker:   fixtureResources,
-		Environment:       caller,
-		PrepareProfile:    func(task.TaskRecord) (PreparedProfile, error) { return fixture.profile(), nil },
+		ResourceChecker: fixtureResources,
+		Environment:     caller,
+		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+			profile := fixture.profile()
+			profile.Plan.Environment = selected
+			return profile, nil
+		},
 		SupervisorOptions: pueue.Options{Environment: fixture.environment},
 	}
 	result := runRunner(runnerArguments{Root: fixture.store.Root, TaskID: fixture.req.TaskID}, deps)
 	if result.err != nil || result.code != 0 || result.response.Outcome == nil || result.response.Publication != task.PublicationRejected.String() {
-		t.Fatalf("empty selected scope did not seal a start refusal: %+v", result)
+		t.Fatalf("unusable selected PATH did not seal the provider refusal: %+v", result)
 	}
 	inspection, err := fixture.td.Inspect()
-	if err != nil || inspection.StartedExists || !inspection.SealExists {
-		t.Fatalf("empty selected scope launched through the caller PATH: %+v, %v", inspection, err)
+	if err != nil || !inspection.StartedExists || !inspection.SealExists {
+		t.Fatalf("unusable selected PATH lost the launched provider evidence: %+v, %v", inspection, err)
 	}
-	if refusal := readRunnerPayload(t, fixture, result.response.Outcome); !strings.Contains(refusal, `interpreter "sh" is unavailable`) {
-		t.Fatalf("empty selected scope refusal = %q", refusal)
+	if refusal := readRunnerPayload(t, fixture, result.response.Outcome); refusal != "provider_exit: 127" {
+		t.Fatalf("unusable selected PATH refusal = %q", refusal)
 	}
 }

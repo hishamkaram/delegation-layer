@@ -19,8 +19,8 @@ import (
 func TestReleaseOwnerRemovesOnlyItsOwnViewsAndReclaimsIdleImages(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "shared")
-	rig.binder("a", plainRequest(entry, digest))
-	rig.binder("b", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
+	rig.seedView("b", plainRequest(entry, digest))
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestReleaseOwnerRemovesOnlyItsOwnViewsAndReclaimsIdleImages(t *testing.T) {
 func TestReleaseOfAMissingNamespaceInALivePoolIsSuccess(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "other")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("ghost")); err != nil {
 		t.Fatalf("release of a missing namespace in a live pool: %v", err)
 	}
@@ -77,23 +77,18 @@ func TestReleaseOfAMissingPoolIsUnresolvedNeverReleased(t *testing.T) {
 func TestUnboundPoolRefusesEveryOwnerOperation(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "unbound")
-	rig.binder("a", plainRequest(entry, digest))
-	unbound, err := NewPool(rig.pool.root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rig.seedView("a", plainRequest(entry, digest))
+	unbound := &Pool{root: rig.pool.root, logf: logPoolFailure}
 	before := treeSnapshot(t, rig.pool.root)
 	ctx := context.Background()
-	if _, err = unbound.Bind(ctx, rig.ns("b"), plainRequest(entry, digest)); !errors.Is(err, errPoolUnbound) {
-		t.Fatalf("Bind on an unbound pool gave %v; want %v", err, errPoolUnbound)
-	}
-	if err = unbound.ReleaseOwner(ctx, rig.ns("a")); !errors.Is(err, errPoolUnbound) {
+
+	if err := unbound.ReleaseOwner(ctx, rig.ns("a")); !errors.Is(err, errPoolUnbound) {
 		t.Fatalf("ReleaseOwner on an unbound pool gave %v; want %v", err, errPoolUnbound)
 	}
 	if pending, pendingErr := unbound.ReleasePending(rig.ns("a")); !errors.Is(pendingErr, errPoolUnbound) || pending {
 		t.Fatalf("ReleasePending on an unbound pool gave %v %v; want %v", pending, pendingErr, errPoolUnbound)
 	}
-	if _, _, err = unbound.reclaimIdle(ctx); !errors.Is(err, errPoolUnbound) {
+	if _, _, err := unbound.reclaimIdle(ctx); !errors.Is(err, errPoolUnbound) {
 		t.Fatalf("reclaim on an unbound pool gave %v; want %v", err, errPoolUnbound)
 	}
 	if after := treeSnapshot(t, rig.pool.root); after != before {
@@ -107,7 +102,7 @@ func TestUnboundPoolRefusesEveryOwnerOperation(t *testing.T) {
 func TestReleaseNeverFollowsSymlinksOrChmodsOutsideTheOwner(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "symlink")
-	command := rig.binder("a", plainRequest(entry, digest))
+	command := rig.seedView("a", plainRequest(entry, digest))
 	outside := filepath.Join(rig.dir, "installation")
 	if err := os.MkdirAll(filepath.Join(outside, "nested"), 0o755); err != nil {
 		t.Fatal(err)
@@ -144,7 +139,7 @@ func TestReleaseNeverFollowsSymlinksOrChmodsOutsideTheOwner(t *testing.T) {
 func TestReleaseLeavesTheWitnessWhenAViewCannotBeRemoved(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "stuck")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	owner := rig.ownerDir("a")
 	if err := os.Chmod(owner, 0o500); err != nil {
 		t.Fatal(err)
@@ -173,7 +168,7 @@ func TestReleaseLeavesTheWitnessWhenAViewCannotBeRemoved(t *testing.T) {
 func TestReleaseRefusesAWitnessThatIsNotADirectory(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "file-witness")
-	rig.binder("seed", plainRequest(entry, digest))
+	rig.seedView("seed", plainRequest(entry, digest))
 	witness := rig.ownerDir("a")
 	if err := os.WriteFile(witness, []byte("not ours"), 0o600); err != nil {
 		t.Fatal(err)
@@ -189,7 +184,7 @@ func TestReleaseRefusesAWitnessThatIsNotADirectory(t *testing.T) {
 func TestReleasePendingReportsConcreteErrors(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "pending")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	if pending, err := rig.pool.ReleasePending(rig.ns("a")); err != nil || !pending {
 		t.Fatalf("bound owner: %v %v", pending, err)
 	}
@@ -213,8 +208,8 @@ func TestReleaseRemovesTheWitnessLast(t *testing.T) {
 	rig := newPoolRig(t)
 	first, firstDigest := plainEntry(t, rig.dir, "last-1")
 	second, secondDigest := plainEntry(t, rig.dir, "last-2")
-	rig.binder("a", plainRequest(first, firstDigest))
-	rig.binder("a", plainRequest(second, secondDigest))
+	rig.seedView("a", plainRequest(first, firstDigest))
+	rig.seedView("a", plainRequest(second, secondDigest))
 	removed, beforeWitness := 0, 0
 	rig.pool.faults.at = func(point poolPoint, _ string) {
 		if point == pointIdentityChecked {
@@ -252,8 +247,8 @@ func TestReleaseHonorsContextAndKeepsTheWitness(t *testing.T) {
 	rig := newPoolRig(t)
 	first, firstDigest := plainEntry(t, rig.dir, "ctx-1")
 	second, secondDigest := plainEntry(t, rig.dir, "ctx-2")
-	rig.binder("a", plainRequest(first, firstDigest))
-	rig.binder("a", plainRequest(second, secondDigest))
+	rig.seedView("a", plainRequest(first, firstDigest))
+	rig.seedView("a", plainRequest(second, secondDigest))
 	ctx, cancel := context.WithCancel(context.Background())
 	rig.pool.faults.at = func(point poolPoint, _ string) {
 		if point == pointAfterViewRemoved {
@@ -277,11 +272,11 @@ func TestReleaseHonorsContextAndKeepsTheWitness(t *testing.T) {
 }
 
 func TestIdleReclaimFailureNeverChangesTheReleaseOutcomeAndRetriesLater(t *testing.T) {
-	for _, retry := range []string{"release", "bind"} {
+	for _, retry := range []string{"release"} {
 		t.Run(retry, func(t *testing.T) {
 			rig := newPoolRig(t)
 			entry, digest := plainEntry(t, rig.dir, "gc-failure")
-			rig.binder("a", plainRequest(entry, digest))
+			rig.seedView("a", plainRequest(entry, digest))
 			releaseWithBrokenReclaim(t, rig, "a")
 			if !rig.imageExists(digest) {
 				t.Fatal("the failed reclaim removed the image")
@@ -289,13 +284,8 @@ func TestIdleReclaimFailureNeverChangesTheReleaseOutcomeAndRetriesLater(t *testi
 			if !logContains(rig.logged(), "idle image reclaim failed") {
 				t.Fatalf("the failure was not reported: %q", rig.logged())
 			}
-			if retry == "release" {
-				if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("ghost")); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				other, otherDigest := plainEntry(t, rig.dir, "gc-retry")
-				rig.binder("b", plainRequest(other, otherDigest))
+			if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("ghost")); err != nil {
+				t.Fatal(err)
 			}
 			if rig.imageExists(digest) {
 				t.Fatalf("the later %s did not retry the reclaim", retry)
@@ -366,8 +356,8 @@ func TestIdleReclaimBusyGateReturnsImmediatelyAndLosesNoLiveOwner(t *testing.T) 
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "busy")
 	live, liveDigest := plainEntry(t, rig.dir, "busy-live")
-	rig.binder("a", plainRequest(entry, digest))
-	rig.binder("live", plainRequest(live, liveDigest))
+	rig.seedView("a", plainRequest(entry, digest))
+	rig.seedView("live", plainRequest(live, liveDigest))
 	holder, err := taskdir.OpenLockFileContext(context.Background(), rig.pool.gatePath(), taskdir.LockLevelNone)
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +394,7 @@ func TestIdleReclaimBusyGateReturnsImmediatelyAndLosesNoLiveOwner(t *testing.T) 
 func TestIdleReclaimRemovesStagesAndOnlyUnlinkedImages(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "stages")
-	rig.binder("keep", plainRequest(entry, digest))
+	rig.seedView("keep", plainRequest(entry, digest))
 	stage := filepath.Join(rig.pool.imagesPath(), poolStagePrefix+"abandoned")
 	stranger := filepath.Join(rig.pool.imagesPath(), "not-ours")
 	idle := filepath.Join(rig.pool.imagesPath(), strings.Repeat("a", 64))
@@ -423,15 +413,4 @@ func TestIdleReclaimRemovesStagesAndOnlyUnlinkedImages(t *testing.T) {
 		}
 	}
 	rig.requireViewsLinkImages("keep", entry)
-}
-
-func TestRebindAfterReleaseGetsAFreshWitness(t *testing.T) {
-	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "rebind")
-	rig.binder("a", plainRequest(entry, digest))
-	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
-		t.Fatal(err)
-	}
-	rig.binder("a", plainRequest(entry, digest))
-	rig.requireViewsLinkImages("a", entry)
 }

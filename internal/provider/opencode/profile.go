@@ -284,7 +284,7 @@ func configureInspection(definition commonprovider.InspectionDefinition, mode, w
 }
 
 func effectivePolicy(request task.TaskRecord, environment profileEnvironment, runtimeSHA256, nativeConfigSHA256 string) (task.EffectiveConfig, error) {
-	if err := task.ValidateSHA256(runtimeSHA256); err != nil {
+	if err := commonprovider.ValidateOptionalExecutableSHA256(runtimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	if nativeConfigSHA256 != "" {

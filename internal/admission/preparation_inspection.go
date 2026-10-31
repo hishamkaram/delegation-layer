@@ -20,14 +20,14 @@ func finalizeInspection(selection supervisorcore.AdmissionSelection, options Pre
 	}
 	// The inspection worker reconstructs the candidate when it actually runs.
 	// Refresh once more after its proof is complete so finalization uses the
-	// same current provider identity that the worker inspected. The finalizer
-	// still binds the returned facts to this candidate; a replacement during
-	// this last handoff fails closed instead of relabeling the proof.
+	// current installed provider. The proof may come from a completed journal
+	// reused across a provider-only change, so its facts are projected onto
+	// that provider in memory; the capability contract stays bound by replay.
 	candidate, err = options.Profiles.Refresh(store.Root, req, candidate)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, commonprovider.ProfileCandidate{}, WithStage("finalize-provider", err)
 	}
-	profile, err := FinalizeCandidate(candidate, req, facts)
+	profile, err := finalizeSavedFacts(candidate, req, facts)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, commonprovider.ProfileCandidate{}, WithStage("finalize-provider", err)
 	}

@@ -114,7 +114,6 @@ from scripts.delegate_acceptance.native_evidence.contract import (
     _case_definition as _case_definition,
     _case_result_verdict as _case_result_verdict,
     _compact_provider_runtime_identities as _compact_provider_runtime_identities,
-    _compact_provider_versions as _compact_provider_versions,
     _digest_bytes as _digest_bytes,
     _empty_summary as _empty_summary,
     _expected_task_aliases as _expected_task_aliases,
@@ -159,6 +158,7 @@ from scripts.delegate_acceptance.native_evidence.directories import (
 from scripts.delegate_acceptance.native_evidence.proof import (
     _binary_identities as _binary_identities,
     _cleanup_observation as _cleanup_observation,
+    _compact_provider_versions as _compact_provider_versions,
     _read_optional_object as _read_optional_object,
     _source_proof as _source_proof,
     _task_session_bindings as _task_session_bindings,

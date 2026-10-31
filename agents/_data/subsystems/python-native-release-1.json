@@ -401,6 +401,7 @@
       "py:delegate_acceptance.native_evidence.block_reason",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.proof",
       "py:delegate_acceptance.native_evidence.validation",
       "py:pathlib"
     ]

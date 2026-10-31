@@ -33,9 +33,11 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 	nativeEnabled := len(definition.Arguments) > 0 || definition.Project != nil || definition.Remote != nil
 	var nativeFacts json.RawMessage
 	if nativeEnabled {
-		digest, digestErr := provider.FingerprintExecutable(definition.Executable)
-		if digestErr != nil || digest != definition.ExecutableSHA256 {
-			return nil, errNativeInspection
+		if !definition.ProviderExecutable() {
+			digest, digestErr := provider.FingerprintExecutable(definition.Executable)
+			if digestErr != nil || digest != definition.ExecutableSHA256 {
+				return nil, errNativeInspection
+			}
 		}
 		native, nativeErr := runNative(scope, definition, nativeHooks{})
 		if nativeErr != nil {

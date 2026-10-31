@@ -212,22 +212,14 @@ func TestAliasedProcessTmpdirDoesNotStopMirroringOfTheChildsProviderParent(t *te
 		command.Cmd.Dir = a.childDir
 		requireNodeReport(t, command, a.entry)
 	})
-	t.Run("pooled", func(t *testing.T) {
-		rig := newPoolRig(t)
-		command := rig.binder("a", CommandRequest{Executable: a.entry, SHA256: a.digest, Directory: a.childDir, Environment: a.environment})
-		command.Cmd.Dir = a.childDir
-		requireNodeReport(t, command, a.entry)
-	})
 }
 
 // TestChildTemporaryDirectoryStillStopsMirroring is the genuine boundary: the
 // provider lives inside the child's real relative TMPDIR, whose own contents
 // must not be enumerated into the view, while the package below it still is.
-// The pooled view lives under the pool root, which is not the user's TMPDIR, so
-// the boundary must come from the environment, not from where the view is.
 func TestChildTemporaryDirectoryStillStopsMirroring(t *testing.T) {
 	discoverPath(t, "node") // skip when node is unavailable
-	for _, mode := range []string{"private", "pooled"} {
+	for _, mode := range []string{"private"} {
 		t.Run(mode, func(t *testing.T) {
 			base := scratch(t)
 			childDir := filepath.Join(base, "child")
@@ -239,19 +231,15 @@ func TestChildTemporaryDirectoryStillStopsMirroring(t *testing.T) {
 			t.Chdir(base)
 			request := CommandRequest{Executable: entry, SHA256: fileDigest(t, entry), Directory: childDir, Environment: append(pathFor("node"), "TMPDIR=tmp-rel")}
 			var command *Command
-			if mode == "pooled" {
-				command = rigIn(t, filepath.Join(base, "rig")).binder("a", request)
-			} else {
-				var err error
-				if command, err = NewCommandFromRequest(request); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() {
-					if closeErr := command.Close(); closeErr != nil {
-						t.Errorf("close: %v", closeErr)
-					}
-				})
+			var err error
+			if command, err = NewCommandFromRequest(request); err != nil {
+				t.Fatal(err)
 			}
+			t.Cleanup(func() {
+				if closeErr := command.Close(); closeErr != nil {
+					t.Errorf("close: %v", closeErr)
+				}
+			})
 			command.Cmd.Dir = childDir
 			requireNodeReport(t, command, entry)
 			mirroredCanary := filepath.Join(command.temporaryDir, "executable", childTmp, "canary")

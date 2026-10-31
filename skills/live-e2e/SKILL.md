@@ -23,7 +23,7 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 
 ## Inputs
 
-- the adapter's supported profile, observed CLI version, output-predicate
+- the adapter's supported profile, resolved provider path, output-predicate
   revision, and runtime capability result;
 - an isolated workspace, state root, supervisor configuration, and finite task
   budget;
@@ -46,9 +46,12 @@ owner.
 
 1. Verify prerequisites and record sanitized platform, executable, profile,
    configuration-source, task/session, timing, and digest metadata. Runtime
-   preflight must locate an executable, verify it is executable, run version and
-   help, and confirm the adapter's stable runtime flags are advertised; any
-   reported CLI version is accepted when those checks pass. Provider-specific
+   preflight must locate an executable, verify it is executable, run help, and
+   confirm the adapter's stable runtime flags are advertised. The current probe
+   records the resolved provider path and leaves version and provider SHA-256
+   fields empty; it does not extract versions from help. Historically populated
+   provider diagnostics remain validated history, never readiness gates.
+   Provider-specific
    forwarded options are proven by the live turn. Never put
    credentials, tokens, unrelated environment values, or private raw logs in a
    receipt.
@@ -136,8 +139,9 @@ prerequisite block. Tag-based public proof ZIP submission applies only to
   manifest](../../agents/_data/maintainability-contract.md#handoff-evidence) with
   sanitized acceptance receipts;
 - task/session identities and direct filesystem observations;
-- command, exact source and executable fingerprints, platform, native primitive
-  and assurance receipts, provider version, profile, and predicate revision;
+- command, exact source, Delegate binary, and evidence fingerprints, platform,
+  native primitive and assurance receipts, profile, and predicate revision;
+- optional historically reported provider diagnostics;
 - separate fixture, live-provider, and native-lifecycle verdicts; and
 - a named `passed`, `failed`, or `BLOCKED` result with the reason.
 

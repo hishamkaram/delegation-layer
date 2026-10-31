@@ -128,7 +128,6 @@ func lifetimeGuardianSentinels() []lifetimeGuardianSentinel {
 		{"taskdir.ErrUnsupportedFilesystem", taskdir.ErrUnsupportedFilesystem},
 		{"taskdir.ErrLockOrderViolation", taskdir.ErrLockOrderViolation},
 		{"taskdir.ErrLockNotHeld", taskdir.ErrLockNotHeld},
-		{"verifiedexec.ErrPoolNoExec", verifiedexec.ErrPoolNoExec},
 		{"verifiedexec.ErrAdmittedExecutableChanged", verifiedexec.ErrAdmittedExecutableChanged},
 		{"context.Canceled", context.Canceled},
 		{"context.DeadlineExceeded", context.DeadlineExceeded},

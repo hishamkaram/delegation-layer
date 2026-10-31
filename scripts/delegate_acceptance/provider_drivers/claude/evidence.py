@@ -9,7 +9,8 @@ from pathlib import Path
 import re
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.tasks.publication import read_outcome_payload
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import _hex_digest, require
+from scripts.delegate_acceptance.tasks.runtime_metadata import validate_provider_runtime_metadata
 from scripts.delegate_acceptance.tasks.publication import snapshot
 from scripts.delegate_acceptance.evidence.files import digest, read_json
 from scripts.delegate_acceptance.evidence.digests import sha
@@ -254,9 +255,8 @@ def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
                        provider: str, mode: str, approval: str,
                        revision: str) -> tuple[dict[str, object], str]:
     meta = _read_task_record(directory, task, "meta.json")
+    validate_provider_runtime_metadata(meta, label=f"{name} provider runtime metadata")
     require(meta.get("root_id") == root_id and meta.get("task_id") == task and
-            meta.get("provider_executable") == str(claude) and
-            meta.get("provider_version") == provider_version and
             meta.get("containment") == mode and meta.get("approval") == approval,
             f"{name} meta provider or policy binding mismatch")
     effective = meta.get("effective_config")
@@ -265,7 +265,7 @@ def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
             f"{name} effective Claude policy is absent")
     policy = effective.get("policy")
     require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            policy.get("runtime_sha256") == provider_sha256,
+            (policy.get("runtime_sha256") == "" or _hex_digest(policy.get("runtime_sha256"))),
             f"{name} persisted Claude profile policy is incomplete")
     profile_revision = policy.get("profile_revision")
     require(profile_revision == revision,
@@ -325,6 +325,8 @@ def validate_task_publication(*, name: str, task: str, directory: Path,
             seal.get("invocation_state") == "started" and seal.get("exit_code") == 0 and
             seal.get("error") == "" and seal.get("predicate") == predicate,
             f"{name} provider seal mismatch")
+    validate_provider_runtime_metadata(
+        meta, launch_evidence=(started, seal), label=f"{name} provider runtime metadata")
     return seal
 
 

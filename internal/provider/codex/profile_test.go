@@ -52,8 +52,9 @@ func TestCurrentNativeProfileAdmitsWithoutRuntimeFacts(t *testing.T) {
 	}
 
 	finalized := finalizeProfile(t, candidate, now)
-	if finalized.RuntimePreflightSHA256 != "" || finalized.ObservedVersion == "" {
-		t.Fatalf("finalized profile retained pending runtime state: %+v", finalized)
+	// Path-only runtime facts finalize without inventing a version.
+	if finalized.RuntimePreflightSHA256 != "" || finalized.ObservedVersion != "" {
+		t.Fatalf("finalized profile retained pending runtime state or invented a version: %+v", finalized)
 	}
 	if !slices.Equal(static.Plan.Arguments, finalized.Plan.Arguments) ||
 		!slices.Equal(static.Plan.Environment, finalized.Plan.Environment) ||
@@ -192,7 +193,6 @@ func finalizeProfile(t *testing.T, candidate commonprovider.ProfileCandidate, no
 	}
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
 		Executable: candidate.Inspection.Executable,
-		Version:    "fixture",
 		SHA256:     candidate.Inspection.ExecutableSHA256,
 	}, nil)
 	if err != nil {

@@ -7,22 +7,25 @@ provider answer text.
 ## Provider is not found or runtime verification fails
 
 Managed runtime-only tasks resolve the executable before admission, then check
-version and help inside the admitted task. When `task_record` is `created`,
+help and the declared flags inside the admitted task. When `task_record` is `created`,
 observe that task with `status` and `collect`; do not dispatch it again.
 Admission alone does not prove runtime compatibility, authentication, or completion.
 
 Check that the executable is on the dispatch process's `PATH`, is a regular
 executable file, and can run in the requested workspace. Delegation Layer
-invokes the provider's version and help commands and checks the stable runtime
-flags declared by the selected profile. A missing declared flag or an
-unreadable executable is a capability failure, not a release-version failure.
+invokes the provider's help command and checks the stable runtime flags
+declared by the selected profile; it does not run a separate version command.
+A missing declared flag or an unreadable executable is a capability failure,
+not a release-version failure. A CLI that has no `--version` command is still
+usable.
 Provider-specific launch options remain validated by the actual provider turn;
 this avoids rejecting current CLIs whose noninteractive help output omits or
 truncates forwarded options.
 
-The observed version is evidence for diagnostics and task binding only. It is
-not checked against a hardcoded release, semver range, web lookup, or binary
-allowlist. If a probe is rejected, inspect the bounded reason class in the
+A reported version is an optional diagnostic and never a readiness condition.
+It is recorded only when a required exchange supplies valid bounded text, and it
+is not checked against a hardcoded release, semver range, web lookup, or binary
+allowlist or hash. An absent or invalid diagnostic is omitted, not an error. If a probe is rejected, inspect the bounded reason class in the
 control response and compare the selected CLI's current help output with the
 profile's declared runtime flags.
 
@@ -209,11 +212,16 @@ and queue behavior match the supported schema, including additive fields that
 do not change the required lifecycle data. A Pueue release upgrade alone does
 not require changing the state root or installing a matching version.
 
-Provider executable upgrades are handled by the runner's fresh preflight. If
-the current CLI still passes its version/help and declared runtime checks, the
-runner refreshes the launch plan and starts that current executable. A changed
-task policy, workspace, writable root, predicate, or artifact contract remains
-a refusal because those fields are admission-bound.
+Provider executable upgrades are handled by the runner's fresh preflight. The
+runner resolves the installed CLI in the task's saved lookup environment. If
+that CLI still passes its help and declared runtime checks, the runner builds
+the launch plan from it and starts it directly. A changed path, version, or
+bytes is not a refusal. A changed task policy, workspace, writable root,
+predicate, or artifact contract remains a refusal because those fields are
+admission-bound. If the provider is replaced or removed between the check and
+the process start, the task reports the operating-system or provider error. A
+started or possibly started task is never retried and never continues in a
+fresh session.
 
 A legacy private supervisor binding without daemon identity can be recovered
 when delegate resolves a matching executable pair and verifies the saved
@@ -515,8 +523,10 @@ editing task records, or extracting a plausible answer from raw logs.
 
 ## Recorded executable custody is unavailable
 
-Each task and inspection records the pool that holds its verified executables.
-If that pool is missing, replaced, foreign, aliased, or otherwise unavailable,
+This applies only to a task or inspection whose lifetime registration records a
+custody placement written by an earlier development build. New runs record no
+placement, and a registration without one is normal, not an error. If the
+recorded pool is missing, replaced, foreign, aliased, or otherwise unavailable,
 Delegate keeps the custody and reports the concrete cause; this is conservative
 retention, not a task failure. The guardian logs
 `delegate: lifetime custody release deferred: ...` on stderr, and the
@@ -530,26 +540,20 @@ is still pending is kept in the supervisor queue; a later maintenance pass
 retries it. Once the pool is usable again, run `status` or `collect` on the
 same root.
 
-- Do not delete, move, replace, or recreate the pool directory
-  (`<state root>/.custody` or `<TMPDIR>/delegate-custody-<RootID>`), and do not
-  edit the task or lifetime records. Delegate does not reselect a pool for an
-  existing task, and a missing pool is not treated as released. No command
-  repairs it.
-- A registration written before custody existed has no recorded pool. Delegate
-  never releases it, and a worker refuses to start a task or inspection from it.
-- If a new task fails with `select lifetime custody placement`, the message
-  reports the cause of the state-root pool's refusal. Only when that refusal was
-  `noexec` and the fallback location was then attempted and also failed does it
-  report both causes. Any other state-root refusal, such as a foreign or aliased
-  directory, fails directly with its own cause and no fallback is tried.
+- Do not delete, move, replace, or recreate the pool directory recorded in the
+  registration, and do not edit the task or lifetime records. Delegate does not
+  reselect a pool for an existing task, does not delete the root, and a missing
+  pool is not treated as released. No command repairs it.
+- Release needs both the exact recorded pool identity and canonical lifetime
+  closure. A pending or unproven closure releases nothing.
 
-If the state root is on a `noexec` mount and the supervisor is external, the
-fallback pool lives under `TMPDIR` (default `/tmp`) as captured by the guardian
-process. The pool path below it must be on a mount that allows execution;
-otherwise the refusal reports `custody pool filesystem is mounted noexec`. The
+An external supervisor may run with a state directory on a `noexec` mount. New
+runs execute the installed provider in place and write no provider executable
+copy, so there is no custody pool to relocate and no `TMPDIR` fallback. The
 private bundled supervisor is stored under the state root and cannot run from a
 `noexec` state root. See
-[verified executable custody](architecture.md#verified-executable-custody).
+[legacy executable custody](architecture.md#legacy-executable-custody-cleanup-only)
+and [installed provider execution](architecture.md#installed-provider-execution).
 
 ## Collection fails after a successful run
 

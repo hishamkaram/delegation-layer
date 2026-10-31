@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -32,8 +31,6 @@ func requireUnresolved(t *testing.T, rig *poolRig, entry, digest string, cause e
 			t.Fatalf("%s gave %v; want an unverified identity caused by %v", operation, err, cause)
 		}
 	}
-	_, bindErr := rig.pool.Bind(ctx, rig.ns("b"), plainRequest(entry, digest))
-	check("Bind", bindErr)
 	check("ReleaseOwner", rig.pool.ReleaseOwner(ctx, rig.ns("a")))
 	pending, pendingErr := rig.pool.ReleasePending(rig.ns("a"))
 	check("ReleasePending", pendingErr)
@@ -56,7 +53,7 @@ func boundRig(t *testing.T) (rig *poolRig, entry, digest string) {
 	t.Helper()
 	rig = newPoolRig(t)
 	entry, digest = plainEntry(t, rig.dir, "guard")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	return rig, entry, digest
 }
 
@@ -89,6 +86,7 @@ func TestGuardedOperationsRefuseARootThatDoesNotHoldTheExpectedIdentity(t *testi
 		}, errPoolRootNotPrivate},
 		{"foreign pool at the same path", func(t *testing.T, rig *poolRig) {
 			foreign, _ := preparedPool(t, filepath.Join(rig.dir, "foreign"))
+			plantMarker(t, foreign.root, canonicalMarker(t, strings.Repeat("b", 64)), 0o600)
 			moved := filepath.Join(rig.dir, "moved-original")
 			if err := os.Rename(rig.pool.root, moved); err != nil {
 				t.Fatal(err)
@@ -126,12 +124,10 @@ func TestGuardedOperationsRefuseARootTheyCannotRead(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses directory permissions")
 	}
-	rig, entry, digest := boundRig(t)
+	rig, _, _ := boundRig(t)
 	chmodWithRestore(t, rig.pool.root, 0o300)
 	ctx := context.Background()
-	if _, err := rig.pool.Bind(ctx, rig.ns("b"), plainRequest(entry, digest)); !errors.Is(err, errPoolIdentityUnverified) || !errors.Is(err, unix.EACCES) {
-		t.Fatalf("Bind gave %v; want an unverified identity caused by EACCES", err)
-	}
+
 	if err := rig.pool.ReleaseOwner(ctx, rig.ns("a")); !errors.Is(err, unix.EACCES) {
 		t.Fatalf("ReleaseOwner gave %v; want EACCES, never success", err)
 	}
@@ -146,7 +142,7 @@ func TestGuardedOperationsRefuseARootTheyCannotRead(t *testing.T) {
 // TestGuardedOperationsNeverRecreateAMissingRoot: a removed pool is unresolved,
 // not an empty pool to be rebuilt, and never "already released".
 func TestGuardedOperationsNeverRecreateAMissingRoot(t *testing.T) {
-	rig, entry, digest := boundRig(t)
+	rig, _, _ := boundRig(t)
 	if err := unsealTemporaryDirectory(rig.pool.root); err != nil {
 		t.Fatal(err)
 	}
@@ -154,9 +150,7 @@ func TestGuardedOperationsNeverRecreateAMissingRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := rig.pool.Bind(ctx, rig.ns("b"), plainRequest(entry, digest)); !errors.Is(err, fs.ErrNotExist) || !errors.Is(err, errPoolIdentityUnverified) {
-		t.Fatalf("Bind into a removed pool gave %v", err)
-	}
+
 	if err := rig.pool.ReleaseOwner(ctx, rig.ns("a")); !errors.Is(err, errPoolIdentityUnverified) {
 		t.Fatalf("ReleaseOwner of a removed pool gave %v; want it unresolved, not released", err)
 	}
@@ -165,26 +159,6 @@ func TestGuardedOperationsNeverRecreateAMissingRoot(t *testing.T) {
 	}
 	if _, err := os.Lstat(rig.pool.root); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a guarded operation recreated the removed root: %v", err)
-	}
-}
-
-// TestBindRootRemovedBetweenTheCheckAndTheGateReceivesNoViews: the root vanishes
-// after the first proof. Opening the gate recreates an empty layout, which the
-// second proof must refuse: it gets no witness, no view and no identity.
-func TestBindRootRemovedBetweenTheCheckAndTheGateReceivesNoViews(t *testing.T) {
-	rig, entry, digest := boundRig(t)
-	removeRootOnFirstProof(t, rig)
-	_, err := rig.pool.Bind(context.Background(), rig.ns("b"), plainRequest(entry, digest))
-	if !errors.Is(err, errPoolIdentityUnverified) || !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("Bind gave %v; want an unverified identity caused by the missing marker", err)
-	}
-	rig.pool.faults.at = nil
-	if names := rootNames(t, rig.pool.root); !slices.Equal(names, []string{poolGateName, poolImagesDir, poolViewsDir}) {
-		t.Fatalf("the recreated layout holds %v; want only the empty gate, images and views", names)
-	}
-	rig.requireNothingBound()
-	if pending, pendingErr := rig.pool.ReleasePending(rig.ns("b")); pendingErr == nil || pending {
-		t.Fatalf("the recreated root answered ReleasePending %v %v; want it unresolved", pending, pendingErr)
 	}
 }
 
@@ -227,31 +201,11 @@ func TestRootRemovedAfterTheGuardIsNeverReportedAsReleased(t *testing.T) {
 	})
 }
 
-// TestBindMarkerRemovedAfterTheGateCreatesNoOwner: the second proof alone, with
-// the gate already held, stops the witness from being created.
-func TestBindMarkerRemovedAfterTheGateCreatesNoOwner(t *testing.T) {
-	rig, entry, digest := boundRig(t)
-	rig.pool.faults.at = func(point poolPoint, _ string) {
-		if point == pointSourceOpened {
-			if err := os.Remove(filepath.Join(rig.pool.root, poolIdentityName)); err != nil {
-				t.Error(err)
-			}
-		}
-	}
-	if _, err := rig.pool.Bind(context.Background(), rig.ns("b"), plainRequest(entry, digest)); !errors.Is(err, errPoolIdentityUnverified) {
-		t.Fatalf("Bind gave %v; want an unverified identity", err)
-	}
-	rig.requireViewDirs("b", 0)
-	if _, err := os.Lstat(filepath.Join(rig.pool.root, poolIdentityName)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("the refused Bind restored the marker: %v", err)
-	}
-}
-
 func idleImageRig(t *testing.T) (rig *poolRig, digest string) {
 	t.Helper()
 	rig = newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "idle")
-	command := rig.binder("a", plainRequest(entry, digest))
+	command := rig.seedView("a", plainRequest(entry, digest))
 	if err := unsealTemporaryDirectory(command.temporaryDir); err != nil {
 		t.Fatal(err)
 	}

@@ -2,7 +2,7 @@ package verifiedexec
 
 // The pool identity marker: data and pure decisions. Pool owns one immutable
 // marker per root; its operations on the filesystem live in pool_identity_fs.go
-// and the protocol that publishes it in pool_prepare.go.
+// along with the read-only proof of its recorded identity.
 //
 // A marker is the canonical JSON {"version":1,"pool_id":"<64 lowercase hex>"}
 // in a regular file named poolIdentityName, mode 0600. The id is a random
@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 const (
@@ -34,8 +33,7 @@ const (
 
 var (
 	errPoolIdentityInvalid = errors.New("custody pool identity is not a 64-character lowercase hex id")
-	errPoolUnbound         = errors.New("custody pool is not bound to an identity: Prepare it and use NewPoolWithIdentity")
-	errPoolPrepareGuarded  = errors.New("custody pool is bound to an identity and is never prepared again")
+	errPoolUnbound         = errors.New("custody pool is not bound to a recorded identity")
 	// errPoolIdentityUnverified wraps the concrete cause when a guarded operation
 	// cannot prove that the root holds the expected marker. The operation then
 	// changes nothing and the pool stays unresolved: it never reports a release,
@@ -50,20 +48,6 @@ var (
 type poolIdentityRecord struct {
 	Version int    `json:"version"`
 	PoolID  string `json:"pool_id"`
-}
-
-// newPoolID returns a fresh random 64-lowercase-hex identity from the
-// repository's random-id source.
-func newPoolID() (string, error) {
-	head, err := randomid.NewRandomID()
-	if err != nil {
-		return "", err
-	}
-	tail, err := randomid.NewRandomID()
-	if err != nil {
-		return "", err
-	}
-	return head + tail, nil
 }
 
 // encodePoolIdentity is the canonical marker bytes for id.
@@ -95,15 +79,6 @@ func decodePoolIdentity(raw []byte) (string, error) {
 		return "", fmt.Errorf("%w: not the canonical bytes", errPoolIdentityRecord)
 	}
 	return record.PoolID, nil
-}
-
-// newIdentityStageName is a fresh recognized marker-stage name.
-func newIdentityStageName() (string, error) {
-	nonce, err := randomid.NewRandomID()
-	if err != nil {
-		return "", err
-	}
-	return poolIdentityStagePrefix + nonce, nil
 }
 
 // isIdentityStageName reports whether name has exactly the grammar of a marker

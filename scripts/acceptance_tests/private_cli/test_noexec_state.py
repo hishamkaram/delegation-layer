@@ -1,4 +1,4 @@
-"""Noexec Delegate state: option boundary, execution probe, and recorded custody placement policy."""
+"""Noexec state: execution probe, fresh registrations, and legacy custody cleanup."""
 
 from contextlib import redirect_stderr
 import io
@@ -182,6 +182,59 @@ class NoexecProbeTests(unittest.TestCase):
         self.assertEqual(list(self.execution.iterdir()), [])
 
 
+class UnplacedRegistrationTests(unittest.TestCase):
+    def setUp(self):
+        self.closures = {
+            "tasks": {TASK: {"registration": {"scope_kind": "process-group"}}},
+            "inspections": {INSPECTION: {"registration": {"scope_kind": "process-group"}}},
+        }
+
+    def test_each_registered_task_and_inspection_is_reported(self):
+        self.closures["tasks"][OTHER_TASK] = {"registration": {"scope_kind": "process-group"}}
+        self.assertEqual(noexec_state.require_unplaced_registrations(self.closures),
+                         {"tasks": sorted([TASK, OTHER_TASK]), "inspections": [INSPECTION]})
+
+    def test_any_present_placement_in_either_namespace_is_refused(self):
+        for kind, identity in (("tasks", TASK), ("inspections", INSPECTION)):
+            registration = self.closures[kind][identity]["registration"]
+            for value in (None, {}, "", {"version": 1, "pool_id": POOL_A, "pool_root": "/pool"}):
+                with self.subTest(kind=kind, value=value):
+                    registration["custody_placement"] = value
+                    with self.assertRaisesRegex(RuntimeError, "registration contains custody placement"):
+                        noexec_state.require_unplaced_registrations(self.closures)
+            del registration["custody_placement"]
+
+    def test_another_valid_registration_cannot_vouch_for_a_placed_one(self):
+        self.closures["tasks"][OTHER_TASK] = {"registration": {"custody_placement": None}}
+        with self.assertRaisesRegex(RuntimeError, "task " + OTHER_TASK):
+            noexec_state.require_unplaced_registrations(self.closures)
+
+    def test_genuinely_unregistered_rows_are_skipped(self):
+        for kind in ("tasks", "inspections"):
+            self.closures[kind][OTHER_TASK] = {"registration": None}
+            self.closures[kind]["unlaunched"] = {}
+        self.assertEqual(noexec_state.require_unplaced_registrations(self.closures),
+                         {"tasks": [TASK], "inspections": [INSPECTION]})
+
+    def test_each_namespace_needs_at_least_one_registration(self):
+        for kind in ("tasks", "inspections"):
+            original = self.closures[kind]
+            for rows in ({}, {OTHER_TASK: {"registration": None}}, {OTHER_TASK: {}}):
+                with self.subTest(kind=kind, rows=rows):
+                    self.closures[kind] = rows
+                    with self.assertRaisesRegex(RuntimeError, "no " + kind + " lifetime registration"):
+                        noexec_state.require_unplaced_registrations(self.closures)
+            self.closures[kind] = original
+
+    def test_missing_or_malformed_proof_members_are_refused(self):
+        for value in (None, [], {}, {"tasks": self.closures["tasks"]},
+                      {"tasks": [], "inspections": self.closures["inspections"]},
+                      {"tasks": {TASK: None}, "inspections": self.closures["inspections"]},
+                      {"tasks": {TASK: {"registration": []}}, "inspections": self.closures["inspections"]}):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                noexec_state.require_unplaced_registrations(value)
+
+
 class CustodyTree:
     """Real directories for recorded pools; the closure maps are plain published-record shapes."""
 
@@ -196,6 +249,7 @@ class CustodyTree:
 
     def pool(self, name, pool_id, parent=None, marker=True):
         root = create_private_pool_directory((parent or self.execution) / name)
+        create_private_pool_directory(root / "views")
         if marker:
             write_pool_marker(root, canonical_pool_marker(pool_id))
         return root
@@ -215,12 +269,10 @@ class CustodyTree:
         }
 
     def prove(self, closures):
-        return noexec_state.require_alternate_exec_custody(
-            closures, state_root=self.state, execution_root=self.execution
-        )
+        return noexec_state.custody_release_pending(closures, (self.state, self.execution))
 
 
-class CustodyPlacementTests(unittest.TestCase):
+class LegacyCustodyCleanupTests(unittest.TestCase):
     def setUp(self):
         self.tree = CustodyTree(self)
         self.pool_a = self.tree.pool("pool-a", POOL_A)
@@ -232,70 +284,42 @@ class CustodyPlacementTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, pattern):
             self.tree.prove(closures)
 
-    def test_every_task_and_inspection_is_proven_from_its_own_record(self):
-        evidence = self.tree.prove(
+    def test_each_legacy_pool_with_no_owner_views_is_released(self):
+        self.assertEqual(self.tree.prove(
             self.tree.closures({TASK: self.good_task}, {INSPECTION: self.good_inspection})
-        )
-        self.assertEqual(evidence, {
-            "tasks": {TASK: {"pool_root": str(self.pool_a), "pool_id": POOL_A, "marker": "matched"}},
-            "inspections": {INSPECTION: {"pool_root": str(self.pool_b), "pool_id": POOL_B, "marker": "matched"}},
-        })
+        ), ())
 
-    def test_namespaces_may_share_a_pool_but_each_is_checked_on_its_own(self):
+    def test_shared_legacy_pools_still_validate_each_record(self):
         shared = self.tree.registration(self.pool_a, POOL_A)
-        evidence = self.tree.prove(self.tree.closures({TASK: shared, OTHER_TASK: shared}, {INSPECTION: shared}))
-        self.assertEqual(set(evidence["tasks"]), {TASK, OTHER_TASK})
-        broken = {key: value for key, value in self.good_task.items() if key != "custody_placement"}
+        self.assertEqual(self.tree.prove(self.tree.closures({TASK: shared, OTHER_TASK: shared},
+                                                          {INSPECTION: shared})), ())
+        broken = self.tree.registration(self.pool_a, POOL_B)
         self.assert_refused(
             self.tree.closures({TASK: shared, OTHER_TASK: broken}, {INSPECTION: shared}),
-            "task " + OTHER_TASK + " lifetime registration omitted its custody placement",
+            "conflicting identities",
         )
 
-    def test_a_valid_task_never_vouches_for_an_inspection_and_the_reverse(self):
-        self.assert_refused(
-            self.tree.closures({TASK: self.good_task}, {INSPECTION: {"scope_kind": "process-group"}}),
-            "inspection " + INSPECTION + " lifetime registration omitted its custody placement",
-        )
-        self.assert_refused(
-            self.tree.closures({TASK: {"scope_kind": "process-group"}}, {INSPECTION: self.good_inspection}),
-            "task " + TASK + " lifetime registration omitted its custody placement",
-        )
-
-    def test_both_kinds_must_have_at_least_one_registered_namespace(self):
-        unregistered = {"registration": None}
-        self.assert_refused(
-            {"tasks": {TASK: {"registration": self.good_task}}, "inspections": {INSPECTION: unregistered}},
-            "no inspections lifetime registration recorded a custody placement",
-        )
-        self.assert_refused(
-            {"tasks": {}, "inspections": {INSPECTION: {"registration": self.good_inspection}}},
-            "no tasks lifetime registration recorded a custody placement",
-        )
-        self.assert_refused(
-            {"tasks": {TASK: {"registration": self.good_task}}}, "managed lifetime closure omitted inspections"
-        )
-
-    def test_an_unlaunched_namespace_without_a_registration_is_skipped(self):
+    def test_unplaced_or_unregistered_rows_need_no_legacy_cleanup(self):
         closures = self.tree.closures({TASK: self.good_task}, {INSPECTION: self.good_inspection})
         closures["inspections"][OTHER_TASK] = {"registration": None}
-        self.assertEqual(set(self.tree.prove(closures)["inspections"]), {INSPECTION})
+        closures["tasks"][OTHER_TASK] = {"registration": {"scope_kind": "process-group"}}
+        self.assertEqual(self.tree.prove(closures), ())
 
-    def test_a_pool_inside_the_state_root_is_refused_even_beneath_the_execution_root(self):
-        self.assert_refused(
+    def test_legacy_cleanup_accepts_owned_state_and_execution_pools(self):
+        self.assertEqual(self.tree.prove(
             self.tree.closures({TASK: self.tree.registration(self.pool_a, POOL_A)}, {
                 INSPECTION: self.tree.registration(self.tree.pool(".custody", POOL_B, parent=self.tree.state), POOL_B)
             }),
-            "inspection " + INSPECTION + " custody pool root is inside the noexec state root",
-        )
+        ), ())
 
-    def test_a_pool_outside_or_equal_to_the_execution_root_is_refused(self):
+    def test_a_pool_outside_or_equal_to_an_owned_root_is_refused(self):
         elsewhere = self.tree.pool("elsewhere", POOL_B, parent=self.tree.root)
         for root, pool_id in ((elsewhere, POOL_B), (self.tree.execution, POOL_B)):
             with self.subTest(root=root.name):
                 write_pool_marker(root, canonical_pool_marker(pool_id))
                 self.assert_refused(
                     self.tree.closures({TASK: self.tree.registration(root, pool_id)}, {INSPECTION: self.good_inspection}),
-                    "task " + TASK + " custody pool root is not beneath the execution temporary root",
+                    "task " + TASK + " custody pool is outside the fixture-owned roots",
                 )
 
     def test_a_symlinked_alias_of_a_valid_pool_is_not_canonical(self):
@@ -328,7 +352,7 @@ class CustodyPlacementTests(unittest.TestCase):
         return self.tree.prove(self.tree.closures({TASK: self.good_task}, {INSPECTION: self.good_inspection}))
 
     def test_the_canonical_private_marker_is_accepted(self):
-        self.assertEqual(self.prove_good()["tasks"][TASK]["marker"], "matched")
+        self.assertEqual(self.prove_good(), ())
 
     def test_a_marker_that_is_not_the_canonical_version_one_record_is_refused(self):
         # Go's decodePoolIdentity accepts only its own json.Marshal bytes; json.loads accepts most of these.
@@ -379,7 +403,7 @@ class CustodyPlacementTests(unittest.TestCase):
             with self.subTest(mode=oct(mode)):
                 self.pool_a.chmod(mode)
                 self.addCleanup(self.pool_a.chmod, 0o700)
-                self.assertEqual(self.prove_good()["tasks"][TASK]["marker"], "matched")
+                self.assertEqual(self.prove_good(), ())
 
     def test_a_pool_root_that_is_not_private_to_this_user_is_refused(self):
         message = "task " + TASK + " custody pool root is not a private directory of this user"

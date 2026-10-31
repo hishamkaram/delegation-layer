@@ -1,13 +1,10 @@
-"""Noexec Delegate state proof, recorded custody placement policy, and custody release readiness.
+"""Noexec state proof, fresh registration checks, and legacy custody release readiness.
 
 The caller owns the noexec parent; the harness owns only the container it creates
-there. Each lifetime registration is the sole authority for the custody pool its
-scope used. This module only checks those published records against the exact
-execution temporary root and the pool identity marker on disk; it never derives a
-pool location itself. Go's verifiedexec Pool owns the root, its marker and its
-views; the static checks here mirror Go's root, marker, views and owner-link
-decisions and never relax them. They read by path once and claim nothing
-against a concurrent replacement.
+there. Fresh lifetime registrations must omit custody placement. A historical
+registration remains the sole authority for any legacy pool cleanup. Those
+static checks preserve the legacy root, marker, views and owner-link policy;
+they read by path once and claim nothing against a concurrent replacement.
 """
 
 import json
@@ -72,42 +69,26 @@ def _probe_execution(directory):
     return "executed" if result.exit_code == 0 else "inconclusive"
 
 
-def require_alternate_exec_custody(closures, *, state_root, execution_root):
-    """Prove every registered task and inspection recorded its own pool beneath the execution root."""
+def require_unplaced_registrations(closures):
+    """Report fresh registered namespaces only when every registration omits custody placement."""
     require(isinstance(closures, dict), "managed lifetime closure is invalid")
     evidence = {}
     for kind in CUSTODY_NAMESPACE_KINDS:
         namespaces = closures.get(kind)
         require(isinstance(namespaces, dict), "managed lifetime closure omitted " + kind)
-        placements = {}
+        registered = []
         for identity, closure in sorted(namespaces.items()):
             label = "%s %s" % (kind[:-1], identity)
             require(isinstance(closure, dict), label + " lifetime closure is invalid")
             registration = closure.get("registration")
             if registration is not None:
-                placements[identity] = _recorded_pool(label, registration, Path(state_root), Path(execution_root))
-        require(placements, "no %s lifetime registration recorded a custody placement" % kind)
-        evidence[kind] = placements
+                require(isinstance(registration, dict), label + " lifetime registration is invalid")
+                require("custody_placement" not in registration,
+                        label + " lifetime registration contains custody placement")
+                registered.append(identity)
+        require(registered, "no %s lifetime registration was recorded" % kind)
+        evidence[kind] = registered
     return evidence
-
-
-def _recorded_pool(label, registration, state_root, execution_root):
-    require(isinstance(registration, dict), label + " lifetime registration is invalid")
-    require("custody_placement" in registration, label + " lifetime registration omitted its custody placement")
-    placement = validate_custody_placement(registration["custody_placement"], label + " custody placement")
-    pool_id = placement["pool_id"]
-    pool_root_text = placement["pool_root"]
-    pool_root = Path(pool_root_text)
-    canonical, state, execution = _resolve_existing(label, pool_root, state_root, execution_root)
-    require(canonical == pool_root, label + " custody pool root is not canonical")
-    require(
-        canonical != state and state not in canonical.parents,
-        label + " custody pool root is inside the noexec state root",
-    )
-    require(execution in canonical.parents, label + " custody pool root is not beneath the execution temporary root")
-    marker_id = _pool_marker_id(label, pool_root)
-    require(marker_id == pool_id, label + " custody pool marker does not match its registration")
-    return {"pool_root": pool_root_text, "pool_id": pool_id, "marker": "matched"}
 
 
 def custody_release_pending(closures, owned_roots):

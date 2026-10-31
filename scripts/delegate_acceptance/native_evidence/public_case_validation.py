@@ -290,7 +290,7 @@ def _validate_public_binary_facts(
             or ids != sorted(set(ids))):
         raise PublicProofError("public_case_binary_tasks_invalid")
     if (case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
-            and (binaries["state"] != "complete" or not ids or set(hashes) != hash_names
+            and (binaries["state"] != "complete" or not ids or not set(bindings).issubset(hashes)
                  or any(hashes[key] != digest for key, digest in bindings.items()))):
         raise PublicProofError("public_case_binary_incomplete")
     return binaries, ids

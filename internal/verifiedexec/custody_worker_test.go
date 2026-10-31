@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -23,14 +22,8 @@ const (
 	// exitWorkerCrash is the status of a worker that reached its crash point.
 	exitWorkerCrash = 97
 
-	modeBind         = "bind"
-	modeChurn        = "churn"
-	modeCrashBind    = "crash-bind:"
+	modeObserve      = "observe"
 	modeCrashRelease = "crash-release:"
-	// modePrepare prints the identity an unbound pool at args[0] prepares.
-	modePrepare = "prepare"
-	// modeCrashPrepare exits at the named point while preparing args[0].
-	modeCrashPrepare = "crash-prepare:"
 )
 
 func runProofWorker(mode string, args []string) int {
@@ -44,35 +37,24 @@ func runProofWorker(mode string, args []string) int {
 
 func dispatchWorker(mode string, args []string) (int, error) {
 	switch {
-	case mode == modeBind:
-		return 0, workerBind(args)
-	case mode == modeChurn:
-		return 0, workerChurn(args)
-	case mode == modePrepare:
-		return 0, workerPrepare(poolPoint(""), args)
-	case strings.HasPrefix(mode, modeCrashPrepare):
-		return 0, workerPrepare(poolPoint(strings.TrimPrefix(mode, modeCrashPrepare)), args)
-	case strings.HasPrefix(mode, modeCrashBind):
-		return 0, workerCrash(poolPoint(strings.TrimPrefix(mode, modeCrashBind)), false, args)
+	case mode == modeObserve:
+		return 0, workerObserve(args)
 	case strings.HasPrefix(mode, modeCrashRelease):
-		return 0, workerCrash(poolPoint(strings.TrimPrefix(mode, modeCrashRelease)), true, args)
+		return 0, workerCrash(poolPoint(strings.TrimPrefix(mode, modeCrashRelease)), args)
 	default:
 		return 0, fmt.Errorf("unknown worker mode %q", mode)
 	}
 }
 
-// workerTarget is the parsed common prefix of every worker's arguments: a pool
-// root, the identity its marker holds, an owner namespace and (entry, digest)
-// pairs to bind.
+// workerTarget names the recorded pool and owner for observation or release.
 type workerTarget struct {
-	pool     *Pool
-	ns       Namespace
-	requests []CommandRequest
+	pool *Pool
+	ns   Namespace
 }
 
 func parseWorkerTarget(args []string) (workerTarget, error) {
-	if len(args) < 5 || len(args)%2 != 1 {
-		return workerTarget{}, errors.New("usage: poolRoot poolID owner (entry digest)...")
+	if len(args) != 3 {
+		return workerTarget{}, errors.New("usage: poolRoot poolID owner")
 	}
 	pool, err := NewPoolWithIdentity(args[0], args[1])
 	if err != nil {
@@ -82,39 +64,20 @@ func parseWorkerTarget(args []string) (workerTarget, error) {
 	if err != nil {
 		return workerTarget{}, err
 	}
-	target := workerTarget{pool: pool, ns: ns}
-	for i := 3; i < len(args); i += 2 {
-		target.requests = append(target.requests, CommandRequest{Executable: args[i], SHA256: args[i+1]})
-	}
-	return target, nil
+	return workerTarget{pool: pool, ns: ns}, nil
 }
 
-// bindAll binds every request for the owner and returns the commands. They are
-// not closed: view removal belongs to the release path, as in production.
-func (w workerTarget) bindAll(ctx context.Context) ([]*Command, error) {
-	var commands []*Command
-	for _, request := range w.requests {
-		command, err := w.pool.Bind(ctx, w.ns, request)
-		if err != nil {
-			return commands, err
-		}
-		commands = append(commands, command)
-	}
-	return commands, nil
-}
-
-func workerBind(args []string) error {
+func workerObserve(args []string) error {
 	target, err := parseWorkerTarget(args)
 	if err != nil {
 		return err
 	}
-	_, err = target.bindAll(context.Background())
+	_, err = target.pool.ReleasePending(target.ns)
 	return err
 }
 
-// workerCrash exits with exitWorkerCrash when the pool reaches point. With
-// release set it first binds, then releases, so release points can fire.
-func workerCrash(point poolPoint, release bool, args []string) error {
+// workerCrash exits during closure-authorized release of a seeded legacy view.
+func workerCrash(point poolPoint, args []string) error {
 	target, err := parseWorkerTarget(args)
 	if err != nil {
 		return err
@@ -124,94 +87,10 @@ func workerCrash(point poolPoint, release bool, args []string) error {
 			os.Exit(exitWorkerCrash)
 		}
 	}
-	ctx := context.Background()
-	if _, err = target.bindAll(ctx); err != nil {
+	if err = target.pool.ReleaseOwner(context.Background(), target.ns); err != nil {
 		return err
-	}
-	if release {
-		if err = target.pool.ReleaseOwner(ctx, target.ns); err != nil {
-			return err
-		}
 	}
 	return fmt.Errorf("the crash point %s never fired", point)
-}
-
-// workerPrepare prepares the pool at args[0] and prints the identity. With a
-// crash point it exits with exitWorkerCrash when the pool reaches it.
-func workerPrepare(crash poolPoint, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: poolRoot")
-	}
-	pool, err := NewPool(args[0])
-	if err != nil {
-		return err
-	}
-	if crash != "" {
-		pool.faults.at = func(got poolPoint, _ string) {
-			if got == crash {
-				os.Exit(exitWorkerCrash)
-			}
-		}
-	}
-	id, err := pool.Prepare(context.Background())
-	if err != nil {
-		return err
-	}
-	if crash != "" {
-		return fmt.Errorf("the crash point %s never fired", crash)
-	}
-	_, err = fmt.Println(id)
-	return err
-}
-
-// workerChurn binds and releases its own owners in a loop against a shared
-// pool and checks every view it was handed: args are poolRoot poolID
-// ownerPrefix iterations (entry digest)...
-func workerChurn(args []string) error {
-	if len(args) < 6 {
-		return errors.New("usage: poolRoot poolID ownerPrefix iterations (entry digest)...")
-	}
-	iterations, err := strconv.Atoi(args[3])
-	if err != nil {
-		return err
-	}
-	for i := range iterations {
-		target, parseErr := parseWorkerTarget(append([]string{args[0], args[1], args[2] + strconv.Itoa(i)}, args[4:]...))
-		if parseErr != nil {
-			return parseErr
-		}
-		if err = churnOnce(target); err != nil {
-			return fmt.Errorf("iteration %d: %w", i, err)
-		}
-	}
-	return nil
-}
-
-func churnOnce(target workerTarget) error {
-	ctx := context.Background()
-	commands, err := target.bindAll(ctx)
-	if err != nil {
-		return err
-	}
-	for i, command := range commands {
-		if err = requireViewHoldsDigest(command, target.requests[i].SHA256); err != nil {
-			return err
-		}
-	}
-	return target.pool.ReleaseOwner(ctx, target.ns)
-}
-
-// requireViewHoldsDigest re-reads the view's entry through the command path and
-// requires the admitted bytes.
-func requireViewHoldsDigest(command *Command, digest string) error {
-	content, err := os.ReadFile(command.Cmd.Path)
-	if err != nil {
-		return fmt.Errorf("read bound view: %w", err)
-	}
-	if got := digestOf(content); got != digest {
-		return fmt.Errorf("bound view holds %s, want %s", got, digest)
-	}
-	return nil
 }
 
 // workerProcess is one started worker and its captured output.

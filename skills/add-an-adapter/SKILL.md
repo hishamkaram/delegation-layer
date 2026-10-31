@@ -91,11 +91,15 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    This is distinct from rejecting a success-shaped result that fails the
    success predicate. Missing prerequisites and inconclusive controls are
    `BLOCKED`, never pass.
-7. Record sanitized platform/version/profile/predicate/configuration, task and
-   session identities, timings, commands, observations, and digests. Treat the
-   provider version and executable digest as observations bound to that task;
-   never compare them with a checked-in release value. Keep raw private
-   evidence outside the repository and let root update normative plans.
+7. Record sanitized platform/profile/predicate/configuration, task and session
+   identities, timings, commands, observations, and digests. Preserve hashes for
+   Delegate-owned task/configuration contracts, worker, supervisor, native
+   helpers, and evidence. Follow the
+   [product boundary](../../agents/_data/product-boundary.md) for external
+   providers: record the resolved provider path, with any historically reported
+   version as an optional diagnostic, never a readiness gate. Do not hash the
+   provider executable. Keep raw private evidence outside the repository and
+   let root update normative plans.
 
 ## Deliverables
 

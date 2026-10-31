@@ -103,6 +103,7 @@ def validate_meta_supervisor(
 
 def validate_effective_policy(
         name: str, meta: dict[str, object], workspace: Path, provider_sha256: str) -> tuple[dict[str, object], bool, str]:
+    validate_provider_runtime_metadata(meta, label=f"{name} provider runtime metadata")
     effective = meta.get("effective_config")
     require(isinstance(effective, dict) and effective.get("containment") == MODE and
             isinstance(effective.get("digest"), str) and effective.get("digest"),
@@ -110,8 +111,7 @@ def validate_effective_policy(
     policy = effective.get("policy")
     pending_runtime = "runtime_preflight_sha256" in meta
     require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
-             else policy.get("runtime_sha256") == provider_sha256),
+            (policy.get("runtime_sha256") == "" or _hex_digest(policy.get("runtime_sha256"))),
             f"{name} effective policy binding mismatch")
     profile_revision = policy.get("profile_revision")
     require(isinstance(profile_revision, str) and profile_revision,
@@ -138,9 +138,6 @@ def validate_provider_exit(
         label=f"{name} provider runtime metadata")
     require(isinstance(launch_identity, dict),
             f"{name} provider launch identity is unavailable")
-    if not pending_runtime:
-        require(meta.get("provider_executable") == str(agy),
-                f"{name} provider executable drifted")
     require(provider_exit.get("root_id") == root_id and provider_exit.get("task_id") == task and
             provider_exit.get("invocation_state") == "started" and
             provider_exit.get("predicate") == predicate,

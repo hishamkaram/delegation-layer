@@ -11,23 +11,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestParseCLIVersionAcceptsChangedReportedVersion(t *testing.T) {
-	for _, output := range []string{"provider 99.42.7 (nightly)\n", "v2026.09\n", "custom build"} {
-		got, err := ParseCLIVersion([]byte(output))
-		if err != nil || got != strings.TrimSpace(output) {
-			t.Fatalf("version %q: got %q err=%v", output, got, err)
-		}
-	}
-}
-
-func TestParseCLIVersionRejectsInvalidOutput(t *testing.T) {
-	for _, output := range [][]byte{nil, []byte("  \n"), []byte("provider\x00version\n"), {0xff}} {
-		if _, err := ParseCLIVersion(output); err == nil {
-			t.Fatalf("invalid version output %q was accepted", output)
-		}
-	}
-}
-
 func TestRuntimeVersionArgsAreCopiedAndBoundToTheCapabilityDigest(t *testing.T) {
 	definition, err := NewRuntimeInspectionDefinition(CLIInfo{Path: "/usr/bin/provider", SHA256: strings.Repeat("a", 64)}, "/workspace", []string{"LANG=C"}, RuntimeCapability{VersionArgs: []string{"version"}})
 	if err != nil {
@@ -101,17 +84,30 @@ func TestLocateCLIRejectsMissingAndNonExecutable(t *testing.T) {
 	}
 }
 
-func TestLocateCLIPathFingerprintsRegularExecutable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "provider")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' version\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	info, err := LocateCLIPath(path)
+// TestLocateCLIPathResolvesWithoutReadingProviderBytes replaces the retired
+// fingerprinting locator: discovery checks availability and records only the
+// canonical path, so an unreadable executable is still a usable provider.
+func TestLocateCLIPathResolvesWithoutReadingProviderBytes(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Path == "" || info.SHA256 == "" || info.Version != "" {
-		t.Fatalf("unexpected static executable info: %+v", info)
+	path := filepath.Join(root, "provider")
+	if err = os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o100); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err = os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{path, alias} {
+		info, locateErr := LocateCLIPath(input)
+		if locateErr != nil || info != (CLIInfo{Path: path}) {
+			t.Fatalf("LocateCLIPath(%q) = %+v, %v; want canonical path only", input, info, locateErr)
+		}
+	}
+	if _, err = LocateCLIPath(root); err == nil {
+		t.Fatal("directory was accepted as a provider executable")
 	}
 }
 

@@ -81,50 +81,6 @@ func cString(raw []byte) string {
 	return string(raw)
 }
 
-// usage is the storage a set of trees holds. Named counts every name as its own
-// file; unique counts each inode once; allocated is st_blocks * 512 of unique inodes.
-type usage struct {
-	NamedLogical  uint64
-	UniqueLogical uint64
-	Allocated     uint64
-	Inodes        int
-}
-
-type inodeKey struct{ dev, ino uint64 }
-
-func measureTrees(roots ...string) (usage, error) {
-	var total usage
-	seen := map[inodeKey]bool{}
-	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil || !entry.Type().IsRegular() {
-				return walkErr
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			stat, ok := info.Sys().(*syscall.Stat_t)
-			if !ok {
-				return fmt.Errorf("no stat for %s", path)
-			}
-			total.NamedLogical += uint64(stat.Size)
-			key := inodeKey{dev: uint64(stat.Dev), ino: stat.Ino}
-			if !seen[key] {
-				seen[key] = true
-				total.UniqueLogical += uint64(stat.Size)
-				total.Allocated += uint64(stat.Blocks) * 512
-				total.Inodes++
-			}
-			return nil
-		})
-		if err != nil {
-			return usage{}, err
-		}
-	}
-	return total, nil
-}
-
 // openDescriptors counts this process's open descriptors, excluding the one the
 // listing itself uses.
 func openDescriptors() (int, error) {
@@ -133,14 +89,6 @@ func openDescriptors() (int, error) {
 		return 0, err
 	}
 	return len(entries) - 1, nil
-}
-
-func descriptorLimit() (uint64, error) {
-	var limit unix.Rlimit
-	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
-		return 0, err
-	}
-	return limit.Cur, nil
 }
 
 // childResources is what the kernel reported for one waited child.
@@ -159,14 +107,4 @@ func resourcesOf(state *os.ProcessState) (childResources, bool) {
 		rss *= 1024 // Linux reports kilobytes; Darwin reports bytes.
 	}
 	return childResources{CPU: state.UserTime() + state.SystemTime(), MaxRSSBytes: rss}, true
-}
-
-// listXattrs returns the extended attribute names on path.
-func listXattrs(path string) (string, error) {
-	buffer := make([]byte, 4096)
-	size, err := unix.Listxattr(path, buffer)
-	if err != nil {
-		return "", err
-	}
-	return strings.ReplaceAll(strings.TrimRight(string(buffer[:size]), "\x00"), "\x00", ","), nil
 }

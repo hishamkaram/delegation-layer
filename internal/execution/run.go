@@ -12,7 +12,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 type invocation struct {
@@ -22,13 +21,10 @@ type invocation struct {
 	stdin               *os.File
 	stdout              *capture
 	stderr              *capture
-	verified            *verifiedexec.Command
 	launchFilesPrepared bool
 	launchDeclaration   []string
 	launchArguments     []string
-	boundPlan           *Plan
 	inherited           []string
-	binder              CommandBinder
 	budget              *budgetOwner
 	started             time.Time
 	wait                chan error
@@ -57,7 +53,7 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 		result.Error = err
 		return result
 	}
-	i.inherited, i.binder = inherited, opts.Binder
+	i.inherited = inherited
 	request, _, err := td.PreparedRecords()
 	if err != nil {
 		result.Error = errors.Join(err, i.discard())
@@ -89,27 +85,24 @@ func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Opt
 	return finishInvocation(i, launchPlan, startErr, opts)
 }
 
+// prepareLaunchPlan runs the fresh preflight inside the armed budget and then
+// constructs the one unstarted provider command from the plan it returns.
+// Nothing is bound before preflight, so a provider update between admission
+// and launch is resolved by the preflight rather than by a stale binding.
 func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (Plan, error) {
 	launchPlan := plan
 	_, startErr := i.prepareLaunchFiles(plan)
-	if startErr == nil {
-		deferred, bindErr := i.bindInitial(plan, allowRuntimeRefresh)
-		if bindErr != nil {
-			startErr = bindErr
-		} else if deferred {
-			// The binder reported that the admitted provider executable changed.
-			// Fresh preflight will select and verify the replacement.
-			startErr = nil
-		}
-	}
 	clock := opts.clock()
 	i.started = clock.Now()
 	deadline := i.started.Add(time.Duration(budgetNanos))
 	if !opts.Deadline.IsZero() {
 		if opts.Deadline.After(deadline) {
-			return launchPlan, task.ErrIdentityMismatch
+			// Keep the admitted deadline and arm its owner before finalizing
+			// the refusal; every finalization path requires that owner.
+			startErr = errors.Join(startErr, task.ErrIdentityMismatch)
+		} else {
+			deadline = opts.Deadline
 		}
-		deadline = opts.Deadline
 	}
 	i.budget = armBudgetUntil(clock, deadline, opts)
 	opts.emit("start-entry")
@@ -123,15 +116,10 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 	if err := validatePreflightPlan(plan, refreshedPlan); err != nil {
 		return launchPlan, err
 	}
-	if i.boundPlan == nil || !sameLaunchPlan(*i.boundPlan, refreshedPlan) {
-		if err := i.unbind(); err != nil {
-			return launchPlan, err
-		}
-		if err := i.bind(refreshedPlan, allowRuntimeRefresh); err != nil {
-			return launchPlan, err
-		}
+	if err := i.prepareCommand(refreshedPlan, allowRuntimeRefresh); err != nil {
+		return launchPlan, err
 	}
-	// A successful bind makes the refreshed plan authoritative. A bind
+	// The constructed command makes the refreshed plan authoritative. A
 	// refusal keeps the admitted plan available for sealing.
 	return refreshedPlan, nil
 }
@@ -198,11 +186,7 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan, allo
 	if guard.RootID != meta.RootID || guard.TaskID != td.TaskID || guard.SpecSHA256 != meta.SpecSHA256 || guard.BudgetNanos != req.BudgetNanos {
 		return task.ErrInvalidPermit
 	}
-	if matchErr := matchLaunchPlan(p, req, meta, allowRuntimeRefresh); matchErr != nil {
-		return matchErr
-	}
-	_, err = executableDigest(p, *meta, allowRuntimeRefresh)
-	return err
+	return matchLaunchPlan(p, req, meta, allowRuntimeRefresh)
 }
 
 func matchLaunchPlan(p Plan, req *task.TaskRecord, meta *task.MetaRecord, allowRuntimeRefresh bool) error {
@@ -213,34 +197,6 @@ func matchLaunchPlan(p Plan, req *task.TaskRecord, meta *task.MetaRecord, allowR
 		return task.ErrIdentityMismatch
 	}
 	return nil
-}
-
-// executableDigest selects the identity carried by the launch plan. New
-// profiles refresh it during preflight; older records may carry it in
-// persisted native policy details. A pathname without a validated digest is
-// never launched.
-func executableDigest(plan Plan, meta task.MetaRecord, allowRuntimeRefresh bool) (string, error) {
-	planDigest := plan.ExecutableSHA256
-	if planDigest != "" && task.ValidateSHA256(planDigest) != nil {
-		return "", task.ErrIdentityMismatch
-	}
-	policyDigest := ""
-	if meta.EffectiveConfig.Policy != nil {
-		policyDigest = meta.EffectiveConfig.Policy.RuntimeSHA256
-		if task.ValidateSHA256(policyDigest) != nil {
-			return "", task.ErrIdentityMismatch
-		}
-	}
-	if !allowRuntimeRefresh && planDigest != "" && policyDigest != "" && planDigest != policyDigest {
-		return "", task.ErrIdentityMismatch
-	}
-	if planDigest != "" {
-		return planDigest, nil
-	}
-	if policyDigest != "" {
-		return policyDigest, nil
-	}
-	return "", task.ErrIdentityMismatch
 }
 
 func prepareInvocation(td *taskdir.TaskDir) (*invocation, error) {
@@ -260,35 +216,15 @@ func prepareInvocation(td *taskdir.TaskDir) (*invocation, error) {
 }
 
 func (i *invocation) discard() error {
-	var verifiedErr error
-	if i.verified != nil {
-		verifiedErr = i.verified.Close()
-	}
-	return errors.Join(i.stdin.Close(), i.stdout.discard(), i.stderr.discard(), verifiedErr)
+	return errors.Join(i.stdin.Close(), i.stdout.discard(), i.stderr.discard())
 }
 
-func (i *invocation) bindInitial(plan Plan, allowRuntimeRefresh bool) (bool, error) {
-	err := i.bind(plan, allowRuntimeRefresh)
-	if err == nil || !allowRuntimeRefresh {
-		return false, err
-	}
-	// Only a refusal whose every cause is the binder's report that the admitted
-	// executable changed may be repaired by the fresh runtime preflight. Any
-	// other or joined cause remains a definite setup refusal.
-	if task.AllErrorCauses(err, isAdmittedExecutableChange) {
-		return true, nil
-	}
-	return false, err
-}
-
-// isAdmittedExecutableChange is the leaf predicate of the initial binding's
-// whole-error classification. verifiedexec owns the provenance of the marker.
-func isAdmittedExecutableChange(cause error) bool {
-	return errors.Is(cause, verifiedexec.ErrAdmittedExecutableChanged)
-}
-
-func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
-	_, meta, err := i.td.PreparedRecords()
+// prepareCommand constructs the one unstarted provider command for the plan
+// returned by fresh preflight. The installed executable runs directly at its
+// resolved absolute path; the OS performs any shebang handling. There is no
+// copy, view, byte verification, or fallback.
+func (i *invocation) prepareCommand(plan Plan, allowRuntimeRefresh bool) error {
+	request, meta, err := i.td.PreparedRecords()
 	if err != nil {
 		return err
 	}
@@ -298,48 +234,21 @@ func (i *invocation) bind(plan Plan, allowRuntimeRefresh bool) error {
 	if err = validatePlanRuntimeIdentity(plan); err != nil {
 		return err
 	}
-	request, _, err := i.td.PreparedRecords()
-	if err != nil {
-		return err
-	}
 	if err = matchLaunchPlan(plan, request, meta, allowRuntimeRefresh); err != nil {
-		return err
-	}
-	digest, err := executableDigest(plan, *meta, allowRuntimeRefresh)
-	if err != nil {
 		return err
 	}
 	arguments, err := i.launchArgumentsFor(plan)
 	if err != nil {
 		return err
 	}
-	environment := i.launchEnvironment(plan)
-	verified, err := bindCommand(i.bindingContext(), i.binder, verifiedexec.CommandRequest{
-		Executable: plan.Executable, SHA256: digest, Directory: plan.Directory, Environment: environment, Args: arguments,
-	})
-	if err != nil {
-		return err
-	}
-	cmd := verified.Cmd
-	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = plan.Directory, i.stdin, i.stdout.writer, i.stderr.writer
-	cmd.Env = environment
-	i.cmd, i.verified = cmd, verified
-	i.boundPlan = clonePlan(plan)
+	cmd := exec.Command(plan.Executable, arguments...)
+	cmd.Dir, cmd.Env = plan.Directory, i.launchEnvironment(plan)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = i.stdin, i.stdout.writer, i.stderr.writer
+	i.cmd = cmd
 	return nil
 }
 
-// bindingContext is the budget owner's deadline context once it is armed, as
-// for a refreshed plan. The initial binding precedes the budget, so its context
-// has no deadline, as the historical private copy had none.
-func (i *invocation) bindingContext() context.Context {
-	if i.budget == nil {
-		return context.Background()
-	}
-	return i.budget.workContext
-}
-
-// launchEnvironment is the single environment for interpreter lookup,
-// materialization, and the child. An explicit plan environment wins, including
+// launchEnvironment is the single environment of the child. An explicit plan environment wins, including
 // a non-nil empty one, and is never extended. A nil plan environment selects
 // the snapshot captured at Run entry plus the host's implicit working
 // directory entries, so the launch matches the historical implicit inheritance
@@ -361,39 +270,6 @@ func (i *invocation) launchArgumentsFor(plan Plan) ([]string, error) {
 		return nil, task.ErrIdentityMismatch
 	}
 	return append([]string(nil), i.launchArguments...), nil
-}
-
-func (i *invocation) unbind() error {
-	if i.verified == nil {
-		i.cmd, i.boundPlan = nil, nil
-		return nil
-	}
-	err := i.verified.Close()
-	i.cmd, i.verified, i.boundPlan = nil, nil, nil
-	return err
-}
-
-func sameLaunchPlan(left, right Plan) bool {
-	return left.Executable == right.Executable && left.ExecutableSHA256 == right.ExecutableSHA256 &&
-		left.ProviderRuntime == right.ProviderRuntime && left.RuntimePreflightSHA256 == right.RuntimePreflightSHA256 &&
-		left.Directory == right.Directory && sameLaunchEnvironment(left.Environment, right.Environment) &&
-		slices.Equal(left.Arguments, right.Arguments) && left.Predicate.Equal(right.Predicate) &&
-		task.CompareInputFiles(left.InputFiles, right.InputFiles) &&
-		task.CompareOutputArtifacts(left.OutputArtifacts, right.OutputArtifacts) &&
-		left.OutputWriterContract == right.OutputWriterContract
-}
-
-func sameLaunchEnvironment(left, right []string) bool {
-	return (left == nil) == (right == nil) && slices.Equal(left, right)
-}
-
-func clonePlan(plan Plan) *Plan {
-	clone := plan
-	clone.Arguments = slices.Clone(plan.Arguments)
-	clone.Environment = slices.Clone(plan.Environment)
-	clone.InputFiles = slices.Clone(plan.InputFiles)
-	clone.OutputArtifacts = slices.Clone(plan.OutputArtifacts)
-	return &clone
 }
 
 func validatePlanRuntimeIdentity(plan Plan) error {
@@ -478,13 +354,6 @@ func (i *invocation) closeParents(startErr error, opts Options) error {
 		_, diagnosticErr = fmt.Fprintln(i.stderr.writer, startErr.Error())
 	}
 	parentErr := errors.Join(i.stdin.Close(), i.stdout.writer.Close(), i.stderr.writer.Close())
-	if startErr != nil {
-		if i.verified != nil {
-			parentErr = errors.Join(parentErr, i.verified.Close())
-		}
-	} else if i.verified != nil {
-		parentErr = errors.Join(parentErr, i.verified.ReleaseDescriptors())
-	}
 	opts.emit("parent-fds-closed")
 	return errors.Join(diagnosticErr, parentErr)
 }
@@ -499,11 +368,7 @@ func (i *invocation) finishCaptures(startErr error, opts Options) error {
 		lifetimeErr = opts.Lifetime.FinishCommand(context.Background(), i.cmd)
 	}
 	stdoutErr, stderrErr := <-i.stdout.done, <-i.stderr.done
-	var verifiedErr error
-	if startErr == nil && i.verified != nil {
-		verifiedErr = i.verified.Close()
-	}
-	return errors.Join(observedWaitError(waitErr), lifetimeErr, stdoutErr, stderrErr, verifiedErr)
+	return errors.Join(observedWaitError(waitErr), lifetimeErr, stdoutErr, stderrErr)
 }
 
 func observedWaitError(err error) error {
@@ -541,7 +406,8 @@ func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr erro
 	}
 	identity := plan.ProviderRuntime
 	if startErr != nil {
-		// A failed preflight, bind, or Start has no confirmed provider launch.
+		// A failed preflight, command construction, or Start has no confirmed
+		// provider launch.
 		// Do not carry an untrusted historical identity into terminal evidence.
 		identity = task.ProviderRuntimeIdentity{}
 	}

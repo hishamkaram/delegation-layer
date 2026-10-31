@@ -27,7 +27,9 @@ func FinalizeCandidate(candidate commonprovider.ProfileCandidate, req task.TaskR
 	if profile.Plan.Directory != candidate.Directory || !slices.Equal(profile.WritableRoots, candidate.WritableRoots) {
 		return commonprovider.PreparedProfile{}, commonprovider.ErrProfileUnavailable
 	}
-	if profile.Plan.ExecutableSHA256 != "" && profile.ObservedVersion != "" {
+	if candidate.Inspection != nil && candidate.Inspection.Runtime != nil {
+		// The supervised runtime probe observed this installed executable. Its
+		// version and digest are optional observations recorded only when present.
 		profile.Plan.ProviderRuntime = task.ProviderRuntimeIdentity{
 			Executable: profile.Plan.Executable,
 			Version:    profile.ObservedVersion,
@@ -35,6 +37,18 @@ func FinalizeCandidate(candidate commonprovider.ProfileCandidate, req task.TaskR
 		}
 	}
 	return profile, nil
+}
+
+// finalizeSavedFacts finalizes the current candidate from facts recorded by a
+// completed inspection journal. A journal may be reused after a provider-only
+// change, so its facts are first projected onto the current installed
+// executable; the journal itself is never rewritten or rerun.
+func finalizeSavedFacts(candidate commonprovider.ProfileCandidate, req task.TaskRecord, facts json.RawMessage) (commonprovider.PreparedProfile, error) {
+	facts, err := factsForCurrentRuntime(candidate, facts)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	return FinalizeCandidate(candidate, req, facts)
 }
 
 func AdmitCandidate(candidate commonprovider.ProfileCandidate, req task.TaskRecord) (commonprovider.PreparedProfile, error) {
@@ -55,12 +69,7 @@ func finalizeMatchedProfile(candidate commonprovider.ProfileCandidate, facts jso
 		}
 		return profile, nil
 	}
-	var err error
-	facts, err = factsForCurrentRuntime(candidate, facts)
-	if err != nil {
-		return commonprovider.PreparedProfile{}, err
-	}
-	profile, err := FinalizeCandidate(candidate, req, facts)
+	profile, err := finalizeSavedFacts(candidate, req, facts)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}

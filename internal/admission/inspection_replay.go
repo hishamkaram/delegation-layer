@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -49,9 +48,6 @@ func validateAdmissionInspectionReplay(ctx context.Context, store *taskdir.Store
 	if err != nil || record.IdentityID() != identity {
 		return errors.Join(task.ErrEvidenceFault, err)
 	}
-	if err = rejectCompletedRuntimeIdentityDrift(ctx, operation, record.Binding, binding); err != nil {
-		return err
-	}
 	allowMarkerlessReplay, err := allowIncompleteMarkerlessRuntimeReplay(ctx, operation, record.Binding, binding)
 	if err != nil || allowMarkerlessReplay {
 		// A permitted markerless replay keeps its original create-once request.
@@ -91,8 +87,8 @@ func CreateAdmissionInspectionOperationContext(ctx context.Context, store *taskd
 // journal survive a provider or probe-contract refresh while it is still
 // incomplete. Its immutable worker, supervisor, and environment bindings must
 // remain unchanged; only the runtime identity/definition may be re-probed.
-// Completed markerless journals remain subject to the conservative identity
-// drift rejection above because their proof cannot be relabeled in place.
+// A completed markerless journal has no capability contract to compare, so
+// its changed definition remains refused by the exact binding comparison.
 func allowIncompleteMarkerlessRuntimeReplay(ctx context.Context, operation *inspection.Operation, saved, current inspection.Binding) (bool, error) {
 	if operation == nil || !markerlessRuntimeReplayBindingMatches(saved, current) {
 		return false, nil
@@ -110,28 +106,6 @@ func allowIncompleteMarkerlessRuntimeReplay(ctx context.Context, operation *insp
 		return false, err
 	}
 	return false, nil
-}
-
-// rejectCompletedRuntimeIdentityDrift prevents a completed capability proof
-// from being relabeled as proof for a different provider executable. A queued
-// or incomplete operation can still run its one worker against the current
-// candidate; a completed operation has no safe way to rerun that worker under
-// the same create-once journal.
-func rejectCompletedRuntimeIdentityDrift(ctx context.Context, operation *inspection.Operation, saved, current inspection.Binding) error {
-	if operation == nil ||
-		(saved.CapabilitySHA256 == "" && current.CapabilitySHA256 == "") ||
-		saved.DefinitionRevision != commonprovider.RuntimeInspectionRevision ||
-		current.DefinitionRevision != commonprovider.RuntimeInspectionRevision ||
-		saved.DefinitionSHA256 == current.DefinitionSHA256 {
-		return nil
-	}
-	if _, _, err := operation.ReadCompletedContext(ctx); err == nil {
-		return task.ErrEvidenceFault
-	} else if errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else {
-		return err
-	}
 }
 
 func validateManagedInspectionReplay(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) error {

@@ -48,6 +48,19 @@ func locateTestShell(t *testing.T) provider.CLIInfo {
 	return info
 }
 
+// locateTestHelper returns the shell as an integrity-bound native helper:
+// unlike a provider CLI, a helper definition carries its admitted digest.
+func locateTestHelper(t *testing.T) provider.CLIInfo {
+	t.Helper()
+	info := locateTestShell(t)
+	digest, err := provider.FingerprintExecutable(info.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.SHA256 = digest
+	return info
+}
+
 func testModelDefinition(t *testing.T, outputLimit int64) provider.InspectionDefinition {
 	t.Helper()
 	info := locateTestShell(t)
@@ -120,7 +133,10 @@ func TestModelCaptureStartFailureJoinsStreams(t *testing.T) {
 	}
 }
 
-func TestModelCommandUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
+// TestModelCommandRunsInstalledExecutableAfterPathReplacement replaces the
+// retired private-copy guarantee: the command runs the installed file present
+// at Start, with no copy of the bytes observed earlier.
+func TestModelCommandRunsInstalledExecutableAfterPathReplacement(t *testing.T) {
 	root := t.TempDir()
 	original := filepath.Join(root, "provider")
 	replacement := filepath.Join(root, "replacement")
@@ -151,8 +167,8 @@ func TestModelCommandUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
 		})
 		return err
 	})
-	if workErr != nil || stopErr != nil || !captured.success || string(captured.stdout) != "original\n" {
-		t.Fatalf("verified launch was not bound to the admitted file: result=%+v work=%v stop=%v", captured, workErr, stopErr)
+	if workErr != nil || stopErr != nil || !captured.success || string(captured.stdout) != "replacement\n" {
+		t.Fatalf("launch did not run the installed file: result=%+v work=%v stop=%v", captured, workErr, stopErr)
 	}
 }
 
@@ -230,28 +246,33 @@ func TestModelDiscoveryVerifiesCapabilityBeforeListing(t *testing.T) {
 	}
 }
 
-func TestModelDiscoveryRejectsExecutableReplacementBetweenCommands(t *testing.T) {
+// TestModelDiscoveryRunsUpdatedExecutableBetweenCommands replaces the retired
+// byte-identity rejection: a provider update between the help and model
+// commands is the user's installation, so discovery runs the installed bytes.
+func TestModelDiscoveryRunsUpdatedExecutableBetweenCommands(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "provider-cli")
-	script := "#!/bin/sh\nset -eu\ncase \"${1-}\" in\n  --version) printf 'provider 1.0\\n' ;;\n  --help) printf '\\n# changed\\n' >> \"$0\"; printf 'help\\n' ;;\n  *) printf executed > unexpected-model-launch ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\ncase \"${1-}\" in\n  --help) printf '\\n# changed\\n' >> \"$0\"; printf 'help\\n' ;;\n  models) printf updated > updated-model-launch ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	definition := runtimeDefinition(t, directory, path, nil)
 	definition.Runtime = nil
+	definition.Revision = provider.ModelsRevision
+	projected := false
 	definition.Models = &provider.ModelDiscoveryDefinition{Arguments: []string{"models"}, Source: "fixture", Project: func([]byte, []byte, []byte, bool) (provider.ModelCatalog, error) {
-		t.Error("replaced executable facts reached projection")
-		return provider.ModelCatalog{}, nil
+		projected = true
+		return provider.ModelCatalog{}, errors.New("fixture lists no models")
 	}}
 	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}}, func(scope execution.PreflightScope) error {
 		_, err := inspectModels(scope, definition)
 		return err
 	})
-	if workErr == nil || stopErr != nil {
-		t.Fatalf("expected identity rejection, got %v %v", workErr, stopErr)
+	if workErr != nil || stopErr != nil || !projected {
+		t.Fatalf("updated provider was refused: work=%v stop=%v projected=%v", workErr, stopErr, projected)
 	}
-	if _, err := os.Stat(filepath.Join(directory, "unexpected-model-launch")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("replacement was executed: %v", err)
+	if _, err := os.Stat(filepath.Join(directory, "updated-model-launch")); err != nil {
+		t.Fatalf("updated provider was not executed: %v", err)
 	}
 }
 
@@ -274,7 +295,7 @@ func TestModelDiscoveryLaunchesEveryCommandWithTheSelectedEmptyEnvironment(t *te
 	log := filepath.Join(directory, "observed")
 	path := filepath.Join(directory, "provider-cli")
 	script := "#!/bin/sh\nset -eu\nprintf '%s:%s\\n' \"$1\" \"${" + markerName + "-unset}\" >> \"" + log + "\"\n" +
-		"case \"$1\" in\n  --version) printf 'provider 1.0\\n' ;;\n  --help) printf '%s\\n' '--list-models' ;;\n  --list-models) ;;\n  *) exit 64 ;;\nesac\n"
+		"case \"$1\" in\n  --help) printf '%s\\n' '--list-models' ;;\n  --list-models) ;;\n  *) exit 64 ;;\nesac\n"
 	if err = os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +321,7 @@ func TestModelDiscoveryLaunchesEveryCommandWithTheSelectedEmptyEnvironment(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "--version:unset\n--help:unset\n--list-models:unset\n"; string(observed) != want {
+	if want := "--help:unset\n--list-models:unset\n"; string(observed) != want {
 		t.Fatalf("commands observed %q, want %q", observed, want)
 	}
 	if os.Getenv(markerName) != "host-marker" || strings.Join(hostBefore, "\x00") != strings.Join(os.Environ(), "\x00") {

@@ -1,37 +1,17 @@
 package verifiedexec
 
-// Pool is the filesystem custody of verified executables. It owns images and
-// views and nothing else.
+// Pool disposes legacy executable custody after the guardian proves closure.
+// The guardian's saved registration owns the exact root, identity and namespace.
+// Pool never infers closure or creates pools, images or views.
 //
-// Layout below one private root, all on one filesystem:
-//
-//	<root>/.gate                    taskdir lock: shared to link, exclusive to publish and reclaim
-//	<root>/.identity                immutable pool identity marker, mode 0600, published once
-//	<root>/.identity-stage-<hex32>  at most one live marker stage, owned by the exclusive gate holder
-//	<root>/images/<sha256>          immutable, mode 0500, one per digest
-//	<root>/images/.custody-stage-*  at most one live stage, owned by the exclusive gate holder
-//	<root>/views/<namespace>/       an owner's witness directory
-//	<root>/views/<namespace>/delegation-layer-verified-*   one private hard-link view per bind
-//
-// Owner: Pool. Writers: Prepare (the identity marker, once, and the layout),
-// Bind (views, and images through the gate), ReleaseOwner (this owner's views
-// and witness) and idle reclaim (marker stages, image stages and images no view
-// links). Readers: the bound child, through its view.
-// Invariants: an image holds exactly the bytes its name claims and is never
-// rewritten; a view entry is a hard link to a verified image, never to a source
-// inode; a stage or an image with link count 1 observed under the exclusive gate
-// belongs to a dead publisher or an unreferenced digest, because a live
-// publisher holds the gate from stage creation until its first view link exists.
-// The identity marker is published once and never changes; every operation on a
-// pool bound to an identity first proves that the canonical private root still
-// holds that exact marker, and otherwise changes nothing and reports why.
-//
-// Pool never decides that an owner is closed. Its caller proves canonical
-// closure and then calls ReleaseOwner. A dead process, an unheld lock or an
-// inherited descriptor is never evidence here.
+// Legacy layout: .identity (canonical JSON, 0600), .gate, images/<sha256>
+// (0500), and views/<namespace>/delegation-layer-verified-* (0500).
+// The root, images, views and namespace directories are private (0700).
+// Every operation proves the immutable identity and canonical private chain.
+// Release removes only its owner's views, then its witness. Reclaim uses the
+// exclusive gate to remove abandoned stages and images with no view links.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,7 +22,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -50,8 +29,6 @@ const (
 	poolViewsDir    = "views"
 	poolGateName    = ".gate"
 	poolStagePrefix = ".custody-stage-"
-	poolDirMode     = 0o700
-	poolImageMode   = 0o500
 	poolViewPrefix  = "delegation-layer-verified-"
 )
 
@@ -59,19 +36,10 @@ var (
 	errPoolRootInvalid    = errors.New("custody pool root must be an absolute clean path")
 	errPoolRootNotPrivate = errors.New("custody pool directory is not a private directory owned by this user")
 	errPoolRootNotCanon   = errors.New("custody pool root is not canonical (a symlink or alias is in its path)")
-	errPoolCrossDevice    = errors.New("custody pool images and views are on different filesystems")
 )
 
-// ErrPoolNoExec is the cause of a refusal to use a pool root on a filesystem
-// mounted noexec. It is exported so that a caller can classify the clean refusal
-// with the canonical error-cause walker.
-var ErrPoolNoExec = errors.New("custody pool filesystem is mounted noexec; views could not be executed")
-
-// Pool is safe for concurrent use. It holds only its root, the identity it is
-// bound to and test seams; every operation opens its own gate handle because a
-// taskdir lock handle is not safe for concurrent binders. id is empty for an
-// unbound pool (NewPool), which may only Prepare; a pool made by
-// NewPoolWithIdentity holds a valid id for its whole life and never Prepares.
+// Pool is safe for concurrent disposal. Each operation opens its own gate.
+// The recorded identity is immutable; zero-value pools refuse every operation.
 type Pool struct {
 	root   string
 	id     string
@@ -83,60 +51,29 @@ type Pool struct {
 type poolPoint string
 
 const (
-	pointBeforeExclusive poolPoint = "before-exclusive"
-	pointBeforeCopy      poolPoint = "before-copy"
-	pointAfterStage      poolPoint = "after-stage"
-	pointAfterImageLink  poolPoint = "after-image-link"
-	pointAfterViewLink   poolPoint = "after-view-link"
-	// pointSourceOpened fires in Bind right after the original executable has
-	// been opened and verified, before the builder reads anything from it. It
-	// names the window in which an installer can still rewrite the original.
-	pointSourceOpened poolPoint = "source-opened"
-	// pointStageWritten fires after a stage has been written, made read-only and
-	// flushed, immediately before it is re-opened and verified by digest.
-	pointStageWritten poolPoint = "stage-written"
 	// Release points carry no digest: the owner namespace is the identity.
 	pointAfterViewRemoved    poolPoint = "after-view-removed"
 	pointBeforeWitnessRemove poolPoint = "before-witness-remove"
 	// pointIdentityChecked fires each time a guarded operation has just proved
 	// the identity marker, before it acts on that proof.
 	pointIdentityChecked poolPoint = "identity-checked"
-	// pointMarkerLinked fires right after the marker was linked into place,
-	// before its directory is flushed.
-	pointMarkerLinked poolPoint = "marker-linked"
 )
 
 // Marker points are consulted through poolFaults.inject, immediately before the
 // production operation they name, which an injected error replaces.
 const (
-	pointMarkerStageBarrier poolPoint = "marker-stage-barrier"
-	pointMarkerLink         poolPoint = "marker-link"
-	pointMarkerFileBarrier  poolPoint = "marker-file-barrier"
-	pointMarkerDirBarrier   poolPoint = "marker-dir-barrier"
 	pointMarkerStageRemove  poolPoint = "marker-stage-remove"
 	pointMarkerCleanBarrier poolPoint = "marker-clean-barrier"
 )
 
 // poolFaults is a test seam; the zero value does nothing.
 type poolFaults struct {
-	link   func(oldname, newname string) error
 	at     func(point poolPoint, digest string)
 	inject func(point poolPoint) error
 }
 
-// NewPool names an unbound custody pool rooted at root, which must be absolute
-// and clean. It touches nothing, and the pool it returns may only Prepare and
-// report its Root: Bind, ReleaseOwner and ReleasePending refuse it with
-// errPoolUnbound until a caller binds an identity with NewPoolWithIdentity.
-func NewPool(root string) (*Pool, error) {
-	if err := validatePoolRoot(root); err != nil {
-		return nil, err
-	}
-	return &Pool{root: root, logf: logPoolFailure}, nil
-}
-
 // NewPoolWithIdentity names the custody pool rooted at root that is expected to
-// hold the identity id, which Prepare returned. id is an immutable guard, not a
+// hold the recorded legacy identity id. id is an immutable guard, not a
 // second authority: every operation proves that the canonical private root
 // still holds exactly that marker before it changes anything. An empty or
 // malformed id is refused here and never yields an unguarded pool. It touches
@@ -183,57 +120,8 @@ func (p *Pool) injected(point poolPoint) error {
 	return nil
 }
 
-func (p *Pool) linkFile(oldname, newname string) error {
-	if p.faults.link != nil {
-		return p.faults.link(oldname, newname)
-	}
-	return os.Link(oldname, newname)
-}
-
-// openGate prepares and verifies the layout, then opens this operation's own
-// gate handle with the canonical context-aware taskdir lock opener. The layout
-// is verified before any stage, image or view is published.
-func (p *Pool) openGate(ctx context.Context) (*taskdir.LockFile, error) {
-	if info, err := os.Lstat(p.root); err == nil {
-		if !info.IsDir() {
-			return nil, fmt.Errorf("%w: %s", errPoolRootNotPrivate, p.root)
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	}
-	gate, err := taskdir.OpenLockFileContext(ctx, p.gatePath(), taskdir.LockLevelNone)
-	if err != nil {
-		return nil, err
-	}
-	if err = p.verifyLayout(); err != nil {
-		return nil, errors.Join(err, gate.Close())
-	}
-	return gate, nil
-}
-
-// verifyLayout checks the root and creates the two subtrees, refusing aliases,
-// foreign ownership, group or world access, a noexec mount and a device split.
-func (p *Pool) verifyLayout() error {
-	if err := p.requireCanonicalPrivateRoot(); err != nil {
-		return err
-	}
-	noExec, err := filesystemForbidsExec(p.root)
-	if err != nil {
-		return err
-	}
-	if noExec {
-		return fmt.Errorf("%w: %s", ErrPoolNoExec, p.root)
-	}
-	for _, dir := range []string{p.imagesPath(), p.viewsPath()} {
-		if err = ensurePrivateDirectory(dir, p.root); err != nil {
-			return err
-		}
-	}
-	return p.requireOneDevice()
-}
-
 // requireCanonicalPrivateRoot is the one read-only check of the pool root that
-// bind, release, pending and reclaim all share: no alias in its path, and a
+// release, pending and reclaim all share: no alias in its path, and a
 // private directory owned by this user.
 func (p *Pool) requireCanonicalPrivateRoot() error {
 	canonical, err := config.CanonicalizePath(p.root)
@@ -313,27 +201,6 @@ func (p *Pool) observeDirectory(names ...string) (present bool, err error) {
 	return true, nil
 }
 
-func (p *Pool) requireOneDevice() error {
-	var root uint64
-	for i, dir := range []string{p.root, p.imagesPath(), p.viewsPath()} {
-		info, err := os.Lstat(dir)
-		if err != nil {
-			return err
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			return errors.New("custody pool directory has no device identity")
-		}
-		device := uint64(stat.Dev)
-		if i == 0 {
-			root = device
-		} else if device != root {
-			return errors.Join(fmt.Errorf("%w: %s", errPoolCrossDevice, dir), unix.EXDEV)
-		}
-	}
-	return nil
-}
-
 // requirePrivateDirectory refuses anything but a real directory owned by this
 // user with no group or world access.
 func requirePrivateDirectory(path string) error {
@@ -352,20 +219,6 @@ func requirePrivateInfo(info os.FileInfo, path string) error {
 		return fmt.Errorf("%w: %s", errPoolRootNotPrivate, path)
 	}
 	return nil
-}
-
-// ensurePrivateDirectory creates dir if missing and then requires it to be
-// private. The parent is flushed whether this call created dir or found it: an
-// earlier attempt may have created it and then failed its barrier, so an
-// existing entry is not yet known to be durable.
-func ensurePrivateDirectory(dir, parent string) error {
-	if err := os.Mkdir(dir, poolDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	if err := barrierPath(parent); err != nil {
-		return err
-	}
-	return requirePrivateDirectory(dir)
 }
 
 // barrierPath flushes a file or directory with the platform's required

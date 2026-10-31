@@ -1,7 +1,7 @@
 """Noexec Delegate state: fixture placement, ownership cleanup, scenario entry, and the external case flow.
 
 These tests run the real harness code over fake binaries and mocked edges. They prove harness
-wiring and policy only; whether a public CLI places custody correctly on a real noexec mount is
+wiring and policy only; whether a public CLI executes correctly on a real noexec mount is
 native acceptance evidence.
 """
 
@@ -12,11 +12,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.acceptance_tests.private_cli.fixtures import (
-    canonical_pool_marker,
-    create_private_pool_directory,
-    write_pool_marker,
-)
 from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.delegate_acceptance.private_cli import application, handoff as handoff_impl
 from scripts.delegate_acceptance.private_cli import fixture_setup, scenario_entry
@@ -31,8 +26,6 @@ from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLife
 from scripts.delegate_acceptance.private_cli.handoff_observation import ObservedHandoffTask
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 
-POOL_A = "a" * 64
-POOL_B = "b" * 64
 TASK = "1" * 32
 INSPECTION = "3" * 32
 OTHER = "4" * 32
@@ -264,11 +257,6 @@ class NoexecCaseFlowTests(unittest.TestCase):
         self.responses = self.root / "responses"
         for directory in (self.state, self.execution, self.waiters, self.responses):
             directory.mkdir(parents=True)
-        self.pools = {}
-        for name, pool_id in (("pool-a", POOL_A), ("pool-b", POOL_B)):
-            pool = create_private_pool_directory(self.execution / name)
-            write_pool_marker(pool, canonical_pool_marker(pool_id))
-            self.pools[pool_id] = pool
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 1, 1, {})
         self.cases = {}
         self.task_ids = []
@@ -279,22 +267,19 @@ class NoexecCaseFlowTests(unittest.TestCase):
         self.shutdowns = []
         self.closure_calls = []
 
-    def registration(self, pool_id, placed=True):
-        record = {"created_at": "r", "scope_kind": "process-group", "assurance": "fixture"}
-        if placed:
-            record["custody_placement"] = {"version": 1, "pool_root": str(self.pools[pool_id]), "pool_id": pool_id}
-        return record
+    def registration(self):
+        return {"created_at": "r", "scope_kind": "process-group", "assurance": "fixture"}
 
-    def closures(self, task_placed=True):
+    def closures(self):
         return {
             "tasks": {TASK: {
                 "intent": {"deadline": "d", "created_at": "c"},
-                "registration": self.registration(POOL_A, task_placed),
+                "registration": self.registration(),
                 "worker_wait": {"child_pid": 1, "result": "success", "exit_code": 0},
                 "termination": {"cause": "completed", "scope_empty": True},
                 "launches": [{"pid": 1}],
             }},
-            "inspections": {INSPECTION: {"registration": self.registration(POOL_B)}},
+            "inspections": {INSPECTION: {"registration": self.registration()}},
         }
 
     def dispatch_response(self):
@@ -354,13 +339,13 @@ class NoexecCaseFlowTests(unittest.TestCase):
                 handoff_cases=self.cases,
             )
 
-    def test_success_proves_placement_after_closure_and_before_collection(self):
+    def test_success_proves_unplaced_registrations_after_closure_and_before_collection(self):
         evidence = self.run_case(self.closures())
         self.assertEqual(self.order[:4], ["release", "closure", "status", "collect"])
         self.assertEqual(evidence["scenario"], EXTERNAL_NOEXEC_STATE_SCENARIO)
         self.assertEqual(evidence["requested_task_count"], 1)
-        self.assertEqual(evidence["custody_placement"]["tasks"][TASK]["pool_id"], POOL_A)
-        self.assertEqual(evidence["custody_placement"]["inspections"][INSPECTION]["pool_id"], POOL_B)
+        self.assertEqual(evidence["execution_registrations"], {"tasks": [TASK], "inspections": [INSPECTION]})
+        self.assertNotIn("custody_placement", evidence)
         self.assertNotIn("private", evidence["supervisors"])
         self.assertNotIn("private_daemon", evidence["cleanup"])
         self.assertEqual(evidence["tasks"]["external"]["closure"]["task_id"], TASK)
@@ -387,15 +372,45 @@ class NoexecCaseFlowTests(unittest.TestCase):
         self.assertEqual(self.receipt.safe_stage, "external-noexec-state-proved")
         self.assertTrue(self.shutdowns)
 
-    def test_a_task_without_a_recorded_placement_fails_before_collection_and_still_cleans_up(self):
-        with self.assertRaisesRegex(RuntimeError, "task " + TASK + " lifetime registration omitted its custody"):
-            self.run_case(self.closures(task_placed=False))
-        self.assertNotIn("collect", self.order)
-        self.assertEqual(self.order.count("release"), 1)
-        self.assertEqual(len(self.closure_calls), 2)
+    def test_a_placement_field_fails_before_collection_and_still_cleans_up(self):
+        for kind, identity in (("tasks", TASK), ("inspections", INSPECTION)):
+            with self.subTest(kind=kind):
+                self.setUp()
+                closures = self.closures()
+                closures[kind][identity]["registration"]["custody_placement"] = None
+                with self.assertRaisesRegex(RuntimeError, "lifetime registration contains custody placement"):
+                    self.run_case(closures)
+                self.assertNotIn("collect", self.order)
+                self.assertEqual(self.order.count("release"), 1)
+                self.assertEqual(len(self.closure_calls), 2)
+                recorded = self.receipt.details["external_noexec_state"][EXTERNAL_NOEXEC_STATE_SCENARIO]
+                self.assertIn("closure", recorded["tasks"]["external"])
+                self.assertNotIn("execution_registrations", recorded)
+
+    def test_no_registered_inspection_fails_before_status_and_collection(self):
+        for rows in ({}, {INSPECTION: {"registration": None}}):
+            with self.subTest(rows=rows):
+                self.setUp()
+                closures = self.closures()
+                closures["inspections"] = rows
+                with self.assertRaisesRegex(RuntimeError, "no inspections lifetime registration"):
+                    self.run_case(closures)
+                self.assertEqual(self.status_calls, [])
+                self.assertEqual(self.collect_calls, [])
+                self.assertEqual(self.order, ["release", "closure", "closure"])
+                recorded = self.receipt.details["external_noexec_state"][EXTERNAL_NOEXEC_STATE_SCENARIO]
+                self.assertEqual(recorded["cleanup"]["fixture_waiter_entries"], 0)
+                self.assertNotIn("errors", recorded["cleanup"])
+
+    def test_unplaced_registrations_never_substitute_for_canonical_closure(self):
+        closures = self.closures()
+        closures["tasks"][TASK]["termination"]["scope_empty"] = False
+        with self.assertRaisesRegex(RuntimeError, "did not prove an empty native scope"):
+            self.run_case(closures)
+        self.assertEqual(self.status_calls, [])
+        self.assertEqual(self.collect_calls, [])
         recorded = self.receipt.details["external_noexec_state"][EXTERNAL_NOEXEC_STATE_SCENARIO]
-        self.assertIn("closure", recorded["tasks"]["external"])
-        self.assertNotIn("custody_placement", recorded)
+        self.assertNotIn("execution_registrations", recorded)
 
     def test_an_unusable_public_status_prevents_a_pass_before_collection(self):
         missing_root = {key: value for key, value in TERMINAL_STATUS.items() if key != "root_id"}
@@ -418,7 +433,7 @@ class NoexecCaseFlowTests(unittest.TestCase):
                 self.assertNotIn("collect", self.order)
                 self.assertEqual(len(self.status_calls), 1)
                 recorded = self.receipt.details["external_noexec_state"][EXTERNAL_NOEXEC_STATE_SCENARIO]
-                self.assertIn("custody_placement", recorded)
+                self.assertIn("execution_registrations", recorded)
                 self.assertNotIn("status", recorded["tasks"]["external"])
 
     def test_terminal_unknown_admission_and_pending_observations_are_preserved_not_refused(self):
@@ -447,11 +462,11 @@ class NoexecCaseFlowTests(unittest.TestCase):
                     self.run_case(self.closures())
                 self.assertNotIn("collect", self.order)
 
-    def test_an_uncommitted_collection_is_a_failure_after_the_placement_proof(self):
+    def test_an_uncommitted_collection_is_a_failure_after_the_registration_proof(self):
         with self.assertRaisesRegex(RuntimeError, "did not publish a committed outcome"):
             self.run_case(self.closures(), verdict="failed")
         recorded = self.receipt.details["external_noexec_state"][EXTERNAL_NOEXEC_STATE_SCENARIO]
-        self.assertIn("custody_placement", recorded)
+        self.assertIn("execution_registrations", recorded)
         self.assertNotIn("collection", recorded["tasks"]["external"])
 
     def test_the_case_requires_the_captured_execution_temporary_root(self):

@@ -193,7 +193,7 @@ func TestCompleteMetaRecord(t *testing.T) {
 		{"executable", func(r *MetaRecord) { r.ProviderExecutable = "relative" }},
 		{"runner-executable", func(r *MetaRecord) { r.RunnerExecutable = "relative" }},
 		{"runner-ownership", func(r *MetaRecord) { r.RunnerOwnership = "unknown" }},
-		{"provider-version", func(r *MetaRecord) { r.ProviderVersion = "" }},
+		{"blank-provider-version", func(r *MetaRecord) { r.ProviderVersion = " " }},
 		{"publisher-build", func(r *MetaRecord) { r.PublisherBuild = "" }},
 		{"publisher-version", func(r *MetaRecord) { r.PublisherVersion = "" }},
 		{"predicate-digest", func(r *MetaRecord) { r.Predicate.SHA256 = "" }},

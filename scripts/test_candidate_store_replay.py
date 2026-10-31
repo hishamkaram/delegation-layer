@@ -163,10 +163,13 @@ class Scenario:
     def claim_file(self, claim: PlatformClaim) -> Files:
         return {name(EntryFamily.CLAIM, attempt=claim.attempt, platform=claim.platform): encode_claim(claim)}
 
-    def zip(self, claim: PlatformClaim, *, failed: bool = False, candidate: BoundCandidate | None = None) -> bytes:
+    def zip(self, claim: PlatformClaim, *, failed: bool = False, candidate: BoundCandidate | None = None,
+            case_change: proof_fixture.Change | None = None) -> bytes:
         owner = candidate or self.candidate
+        release = self.failing if failed else self.passing
         facts = candidate_proof_expectation(owner.manifest, owner.locator, claim)
-        return proof_fixture.candidate_zip(self.failing if failed else self.passing, facts)
+        changes = None if case_change is None else {name: case_change for name, _ in release.candidate_cases}
+        return proof_fixture.candidate_zip(release, facts, case_changes=changes)
 
     def proof_file(self, claim: PlatformClaim, data: bytes) -> Files:
         return {name(EntryFamily.PROOF, attempt=claim.attempt, platform=claim.platform): data}
@@ -415,6 +418,34 @@ class ProofTests(ReplayCase):
     def test_a_proof_needs_the_claim_of_its_attempt_and_platform(self):
         self.assertCode("store_proof_unclaimed", [self.s.register(), self.s.intent(), self.s.claim_file(self.darwin),
                                                   self.s.proof_file(self.linux, self.linux_zip)])
+
+    def test_proofs_without_provider_hashes_reach_the_normal_attempt_verdict(self):
+        def drop_provider(case):
+            del case["source_proof"]["binary_identities"]["sha256"]["provider_sha256"]
+        darwin = self.s.zip(self.darwin, case_change=drop_provider)
+        linux = self.s.zip(self.linux, case_change=drop_provider)
+        snapshot = self.replay([*self.claimed(), self.s.proof_file(self.darwin, darwin),
+                                self.s.proof_file(self.linux, linux)])
+        self.assertEqual({proof.proof_sha256 for proof in snapshot.history.proofs}, {sha(darwin), sha(linux)})
+        self.assertNotEqual(sha(linux), sha(self.linux_zip))
+        for proof in snapshot.history.proofs:
+            self.assertEqual((proof.binaries, proof.closure), (self.linux.binaries, Closure.COMPLETE))
+            self.assertEqual({cell.status for cell in proof.cells}, {CellStatus.PASS})
+        self.assertEqual(evaluate_attempt(self.s.candidate.manifest, snapshot.history, 1).state, AttemptState.PASS)
+
+    def test_proof_without_provider_hash_still_refuses_missing_or_wrong_owned_hash(self):
+        for field in ("delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256"):
+            for missing in (True, False):
+                def change(case, field=field, missing=missing):
+                    hashes = case["source_proof"]["binary_identities"]["sha256"]
+                    del hashes["provider_sha256"]
+                    if missing:
+                        del hashes[field]
+                    else:
+                        hashes[field] = "9" * 64
+                code = "public_case_binary_incomplete" if missing else "public_case_binary_binding_mismatch"
+                with self.subTest(field=field, missing=missing):
+                    self.assertProofRefused(self.s.zip(self.linux, case_change=change), code)
 
     def test_tampered_foreign_and_shape_only_proofs_refuse(self):
         flipped = bytearray(self.linux_zip)

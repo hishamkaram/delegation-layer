@@ -19,7 +19,8 @@ const (
 )
 
 // PolicyDetails records the non-secret policy decisions and the exact source
-// observations used to resolve them.
+// observations used to resolve them. RuntimeSHA256 is an optional provider
+// executable observation; an empty value means it was not observed.
 type PolicyDetails struct {
 	ProfileRevision string               `json:"profile_revision"`
 	RuntimeSHA256   string               `json:"runtime_sha256"`
@@ -53,8 +54,10 @@ func validatePolicyDetails(policy PolicyDetails) error {
 	if err := validatePolicyText(policy.ProfileRevision, "policy profile revision", true); err != nil {
 		return err
 	}
-	if err := ValidateSHA256(policy.RuntimeSHA256); err != nil {
-		return fmt.Errorf("policy runtime SHA-256: %w", err)
+	if policy.RuntimeSHA256 != "" {
+		if err := ValidateSHA256(policy.RuntimeSHA256); err != nil {
+			return fmt.Errorf("policy runtime SHA-256: %w", err)
+		}
 	}
 	if err := validatePolicyPath(policy.Workspace, "policy workspace"); err != nil {
 		return err

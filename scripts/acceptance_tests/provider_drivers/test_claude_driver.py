@@ -520,7 +520,7 @@ class ClaudeOracleTests(unittest.TestCase):
             definition = {
                 "revision": claude_constants.RUNTIME_INSPECTION_REVISION,
                 "executable": str(claude.resolve()),
-                "executable_sha256": common.digest(claude),
+                "executable_sha256": "",
                 "arguments": None,
                 "directory": str(workspace.resolve()),
                 "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
@@ -528,7 +528,7 @@ class ClaudeOracleTests(unittest.TestCase):
                 "output_limit": 1 << 20,
                 "runtime": {
                     "executable": str(claude.resolve()),
-                    "executable_sha256": common.digest(claude),
+                    "executable_sha256": "",
                     "directory": str(workspace.resolve()),
                     "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
                                     "USER=fixture-user", "XDG_CONFIG_HOME=" + str(root / "config")],

@@ -9,6 +9,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+// factsForCurrentRuntime projects saved admission facts onto the current
+// candidate's installed executable in memory. The saved proof stays unchanged.
+// Its reported version described the executable observed at admission, so it
+// is not presented as an observation of the current one.
 func factsForCurrentRuntime(candidate commonprovider.ProfileCandidate, facts json.RawMessage) (json.RawMessage, error) {
 	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil || len(facts) == 0 {
 		return facts, nil
@@ -20,6 +24,7 @@ func factsForCurrentRuntime(candidate commonprovider.ProfileCandidate, facts jso
 	runtime := *decoded.Runtime
 	runtime.Executable = candidate.Inspection.Runtime.Executable
 	runtime.SHA256 = candidate.Inspection.Runtime.ExecutableSHA256
+	runtime.Version = ""
 	return commonprovider.EncodeInspectionFacts(runtime, decoded.Native)
 }
 

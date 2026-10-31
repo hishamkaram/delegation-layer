@@ -74,7 +74,7 @@ func moveToOutsideAndAlias(t *testing.T, rig *poolRig, name string) (outside str
 func TestReleaseAndPendingRefuseAnAliasedViewsDirectory(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "views-alias")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	outside := moveToOutsideAndAlias(t, rig, poolViewsDir)
 	before := treeSnapshot(t, outside)
 
@@ -92,7 +92,7 @@ func TestReleaseAndPendingRefuseAnAliasedViewsDirectory(t *testing.T) {
 func TestReleaseRefusesADanglingViewsAliasWithAConcreteFault(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "views-dangling")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	moved := filepath.Join(rig.dir, "gone-views")
 	if err := os.Rename(rig.pool.viewsPath(), moved); err != nil {
 		t.Fatal(err)
@@ -111,7 +111,7 @@ func TestReleaseRefusesADanglingViewsAliasWithAConcreteFault(t *testing.T) {
 func TestIdleReclaimRefusesAnAliasedImagesDirectory(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "images-alias")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestIdleReclaimRefusesAnAliasedImagesDirectory(t *testing.T) {
 func TestReadOnlyOperationsRefuseASymlinkedRoot(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "root-alias")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	real := filepath.Join(rig.dir, "real-pool")
 	if err := os.Rename(rig.pool.root, real); err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestMissingChainLinksAreAbsentAndCreateNothing(t *testing.T) {
 func TestOwnReleaseSucceedsWhenTheImagesDirectoryIsCorrupt(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "corrupt-images")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	// Corrupt the images directory after bind: replace it by a regular file.
 	images := rig.pool.imagesPath()
 	if err := os.Rename(images, images+".moved"); err != nil {
@@ -210,7 +210,7 @@ func TestOwnReleaseSucceedsWhenTheImagesDirectoryIsCorrupt(t *testing.T) {
 func TestReleaseTreatsAnOwnerGoneAtRemovalAsAlreadyReleased(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "owner-gone")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	rig.pool.faults.at = func(point poolPoint, _ string) {
 		if point == pointBeforeWitnessRemove {
 			// A concurrent release of the same, already closed, owner finishes
@@ -228,7 +228,7 @@ func TestReleaseTreatsAnOwnerGoneAtRemovalAsAlreadyReleased(t *testing.T) {
 func TestReleaseKeepsEveryOtherRemovalFault(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := plainEntry(t, rig.dir, "other-fault")
-	rig.binder("a", plainRequest(entry, digest))
+	rig.seedView("a", plainRequest(entry, digest))
 	rig.pool.faults.at = func(point poolPoint, _ string) {
 		if point == pointBeforeWitnessRemove {
 			// Make removal fail for a reason other than absence.

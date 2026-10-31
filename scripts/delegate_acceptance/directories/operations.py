@@ -305,11 +305,39 @@ def _remove_empty_cleanup_quarantine(parent_fd, name, descriptor, expected_ident
     os.rmdir(name, dir_fd=parent_fd)
 
 
-def _isolate_directory_at(parent_fd, name, deadline=None):
-    """Rename one directory to a fresh sibling without ever replacing an entry.
+def _grant_owner_access(descriptor, expected_identity, retained, deadline):
+    """Grant missing owner bits only through a held descriptor of the exact owned directory.
 
-    A same-parent rename does not rewrite the directory's ".." entry, so it does
-    not need write permission on a product-sealed directory.
+    Replacements, non-directories, and other users' directories are refused unmodified.
+    """
+    held = os.fstat(descriptor)
+    require(stat.S_ISDIR(held.st_mode) and (held.st_dev, held.st_ino) == expected_identity,
+            "owned entry was replaced during cleanup; retained " + retained)
+    if held.st_mode & stat.S_IRWXU == stat.S_IRWXU:
+        return
+    require(held.st_uid == os.getuid(),
+            "sealed owned directory is not owned by the current user; retained " + retained)
+    _check_cleanup_deadline(deadline)
+    os.fchmod(descriptor, stat.S_IMODE(held.st_mode) | stat.S_IRWXU)
+
+
+def _hold_owned_directory(parent_fd, name, expected_identity, deadline):
+    """Open one exact owned directory by name and grant owner access before isolation."""
+    _check_cleanup_deadline(deadline)
+    descriptor = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+    try:
+        _grant_owner_access(descriptor, expected_identity, "in place: " + name, deadline)
+        return descriptor
+    except BaseException:
+        _close_parent_descriptor(descriptor)
+        raise
+
+
+def _isolate_directory_at(parent_fd, name, expected_identity, deadline=None):
+    """Rename one held directory to a fresh sibling without ever replacing an entry.
+
+    Some kernels (macOS xnu-11417) require owner write on the directory itself even
+    for a same-parent rename, so the caller grants it through its held descriptor.
     """
     for _attempt in range(16):
         _check_cleanup_deadline(deadline)
@@ -318,39 +346,34 @@ def _isolate_directory_at(parent_fd, name, deadline=None):
             _rename_noreplace(parent_fd, name, parent_fd, isolated_name)
         except FileExistsError:
             continue
+        except PermissionError as error:
+            try:
+                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError as observation:
+                raise RuntimeError("cannot verify owned directory after rename refusal (" +
+                                   str(error) + "): " + name) from observation
+            if (current.st_dev, current.st_ino) != expected_identity:
+                raise RuntimeError("owned entry was replaced during cleanup; retained in place: " +
+                                   name) from error
+            raise
         return isolated_name
     raise RuntimeError("could not allocate a unique cleanup quarantine")
 
 
-def _open_isolated_directory(parent_fd, isolated_name, expected_identity, name):
-    """Hold the isolated directory and grant owner access only to that exact inode."""
-    result = os.stat(isolated_name, dir_fd=parent_fd, follow_symlinks=False)
-    require((result.st_dev, result.st_ino) == expected_identity,
-            "owned entry was replaced during cleanup; retained in quarantine: " +
-            isolated_name)
-    descriptor = os.open(isolated_name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
-    try:
-        held = os.fstat(descriptor)
-        require(stat.S_ISDIR(held.st_mode) and
-                (held.st_dev, held.st_ino) == expected_identity,
-                "owned directory changed while opening: " + name)
-        if held.st_mode & stat.S_IRWXU != stat.S_IRWXU:
-            require(held.st_uid == os.getuid(),
-                    "sealed owned directory is not owned by the current user; "
-                    "retained in quarantine: " + isolated_name)
-            os.fchmod(descriptor, stat.S_IMODE(held.st_mode) | stat.S_IRWXU)
-        return descriptor
-    except BaseException:
-        _close_parent_descriptor(descriptor)
-        raise
-
-
 def _remove_directory_at(parent_fd, name, expected_identity, deadline=None):
-    """Isolate one exact directory beside itself, then delete its contents."""
-    isolated_name = _isolate_directory_at(parent_fd, name, deadline)
-    descriptor = _open_isolated_directory(
-        parent_fd, isolated_name, expected_identity, name)
+    """Hold one exact directory, isolate it beside itself, then delete its contents.
+
+    The granted descriptor stays open through isolation and every later identity check.
+    """
+    descriptor = _hold_owned_directory(parent_fd, name, expected_identity, deadline)
     try:
+        isolated_name = _isolate_directory_at(parent_fd, name, expected_identity, deadline)
+        isolated = os.stat(isolated_name, dir_fd=parent_fd, follow_symlinks=False)
+        require((isolated.st_dev, isolated.st_ino) == expected_identity,
+                "owned entry was replaced during cleanup; retained in quarantine: " +
+                isolated_name)
+        _grant_owner_access(descriptor, expected_identity, "in quarantine: " + isolated_name,
+                            deadline)
         for child in os.listdir(descriptor):
             _check_cleanup_deadline(deadline)
             child_result = os.stat(child, dir_fd=descriptor, follow_symlinks=False)

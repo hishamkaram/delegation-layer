@@ -17,7 +17,9 @@ This document defines the normative requirements for provider adapters
 | `opencode:run` | `read-only`, `workspace-write` | native ACP `plan`/`build` mode; native permission requests answered `reject_once` for read-only and `allow_once` for workspace-write | `opencode acp` started in the workspace directory; mode, model, and effort are acknowledged `session/set_config_option` values | interactive clarification and steering, independent containment |
 
 Each native adapter locates its executable during static preparation and records
-the executable identity in the immutable candidate. Lookup uses the
+the resolved path in the immutable candidate. Provider executable bytes are not
+hashed. A populated SHA-256 in a record written earlier is validated when present
+and is history only; it does not pin the installed provider. Lookup uses the
 unfiltered preparation scope that composition supplies to the factory, which
 may be a recorded scope that composition selected. An adapter does not replace
 that scope with a recorded launch environment; a recorded environment only
@@ -25,8 +27,9 @@ selects the launch environment, under the provider's own saved and unrecorded
 rules. Managed runtime-only
 admission records the required capability digest with no observed version.
 The task's already-supervised runner verifies that the file is still executable, runs its
-version and help commands, and checks the stable public entrypoint flags that
+help command, and checks the stable public entrypoint flags that
 the profile can observe reliably before finalization and provider launch.
+No standalone version command is run.
 Native policy projections, custom runners, and historical contracts retain
 their required admission inspection. A
 provider's complete launch argv remains subject to the provider process and its
@@ -34,12 +37,19 @@ result predicate; rapidly changing or pipe-truncated forwarded options are not
 turned into a stale admission allowlist.
 Documented SDK protocol options that are absent from public help (Claude
 `--permission-prompt-tool stdio`) additionally require protocol fixtures and
-live handshake acceptance; public help alone does not prove native interaction. Any
-reported version that fits the bounded durable evidence record and its binary
-digest are recorded in the task evidence; a fresh
-launch may refresh provider runtime identity after the current capability
-probe. No release version, operating system, architecture, profile revision, or
-digest is compared with a checked-in value.
+live handshake acceptance; public help alone does not prove native interaction. A
+reported version is an optional diagnostic. The current runtime probe records
+only the resolved executable path and leaves its version and SHA-256 fields
+empty; it does not extract version text from help or protocol output. Historical
+populated diagnostics remain subject to their recorded-field validation. A
+fresh launch may refresh the provider runtime path after the current capability
+probe. Provider compatibility is decided from observed behavior (help output,
+declared flags, and the adapter's protocol and result checks), with no provider
+release allowlist and no provider executable hash or version pin. Delegate's own
+contracts remain real checks: profile, predicate, and protocol revisions, and
+the worker, supervisor, and native-helper identities. The
+[product boundary](product-boundary.md) owns the rule that provider
+installations are mutable and user-owned.
 
 ## 2. Launch Planning and Preflight Policy
 - **Native Configuration**: Provider CLIs own configuration, authentication,
@@ -79,16 +89,24 @@ digest is compared with a checked-in value.
   selection.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).
 - **Launch Verification**:
-  - Records the requested native permission mode, runtime identity, and workspace.
+  - Records the requested native permission mode, runtime path, and workspace.
   - Rechecks the provider capability and rebuilds the current launch plan
     immediately before launch. Personal provider configuration is not hashed or
-    rejected for drift by new profiles. A changed provider path, reported
-    version, or executable digest is accepted only when the fresh capability
-    check succeeds; the task policy, workspace, predicate, writable roots, and
-    artifact declarations remain admission-bound.
-  - Records the final provider executable, observed version, and digest in
-    `provider.started.json` and `provider.exit`; `meta.json` remains the
-    immutable admission record.
+    rejected for drift by new profiles. A changed provider path or reported
+    version is accepted when the fresh capability check succeeds; the task
+    policy, workspace, predicate, writable roots, and artifact declarations
+    remain admission-bound.
+  - Resolves the installed CLI in the task's saved authorized lookup
+    environment and builds one direct command from the fresh observation. It
+    makes no provider executable hash, copy, hard link, mirror, or image pool,
+    and it does not promise that inspected bytes equal executed bytes. A missing
+    executable, operating-system launch error, authentication or protocol error,
+    or native resume failure is reported explicitly, with no automatic retry,
+    fallback executable, or fresh session.
+  - Records the final provider executable path in `provider.started.json` and
+    `provider.exit`. Current runtime probes leave the optional version and
+    provider SHA-256 diagnostics empty; `meta.json` remains the immutable
+    admission record.
   - Previously admitted tasks retain their original preparation contract.
 - **Credential Safety**: Credentials, tokens, and unrelated user environment variables are never included in command arguments, logs, metadata, or committed fixtures.
 

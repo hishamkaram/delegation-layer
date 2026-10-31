@@ -80,10 +80,10 @@ class CodexAcceptance:
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.codex = resolve_executable(args.codex, Path(shutil.which("codex") or "/opt/homebrew/bin/codex"), "codex")
-        self.provider_version: str | None = None
+        self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = digest(self.codex)
+        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         self.inspection_binding: dict[str, object] | None = None
         require_discovery("codex", self.codex)
@@ -235,14 +235,9 @@ class CodexAcceptance:
             bounded_text(pueue_version.directory / "stdout", "pueue version output"), "pueue")
         self.pueued_version = observed_pueue_version(
             bounded_text(pueued_version.directory / "stdout", "pueued version output"), "pueued")
-        codex_version = self.direct("codex-version", [self.codex, "--version"], timeout=15)
-        observed = (codex_version.directory / "stdout").read_text().strip()
-        require(observed, "Codex returned an empty version")
-        self.provider_version = observed
         self.inspection_binding = expected_codex_inspection_binding(
             pueue=self.pueue, config=self.pueue_config, base=self.pueue_base, config_digest=digest(self.pueue_config),
             runner=self.runner, workspace=self.workspace, environment=self.environment, provider=self.codex,
-            provider_digest=self.provider_sha256,
             pueue_version=self.pueue_version)
 
     def _start_private_daemon(self) -> None:

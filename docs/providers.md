@@ -66,64 +66,85 @@ format changes do not become false admission failures.
 
 ## Shared compatibility behavior
 
-Before a task is admitted, the selected adapter resolves a canonical regular
-executable and records its static identity and required capability contract.
-For managed runtime-only tasks, admission records that runtime verification is
-pending. The task's supervised runner performs the runtime probe before the
-provider task starts:
+Delegation Layer runs the provider CLI the user installed, as a normal process
+under its existing supervision. The CLI, its updates, accounts, settings,
+extensions, and native sessions belong to the provider and the user; the
+[product boundary](../agents/_data/product-boundary.md) owns that division.
+Delegation Layer does not hash, copy, hard-link, mirror, or pin provider
+executables, and it keeps no provider release or version allowlist.
 
-1. invokes the provider-declared version command (defaulting to `--version`)
-   and accepts any nonempty, valid
-   reported version that fits the bounded durable evidence record;
-2. invokes the provider help command, including any profile-specific subcommand;
-3. checks the stable public flags declared by the adapter; and
-4. fingerprints the executable again before the profile is finalized.
+Before a task is admitted, the selected adapter resolves a regular executable
+and records its path and required capability contract. For managed runtime-only
+tasks, admission records that runtime verification is pending. The task's
+supervised runner performs the runtime probe before the provider task starts:
 
-This detects missing commands, non-executable files, and incompatible flag
-changes without pinning a release number or binary hash. A reported version
-is valid when it is trimmed nonempty UTF-8 text without control characters and
-fits the bounded durable evidence record; no semantic-version pattern is
-required. A newer provider build is accepted when it preserves the command
-capabilities the adapter needs.
+1. invokes the provider help command, including any profile-specific
+   subcommand; and
+2. checks the stable public flags declared by the adapter.
 
-The runner uses a fresh inspection result to build the launch plan it will
-actually execute. A provider can be upgraded or relinked between admission and
-launch when the new executable passes the current capability probe. The task's
-requested mode, policy, workspace, writable roots, predicate, environment
-contract, and input/output declarations remain immutable and are still matched
-exactly before the process starts. The final executable, observed version, and
-digest are recorded in the started and sealed task evidence.
+There is no standalone version command and no executable fingerprint. The probe
+detects missing commands, non-executable files, and incompatible flag changes
+without pinning a release number or binary hash. A newer provider build is
+accepted when it preserves the command capabilities the adapter needs.
+
+The runner resolves the installed CLI in the authorized lookup environment saved
+with the task, then builds the launch from that fresh observation. The
+observer's ambient `PATH` and an older absolute path recorded in the admission
+metadata are not authority: a provider can be upgraded, relinked, or moved
+between admission and launch when the current CLI passes the probe. The task's
+requested provider, model, effort, native permission mode, workspace, writable
+roots, predicate, environment contract, and input/output declarations remain
+immutable and are still matched exactly before the process starts. The resolved
+executable path is recorded in the started and sealed task evidence.
+
+Delegation Layer does not promise that the bytes it probed are the bytes the
+operating system executes. A provider update between the probe and the process
+start can be observed inconsistently or surface as an operating-system or
+provider error. That error is reported as it happened; the launch permit is
+already consumed, so there is no automatic retry, fallback executable, or fresh
+session.
+
+A reported version is an optional diagnostic and never a readiness condition.
+The current runtime probe records only the resolved executable path. Its version
+and SHA-256 members remain empty; it does not extract version text from help or
+protocol output. A required exchange that actually fails, times out, or exceeds
+its capture bound is still an error. Evidence written by earlier releases can
+carry a populated version or executable SHA-256. A present value is validated like any other recorded field,
+and malformed evidence is still rejected. A valid old observation is history
+only: it does not pin the current installed provider and never authorizes a
+launch.
 
 Native policy projections, custom runners, and historical tasks retain their
 admission inspection requirements. Runtime-only tasks do not share capability
 observations: every task's fresh preflight is required, even when unchanged
-launcher bytes load an updated runtime payload.
+launcher bytes load an updated runtime payload. Digests that Delegation Layer
+owns, such as the capability contract, task and artifact evidence, and the
+release, worker, and bundled supervisor identities, are unchanged.
 
 The same compatibility rule applies to the private Pueue boundary: delegate
 checks the required queue behavior and fields, accepts nonempty observed Pueue
 version output and additive status fields, and keeps the bundled artifact pin
 only for reproducible packaging.
 
-The observed version is descriptive evidence stored with the task. It does not
-authorize a release by itself, and Delegation Layer does not query a web release
-list or maintain a semver allowlist. The version-size bound is a durable-record
-safety limit, not a release compatibility check; an observation that exceeds it
-is rejected before provider execution. Terminal launch evidence
-uses the same bound so publication remains durable. The inspection definition and
-executable digest bind each capability result to the checked command. The runner
-checks the current runtime before launch. Probe failures expose only a bounded reason
-class, such as a missing required flag or executable identity drift, and never
-provider output or process diagnostics.
+The observed path and any version are local task observations, not provider
+attestation, and Delegation Layer does not query a web release list. The
+version-size bound is a durable-record safety limit, not a release
+compatibility check. The inspection definition and capability digest bind each
+capability result to the checked command. The runner checks the current runtime
+before launch. Probe failures expose only a bounded reason class, such as a
+missing required flag or an unusable executable, and never provider output or
+process diagnostics.
 
 The probe does not replace provider behavior validation. Each adapter still
 requires its expected output shape, task and session identity, authentication
 result, and output artifact integrity. The recorded effective configuration binds
-the selected native mode and executable, not the contents of provider settings.
+the selected native mode and executable path, not the contents of provider
+settings.
 
 When dispatch returns a capability projection, `status: "ready"` means the
-shared probe observed the required behavior and executable identity for that
-admission boundary. A live acceptance receipt remains separate: authenticated
-proof is `passed`, and unavailable authentication is `blocked` and neutral.
+shared probe observed the required behavior at that admission boundary. A live
+acceptance receipt remains separate: authenticated proof is `passed`, and
+unavailable authentication is `blocked` and neutral.
 
 ## Live acceptance
 
@@ -482,8 +503,7 @@ speaks JSON-RPC 2.0 over standard input and output. Fresh tasks record profile
 revision `opencode-acp-v1` and predicate `acp-v2`. The adapter passes no other
 argument. The process starts in the canonical workspace, and the workspace,
 agent, model, effort, and session travel in protocol requests. The runtime probe
-validates `opencode --version` and requires `opencode acp --help` to succeed;
-no ACP flag allowlist is required. Help proves no protocol
+requires `opencode acp --help` to succeed; no ACP flag allowlist is required. Help proves no protocol
 behavior, so every task validates the handshake, each configuration
 acknowledgement, and the terminal response.
 

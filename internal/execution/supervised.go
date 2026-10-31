@@ -58,10 +58,11 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	return s.Start(func() error { return s.lifetime.StartCommand(cmd, start) })
 }
 
-// BindCommand binds one native command through the owner's binder with the
-// scope's deadline context; a scope without a binder makes a private copy. The
-// caller owns the returned command and closes it after Wait, or after a refused
-// start.
+// BindCommand binds one integrity-bound native helper command through the
+// owner's binder with the scope's deadline context; a scope without a binder
+// makes the helper's private verified copy. The caller owns the returned
+// command and closes it after Wait, or after a refused start. Provider CLI
+// commands are constructed directly and never bound.
 func (s PreflightScope) BindCommand(request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
 	return bindCommand(s.ctx, s.binder, request)
 }
@@ -117,8 +118,9 @@ type SupervisedOptions struct {
 	Clock    Clock
 	Stopper  Stopper
 	Lifetime Lifetime
-	// Binder binds every native command started through the scope. Nil keeps
-	// the private copy that Command.Close removes.
+	// Binder binds integrity-bound native helper commands started through the
+	// scope. Nil keeps the helper's private copy that Command.Close removes.
+	// Provider CLI commands never use it.
 	Binder CommandBinder
 }
 

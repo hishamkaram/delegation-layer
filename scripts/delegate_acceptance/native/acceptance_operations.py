@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import digest, write_json
-from scripts.delegate_acceptance.evidence.validation import _hex_digest, _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import _task_identity, require
 from scripts.delegate_acceptance.native.fixtures import shell_append_continuation_command, shell_digest_command
 from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER
 from scripts.delegate_acceptance.paths.operations import write_bytes
@@ -56,9 +56,7 @@ def write_binding(owner, task_id: str, provider_identity: dict[str, str]) -> Non
     require(_task_identity(task_id) and
             set(provider_identity) == {"executable", "version", "sha256"} and
             recorded_identity is not None and
-            dict(recorded_identity) == provider_identity and
-            provider_identity.get("version") == acceptance.provider_version and
-            _hex_digest(provider_identity.get("sha256")),
+            dict(recorded_identity) == provider_identity,
             "first admitted provider identity is unavailable")
     args = getattr(acceptance, "args", None)
     budget = case_task_budget(acceptance.provider)

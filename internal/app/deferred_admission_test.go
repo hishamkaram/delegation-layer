@@ -55,7 +55,7 @@ func testPendingRuntimeUpgrade(t *testing.T, name string) {
 		writeRuntimeUpgradeLauncher(t, currentPath, versionPath, helpPath)
 		testsupport.RequireAppTest(t, os.Remove(oldPath))
 	}
-	writeAppTestFile(t, versionPath, []byte("provider-v2\n"))
+	writeAppTestFile(t, versionPath, []byte("must-not-be-observed\n"))
 	incompatible := name == "unchanged launcher incompatible payload"
 	if incompatible {
 		writeAppTestFile(t, helpPath, []byte("--different\n"))
@@ -96,7 +96,7 @@ func assertPendingRuntimeUpgradeOutcome(t *testing.T, directory string, result e
 		testsupport.RequireAppTest(t, err)
 		var started task.ProviderStartedRecord
 		testsupport.RequireAppTest(t, task.DecodeStrict(data, &started))
-		if started.ProviderExecutable != executable || started.ProviderVersion != "provider-v2" {
+		if started.ProviderExecutable != executable || started.ProviderVersion != "" || started.ProviderSHA256 != "" {
 			t.Fatalf("launch did not record refreshed runtime: %+v", started)
 		}
 	}
@@ -119,7 +119,7 @@ func runtimeUpgradeCandidate(t *testing.T, request task.TaskRecord, executable s
 	testsupport.RequireAppTest(t, err)
 	build := func(version, pending string) commonprovider.PreparedProfile {
 		profile := appInspectionPreparedProfile(request, request.CanonicalCwd, nil)
-		profile.Plan.Executable, profile.Plan.ExecutableSHA256 = cli.Path, cli.SHA256
+		profile.Plan.Executable = cli.Path
 		profile.Plan.Arguments = []string{"--run"}
 		profile.Plan.Environment = []string{"LANG=C"}
 		profile.ObservedVersion, profile.RuntimePreflightSHA256 = version, pending

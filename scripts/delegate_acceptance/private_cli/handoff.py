@@ -9,7 +9,7 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_TASK_COUNT
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_OBSERVATION_PHASE
-from scripts.delegate_acceptance.private_cli.noexec_state import require_alternate_exec_custody
+from scripts.delegate_acceptance.private_cli.noexec_state import require_unplaced_registrations
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from pathlib import Path
@@ -140,7 +140,7 @@ def run_external_inspection_handoff_acceptance(
 
 
 def run_external_noexec_state_acceptance(**inputs):
-    """Prove external-mode noexec state keeps each scope in its recorded exec custody pool, without a private handoff.
+    """Prove external-mode execution from noexec state with unplaced registrations and no private handoff.
 
     The inputs are the HandoffCase fields.
     """
@@ -155,9 +155,7 @@ def _run_noexec_state_case(case: HandoffCase):
     try:
         task, _ = _start_external_task(case, evidence, resources, supervisor_control, task_commands)
         closures = _close_noexec_state_scope(case, evidence, task, resources)
-        evidence["custody_placement"] = require_alternate_exec_custody(
-            closures, state_root=case.state, execution_root=Path(execution_root)
-        )
+        evidence["execution_registrations"] = require_unplaced_registrations(closures)
         evidence["tasks"]["external"]["status"] = _observe_external_status(case, task_commands, task)
         collected = run_json(
             case.delegate,

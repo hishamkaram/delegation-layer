@@ -186,6 +186,7 @@
       "py:delegate_acceptance.provider_drivers.claude.identity",
       "py:delegate_acceptance.provider_drivers.claude.protocol",
       "py:delegate_acceptance.tasks.publication",
+      "py:delegate_acceptance.tasks.runtime_metadata",
       "py:json",
       "py:pathlib",
       "py:re"
@@ -300,6 +301,7 @@
       "py:delegate_acceptance.provider_drivers.codex.identity",
       "py:delegate_acceptance.provider_drivers.codex.protocol",
       "py:delegate_acceptance.tasks.publication",
+      "py:delegate_acceptance.tasks.runtime_metadata",
       "py:pathlib",
       "py:re"
     ]

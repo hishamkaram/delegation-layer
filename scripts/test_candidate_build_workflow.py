@@ -40,6 +40,7 @@ class CandidateWorkflowTests(unittest.TestCase):
                 self.assertNotIn("candidate", header)
         self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, "gate-linux"))
         self.assertIn("runs-on: macos-15", job_text(self.source, "gate-macos"))
+        self.assertIn("os: [ubuntu-24.04, macos-15]", job_text(self.source, "skill-package"))
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]

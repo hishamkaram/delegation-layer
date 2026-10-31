@@ -112,9 +112,6 @@ func TestLegacyCloseRemovesItsPrivateView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if command.retainView {
-		t.Fatal("a private-copy command must own its view")
-	}
 	if _, err = os.Lstat(command.temporaryDir); err != nil {
 		t.Fatalf("view missing before Close: %v", err)
 	}

@@ -5,7 +5,6 @@ package verifiedexec
 // the original text, errors.Is and errors.As answers are preserved.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -150,19 +149,6 @@ func TestPrivateBindTagsAChangedOriginalAsAdmittedChange(t *testing.T) {
 	}
 }
 
-func TestGuardedPoolBindTagsAChangedOriginalAsAdmittedChange(t *testing.T) {
-	for _, tc := range changeCases() {
-		t.Run(tc.name, func(t *testing.T) {
-			rig := newPoolRig(t)
-			entry, digest := plainEntry(t, rig.dir, "pool-change")
-			tc.apply(t, entry)
-			_, err := rig.pool.Bind(context.Background(), rig.ns("a"), plainRequest(entry, digest))
-			tc.requireTagged(t, err)
-			rig.requireNothingBound()
-		})
-	}
-}
-
 // TestDirectInspectionNeverReportsAnAdmittedChange: Open, Fingerprint and
 // LocatePath serve every caller, including the interpreter, image and stage
 // checks, so none of them says that an admitted entrypoint changed. Text, Is and
@@ -221,15 +207,7 @@ func refusalControls() []refusalControl {
 			_, err := NewCommandFromRequest(entryRequest(dir, entry, digest))
 			return err
 		}},
-		{"entrypoint lost its exec bit, pool", func(t *testing.T) error {
-			rig := newPoolRig(t)
-			entry, digest := plainEntry(t, rig.dir, "noexec-bit")
-			if err := os.Chmod(entry, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := rig.pool.Bind(context.Background(), rig.ns("a"), plainRequest(entry, digest))
-			return err
-		}},
+
 		{"missing interpreter, private", func(t *testing.T) error {
 			dir := scratch(t)
 			f := newEntryFixture(t, dir)
@@ -239,49 +217,22 @@ func refusalControls() []refusalControl {
 			_, err := NewCommandFromRequest(entryRequest(dir, f.script, f.digest))
 			return err
 		}},
-		{"missing interpreter, pool", func(t *testing.T) error {
-			rig := newPoolRig(t)
-			f := newEntryFixture(t, rig.dir)
-			if err := os.Remove(f.interpreter); err != nil {
-				t.Fatal(err)
-			}
-			_, err := rig.pool.Bind(context.Background(), rig.ns("a"), plainRequest(f.script, f.digest))
-			return err
-		}},
+
 		{"copy hash mismatch after open", copyMismatchAfterOpen},
-		{"cached image that does not hash to its name", tamperedCachedImage},
 	}
 }
 
 func copyMismatchAfterOpen(t *testing.T) error {
-	rig := newPoolRig(t)
-	f := newEntryFixture(t, rig.dir)
-	rig.pool.faults.at = func(point poolPoint, _ string) {
-		if point == pointSourceOpened {
-			f.rewriteInPlace(t)
-		}
+	dir := scratch(t)
+	f := newEntryFixture(t, dir)
+	file, err := Open(f.script, f.digest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, err := rig.pool.Bind(context.Background(), rig.ns("a"), plainRequest(f.script, f.digest))
+	f.rewriteInPlace(t)
+	_, err = privateBinding(f.script, f.digest, "", []string{"TMPDIR=" + dir}, nil).newCommand(file)
 	if err == nil || !strings.Contains(err.Error(), "does not match admission") {
-		t.Fatalf("a cold bind of a rewritten original gave %v", err)
-	}
-	return err
-}
-
-func tamperedCachedImage(t *testing.T) error {
-	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "tampered-image")
-	rig.binder("a", plainRequest(entry, digest))
-	image := rig.pool.imagePath(digest)
-	if err := os.Chmod(image, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(image, []byte("tampered cache"), 0o500); err != nil {
-		t.Fatal(err)
-	}
-	_, err := rig.pool.Bind(context.Background(), rig.ns("b"), plainRequest(entry, digest))
-	if err == nil || !strings.Contains(err.Error(), "verify custody image") {
-		t.Fatalf("a tampered cached image gave %v", err)
+		t.Fatalf("a private copy of a rewritten original gave %v", err)
 	}
 	return err
 }

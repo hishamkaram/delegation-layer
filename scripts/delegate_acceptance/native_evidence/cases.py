@@ -16,7 +16,6 @@ from .contract import (
     MAX_RECEIPT_BYTES,
     MatrixRow,
     _case_cleanup_authorization,
-    _compact_provider_versions,
     _digest_bytes,
     _empty_summary,
     _source_status_matches,
@@ -30,6 +29,7 @@ from .filesystem import (
     _write_atomic,
     _write_bytes_atomic,
 )
+from .proof import _compact_provider_versions
 from .validation import (
     _validate_case_receipt,
 )

@@ -38,6 +38,11 @@ ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
 
 # Agent Roles and Responsibilities
 
+## Product boundary
+
+Read the [product boundary](agents/_data/product-boundary.md) before proposing a
+design, guarantee, or restriction; it owns what Delegate does and does not own.
+
 ## Golden engineering rules
 
 Maintainability and clear state ownership are acceptance conditions for every repository

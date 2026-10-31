@@ -459,7 +459,7 @@ func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironm
 	if now.IsZero() || request.BudgetNanos <= 0 {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: invalid runtime inspection boundary", ErrUnsupportedProfile)
 	}
-	if err := task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
+	if err := commonprovider.ValidateOptionalExecutableSHA256(environment.RuntimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	sources = slices.Clone(sources)
@@ -507,7 +507,7 @@ func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sou
 		}
 		return cmp.Compare(a.Kind, b.Kind)
 	})
-	if err = task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
+	if err = commonprovider.ValidateOptionalExecutableSHA256(environment.RuntimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
 	profileRevision, approval := ProfileRevision, "dontAsk"

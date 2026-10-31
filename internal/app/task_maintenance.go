@@ -13,6 +13,10 @@ package app
 //     existing independent owner.
 //   - A validated saved external binding has no elected owner, so its public
 //     observer keeps the synchronous custody retry.
+//   - An ordinary private guardian removes no view after its run. It hands a
+//     closed lifetime's custody to the elected owner through one durable full
+//     wake and the existing launcher. Inspection and external guardians keep
+//     their direct post-run release.
 
 import (
 	"context"
@@ -259,10 +263,10 @@ func isUnknownObservation(err error) bool { return errors.Is(err, pueue.ErrUnkno
 
 var errPrivateMaintenanceNotStarted = errors.New("private queue maintenance owner was not started; the wake remains durable")
 
-// releaseGuardianLifetimeCustody is the guardian's post-run release. A private
-// task's release fault persists a full wake before the guardian returns, so
-// the Done callback's elected pass retries the exact recorded pool. The
-// guardian's own result never changes.
+// releaseGuardianLifetimeCustody is the post-run release of an inspection or
+// external guardian. A private inspection's release fault persists a full
+// wake before the guardian returns, so the Done callback's elected pass
+// retries the exact recorded pool. The guardian's own result never changes.
 func releaseGuardianLifetimeCustody(root string, closure guardian.ClosureRecords, private bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), lifetimeCustodyReleaseTimeout)
 	defer cancel()
@@ -277,6 +281,36 @@ func releaseGuardianLifetimeCustody(root string, closure guardian.ClosureRecords
 	if wakeErr := requestPrivateFullMaintenanceWake(ctx, root); wakeErr != nil {
 		log.Printf("delegate: lifetime custody recovery request deferred: %v", wakeErr)
 	}
+}
+
+// handOffGuardianLifetimeCustody is an ordinary private guardian's post-run
+// custody step. It never removes a view. A closed lifetime with remaining
+// views, or a pending check that faulted, gets one durable full wake before
+// the existing independent owner is launched; that owner's elected pass
+// releases through the canonical closure policy. Pending closure or released
+// custody requests nothing. A fault keeps the views, and the wake once
+// published, and is returned beside any check fault.
+func handOffGuardianLifetimeCustody(root string, closure guardian.ClosureRecords, options pueue.Options) error {
+	ctx, cancel := context.WithTimeout(context.Background(), lifetimeCustodyReleaseTimeout)
+	defer cancel()
+	pending, err := closedLifetimeCustodyReleasePending(ctx, closure)
+	if err == nil && !pending {
+		return nil
+	}
+	if wakeErr := requestPrivateFullMaintenanceWake(ctx, root); wakeErr != nil {
+		return errors.Join(err, wakeErr)
+	}
+	if options.PrivateMaintenanceLauncher == nil || options.ControlOwnerExecutable == "" {
+		return errors.Join(err, errPrivateMaintenanceNotStarted)
+	}
+	// The wake is durable, so launch has its own bound, as the scheduled
+	// handoff does, even after the pending check exhausted ctx.
+	launchCtx, cancelLaunch := context.WithTimeout(context.WithoutCancel(ctx), pueue.DefaultObservationTimeout)
+	defer cancelLaunch()
+	if launchErr := options.PrivateMaintenanceLauncher(launchCtx, options.ControlOwnerExecutable, root, options.PrivateMaintenanceEnvironment); launchErr != nil {
+		return errors.Join(err, launchErr, errPrivateMaintenanceNotStarted)
+	}
+	return err
 }
 
 // requestPrivateFullMaintenanceWake publishes one full wake in its own bounded

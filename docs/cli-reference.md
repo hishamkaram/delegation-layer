@@ -482,28 +482,33 @@ is separate from guardian-owned process-lifetime containment.
 
 Discovery is metadata only. It does not inspect the host, authenticate a
 provider, contact Pueue, create state, or launch a process. Static preparation
-locates a regular executable and records its identity and required capability
-contract. The supervised runtime check runs the version and help commands and
-checks the required public flags before provider execution. Interactive
-protocols additionally validate their native handshake and event contract.
-Any valid nonempty version is accepted; valid means trimmed UTF-8 text without
-control characters, not a
-particular semantic-version pattern. A missing executable rejects static
-preparation. A missing required flag rejects inspection-backed admission; for
-managed runtime-only tasks it seals a rejected outcome before provider start.
-The executable is fingerprinted again before launch so a replacement cannot be
-silently substituted.
+locates a regular executable and records its path and required capability
+contract. The supervised runtime check runs the help command and checks the
+required public flags before provider execution. No standalone version command
+is run and no executable fingerprint is taken. Interactive protocols
+additionally validate their native handshake and event contract. A missing
+executable rejects static preparation. A missing required flag rejects
+inspection-backed admission; for managed runtime-only tasks it seals a rejected
+outcome before provider start.
 
-The observed version is descriptive task evidence, not a release authorization.
-The compatibility check does not use a web release lookup, semver allowlist, or
-hardcoded provider version. Probe diagnostics expose bounded reason classes;
-provider output and process diagnostics are not copied into control fields.
+A reported version is an optional diagnostic, never a readiness condition.
+The current runtime probe leaves version and provider SHA-256 diagnostics
+empty and does not extract version text from help or protocol output.
+Historical populated diagnostics remain validated when read. A required
+exchange that actually fails or exceeds its capture bound is still an error.
+The check does not use a web release lookup, semver allowlist, or hardcoded provider version.
+Probe diagnostics expose bounded reason classes; provider output and process
+diagnostics are not copied into control fields. See the
+[provider guide](providers.md#shared-compatibility-behavior) and the
+[product boundary](../agents/_data/product-boundary.md).
 
-The runner performs a fresh capability check immediately before launch and
-uses the returned current launch plan. This permits a provider relink or
+The runner performs a fresh capability check immediately before launch,
+resolves the installed CLI in the task's saved lookup environment, and starts it
+directly under the existing supervision. This permits a provider relink or
 upgrade after admission when the new CLI preserves the adapter contract, while
-the task's
-permission, policy, workspace, predicate, and artifact contract remain fixed.
+the task's permission, policy, workspace, predicate, and artifact contract
+remain fixed. A failure to execute the provider is reported explicitly and is
+not retried.
 
 The compatibility probe is only a startup check. Provider output shape,
 identity, containment, policy, authentication, and result integrity remain

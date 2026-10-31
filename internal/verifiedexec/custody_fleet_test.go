@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 // fleetReader is one started child and its single-use reap.
@@ -139,18 +138,6 @@ func (f *readerFleet) release() error {
 	return failure
 }
 
-// totals sums what the kernel reported for the reaped children.
-func (f *readerFleet) totals() (cpu time.Duration, maxRSS, sumRSS int64) {
-	for _, reader := range f.readers {
-		if reader.known {
-			cpu += reader.used.CPU
-			sumRSS += reader.used.MaxRSSBytes
-			maxRSS = max(maxRSS, reader.used.MaxRSSBytes)
-		}
-	}
-	return cpu, maxRSS, sumRSS
-}
-
 var errInjectedFleetFault = errors.New("injected fleet fault")
 
 func faultAt(index int) func(int) error {
@@ -166,7 +153,7 @@ func faultAt(index int) func(int) error {
 func bindFleet(rig *poolRig, entry, digest, prefix string, n int) []*Command {
 	commands := make([]*Command, n)
 	for i := range commands {
-		commands[i] = rig.binder(fmt.Sprintf("%s-%d", prefix, i), CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
+		commands[i] = legacyBinder(rig.t, rig.dir)(fmt.Sprintf("%s-%d", prefix, i), CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
 	}
 	return commands
 }
@@ -261,7 +248,7 @@ func runFleetScenario(t *testing.T, rig *poolRig, entry, digest, scenario string
 func TestFleetAndHandshakeRefusePreconfiguredStdioWithoutLeakingOrStarting(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := selfNative(t, filepath.Join(rig.dir, "stdio"))
-	command := rig.binder("a", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
+	command := legacyBinder(rig.t, rig.dir)("a", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
 	sink, err := os.CreateTemp(rig.dir, "sink-")
 	if err != nil {
 		t.Fatal(err)
@@ -294,7 +281,7 @@ func TestFleetAndHandshakeRefusePreconfiguredStdioWithoutLeakingOrStarting(t *te
 	}
 
 	// A real Start failure after the pipes exist must close all of them too.
-	broken := rig.binder("b", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
+	broken := legacyBinder(rig.t, rig.dir)("b", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
 	broken.Cmd.Path = filepath.Join(rig.dir, "does-not-exist")
 	if err = fleet.start(broken, sink); err == nil || len(fleet.readers) != 0 {
 		t.Fatalf("fleet.start of a missing program gave %v with %d readers", err, len(fleet.readers))
@@ -311,7 +298,7 @@ func TestFleetAndHandshakeRefusePreconfiguredStdioWithoutLeakingOrStarting(t *te
 func TestHandshakeChildAndWorkerAreReapedOnEarlyExit(t *testing.T) {
 	rig := newPoolRig(t)
 	entry, digest := selfNative(t, filepath.Join(rig.dir, "early"))
-	command := rig.binder("early", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
+	command := legacyBinder(rig.t, rig.dir)("early", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
 	var child *liveChild
 	var worker *workerProcess
 	t.Run("handshake-child", func(t *testing.T) {
@@ -320,9 +307,8 @@ func TestHandshakeChildAndWorkerAreReapedOnEarlyExit(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	plain, plainDigest := plainEntry(t, rig.dir, "early-worker")
 	t.Run("worker", func(t *testing.T) {
-		worker = startWorker(t, modeBind, rig.pool.root, rig.id, "early-worker", plain, plainDigest)
+		worker = startWorker(t, modeObserve, rig.pool.root, rig.id, "early-worker")
 	})
 	if !child.finished || child.cmd.ProcessState == nil || !child.cmd.ProcessState.Exited() {
 		t.Fatal("the handshake child was left unwaited by an early exit")
@@ -346,7 +332,7 @@ func TestFleetRegistersWaitOwnershipBeforeTheFalliblePipeClose(t *testing.T) {
 	t.Run("start", func(t *testing.T) {
 		fleet = newReaderFleet(t)
 		fleet.childEndFault = faultAt(0)
-		command := rig.binder("a", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
+		command := legacyBinder(rig.t, rig.dir)("a", CommandRequest{Executable: entry, SHA256: digest, Args: []string{helperArg, "handshake"}})
 		startErr = fleet.start(command, os.Stderr)
 	})
 	if !errors.Is(startErr, errInjectedFleetFault) {

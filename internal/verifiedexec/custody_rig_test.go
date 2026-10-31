@@ -4,7 +4,6 @@ package verifiedexec
 // assertions shared by the pool tests.
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"testing"
 )
+
+const poolImageMode = 0o500
 
 type poolRig struct {
 	t    *testing.T
@@ -39,21 +40,67 @@ func rigIn(t *testing.T, dir string) *poolRig {
 	return rig
 }
 
-// preparedPool bootstraps root the way production does: an unbound pool
-// publishes the identity, and every owner operation then uses a pool bound to it.
-func preparedPool(t *testing.T, root string) (pool *Pool, id string) {
+// preparedPool writes a literal legacy layout. Production has no creation API.
+func preparedPool(t *testing.T, root string) (*Pool, string) {
 	t.Helper()
-	bootstrap, err := NewPool(root)
+	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, dir := range []string{root, filepath.Join(root, "images"), filepath.Join(root, "views")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, raw := range map[string]string{
+		".identity": `{"version":1,"pool_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+		".gate":     "",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pool, err := NewPoolWithIdentity(root, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id, err = bootstrap.Prepare(context.Background()); err != nil {
-		t.Fatalf("setup blocked: prepare %s: %v", root, err)
-	}
-	if pool, err = NewPoolWithIdentity(root, id); err != nil {
-		t.Fatal(err)
-	}
 	return pool, id
+}
+
+// legacyView names fixture bytes only; it is never an executable Command.
+type legacyView struct{ temporaryDir string }
+
+// seedView models the historical disk layout without any production producer.
+// It creates hard links to test-owned image bytes and a sealed owner view.
+func (r *poolRig) seedView(owner string, request CommandRequest) legacyView {
+	r.t.Helper()
+	content, err := os.ReadFile(request.Executable)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	image := r.pool.imagePath(request.SHA256)
+	if _, err = os.Lstat(image); errors.Is(err, os.ErrNotExist) {
+		if err = os.WriteFile(image, content, 0o500); err != nil {
+			r.t.Fatal(err)
+		}
+	} else if err != nil {
+		r.t.Fatal(err)
+	}
+	witness := r.ownerDir(owner)
+	if err = os.MkdirAll(witness, 0o700); err != nil {
+		r.t.Fatal(err)
+	}
+	view, err := os.MkdirTemp(witness, "delegation-layer-verified-")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if err = os.Link(image, filepath.Join(view, "entry")); err != nil {
+		r.t.Fatal(err)
+	}
+	if err = os.Chmod(view, 0o500); err != nil {
+		r.t.Fatal(err)
+	}
+	return legacyView{temporaryDir: view}
 }
 
 func (r *poolRig) logf(format string, args ...any) {
@@ -88,23 +135,6 @@ func (r *poolRig) pending(owner string) bool {
 }
 
 func (r *poolRig) ownerDir(owner string) string { return r.pool.ownerPath(r.ns(owner)) }
-
-// binder is the pooled bindFunc over this rig.
-func (r *poolRig) binder(owner string, request CommandRequest) *Command {
-	r.t.Helper()
-	command, err := r.pool.Bind(context.Background(), r.ns(owner), request)
-	if err != nil {
-		r.t.Fatalf("bind %s for %s: %v", request.Executable, owner, err)
-	}
-	r.t.Cleanup(func() {
-		if closeErr := command.Close(); closeErr != nil {
-			r.t.Errorf("close pooled command: %v", closeErr)
-		}
-	})
-	return command
-}
-
-func poolBinderFactory(t *testing.T, dir string) bindFunc { return rigIn(t, dir).binder }
 
 // images lists the digest-named images.
 func (r *poolRig) images() []string {
@@ -142,17 +172,6 @@ func (r *poolRig) imagesDirEntries() []string {
 func (r *poolRig) imageExists(digest string) bool {
 	r.t.Helper()
 	return slices.Contains(r.images(), digest)
-}
-
-// requireNothingBound asserts that the prepared pool holds no image and no owner
-// witness: a refused call published nothing on top of the prepared layout.
-func (r *poolRig) requireNothingBound() {
-	r.t.Helper()
-	r.requireImagesDir(0)
-	entries, err := os.ReadDir(r.pool.viewsPath())
-	if err != nil || len(entries) != 0 {
-		r.t.Fatalf("views directory holds %v (%v); want it empty", entries, err)
-	}
 }
 
 func (r *poolRig) requireImagesDir(want int) {

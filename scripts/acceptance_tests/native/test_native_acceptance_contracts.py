@@ -9,6 +9,66 @@ from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_collection as collection_impl,
 )
+from scripts.delegate_acceptance.native.binding_policy import _validate_bound_provider_record
+from scripts.delegate_acceptance.native.bindings import ProviderRuntimeBindings
+
+
+class OptionalRuntimeDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.task_id = "a" * 32
+        self.meta = {"provider_executable": "/admitted/provider", "provider_version": ""}
+        self.started = {"provider_executable": "/upgraded/provider"}
+        self.bindings = ProviderRuntimeBindings()
+
+    def test_launch_without_diagnostics_uses_actual_path(self):
+        identity = self.bindings.record(
+            self.task_id, self.meta, Path("/admitted/provider"),
+            launch_evidence=(self.started, dict(self.started)))
+        self.assertEqual(identity, {"executable": "/upgraded/provider", "version": "", "sha256": ""})
+        self.assertEqual(self.bindings.receipt({self.task_id})["provider_versions"], {self.task_id: ""})
+
+    def test_historical_fallback_does_not_require_policy_hash(self):
+        self.assertEqual(self.bindings.record(self.task_id, self.meta, Path("/admitted/provider")),
+                         {"executable": "/admitted/provider", "version": "", "sha256": ""})
+
+    def test_historical_fallback_retains_and_validates_optional_hash(self):
+        for digest in ("b" * 64, "", None, "bad"):
+            with self.subTest(digest=digest):
+                bindings = ProviderRuntimeBindings()
+                meta = dict(self.meta, effective_config={"policy": {"runtime_sha256": digest}})
+                if digest in ("b" * 64, ""):
+                    self.assertEqual(bindings.record(self.task_id, meta, Path("/admitted/provider"))[
+                        "sha256"], digest)
+                else:
+                    with self.assertRaises(gate.AcceptanceFailure):
+                        bindings.record(self.task_id, meta, Path("/admitted/provider"))
+
+    def test_started_envelope_allows_absent_diagnostics(self):
+        record = dict(self.started, schema_version=1, root_id="b" * 32, task_id=self.task_id,
+                      spec_sha256="c" * 64, meta_sha256="d" * 64,
+                      started_at="2026-10-15T08:21:52Z", diagnostic_nanos=0)
+        self.assertEqual(_validate_bound_provider_record(
+            record, "provider.started.json", "b" * 32, self.task_id, "d" * 64, "c" * 64), record)
+        for field, value in (("provider_version", None), ("provider_sha256", None),
+                             ("provider_version", " \t"), ("provider_sha256", "bad")):
+            with self.subTest(field=field, value=value), self.assertRaises(gate.AcceptanceFailure):
+                _validate_bound_provider_record(dict(record, **{field: value}),
+                    "provider.started.json", "b" * 32, self.task_id, "d" * 64, "c" * 64)
+
+    def test_start_exit_mismatch_and_task_coverage_stay_strict(self):
+        for field, value in (("provider_executable", "/another/provider"),
+                             ("provider_version", "upgraded"), ("provider_sha256", "b" * 64)):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    gate.AcceptanceFailure, "runtime identities differ"):
+                self.bindings.record(self.task_id, self.meta, Path("/admitted/provider"),
+                    launch_evidence=(self.started, dict(self.started, **{field: value})))
+        self.bindings.record(self.task_id, self.meta, Path("/admitted/provider"),
+                             started_evidence=self.started)
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "coverage is incomplete"):
+            self.bindings.receipt({self.task_id, "b" * 32})
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "changed its admitted"):
+            self.bindings.record(self.task_id, self.meta, Path("/admitted/provider"),
+                                 started_evidence={"provider_executable": "/other/provider"})
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):

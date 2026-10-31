@@ -40,10 +40,6 @@ func runtimeOnlyInspectionDefinition(definition commonprovider.InspectionDefinit
 	return definition.RuntimeOnly()
 }
 
-func runtimeOwnsInspectionExecutable(definition commonprovider.InspectionDefinition) bool {
-	return definition.Runtime != nil && definition.Executable == definition.Runtime.Executable && definition.ExecutableSHA256 == definition.Runtime.ExecutableSHA256
-}
-
 func matchPreparedProfile(candidate commonprovider.ProfileCandidate, profile commonprovider.PreparedProfile, req task.TaskRecord, meta task.MetaRecord) error {
 	if candidate.Inspection != nil && candidate.Inspection.Runtime != nil {
 		return profile.MatchesWithRuntimeRefresh(req, meta)

@@ -136,17 +136,19 @@ type Options struct {
 	// start-failed capture/sealing; it never abandons the consumed start permit.
 	Preflight func(PreflightScope) error
 	// PreflightPlan performs the same finite validation and may return the
-	// current launch plan after runtime capability inspection. The returned
-	// plan is verified and materialized only after this callback succeeds.
+	// current launch plan after runtime capability inspection. The one
+	// provider command is constructed from the returned plan only after this
+	// callback succeeds.
 	// Pending runtime admission requires this callback to clear the preflight
 	// marker and supply a complete observed ProviderRuntime identity.
 	PreflightPlan func(PreflightScope, Plan) (Plan, error)
 	Clock         Clock
 	Stopper       Stopper
 	Lifetime      Lifetime
-	// Binder binds the provider command, both the initial and any refreshed
-	// plan, and every native command started through PreflightScope. Nil keeps
-	// the private copy that Command.Close removes.
+	// Binder binds integrity-bound native helper commands started through
+	// PreflightScope. Nil keeps the helper's private copy that Command.Close
+	// removes. The provider command never uses it: it runs the installed
+	// executable directly.
 	Binder CommandBinder
 	// Deadline is the immutable outer guardian deadline. A zero value retains
 	// the legacy duration-relative clock. A supplied deadline may shorten but

@@ -1,13 +1,13 @@
 package verifiedexec
 
-// Owner-facing operations of Pool: Bind, ReleaseOwner and ReleasePending. A
+// Owner-facing disposal operations of Pool: ReleaseOwner and ReleasePending. A
 // Namespace names one lifetime owner's witness directory; Pool treats it as an
 // opaque safe name and never reads a lifetime record. The caller derives it
 // (for example from RootID, owner kind and owner ID) and verifies canonical
 // closure before ReleaseOwner.
 //
-// All three operations require a pool bound to an identity (NewPoolWithIdentity)
-// and prove it first, before they create or change anything: see
+// Both operations require a pool bound to an identity (NewPoolWithIdentity)
+// and prove it first, before they change anything: see
 // Pool.requireIdentity. An unbound pool refuses them with errPoolUnbound.
 
 import (
@@ -18,8 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 const maxNamespaceBytes = 128
@@ -66,72 +64,6 @@ func requireUsableNamespace(ns Namespace) error {
 		return fmt.Errorf("%w: the zero namespace", errNamespaceInvalid)
 	}
 	return nil
-}
-
-// Bind binds request to a private hard-link view in ns's witness directory. The
-// view uses the ordinary shadow-directory loader layout; its entrypoint and any
-// interpreter are links to verified images shared by digest, published once.
-// The returned command's Close closes only local handles: the view stays until
-// ReleaseOwner. A Bind that fails removes only the partial view it created
-// itself; the witness and any crash leftovers belong to the owner's closure.
-// ctx must be non-nil: a nil ctx is rejected with errNilContext before anything
-// is read or changed. It bounds waiting for the gate and the lock opener; it
-// cannot interrupt a filesystem copy or sync that has started.
-//
-// The identity is proved before the gate is opened, because opening the gate
-// creates missing parents, and again under the gate before the owner's witness
-// is created. A root removed in between ends up with an empty recreated layout
-// that receives no view; the Bind fails and the pool stays unresolved.
-func (p *Pool) Bind(ctx context.Context, ns Namespace, request CommandRequest) (*Command, error) {
-	if ctx == nil {
-		return nil, errNilContext
-	}
-	if err := requireUsableNamespace(ns); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := p.requireIdentity(); err != nil {
-		return nil, err
-	}
-	gate, err := p.openGate(ctx)
-	if err != nil {
-		return nil, err
-	}
-	command, bindErr := p.bindUnderGate(ctx, gate, ns, request)
-	closeErr := gate.Close()
-	if bindErr != nil {
-		return nil, errors.Join(bindErr, closeErr)
-	}
-	if closeErr != nil {
-		return nil, errors.Join(closeErr, command.removeView())
-	}
-	p.maintain(ctx, false)
-	return command, nil
-}
-
-func (p *Pool) bindUnderGate(ctx context.Context, gate *taskdir.LockFile, ns Namespace, request CommandRequest) (*Command, error) {
-	file, err := openAdmittedEntrypoint(request)
-	if err != nil {
-		return nil, err
-	}
-	p.at(pointSourceOpened, request.SHA256)
-	if err = p.requireIdentity(); err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-	// The witness directory exists, and its entry in views/ is durable, before
-	// any stage, image or view is published for this owner.
-	owner := p.ownerPath(ns)
-	if err = ensurePrivateDirectory(owner, p.viewsPath()); err != nil {
-		return nil, errors.Join(err, file.Close())
-	}
-	binder := &poolBinder{pool: p, gate: gate, ctx: ctx}
-	binding := request.privateBinding()
-	binding.viewRoot = owner
-	binding.materialize = binder.materialize
-	binding.retainView = true
-	return binding.newCommand(file)
 }
 
 // ReleaseOwner removes ns's views and then its witness directory. Its caller
