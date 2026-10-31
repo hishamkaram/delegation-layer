@@ -1,178 +1,182 @@
 # Command reference
 
-All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
-`--json` to commands that return an agent-consumable response.
+Paths passed to `--root`, `--cwd`, and `--brief` must be absolute.
+Use `--json` and preserve the response and process exit separately.
+The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
 
-Pass the intended workspace directly. Delegate handles provider launch options;
-do not initialize Git, change trust settings, or call a provider CLI as a
-workspace workaround. Ordinary tasks support non-Git directories. Git is
-required for managed worktree creation/attachment and checkpoint creation or
-removal only; native review retains
-its separate explicit review-target contract. See [managed workspace guidance](workspaces.md)
-for the policy owner.
-
-| Command | Purpose | Launches provider work? |
+| Command | Purpose | Provider execution |
 | --- | --- | --- |
-| `delegate --version` | Confirm the installed control CLI | No |
-| `delegate --root ROOT providers --json` | List compiled provider metadata | No |
-| `delegate --root ROOT capabilities --provider ID --json` | Read the catalog contract | No |
-| `delegate --root ROOT models --provider ID [--cwd ABS] --json` | Discover advisory native model and effort facts | Native inspection only; no admitted task |
-| `delegate --root ROOT preflight --provider ID --cwd ABS --json` | Check static provider admission | No |
-| `delegate --root ROOT dispatch --auto ... --json` | Select and admit one bounded turn | Yes, at most once |
-| `delegate --root ROOT status TASK --json` | Reconcile and observe task state | No provider launch |
-| `delegate --root ROOT collect TASK --watch 5s --json` | Read or wait for publication | No provider launch |
-| `delegate --root ROOT recheck TASK --json` | Reassess eligible rejected evidence offline | No provider launch; original outcome unchanged |
-| `delegate --root ROOT continue --task TASK ... --json` | Create an exact-session successor | Yes, at most once for the successor |
-| `delegate --root ROOT reply TASK --request ID --answers FILE --id MESSAGE_ID --json` | Answer a pending native question | No new launch |
-| `delegate --root ROOT steer TASK --brief FILE --id MESSAGE_ID --json` | Guide a supported active turn | No new launch |
-| `delegate --root ROOT events TASK --after SEQUENCE --watch 5s --json` | Read a bounded interaction event page | No |
-| `delegate --root ROOT logs TASK --json` | Return validated output descriptors | No |
-| `delegate --root ROOT cancel TASK --json` | Record one explicit stop request | Stops, does not relaunch |
+| `delegate --version` | Check the control CLI | None |
+| `providers --json` | List compiled profiles | None |
+| `capabilities --provider ID --json` | Read a compiled contract | None |
+| `models --provider ID [--cwd ABS] --json` | Discover model/effort facts | Native inspection, no admitted task |
+| `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
+| `dispatch (--auto \| --provider ID) ... --json` | Admit a bounded turn | At most one launch attempt |
+| `status TASK --json` | Observe task state | No launch |
+| `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
+| `logs TASK --json` | Read validated stream descriptors | No launch |
+| `cancel TASK --json` | Record an explicit stop | No launch |
+| `continue --task TASK ... --json` | Create an exact-session successor | At most one successor launch attempt |
+| `recheck TASK --json` | Reassess eligible evidence offline | None |
+| `reply`, `steer`, `events` | [Active interaction](interaction.md) | No new launch |
+| `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
 
-`delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" supervisor migrate --json` is the single command-neutral recovery
-step for a `supervisor_upgrade_required` admission response. Run it once with
-the failed command's exact root. A successful response names its next action
-`retry_dispatch`, but the original command and argv remain authoritative:
-retry `dispatch` as `dispatch` or `continue` as `continue`, exactly once.
+Prefix every task command with `delegate --root ROOT`, using the same
+explicit root across invocations.
 
-Delegate selects its managed runner automatically, so omit `--runner` on
-`dispatch` and `continue`. `--runner` is an advanced custom-runner override: a
-managed workspace (`--isolation` or `--workspace`) and a `continue` whose
-runner differs from the predecessor's both return `invalid_request` with
-`reason_code` `managed_workspace_runner_conflict` or
-`continuation_runner_conflict`. Remove `--runner` and repeat the request when
-`next_action` is `correct_request`.
+## Dispatch
 
-The bundled supervisor is managed by the released CLI under the state root.
-Collection remains observational. Provider authentication remains the
-provider’s own responsibility and is never performed by this skill.
+```text
+delegate --root ROOT dispatch (--auto | --provider ID) --brief FILE \
+  --cwd ABS [--id TASK_ID] [--permission MODE] [--budget DURATION] \
+  [--model MODEL] [--effort EFFORT] [--native-timeout DURATION] \
+  [--interactive] [--review-target TARGET] [--resume-task TASK_ID] --json
+```
 
-Dispatch flags:
+| Option | Contract |
+| --- | --- |
+| `--brief FILE` | Regular file, at most 8 MiB; task input, not a raw provider argument. |
+| `--cwd ABS` | Existing workspace, disjoint from the private state root. Ordinary tasks support non-Git directories. |
+| `--auto` | Try static admission in deterministic provider-ID order; choose the first statically ready candidate. |
+| `--provider ID` | Named catalog profile; mutually exclusive with `--auto`. |
+| `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID; omit to allocate. |
+| `--permission MODE` | Default `read-only`; authorized `workspace-write` requests unattended commands and edits. Native access can extend beyond the workspace. |
+| `--budget DURATION` | Positive Go duration; default `30m`, or `1h` for `codex:review`. Queue time is excluded. |
+| `--model MODEL` | Exact selector for a profile advertising `model`: Codex, CCR, Claude, AGY, Pi, or OpenCode. CCR requires a configured alias. |
+| `--effort VALUE` | Advertised effort selector; omitted or `default` preserves native defaults. |
+| `--native-timeout DURATION` | Antigravity print timeout, no greater than `--budget`. |
+| `--interactive` | Enable advertised native clarification/steering; see [interaction](interaction.md). |
+| `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
+| `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
 
-- `--brief FILE`: bounded task instructions; for `codex:review`, the brief is
-  retained as task evidence and the explicit review target supplies Codex's
-  native scope;
-- `--cwd ABS`: workspace for the delegated turn;
-- `--permission read-only|workspace-write`: read-only investigation or authorized unattended write execution, including commands (not independent containment);
-- `--budget DURATION`: finite turn budget;
-- `--auto`: let the CLI select a ready provider;
-- `--provider ID`: preserve the caller’s named harness or provider, resolved through the catalog;
-- `--review-target uncommitted|base:BRANCH|commit:SHA`: select the explicit Git state for `codex:review`; it is required for that read-only profile and unsupported by other profiles;
-- `--model MODEL` and `--effort VALUE`: provider-advertised choices (CCR requires a model alias);
-  Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a native
-  turn parameter for interactive turns, while Claude and AGY
-  pass native effort flags; Pi maps effort to `--thinking`; OpenCode sends model
-  and effort as acknowledged ACP session options; CCR forwards effort to Claude and uses `--model` as a CCR alias; `default` is omitted;
-- `--interactive`: enable advertised native clarification and steering; see [interaction](interaction.md);
-- `--native-timeout DURATION`: optional provider-native timeout where advertised.
+Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a
+native parameter for interactive turns. CCR, Claude, and AGY pass their native
+effort flag. Pi maps it to `--thinking`; OpenCode sends acknowledged ACP
+session options, with model before effort. CCR treats model as a CCR alias.
+
+Raw provider arguments, token ceilings, and dollar ceilings are not public
+options. Preserve the selected workspace; do not initialize Git or change
+trust settings as a workaround.
+
+Every task ID identifies one immutable request and at most one provider launch
+attempt. Changing its request is rejected; repeating it cannot grant another
+launch. A selected provider's failure does not select a fallback.
+Read [task creation](result-handling.md#task-creation) before any retry.
+
+Omit `--runner`: Delegate selects its managed worker. A custom override
+conflicting with managed workspaces or a predecessor returns `invalid_request`
+with `managed_workspace_runner_conflict` or `continuation_runner_conflict`.
+Correct it only under the returned task-creation guidance.
+
+## Codex review
+
+For explicit native code review, select `codex:review` and one persisted
+target: `uncommitted`, `base:BRANCH`, or `commit:SHA`. It is read-only
+and supports neither `--interactive` nor continuation. Use `codex:exec`
+for general investigation or edits. The brief is retained as task evidence;
+Codex's native target flag supplies review scope because it cannot be combined
+with a native prompt.
+
+An `uncommitted` review includes current staged, unstaged, and untracked
+changes, but excludes worker commits. For a complete managed turn use an
+ordinary read-only task with sealed base/tree refs and `git diff BASE TREE`.
+Preserve an explicitly requested narrower native target. See
+[workspace review scope](workspaces.md#recovery-and-review-scope).
 
 ## Managed workspace commands
 
-Managed workspaces are optional. For independent parallel writes, choose
-`--isolation git-worktree` unless the user explicitly chooses shared
-coordination. The model chooses fan-out and task scope; there is no fixed task
-count cap or TTL eviction. Use the canonical [workspace reference](workspaces.md)
-for retention, capture, release, forgetting, and review-scope rules.
-
-The public forms are:
-
-```sh
-delegate --root ROOT dispatch --isolation git-worktree --cwd ABS \
-  [--base REV] [--workspace-budget DURATION] ... --json
-delegate --root ROOT dispatch --workspace WORKSPACE_ID ... --json
-delegate --root ROOT workspace list [--after ID] [--limit 1..50] --json
-delegate --root ROOT workspace status ID [--operation OP] [--watch DURATION] --json
-delegate --root ROOT workspace exec ID --budget DURATION -- ARGV...
-delegate --root ROOT workspace release ID [--discard] [--budget DURATION] --json
-delegate --root ROOT workspace forget ID [--budget DURATION] --json
-```
-
-`--workspace` cannot be combined with public `--cwd`, `--base`, or
-`--isolation`. `workspace exec` passes literal argv after `--` and initially
-returns asynchronously; exit `3` means the operation is pending. The helper
-budget defaults to 5m, is persisted/overridable, and does not renew the task
-budget. `continue --task TASK` inherits the predecessor workspace, cwd, and
-session while creating a new task ID. A read-only review may attach a retained
-workspace with `--workspace ID`.
-
-Model discovery uses the same `--provider ID` profiles and accepts an optional
-absolute `--cwd` (default: current directory). Its JSON has `status` values
-`available`, `partial`, `blocked`, `unavailable`, or `failed`; exits are `0`,
-`0`, `2`, `2`, and `1` respectively. `complete` describes model enumeration.
-Top-level or per-model `efforts: null` means unknown, while `[]` means no
-choices were explicitly reported. Discovery is advisory and never an admission
-allowlist; defaults remain valid when it is not run.
-
-Continuation flags:
-
-- `--task TASK`: predecessor task ID;
-- `--brief FILE`: optional new follow-up instruction;
-- `--budget DURATION`, `--model MODEL`, and `--effort VALUE`: optional overrides;
-- `--interactive`: enable interaction when supported; already-interactive predecessors keep it.
+[Workspaces](workspaces.md#public-commands) owns creation, attachment, helper
+budgets, capture, review, release, and forgetting. Use managed worktrees for
+independent parallel writes unless the user explicitly chooses shared coordination.
 
 ## Checkpoint commands
 
-Git checkpoints are optional and launch no provider work. Use them to fork a
-worker from current uncommitted content; the canonical
-[checkpoint guidance](workspaces.md#git-checkpoints) owns targets, limits, and
-the checkpoint-before-fork sequence, and
-[checkpoint results](result-handling.md#checkpoint-results) owns the decisions.
+[Git checkpoints](workspaces.md#git-checkpoints) owns commands and limits;
+[checkpoint results](result-handling.md#checkpoint-results) owns decisions.
+A checkpoint is Git-content evidence, not a provider outcome.
+
+## Providers and capabilities
 
 ```sh
-delegate --root ROOT checkpoint create --cwd ABS [--budget DURATION] --json
-delegate --root ROOT checkpoint create --workspace ID [--budget DURATION] --json
-delegate --root ROOT checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
-delegate --root ROOT checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
-delegate --root ROOT checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" providers --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" capabilities --provider PROVIDER_ID --json
 ```
 
-`create` takes exactly one of `--cwd` or `--workspace`. `--operation` selects a
-removal attempt ID returned by `remove`; without it, `status` observes the
-creation and its latest removal. `list` pages with the returned
-`checkpoint_cursor` as `--after`.
+`providers` returns `schema_version: 1` and a sorted `providers` array.
+Each entry exposes `id`, `supported_modes`, `supported_options`, any
+`required_options`, `continuation`, `read_only`, `interaction`, and
+`runtime` metadata. Supply every required option:
+`ccr:print` requires a configured CCR model alias; `codex:review` requires
+a review target. See [CCR](ccr.md).
+
+These commands create no task or state, contact no supervisor, and launch no
+provider. The capability envelope has `schema_version: 1`,
+`command: "capabilities"`, and `capability`. Its catalog projection uses
+`contract: "runtime-capability-v1"`, `status: "unknown"`,
+`verification: "catalog"`, and `live_acceptance.status: "not_run"`.
+It describes compiled support, not installation, authentication, or host readiness.
+
+`read_only.containment: "provider-owned"` describes native permissions,
+separately from guardian-owned process lifetime. Runtime metadata lists required
+help/flag behavior. Required native behavior determines compatibility;
+provider versions are optional diagnostics.
+
+Inspection-backed admission can return `status: "ready"` with
+`verification: "runtime"` after its probe. Managed runtime-only admission
+keeps the catalog projection; its supervised worker checks compatibility before
+provider execution. Collect the created task to establish the result.
+Optional protocol members `version` and `executable_sha256` are diagnostics,
+not launch authority. Live acceptance remains separate (`not_run`, `passed`,
+or `blocked`); a blocked prerequisite is unresolved.
 
 ## Choosing models and effort
 
-Pass an explicitly supplied model ID and effort unchanged, even if discovery
-is incomplete or does not list them. To resolve a natural-language model name
-or choose an option the caller left open, use native discovery:
+Pass exact requested model IDs and effort unchanged, even if discovery omits
+them. Keep defaults when no explicit choice is needed. Resolve a natural-language
+name through native discovery:
 
 ```sh
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" models \
   --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
-Omit `--cwd` to use the current directory. Run discovery only when the caller
-needs a non-default choice; provider defaults are valid. The command uses the
-state-rooted supervisor and a bounded `model-discovery-v1` five-minute native
-inspection to allow first-run provider model/cache initialization. It creates
-inspection evidence without admitting a provider task, and may contact the
-provider CLI. It is advisory and never an admission allowlist. Do not reject a
-requested value merely because discovery did not list it, and do not infer
-per-model effort support from the harness-wide list. If a selected model has
-`efforts: null` or `efforts: []`, omit `--effort` unless the caller explicitly
-requested it; do not invent model aliases or combine options by guessing.
-If a natural-language name cannot be resolved to a single exact ID, ask one
-focused question for that ID. Do not silently select a default or transform
-spaces into hyphens to manufacture an ID. This ambiguity rule is guidance for
-selecting a value, not a new admission restriction.
+If discovery cannot resolve a name to one exact ID, ask for that ID; never
+manufacture an alias. An explicit ID needs no clarification just because it
+is absent from discovery.
 
-The response includes `schema_version`, `command: "models"`, `provider`,
+`--cwd` defaults to the current directory. Discovery uses the state-rooted
+supervisor and a `model-discovery-v1` five-minute native inspection, allowing
+first-run model/cache initialization. It may contact the provider, creates
+inspection evidence, and admits no provider task. `codex:review` has no
+model-discovery command.
+
+The JSON envelope has `schema_version`, `command: "models"`, `provider`,
 `observed_at`, `status`, `reason_code`, `complete`, `source`, nullable
-`efforts`, and model rows with exact `id` values plus optional `name`, nullable
-`efforts`, and optional `default_effort`. `complete` describes model
-enumeration, not effort metadata. `null` means effort metadata is unknown;
-`[]` means the provider explicitly reported no choices. Discovery exits `0`
-for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
-`failed`. Preserve a blocked or unavailable discovery result as unresolved;
-defaults remain allowed. An operational discovery failure also includes an
-optional `failure` object and a fixed `error` message; keep both fields and
-follow `failure.next_action`.
+`efforts`, and `models`. Rows have exact `id`, optional `name`, nullable
+`efforts`, and optional `default_effort`.
+
+`complete` describes enumeration, not effort knowledge. `efforts: null`
+means unknown; `[]` means explicitly no choices. Do not apply harness-wide
+efforts to every model. Omit effort for unknown/empty per-model metadata unless
+explicitly requested. A listed model does not prove execution access;
+discovery is advisory, never an admission allowlist.
+
+| Status | Exit | Interpretation |
+| --- | --- | --- |
+| `available` or `partial` | `0` | Observed model facts; partial enumeration is incomplete. |
+| `blocked` or `unavailable` | `2` | Unresolved prerequisite. |
+| `failed` | `1` | Operational discovery failure. |
+| `failed` | `2` | Invalid or unsupported request, such as invalid cwd or root/workspace overlap; not an authentication block. |
+
+Validate the whole envelope. Keep optional typed `failure` and fixed `error`
+with the result; follow `failure.next_action`, stopping on `stop_and_report`.
+Supervisor refusals retain `supervisor_migration_blocked`,
+`supervisor_migration_unsupported`, or `supervisor_upgrade_required` as
+reason codes and return no model facts.
 
 ## Checking readiness
 
-Use `preflight` when the caller asks about static readiness, rather than as a
-required step before every dispatch:
+Use static preflight when readiness was requested, not before every task:
 
 ```sh
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" preflight \
@@ -180,11 +184,9 @@ delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" preflight \
   --permission REQUESTED_MODE --json
 ```
 
-Use `read-only` for investigation or `workspace-write` for authorized edits.
-Supply any required provider options, including `--model ALIAS` for `ccr:print`
-and `--review-target TARGET` for `codex:review`.
-Preflight does not create a task, start the supervisor, or launch a provider.
-Its result is not proof of live authentication or successful execution. Report
-`blocked` or `unsupported` results; a readiness request does not authorize
-provider configuration changes. Honor `failure.next_action` without probing
-provider CLIs yourself.
+Supply required options; the supported request options also include budget,
+model, effort, native timeout, and review target where advertised.
+Preflight creates no task, starts no supervisor, and launches no provider.
+A ready `verification: "preflight"` result is not live authentication or
+execution proof. Report blocked/unsupported results and follow the returned
+guidance; readiness checks do not authorize provider configuration changes.

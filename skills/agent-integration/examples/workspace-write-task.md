@@ -1,13 +1,15 @@
 # Authorized workspace write task
 
-```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
-  --brief "$PWD/delegated-task.md" --cwd "$PWD" \
-  --permission workspace-write --budget 30m --json
-```
+Use the captured invocation in the [read-only example](read-only-task.md).
+Replace its brief with the authorized change and checks, and select
+`--permission workspace-write`. For independent parallel writes, also follow
+[managed workspaces](../references/workspaces.md) and its
+[worked example](managed-workspace.md).
 
-Use `workspace-write` only when the caller authorized edits in the selected
-workspace. Delegate requests unattended native approval for commands and edits.
-The provider owns its tools and access restrictions; the workspace is not an
-independent sandbox. Save the returned task ID, then use the same state root
-with `status` and `collect`; do not run the provider directly after a denial.
+Workspace-write requests unattended native commands and edits. Native access
+can extend beyond the workspace; the provider owns tools and restrictions.
+Use it only when the caller authorized edits.
+
+Apply [task creation](../references/result-handling.md#task-creation) before
+observing any returned ID, then collect the created task in the foreground.
+A denial does not authorize a direct provider call or changed permissions.

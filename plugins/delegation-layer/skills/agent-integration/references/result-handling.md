@@ -1,65 +1,98 @@
 # Result handling
 
-Use the response fields independently. A successful control command is not
-the same as a successful provider result.
+Read response fields independently. A successful control command is not a
+successful provider result.
 
-1. Save `task_id` immediately after dispatch or continue. It is the durable
-   Delegate identity. `supervisor.numeric_task_id` and a stop's
-   `numeric_task_id` are private, ephemeral queue addresses. The queue can
-   reuse a number for a later task, so a repeated number is not a binding
-   error; never use it as a task handle.
-2. For a dispatch or continue error, inspect `task_record` first. When it is
-   `created`, observe the returned ID with `status`. Before applying the generic
-   `not_created` stop rule, handle the sole migration exception: when
-   `failure.code` is `supervisor_upgrade_required` and `failure.next_action` is
-   `run_supervisor_migrate`, run `supervisor migrate` once with the same root.
-   Only after it reports `supervisor_control.state: "migrated"` and
-   `supervisor_control.next_action: "retry_dispatch"`, retry the exact original
-   admission argv once. The retry is command-neutral: `dispatch` remains
-   `dispatch`, and `continue` remains `continue`; never create a fresh dispatch
-   or call a provider directly to replace a failed continuation. Also handle
-   `workspace_provision_pending` or `workspace_busy` with `watch_workspace`
-   using [managed workspace recovery](#managed-workspace-results) before the
-   generic stop rule. A `resource_pressure` refusal (`failure.next_action:
-   "retry_later"`, `failure.retry_after_seconds: 30`, `task_record: "not_created"`) is
-   a bounded caller choice: report and stop, or wait at least 30 seconds in the
-   foreground and retry the exact original admission once; `continue` remains
-   `continue`. Never loop, retry in the background, or poll. For every other
-   `not_created` response, do not poll;
-   correct the request only if
-   `failure.next_action` is `correct_request`, otherwise report and stop. When
-   `task_record` is `unknown`, stop and report without polling or retrying.
-   Status and collect can report `admission: "unknown"` alongside valid terminal
-   evidence for an existing task. An admitted task can carry
-   `resource_admission` with `status: "unknown"` and bounded `warnings`
-   (for example `resource_observation_unavailable`). That is a warning about
-   an unreadable host metric, not a failure: observe that same task with
-   `status` and `collect`, and do not redispatch.
-3. If `status` is `timed_out`, follow the continuation procedure before treating
-   pending publication as a reason to wait. `continuation.resumable: true`
-   permits a linked successor even when no outcome has been published. An
-   `interrupted` task (`failure.code: "task_interrupted"`) follows the table in
-   [interrupted turn](continuation.md#interrupted-turn): continue only when
-   `failure.next_action` is `continue_task` and `continuation.resumable` is
-   `true`, otherwise report it. A `timed_out` task whose `failure.code` is
-   `task_cancelled` is `stop_and_report`: report it and stop, even though
-   `collect` exits `3`; that exit is not success.
-4. If `publication` is committed and `outcome.verdict` is committed, return
-   the result and its payload/evidence descriptors.
-5. If `outcome.verdict` is rejected and `failure.next_action` is `recheck`,
-   follow [offline recovery](#offline-recovery) once. Otherwise report the
-   terminal rejection with its diagnostic and evidence. Do not redispatch.
-6. If `pending.kind` is `interaction`, handle the returned questions using
-   [interaction guidance](interaction.md) before waiting again. If
-   `pending.kind` is `lifetime-finalization`, the resident guardian still owns
-   cleanup; observe the same task with a finite watch interval and do not run
-   supervisor or process commands, redispatch, or call the provider directly.
-   Otherwise, if `liveness` is queued or running or publication is pending,
-   observe the same task with a finite watch interval.
-7. If authentication is `blocked`, preserve that neutral state and tell the
-   caller what prerequisite is unavailable without inventing a login command.
-8. Never relaunch an uncertain task by guessing. Observe only a task whose
-   record is known to exist; the `task_record` decision above takes precedence.
+## Task control response
+
+Task-command JSON uses `schema_version: 1`, `command`, root/task identity
+when applicable, and three separate dimensions:
+
+| Field | Values |
+| --- | --- |
+| `admission` | `unknown`, `not-admitted`, `admitted` |
+| `liveness` | `undetermined`, `running`, `ended` |
+| `publication` | `unknown`, `pending`, `committed`, `rejected` |
+
+Queue state is not a liveness value. Optional `status` describes
+`timed_out`, `interrupted`, or `blocked`. Responses can also include
+`task_record`, `parent_task_id`, `capability`, `continuation`,
+`supervisor`, `raw`, `pending`, `stops`, `stop`, `failure`,
+`resource_admission`, `diagnostics`, `recheck`, `workspace`, and `error`
+with `error_truncated` where applicable.
+
+`outcome` is terminal authority after validation. Its verdict, evidence
+digest, and payload descriptor describe the accepted or rejected evidence.
+A payload descriptor has `basename`, `length`, and `sha256`; raw stream
+descriptors include rooted paths. Validate the returned path, byte length,
+and digest before reading; never invent paths or use raw logs as an answer.
+A committed outcome may coexist with an ancillary operational `error`;
+keep both observations.
+
+`task_id` is Delegate's durable identity. `supervisor.numeric_task_id` and
+stop `numeric_task_id` values are ephemeral queue addresses and may be reused;
+never use them as task handles.
+
+## Task creation
+
+Capture the original response and exit status once. A returned `task_id`
+can be allocated without creation. Before any observation or retry, apply
+this table to each dispatch or continuation attempt separately, in order:
+
+| Response | Next action |
+|---|---|
+| Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
+| `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
+| `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
+| `task_record: not_created`, `failure.code: workspace_provision_pending` or `workspace_busy`, and `failure.next_action: watch_workspace` | Follow [managed workspace recovery](#managed-workspace-results) using the same root and workspace. Once ready, retry the exact admission command and inputs. A failed `continue` remains that same `continue`, never a new dispatch. |
+| `task_record: not_created`, `failure.code: resource_pressure`, `failure.next_action: retry_later`, and `failure.retry_after_seconds: 30` | Delegate checked the host and confirmed resource pressure, so no ordinary task record was created and no provider task is running for this attempt. Do not poll or observe a task. Choose one: report the refusal and stop, or wait at least 30 seconds in the foreground and retry the exact original admission argv once. A `continue` stays that same `continue`. If the retry is refused again, report and stop. Never loop, retry in the background, schedule a retry, or run Pueue or process commands. The 30 seconds is advice, not a guarantee that the retry will pass. |
+| `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
+| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. An optional `resource_admission` object with `status: unknown` and `warnings` only means a resource metric could not be read; the task was admitted. Keep the warning with your report, observe that same task with `status` and `collect`, and do not redispatch. |
+| `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
+
+A `stop_and_report` ends that attempt. Do not diagnose provider setup, ask
+for a fallback, run Pueue/process commands, or use a direct integration.
+Other independent requests may proceed. With an explicit task ID, absence
+can race another creator; never retry an uncertain ID.
+
+`resource_admission` is optional: `status` is `clear`, `pressure`, or
+`unknown`, and `warnings` contain bounded `code`, optional `metric`,
+`reason_code`, and `message`. An unknown metric never refuses by itself;
+independent confirmed pressure still can. Only new dispatch/continue admission
+runs this check. Existing-task observation, cancellation, and recovery remain
+available.
+
+## Observe and collect
+
+After `task_record: "created"`, run `status` first. Keep the same root and
+task ID; observation never launches or retries provider work.
+
+1. Preserve a concrete failure's guidance. Cancellation and `stop_and_report`
+   prevent automatic continuation. An ancillary error does not erase a valid
+   terminal outcome.
+2. Return a committed `outcome` only with committed publication. For a
+   validated rejected outcome, use [offline recovery](#offline-recovery) once
+   only when `failure.next_action` is `recheck`; otherwise report rejection.
+3. With no terminal outcome, handle `timed_out` before waiting on publication:
+   follow [continuation](continuation.md), including its busy-workspace exception.
+   For `interrupted`, all three of `failure.code: "task_interrupted"`,
+   `failure.next_action: "continue_task"`, and
+   `continuation.resumable: true` are required for automatic continuation.
+   A cancelled timeout is `task_cancelled` / `stop_and_report`, even if
+   collect exits `3`; stop instead of waiting.
+4. If `interaction.pending_requests` is nonempty and interaction is open,
+   answer using [interaction](interaction.md) before collecting again.
+5. With `pending.kind: "lifetime-finalization"`, the guardian still owns
+   cleanup. Keep observing the same task with a finite watch, without
+   supervisor repair or process commands. A queue-row end alone cannot prove
+   termination. Other pending publication or running/undetermined liveness
+   is observed through the same task; it is never permission to redispatch.
+6. Preserve blocked authentication as unresolved. Report the unavailable
+   prerequisite without inventing login commands or interpreting free-form logs.
+
+Keep collection in the foreground until terminal evidence or a reported
+blocker. Detach only when requested. `collect --watch` defaults to `0s`;
+a positive finite interval bounds observation and never extends the task budget.
 
 Committed publication certifies that the provider/evidence predicate passed;
 it does not certify fulfillment of the brief. The Lead must read the complete
@@ -80,35 +113,6 @@ For an `inspect-provider` failure, preserve the optional
 the report. They are bounded diagnostics, not a new recovery instruction.
 Follow `failure.next_action`; do not infer provider authentication or settings
 from an inspection-worker or supervisor-observation failure.
-
-For `delegate models`, validate the complete JSON envelope before using any
-fact. Treat `available` and `partial` with exit `0` as observations, preserve
-`blocked` and `unavailable` with exit `2` as unresolved prerequisites, and
-preserve `failed` as a discovery failure. Exit `1` with `failed` is an
-operational failure; exit `2` with `failed` is an invalid or unsupported
-request, not an authentication block. Status and exit are separate
-observations. When the response
-includes the optional `failure` object and `error` message, keep both in the
-report and follow `failure.next_action`; report and stop on
-`stop_and_report`. `complete` refers to
-model enumeration. Keep `efforts: null` distinct from `efforts: []`, and do not
-apply harness-wide effort choices to every model. Discovery is advisory and
-never an admission allowlist; a provider default remains valid and a listed
-model is not an execution guarantee.
-
-Exit codes are bounded control signals: `0` is a completed command, `1` is an
-operational error, `2` is an invalid or unsupported request, `3` is a pending
-collection watch, and `4` is a validated rejected outcome.
-
-Catalog facts (`verification: "catalog"`) are not runtime proof. Preflight
-checks static readiness; runtime verification requires the supervised probe.
-For managed runtime-only dispatches, admission accepts the static contract and
-the task's runner performs that probe before provider execution. Always collect
-the created task's outcome; `admission: "admitted"` alone does not prove that
-the provider started or completed the work.
-Versions and help are observations, not semantic-version allowlists.
-Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
-Report a blocked prerequisite without inventing a login command or retrying.
 
 ## Managed workspace results
 
@@ -224,3 +228,16 @@ tokens, or change the original outcome.
 Keep the assessment ID and source/target descriptors with the result. Do not
 loop on the same recheck. A separate user request is required for further
 troubleshooting or a new provider task.
+
+## Exit codes
+
+| Exit | Control meaning |
+| --- | --- |
+| `0` | Command completed; collect returned a committed outcome, or recheck recovered an answer, when applicable. A successful observation alone is not provider completion. |
+| `1` | Operational error; interrupted collection also uses this exit. Read the response. |
+| `2` | Invalid or unsupported request; discovery can also report an unresolved prerequisite. |
+| `3` | Pending bounded observation/action, including collection, workspace, or checkpoint responses. Not success. |
+| `4` | Validated rejected outcome or still-rejected recheck. |
+
+For model-discovery status/exit pairs use the
+[model contract](command-reference.md#choosing-models-and-effort).

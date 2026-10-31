@@ -2,85 +2,65 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Delegation Layer \u2014 System Components",
-    "quality_profile": "showcase",
-    "views": [
-      {
-        "id": "admission",
-        "label": "Admission",
-        "focus": [
-          "caller",
-          "delegate",
-          "resources",
-          "inspection",
-          "store",
-          "pueue",
-          "acceptance"
-        ],
-        "note": "A fresh task passes the resource check first; pressure creates no task. Static or strict admission; receipt precedes enqueue."
-      },
-      {
-        "id": "execution",
-        "label": "Execution and publication",
-        "focus": [
-          "pueue",
-          "guardian",
-          "runner",
-          "inspection",
-          "providers",
-          "store",
-          "predicate"
-        ],
-        "note": "Fresh preflight gates Start. Guardian closes the native scope; TaskDir interprets sealed evidence and commits the outcome."
-      },
-      {
-        "id": "recovery",
-        "label": "Observation and recovery",
-        "focus": [
-          "caller",
-          "delegate",
-          "store",
-          "pueue",
-          "guardian"
-        ],
-        "note": "Observation reconciles durable evidence. Cancellation has one stopping owner; continuation creates a linked successor."
-      },
-      {
-        "id": "managed-workspaces",
-        "label": "Optional managed Git workspaces",
-        "focus": [
-          "delegate",
-          "workspaces",
-          "pueue",
-          "guardian",
-          "runner",
-          "store",
-          "workspace"
-        ],
-        "note": "workspaces coordinates finite helpers. Capture requires lifetime closure; Git receipts never change provider outcomes."
-      }
-    ],
+    "title": "Delegate — Task lifecycle components",
+    "locale": "en",
     "output": "diagrams/components.html",
+    "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "13d7e5e73cde55f3b2458ffb919acdd003e1244a",
+      "revision": "2f15f72d4da54a40489b77d5d5f43a51b6f20ff7",
       "link_mode": "local-only"
     },
-    "animation": "none"
+    "views": [
+      {
+        "id": "task",
+        "label": "Run a task",
+        "focus": [
+          "lead",
+          "control",
+          "queue",
+          "execution",
+          "provider"
+        ],
+        "note": "The lead requests a task. Pueue schedules it; the guardian and runner supervise the provider turn."
+      },
+      {
+        "id": "result",
+        "label": "Retrieve the result",
+        "focus": [
+          "lead",
+          "control",
+          "execution",
+          "task-records"
+        ],
+        "note": "TaskDir owns the terminal outcome. The lead observes and collects that saved result."
+      },
+      {
+        "id": "workspace",
+        "label": "Optional Git workspace",
+        "focus": [
+          "control",
+          "execution",
+          "provider",
+          "workspace"
+        ],
+        "note": "Git isolation and capture are optional. Workspace capture stays separate from the provider's task outcome."
+      }
+    ]
   },
   "components": [
     {
-      "id": "caller",
+      "id": "lead",
       "type": "external",
-      "label": "Caller or automation",
-      "sublabel": "dispatch \u00b7 observe \u00b7 continue",
+      "label": "Lead or automation",
+      "sublabel": "request · track · collect",
       "pos": [
         40,
         40
       ],
       "size": [
         190,
-        84
+        90
       ],
       "sources": [
         {
@@ -92,365 +72,114 @@
       ]
     },
     {
-      "id": "acceptance",
-      "type": "security",
-      "label": "Live acceptance",
-      "sublabel": "native provider proof",
+      "id": "control",
+      "type": "backend",
+      "label": "Delegate CLI",
+      "sublabel": "dispatch · cancel · continue",
       "pos": [
-        490,
+        390,
         40
       ],
       "size": [
-        270,
-        90
-      ],
-      "sources": [
-        {
-          "path": "scripts/acceptance_native.py",
-          "line": 151,
-          "end_line": 223,
-          "label": "Native acceptance entry and receipt"
-        },
-        {
-          "path": "scripts/delegate_acceptance/native/provider_policy.py",
-          "line": 17,
-          "end_line": 30,
-          "label": "Structured authentication block"
-        },
-        {
-          "path": "scripts/acceptance_native_all.sh",
-          "line": 61,
-          "end_line": 74,
-          "label": "BLOCKED remains neutral"
-        }
-      ],
-      "tag": "auth-gated \u00b7 BLOCKED is neutral"
-    },
-    {
-      "id": "resources",
-      "type": "security",
-      "label": "Resource admission",
-      "sublabel": "resourceadmission \u00b7 fresh tasks only",
-      "pos": [
-        490,
-        330
-      ],
-      "size": [
-        270,
+        230,
         100
       ],
       "sources": [
         {
-          "path": "internal/tasklifecycle/resource_admission.go",
-          "line": 111,
-          "end_line": 193,
-          "label": "Fresh-task gate, refresh and continue"
-        },
-        {
-          "path": "internal/resourceadmission/checker.go",
-          "line": 25,
-          "end_line": 46,
-          "label": "Invocation-local sampled check"
-        },
-        {
-          "path": "internal/resourceadmission/assessment.go",
-          "line": 123,
-          "end_line": 137,
-          "label": "Pressure refuses; unknown warns"
-        }
-      ],
-      "tag": "pressure refuses \u00b7 unknown warns"
-    },
-    {
-      "id": "delegate",
-      "type": "backend",
-      "label": "Task control",
-      "sublabel": "app composes tasklifecycle",
-      "pos": [
-        40,
-        540
-      ],
-      "size": [
-        250,
-        96
-      ],
-      "sources": [
-        {
-          "path": "internal/app/runtime.go",
-          "line": 207,
-          "end_line": 284,
-          "label": "CLI routing and presentation"
-        },
-        {
-          "path": "internal/tasklifecycle/dispatch.go",
-          "line": 12,
-          "end_line": 87,
-          "label": "Fresh resource gate, then preparation"
+          "path": "internal/app/dispatch_composition.go",
+          "line": 34,
+          "end_line": 44,
+          "label": "Dispatch and continuation composition"
         },
         {
           "path": "internal/tasklifecycle/creation.go",
-          "line": 12,
+          "line": 18,
           "end_line": 56,
-          "label": "Refresh check, then create and submit"
-        }
-      ],
-      "tag": "bounded CLI responses"
-    },
-    {
-      "id": "inspection",
-      "type": "security",
-      "label": "Admission and probes",
-      "sublabel": "catalog \u00b7 admission \u00b7 sealed probes",
-      "pos": [
-        490,
-        540
-      ],
-      "size": [
-        270,
-        100
-      ],
-      "sources": [
-        {
-          "path": "internal/admission/preparation.go",
-          "line": 9,
-          "end_line": 71,
-          "label": "Static or strict admission"
+          "label": "Create task before queue submission"
         },
         {
-          "path": "internal/admission/profile_recovery.go",
-          "line": 57,
-          "end_line": 87,
-          "label": "Fresh probe and strict profile match"
-        },
-        {
-          "path": "internal/inspection/internal/probe/runtime_probe.go",
-          "line": 27,
-          "end_line": 105,
-          "label": "Sealed runtime probe implementation"
+          "path": "internal/app/task_observation.go",
+          "line": 46,
+          "end_line": 80,
+          "label": "Collect and project saved results"
         }
-      ],
-      "tag": "static admission; fresh launch"
+      ]
     },
     {
-      "id": "pueue",
+      "id": "queue",
       "type": "messagebus",
-      "label": "Private supervision",
-      "sublabel": "supervisor policy \u00b7 Pueue rows",
+      "label": "Task queue",
+      "sublabel": "private Pueue by default",
       "pos": [
-        490,
-        860
+        830,
+        40
       ],
       "size": [
-        270,
+        240,
         100
       ],
       "sources": [
-        {
-          "path": "internal/supervisor/task_observation.go",
-          "line": 15,
-          "end_line": 94,
-          "label": "Existing-task observation"
-        },
-        {
-          "path": "internal/supervisor/scheduling.go",
-          "line": 82,
-          "end_line": 104,
-          "label": "Shared submission gate"
-        },
         {
           "path": "internal/pueue/internal/control/staged.go",
           "line": 175,
           "end_line": 240,
-          "label": "Stash, commit receipt, then enqueue"
+          "label": "Stage, save receipt, then enqueue"
+        },
+        {
+          "path": "internal/admission/preparation.go",
+          "line": 42,
+          "end_line": 57,
+          "label": "Select and acquire the supervisor"
         }
       ],
-      "tag": "stashed \u2192 receipt \u2192 enqueue"
+      "tag": "receipt before enqueue"
     },
     {
-      "id": "guardian",
-      "type": "security",
-      "label": "Lifetime guardian",
-      "sublabel": "scope \u00b7 termination \u00b7 exact Wait",
+      "id": "execution",
+      "type": "backend",
+      "label": "Task execution",
+      "sublabel": "guardian + delegate-run",
       "pos": [
-        40,
-        860
+        1260,
+        40
       ],
       "size": [
-        250,
+        240,
         100
       ],
       "sources": [
         {
-          "path": "internal/guardian/registration.go",
-          "line": 113,
-          "end_line": 147,
-          "label": "Intent and registration writer calls"
+          "path": "internal/execution/run.go",
+          "line": 88,
+          "end_line": 161,
+          "label": "Preflight, lifetime closure and finalization"
         },
         {
-          "path": "internal/guardian/worker.go",
-          "line": 15,
-          "end_line": 131,
-          "label": "Exact worker identity and Wait"
+          "path": "internal/execution/run.go",
+          "line": 323,
+          "end_line": 371,
+          "label": "Provider Start, Wait and capture"
         },
         {
           "path": "internal/guardian/finalization.go",
           "line": 168,
           "end_line": 215,
-          "label": "Empty-scope termination proof"
+          "label": "Guardian closes scope and records termination"
         }
       ],
-      "tag": "owns native stopping"
+      "tag": "finite budget · closed lifetime"
     },
     {
-      "id": "workspaces",
-      "type": "backend",
-      "label": "Workspace coordinator",
-      "sublabel": "workspaces owns use and capture",
-      "pos": [
-        900,
-        860
-      ],
-      "size": [
-        270,
-        100
-      ],
-      "sources": [
-        {
-          "path": "internal/workspaces/admission.go",
-          "line": 16,
-          "end_line": 62,
-          "label": "Managed workspace admission"
-        },
-        {
-          "path": "internal/workspaces/capture.go",
-          "line": 123,
-          "end_line": 150,
-          "label": "Capture receipt requires closure"
-        },
-        {
-          "path": "internal/workspaces/operations.go",
-          "line": 170,
-          "end_line": 220,
-          "label": "Finite helper submission and receipt"
-        }
-      ],
-      "tag": "capture requires lifetime closure"
-    },
-    {
-      "id": "runner",
-      "type": "backend",
-      "label": "delegate-run",
-      "sublabel": "execution: preflight \u00b7 Start/Wait \u00b7 seal",
-      "pos": [
-        40,
-        1200
-      ],
-      "size": [
-        260,
-        100
-      ],
-      "sources": [
-        {
-          "path": "internal/execution/run.go",
-          "line": 91,
-          "end_line": 173,
-          "label": "Preflight and closure before sealing"
-        },
-        {
-          "path": "internal/execution/run.go",
-          "line": 436,
-          "end_line": 546,
-          "label": "Provider Start/Wait, seal and finalize"
-        },
-        {
-          "path": "internal/app/workspace_operation_worker.go",
-          "line": 67,
-          "end_line": 99,
-          "label": "Finite helpers use the same lifetime"
-        }
-      ],
-      "tag": "provider turn or finite helper"
-    },
-    {
-      "id": "store",
-      "type": "database",
-      "label": "Owned record journals",
-      "sublabel": "taskdir \u00b7 inspection \u00b7 workspace",
-      "pos": [
-        490,
-        1200
-      ],
-      "size": [
-        270,
-        100
-      ],
-      "sources": [
-        {
-          "path": "internal/taskdir/publication.go",
-          "line": 193,
-          "end_line": 220,
-          "label": "TaskDir commits terminal outcome"
-        },
-        {
-          "path": "internal/inspection/internal/journal/evidence.go",
-          "line": 22,
-          "end_line": 49,
-          "label": "Inspection receipt writer"
-        },
-        {
-          "path": "internal/workspace/internal/journal/resource_capture.go",
-          "line": 53,
-          "end_line": 80,
-          "label": "Independent workspace receipt writer"
-        }
-      ],
-      "tag": "outcome.json: terminal authority"
-    },
-    {
-      "id": "predicate",
-      "type": "security",
-      "label": "Behavior predicates",
-      "sublabel": "sealed-evidence interpretation",
-      "pos": [
-        900,
-        1200
-      ],
-      "size": [
-        250,
-        96
-      ],
-      "sources": [
-        {
-          "path": "internal/predicate/contract.go",
-          "line": 31,
-          "end_line": 65,
-          "label": "Typed sealed-evidence interpreter"
-        },
-        {
-          "path": "internal/taskdir/predicate_publication.go",
-          "line": 139,
-          "end_line": 191,
-          "label": "TaskDir invokes and publishes"
-        },
-        {
-          "path": "internal/taskdir/publication.go",
-          "line": 140,
-          "end_line": 220,
-          "label": "TaskDir resolves and commits outcome"
-        }
-      ]
-    },
-    {
-      "id": "providers",
+      "id": "provider",
       "type": "external",
-      "label": "Provider CLIs",
-      "sublabel": "agy \u00b7 codex \u00b7 claude \u00b7 ccr \u00b7 pi \u00b7 opencode",
+      "label": "Provider CLI",
+      "sublabel": "native configuration + session",
       "pos": [
-        40,
-        1540
+        1260,
+        350
       ],
       "size": [
-        260,
+        240,
         100
       ],
       "sources": [
@@ -458,287 +187,182 @@
           "path": "internal/app/catalog.go",
           "line": 20,
           "end_line": 45,
-          "label": "Native provider registrations"
+          "label": "Provider registrations"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 291,
-          "end_line": 328,
-          "label": "Verified command and directory"
-        },
-        {
-          "path": "internal/execution/run.go",
-          "line": 436,
-          "end_line": 453,
-          "label": "Provider Start and Wait"
+          "line": 222,
+          "end_line": 248,
+          "label": "Execute selected command and directory"
         }
-      ],
-      "tag": "native login and output"
+      ]
     },
     {
-      "id": "workspace",
-      "type": "security",
-      "label": "Selected workspace",
-      "sublabel": "caller directory or Git checkout",
+      "id": "task-records",
+      "type": "database",
+      "label": "Task records + result",
+      "sublabel": "outcome.json is the final verdict",
       "pos": [
-        490,
-        1540
+        610,
+        350
       ],
       "size": [
         270,
-        96
+        110
       ],
       "sources": [
         {
-          "path": "internal/provider/contract/placement.go",
-          "line": 30,
-          "end_line": 58,
-          "label": "Canonical writable-root boundary"
+          "path": "internal/taskdir/taskdir.go",
+          "line": 119,
+          "end_line": 151,
+          "label": "Create immutable task records"
         },
         {
-          "path": "internal/execution/run.go",
-          "line": 291,
-          "end_line": 328,
-          "label": "Execution binds selected directory"
+          "path": "internal/taskdir/predicate_publication.go",
+          "line": 139,
+          "end_line": 191,
+          "label": "TaskDir evaluates and publishes"
         },
+        {
+          "path": "internal/taskdir/publication.go",
+          "line": 193,
+          "end_line": 220,
+          "label": "Commit the terminal outcome"
+        }
+      ],
+      "tag": "TaskDir owns publication"
+    },
+    {
+      "id": "workspace",
+      "type": "backend",
+      "label": "Selected workspace",
+      "sublabel": "caller directory or Git checkout",
+      "pos": [
+        1260,
+        650
+      ],
+      "size": [
+        240,
+        110
+      ],
+      "sources": [
         {
           "path": "internal/workspaces/admission.go",
           "line": 16,
           "end_line": 62,
-          "label": "Optional managed dispatch directory"
+          "label": "Optional managed workspace admission"
+        },
+        {
+          "path": "internal/workspaces/capture.go",
+          "line": 123,
+          "end_line": 150,
+          "label": "Independent capture after closure"
+        },
+        {
+          "path": "internal/execution/run.go",
+          "line": 222,
+          "end_line": 248,
+          "label": "Provider uses selected working directory"
         }
-      ]
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "Single-host supervised runtime",
-      "wraps": [
-        "resources",
-        "delegate",
-        "inspection",
-        "pueue",
-        "guardian",
-        "workspaces",
-        "runner",
-        "store",
-        "predicate",
-        "providers",
-        "workspace"
       ],
-      "pad": 28
+      "tag": "Git isolation + capture: optional"
     }
   ],
   "connections": [
     {
-      "id": "caller-to-delegate",
-      "from": "caller",
-      "to": "delegate",
-      "label": "dispatch \u00b7 observe \u00b7 continue",
+      "id": "request-task",
+      "from": "lead",
+      "to": "control",
+      "label": "request",
       "variant": "emphasis"
     },
     {
-      "id": "acceptance-to-delegate",
-      "from": "acceptance",
-      "to": "delegate",
-      "label": "live acceptance",
+      "id": "return-to-lead",
+      "from": "control",
+      "to": "lead",
+      "label": "task id / result",
       "variant": "dashed"
     },
     {
-      "id": "delegate-to-resources",
-      "from": "delegate",
-      "to": "resources",
-      "label": "fresh task: check before create",
-      "variant": "security"
-    },
-    {
-      "id": "resources-to-delegate",
-      "from": "resources",
-      "to": "delegate",
-      "label": "pressure refuses \u00b7 unknown warns",
-      "variant": "dashed"
-    },
-    {
-      "id": "delegate-to-inspection",
-      "from": "delegate",
-      "to": "inspection",
-      "label": "static or required strict",
-      "variant": "security"
-    },
-    {
-      "id": "inspection-to-pueue",
-      "from": "inspection",
-      "to": "pueue",
-      "label": "bind; strict checks if needed"
-    },
-    {
-      "id": "delegate-to-store",
-      "from": "delegate",
-      "to": "store",
-      "label": "immutable task + receipt",
+      "id": "submit-task",
+      "from": "control",
+      "to": "queue",
+      "label": "admit + submit",
       "variant": "emphasis"
     },
     {
-      "id": "delegate-to-pueue",
-      "from": "delegate",
-      "to": "pueue",
-      "label": "stage \u2192 receipt \u2192 enqueue"
-    },
-    {
-      "id": "pueue-to-guardian",
-      "from": "pueue",
-      "to": "guardian",
-      "label": "schedule guardian row",
+      "id": "schedule-task",
+      "from": "queue",
+      "to": "execution",
+      "label": "schedule",
       "variant": "emphasis"
     },
     {
-      "id": "guardian-to-runner",
-      "from": "guardian",
-      "to": "runner",
-      "label": "start exact worker",
+      "id": "run-provider",
+      "from": "execution",
+      "to": "provider",
+      "label": "run one turn",
       "variant": "emphasis"
     },
     {
-      "id": "runner-to-guardian",
-      "from": "runner",
-      "to": "guardian",
-      "label": "launch identity + close",
-      "variant": "security"
-    },
-    {
-      "id": "guardian-to-store",
-      "from": "guardian",
-      "to": "store",
-      "label": "intent \u00b7 launch \u00b7 Wait proof"
-    },
-    {
-      "id": "runner-to-inspection",
-      "from": "runner",
-      "to": "inspection",
-      "label": "fresh preflight before Start",
-      "variant": "security"
-    },
-    {
-      "id": "runner-to-providers",
-      "from": "runner",
-      "to": "providers",
-      "label": "validated Start / Wait",
-      "variant": "emphasis"
-    },
-    {
-      "id": "providers-to-workspace",
-      "from": "providers",
-      "to": "workspace",
-      "label": "native read / writes"
-    },
-    {
-      "id": "runner-to-store",
-      "from": "runner",
-      "to": "store",
+      "id": "finalize-result",
+      "from": "execution",
+      "to": "task-records",
       "label": "seal + finalize",
       "variant": "emphasis"
     },
     {
-      "id": "store-to-predicate",
-      "from": "store",
-      "to": "predicate",
-      "label": "evaluate sealed evidence"
+      "id": "task-record-access",
+      "from": "control",
+      "to": "task-records",
+      "label": "create / observe"
     },
     {
-      "id": "predicate-to-store",
-      "from": "predicate",
-      "to": "store",
-      "label": "return interpretation",
-      "variant": "dashed"
-    },
-    {
-      "id": "delegate-to-caller",
-      "from": "delegate",
-      "to": "caller",
-      "label": "task id + task_record",
-      "variant": "dashed"
-    },
-    {
-      "id": "delegate-to-workspaces",
-      "from": "delegate",
-      "to": "workspaces",
-      "label": "optional Git isolation",
-      "variant": "dashed"
-    },
-    {
-      "id": "workspaces-to-pueue",
-      "from": "workspaces",
-      "to": "pueue",
-      "label": "finite helpers",
-      "variant": "dashed"
-    },
-    {
-      "id": "runner-to-workspace",
-      "from": "runner",
+      "id": "optional-worktree",
+      "from": "control",
       "to": "workspace",
-      "label": "finite Git / verify helpers",
+      "label": "optional Git worktree",
       "variant": "dashed"
     },
     {
-      "id": "workspaces-to-store",
-      "from": "workspaces",
-      "to": "store",
-      "label": "independent receipts",
-      "variant": "dashed"
+      "id": "provider-workspace",
+      "from": "provider",
+      "to": "workspace",
+      "label": "use selected directory"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Source owners",
+      "title": "Who owns the task?",
       "items": [
-        "app composes the CLI; tasklifecycle owns task control and the fresh-task resource gate. The provider catalog is part of admission preparation.",
-        "admission owns profile decisions; inspection and Pueue runtime implementations stay behind their public boundaries.",
-        "supervisor owns binding and submission gates; Pueue owns rows. guardian owns native lifetime.",
-        "execution owns Start/Wait and sealing; taskdir owns predicate evaluation and outcome commit.",
-        "The guardian records each observed native launch before acknowledgement (internal/guardian/control.go:198-225).",
-        "Existing-task status enters ObserveTaskSupervisor; strict preparation and mutation keep their completion gates."
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "Fresh-task resource admission",
-      "items": [
-        "resourceadmission owns sampling and the pure decision; tasklifecycle owns the gate. Nothing is persisted or cached across commands.",
-        "Fresh dispatch is checked before workspace, provider or supervisor preparation; continue is checked after its predecessor loads.",
-        "Before task creation, the check is refreshed only when it is older than 5 s or the execution target changed.",
-        "Confirmed pressure (3 sustained intervals, or critical memory) refuses: task_record not_created, retry_later, retry_after_seconds.",
-        "Unknown metric: an unavailable metric never refuses by itself. If no independent pressure is confirmed, the check lets admission continue with resource_admission unknown and a warning; later admission steps may still fail.",
-        "Running tasks, status, collect, cancel and existing-task recovery are never checked; nothing is killed or throttled."
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "Admission and launch",
-      "items": [
-        "Managed runtime-only admission stores a static capability contract; other paths keep strict admission inspection.",
-        "Every managed launch probes the current runtime inside its guardian scope and matches the admitted contract before Start.",
-        "Legacy logical-owner adoption is create-once and precedes scheduling changes."
+        "Pueue schedules the task. The guardian owns its lifetime; delegate-run starts the provider and captures its output.",
+        "Fresh preflight runs before provider Start. Scope closure precedes sealing and publication."
       ]
     },
     {
       "dot": "emerald",
-      "title": "Independent evidence",
+      "title": "Where is the answer?",
       "items": [
-        "provider.exit seals raw evidence; outcome.json alone establishes a terminal verdict.",
-        "TaskDir, inspection journals and workspace journals have separate record writers and authority.",
-        "Full maintenance sends all current rows to the same durable authorizer. With terminal events enabled, event-only starts from inbox IDs.",
-        "Cached and fresh status rows require the canonical generation check under a shared lease; deferral is derived per reconciliation attempt."
+        "TaskDir evaluates sealed evidence and commits outcome.json. That record establishes the terminal verdict.",
+        "The lead uses status, logs and collect to observe the same task; collection does not request another provider turn."
       ]
     },
     {
       "dot": "violet",
-      "title": "Optional managed workspaces",
+      "title": "Optional workspace capture",
       "items": [
-        "workspaces owns use \u2192 capture \u2192 reusable under the resource use-owner lease.",
-        "Finite Git and verification helpers reuse Pueue \u2192 guardian \u2192 delegate-run; capture requires exact lifetime closure.",
-        "Workspace receipts never rewrite provider outcomes. The lead verifies the retained checkout and explicitly releases or forgets it."
+        "Managed Git isolation adds a checkout and independent capture receipts; it does not change the provider's task outcome.",
+        "Workspace helpers reuse the supervised task path. The lead reviews the capture and explicitly releases the retained checkout."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Refusal, stopping and continuation",
+      "items": [
+        "Confirmed resource pressure refuses a fresh task before task creation. An unavailable metric alone warns rather than refuses.",
+        "Cancellation records a stop request for an active task; cancel on a terminal task returns without changing it (internal/tasklifecycle/cancel.go:13–41).",
+        "Eligible continuation creates a linked successor in the caller's scope with the recorded provider session; predecessor records stay unchanged (internal/tasklifecycle/continue.go:10–90)."
       ]
     }
   ]

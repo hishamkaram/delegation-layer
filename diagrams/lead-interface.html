@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="generator" content="archify 3.1.0">
+  <meta name="generator" content="archify 3.2.0">
   <meta name="archify-reader-contract" content="declared-wide-v1">
-  <title>Delegation Layer — Ordinary Task Lifecycle Diagram</title>
+  <title>Delegate — Run, stop or continue a task Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -2736,19 +2736,31 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     }
     html[data-reader-rail="bottom"] .node-outline-head { padding: 1rem 2.5rem 0.375rem 0.25rem; }
     html[data-reader-rail="bottom"] .node-outline-list {
-      columns: 15rem;
-      column-gap: 1.75rem;
+      display: grid;
+      gap: 0.5rem;
       padding: 0;
       overflow: visible;
       -webkit-mask-image: none;
       mask-image: none;
     }
-    /* Named groups stay whole; a single unnamed group may split across columns,
-       where a continuous spine would read as a broken line. */
     html[data-reader-rail="bottom"] .node-outline-group + .node-outline-group { margin-top: 0; }
-    html[data-reader-rail="bottom"] .node-outline-group:has(> .node-outline-heading) { break-inside: avoid; padding-bottom: 0.25rem; }
-    html[data-reader-rail="bottom"] .node-outline-group:not(:has(> .node-outline-heading)) > ul::before { display: none; }
-    html[data-reader-rail="bottom"] .node-outline-group li { break-inside: avoid; }
+    html[data-reader-rail="bottom"] .node-outline-group:has(> .node-outline-heading) { padding-bottom: 0.25rem; }
+    html[data-reader-rail="bottom"] .node-outline-group > ul {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 0.5rem;
+    }
+    html[data-reader-rail="bottom"] .node-outline-group > ul::before { display: none; }
+    html[data-reader-rail="bottom"] .node-outline-group li {
+      flex: 0 1 auto;
+      min-width: min(100%, 12rem);
+      max-width: min(100%, 32rem);
+    }
+    html[data-reader-rail="bottom"] .node-outline-heading {
+      justify-content: flex-start;
+      gap: 0.5rem;
+    }
+    html[data-reader-rail="bottom"] .node-outline-heading > span { overflow-wrap: anywhere; }
     .rail-controls { display: none; }
     html:is([data-reader-rail="true"], [data-reader-rail="overlay"], [data-reader-rail="bottom"]) .rail-controls {
       display: flex;
@@ -2964,6 +2976,37 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     .node-outline-item:hover small,
     .node-outline-item[data-previewing] small,
     .node-outline-item[aria-current="true"] small { color: var(--text-muted); }
+
+    /* The desktop bottom rail is an index: compact rows keep related nodes
+       together while allowing full names and descriptions to wrap naturally. */
+    html[data-reader-rail="bottom"] .node-outline-item {
+      grid-template-columns: 0.625rem minmax(0, 1fr) 0.75rem;
+      align-items: first baseline;
+      column-gap: 0.375rem;
+      min-height: 0;
+      padding-block: 0.375rem;
+    }
+    html[data-reader-rail="bottom"] .node-outline-item strong,
+    html[data-reader-rail="bottom"] .node-outline-item small {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    html[data-reader-rail="bottom"] .node-outline-item strong {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    html[data-reader-rail="bottom"] .node-outline-item small {
+      grid-column: 2;
+      grid-row: 2;
+      text-align: left;
+    }
+    html[data-reader-rail="bottom"] .node-outline-item::after {
+      grid-column: 3;
+      grid-row: 1;
+      align-self: center;
+    }
 
     .card-header {
       display: flex;
@@ -5040,6 +5083,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       svg [data-node-id], svg [data-edge-from], svg [data-detail], svg [data-detail-anchor], svg [data-legend-hit], svg { transition: none !important; }
     }
   </style>
+<script type="application/json" id="archify-software-notices">"NOTICE\nArchify\nCopyright (c) 2026 tt-a1i (Archify)\nCopyright (c) 2025 Cocoon AI\n\nArchify is distributed under the Apache License, Version 2.0 (LICENSE),\nexcept where a file, package manifest, or third-party notice specifies otherwise.\nThe separately versioned DeepSeek Harness adapter remains MIT; its bundled\nSkill retains the license of the immutable source selected in release.json.\n\nCode and contributions received under the MIT License through pre-transition\ncommit 25cf37080fc8b1dbe758a4efc3935b55f3327083 remain available under their\noriginal terms. Previously published releases keep their existing licenses. The complete historical MIT\ncopyright and permission notice is preserved in LICENSE-MIT. This transition\ndoes not revoke existing MIT grants or assert a new patent grant on behalf\nof historical contributors.\n\nArchify originated from Cocoon-AI/architecture-diagram-generator:\nhttps://github.com/Cocoon-AI/architecture-diagram-generator\n\nThird-party components retain their own licenses; see THIRD_PARTY_NOTICES.md\nand the license files beside those components. Names and logos do not imply\nofficial endorsement, and the software license grants no general trademark\npermission.\n\nThese software licenses cover Archify's embedded runtime and templates, not\nownership of a user's authored content, business data, or source repository.\n\nLICENSE\n\n                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/\n\n   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION\n\n   1. Definitions.\n\n      \"License\" shall mean the terms and conditions for use, reproduction,\n      and distribution as defined by Sections 1 through 9 of this document.\n\n      \"Licensor\" shall mean the copyright owner or entity authorized by\n      the copyright owner that is granting the License.\n\n      \"Legal Entity\" shall mean the union of the acting entity and all\n      other entities that control, are controlled by, or are under common\n      control with that entity. For the purposes of this definition,\n      \"control\" means (i) the power, direct or indirect, to cause the\n      direction or management of such entity, whether by contract or\n      otherwise, or (ii) ownership of fifty percent (50%) or more of the\n      outstanding shares, or (iii) beneficial ownership of such entity.\n\n      \"You\" (or \"Your\") shall mean an individual or Legal Entity\n      exercising permissions granted by this License.\n\n      \"Source\" form shall mean the preferred form for making modifications,\n      including but not limited to software source code, documentation\n      source, and configuration files.\n\n      \"Object\" form shall mean any form resulting from mechanical\n      transformation or translation of a Source form, including but\n      not limited to compiled object code, generated documentation,\n      and conversions to other media types.\n\n      \"Work\" shall mean the work of authorship, whether in Source or\n      Object form, made available under the License, as indicated by a\n      copyright notice that is included in or attached to the work\n      (an example is provided in the Appendix below).\n\n      \"Derivative Works\" shall mean any work, whether in Source or Object\n      form, that is based on (or derived from) the Work and for which the\n      editorial revisions, annotations, elaborations, or other modifications\n      represent, as a whole, an original work of authorship. For the purposes\n      of this License, Derivative Works shall not include works that remain\n      separable from, or merely link (or bind by name) to the interfaces of,\n      the Work and Derivative Works thereof.\n\n      \"Contribution\" shall mean any work of authorship, including\n      the original version of the Work and any modifications or additions\n      to that Work or Derivative Works thereof, that is intentionally\n      submitted to Licensor for inclusion in the Work by the copyright owner\n      or by an individual or Legal Entity authorized to submit on behalf of\n      the copyright owner. For the purposes of this definition, \"submitted\"\n      means any form of electronic, verbal, or written communication sent\n      to the Licensor or its representatives, including but not limited to\n      communication on electronic mailing lists, source code control systems,\n      and issue tracking systems that are managed by, or on behalf of, the\n      Licensor for the purpose of discussing and improving the Work, but\n      excluding communication that is conspicuously marked or otherwise\n      designated in writing by the copyright owner as \"Not a Contribution.\"\n\n      \"Contributor\" shall mean Licensor and any individual or Legal Entity\n      on behalf of whom a Contribution has been received by Licensor and\n      subsequently incorporated within the Work.\n\n   2. Grant of Copyright License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      copyright license to reproduce, prepare Derivative Works of,\n      publicly display, publicly perform, sublicense, and distribute the\n      Work and such Derivative Works in Source or Object form.\n\n   3. Grant of Patent License. Subject to the terms and conditions of\n      this License, each Contributor hereby grants to You a perpetual,\n      worldwide, non-exclusive, no-charge, royalty-free, irrevocable\n      (except as stated in this section) patent license to make, have made,\n      use, offer to sell, sell, import, and otherwise transfer the Work,\n      where such license applies only to those patent claims licensable\n      by such Contributor that are necessarily infringed by their\n      Contribution(s) alone or by combination of their Contribution(s)\n      with the Work to which such Contribution(s) was submitted. If You\n      institute patent litigation against any entity (including a\n      cross-claim or counterclaim in a lawsuit) alleging that the Work\n      or a Contribution incorporated within the Work constitutes direct\n      or contributory patent infringement, then any patent licenses\n      granted to You under this License for that Work shall terminate\n      as of the date such litigation is filed.\n\n   4. Redistribution. You may reproduce and distribute copies of the\n      Work or Derivative Works thereof in any medium, with or without\n      modifications, and in Source or Object form, provided that You\n      meet the following conditions:\n\n      (a) You must give any other recipients of the Work or\n          Derivative Works a copy of this License; and\n\n      (b) You must cause any modified files to carry prominent notices\n          stating that You changed the files; and\n\n      (c) You must retain, in the Source form of any Derivative Works\n          that You distribute, all copyright, patent, trademark, and\n          attribution notices from the Source form of the Work,\n          excluding those notices that do not pertain to any part of\n          the Derivative Works; and\n\n      (d) If the Work includes a \"NOTICE\" text file as part of its\n          distribution, then any Derivative Works that You distribute must\n          include a readable copy of the attribution notices contained\n          within such NOTICE file, excluding those notices that do not\n          pertain to any part of the Derivative Works, in at least one\n          of the following places: within a NOTICE text file distributed\n          as part of the Derivative Works; within the Source form or\n          documentation, if provided along with the Derivative Works; or,\n          within a display generated by the Derivative Works, if and\n          wherever such third-party notices normally appear. The contents\n          of the NOTICE file are for informational purposes only and\n          do not modify the License. You may add Your own attribution\n          notices within Derivative Works that You distribute, alongside\n          or as an addendum to the NOTICE text from the Work, provided\n          that such additional attribution notices cannot be construed\n          as modifying the License.\n\n      You may add Your own copyright statement to Your modifications and\n      may provide additional or different license terms and conditions\n      for use, reproduction, or distribution of Your modifications, or\n      for any such Derivative Works as a whole, provided Your use,\n      reproduction, and distribution of the Work otherwise complies with\n      the conditions stated in this License.\n\n   5. Submission of Contributions. Unless You explicitly state otherwise,\n      any Contribution intentionally submitted for inclusion in the Work\n      by You to the Licensor shall be under the terms and conditions of\n      this License, without any additional terms or conditions.\n      Notwithstanding the above, nothing herein shall supersede or modify\n      the terms of any separate license agreement you may have executed\n      with Licensor regarding such Contributions.\n\n   6. Trademarks. This License does not grant permission to use the trade\n      names, trademarks, service marks, or product names of the Licensor,\n      except as required for reasonable and customary use in describing the\n      origin of the Work and reproducing the content of the NOTICE file.\n\n   7. Disclaimer of Warranty. Unless required by applicable law or\n      agreed to in writing, Licensor provides the Work (and each\n      Contributor provides its Contributions) on an \"AS IS\" BASIS,\n      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or\n      implied, including, without limitation, any warranties or conditions\n      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A\n      PARTICULAR PURPOSE. You are solely responsible for determining the\n      appropriateness of using or redistributing the Work and assume any\n      risks associated with Your exercise of permissions under this License.\n\n   8. Limitation of Liability. In no event and under no legal theory,\n      whether in tort (including negligence), contract, or otherwise,\n      unless required by applicable law (such as deliberate and grossly\n      negligent acts) or agreed to in writing, shall any Contributor be\n      liable to You for damages, including any direct, indirect, special,\n      incidental, or consequential damages of any character arising as a\n      result of this License or out of the use or inability to use the\n      Work (including but not limited to damages for loss of goodwill,\n      work stoppage, computer failure or malfunction, or any and all\n      other commercial damages or losses), even if such Contributor\n      has been advised of the possibility of such damages.\n\n   9. Accepting Warranty or Additional Liability. While redistributing\n      the Work or Derivative Works thereof, You may choose to offer,\n      and charge a fee for, acceptance of support, warranty, indemnity,\n      or other liability obligations and/or rights consistent with this\n      License. However, in accepting such obligations, You may act only\n      on Your own behalf and on Your sole responsibility, not on behalf\n      of any other Contributor, and only if You agree to indemnify,\n      defend, and hold each Contributor harmless for any liability\n      incurred by, or claims asserted against, such Contributor by reason\n      of your accepting any such warranty or additional liability.\n\n   END OF TERMS AND CONDITIONS\n\n   APPENDIX: How to apply the Apache License to your work.\n\n      To apply the Apache License to your work, attach the following\n      boilerplate notice, with the fields enclosed by brackets \"[]\"\n      replaced with your own identifying information. (Don't include\n      the brackets!)  The text should be enclosed in the appropriate\n      comment syntax for the file format. We also recommend that a\n      file or class name and description of purpose be included on the\n      same \"printed page\" as the copyright notice for easier\n      identification within third-party archives.\n\n   Copyright [yyyy] [name of copyright owner]\n\n   Licensed under the Apache License, Version 2.0 (the \"License\");\n   you may not use this file except in compliance with the License.\n   You may obtain a copy of the License at\n\n       http://www.apache.org/licenses/LICENSE-2.0\n\n   Unless required by applicable law or agreed to in writing, software\n   distributed under the License is distributed on an \"AS IS\" BASIS,\n   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n   See the License for the specific language governing permissions and\n   limitations under the License.\n\nLICENSE-MIT\nMIT License\n\nCopyright (c) 2026 tt-a1i (Archify)\nCopyright (c) 2025 Cocoon AI\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n\nTHIRD_PARTY_NOTICES.md\n# Third-party notices\n\nArchify includes optional vector data for third-party brand marks. These marks\nare provided only to identify technologies and services in user-authored\ndiagrams. Their inclusion does not imply sponsorship, endorsement, partnership,\nor affiliation with Archify.\n\nArchify's license and historical MIT grants are described in LICENSE, NOTICE,\nand LICENSE-MIT. The software license does not\nreplace the copyright licenses, trademark policies, or brand guidelines that\napply to third-party marks. Users are responsible for confirming that their\nparticular use is permitted.\n\n## Simple Icons\n\nMost of the built-in vector paths and their metadata were generated from\n[Simple Icons 16.28.0](https://github.com/simple-icons/simple-icons/tree/16.28.0).\nSimple Icons makes its collection work available under\n[CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/16.28.0/LICENSE.md).\n\nAs Simple Icons explains in its\n[disclaimer](https://github.com/simple-icons/simple-icons/blob/16.28.0/DISCLAIMER.md),\nCC0 for the collection does not mean that every underlying icon is CC0. License\nand brand-guideline metadata may be incomplete or change over time. The absence\nof an individual license entry is not a grant of permission.\n\nArchify embeds the selected icons as vector-path data and may render them in a\nuser-selected color. The following individual licenses were recorded in the\npinned Simple Icons 16.28.0 metadata:\n\n| Mark | Recorded source | Recorded license | Archify treatment |\n|---|---|---|---|\n| Angular | [Angular press kit](https://angular.dev/press-kit) | [`CC-BY-4.0`](https://creativecommons.org/licenses/by/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. |\n| Apache Airflow | [Apache logos](https://apache.org/logos) | [`Apache-2.0`](https://www.apache.org/licenses/LICENSE-2.0) | Embedded as vector-path data; Apache trademarks remain subject to the [ASF trademark policy](https://www.apache.org/foundation/marks/). |\n| Apache Kafka | [Apache logos](https://apache.org/logos) | [`Apache-2.0`](https://www.apache.org/licenses/LICENSE-2.0) | Embedded as vector-path data; Apache trademarks remain subject to the [ASF trademark policy](https://www.apache.org/foundation/marks/). |\n| .NET | [.NET brand repository](https://github.com/dotnet/brand/blob/c7d0f51b8ec59531332d05fb27a5b758a7a3d689/logo/dotnet-logo.svg) | [`CC0-1.0`](https://creativecommons.org/publicdomain/zero/1.0/) | Embedded as vector-path data; color may be changed by the authored diagram. |\n| JavaScript | [JS community logo](https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/js.svg) | [`MIT`](https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/LICENSE) | Embedded as vector-path data; color may be changed by the authored diagram. |\n| Jenkins | [Jenkins artwork source](https://get.jenkins.io/art/) | [`CC-BY-SA-3.0`](https://creativecommons.org/licenses/by-sa/3.0/) | Embedded as vector-path data; color may be changed by the authored diagram. Jenkins retains its trademark rights. |\n| Rust | [Rust project](https://www.rust-lang.org) | [`CC-BY-SA-4.0`](https://creativecommons.org/licenses/by-sa/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. See the [Rust media guide](https://www.rust-lang.org/policies/media-guide). |\n| Vue.js | [Vue logo source](https://github.com/vuejs/art/blob/a1c78b74569b70a25300925b4eacfefcc143b8f6/logo.svg) | [`CC-BY-NC-SA-4.0`](https://creativecommons.org/licenses/by-nc-sa/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. The non-commercial and share-alike conditions remain applicable; see the [Vue artwork terms](https://github.com/vuejs/art/blob/a1c78b74569b70a25300925b4eacfefcc143b8f6/README.md). |\n\nThe source, guideline, and known license fields for every packaged mark are\npreserved in `renderers/shared/generated-brand-marks.mjs`.\n\n## OpenAI mark\n\nThe OpenAI vector path is recorded from the\n[OpenAI brand guidelines](https://openai.com/brand/), not from Simple Icons.\nUse remains subject to those current guidelines and any applicable trademark\nrights. Its inclusion does not state or imply endorsement by OpenAI.\n\n## JetBrains Mono\n\nDelivered Archify viewer artifacts embed the JetBrains Mono variable font\nsubsets served by Google Fonts. For characters covered by these subsets, font\nselection does not depend on a network request or a locally installed copy.\nUncovered characters (including CJK) still use the system fallback stack;\nbrowser and operating-system rasterization can differ.\nJetBrains Mono is maintained at\n[github.com/JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono)\nand is distributed under the SIL Open Font License 1.1. The complete license\ntext is preserved in `assets/JetBrainsMono-OFL.txt` in the packaged Skill and\nin the font CSS carried by standalone HTML and SVG exports.\n\n## Pele\n\nThe explainer renders Mermaid chart fences with an unmodified subset of\n[Pele 1.3.0](https://github.com/obsidianmd/pele), copyright (c) 2026 kepano,\ndistributed under the MIT License. The subset and its license text are in\n`explainer/vendor/pele/` in the packaged Skill. Charts are rendered to static\nSVG when a page is built; delivered pages contain no Pele code.\n\n## No additional rights granted\n\nBrand names, logos, and trademarks remain the property of their respective\nowners. This notice records provenance and known terms; it does not grant rights\nthat Archify does not hold, and it does not state that every packaged mark has\nbeen cleared for every commercial, promotional, or redistributive use."</script>
 </head>
 <body>
   <!-- Toolbar: theme, live visual style, trace motion, presentation stage, and export.
@@ -5150,17 +5194,17 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="BLUEPRINT / REV 01"
            data-preset-badge-editorial="EDITORIAL / FIELD NOTE">
         <div class="pulse-dot"></div>
-        <h1>Delegation Layer — Ordinary Task Lifecycle</h1>
+        <h1>Delegate — Run, stop or continue a task</h1>
       </div>
     </div>
 
-    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"git@github.com:hishamkaram/delegation-layer","revision":"13d7e5e73cde55f3b2458ffb919acdd003e1244a","shortRevision":"13d7e5e","label":"hishamkaram/delegation-layer","linkMode":"local-only"},"referenceCount":30,"nodes":{"caller":[{"path":"cmd/delegate/main.go","line":15,"endLine":21,"label":"CLI entry"},{"path":"scripts/acceptance_native.py","line":151,"endLine":223,"label":"Acceptance automation"},{"path":"scripts/acceptance_native_all.sh","line":61,"endLine":74,"label":"Neutral BLOCKED result"}],"delegate":[{"path":"internal/tasklifecycle/dispatch.go","line":12,"endLine":87,"label":"Fresh resource gate, then preparation"},{"path":"internal/tasklifecycle/continue.go","line":10,"endLine":90,"label":"Continue: check, then caller-scope dispatch"},{"path":"internal/tasklifecycle/creation.go","line":12,"endLine":56,"label":"Refresh check, then create and submit"}],"resources":[{"path":"internal/tasklifecycle/resource_admission.go","line":111,"endLine":193,"label":"Fresh-task gate, refresh and continue"},{"path":"internal/resourceadmission/checker.go","line":25,"endLine":46,"label":"Invocation-local sampled check"},{"path":"internal/resourceadmission/assessment.go","line":123,"endLine":137,"label":"Pressure refuses; unknown warns"}],"inspect":[{"path":"internal/admission/preparation.go","line":9,"endLine":71,"label":"Static or strict admission"},{"path":"internal/admission/profile_recovery.go","line":57,"endLine":87,"label":"Fresh probe and strict profile match"},{"path":"internal/inspection/internal/probe/runtime_probe.go","line":27,"endLine":105,"label":"Sealed runtime probe implementation"}],"pueue":[{"path":"internal/supervisor/task_observation.go","line":15,"endLine":94,"label":"Existing-task observation"},{"path":"internal/supervisor/scheduling.go","line":82,"endLine":104,"label":"Shared submission gate"},{"path":"internal/pueue/internal/control/staged.go","line":175,"endLine":240,"label":"Stash, commit receipt, then enqueue"}],"guardian":[{"path":"internal/guardian/registration.go","line":113,"endLine":147,"label":"Intent and registration writer calls"},{"path":"internal/guardian/worker.go","line":15,"endLine":131,"label":"Exact worker identity and Wait"},{"path":"internal/guardian/finalization.go","line":168,"endLine":215,"label":"Empty-scope termination proof"}],"runner":[{"path":"internal/execution/run.go","line":91,"endLine":173,"label":"Preflight and closure before sealing"},{"path":"internal/execution/run.go","line":436,"endLine":546,"label":"Provider Start/Wait, seal and finalize"},{"path":"internal/app/workspace_operation_worker.go","line":67,"endLine":99,"label":"Finite helpers use the same lifetime"}],"provider":[{"path":"internal/app/catalog.go","line":20,"endLine":45,"label":"Native provider registrations"},{"path":"internal/execution/run.go","line":291,"endLine":328,"label":"Verified command and directory"},{"path":"internal/execution/run.go","line":436,"endLine":453,"label":"Provider Start and Wait"}],"store":[{"path":"internal/taskdir/taskdir.go","line":119,"endLine":151,"label":"Immutable task-set writer"},{"path":"internal/taskdir/supervisor_records.go","line":104,"endLine":120,"label":"Exact supervisor receipt writer"},{"path":"internal/taskdir/publication.go","line":140,"endLine":220,"label":"Predicate orchestration and commit"}],"predicate":[{"path":"internal/predicate/contract.go","line":31,"endLine":65,"label":"Typed sealed-evidence interpreter"},{"path":"internal/taskdir/predicate_publication.go","line":139,"endLine":191,"label":"TaskDir invokes and publishes"},{"path":"internal/taskdir/publication.go","line":140,"endLine":220,"label":"TaskDir resolves and commits outcome"}]}}</script>
+    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"git@github.com:hishamkaram/delegation-layer","revision":"2f15f72d4da54a40489b77d5d5f43a51b6f20ff7","shortRevision":"2f15f72","label":"hishamkaram/delegation-layer","linkMode":"local-only"},"referenceCount":14,"nodes":{"lead":[{"path":"cmd/delegate/main.go","line":15,"endLine":21,"label":"Caller enters the CLI"}],"control":[{"path":"internal/tasklifecycle/dispatch.go","line":12,"endLine":90,"label":"Resource gate and task admission"},{"path":"internal/tasklifecycle/cancel.go","line":13,"endLine":55,"label":"Active cancel; terminal task is unchanged"},{"path":"internal/tasklifecycle/continue.go","line":10,"endLine":90,"label":"Validate and dispatch a linked successor"}],"queue":[{"path":"internal/pueue/internal/control/staged.go","line":175,"endLine":240,"label":"Receipt commits before enqueue"},{"path":"internal/tasklifecycle/stop.go","line":14,"endLine":82,"label":"Idle task stopping requires owner lease"}],"execution":[{"path":"internal/execution/run.go","line":88,"endLine":161,"label":"Preflight and closure before finalization"},{"path":"internal/execution/run.go","line":323,"endLine":371,"label":"Provider Start, Wait and output capture"},{"path":"internal/guardian/finalization.go","line":168,"endLine":215,"label":"Close native scope and record termination"}],"provider":[{"path":"internal/app/catalog.go","line":20,"endLine":45,"label":"Provider registrations"},{"path":"internal/execution/run.go","line":222,"endLine":248,"label":"Configured command in selected directory"}],"task-records":[{"path":"internal/taskdir/taskdir.go","line":119,"endLine":151,"label":"Persist immutable task records"},{"path":"internal/taskdir/supervisor_records.go","line":104,"endLine":120,"label":"Persist exact queue receipt"},{"path":"internal/taskdir/predicate_publication.go","line":139,"endLine":191,"label":"Evaluate evidence and commit outcome"}]}}</script>
     <script id="archify-i18n-data" type="application/json">{"locale":"en","messages":{"viewer.kind.frontend":"Frontend","viewer.kind.backend":"Backend","viewer.kind.database":"Database","viewer.kind.cloud":"Cloud","viewer.kind.security":"Security","viewer.kind.messagebus":"Message bus","viewer.kind.external":"External","viewer.kind.neutral":"Neutral","viewer.kind.node":"Node","viewer.kind.start":"Start","viewer.kind.active":"Active","viewer.kind.waiting":"Waiting","viewer.kind.decision":"Decision","viewer.kind.success":"Success","viewer.kind.failure":"Failure","viewer.toolbar.actions":"Diagram actions","viewer.theme.toggle.title":"Toggle theme (T)","viewer.theme.toggle":"Toggle color theme","viewer.theme.dark":"Dark","viewer.theme.light":"Light","viewer.preset.choose.title":"Choose visual style (S cycles)","viewer.preset.choose":"Choose visual style","viewer.preset.style":"Style","viewer.preset.menu":"Visual style","viewer.preset.identity":"Visual identity","viewer.preset.cycles":"to cycle","viewer.preset.classic":"Classic","viewer.preset.classic.short":"Classic","viewer.preset.classic.hint":"Stable technical default","viewer.preset.flow":"Signal Flow","viewer.preset.flow.short":"Flow","viewer.preset.flow.hint":"Motion-forward presentation","viewer.preset.blueprint":"Blueprint","viewer.preset.blueprint.hint":"Engineering review","viewer.preset.editorial":"Editorial","viewer.preset.editorial.hint":"Publication and launch notes","viewer.preset.badge.signalFlow":"SIGNAL FLOW","viewer.preset.badge.blueprint":"BLUEPRINT / REV 01","viewer.preset.badge.editorial":"EDITORIAL / FIELD NOTE","viewer.preset.badge.editorialPlate":"ARCHIFY / PLATE 04","viewer.preset.current":"Visual style: {style}. Choose visual style","viewer.motion.live":"Live","viewer.motion.still":"Still","viewer.motion.pause":"Pause motion","viewer.motion.resume":"Resume motion","viewer.motion.reduced":"Motion paused by reduced-motion preference","viewer.motion.hidden":"Motion paused while this page is hidden","viewer.motion.yielding":"Pause motion; currently yielding to {owner}","viewer.motion.yielding.title":"Live preview enabled · yielding to {owner}","viewer.owner.route":"Route Probe","viewer.owner.lens":"Semantic Lens","viewer.owner.relationship":"Relationship Preview","viewer.owner.intent":"Intent Trace","viewer.owner.focus":"semantic focus","viewer.owner.legend":"legend preview","viewer.owner.reader":"reader interaction","viewer.present.enter":"Enter presentation stage","viewer.present.enter.title":"Presentation stage (F)","viewer.present.exit":"Exit presentation stage","viewer.present.exit.title":"Exit presentation stage (F or Escape)","viewer.present.present":"Present","viewer.present.exit.label":"Exit","viewer.export.button":"Export","viewer.export.button.title":"Export diagram (E)","viewer.export.diagram":"Export diagram","viewer.export.menu":"Export","viewer.export.subtitle":"Portable, clean outputs","viewer.export.share":"Share","viewer.export.shareCard":"Share Card","viewer.export.routeShareCard":"Route Share Card","viewer.export.reachShareCard":"Reach Share Card","viewer.export.copyDiagram":"Copy diagram","viewer.export.clipboardPng":"PNG to clipboard","viewer.export.raster":"Raster images","viewer.export.image":"Image","viewer.export.lossless":"Lossless image","viewer.export.compact":"Compact image","viewer.export.modern":"Modern image","viewer.export.vectorMotion":"Vector and motion","viewer.export.vectorMotion.heading":"Vector \u0026 motion","viewer.export.editable":"Editable vector","viewer.export.svg.auto":"SVG · Auto","viewer.export.svg.auto.hint":"Matches host theme","viewer.export.svg.light":"SVG · Light","viewer.export.svg.light.hint":"Always light","viewer.export.svg.dark":"SVG · Dark","viewer.export.svg.dark.hint":"Always dark","viewer.export.motion6s":"6s motion","viewer.export.unsupported":"Not supported by this browser","viewer.export.clipboardUnsupported":"Clipboard image write not supported by this browser","viewer.export.clipboardUnsupported.short":"Clipboard image write not supported in this browser.","viewer.export.motionUnavailable":"Motion capture unavailable in this browser","viewer.export.webmUnavailable":"WebM unavailable in this browser","viewer.export.failed":"Export failed: {message}","viewer.export.unknownVariant":"Unknown Share Card variant: {variant}","viewer.export.routeRequired":"Trace a route before exporting a Route Share Card","viewer.export.reachRequired":"Trace authored reach before exporting a Reach Share Card","viewer.export.unknown":"unknown","viewer.export.routeFailed":"Route Share Card export failed: {message}","viewer.export.reachFailed":"Reach Share Card export failed: {message}","viewer.export.copyFailed":"Copy failed: {message}","viewer.export.copiedPng":"Copied PNG to clipboard","viewer.export.downloadedRoute":"Downloaded Route Share Card","viewer.export.downloadedReach":"Downloaded Reach Share Card","viewer.export.downloadedWebm":"Downloaded WebM","viewer.export.recording":"Recording 6 seconds of motion…","viewer.export.card.routeSummary.one":"Path: {source} → {target} · {count} step","viewer.export.card.routeSummary.other":"Path: {source} → {target} · {count} steps","viewer.export.card.reachSummary":"Authored {direction} from {origin} · {nodes} · {links} · max {hops}","viewer.export.card.node.one":"{count} node","viewer.export.card.node.other":"{count} nodes","viewer.export.card.link.one":"{count} link","viewer.export.card.link.other":"{count} links","viewer.export.card.hop.one":"{count} hop","viewer.export.card.hop.other":"{count} hops","viewer.export.card.routeBadge":"ARCHIFY · ROUTE · {hops}","viewer.export.card.reachBadge":"ARCHIFY · {direction} REACH","viewer.export.direction.upstream":"Upstream","viewer.export.direction.downstream":"Downstream","viewer.export.error.canvasUnavailable":"Canvas unavailable for {label}","viewer.export.error.contextUnavailable":"2D canvas context unavailable for {label}","viewer.export.error.toBlobUnavailable":"canvas.toBlob unavailable for {label}","viewer.export.error.toBlobNull":"canvas.toBlob returned no data for {label}","viewer.export.error.variantsCombined":"Share Card variants cannot be combined","viewer.export.error.viewerState":"Share Card export could not remove temporary viewer state","viewer.export.error.routeState":"Route Card export could not preserve the resolved route safely","viewer.export.error.reachState":"Reach Card export could not preserve authored reach safely","viewer.export.error.webmRequirements":"WebM motion export requires a trace animation and browser MediaRecorder support","viewer.export.error.mediaRecorder":"MediaRecorder failed","viewer.export.error.emptyWebm":"MediaRecorder produced an empty WebM","viewer.export.error.webmBackground":"SVG background could not be loaded for WebM export","viewer.guide.title":"Explore this system","viewer.focus.selectedNodes":"{count} selected nodes","viewer.guide.eyebrow":"Diagram guide","viewer.guide.close":"Close diagram guide","viewer.guide.inspecting":"Inspecting compiled semantics","viewer.guide.actions":"Diagram exploration actions","viewer.guide.find":"Find any node","viewer.guide.find.hint":"Search labels, responsibilities, kinds, and stable IDs.","viewer.guide.route":"Trace a route","viewer.guide.route.aria":"Trace a directed route","viewer.guide.route.hint":"Ask how two semantic nodes connect in authored direction.","viewer.guide.map":"See the whole system","viewer.guide.map.hint":"Open Semantic Radar with a live viewport and stable nodes.","viewer.guide.lens":"Compare semantic kinds","viewer.guide.lens.hint":"Count roles, reveal their traffic, and compare direct authored links.","viewer.guide.present":"Enter Presentation Stage","viewer.guide.present.hint":"Give the live diagram the viewport without changing export.","viewer.guide.shortcuts":"Additional keyboard shortcuts","viewer.guide.shortcut.export":"Export","viewer.guide.shortcut.theme":"Theme","viewer.guide.shortcut.style":"Style","viewer.guide.shortcut.reset":"Reset","viewer.guide.shortcut.zoomIn":"Zoom in","viewer.guide.shortcut.zoomOut":"Zoom out","viewer.guide.shortcut.close":"Close","viewer.guide.credit":"Find Archify useful? A star on GitHub helps","viewer.guide.star":"Star","viewer.guide.facts":"{nodes} · {relationships}","viewer.guide.fact.node.one":"{count} semantic node","viewer.guide.fact.node.other":"{count} semantic nodes","viewer.guide.fact.relationship.one":"{count} relationship","viewer.guide.fact.relationship.other":"{count} relationships","viewer.guide.open":"Open diagram guide","viewer.finder.title":"Find a node","viewer.finder.close":"Close node finder","viewer.finder.placeholder":"Search labels or IDs","viewer.finder.search":"Search diagram nodes","viewer.finder.results":"Diagram nodes","viewer.finder.empty":"No matching nodes","viewer.finder.result.focus":"Focus {label}","viewer.finder.result.routeStart":"Choose {label} as route start","viewer.finder.result.routeTarget":"Choose {label} as route destination, {links}","viewer.finder.status.empty":"No matching nodes","viewer.finder.status.count.one":"{count} matching node","viewer.finder.status.count.other":"{count} matching nodes","viewer.finder.noun.nodes":"nodes","viewer.finder.link.one":"{count} link","viewer.finder.link.other":"{count} links","viewer.finder.result.focus.one":"Focus {label}, {count} related connection","viewer.finder.result.focus.other":"Focus {label}, {count} related connections","viewer.finder.status.filtered":"{visible} of {available} {noun}","viewer.finder.status.all":"{available} {noun}","viewer.passport.eyebrow":"Semantic passport","viewer.passport.metadata":"Node metadata","viewer.passport.evidence":"Verified source evidence","viewer.passport.verified":"Verified source","viewer.passport.verificationScope":"Verified against local Git at the pinned revision. Remote access has not been checked.","viewer.passport.reach":"Authored reach","viewer.passport.reach.trace":"Trace authored reachability","viewer.passport.upstream":"Upstream","viewer.passport.downstream":"Downstream","viewer.passport.upstream.trace":"Trace upstream authored reachability","viewer.passport.downstream.trace":"Trace downstream authored reachability","viewer.passport.close":"Close semantic passport","viewer.passport.move":"Move semantic passport. Drag, use arrow keys, or press Home to reset.","viewer.passport.copy":"Copy link","viewer.passport.copy.focus":"Copy link to focused node","viewer.passport.relations":"Relations","viewer.passport.relations.show":"Show connected relationships","viewer.passport.relations.hide":"Hide connected relationships","viewer.passport.relations.list":"Connected relationships","viewer.passport.copyRelation":"Copy relation","viewer.passport.copyNode":"Copy node","viewer.passport.copyPinned":"Copy link to pinned relationship","viewer.passport.copySource":"Copy link to source node","viewer.passport.copy.focused.success":"Focused node link copied","viewer.passport.copy.pinned.success":"Pinned relationship link copied","viewer.passport.copy.focused.failed":"Could not copy focused node link","viewer.passport.copy.pinned.failed":"Could not copy pinned relationship link","viewer.passport.relationship.none":"No connected relationships","viewer.passport.relationship.count.one":"{count} relation","viewer.passport.relationship.count.other":"{count} relations","viewer.passport.relationship.show.one":"Show {count} connected relationship","viewer.passport.relationship.show.other":"Show {count} connected relationships","viewer.passport.relationship.summary":"{out} outgoing · {in} incoming{loops}","viewer.passport.relationship.loops":" · {count} loop","viewer.passport.relationship.explorer":"Direct relationship explorer","viewer.passport.relationship.help":"Use arrow keys to explore relationships. Press Enter or Space to pin details; Escape clears.","viewer.passport.relationship.loopsBack":"loops back","viewer.passport.relationship.connectsTo":"connects to","viewer.passport.relationship.connectsFrom":"connects from","viewer.passport.relationship.pinned":"Pinned relationship · {from} → {to} · {label}","viewer.passport.relationship.inspect":"Inspect relationship {index} of {total}: {from} to {to}, {label}. Press Enter for details.","viewer.passport.relationship.group.out":"Outgoing","viewer.passport.relationship.group.in":"Incoming","viewer.passport.relationship.group.loop":"Self loops","viewer.passport.relationship.row":"{group}: {relationship}, {neighbor}","viewer.passport.relationship.direction.out":"OUT →","viewer.passport.relationship.direction.in":"← IN","viewer.passport.relationship.direction.loop":"LOOP","viewer.passport.sourceCount.one":"{count} verified source reference","viewer.passport.sourceCount.other":"{count} verified source references","viewer.passport.repository.open":"Open verified repository revision {revision}","viewer.passport.source.open":"Open verified source {path} at revision {revision}","viewer.passport.source.openLink":"Open ↗","viewer.passport.reach.upstream.one":"Trace {count} upstream authored node","viewer.passport.reach.upstream.other":"Trace {count} upstream authored nodes","viewer.passport.reach.downstream.one":"Trace {count} downstream authored node","viewer.passport.reach.downstream.other":"Trace {count} downstream authored nodes","viewer.passport.reach.noUpstream":"No upstream authored nodes","viewer.passport.reach.noDownstream":"No downstream authored nodes","viewer.passport.reach.status":"{direction} · {nodes} nodes · {links} links · max {hops} hops","viewer.route.eyebrow":"Path","viewer.route.start":"Click where the path starts","viewer.route.start.find":"Find start","viewer.route.start.find.aria":"Find a route start","viewer.route.copy":"Copy link","viewer.route.copy.aria":"Copy link to traced route","viewer.route.clear":"Clear","viewer.route.clear.aria":"Clear route probe","viewer.route.traced":"Path","viewer.route.pickTwo":"Click two nodes on the diagram","viewer.route.pickOne":"Click a node on the diagram","viewer.route.controls":"Route journey controls","viewer.route.previous":"Previous route position","viewer.route.play":"Play route journey","viewer.route.pause":"Pause route journey","viewer.route.replay":"Replay route journey","viewer.route.next":"Next route position","viewer.route.journey":"Journey","viewer.route.pause.label":"Pause","viewer.route.replay.label":"Replay","viewer.route.overview":"Overview","viewer.route.overview.aria":"Show complete route overview","viewer.route.instructions":"Click a start, then an end. Paths follow the arrows.","viewer.route.destination":"Where does the path from {label} end?","viewer.route.destination.find":"Find target","viewer.route.destination.find.aria":"Find a reachable route destination","viewer.route.differentDestination":"Choose a different destination","viewer.route.distinct":"Pick two different nodes.","viewer.route.unreachable":"Cannot reach {label} from here","viewer.route.unreachable.detail":"{target} cannot be reached from {source} along the arrows. Pick a highlighted node.","viewer.route.start.instructions":"Next, pick the end. Only nodes you can reach will light up.","viewer.route.copy.success":"Traced route link copied","viewer.route.copy.failed":"Could not copy traced route link","viewer.route.position":"Route position {index} of {total}: {label}","viewer.route.step":"Step {index} of {total} · {phase} · {label}","viewer.route.motionRequired":"Automatic journey requires Live motion","viewer.route.trigger.clear":"Clear traced route","viewer.route.overview.status":"{nodes} · {hops} · shortest path","viewer.route.overview.node.one":"{count} node","viewer.route.overview.node.other":"{count} nodes","viewer.route.overview.hop.one":"{count} step","viewer.route.overview.hop.other":"{count} steps","viewer.route.phase.playing":"Playing","viewer.route.phase.complete":"Complete","viewer.route.phase.inspecting":"Inspecting","viewer.route.destination.count.one":"{count} reachable node is highlighted. Click it.","viewer.route.destination.count.other":"{count} reachable nodes are highlighted. Click one.","viewer.route.noOutgoing":"No arrows lead out of this node. Clear it and pick another start.","viewer.route.result.title":"{source} to {target}","viewer.route.finder.source.title":"Choose route start","viewer.route.finder.source.placeholder":"Search route sources","viewer.route.finder.source.empty":"No matching route sources","viewer.route.finder.source.results":"Nodes that can start a route","viewer.route.finder.source.noun":"route sources","viewer.route.finder.source.badge":"start","viewer.route.finder.target.title":"Destination from {label}","viewer.route.finder.target.placeholder":"Search reachable destinations","viewer.route.finder.target.empty":"No matching reachable destinations","viewer.route.finder.target.results":"Reachable route destinations","viewer.route.finder.target.noun":"reachable destinations","viewer.route.hop.one":"{count} hop","viewer.route.hop.other":"{count} hops","viewer.lens.eyebrow":"Semantic lens","viewer.lens.title":"Compare system roles","viewer.lens.close":"Close semantic lens","viewer.lens.instruction":"Choose up to two semantic kinds. One reveals its real traffic; two compare only direct authored relationships.","viewer.lens.kinds":"Semantic kinds","viewer.lens.choose":"Choose a kind to inspect its nodes and touching relationships.","viewer.lens.copy":"Copy link to semantic lens","viewer.lens.clear":"Clear semantic lens","viewer.lens.open":"Open semantic lens","viewer.lens.openActive":"Open active semantic lens","viewer.lens.legend":"Semantic legend","viewer.lens.legend.inspect.one":"Inspect {label}, {count} node","viewer.lens.legend.inspect.other":"Inspect {label}, {count} nodes","viewer.lens.kind.count.one":"{label}, {count} node","viewer.lens.kind.count.other":"{label}, {count} nodes","viewer.lens.compare.one":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationship","viewer.lens.compare.other":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationships","viewer.lens.single":"{nodes} · {relationships} · connected peers remain visible","viewer.lens.node.one":"{count} {label} node","viewer.lens.node.other":"{count} {label} nodes","viewer.lens.relationship.one":"{count} touching relationship","viewer.lens.relationship.other":"{count} touching relationships","viewer.radar.title":"Semantic radar","viewer.radar.building":"Building overview","viewer.radar.openFull":"Open full semantic radar","viewer.radar.open":"Open radar","viewer.radar.close":"Close semantic radar","viewer.radar.surface":"Diagram overview. Click a node to focus it, or use arrow keys to pan.","viewer.radar.click":"Click node","viewer.radar.drag":"Drag to pan","viewer.radar.space":"Semantic radar needs more MAP space.","viewer.radar.nodes":"Semantic diagram radar nodes","viewer.radar.focus":"Focus {label} from Semantic Radar","viewer.radar.status":"{count} nodes · {viewport}","viewer.radar.fullMap":"{count} nodes · full map","viewer.radar.compacted":"Radar compacted to avoid covering the Semantic Passport or MAP controls.","viewer.radar.cancelWaiting":"Cancel semantic radar waiting for more MAP space","viewer.radar.needsSpace":"Semantic radar needs more visible MAP space","viewer.radar.viewport.full":"full map","viewer.radar.viewport.width":"{percent}% width","viewer.radar.viewport.scale":"{percent}% viewport","viewer.nav.controls":"Diagram view controls","viewer.nav.route":"Trace a directed route","viewer.nav.route.title":"Trace route (R)","viewer.nav.route.short":"ROUTE","viewer.nav.radar":"Open semantic radar","viewer.nav.radar.title":"Semantic radar (M)","viewer.nav.radar.short":"MAP","viewer.nav.lens":"Open semantic lens","viewer.nav.lens.title":"Semantic lens (L)","viewer.nav.lens.short":"LENS","viewer.nav.find":"Find a node","viewer.nav.find.title":"Find a node (/)","viewer.outline.title":"Node index","viewer.rail.show":"Notes \u0026 index","viewer.rail.controls":"Side panel","viewer.rail.collapse":"Collapse side panel","viewer.rail.bottom":"Move panel below the diagram","viewer.rail.right":"Move panel beside the diagram","viewer.nav.guide":"Open diagram guide","viewer.nav.guide.title":"Diagram guide (?)","viewer.nav.zoomOut":"Zoom out","viewer.nav.zoomOut.title":"Zoom out (-)","viewer.nav.reset":"Reset diagram view","viewer.nav.reset.title":"Reset view (0)","viewer.nav.read":"READ","viewer.nav.zoomIn":"Zoom in","viewer.nav.zoomIn.title":"Zoom in (+)","viewer.nav.camera":"{hint}. Reset diagram view","viewer.nav.camera.title":"{semantic}{hint} · reset view (0)","viewer.nav.camera.semantic":"Semantic camera active · ","viewer.nav.level.map":"MAP","viewer.nav.level.read":"READ","viewer.nav.level.full":"FULL","viewer.nav.level.auto":"AUTO","viewer.nav.detail.map":"Zoom in to reveal relationship labels and node context","viewer.nav.detail.read":"Zoom in again to reveal tags and annotations","viewer.nav.detail.full":"Full diagram detail","viewer.intent.summary":"{label}. {out} outgoing, {in} incoming{loops}. {total} connections. Press Enter for details.","viewer.intent.loops":", {count} self loop","viewer.common.copied":"Copied","viewer.common.copyFailed":"Copy failed","viewer.common.copyLink":"Copy link","viewer.common.clear":"Clear","viewer.common.close":"Close"}}</script>
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="0 0 1100 1576" data-sequence-column-fit="spread" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence">
-        <title id="archify-diagram-title">Delegation Layer — Ordinary Task Lifecycle</title>
+      <svg viewBox="0 0 920 1648" data-sequence-column-fit="spread" data-reader-fit="width-first" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence">
+        <title id="archify-diagram-title">Delegate — Run, stop or continue a task</title>
         <desc id="archify-diagram-description">A sequence diagram generated by Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -5185,546 +5229,353 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Time Segments -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="140" width="1004" height="426" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="145" width="824" height="361" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="574" width="1004" height="548" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="526" width="824" height="474" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="1146" width="1004" height="334" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="1020" width="824" height="270" rx="10" class="c-lane" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="3" x="48" y="1310" width="824" height="240" rx="10" class="c-lane" stroke-width="1"/>
 
         <!-- Lifelines -->
-        <path d="M 99 142 L 99 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 201 142 L 201 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 303 142 L 303 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 405 142 L 405 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 507 142 L 507 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 609 142 L 609 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 711 142 L 711 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 813 142 L 813 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 915 142 L 915 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 1017 142 L 1017 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 116.5 142 L 116.5 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 258.3 142 L 258.3 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 400.1 142 L 400.1 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 541.9000000000001 142 L 541.9000000000001 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 683.7 142 L 683.7 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 825.5 142 L 825.5 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
 
         <!-- Activations -->
-        <rect x="196" y="157" width="10" height="404" rx="3" class="c-mask"/>
-        <rect x="196" y="157" width="10" height="404" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="298" y="185" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="298" y="185" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="400" y="269" width="10" height="96" rx="3" class="c-mask"/>
-        <rect x="400" y="269" width="10" height="96" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="298" y="381" width="10" height="12" rx="3" class="c-mask"/>
-        <rect x="298" y="381" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="604" y="601" width="10" height="516" rx="3" class="c-mask"/>
-        <rect x="604" y="601" width="10" height="516" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="706" y="657" width="10" height="432" rx="3" class="c-mask"/>
-        <rect x="706" y="657" width="10" height="432" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="400" y="769" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="400" y="769" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="808" y="825" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="808" y="825" width="10" height="40" rx="3" class="c-external" stroke-width="1"/>
-        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-mask"/>
-        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-mask"/>
-        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="253.3" y="166" width="10" height="324" rx="3" class="c-mask"/>
+        <rect x="253.3" y="166" width="10" height="324" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="536.9000000000001" y="550" width="10" height="252" rx="3" class="c-mask"/>
+        <rect x="536.9000000000001" y="550" width="10" height="252" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="678.7" y="590" width="10" height="116" rx="3" class="c-mask"/>
+        <rect x="678.7" y="590" width="10" height="116" rx="3" class="c-external" stroke-width="1"/>
+        <rect x="820.5" y="732" width="10" height="68" rx="3" class="c-mask"/>
+        <rect x="820.5" y="732" width="10" height="68" rx="3" class="c-database" stroke-width="1"/>
+        <rect x="253.3" y="824" width="10" height="146" rx="3" class="c-mask"/>
+        <rect x="253.3" y="824" width="10" height="146" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="253.3" y="1044" width="10" height="148" rx="3" class="c-mask"/>
+        <rect x="253.3" y="1044" width="10" height="148" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="536.9000000000001" y="1210" width="10" height="60" rx="3" class="c-mask"/>
+        <rect x="536.9000000000001" y="1210" width="10" height="60" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="253.3" y="1334" width="10" height="198" rx="3" class="c-mask"/>
+        <rect x="253.3" y="1334" width="10" height="198" rx="3" class="c-backend" stroke-width="1"/>
 
         <!-- Messages -->
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="dispatch / continue" data-edge-key="0" data-edge-id="dispatch">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="dispatch" data-composition-points="106,160;194,160" d="M 106 160 L 194 160" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="dispatch request" data-edge-key="0" data-edge-id="request">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="request" data-composition-points="123.5,170;251.3,170" d="M 123.5 170 L 251.3 170" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="81.30000000000001" y="140" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="150" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch / continue</text>
+          <rect x="128.60000000000002" y="150" width="117.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="160" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch request</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check fresh task resources" data-edge-key="1" data-edge-id="resource-check">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-check" data-composition-points="208,188;296,188" d="M 208 188 L 296 188" class="a-security" data-animate="edge" style="--step:1" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="if pressure: not_created; stop" data-edge-key="1" data-edge-id="resource-refusal">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="resource-refusal" data-composition-points="251.3,208;123.5,208" d="M 251.3 208 L 123.5 208" class="a-dashed" data-animate="edge" style="--step:1" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="160.2" y="168" width="183.6" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="178" class="t-edge-security" font-size="11" text-anchor="middle">check fresh task resources</text>
+          <rect x="82.4" y="188" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="198" class="t-edge-dashed" font-size="11" text-anchor="middle">if pressure: not_created; stop</text>
+        </g>
+        <text data-detail="context" x="135.5" y="226" class="t-muted" font-size="7"><tspan x="135.5" dy="0">Otherwise proceed below;</tspan><tspan x="135.5" dy="11">unknown metrics warn.</tspan></text>
+        </g>
+
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="if admitted: create immutable task" data-edge-key="2" data-edge-id="create-task">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="create-task" data-composition-points="265.3,292;818.5,292" d="M 265.3 292 L 818.5 292" class="a-emphasis" data-animate="edge" style="--step:2" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-detail="context">
+          <rect x="423.7" y="272" width="236.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="282" class="t-edge-emphasis" font-size="11" text-anchor="middle">if admitted: create immutable task</text>
         </g>
         </g>
 
-        <g data-edge-from="resources" data-edge-to="delegate" data-edge-label="clear · unknown + warning · pressure" data-edge-key="2" data-edge-id="resource-result">
-          <path data-composition-edge-from="resources" data-composition-edge-to="delegate" data-composition-edge-id="resource-result" data-composition-points="296,216;208,216" d="M 296 216 L 208 216" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="stage exact row" data-edge-key="3" data-edge-id="stage-row">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="stage-row" data-composition-points="265.3,332;393.1,332" d="M 265.3 332 L 393.1 332" class="a-default" data-animate="edge" style="--step:3" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="127.2" y="196" width="249.6" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="206" class="t-muted" font-size="11" text-anchor="middle">clear · unknown + warning · pressure</text>
+          <rect x="273.70000000000005" y="312" width="111" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="322" class="t-muted" font-size="11" text-anchor="middle">stage exact row</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="pressure: retry_later" data-edge-key="3" data-edge-id="pressure-refusal">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="pressure-refusal" data-composition-points="194,244;106,244" d="M 194 244 L 106 244" class="a-dashed" data-animate="edge" style="--step:3" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="save queue receipt" data-edge-key="4" data-edge-id="save-receipt">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="save-receipt" data-composition-points="265.3,372;818.5,372" d="M 265.3 372 L 818.5 372" class="a-emphasis" data-animate="edge" style="--step:4" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="74.7" y="224" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="234" class="t-edge-dashed" font-size="11" text-anchor="middle">pressure: retry_later</text>
+          <rect x="476.5" y="352" width="130.8" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="362" class="t-edge-emphasis" font-size="11" text-anchor="middle">save queue receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="prepare candidate" data-edge-key="4" data-edge-id="candidate">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="candidate" data-composition-points="208,272;398,272" d="M 208 272 L 398 272" class="a-emphasis" data-animate="edge" style="--step:4" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="enqueue after receipt" data-edge-key="5" data-edge-id="enqueue">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="enqueue" data-composition-points="265.3,412;393.1,412" d="M 265.3 412 L 393.1 412" class="a-emphasis" data-animate="edge" style="--step:5" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="240.9" y="252" width="124.19999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="262" class="t-edge-emphasis" font-size="11" text-anchor="middle">prepare candidate</text>
+          <rect x="253.90000000000003" y="392" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="402" class="t-edge-emphasis" font-size="11" text-anchor="middle">enqueue after receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="pueue" data-edge-label="prepare supervisor" data-edge-key="5" data-edge-id="bind-supervisor">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="pueue" data-composition-edge-id="bind-supervisor" data-composition-points="412,300;500,300" d="M 412 300 L 500 300" class="a-default" data-animate="edge" style="--step:5" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="task_record: created + task id" data-edge-key="6" data-edge-id="admitted">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="admitted" data-composition-points="251.3,460;123.5,460" d="M 251.3 460 L 123.5 460" class="a-default" data-animate="edge" style="--step:6" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="390.6" y="280" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="456" y="290" class="t-muted" font-size="11" text-anchor="middle">prepare supervisor</text>
+          <rect x="82.4" y="440" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="450" class="t-muted" font-size="11" text-anchor="middle">task_record: created + task id</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="strict, when required" data-edge-key="6" data-edge-id="strict-admission">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="strict-admission" data-composition-points="208,328;398,328" d="M 208 328 L 398 328" class="a-dashed" data-animate="edge" style="--step:6" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="queue" data-edge-to="execution" data-edge-label="schedule task" data-edge-key="7" data-edge-id="scheduled">
+          <path data-composition-edge-from="queue" data-composition-edge-to="execution" data-composition-edge-id="scheduled" data-composition-points="407.1,554;534.9000000000001,554" d="M 407.1 554 L 534.9000000000001 554" class="a-emphasis" data-animate="edge" style="--step:7" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="227.7" y="308" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="318" class="t-edge-dashed" font-size="11" text-anchor="middle">strict, when required</text>
+          <rect x="422.1000000000001" y="534" width="97.8" height="18" rx="3" class="c-mask"/>
+          <text x="471.00000000000006" y="544" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule task</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="delegate" data-edge-label="admission plan" data-edge-key="7" data-edge-id="prepared">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="delegate" data-composition-edge-id="prepared" data-composition-points="398,356;208,356" d="M 398 356 L 208 356" class="a-default" data-animate="edge" style="--step:7" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="execution" data-edge-to="provider" data-edge-label="preflight, then Start" data-edge-key="8" data-edge-id="start-provider">
+          <path data-composition-edge-from="execution" data-composition-edge-to="provider" data-composition-edge-id="start-provider" data-composition-points="548.9000000000001,594;676.7,594" d="M 548.9000000000001 594 L 676.7 594" class="a-emphasis" data-animate="edge" style="--step:8" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="250.8" y="336" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="346" class="t-muted" font-size="11" text-anchor="middle">admission plan</text>
+          <rect x="537.5000000000001" y="574" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="612.8000000000001" y="584" class="t-edge-emphasis" font-size="11" text-anchor="middle">preflight, then Start</text>
+        </g>
+        <text data-detail="context" x="560.9000000000001" y="612" class="t-muted" font-size="7"><tspan x="560.9000000000001" dy="0">Guardian owns the scope</tspan><tspan x="560.9000000000001" dy="11">and budget; runner</tspan><tspan x="560.9000000000001" dy="11">executes.</tspan></text>
+        </g>
+
+        <g data-edge-from="provider" data-edge-to="execution" data-edge-label="output + exit" data-edge-key="9" data-edge-id="provider-output">
+          <path data-composition-edge-from="provider" data-composition-edge-to="execution" data-composition-edge-id="provider-output" data-composition-points="676.7,696;548.9000000000001,696" d="M 676.7 696 L 548.9000000000001 696" class="a-default" data-animate="edge" style="--step:9" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-detail="context">
+          <rect x="563.9000000000001" y="676" width="97.8" height="18" rx="3" class="c-mask"/>
+          <text x="612.8000000000001" y="686" class="t-muted" font-size="11" text-anchor="middle">output + exit</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="refresh only if stale or target changed" data-edge-key="8" data-edge-id="resource-refresh">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-refresh" data-composition-points="208,384;296,384" d="M 208 384 L 296 384" class="a-dashed" data-animate="edge" style="--step:8" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="after closure: seal + finalize" data-edge-key="10" data-edge-id="seal-finalize">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="seal-finalize" data-composition-points="548.9000000000001,736;818.5,736" d="M 548.9000000000001 736 L 818.5 736" class="a-emphasis" data-animate="edge" style="--step:10" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="117.30000000000001" y="364" width="269.4" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="374" class="t-edge-dashed" font-size="11" text-anchor="middle">refresh only if stale or target changed</text>
+          <rect x="578.7" y="716" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="726" class="t-edge-emphasis" font-size="11" text-anchor="middle">after closure: seal + finalize</text>
+        </g>
+        <text data-detail="context" x="560.9000000000001" y="754" class="t-muted" font-size="7"><tspan x="560.9000000000001" dy="0">TaskDir evaluates sealed</tspan><tspan x="560.9000000000001" dy="11">output and commits</tspan><tspan x="560.9000000000001" dy="11">outcome.json.</tspan></text>
+        </g>
+
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="collect TASK_ID" data-edge-key="11" data-edge-id="collect-request">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="collect-request" data-composition-points="123.5,828;251.3,828" d="M 123.5 828 L 251.3 828" class="a-default" data-animate="edge" style="--step:11" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-detail="context">
+          <rect x="131.9" y="808" width="111" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="818" class="t-muted" font-size="11" text-anchor="middle">collect TASK_ID</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="late pressure: not_created" data-edge-key="9" data-edge-id="late-refusal">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="late-refusal" data-composition-points="194,412;106,412" d="M 194 412 L 106 412" class="a-dashed" data-animate="edge" style="--step:9" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="read / reconcile outcome" data-edge-key="12" data-edge-id="read-outcome">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="read-outcome" data-composition-points="265.3,868;818.5,868" d="M 265.3 868 L 818.5 868" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="58.2" y="392" width="183.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="402" class="t-edge-dashed" font-size="11" text-anchor="middle">late pressure: not_created</text>
+          <rect x="456.7" y="848" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="858" class="t-muted" font-size="11" text-anchor="middle">read / reconcile outcome</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist immutable task" data-edge-key="10" data-edge-id="persist">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="persist" data-composition-points="208,440;908,440" d="M 208 440 L 908 440" class="a-emphasis" data-animate="edge" style="--step:10" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="task-records" data-edge-to="control" data-edge-label="committed / rejected" data-edge-key="13" data-edge-id="saved-outcome">
+          <path data-composition-edge-from="task-records" data-composition-edge-to="control" data-composition-edge-id="saved-outcome" data-composition-points="818.5,908;265.3,908" d="M 818.5 908 L 265.3 908" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="479.4" y="420" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="430" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist immutable task</text>
+          <rect x="469.9" y="888" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="898" class="t-muted" font-size="11" text-anchor="middle">committed / rejected</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="add exact stashed row" data-edge-key="11" data-edge-id="stage">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stage" data-composition-points="208,468;500,468" d="M 208 468 L 500 468" class="a-default" data-animate="edge" style="--step:11" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="task result" data-edge-key="14" data-edge-id="deliver-result">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="deliver-result" data-composition-points="251.3,948;123.5,948" d="M 251.3 948 L 123.5 948" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="278.7" y="448" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="458" class="t-muted" font-size="11" text-anchor="middle">add exact stashed row</text>
+          <rect x="145.10000000000002" y="928" width="84.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="938" class="t-muted" font-size="11" text-anchor="middle">task result</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist numeric receipt" data-edge-key="12" data-edge-id="receipt">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="receipt" data-composition-points="208,496;908,496" d="M 208 496 L 908 496" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="cancel ACTIVE_TASK_ID" data-edge-key="15" data-edge-id="cancel-active">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="cancel-active" data-composition-points="123.5,1048;251.3,1048" d="M 123.5 1048 L 251.3 1048" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g data-detail="context">
-          <rect x="476.1" y="476" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="486" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist numeric receipt</text>
+          <rect x="112.10000000000001" y="1028" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1038" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel ACTIVE_TASK_ID</text>
+        </g>
+        <text data-detail="context" x="135.5" y="1066" class="t-muted" font-size="7"><tspan x="135.5" dy="0">Separate path from B.</tspan><tspan x="135.5" dy="11">Terminal tasks return</tspan><tspan x="135.5" dy="11">unchanged.</tspan></text>
+        </g>
+
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="persist stop request" data-edge-key="16" data-edge-id="stop-request">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="stop-request" data-composition-points="265.3,1138;818.5,1138" d="M 265.3 1138 L 818.5 1138" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-detail="context">
+          <rect x="469.9" y="1118" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="1128" class="t-edge-security" font-size="11" text-anchor="middle">persist stop request</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="enqueue after receipt" data-edge-key="13" data-edge-id="enqueue">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="enqueue" data-composition-points="208,524;500,524" d="M 208 524 L 500 524" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="stop requested; track task" data-edge-key="17" data-edge-id="stop-ack">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="stop-ack" data-composition-points="251.3,1176;123.5,1176" d="M 251.3 1176 L 123.5 1176" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="278.7" y="504" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="514" class="t-muted" font-size="11" text-anchor="middle">enqueue after receipt</text>
+          <rect x="95.60000000000001" y="1156" width="183.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1166" class="t-muted" font-size="11" text-anchor="middle">stop requested; track task</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="task id · created · warnings" data-edge-key="14" data-edge-id="accepted">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="accepted" data-composition-points="194,552;106,552" d="M 194 552 L 106 552" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="close scope; record termination" data-edge-key="18" data-edge-id="termination">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="termination" data-composition-points="548.9000000000001,1214;818.5,1214" d="M 548.9000000000001 1214 L 818.5 1214" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <g data-detail="context">
-          <rect x="51.60000000000001" y="532" width="196.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="542" class="t-muted" font-size="11" text-anchor="middle">task id · created · warnings</text>
+          <rect x="575.4000000000001" y="1194" width="216.6" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="1204" class="t-edge-security" font-size="11" text-anchor="middle">close scope; record termination</text>
         </g>
         </g>
 
-        <g data-edge-from="pueue" data-edge-to="guardian" data-edge-label="schedule guardian row" data-edge-key="15" data-edge-id="schedule">
-          <path data-composition-edge-from="pueue" data-composition-edge-to="guardian" data-composition-edge-id="schedule" data-composition-points="514,604;602,604" d="M 514 604 L 602 604" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="seal + finalize stopped task" data-edge-key="19" data-edge-id="stopped-outcome">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="stopped-outcome" data-composition-points="548.9000000000001,1254;818.5,1254" d="M 548.9000000000001 1254 L 818.5 1254" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="482.7" y="584" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="594" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule guardian row</text>
+          <rect x="585.3000000000001" y="1234" width="196.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="1244" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal + finalize stopped task</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="scope intent + registration" data-edge-key="16" data-edge-id="scope-intent">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="scope-intent" data-composition-points="616,632;908,632" d="M 616 632 L 908 632" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="continue eligible task" data-edge-key="20" data-edge-id="continue-eligible">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="continue-eligible" data-composition-points="123.5,1338;251.3,1338" d="M 123.5 1338 L 251.3 1338" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="666.9" y="612" width="190.2" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="622" class="t-muted" font-size="11" text-anchor="middle">scope intent + registration</text>
+          <rect x="108.80000000000001" y="1318" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1328" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue eligible task</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="start exact worker" data-edge-key="17" data-edge-id="spawn">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="spawn" data-composition-points="616,660;704,660" d="M 616 660 L 704 660" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="load session; validate" data-edge-key="21" data-edge-id="load-session">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="load-session" data-composition-points="265.3,1376;818.5,1376" d="M 265.3 1376 L 818.5 1376" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="594.6" y="640" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="650" class="t-edge-emphasis" font-size="11" text-anchor="middle">start exact worker</text>
+          <rect x="463.29999999999995" y="1356" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="1366" class="t-muted" font-size="11" text-anchor="middle">load session; validate</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="record worker identity" data-edge-key="18" data-edge-id="worker-identity">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="worker-identity" data-composition-points="616,688;908,688" d="M 616 688 L 908 688" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="new task; same session" data-edge-key="22" data-edge-id="new-successor">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="new-successor" data-composition-points="265.3,1414;393.1,1414" d="M 265.3 1414 L 393.1 1414" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g data-detail="context">
-          <rect x="683.4" y="668" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="678" class="t-muted" font-size="11" text-anchor="middle">record worker identity</text>
+          <rect x="250.60000000000005" y="1394" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="1404" class="t-edge-emphasis" font-size="11" text-anchor="middle">new task; same session</text>
         </g>
+        <text data-detail="context" x="277.3" y="1432" class="t-muted" font-size="7"><tspan x="277.3" dy="0">Fresh admission applies</tspan><tspan x="277.3" dy="11">again; predecessor records</tspan><tspan x="277.3" dy="11">stay unchanged.</tspan></text>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="identity acknowledged" data-edge-key="19" data-edge-id="worker-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="worker-ack" data-composition-points="616,716;704,716" d="M 616 716 L 704 716" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="new task id" data-edge-key="23" data-edge-id="successor-id">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="successor-id" data-composition-points="251.3,1514;123.5,1514" d="M 251.3 1514 L 123.5 1514" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g data-detail="context">
-          <rect x="584.7" y="696" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="706" class="t-muted" font-size="11" text-anchor="middle">identity acknowledged</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="read task + receipt" data-edge-key="20" data-edge-id="reconstruct">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="reconstruct" data-composition-points="718,744;908,744" d="M 718 744 L 908 744" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="744.3" y="724" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="734" class="t-muted" font-size="11" text-anchor="middle">read task + receipt</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="inspect" data-edge-label="fresh runtime preflight" data-edge-key="21" data-edge-id="fresh-probe">
-          <path data-composition-edge-from="runner" data-composition-edge-to="inspect" data-composition-edge-id="fresh-probe" data-composition-points="704,772;412,772" d="M 704 772 L 412 772" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g data-detail="context">
-          <rect x="476.1" y="752" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="762" class="t-edge-security" font-size="11" text-anchor="middle">fresh runtime preflight</text>
-        </g>
-        </g>
-
-        <g data-edge-from="inspect" data-edge-to="runner" data-edge-label="matched launch plan" data-edge-key="22" data-edge-id="launch-plan">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="runner" data-composition-edge-id="launch-plan" data-composition-points="412,800;704,800" d="M 412 800 L 704 800" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="489.3" y="780" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="790" class="t-muted" font-size="11" text-anchor="middle">matched launch plan</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="provider" data-edge-label="Start after strict match" data-edge-key="23" data-edge-id="invoke">
-          <path data-composition-edge-from="runner" data-composition-edge-to="provider" data-composition-edge-id="invoke" data-composition-points="718,828;806,828" d="M 718 828 L 806 828" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="676.8" y="808" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="818" class="t-edge-emphasis" font-size="11" text-anchor="middle">Start after strict match</text>
-        </g>
-        </g>
-
-        <g data-edge-from="provider" data-edge-to="runner" data-edge-label="streams + exact Wait" data-edge-key="24" data-edge-id="capture">
-          <path data-composition-edge-from="provider" data-composition-edge-to="runner" data-composition-edge-id="capture" data-composition-points="806,856;718,856" d="M 806 856 L 718 856" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="690" y="836" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="846" class="t-muted" font-size="11" text-anchor="middle">streams + exact Wait</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="close task lifetime" data-edge-key="25" data-edge-id="close-lifetime">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="close-lifetime" data-composition-points="704,884;616,884" d="M 704 884 L 616 884" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g data-detail="context">
-          <rect x="591.3" y="864" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="874" class="t-edge-security" font-size="11" text-anchor="middle">close task lifetime</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="termination + empty scope" data-edge-key="26" data-edge-id="empty-scope">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="empty-scope" data-composition-points="616,912;908,912" d="M 616 912 L 908 912" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="673.5" y="892" width="177" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="902" class="t-edge-emphasis" font-size="11" text-anchor="middle">termination + empty scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="close acknowledged" data-edge-key="27" data-edge-id="close-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="close-ack" data-composition-points="616,940;704,940" d="M 616 940 L 704 940" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="594.6" y="920" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="930" class="t-muted" font-size="11" text-anchor="middle">close acknowledged</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="seal evidence; finalize" data-edge-key="28" data-edge-id="seal">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="seal" data-composition-points="718,968;908,968" d="M 718 968 L 908 968" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="731.1" y="948" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="958" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal evidence; finalize</text>
-        </g>
-        </g>
-
-        <g data-edge-from="store" data-edge-to="predicate" data-edge-label="evaluate sealed evidence" data-edge-key="29" data-edge-id="interpret">
-          <path data-composition-edge-from="store" data-composition-edge-to="predicate" data-composition-edge-id="interpret" data-composition-points="922,996;1010,996" d="M 922 996 L 1010 996" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="880.8" y="976" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="966" y="986" class="t-muted" font-size="11" text-anchor="middle">evaluate sealed evidence</text>
-        </g>
-        </g>
-
-        <g data-edge-from="predicate" data-edge-to="store" data-edge-label="interpretation" data-edge-key="30" data-edge-id="verdict">
-          <path data-composition-edge-from="predicate" data-composition-edge-to="store" data-composition-edge-id="verdict" data-composition-points="1010,1024;922,1024" d="M 1010 1024 L 922 1024" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="913.8" y="1004" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="966" y="1014" class="t-muted" font-size="11" text-anchor="middle">interpretation</text>
-        </g>
-        </g>
-
-        <g data-edge-from="store" data-edge-to="runner" data-edge-label="outcome.json verdict" data-edge-key="31" data-edge-id="outcome">
-          <path data-composition-edge-from="store" data-composition-edge-to="runner" data-composition-edge-id="outcome" data-composition-points="908,1052;718,1052" d="M 908 1052 L 718 1052" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="741" y="1032" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="1042" class="t-muted" font-size="11" text-anchor="middle">outcome.json verdict</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="managed worker exits" data-edge-key="32" data-edge-id="worker-exit">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="worker-exit" data-composition-points="704,1080;616,1080" d="M 704 1080 L 616 1080" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="588" y="1060" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="1070" class="t-muted" font-size="11" text-anchor="middle">managed worker exits</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="persist exact child Wait" data-edge-key="33" data-edge-id="lifetime-proof">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="lifetime-proof" data-composition-points="616,1108;908,1108" d="M 616 1108 L 908 1108" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="676.8" y="1088" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="1098" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist exact child Wait</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="status / logs / collect" data-edge-key="34" data-edge-id="observe">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="observe" data-composition-points="106,1176;194,1176" d="M 106 1176 L 194 1176" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="68.10000000000001" y="1156" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1166" class="t-muted" font-size="11" text-anchor="middle">status / logs / collect</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="observe and reconcile" data-edge-key="35" data-edge-id="read">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="read" data-composition-points="208,1204;908,1204" d="M 208 1204 L 908 1204" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="482.7" y="1184" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1194" class="t-muted" font-size="11" text-anchor="middle">observe and reconcile</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="bounded response" data-edge-key="36" data-edge-id="returned">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="returned" data-composition-points="194,1232;106,1232" d="M 194 1232 L 106 1232" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="91.2" y="1212" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1222" class="t-muted" font-size="11" text-anchor="middle">bounded response</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="cancel TASK_ID" data-edge-key="37" data-edge-id="cancel">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="cancel" data-composition-points="106,1260;194,1260" d="M 106 1260 L 194 1260" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g data-detail="context">
-          <rect x="97.80000000000001" y="1240" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1250" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel TASK_ID</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist one stop request" data-edge-key="38" data-edge-id="cancel-request">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="cancel-request" data-composition-points="208,1288;908,1288" d="M 208 1288 L 908 1288" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="472.8" y="1268" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1278" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist one stop request</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="active owner: terminate scope" data-edge-key="39" data-edge-id="guardian-cancel">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="guardian-cancel" data-composition-points="616,1316;908,1316" d="M 616 1316 L 908 1316" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g data-detail="context">
-          <rect x="660.3" y="1296" width="203.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="1306" class="t-edge-dashed" font-size="11" text-anchor="middle">active owner: terminate scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="else, lease: stop row" data-edge-key="40" data-edge-id="stop">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stop" data-composition-points="208,1344;500,1344" d="M 208 1344 L 500 1344" class="a-dashed" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g data-detail="context">
-          <rect x="278.7" y="1324" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="1334" class="t-edge-dashed" font-size="11" text-anchor="middle">else, lease: stop row</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="continue TASK_ID" data-edge-key="41" data-edge-id="continue">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="continue" data-composition-points="106,1372;194,1372" d="M 106 1372 L 194 1372" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="91.2" y="1352" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1362" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue TASK_ID</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check before successor work" data-edge-key="42" data-edge-id="continue-check">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="continue-check" data-composition-points="208,1400;296,1400" d="M 208 1400 L 296 1400" class="a-security" data-animate="edge" style="--step:12" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g data-detail="context">
-          <rect x="156.9" y="1380" width="190.2" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="1390" class="t-edge-security" font-size="11" text-anchor="middle">check before successor work</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="linked successor in caller scope" data-edge-key="43" data-edge-id="successor">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="successor" data-composition-points="208,1428;908,1428" d="M 208 1428 L 908 1428" class="a-emphasis" data-animate="edge" style="--step:12" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g data-detail="context">
-          <rect x="446.4" y="1408" width="223.2" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1418" class="t-edge-emphasis" font-size="11" text-anchor="middle">linked successor in caller scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="new task id" data-edge-key="44" data-edge-id="new-task">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="new-task" data-composition-points="194,1456;106,1456" d="M 194 1456 L 106 1456" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g data-detail="context">
-          <rect x="107.7" y="1436" width="84.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1446" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
+          <rect x="145.10000000000002" y="1494" width="84.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="1504" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
         </g>
         </g>
 
         <!-- Segment Labels -->
         <g data-graph-role="segment-label" data-segment-id="0">
-          <rect x="220.7" y="134" width="248" height="18" rx="3" class="c-mask"/>
-          <text x="226.7" y="147" class="t-muted" font-size="9" font-weight="600">Resource check, admission and durable enqueue</text>
+          <rect x="248.20000000000002" y="134" width="279.2" height="18" rx="3" class="c-mask"/>
+          <text x="254.20000000000002" y="147" class="t-muted" font-size="9" font-weight="600">A · Fresh request — pressure exits; otherwise admit</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="1">
-          <rect x="56" y="578" width="242.8" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="591" class="t-muted" font-size="9" font-weight="600">Guardian scope, fresh launch and publication</text>
+          <rect x="56" y="504" width="206.4" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="517" class="t-muted" font-size="9" font-weight="600">B · Admitted task — normal completion</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="2">
-          <rect x="56" y="1124" width="154.4" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="1137" class="t-muted" font-size="9" font-weight="600">Observe, cancel or continue</text>
+          <rect x="56" y="998" width="232.4" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="1011" class="t-muted" font-size="9" font-weight="600">C · Alternative to B — cancel while active</text>
+        </g>
+        <g data-graph-role="segment-label" data-segment-id="3">
+          <rect x="56" y="1288" width="211.6" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="1301" class="t-muted" font-size="9" font-weight="600">D · Eligible continuation — a new task</text>
         </g>
 
         <!-- Participants -->
-        <g id="node-caller" data-node-id="caller" data-node-label="Caller" tabindex="0" role="button" aria-label="Focus Caller, lead / automation, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="lead / automation" data-node-context="Sequence participant">
-          <title>Caller · lead / automation · Sequence participant</title>
-          <rect x="56" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="56" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(62 78) scale(0.6875)">
+        <g id="node-lead" data-node-id="lead" data-node-label="Lead" tabindex="0" role="button" aria-label="Focus Lead, caller or automation, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="caller or automation" data-node-context="Sequence participant">
+          <title>Lead · caller or automation · Sequence participant</title>
+          <rect x="62" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="62" y="72" width="109" height="60" rx="6" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(68 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="99" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Caller</text>
-          <text data-detail="context" x="99" y="122" class="t-muted" font-size="7" text-anchor="middle">lead / automation</text>
+          <text data-node-label="" data-detail-anchor="" x="116.5" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lead</text>
+          <text data-detail="context" x="116.5" y="122" class="t-muted" font-size="7" text-anchor="middle">caller or automation</text>
         </g>
 
-        <g id="node-delegate" data-node-id="delegate" data-node-label="Lifecycle" tabindex="0" role="button" aria-label="Focus Lifecycle, app→tasklifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="app→tasklifecycle" data-node-context="Sequence participant">
-          <title>Lifecycle · app→tasklifecycle · Sequence participant</title>
-          <rect x="158" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="158" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(164 78) scale(0.6875)">
+        <g id="node-control" data-node-id="control" data-node-label="Delegate CLI" tabindex="0" role="button" aria-label="Focus Delegate CLI, task lifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="task lifecycle" data-node-context="Sequence participant">
+          <title>Delegate CLI · task lifecycle · Sequence participant</title>
+          <rect x="203.8" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="203.8" y="72" width="109" height="60" rx="6" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(209.8 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="201" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lifecycle</text>
-          <text data-detail="context" x="201" y="122" class="t-muted" font-size="7" text-anchor="middle">app→tasklifecycle</text>
+          <text data-node-label="" data-detail-anchor="" x="258.3" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Delegate CLI</text>
+          <text data-detail="context" x="258.3" y="122" class="t-muted" font-size="7" text-anchor="middle">task lifecycle</text>
         </g>
 
-        <g id="node-resources" data-node-id="resources" data-node-label="Resources" tabindex="0" role="button" aria-label="Focus Resources, fresh-task check, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="fresh-task check" data-node-context="Sequence participant">
-          <title>Resources · fresh-task check · Sequence participant</title>
-          <rect x="260" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="260" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:2" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(266 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="303" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resources</text>
-          <text data-detail="context" x="303" y="122" class="t-muted" font-size="7" text-anchor="middle">fresh-task check</text>
-        </g>
-
-        <g id="node-inspect" data-node-id="inspect" data-node-label="Admission" tabindex="0" role="button" aria-label="Focus Admission, policy + probes, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="policy + probes" data-node-context="Sequence participant">
-          <title>Admission · policy + probes · Sequence participant</title>
-          <rect x="362" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="362" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:3" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(368 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="405" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admission</text>
-          <text data-detail="context" x="405" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + probes</text>
-        </g>
-
-        <g id="node-pueue" data-node-id="pueue" data-node-label="Pueue" tabindex="0" role="button" aria-label="Focus Pueue, policy + rows, Sequence participant" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="policy + rows" data-node-context="Sequence participant">
-          <title>Pueue · policy + rows · Sequence participant</title>
-          <rect x="464" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="464" y="72" width="86" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step:4" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(470 78) scale(0.6875)">
+        <g id="node-queue" data-node-id="queue" data-node-label="Task queue" tabindex="0" role="button" aria-label="Focus Task queue, Pueue, Sequence participant" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Pueue" data-node-context="Sequence participant">
+          <title>Task queue · Pueue · Sequence participant</title>
+          <rect x="345.6" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="345.6" y="72" width="109" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(351.6 78) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="507" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pueue</text>
-          <text data-detail="context" x="507" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + rows</text>
+          <text data-node-label="" data-detail-anchor="" x="400.1" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task queue</text>
+          <text data-detail="context" x="400.1" y="122" class="t-muted" font-size="7" text-anchor="middle">Pueue</text>
         </g>
 
-        <g id="node-guardian" data-node-id="guardian" data-node-label="Guardian" tabindex="0" role="button" aria-label="Focus Guardian, native lifetime, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="native lifetime" data-node-context="Sequence participant">
-          <title>Guardian · native lifetime · Sequence participant</title>
-          <rect x="566" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="566" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:5" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(572 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="609" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guardian</text>
-          <text data-detail="context" x="609" y="122" class="t-muted" font-size="7" text-anchor="middle">native lifetime</text>
-        </g>
-
-        <g id="node-runner" data-node-id="runner" data-node-label="Runner" tabindex="0" role="button" aria-label="Focus Runner, delegate-run, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="delegate-run" data-node-context="Sequence participant">
-          <title>Runner · delegate-run · Sequence participant</title>
-          <rect x="668" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="668" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step:6" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(674 78) scale(0.6875)">
+        <g id="node-execution" data-node-id="execution" data-node-label="Execution" tabindex="0" role="button" aria-label="Focus Execution, guardian + runner, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="guardian + runner" data-node-context="Sequence participant">
+          <title>Execution · guardian + runner · Sequence participant</title>
+          <rect x="487.4000000000001" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="487.4000000000001" y="72" width="109" height="60" rx="6" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(493.4000000000001 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="711" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runner</text>
-          <text data-detail="context" x="711" y="122" class="t-muted" font-size="7" text-anchor="middle">delegate-run</text>
+          <text data-node-label="" data-detail-anchor="" x="541.9000000000001" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Execution</text>
+          <text data-detail="context" x="541.9000000000001" y="122" class="t-muted" font-size="7" text-anchor="middle">guardian + runner</text>
         </g>
 
-        <g id="node-provider" data-node-id="provider" data-node-label="Provider" tabindex="0" role="button" aria-label="Focus Provider, native CLI, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="native CLI" data-node-context="Sequence participant">
-          <title>Provider · native CLI · Sequence participant</title>
-          <rect x="770" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="770" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step:7" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(776 78) scale(0.6875)">
+        <g id="node-provider" data-node-id="provider" data-node-label="Provider CLI" tabindex="0" role="button" aria-label="Focus Provider CLI, one native turn, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="one native turn" data-node-context="Sequence participant">
+          <title>Provider CLI · one native turn · Sequence participant</title>
+          <rect x="629.2" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="629.2" y="72" width="109" height="60" rx="6" class="c-external" data-animate="node" style="--step:4" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(635.2 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="813" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider</text>
-          <text data-detail="context" x="813" y="122" class="t-muted" font-size="7" text-anchor="middle">native CLI</text>
+          <text data-node-label="" data-detail-anchor="" x="683.7" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider CLI</text>
+          <text data-detail="context" x="683.7" y="122" class="t-muted" font-size="7" text-anchor="middle">one native turn</text>
         </g>
 
-        <g id="node-store" data-node-id="store" data-node-label="TaskDir" tabindex="0" role="button" aria-label="Focus TaskDir, records + outcome, Sequence participant" aria-pressed="false" data-node-kind="database" data-node-sublabel="records + outcome" data-node-context="Sequence participant">
-          <title>TaskDir · records + outcome · Sequence participant</title>
-          <rect x="872" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="872" y="72" width="86" height="60" rx="6" class="c-database" data-animate="node" style="--step:8" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(878 78) scale(0.6875)">
+        <g id="node-task-records" data-node-id="task-records" data-node-label="Task records" tabindex="0" role="button" aria-label="Focus Task records, TaskDir / outcome.json, Sequence participant" aria-pressed="false" data-node-kind="database" data-node-sublabel="TaskDir / outcome.json" data-node-context="Sequence participant">
+          <title>Task records · TaskDir / outcome.json · Sequence participant</title>
+          <rect x="771" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="771" y="72" width="109" height="60" rx="6" class="c-database" data-animate="node" style="--step:5" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(777 78) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="915" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskDir</text>
-          <text data-detail="context" x="915" y="122" class="t-muted" font-size="7" text-anchor="middle">records + outcome</text>
-        </g>
-
-        <g id="node-predicate" data-node-id="predicate" data-node-label="Predicate" tabindex="0" role="button" aria-label="Focus Predicate, sealed data rules, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="sealed data rules" data-node-context="Sequence participant">
-          <title>Predicate · sealed data rules · Sequence participant</title>
-          <rect x="974" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="974" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step:9" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(980 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="1017" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Predicate</text>
-          <text data-detail="context" x="1017" y="122" class="t-muted" font-size="7" text-anchor="middle">sealed data rules</text>
+          <text data-node-label="" data-detail-anchor="" x="825.5" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task records</text>
+          <text data-detail="context" x="825.5" y="122" class="t-muted" font-size="7" text-anchor="middle">TaskDir / outcome.json</text>
         </g>
 
         <!-- Legend -->
-
+        <g data-legend="">
+          <text x="40" y="1574" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="1594" data-legend-width="118">
+            <path d="M 40 1591 L 74 1591" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+            <text x="83" y="1594" class="t-muted" font-size="10" font-weight="500">main request</text>
+          </g>
+          <g data-legend-semantic-kind="return" data-legend-x="180" data-legend-baseline="1594" data-legend-width="81">
+            <path d="M 180 1591 L 214 1591" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+            <text x="223" y="1594" class="t-muted" font-size="10" font-weight="500">return</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-x="283" data-legend-baseline="1594" data-legend-width="93">
+            <path d="M 283 1591 L 317 1591" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+            <text x="326" y="1594" class="t-muted" font-size="10" font-weight="500">security</text>
+          </g>
+          <g data-legend-semantic-kind="dashed" data-legend-x="398" data-legend-baseline="1594" data-legend-width="112">
+            <path d="M 398 1591 L 432 1591" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+            <text x="441" y="1594" class="t-muted" font-size="10" font-weight="500">async trace</text>
+          </g>
+          <g data-legend-semantic-kind="default" data-legend-x="532" data-legend-baseline="1594" data-legend-width="87">
+            <path d="M 532 1591 L 566 1591" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+            <text x="575" y="1594" class="t-muted" font-size="10" font-weight="500">message</text>
+          </g>
+        </g>
       </svg>
       <p class="intent-trace-status no-print" id="intent-trace-status" role="status" aria-live="polite" aria-atomic="true"></p>
       <div class="diagram-guide no-print" id="diagram-guide" hidden role="dialog" aria-modal="false" aria-labelledby="diagram-guide-title">
@@ -5904,87 +5755,46 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot rose"></div>
-          <h3>Fresh-task resource check</h3>
-        </div>
-        <ul>
-          <li>check fresh task resources: a fresh dispatch is checked before workspace, provider or supervisor preparation. Existing or uncertain task IDs skip it.</li>
-          <li>pressure: retry_later: confirmed pressure (3 sustained intervals, or critical memory) refuses the new request with task_record not_created, retry_later and retry_after_seconds. Nothing is queued or retried.</li>
-          <li>unknown + warning: an unavailable metric never refuses by itself. If no independent pressure is confirmed, the check lets admission continue with resource_admission unknown and a warning; later admission steps may still fail.</li>
-          <li>refresh only if stale or target changed: before task creation the check reruns only when it is older than 5 s or the execution target changed. A late refusal still creates no task.</li>
-          <li>Running tasks, status, collect, cancel and existing-task recovery are never checked. Nothing is persisted, killed or throttled.</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>Grouped source owners</h3>
+          <h3>How to read the alternatives</h3>
         </div>
         <ul>
-          <li>Control is app composition calling tasklifecycle behavior. resourceadmission owns sampling and the pure pressure decision; tasklifecycle owns the fresh-task gate.</li>
-          <li>supervisor owns binding and gates; Pueue owns queue rows. guardian owns lifetime; execution owns provider Start/Wait and sealing.</li>
-          <li>Status uses ObserveTaskSupervisor. A shared-lease canonical generation check precedes cached or fresh task rows; optional repair remains mutation-gated.</li>
-          <li>prepare candidate: app composes tasklifecycle; task creation calls admission.Prepare. Managed runtime-only profiles admit a static capability contract without version/help workers.</li>
-          <li>prepare supervisor: supervisor owns binding and submission policy; Pueue owns the private queue and row state. Legacy logical binding adoption is create-once and precedes scheduling changes.</li>
-          <li>strict, when required: This is the conditional phase inside admission.Prepare: candidate inspection is finalized only when runtime checks were not deferred. The grouped participant includes sealed inspection workers.</li>
-          <li>persist immutable task: tasklifecycle requests creation; TaskDir writes brief.md, task.json and meta.json before supervisor submission.</li>
-          <li>persist numeric receipt: The staged submission invokes tasklifecycle’s commit callback, which calls TaskDir.RecordSupervisorReceipt. The queue row is still stashed.</li>
-          <li>enqueue that exact row: The Pueue adapter enqueues only after the receipt callback succeeds; commit failure leaves the stashed row recoverable.</li>
+          <li>A and B form the normal request/completion path only when fresh admission succeeds. Confirmed resource pressure exits A without a task record.</li>
+          <li>C is a separate active-task cancellation path, not a step after B has published a terminal outcome. D is an explicit new request after the predecessor ends.</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Publication authority</h3>
+          <h3>The result has one owner</h3>
         </div>
         <ul>
-          <li>TaskDir calls the predicate on sealed evidence and commits outcome.json. Only that record establishes a terminal verdict.</li>
-          <li>The guardian’s termination and exact worker Wait are separate durable lifetime facts.</li>
-          <li>Full maintenance sends all current rows to the same durable authorizer. With terminal events enabled, event-only starts from inbox IDs.</li>
-          <li>scope intent + registration: The guardian writes intent before scope creation and registration before starting its managed worker.</li>
-          <li>identity acknowledged: The worker cannot receive its hello acknowledgement until its observed identity is durable.</li>
-          <li>fresh runtime preflight: Admission reconstructs the candidate, probes the current runtime inside the guardian scope and finite budget, finalizes strictly, and matches the admitted contract.</li>
-          <li>Start after strict match: Strict profile matching precedes Start. The guardian records each observed native launch before acknowledging it (internal/guardian/control.go:198-225).</li>
-          <li>termination + empty scope: The guardian proves the native scope empty and persists termination before acknowledging close.</li>
-          <li>seal evidence; finalize: execution seals provider.exit and calls TaskDir.Finalize only after successful lifetime closure.</li>
-          <li>final outcome: TaskDir commits outcome.json as committed or rejected, then returns it to execution. Payload files are evidence, not terminal authority.</li>
-          <li>persist exact child Wait: The guardian retains scope and owner until termination and its exact managed-worker Wait disposition are durable.</li>
+          <li>The runner closes the task lifetime, seals provider output and asks TaskDir to finalize. TaskDir interprets that sealed evidence and commits outcome.json.</li>
+          <li>A response carrying a task id alone does not establish task creation. Observe only a task_record: created response and follow its failure guidance.</li>
+          <li>Collection may reconcile existing saved evidence; it does not launch another provider turn (internal/tasklifecycle/collection.go:13–63).</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>Observation and continuation</h3>
+          <h3>Cancellation and continuation</h3>
         </div>
         <ul>
-          <li>observe and reconcile: tasklifecycle can recover the exact stashed row or publish an existing seal. A typed pre-mutation refusal during stashed recovery triggers fresh same-client observation. Each attempt replaces derived maintenance deferral; no new provider turn.</li>
-          <li>active owner: terminate scope: The active guardian reads the durable request and persists native termination proof.</li>
-          <li>else, lease: stop row: Direct queue stopping requires the task lifetime lease, so no guardian can concurrently own or launch the provider.</li>
-          <li>linked successor in caller scope: continue loads the predecessor, runs one resource check, then dispatches a new task in the current caller&#39;s environment and supervisor control. Predecessor records decide only compatibility.</li>
+          <li>The active guardian handles native termination. If the task is idle, stopping the saved queue row requires its lifetime-owner lease; an acknowledgement alone does not prove closure (internal/tasklifecycle/stop.go:14–82).</li>
+          <li>The new continuation task uses the saved provider session in the caller&#39;s current scope. A missing or incompatible session refuses continuation; it does not invent one.</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot violet"></div>
-          <h3>Optional workspaces</h3>
+          <h3>Optional Git isolation</h3>
         </div>
         <ul>
-          <li>This sequence shows an ordinary provider task. workspaces coordinates optional Git isolation and finite helpers on the same supervised path.</li>
-          <li>Workspace journals keep independent capture receipts; the lead verifies and explicitly releases or forgets the retained checkout.</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot amber"></div>
-          <h3>Live acceptance</h3>
-        </div>
-        <ul>
-          <li>Native acceptance is auth-gated; BLOCKED is neutral.</li>
+          <li>This sequence shows the ordinary provider turn. Managed workspace preparation and capture are optional, with their own receipts (internal/workspaces/admission.go:16–62; capture.go:123–150).</li>
+          <li>Workspace capture requires its helper lifetime to close and remains independent of the task&#39;s terminal verdict.</li>
         </ul>
       </div>
     </div>
@@ -6165,6 +5975,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         else open(false);
       });
       btn.addEventListener('keydown', function (e) {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           if (!isOpen()) open(e.key === 'ArrowUp');
@@ -6181,6 +5992,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       menu.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); close(true); return; }
         if (e.key === 'Tab') { close(false); return; }
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
         var available = options();
         var active = available.indexOf(document.activeElement);
         switch (e.key) {
@@ -6683,6 +6495,13 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         var autoTheme = requestedTheme === 'auto';
         var svg = document.querySelector('.diagram-container svg');
         var clone = svg.cloneNode(true);
+        var softwareNotices = document.getElementById('archify-software-notices');
+        if (softwareNotices) {
+          var softwareMetadata = document.createElementNS('http://www.w3.org/2000/svg', 'metadata');
+          softwareMetadata.setAttribute('id', 'archify-software-notices');
+          softwareMetadata.textContent = JSON.parse(softwareNotices.textContent);
+          clone.insertBefore(softwareMetadata, clone.firstChild);
+        }
 
         var canonicalStateClean = cleanExportClone(clone);
 
@@ -7604,6 +7423,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       });
       // APG menu-button pattern: ArrowDown/ArrowUp on the trigger opens the menu.
       btn.addEventListener('keydown', function (e) {
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           if (!isOpen()) open(e.key === 'ArrowUp');
@@ -7619,6 +7439,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       menu.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') { e.preventDefault(); close(true); return; }
         if (e.key === 'Tab')    { close(false); return; }
+        if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
 
         var available = items().filter(function (i) { return !i.hidden && !i.disabled; });
         var current = available.indexOf(document.activeElement);
@@ -10246,6 +10067,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         syncRelationshipPreview();
       });
       relationshipList.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return;
         var buttons = Array.prototype.slice.call(relationshipList.querySelectorAll('[data-relationship-target]'));
         if (!buttons.length) return;
@@ -13034,6 +12856,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       closeBtn.addEventListener('click', function () { close(); });
       input.addEventListener('input', function () { render(input.value); });
       input.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
         var buttons = resultButtons();
         if (event.key === 'ArrowDown' && buttons.length) {
           event.preventDefault();
@@ -13044,6 +12867,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         }
       });
       results.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
         var buttons = resultButtons();
         var index = buttons.indexOf(document.activeElement);
         if (index < 0 || !buttons.length) return;
@@ -13078,6 +12902,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         count: items.length
       };
     })();
+
 
     /* ============================================================
        Node Outline — a rail index of the semantic nodes, grouped by their
@@ -14183,6 +14008,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         if (journeyPlaying && event.target.closest('[data-route-journey-index]')) pauseJourney({ preserveElapsed: true });
       });
       path.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
         var button = event.target.closest('[data-route-journey-index]');
         if (!button) return;
         var index = Number(button.getAttribute('data-route-journey-index'));
@@ -14858,6 +14684,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         select(button.getAttribute('data-kind'));
       });
       kindsRoot.addEventListener('keydown', function (event) {
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
         var buttons = Array.prototype.slice.call(kindsRoot.querySelectorAll('button:not(:disabled)'));
         var index = buttons.indexOf(document.activeElement);
         var next = null;
@@ -15095,6 +14922,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
        ============================================================ */
     document.addEventListener('keydown', function (e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.shiftKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End')) return;
       if (e.defaultPrevented) return;
       var t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;

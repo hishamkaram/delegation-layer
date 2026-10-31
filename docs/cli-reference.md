@@ -1,86 +1,98 @@
 # CLI reference
 
-`delegate` manages durable tasks. `delegate-run` is the supervisor-owned
-worker and is normally invoked for you; run it directly only when developing
-or integrating a custom supervisor.
+This page indexes task commands and owns operator supervisor configuration.
+The packaged [command reference](../skills/agent-integration/references/command-reference.md)
+is the shared syntax/default owner; [result handling](../skills/agent-integration/references/result-handling.md)
+owns JSON decisions and exit codes.
 
 ## Synopsis
 
-```text
-delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
-  (--auto | --provider PROFILE) --brief FILE --cwd ABS [--id TASK_ID] \
-  [--permission MODE] [--budget DURATION] [--model MODEL] \
-  [--effort EFFORT] [--native-timeout DURATION] [--interactive] \
-  [--resume-task PREDECESSOR_ID] [--review-target TARGET] [--json]
+Use `delegate help` for the installed build's command surface.
+`delegate-run` is the supervisor-owned worker and is normally invoked for you.
 
-delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
-  (--auto | --provider PROFILE) --brief FILE --cwd ABS \
-  --isolation git-worktree [--base REV] [--workspace-budget DURATION] \
-  [--id TASK_ID] [--permission MODE] [--budget DURATION] [--model MODEL] \
-  [--effort EFFORT] [--interactive] [--json]
+| Command | Shared reference |
+| --- | --- |
+| `dispatch` | [Flags, defaults, and review scope](../skills/agent-integration/references/command-reference.md#dispatch) |
+| `providers`, `capabilities` | [Discovery](../skills/agent-integration/references/command-reference.md#providers-and-capabilities) |
+| `models` | [Model and effort discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort) |
+| `preflight` | [Static readiness](../skills/agent-integration/references/command-reference.md#checking-readiness) |
+| `status`, `collect`, `logs`, `cancel` | [Observation and results](../skills/agent-integration/references/result-handling.md#observe-and-collect) |
+| `continue` | [Exact-session continuation](../skills/agent-integration/references/continuation.md) |
+| `recheck` | [Offline evidence recovery](../skills/agent-integration/references/result-handling.md#offline-recovery) |
+| `reply`, `steer`, `events` | [Interaction](../skills/agent-integration/references/interaction.md) |
+| `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
+| `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
-delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
-  (--auto | --provider PROFILE) --brief FILE --workspace ID \
-  [--workspace-budget DURATION] [--permission MODE] [--budget DURATION] \
-  [--model MODEL] [--effort EFFORT] [--interactive] [--json]
-
-delegate [--root ABS] providers [--json]
-delegate [--root ABS] capabilities --provider PROFILE [--json]
-delegate [--root ABS] models --provider PROFILE [--cwd ABS] [--json]
-delegate [--root ABS] preflight --provider PROFILE --cwd ABS \
-  [--review-target TARGET] [--json]
-delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
-  [--budget DURATION] [--model MODEL] [--effort EFFORT] [--interactive] [--json]
-delegate [--root ABS] status TASK_ID [--json]
-delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
-delegate [--root ABS] recheck TASK_ID [--json]
-delegate [--root ABS] reply TASK_ID --request REQUEST_ID --answers FILE --id MESSAGE_ID [--json]
-delegate [--root ABS] steer TASK_ID --brief FILE --id MESSAGE_ID [--json]
-delegate [--root ABS] events TASK_ID [--after SEQUENCE] [--watch DURATION] [--json]
-delegate [--root ABS] logs TASK_ID [--json]
-delegate [--root ABS] cancel TASK_ID [--json]
-delegate [--root ABS] supervisor status [--json]
-delegate [--root ABS] supervisor migrate [--json]
-delegate [--root ABS] workspace list [--after ID] [--limit 1..50] --json
-delegate [--root ABS] workspace status ID [--operation OP] [--watch DURATION] --json
-delegate [--root ABS] workspace exec ID --budget DURATION -- ARGV...
-delegate [--root ABS] workspace release ID [--discard] [--budget DURATION] --json
-delegate [--root ABS] workspace forget ID [--budget DURATION] --json
-delegate [--root ABS] checkpoint create (--cwd ABS | --workspace ID) [--budget DURATION] --json
-delegate [--root ABS] checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
-delegate [--root ABS] checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
-delegate [--root ABS] checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
-delegate help
-delegate version
-```
-
-Global paths must be absolute. `--root` defaults to the user's configuration
-directory joined with `delegation-layer`. Dispatch starts the bundled Pueue
-client and daemon in a private state-rooted configuration. `--pueue-config` or
-`DELEGATE_PUEUE_CONFIG` is optional and selects an existing compatible
+Global paths must be absolute. The CLI's default root is the user's
+configuration directory joined with `delegation-layer`; integration examples
+pass an explicit root so each invocation uses the same one.
+`--pueue-config ABS` or `DELEGATE_PUEUE_CONFIG` selects an external compatible
 supervisor for advanced integrations.
 
-Private ordinary-task supervision uses Pueue's unlimited default group. The
-orchestrating model chooses fan-out by issuing multiple dispatches concurrently;
-tasks are still durably recorded and observable through `status` and `collect`.
-Managed runtime-only tasks use static admission and check the provider inside
-their own supervised execution budget. An admitted task still needs that fresh
-check before provider execution; `collect` reports its terminal result. Required
-native policy inspections, custom runners, and saved inspections retain their
-recorded path. Model discovery retains its bounded inspection group. Dispatch
-prepares unlimited scheduling before admission and may release previously
-admitted queued work even if the new request fails.
-Use separate workspaces or read-only permissions when concurrent tasks could
-write the same files. For independent parallel writes, choose
-`--isolation git-worktree` unless the user explicitly chooses shared
-coordination. There is no fixed task-count cap or TTL eviction. See the
-[managed workspace reference](../skills/agent-integration/references/workspaces.md)
-for the single policy owner.
+## Dispatch
+
+See [dispatch](../skills/agent-integration/references/command-reference.md#dispatch)
+and the canonical [manual example](../skills/agent-integration/examples/read-only-task.md).
+
+### Resource check
+
+See [admission results](../skills/agent-integration/references/result-handling.md#task-creation)
+for caller decisions and [architecture](architecture.md#fresh-admission-resource-check)
+for signals and limits.
+
+## Managed Git workspaces
+
+See [workspace commands and capture](../skills/agent-integration/references/workspaces.md).
+
+## Git checkpoints
+
+See [checkpoint guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints)
+and [checkpoint responses](../skills/agent-integration/references/result-handling.md#checkpoint-results).
+
+## Preflight and continuation
+
+See [static readiness](../skills/agent-integration/references/command-reference.md#checking-readiness)
+and [continuation](../skills/agent-integration/references/continuation.md).
+
+## Providers and runtime compatibility
+
+See [catalog/capability facts](../skills/agent-integration/references/command-reference.md#providers-and-capabilities)
+and [provider differences](providers.md).
+
+## Models (implemented)
+
+See [model discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort).
+
+## Capabilities
+
+See [capabilities](../skills/agent-integration/references/command-reference.md#providers-and-capabilities).
+
+## Interactive tasks
+
+See [interaction](../skills/agent-integration/references/interaction.md).
+
+## Observation commands
+
+See [observation](../skills/agent-integration/references/result-handling.md#observe-and-collect).
+
+## Offline evidence recheck
+
+See [offline recovery](../skills/agent-integration/references/result-handling.md#offline-recovery).
+
+## JSON responses and exit codes
+
+See [task control responses](../skills/agent-integration/references/result-handling.md#task-control-response)
+and [exit codes](../skills/agent-integration/references/result-handling.md#exit-codes).
+
+### Required provider options
+
+See [required options](../skills/agent-integration/references/command-reference.md#providers-and-capabilities).
 
 ## Supervisor recovery
 
 The default supervisor is private to the state root. Normal dispatch adopts a
-reachable compatible endpoint and starts one only when the endpoint is absent.
+reachable compatible generation and recovers the saved generation when its
+endpoint is absent.
 The explicit commands are for inspecting or repairing a real logical/configuration
 migration:
 
@@ -88,6 +100,9 @@ migration:
 delegate --root "$HOME/delegation-state" supervisor status --json
 delegate --root "$HOME/delegation-state" supervisor migrate --json
 ```
+
+`supervisor_migration_blocked` or `wait_for_legacy_work` means migration must
+wait for existing work; it is not a completed migration.
 
 `supervisor status` is read-only. It reports whether the state root has an
 older inspection binding, whether that exact legacy endpoint is reachable, and
@@ -115,7 +130,7 @@ resumed from the immutable migration journal. A successful JSON response has
 migrates or stops an external Pueue configuration.
 
 When the inspection journal points to an external supervisor, the same command
-prepares or reuses Delegate's verified private supervisor and records the
+prepares or reuses Delegate's private supervisor and records the
 inspection handoff. Existing tasks and inspections keep their saved supervisor
 bindings and can finish there. Both daemons and queues remain independent.
 The completed journal marker selects the new inspection head; a retry resumes
@@ -124,677 +139,44 @@ Default private dispatch and model discovery perform this same safe journal
 handoff automatically under the existing bootstrap lock. Private daemon or
 configuration migrations still require the explicit recovery command.
 
-When an admission command (`dispatch` or `continue`) returns
-`failure.code: "supervisor_upgrade_required"` with
-`failure.next_action: "run_supervisor_migrate"`, run the command once with the
-same `--root`, then retry the exact original command and argv once only after
-`supervisor_control.state: "migrated"` and
-`supervisor_control.next_action: "retry_dispatch"`. That response field is
-command-neutral: a failed `continue` remains `continue` and must not become a
-fresh dispatch. Do not run `pueue`, `pueued`, process searches, or a provider
-CLI to repair this state.
-
-## Dispatch
-
-`dispatch` validates the request and prepares its supervisor, then persists
-the immutable task before enqueueing its exact supervisor row. Use `--auto`
-to try static provider admission in deterministic provider-ID order. The first
-statically ready candidate is selected. Managed runtime-only tasks run the
-fresh probe inside their guardian-owned worker before provider execution;
-inspection-backed paths retain their admission checks. See the
-[ownership boundaries](architecture.md#ownership-boundaries). If the selected
-provider fails after dispatch starts, the CLI returns that result and does not
-silently fall back to another provider. `--provider` and `--auto` are
-mutually exclusive.
-
-The brief must be a regular file no larger than 8 MiB. It is supplied to the
-provider through standard input and is never appended to provider arguments.
-`--cwd` must name an existing absolute workspace directory. State and workspace
-paths must remain disjoint.
-
-| Flag | Meaning |
-| --- | --- |
-| `--provider PROFILE` | Provider profile from `delegate providers`, such as `codex:exec` or `codex:review`. |
-| `--brief FILE` | Finite task brief, no larger than 8 MiB. |
-| `--cwd ABS` | Canonical workspace directory. |
-| `--isolation git-worktree` | Create a retained managed Git worktree; requires `--cwd`. |
-| `--base REV` | Committed base revision for a managed worktree; default `HEAD`; requires `--isolation git-worktree`. |
-| `--workspace-budget DURATION` | Finite managed-workspace helper budget; default `5m`, persisted and overridable. |
-| `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
-| `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
-| `--budget DURATION` | Positive Go duration; default `30m` for ordinary tasks and `1h` for `codex:review`. Queue time is excluded. |
-| `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, CCR, Claude, AGY, Pi, or OpenCode). `ccr:print` requires a configured CCR alias; see [CCR](providers.md#claude-code-router). |
-| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; CCR, Claude, and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode sets its native ACP `effort` option after any explicit model. `default` keeps the provider default and is omitted from native argv or protocol options. |
-| `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
-| `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
-| `--interactive` | Enable native clarification and supported active-turn steering. Unsupported providers reject this option before admission. |
-| `--review-target TARGET` | Codex review target: `uncommitted`, `base:BRANCH`, or `commit:SHA`. Required by `codex:review`; rejected by other profiles. |
-| `--json` | Emit the versioned control response. |
-
-Raw provider arguments, token ceilings, and dollar ceilings are deliberately not
-part of this interface. Unsupported options fail before supervisor admission.
-
-For `codex:review`, `--brief` remains required and is persisted as task
-evidence. The native review scope comes from `--review-target`; Codex does not
-accept a prompt together with its native target flags.
-
-Every task ID is single-use for the requested turn. Repeating a dispatch with
-the same ID requires the same immutable request and cannot grant another
-provider launch. A continuation is a separate task that names an exact
-predecessor and reserves the provider conversation until the predecessor has a
-validated terminal outcome, a durable Pueue-ended budget stop with
-independently proven empty scope, or canonical closed lifetime evidence with a
-free runner lease for a turn with no seal or outcome (see
-[Preflight and continuation](#preflight-and-continuation)).
-
-### Resource check
-
-A new `dispatch`, and a new `continue` successor, run an automatic host
-resource check before the task is created. There is no flag or configuration
-for it, and no manual provider check. `status`, `collect`, `cancel`, cleanup,
-and the recovery of an existing or uncertain task are never checked.
-
-Responses may carry an optional `resource_admission` object:
-
-| Field | Meaning |
-| --- | --- |
-| `status` | `clear`, `pressure`, or `unknown`. |
-| `warnings` | Bounded list; each entry has `code`, optional `metric`, `reason_code`, and `message`. |
-
-- **Admitted with `unknown`.** An unreadable metric adds a warning (for
-  example `resource_observation_unavailable`) and the task is admitted with
-  the same status and exit as usual. An unknown metric never refuses by
-  itself, but confirmed pressure on an independent metric still refuses.
-  Observe the same task with `status` and `collect`; do not dispatch again.
-- **Refused for pressure.** Confirmed pressure returns exit `1` with
-  `failure.code: "resource_pressure"`, `failure.stage: "check-resources"`, a
-  `reason_code`, and `task_record: "not_created"`. Only this response carries
-  `failure.next_action: "retry_later"` with `failure.retry_after_seconds: 30`
-  (nested in `failure`, not top-level). The
-  value is advice, not a reservation. Nothing is queued: the caller chooses
-  to report the refusal, or to wait and repeat the exact original admission
-  once; a `continue` stays that `continue`. Delegate never waits or retries
-  for the caller.
-- **Unchanged guidance.** An explicit task ID that cannot be proven absent
-  stays `task_record: "unknown"` with stop guidance, and a created task is
-  observed, not redispatched.
-
-The check takes about 1 second, and a confirmation needs 3 intervals. A
-4-second sampling budget bounds the waits and tick boundaries between samples,
-not a blocked operating-system read or the aggregate memory of concurrent
-invocations, so there is no universal wall-time guarantee. It does not limit how many tasks the caller starts; it refuses new
-requests only while pressure is confirmed. See
-[fresh admission resource check](architecture.md#fresh-admission-resource-check)
-for the signals and placement.
-
-## Managed Git workspaces
-
-Managed workspaces are optional. Git is required for managed worktree creation
-or attachment; ordinary dispatch remains valid in non-Git directories. The
-public dispatch forms are:
-
-```sh
-delegate --root "$HOME/delegation-state" dispatch --auto \
-  --brief /absolute/brief.txt --cwd /absolute/git/source \
-  --isolation git-worktree [--base REV] [--workspace-budget DURATION] \
-  --permission workspace-write --budget 30m --json
-
-delegate --root "$HOME/delegation-state" dispatch --auto \
-  --brief /absolute/brief.txt --workspace WORKSPACE_ID \
-  [--workspace-budget DURATION] --permission read-only --budget 30m --json
-```
-
-`--workspace ID` cannot be combined with public `--cwd`, `--base`, or
-`--isolation`. A source-relative subdirectory is preserved in the managed
-checkout. The source base is a committed revision (default `HEAD`); dirty and
-untracked source changes are excluded. The task budget is unchanged. Workspace
-helper operations use a persisted, overridable 5-minute default, while
-`codex:review` retains its 1-hour task default.
-
-The workspace commands are asynchronous where they start an operation:
-
-- `workspace list` returns paginated summaries with `--after ID` and
-  `--limit 1..50`.
-- `workspace status ID` observes the workspace; `--operation OP` selects one
-  operation and `--watch DURATION` bounds observation.
-- `workspace exec ID --budget DURATION -- ARGV...` runs literal argv through
-  the supervised helper; its initial pending response exits `3`.
-- `workspace release ID` performs explicit final capture and cleanup;
-  `--discard` accepts loss of uncaptured checkout content but not missing
-  closure or ownership proof.
-- `workspace forget ID` is only for a proven release and intentionally removes
-  exact owned evidence references; it is not automatic pruning.
-
-Exit `3` distinguishes an accepted pending action (`watch_workspace`) from a
-busy precondition that did not authorize it (`requested_action_not_authorized`
-with `retry_exec`, `retry_release`, or `retry_forget`). Only a supplied
-`operation_id` names a helper. Watch accepted actions without repeating them;
-after `exec` succeeds, wait for the workspace to become `retained` so recapture
-has finished. The [agent result decisions](../skills/agent-integration/references/result-handling.md#managed-workspace-results)
-give the exact retry and observation flow.
-
-Failed helpers may include a bounded `error.txt` artifact in their operation
-evidence. Validate its descriptor before reading; it is separate from captured
-Git content. Release and forgetting retain compact ownership and journal metadata.
-Forgetting removes its recorded artifact inventory; a failed forget attempt may
-retain a diagnostic created after that inventory was committed.
-
-A short watch does not cancel an already-authorized helper scheduling
-transaction or extend its saved deadline. Once Delegate proves a preparation
-ended without a registered checkout or provider launch, the workspace reports
-`preparation_failed` with `stop_and_report`; it does not remain `provisioning`.
-
-`continue --task ID` inherits the predecessor's managed workspace, cwd, and
-session while creating a new task ID; the new turn runs in the calling
-environment. A native review can attach a
-retained workspace with `--workspace ID`; its explicit target remains its scope.
-Codex's `uncommitted` target covers current staged, unstaged, and untracked
-changes. It excludes worker commits. For a complete base-to-capture review,
-use an ordinary read-only task with explicit sealed refs and `git diff BASE
-TREE`. See the [workspace reference](../skills/agent-integration/references/workspaces.md#recovery-and-review-scope).
-
-A known pre-task provision wait returns `task_record: "not_created"`,
-`failure.code: "workspace_provision_pending"`, and
-`failure.next_action: "watch_workspace"` with an exact recovery command.
-Observe that workspace before reuse. Unknown creation state and other failures
-follow their returned next action. Partial-provision release retains changed
-or unverifiable paths rather than guessing ownership.
-
-## Git checkpoints
-
-Checkpoints are optional and launch no provider work. A checkpoint records the
-current Git content of one checkout as a synthetic commit pinned by
-`refs/delegate/ROOT_ID/checkpoints/CHECKPOINT_ID`, without moving `HEAD`,
-changing a branch, or touching the real index. It uses the capture content
-rules, including their exclusions. The Lead can fork a separate worker from a
-qualified checkpoint commit through the existing `dispatch --isolation
-git-worktree --base COMMIT`.
-
-```sh
-delegate --root "$HOME/delegation-state" checkpoint create \
-  --cwd /absolute/git/checkout --budget 5m --json
-delegate --root "$HOME/delegation-state" checkpoint create \
-  --workspace WORKSPACE_ID --budget 5m --json
-delegate --root "$HOME/delegation-state" checkpoint status CHECKPOINT_ID \
-  [--operation OPERATION_ID] --watch 30s --json
-delegate --root "$HOME/delegation-state" checkpoint list [--after CHECKPOINT_ID] --limit 50 --json
-delegate --root "$HOME/delegation-state" checkpoint remove CHECKPOINT_ID --budget 5m --json
-```
-
-- `create` requires exactly one of `--cwd ABS` (an ordinary Git checkout) or
-  `--workspace ID` (a managed workspace); no target is inferred. A managed
-  checkout is selected only by its ID. A managed checkpoint uses the
-  workspace's use owner; while another use holds it, creation is refused with
-  `requested_action_not_authorized` and `retry_create`.
-- `create` and `remove` validate the Git environment; `status` and `list` do
-  not. `list` returns metadata only, runs no Git, and never reconciles,
-  redrives, or settles an operation.
-- Only `create --cwd` may initialize a new state root. Every other checkpoint
-  command fails with exit `1` and creates nothing when the root is missing.
-  A valid root with no checkpoints lists `checkpoints: []`.
-- `--budget` is the finite helper budget (default 5m); `--watch` exists only
-  on `status`, is finite, and never begins an action or renews a deadline.
-- `--operation OP` selects one removal attempt returned by `remove`; without
-  it, `status` observes the creation and its latest removal attempt.
-- `--limit` is between 1 and 50; pass a returned `checkpoint_cursor` as
-  `--after` for the next page.
-
-| Command | Exit `0` | Exit `3` | Exit `1` |
-| --- | --- | --- | --- |
-| `create` | — | Accepted with `checkpoint.id` and `watch_checkpoint`; or a busy refusal with no ID and `retry_create` | Concrete failure, or a requested creation qualified `unavailable`; known IDs are retained |
-| `remove C` | An existing attempt already succeeded; its `operation_id` is returned | Accepted attempt with `operation_id` and `watch_checkpoint`; or a refusal with no `operation_id` and `retry_remove` | Concrete failure |
-| `status C` | Successful observation, including unavailable history with `stop_and_report` | Creation or latest removal pending | Concrete failure |
-| `status C --operation R` | R is `removed` or `nothing_to_remove` | R is pending | R is `unavailable`, or a concrete failure |
-| `list` | One metadata page; entries may be pending or unavailable | — | Concrete failure |
-
-Exit `2` is an invalid request; parse errors print usage on stderr without
-guaranteed JSON. `status` exit `0` does not mean the checkpoint is usable.
-Fork only when `checkpoint.current.state` is `checkpointed` and
-`checkpoint.current.usable` is `true`; `usable` becomes `false` once any
-removal attempt is registered, even a failed one. Commit and ref fields alone
-are not success. A selected attempt's own receipt chooses its exit even when a
-newer attempt exists. Checkpoint refs survive `workspace release` and
-`workspace forget` until `checkpoint remove`. Delegate does not apply,
-restore, or merge a checkpoint. See the [checkpoint
-guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints)
-and [checkpoint results](../skills/agent-integration/references/result-handling.md#checkpoint-results).
-
-## Preflight and continuation
-
-`preflight --provider PROFILE --cwd ABS [--permission MODE] [--budget DURATION]
-[--model MODEL] [--effort EFFORT] [--native-timeout DURATION]
-[--review-target TARGET] --json` runs the selected adapter's
-static preparation and state-placement checks without creating a task,
-contacting Pueue, or launching a provider. It reports `verification:
-"preflight"`; a ready result still does not prove live authentication.
-
-`continue --task PREDECESSOR_ID` reads the predecessor's validated brief and
-exact provider session, then creates a new linked task through the normal
-admission path, including the [resource check](#resource-check). `--brief FILE` replaces the predecessor brief with a new
-follow-up instruction. `--budget`, `--model`, and `--effort` can override the
-corresponding requested values when the provider advertises them. The command
-refuses a missing, still-running, mismatched, or unsupported predecessor. A
-validated outcome, a durable Pueue-ended budget stop backed by
-application-owned empty-scope termination proof, or canonical closed lifetime
-evidence of any closure kind with a free runner lease makes the predecessor
-eligible for handoff. Closure qualifies only while publication is unknown, with
-no seal or outcome; a sealed predecessor fails at `resolve-predecessor` with
-`continuation_unavailable` until `collect` publishes its outcome. A queue-row
-end or timestamp alone never qualifies. Handoff
-does not establish task completion, and no outcome, `Wait`, or session identity
-is generated for the predecessor.
-
-`continue` takes the predecessor's observed provider session from
-`provider.ref`. Only when `provider.ref` is genuinely absent, for any eligible
-predecessor and not only an interrupted one, does it use that turn's validated
-immutable requested `PriorSession` as the input reference. The response reports
-the source in `continuation.session_source`: `observed` means `provider.ref`
-supplied the identity, and `recorded_input` means the predecessor's requested
-`PriorSession` supplied it. Neither value is evidence that the provider
-persisted messages or resumed successfully. A missing
-task reference, an unreadable, malformed, or mismatched record, or missing
-required metadata refuses; there is no ancestor search and the original task is
-not rerun.
-
-Fresh dispatches compile the current provider mapping. `continue` and
-`dispatch --resume-task` create a new task in the calling process's environment,
-for ordinary and supported interactive continuations alike. That environment
-supplies the filtered provider launch values, the derived writable roots, and
-fresh applicable capability proof; nothing is copied from the predecessor's saved
-environment, configuration, profile, or authentication. The predecessor's
-immutable records decide only compatibility and eligibility, so an ordinary
-continuation keeps its recorded permission mode, historical Pi and CCR
-mappings, and output predicate rules while creating a new turn around the
-recorded session. Permission mode and session stay those of the predecessor.
-`continue` also inherits its working directory; `dispatch --resume-task` keeps
-its requested workspace and the provider-specific validation rules. Model and
-effort validation and the budget rules are unchanged. The exact recorded
-session must be available in the calling environment. If it is not, the command
-fails; it does not start a fresh session, search ancestors, or choose another
-provider. A historical native OpenCode `run` predecessor is the exception to the
-preserved launch shape: its successor resumes the exact recorded session
-through the current ACP profile; see
-[OpenCode](providers.md#opencode). Provider-specific continuation validation
-still applies, such as Pi's same-workspace rule and CCR's route-preserving model
-rule. Interactive continuation of Codex and Claude uses the current interactive
-profile in the same calling environment and retains the exact recorded session
-instead of reusing a noninteractive predecessor contract. A scope
-`DELEGATE_PUEUE_CONFIG` never retargets a private predecessor's supervisor; an
-explicit `--pueue-config` keeps its precedence.
-
-The
-resolved `delegate-run` executable is saved with each new task, so generated
-continuation commands preserve an explicit custom `--runner` integration.
-
-When a budget stop has durable termination evidence, `status` and `collect`
-include `status: "timed_out"` and a `continuation` object. `resumable: true`
-means the exact session can be continued; `mode` is `native`, `checkpoint`, or
-`unsupported`. A timeout never authorizes relaunching the original task.
-
-After a host restart, a task can be interrupted: its stored publication state
-is still unknown, with no provider exit or outcome, its canonical lifetime
-closure is proven, and its runner lease is released. A terminated budget stop
-is checked first and reports `timed_out` instead. A proven closure whose
-recorded termination cause is the budget also reports `timed_out`, even when no
-stop observation exists yet, so `collect` without `--watch` and `status` agree.
-Once real outcomes and
-concrete errors are checked, `status` reports `status: "interrupted"` with
-`publication: "unknown"` and no `outcome`, and `collect` exits `1` with
-`failure.code: "task_interrupted"`. Closure is not provider success and no
-answer is accepted. Any other publication evidence is not an interruption. An
-interruption may carry `pending.kind: "supervisor-command"`: that independent
-observation means only that a supervisor command has not finished, and it
-changes neither the interruption, its guidance, nor its exits. A response with
-`pending.kind: "publication"` is still pending publication, even when its
-outer `publication` field is `unknown`, and carries no interrupted resume
-offer. When the task is uncancelled and safely eligible,
-`failure.next_action` is `continue_task` and `continuation.resumable` is
-`true`, naming `continue --task PREDECESSOR` with the original root and a finite
-budget. Otherwise the action is `stop_and_report` with a reason. Normal pending
-exit `3`, `timed_out`, interaction, lifetime finalization, and committed or
-rejected outcomes keep their precedence.
-
-A validated durable user stop suppresses automatic continuation guidance:
-`continuation.resumable` is `false`, `continuation.reason` says the user
-cancelled the task, and no `continue_command` is returned. An interrupted
-cancelled task keeps `status: "interrupted"` and `failure.code:
-"task_interrupted"` with `failure.next_action: "stop_and_report"`. When a
-durable terminated budget stop and a user stop both exist and no terminal
-outcome does, `status` stays `timed_out` and `failure` is `code:
-"task_cancelled"`, `next_action: "stop_and_report"`. Exits do not change:
-`status` exits `0`, and `collect` exits `3` while publication is pending. That
-exit is a finite watch, not success. A committed or rejected outcome remains
-the authority; cancellation metadata never replaces it with `task_cancelled`.
-`stop_and_report` ends the attempt: do not continue automatically or start a
-provider fallback. A later `continue` the user explicitly requests is a
-separate action that re-proves handoff.
-
-## Providers and runtime compatibility
-
-`providers --json` returns a bounded object with `schema_version: 1` and a
-sorted `providers` array. Each entry contains its ID, supported permission
-modes, supported request options, continuation mode, read-only mechanism and
-containment, and runtime metadata: optional help-command arguments plus the
-flags required by the adapter. The shipped profiles report
-`containment: "provider-owned"`, meaning the adapter selects provider-native
-behavior without creating an independent delegate-owned sandbox. This metadata
-is separate from guardian-owned process-lifetime containment.
-
-Discovery is metadata only. It does not inspect the host, authenticate a
-provider, contact Pueue, create state, or launch a process. Static preparation
-locates a regular executable and records its path and required capability
-contract. The supervised runtime check runs the help command and checks the
-required public flags before provider execution. No standalone version command
-is run and no executable fingerprint is taken. Interactive protocols
-additionally validate their native handshake and event contract. A missing
-executable rejects static preparation. A missing required flag rejects
-inspection-backed admission; for managed runtime-only tasks it seals a rejected
-outcome before provider start.
-
-A reported version is an optional diagnostic, never a readiness condition.
-The current runtime probe leaves version and provider SHA-256 diagnostics
-empty and does not extract version text from help or protocol output.
-Historical populated diagnostics remain validated when read. A required
-exchange that actually fails or exceeds its capture bound is still an error.
-The check does not use a web release lookup, semver allowlist, or hardcoded provider version.
-Probe diagnostics expose bounded reason classes; provider output and process
-diagnostics are not copied into control fields. See the
-[provider guide](providers.md#shared-compatibility-behavior) and the
-[product boundary](../agents/_data/product-boundary.md).
-
-The runner performs a fresh capability check immediately before launch,
-resolves the installed CLI in the task's saved lookup environment, and starts it
-directly under the existing supervision. This permits a provider relink or
-upgrade after admission when the new CLI preserves the adapter contract, while
-the task's permission, policy, workspace, predicate, and artifact contract
-remain fixed. A failure to execute the provider is reported explicitly and is
-not retried.
-
-The compatibility probe is only a startup check. Provider output shape,
-identity, containment, policy, authentication, and result integrity remain
-strict runtime contracts; a CLI that starts successfully can still produce a
-rejected task outcome if it violates those contracts.
-
-## Models (implemented)
-
-`models` performs advisory native model discovery for one provider. This
-command is currently implemented. It uses the state-rooted supervisor and the
-shared bounded inspection path, whose `model-discovery-v1` native inspection
-window is five minutes to allow first-run provider model/cache initialization.
-Required admission inspections use a one-minute queue-inclusive bound. Managed
-runtime-only tasks perform their checks within their own task budget. Existing
-20-second admission journals retain their recorded deadline.
-It creates inspection evidence but does not admit a provider task or launch a
-delegated turn. It may contact the selected provider CLI, so use it when an
-explicit model or effort choice is needed; provider defaults remain valid.
-
-```sh
-delegate models --provider codex:exec --cwd /absolute/workspace --json
-```
-
-`--cwd` is optional and defaults to the current directory. When supplied it
-must be absolute. A JSON response has this shape:
-
-```json
-{
-  "schema_version": 1,
-  "command": "models",
-  "provider": "codex:exec",
-  "observed_at": "2026-09-21T10:20:30.123Z",
-  "status": "available",
-  "reason_code": "ok",
-  "complete": true,
-  "source": "codex app-server",
-  "efforts": null,
-  "models": [
-    {"id": "gpt-5.6", "name": "GPT-5.6", "efforts": null}
-  ]
-}
-```
-
-`complete` describes whether model enumeration completed. It does not mean
-that effort metadata is known. A null `efforts` value means the provider did
-not report harness-wide effort choices; an empty array means it explicitly
-reported no choices. The per-model `efforts` value has the same distinction.
-`name` and `default_effort` are optional. Harness-wide choices are not assumed
-to apply to every model, and a listed model does not prove that the account can
-execute it.
-
-The status and process exit mapping is:
-
-| Status | Exit | Meaning |
-| --- | ---: | --- |
-| `available` or `partial` | `0` | Model facts were returned; `partial` means enumeration is incomplete. |
-| `blocked` or `unavailable` | `2` | Discovery could not establish usable model facts. |
-| `failed` | `1` or `2` | Discovery or response processing failed. Exit `1` is an operational failure; exit `2` means the request was invalid or unsupported, such as an invalid `--cwd` or a root/workspace overlap. |
-
-Status and exit are separate observations: `failed` with exit `2` is not an
-authentication block. When the response includes the optional typed
-`failure` object and `error` message, keep both and follow
-`failure.next_action`.
-
-Discovery is never an admission allowlist. Dispatch still performs the
-provider's runtime checks and the provider remains authoritative for whether a
-requested model or effort can run.
-
-## Capabilities
-
-`capabilities --provider PROFILE --json` returns the selected provider's
-compiled runtime contract without creating a task, contacting Pueue, or
-starting the provider. The response uses the same `runtime-capability-v1`
-contract that dispatch projects after its supervised probe. A catalog response
-has `status: "unknown"`, `verification: "catalog"`, and
-`live_acceptance.status: "not_run"`; it must not be treated as host readiness.
-
-The dispatch response reports `status: "ready"` and
-`verification: "runtime"` only after the required behavior and executable
-identity have passed the shared probe. Version text is descriptive. Live
-acceptance is a separate gate: authenticated evidence is `passed`, while an
-unavailable authentication prerequisite is `blocked` and neutral.
-
-## Interactive tasks
-
-Use `dispatch --interactive` for a task that may need clarification while it is
-running. Discover `interaction.clarification`, `interaction.steering`, and
-`interaction.supported_modes` with `providers` or `capabilities`. These describe
-adapter support, not authentication or live readiness. Codex supports clarification
-and steering; Claude supports clarification. Other providers use ordinary
-`continue` turns and reject `--interactive`.
-
-`collect --watch` returns early with exit `3` and `pending.kind: "interaction"`
-when a native question is pending. Read `interaction.pending_requests`; each
-batch has a request ID and questions with IDs, text, options, and `multiple` and
-`free_text` flags. Answer every question in that batch in one JSON file:
-
-```json
-{"color": ["Blue"]}
-```
-
-Use the returned question IDs, not this example's ID. Send the answer with:
-
-```sh
-delegate reply TASK_ID --request REQUEST_ID --answers /absolute/answers.json \
-  --id 0123456789abcdef0123456789abcdef --json
-```
-
-Allocate a new 32-character lowercase hexadecimal message ID for each distinct
-message. Keep that ID and the file unchanged for a retry after a lost CLI
-response. Repeating the same ID and content returns its existing receipt;
-changing the content under that ID is a conflict. Do not resend an uncertain
-message with a new ID.
-
-`steer TASK_ID --brief FILE --id MESSAGE_ID --json` sends guidance to the current
-Codex turn. It cannot change the task's model, permission, workspace, or budget.
-For a new user turn, wait for completion and use `continue --task TASK_ID`.
-Continuation inherits interactive mode; `--interactive` can also enable it on a
-continuation of an ordinary task. Such an interactive successor uses the
-current interactive provider profile in the calling environment while retaining
-the predecessor's exact session.
-
-Delivery states are `queued`, `unknown`, `sent`, `acknowledged`, and `rejected`.
-`unknown` means delivery was reserved but may or may not have reached the provider;
-it is never replayed. `sent` means the local pipe accepted the frame. Only an
-explicit native receipt establishes `acknowledged`; neither state proves the
-model followed the instruction. Codex question resolution alone is not an
-acknowledgement. The collected outcome remains the completion authority.
-
-`events --after SEQUENCE --watch 30s --json` returns a bounded event page and the
-next `cursor`. Persist that cursor before the next call. A positive watch only
-waits for observation; it never extends the task budget. Pages contain up to 100
-events and at most 512 KiB; the private journal is bounded to 8192 records and
-16 MiB, reserving room for closure. Each event, answer, or steering message must fit a 512 KiB record including its
-envelope. The full interaction state, including pending questions and delivery
-receipts, is limited to 256 KiB, with closure accounted for before admission.
-These bounds keep event pages and task observations inside the 1 MiB JSON
-response limit. Larger inputs fail explicitly before they enter the journal.
-
-Waiting for answers consumes the original execution budget. `interaction.deadline`
-reports the execution deadline once the native channel is ready. Cancellation,
-timeout, provider completion, or loss of the runner closes interaction. A crash
-never restarts the original provider. Use the reported continuation path when
-available. Questions and replies are private task evidence; the runner seals the
-closed interaction journal with the raw streams. This is a structured asynchronous
-protocol, not a terminal or arbitrary provider command interface.
-
-## Observation commands
-
-`status` reports the saved admission, current liveness, and publication state.
-`collect` reads a committed outcome or waits for one observation interval when
-`--watch` is positive; `--watch` defaults to `0s` and never changes the task
-budget. For an existing budget stop, collection may reconcile the saved Pueue
-binding and enter lifetime recovery. A queue-row end alone cannot publish
-terminal facts. It never
-launches, retries, or resumes provider work. `logs` returns validated
-descriptors for the raw stdout and stderr streams. `cancel` records one
-explicit stop request and observes its effect; it does not turn an uncertain
-process result into a successful outcome.
-
-When `pending.kind` is `lifetime-finalization`, the resident guardian still
-owns native cleanup or durable finalization. Liveness remains `running` and
-`collect` exits `3`. Continue observing the same task. Do not run supervisor or
-process commands, redispatch the brief, or switch to a provider CLI.
-
-When a task has a committed outcome, that outcome is the terminal authority.
-Payloads and sealed raw streams are returned as validated descriptors with
-byte sizes and SHA-256 digests rather than copied into the control response.
-The payload descriptor names its exact task-relative basename; raw stream
-descriptors include rooted paths.
-
-## Offline evidence recheck
-
-`recheck TASK_ID --json` reassesses an eligible rejected task using a newer,
-explicitly compatible provider interpreter. It reads the original validated
-outcome, seal, and complete evidence; it does not probe authentication, contact
-providers, start a supervisor, or launch another turn.
-
-The original outcome and evidence stay unchanged. A successful recheck returns
-`recheck.status: "recovered"`, a verified `answer` descriptor, and absolute
-`answer_path` and `report_path` values while the original
-`publication` remains `rejected`. A failed semantic reassessment returns
-`recheck.status: "rejected"`. Derived reports live under
-`rechecks/<assessment-id>/report.json`; a recovered answer is published before
-its report. The assessment identity binds the original outcome and seal hashes
-to the target predicate. Repeated requests reuse and validate that assessment.
-
-A rejected `collect` response offers `failure.next_action: "recheck"` only when
-an eligible interpretation is available and has not already been assessed.
-Otherwise report the rejection. Recovery does not change continuation eligibility.
-Do not treat a raw stdout file as a substitute answer.
-
-## JSON responses and exit codes
-
-With `--json`, task-command responses contain `schema_version: 1`, the command
-name, task identity when applicable, and separate `admission`, `liveness`, and
-`publication` fields. A `status` value is present for timeout, interruption, or
-blocked states (`timed_out`, `interrupted`, `blocked`); `parent_task_id`
-identifies a continuation successor and `continuation` carries resumability
-metadata. The `providers` response is a
-separate catalog schema.
-An `outcome` is present only after its publication and evidence have been
-validated; its verdict may be committed or rejected. Bounded `diagnostics`
-explain new interpretation failures without copying raw provider content. Old
-outcomes remain readable and do not acquire an invented rejection cause. Operational diagnostics appear in `error` and do not erase an
-independently valid published outcome.
-
-| Exit code | Meaning |
-| --- | --- |
-| `0` | Command completed; collection returned a committed outcome, or recheck recovered an answer, when applicable. |
-| `1` | Operational, storage, supervisor-binding, or output error. |
-| `2` | Invalid request or unsupported profile/configuration. |
-| `3` | `collect` reached the end of its bounded watch interval without a terminal publication. |
-| `4` | Collection returned a valid rejected provider outcome, or recheck still rejected the evidence. |
-
-All complete JSON responses are bounded. Oversized diagnostic text is shortened
-while authority fields and descriptors are retained.
+For admission's narrow migration exception and retry precedence, use
+[task creation](../skills/agent-integration/references/result-handling.md#task-creation).
+General administration does not override an attempt's `stop_and_report`.
 
 ## Supervisor binding
 
-For the private state-rooted supervisor, the initial dispatch records the
-canonical config path, config digests, endpoint, observed version, and the
-resolved client/daemon executable details as provenance. Its verified
-content-addressed client/daemon pair is stored below the state root. Later
-operations bind to the same private config and endpoint, then verify a live
-daemon by running the resolved Pueue client's readiness command and parsing its
-queue status. Changing install paths, executable hashes, or observed version
-does not by itself invalidate a compatible private supervisor. The
-configuration parser accepts YAML and JSON-form YAML with strict fields and
-bounded depth, aliases, nodes, and document size.
-Fresh bootstrap may choose a shorter socket filename inside the same private
-supervisor directory when the ordinary name exceeds the host limit. This
-pre-publication choice does not alter a published generation; changing a
-published config or endpoint still requires the migration flow below.
-An extremely deep `--root` can exceed the limit even with the shorter name; see
-[Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
+The saved configuration and endpoint identify a private supervisor generation.
+Later controls validate that binding and the live supervisor's required queue
+behavior. An installation upgrade alone does not invalidate a compatible
+generation already serving its endpoint or authorize replacing it.
 
-`delegate-run` normally resolves beside `delegate`, and Delegate uses its
-managed runner automatically: omit `--runner` for ordinary dispatch and
-continuation. The absolute global `--runner` option is an advanced override for
-a source-build layout or a custom integration, and an explicit value is always a
-custom runner, even when it names the bundled worker. A managed workspace
-(`--isolation` or `--workspace`) cannot use a custom runner, and `continue`
-refuses a `--runner` that differs from the predecessor's recorded runner (an
-equal value is accepted). Each refusal is an `invalid_request` with
-`reason_code` `managed_workspace_runner_conflict` or
-`continuation_runner_conflict`. Omit `--runner` and repeat the request only
-when `failure.next_action` is `correct_request`; otherwise follow the returned
-guidance.
+The configuration parser accepts YAML and JSON-form YAML with strict fields
+and bounded depth, aliases, nodes, and document size. Before first publication,
+bootstrap may choose a compact socket name inside the same private supervisor
+directory to fit the host limit. A published binding stays authoritative;
+changing its configuration or endpoint uses the explicit migration flow.
+An extremely deep root can still exceed the socket limit; see
+[troubleshooting](troubleshooting.md#supervisor-configuration-fails).
+
+`delegate-run` normally resolves beside `delegate`. The absolute global
+`--runner` option selects a custom integration, even when it names that
+bundled worker. Task compatibility and correction decisions are owned by the
+[runner option guidance](../skills/agent-integration/references/command-reference.md#dispatch).
 `status` and `collect` do not use the override.
 
-When a saved binding points to the private state-rooted supervisor, `status`,
-`cancel`, and continuation checks reuse it when a compatible daemon is already
-serving its endpoint. If that endpoint is unavailable, they restart the saved
-private executable pair when it is still available. A different verified
-client may inspect a compatible live endpoint, but ordinary recovery cannot
-start or publish that client's daemon over a stopped active generation. If the
-active installation paths are missing but the same verified pair remains under
-the state root, a stopped supervisor restarts from those exact bytes without
-operator setup when neither identity has a migration-history reference.
-A durable bootstrap intent makes interruption recoverable.
-A proven binding/daemon path split with identical hashes is repaired without
-rewriting daemon provenance. Conflicts, unresolved transitions, and references
-in migration history retain the explicit `supervisor migrate` transaction
-described above. Dispatch uses the same adoption-first path; a changed daemon
-path or hash is provenance drift while the compatible endpoint remains live,
-and never grants authority to start a replacement. A real logical binding
-change uses the explicit repair flow described above. Legacy bindings without
-daemon identity require a resolved executable pair and the normal config and
-endpoint checks; see
-[Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
-`collect` may recover that private daemon only to observe an already-requested
-budget stop; it never starts a provider or submits work.
+A compatible live generation is adopted under its saved binding. If its
+endpoint is unavailable, Delegate recovers that same recorded generation when
+its ownership and availability are proven. Another compatible installation
+may observe a live endpoint; that alone does not authorize starting a different
+generation. An unresolved transition, ownership conflict, or unavailable
+generation retains the explicit migration requirement.
 
-For setup failures, see [Troubleshooting](troubleshooting.md). For provider
-specific behavior, see [Providers](providers.md).
+Recovery preserves task history and recorded generation provenance.
+Delegate reconciles a proven metadata mismatch within the same generation;
+it does not relabel a running supervisor. Legacy bindings still require a
+usable supervisor and valid configuration/endpoint checks.
+`collect` may recover the private supervisor only to observe an already
+requested budget stop; it never submits provider work.
 
-### Required provider options
-
-Provider catalog and capability JSON can include `required_options`. Supply
-those fields before dispatch or preflight. `ccr:print` requires `model` to be a
-configured CCR alias; other existing profiles retain their optional defaults.
-Use `delegate models --provider ccr:print --json` to discover aliases when needed.
-
-```sh
-delegate --root "$HOME/delegation-state" dispatch --provider ccr:print \
-  --model local-review --brief /absolute/task.txt --cwd /absolute/workspace \
-  --permission read-only --budget 30m --json
-```
+See [supervisor recovery](#supervisor-recovery) and
+[troubleshooting](troubleshooting.md) for operator actions.

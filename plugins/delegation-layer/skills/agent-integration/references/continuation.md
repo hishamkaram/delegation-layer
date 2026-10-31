@@ -4,6 +4,11 @@ Each task is one provider turn. A time limit ends that turn; it does not grant
 permission to launch the same task again. The durable task record keeps the
 exact provider session identity and the stop evidence.
 
+Apply [result handling](result-handling.md#observe-and-collect) first.
+A terminal outcome remains authoritative. Cancellation, `stop_and_report`,
+and failed or uncertain admission take precedence over automatic continuation,
+even when a response includes `resumable: true`.
+
 When `status` or `collect` reports a timed-out turn with:
 
 ```json
@@ -32,13 +37,10 @@ The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
 validated predecessor brief. A successful continuation returns a new task ID
 and links it to the predecessor. Observe and collect the new ID separately. Always retain the original state
 root, even if a returned command hint omits it. Permission is inherited; do not
-add `--permission` to `continue`. If this exact `continue` returns the
-migration-required `not_created` response, run the same-root supervisor
-migration once and then repeat that argv-equivalent `continue` once after the
-successful migration response. The response field is named `retry_dispatch`,
-but it does not authorize a fresh dispatch. Apply the remaining `task_record`
-error rules in [result handling](result-handling.md) before retrying or
-observing.
+add `--permission` to `continue`. Apply
+[task creation](result-handling.md#task-creation) before retrying or observing.
+Any authorized admission retry remains the argv-equivalent `continue`;
+never replace it with a fresh dispatch.
 
 Run `continue` with the same state root as the predecessor. The new turn uses
 the environment of the process that calls `continue`, not an environment saved
@@ -54,18 +56,9 @@ reservation. A changed provider request is a new turn and must pass the normal
 workspace-use reservation. Read [managed workspace guidance](workspaces.md)
 before attaching another provider, review, or verification operation.
 
-A new `continue` is checked for host resource pressure before the successor is
-created. If it returns `resource_pressure` with `task_record: "not_created"` and
-`next_action: "retry_later"`, follow the bounded choice in
-[result handling](result-handling.md): report and stop, or wait 30 seconds and
-retry the exact `continue --task PREDECESSOR_ID` once. Never replace it with a
-fresh dispatch. A predecessor that is already running is not affected.
-
-If `continue` returns `workspace_busy` with `task_record: "not_created"` and
-`next_action: "watch_workspace"`, observe that workspace with the same root.
-Then retry the exact `continue --task PREDECESSOR_ID` after it becomes retained.
-Keep the original predecessor, brief, and budget; do not replace continuation
-with a fresh dispatch. A created successor is only observed.
+Resource and pre-admission workspace refusals follow the same
+[creation decisions](result-handling.md#task-creation). Keep the original
+predecessor, brief, budget, and root. A created successor is only observed.
 
 **Busy managed workspace after a timeout.** This is the only case where an
 unavailable continuation may be waited for instead of reported. It applies

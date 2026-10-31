@@ -12,6 +12,53 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 class CollaborationExampleTests(unittest.TestCase):
+    def test_read_only_capture_keeps_created_absent_and_uncertain_responses(self):
+        source = (REPO / "skills/agent-integration/examples/read-only-task.md").read_text(
+            encoding="utf-8"
+        )
+        example = source.split("```sh\n", 1)[1].split("```", 1)[0]
+        for shell in (("/bin/sh",), ("/bin/bash", "-e")):
+            for record, code in (("created", 0), ("created", 1),
+                                 ("not_created", 2), ("unknown", 1)):
+                with self.subTest(shell=shell, record=record, code=code):
+                    with tempfile.TemporaryDirectory(prefix="delegate-single-example-") as temp:
+                        root = Path(temp)
+                        workspace = root / "workspace"
+                        workspace.mkdir()
+                        response = {"task_id": "a" * 32, "task_record": record}
+                        stub = root / "delegate"
+                        stub.write_text(
+                            '#!/bin/sh\n'
+                            'printf "called\\n" >>"$EXAMPLE_CALLS"\n'
+                            'printf "%s\\n" "$@" >"$EXAMPLE_ARGV"\n'
+                            'printf "%s\\n" "$EXAMPLE_RESPONSE"\n'
+                            'exit "$EXAMPLE_EXIT"\n',
+                            encoding="utf-8",
+                        )
+                        stub.chmod(0o700)
+                        env = dict(os.environ, PATH=str(root) + os.pathsep + os.defpath)
+                        env.update(
+                            TMPDIR=str(root), DELEGATE_ROOT=str(root / "state"),
+                            EXAMPLE_CALLS=str(root / "calls"), EXAMPLE_ARGV=str(root / "argv"),
+                            EXAMPLE_RESPONSE=json.dumps(response), EXAMPLE_EXIT=str(code),
+                        )
+                        result = subprocess.run(
+                            [*shell, "-c", example], cwd=workspace, env=env, text=True,
+                            capture_output=True, timeout=10, check=False,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual((root / "calls").read_text(), "called\n")
+                        argv = (root / "argv").read_text().splitlines()
+                        self.assertEqual(argv[:4], ["--root", str(root / "state"),
+                                                   "dispatch", "--auto"])
+                        self.assertEqual(argv[argv.index("--cwd") + 1], str(workspace))
+                        self.assertEqual(argv[argv.index("--permission") + 1], "read-only")
+                        brief = Path(argv[argv.index("--brief") + 1])
+                        self.assertTrue(brief.is_file())
+                        saved = Path(result.stdout.splitlines()[0].removeprefix("Saved response: "))
+                        self.assertEqual(json.loads(saved.read_text()), response)
+                        self.assertIn(f"Dispatch exit: {code}; saved response: {saved}", result.stdout)
+
     def test_parallel_capture_preserves_each_failure_and_success(self):
         source = (REPO / "skills/agent-integration/references/collaboration.md").read_text(
             encoding="utf-8"

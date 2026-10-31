@@ -11,18 +11,12 @@ even when it has the same brand as the current harness. An explicit user choice
 of another integration takes precedence. Merely discussing or configuring a
 provider does not request delegation.
 
-## Install without the plugin
+## Activation and status
 
-The guided installer offers routing by default in an interactive installation:
-
-```sh
-npx --yes delegation-layer install
-```
-
-For an explicit setup without prompts:
+Choose the plugin or installer-managed hooks in the canonical
+[installation guide](installation.md). Inspect the selected installer scope:
 
 ```sh
-npx --yes delegation-layer install --scope global --harness claude,codex --routing default --yes
 npx --yes delegation-layer routing status --scope global
 ```
 
@@ -43,7 +37,7 @@ Check actual native hook events and tool calls for activation evidence.
 Existing noninteractive installer commands and the standard `skills add` path
 remain skill-only. `--routing skill-only` does not remove previously configured
 hooks. The installer never installs the CLI as part of skill setup; the plugin's
-separate bootstrap or [CLI installation](getting-started.md#2-install-the-cli)
+separate bootstrap or [CLI installation](installation.md#cli-installation)
 provides it.
 
 ## Disable or recover

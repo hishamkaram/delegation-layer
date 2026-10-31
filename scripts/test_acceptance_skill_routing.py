@@ -337,18 +337,26 @@ class RoutingTests(unittest.TestCase):
         )
         for root in roots:
             skill = (root / "SKILL.md").read_text(encoding="utf-8")
-            skill_flat = " ".join(skill.split())
             result_handling = (root / "references/result-handling.md").read_text(encoding="utf-8")
             result_handling_flat = " ".join(result_handling.split())
             continuation = (root / "references/continuation.md").read_text(encoding="utf-8")
             routing_rule = json.loads((root / "references/routing-rule.json").read_text(encoding="utf-8"))
-            self.assertLess(skill.index("supervisor_upgrade_required"),
-                            skill.index("task_record: not_created` with any other next action"))
-            generic_stop = result_handling_flat.index("For every other `not_created` response")
-            self.assertLess(result_handling_flat.index("sole migration exception"), generic_stop)
+            # The entry loads the shared decisions before observation; the
+            # detailed exceptions belong to the packaged reference.
+            self.assertLess(skill.index("references/result-handling.md#task-creation"),
+                            skill.index("### 5. Observe and collect"))
+            generic_stop = result_handling_flat.index(
+                "`task_record: not_created` with any other next action")
+            self.assertLess(result_handling_flat.index("supervisor_upgrade_required"), generic_stop)
             self.assertLess(result_handling_flat.index("workspace_provision_pending"), generic_stop)
             self.assertLess(result_handling_flat.index("workspace_busy"), generic_stop)
-            self.assertIn("`continue` remains `continue`", skill_flat)
+            self.assertLess(result_handling_flat.index("resource_pressure"), generic_stop)
+            self.assertIn("same `continue`", result_handling_flat)
+            self.assertIn("exact original admission argv once", result_handling_flat)
+            self.assertIn("supervisor_control.state: migrated", result_handling_flat)
+            self.assertIn("supervisor_control.next_action: retry_dispatch", result_handling_flat)
+            self.assertIn("task_record: unknown", result_handling_flat)
+            self.assertIn("do not retry an uncertain task creation", result_handling_flat)
             self.assertIn("argv-equivalent `continue`", continuation)
             self.assertIn("continue remains continue", routing_rule)
 

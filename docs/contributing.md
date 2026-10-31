@@ -14,7 +14,10 @@ specialized rule or skill relevant to the work.
 
 ## Development checks
 
-Run focused tests while editing. On stable combined source the project gate is:
+Run focused tests while editing. Known documentation, skill-content, and
+diagram changes use `make check-docs`. Text-only pull requests and pushes to
+main both use the light content checks. Runtime, install/build logic, CI policy,
+and uncertain or mixed changes use the full project gate on stable source:
 
 ```sh
 make check
@@ -59,15 +62,10 @@ and evidence interpretation belong to the adapter; launch, capture, lifecycle
 and publication belong to the core. Native help/model inspection uses the
 shared execution owner, not hidden commands in pure preparation callbacks.
 
-Provider installations are mutable and user-owned. Do not hash/copy their
-executables, require standalone version commands or pin releases. Preserve
-Delegate-owned task, worker, supervisor, helper and artifact integrity. See the
-[product boundary](../agents/_data/product-boundary.md).
-
-Model discovery is advisory. Preserve null versus an explicit empty effort
-list, model-enumeration completeness and unknown data. Never infer model/effort
-compatibility from a name. Saved predicate revisions interpret historical
-evidence; they are not provider release pins.
+The [product boundary](../agents/_data/product-boundary.md) owns provider/user
+and Delegate responsibilities. The packaged
+[model contract](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort)
+owns discovery semantics; saved predicates interpret historical task evidence.
 
 Use meaningful envelope/error/identity/replay regressions. For actual provider
 behavior use the relevant existing live scenario with a disposable workspace
@@ -174,8 +172,11 @@ deletion. SSH/tmux launch PATH and auth can differ from an interactive shell.
 
 ## Release publication
 
-Ordinary CI builds/packages once and tests installation of those files. The
-main-only Release workflow publishes its selected immutable distribution
+Full main CI runs build/package once and test installation of those files. After
+a content-only main push, run main CI manually with `build_candidate=true` for
+full build/install checks before publishing that exact commit. A light content
+run supplies no distribution artifact or native-runtime proof.
+The main-only Release workflow publishes its selected immutable distribution
 artifact by artifact_id; it does not rebuild, repack or regenerate the npm
 package or formula. Keep the source package version aligned with the release.
 Allowing the package job on main is not direct development or automatic publish.

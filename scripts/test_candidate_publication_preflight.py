@@ -70,6 +70,14 @@ class PreflightTests(CandidateArtifactCase):
         self.routes[ENDPOINTS["attempt"]]["json"]["event"] = "workflow_dispatch"
         self.run_preflight()
 
+    def test_light_runs_with_skipped_required_checks_cannot_authorize_publication(self):
+        for name in preflight.CHECK_JOBS:
+            with self.subTest(name=name):
+                self.set_jobs([job(row["name"], identity=index + 1,
+                                   conclusion="skipped" if row["name"] == name else "success")
+                               for index, row in enumerate(jobs())])
+                self.refuse("distribution_job_not_successful")
+
     def test_history_is_paginated_in_full_before_selecting_latest_executions(self):
         rows = [job("unrelated", identity=1000 + index) for index in range(95)]
         rows += [job(preflight.INSTALL_JOBS[0], 1, 800, conclusion="failure"), *jobs()]

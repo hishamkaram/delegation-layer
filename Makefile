@@ -95,6 +95,18 @@ skill-package-check:
 plugin-package-check:
 	./scripts/check-plugin-package.sh
 
+.PHONY: check-docs
+# Content validators use the project compiler, not the runtime tool/native matrix.
+check-docs:
+	$(VERIFY_MAINTAINABILITY)
+	$(VERIFY_SKILLS)
+	$(MAKE) verify-diagram-checksums plugin-package-check
+	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
+	python3 -m unittest discover -s scripts -p 'test_skill_examples.py' -v
+	python3 -m unittest discover -s scripts -p 'test_acceptance_skill_routing.py' -v
+	python3 -m unittest discover -s scripts/acceptance_tests/native -t scripts -p 'test_native_acceptance_aggregate.py' -k test_public_option_docs_cover_ccr_required_model_and_effort -v
+	go test -count=1 ./internal/app -run '^TestProviderGuideMatchesNativeCatalog$$'
+
 # -timeout is the per-test-binary aggregate hang watchdog, not a latency requirement;
 # functional and cleanup deadlines stay inside each test.
 test-race: tool-versions

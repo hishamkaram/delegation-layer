@@ -17,9 +17,9 @@ This document defines the normative requirements for provider adapters
 | `opencode:run` | `read-only`, `workspace-write` | native ACP `plan`/`build` mode; native permission requests answered `reject_once` for read-only and `allow_once` for workspace-write | `opencode acp` started in the workspace directory; mode, model, and effort are acknowledged `session/set_config_option` values | interactive clarification and steering, independent containment |
 
 Each native adapter locates its executable during static preparation and records
-the resolved path in the immutable candidate. Provider executable bytes are not
-hashed. A populated SHA-256 in a record written earlier is validated when present
-and is history only; it does not pin the installed provider. Lookup uses the
+the resolved path in the immutable candidate. The
+[product boundary](product-boundary.md) owns installed-tool observation and
+compatibility policy. Lookup uses the
 unfiltered preparation scope that composition supplies to the factory, which
 may be a recorded scope that composition selected. An adapter does not replace
 that scope with a recorded launch environment; a recorded environment only
@@ -39,13 +39,12 @@ Documented SDK protocol options that are absent from public help (Claude
 `--permission-prompt-tool stdio`) additionally require protocol fixtures and
 live handshake acceptance; public help alone does not prove native interaction. A
 reported version is an optional diagnostic. The current runtime probe records
-only the resolved executable path and leaves its version and SHA-256 fields
+only the resolved executable path and leaves optional installation diagnostics
 empty; it does not extract version text from help or protocol output. Historical
 populated diagnostics remain subject to their recorded-field validation. A
 fresh launch may refresh the provider runtime path after the current capability
 probe. Provider compatibility is decided from observed behavior (help output,
-declared flags, and the adapter's protocol and result checks), with no provider
-release allowlist and no provider executable hash or version pin. Delegate's own
+declared flags, and the adapter's protocol and result checks). Delegate's own
 contracts remain real checks: profile, predicate, and protocol revisions, and
 the worker, supervisor, and native-helper identities. The
 [product boundary](product-boundary.md) owns the rule that provider
@@ -91,21 +90,20 @@ installations are mutable and user-owned.
 - **Launch Verification**:
   - Records the requested native permission mode, runtime path, and workspace.
   - Rechecks the provider capability and rebuilds the current launch plan
-    immediately before launch. Personal provider configuration is not hashed or
-    rejected for drift by new profiles. A changed provider path or reported
+    immediately before launch. Current profiles preserve personal provider
+    configuration. A changed provider path or reported
     version is accepted when the fresh capability check succeeds; the task
     policy, workspace, predicate, writable roots, and artifact declarations
     remain admission-bound.
   - Resolves the installed CLI in the task's saved authorized lookup
-    environment and builds one direct command from the fresh observation. It
-    makes no provider executable hash, copy, hard link, mirror, or image pool,
-    and it does not promise that inspected bytes equal executed bytes. A missing
+    environment and builds one direct command from the fresh observation. The
+    installed tool runs in place under the product boundary. A missing
     executable, operating-system launch error, authentication or protocol error,
     or native resume failure is reported explicitly, with no automatic retry,
     fallback executable, or fresh session.
   - Records the final provider executable path in `provider.started.json` and
-    `provider.exit`. Current runtime probes leave the optional version and
-    provider SHA-256 diagnostics empty; `meta.json` remains the immutable
+    `provider.exit`. Current runtime probes leave optional installation
+    diagnostics empty; `meta.json` remains the immutable
     admission record.
   - Previously admitted tasks retain their original preparation contract.
 - **Credential Safety**: Credentials, tokens, and unrelated user environment variables are never included in command arguments, logs, metadata, or committed fixtures.
@@ -138,10 +136,10 @@ completed; it does not assert that effort metadata is known. A null effort list
 means unknown metadata, while `[]` means the provider explicitly reported no
 choices. Harness-wide efforts are not assumed to apply to every model.
 
-The status exit mapping is `available`/`partial` → `0`,
-`blocked`/`unavailable` → `2`, and `failed` → `1`. Discovery is advisory and
-never an admission allowlist. Listing a model does not prove that the account
-can execute it; dispatch remains the admission boundary.
+The [shared discovery reference](../../skills/agent-integration/references/command-reference.md#choosing-models-and-effort)
+owns public status/exit handling. Discovery is advisory and never an admission
+allowlist. Listing a model does not prove account access; dispatch remains the
+admission boundary.
 
 ## 4. Evidence Capture and Publication Predicates
 - **Raw Evidence**: Standard streams are piped to task-owned files (`raw/stdout`, `raw/stderr`). Child output writers must complete and flush before the seal (`provider.exit`) is committed.

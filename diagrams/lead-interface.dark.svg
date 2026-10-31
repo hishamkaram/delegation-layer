@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1100 1576" data-sequence-column-fit="spread" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence" style="--flow-cycle: 11.300s; width: 1100px; height: 1576px; min-width: 0px;" width="1100" height="1576" xmlns="http://www.w3.org/2000/svg" data-theme="dark"><style>
+<svg viewBox="0 0 920 1648" data-sequence-column-fit="spread" data-reader-fit="width-first" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-motion-choreography="sequence" style="--flow-cycle: 11.300s; width: 920px; height: 1648px; min-width: 0px;" width="920" height="1648" xmlns="http://www.w3.org/2000/svg" data-theme="dark"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -403,592 +403,674 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
 }
 @keyframes archify-relay-comet-0 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-0 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-1 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-1 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-2 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-2 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  5.68% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-3 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-3 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-4 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-4 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.482% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  5.68% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-5 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-5 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-6 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-6 { 
-  0%, 0.444% { opacity: 0; }
-  1.482% { opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-7 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-7 { 
-  0%, 0.444% { opacity: 0; }
-  1.482% { opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-8 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-8 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-9 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-9 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-10 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.655% { opacity: var(--flow-peak, 0.9); }
-  3.275% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  4.691%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.729% { opacity: var(--flow-peak, 0.9); }
+  3.646% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  5.062%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-10 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  3.275% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  11.24%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  3.646% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  11.61%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-11 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-11 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-12 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.655% { opacity: var(--flow-peak, 0.9); }
-  3.275% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  4.691%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-12 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  3.275% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  11.24%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  5.68% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-13 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-13 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 1.704% { opacity: 0; }
+  5.68% { opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-14 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-14 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-15 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-15 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-16 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-16 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 1.704% { opacity: 0; }
+  5.68% { opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-17 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-17 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-18 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.729% { opacity: var(--flow-peak, 0.9); }
+  3.646% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  5.062%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-18 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 1.094% { opacity: 0; }
+  3.646% { opacity: var(--flow-peak, 0.3); }
+  11.61%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-19 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.729% { opacity: var(--flow-peak, 0.9); }
+  3.646% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  5.062%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-19 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  3.646% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  11.61%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-20 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-20 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.482% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-21 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.062% { opacity: var(--flow-peak, 0.9); }
+  5.68% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  7.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-21 { 
-  0%, 0.683% { opacity: 0; }
-  2.277% { opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  5.68% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  13.644%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-22 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-22 { 
-  0%, 0.683% { opacity: 0; }
-  2.277% { opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.728% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-23 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  0.346% { opacity: var(--flow-peak, 0.9); }
+  1.728% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  3.144%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-23 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-24 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-24 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-25 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-25 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-26 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-26 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-27 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-27 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-28 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-28 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.482% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-29 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-29 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-30 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-30 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-31 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.296% { opacity: var(--flow-peak, 0.9); }
-  1.482% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.897%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-31 { 
-  0%, 0.444% { opacity: 0; }
-  1.482% { opacity: var(--flow-peak, 0.3); }
-  9.446%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-32 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-32 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-33 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-33 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-34 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-34 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-35 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.655% { opacity: var(--flow-peak, 0.9); }
-  3.275% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  4.691%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-35 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  3.275% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  11.24%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-36 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-36 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-37 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-37 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-38 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.655% { opacity: var(--flow-peak, 0.9); }
-  3.275% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  4.691%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-38 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  3.275% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  11.24%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-39 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-39 { 
-  0%, 0.683% { opacity: 0; }
-  2.277% { opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-40 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.455% { opacity: var(--flow-peak, 0.9); }
-  2.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  3.693%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-40 { 
-  0%, 0.683% { opacity: 0; }
-  2.277% { opacity: var(--flow-peak, 0.3); }
-  10.241%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-41 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-41 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.917% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-42 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-42 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-43 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.655% { opacity: var(--flow-peak, 0.9); }
-  3.275% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  4.691%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-43 { 
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  3.275% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  11.24%, 100% { stroke-dashoffset: 0px; opacity: 0; }
-}
-@keyframes archify-relay-comet-44 { 
-  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  0.183% { opacity: var(--flow-peak, 0.9); }
-  0.917% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  2.333%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
-}
-@keyframes archify-relay-wake-44 { 
-  0%, 0.275% { opacity: 0; }
-  0.917% { opacity: var(--flow-peak, 0.3); }
-  8.882%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 0.518% { opacity: 0; }
+  1.728% { opacity: var(--flow-peak, 0.3); }
+  9.693%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-node-0 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
   0% { filter: var(--ambient-node-base-filter, none); }
-  1.062%, 16.545% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  23.448% { filter: var(--ambient-node-base-filter, none); }
-  25.94% { filter: var(--ambient-node-base-filter, none); }
-  27.002%, 29.657% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  36.56% { filter: var(--ambient-node-base-filter, none); }
-  57.582% { filter: var(--ambient-node-base-filter, none); }
-  58.644%, 83.363% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  1.062%, 7.552% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  14.455% { filter: var(--ambient-node-base-filter, none); }
+  22.272% { filter: var(--ambient-node-base-filter, none); }
+  23.334%, 25.989% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  32.891% { filter: var(--ambient-node-base-filter, none); }
+  32.995% { filter: var(--ambient-node-base-filter, none); }
+  34.057%, 36.712% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  43.615% { filter: var(--ambient-node-base-filter, none); }
+  48.947% { filter: var(--ambient-node-base-filter, none); }
+  50.009%, 71.363% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  78.265% { filter: var(--ambient-node-base-filter, none); }
+  79.646% { filter: var(--ambient-node-base-filter, none); }
+  80.708%, 83.363% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
   90.265% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-1 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  0.917% { filter: var(--ambient-node-base-filter, none); }
-  1.979%, 28.74% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  35.643% { filter: var(--ambient-node-base-filter, none); }
-  58.499% { filter: var(--ambient-node-base-filter, none); }
-  59.561%, 82.446% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  89.349% { filter: var(--ambient-node-base-filter, none); }
+  1.728% { filter: var(--ambient-node-base-filter, none); }
+  2.79%, 24.261% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  31.163% { filter: var(--ambient-node-base-filter, none); }
+  34.724% { filter: var(--ambient-node-base-filter, none); }
+  35.786%, 38.819% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  45.722% { filter: var(--ambient-node-base-filter, none); }
+  46.84% { filter: var(--ambient-node-base-filter, none); }
+  47.902%, 61.207% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  68.11% { filter: var(--ambient-node-base-filter, none); }
+  69.374% { filter: var(--ambient-node-base-filter, none); }
+  70.436%, 81.635% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  88.537% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-2 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  2.052% { filter: var(--ambient-node-base-filter, none); }
-  3.114%, 15.41% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  22.312% { filter: var(--ambient-node-base-filter, none); }
-  75.017% { filter: var(--ambient-node-base-filter, none); }
-  76.079%, 78.734% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  85.637% { filter: var(--ambient-node-base-filter, none); }
+  9.893% { filter: var(--ambient-node-base-filter, none); }
+  10.955%, 21.775% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  28.678% { filter: var(--ambient-node-base-filter, none); }
+  32.617% { filter: var(--ambient-node-base-filter, none); }
+  33.679%, 44.877% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  51.78% { filter: var(--ambient-node-base-filter, none); }
+  57.112% { filter: var(--ambient-node-base-filter, none); }
+  58.174%, 79.149% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  86.052% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-3 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  6.023% { filter: var(--ambient-node-base-filter, none); }
-  7.085%, 12.793% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  19.696% { filter: var(--ambient-node-base-filter, none); }
-  38.532% { filter: var(--ambient-node-base-filter, none); }
-  39.594%, 42.467% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  49.37% { filter: var(--ambient-node-base-filter, none); }
+  12% { filter: var(--ambient-node-base-filter, none); }
+  13.062%, 26.367% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  33.27% { filter: var(--ambient-node-base-filter, none); }
+  77.539% { filter: var(--ambient-node-base-filter, none); }
+  78.601%, 81.256% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  88.159% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-4 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  7.158% { filter: var(--ambient-node-base-filter, none); }
-  8.22%, 10.875% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  17.778% { filter: var(--ambient-node-base-filter, none); }
-  18.817% { filter: var(--ambient-node-base-filter, none); }
-  19.879%, 29.876% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  36.778% { filter: var(--ambient-node-base-filter, none); }
-  72.747% { filter: var(--ambient-node-base-filter, none); }
-  73.809%, 76.464% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  83.366% { filter: var(--ambient-node-base-filter, none); }
+  24.379% { filter: var(--ambient-node-base-filter, none); }
+  25.441%, 32.688% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  39.591% { filter: var(--ambient-node-base-filter, none); }
+  59.597% { filter: var(--ambient-node-base-filter, none); }
+  60.659%, 67.338% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  74.241% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-5 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  16.322% { filter: var(--ambient-node-base-filter, none); }
-  17.384%, 39.753% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  46.656% { filter: var(--ambient-node-base-filter, none); }
-  46.928% { filter: var(--ambient-node-base-filter, none); }
-  47.99%, 82.228% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  89.13% { filter: var(--ambient-node-base-filter, none); }
-}
-@keyframes archify-relay-node-6 { 
-  0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  27.076% { filter: var(--ambient-node-base-filter, none); }
-  28.138%, 37.137% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  44.039% { filter: var(--ambient-node-base-filter, none); }
-  44.433% { filter: var(--ambient-node-base-filter, none); }
-  45.495%, 58.804% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  65.707% { filter: var(--ambient-node-base-filter, none); }
-  67.975% { filter: var(--ambient-node-base-filter, none); }
-  69.037%, 71.692% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  78.594% { filter: var(--ambient-node-base-filter, none); }
-}
-@keyframes archify-relay-node-7 { 
-  0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  30.706% { filter: var(--ambient-node-base-filter, none); }
-  31.768%, 57.669% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  64.571% { filter: var(--ambient-node-base-filter, none); }
-}
-@keyframes archify-relay-node-8 { 
-  0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  42.162% { filter: var(--ambient-node-base-filter, none); }
-  43.224%, 46.097% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  53% { filter: var(--ambient-node-base-filter, none); }
-}
-@keyframes archify-relay-node-9 { 
-  0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  50.898% { filter: var(--ambient-node-base-filter, none); }
-  51.96%, 54.834% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  61.736% { filter: var(--ambient-node-base-filter, none); }
+  26.486% { filter: var(--ambient-node-base-filter, none); }
+  27.548%, 30.581% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  37.484% { filter: var(--ambient-node-base-filter, none); }
 }
 :root, svg { --bg: #020617; --grid: #1e293b; --canvas-dot: rgba(148, 163, 184, 0.16); --text: #ffffff; --text-muted: #94a3b8; --text-dim: #475569; --text-faint: #7d8da1; --panel: rgba(15, 23, 42, 0.5); --panel-border: #1e293b; --lane-fill: rgba(15, 23, 42, 0.22); --lane-stroke: #334155; --arrow: #94a3b8; --arrow-emphasis: #34d399; --mask: #0f172a; --frontend-fill: rgba(8, 51, 68, 0.4); --frontend-stroke: #22d3ee; --backend-fill: rgba(6, 78, 59, 0.4); --backend-stroke: #34d399; --database-fill: rgba(76, 29, 149, 0.4); --database-stroke: #a78bfa; --cloud-fill: rgba(120, 53, 15, 0.3); --cloud-stroke: #fbbf24; --security-fill: rgba(136, 19, 55, 0.4); --security-stroke: #fb7185; --messagebus-fill: rgba(251, 146, 60, 0.3); --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, 0.5); --external-stroke: #94a3b8; --toolbar-bg: rgba(15, 23, 42, 0.8); --toolbar-border: #334155; --toolbar-text: #e2e8f0; --toolbar-hover: rgba(15, 23, 42, 0.95); --toolbar-menu-bg: #0f172a; --flow-cycle: ; --flow-halo-peak: ; --flow-glow-peak: ; --flow-tail-peak: ; --flow-head-peak: ; --flow-wake-peak: ; --flow-ripple-peak: ; --flow-peak: ; }
-</style><rect x="0" y="0" width="1100" height="1576" fill="#020617"/>
-        <title id="archify-diagram-title">Delegation Layer — Ordinary Task Lifecycle</title>
+</style><rect x="0" y="0" width="920" height="1648" fill="#020617"/><metadata id="archify-software-notices">NOTICE
+Archify
+Copyright (c) 2026 tt-a1i (Archify)
+Copyright (c) 2025 Cocoon AI
+
+Archify is distributed under the Apache License, Version 2.0 (LICENSE),
+except where a file, package manifest, or third-party notice specifies otherwise.
+The separately versioned DeepSeek Harness adapter remains MIT; its bundled
+Skill retains the license of the immutable source selected in release.json.
+
+Code and contributions received under the MIT License through pre-transition
+commit 25cf37080fc8b1dbe758a4efc3935b55f3327083 remain available under their
+original terms. Previously published releases keep their existing licenses. The complete historical MIT
+copyright and permission notice is preserved in LICENSE-MIT. This transition
+does not revoke existing MIT grants or assert a new patent grant on behalf
+of historical contributors.
+
+Archify originated from Cocoon-AI/architecture-diagram-generator:
+https://github.com/Cocoon-AI/architecture-diagram-generator
+
+Third-party components retain their own licenses; see THIRD_PARTY_NOTICES.md
+and the license files beside those components. Names and logos do not imply
+official endorsement, and the software license grants no general trademark
+permission.
+
+These software licenses cover Archify's embedded runtime and templates, not
+ownership of a user's authored content, business data, or source repository.
+
+LICENSE
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+LICENSE-MIT
+MIT License
+
+Copyright (c) 2026 tt-a1i (Archify)
+Copyright (c) 2025 Cocoon AI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+THIRD_PARTY_NOTICES.md
+# Third-party notices
+
+Archify includes optional vector data for third-party brand marks. These marks
+are provided only to identify technologies and services in user-authored
+diagrams. Their inclusion does not imply sponsorship, endorsement, partnership,
+or affiliation with Archify.
+
+Archify's license and historical MIT grants are described in LICENSE, NOTICE,
+and LICENSE-MIT. The software license does not
+replace the copyright licenses, trademark policies, or brand guidelines that
+apply to third-party marks. Users are responsible for confirming that their
+particular use is permitted.
+
+## Simple Icons
+
+Most of the built-in vector paths and their metadata were generated from
+[Simple Icons 16.28.0](https://github.com/simple-icons/simple-icons/tree/16.28.0).
+Simple Icons makes its collection work available under
+[CC0 1.0 Universal](https://github.com/simple-icons/simple-icons/blob/16.28.0/LICENSE.md).
+
+As Simple Icons explains in its
+[disclaimer](https://github.com/simple-icons/simple-icons/blob/16.28.0/DISCLAIMER.md),
+CC0 for the collection does not mean that every underlying icon is CC0. License
+and brand-guideline metadata may be incomplete or change over time. The absence
+of an individual license entry is not a grant of permission.
+
+Archify embeds the selected icons as vector-path data and may render them in a
+user-selected color. The following individual licenses were recorded in the
+pinned Simple Icons 16.28.0 metadata:
+
+| Mark | Recorded source | Recorded license | Archify treatment |
+|---|---|---|---|
+| Angular | [Angular press kit](https://angular.dev/press-kit) | [`CC-BY-4.0`](https://creativecommons.org/licenses/by/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. |
+| Apache Airflow | [Apache logos](https://apache.org/logos) | [`Apache-2.0`](https://www.apache.org/licenses/LICENSE-2.0) | Embedded as vector-path data; Apache trademarks remain subject to the [ASF trademark policy](https://www.apache.org/foundation/marks/). |
+| Apache Kafka | [Apache logos](https://apache.org/logos) | [`Apache-2.0`](https://www.apache.org/licenses/LICENSE-2.0) | Embedded as vector-path data; Apache trademarks remain subject to the [ASF trademark policy](https://www.apache.org/foundation/marks/). |
+| .NET | [.NET brand repository](https://github.com/dotnet/brand/blob/c7d0f51b8ec59531332d05fb27a5b758a7a3d689/logo/dotnet-logo.svg) | [`CC0-1.0`](https://creativecommons.org/publicdomain/zero/1.0/) | Embedded as vector-path data; color may be changed by the authored diagram. |
+| JavaScript | [JS community logo](https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/js.svg) | [`MIT`](https://github.com/voodootikigod/logo.js/blob/1544bdeed6d618a6cfe4f0650d04ab8d9cfa76d9/LICENSE) | Embedded as vector-path data; color may be changed by the authored diagram. |
+| Jenkins | [Jenkins artwork source](https://get.jenkins.io/art/) | [`CC-BY-SA-3.0`](https://creativecommons.org/licenses/by-sa/3.0/) | Embedded as vector-path data; color may be changed by the authored diagram. Jenkins retains its trademark rights. |
+| Rust | [Rust project](https://www.rust-lang.org) | [`CC-BY-SA-4.0`](https://creativecommons.org/licenses/by-sa/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. See the [Rust media guide](https://www.rust-lang.org/policies/media-guide). |
+| Vue.js | [Vue logo source](https://github.com/vuejs/art/blob/a1c78b74569b70a25300925b4eacfefcc143b8f6/logo.svg) | [`CC-BY-NC-SA-4.0`](https://creativecommons.org/licenses/by-nc-sa/4.0/) | Embedded as vector-path data; color may be changed by the authored diagram. The non-commercial and share-alike conditions remain applicable; see the [Vue artwork terms](https://github.com/vuejs/art/blob/a1c78b74569b70a25300925b4eacfefcc143b8f6/README.md). |
+
+The source, guideline, and known license fields for every packaged mark are
+preserved in `renderers/shared/generated-brand-marks.mjs`.
+
+## OpenAI mark
+
+The OpenAI vector path is recorded from the
+[OpenAI brand guidelines](https://openai.com/brand/), not from Simple Icons.
+Use remains subject to those current guidelines and any applicable trademark
+rights. Its inclusion does not state or imply endorsement by OpenAI.
+
+## JetBrains Mono
+
+Delivered Archify viewer artifacts embed the JetBrains Mono variable font
+subsets served by Google Fonts. For characters covered by these subsets, font
+selection does not depend on a network request or a locally installed copy.
+Uncovered characters (including CJK) still use the system fallback stack;
+browser and operating-system rasterization can differ.
+JetBrains Mono is maintained at
+[github.com/JetBrains/JetBrainsMono](https://github.com/JetBrains/JetBrainsMono)
+and is distributed under the SIL Open Font License 1.1. The complete license
+text is preserved in `assets/JetBrainsMono-OFL.txt` in the packaged Skill and
+in the font CSS carried by standalone HTML and SVG exports.
+
+## Pele
+
+The explainer renders Mermaid chart fences with an unmodified subset of
+[Pele 1.3.0](https://github.com/obsidianmd/pele), copyright (c) 2026 kepano,
+distributed under the MIT License. The subset and its license text are in
+`explainer/vendor/pele/` in the packaged Skill. Charts are rendered to static
+SVG when a page is built; delivered pages contain no Pele code.
+
+## No additional rights granted
+
+Brand names, logos, and trademarks remain the property of their respective
+owners. This notice records provenance and known terms; it does not grant rights
+that Archify does not hold, and it does not state that every packaged mark has
+been cleared for every commercial, promotional, or redistributive use.</metadata>
+        <title id="archify-diagram-title">Delegate — Run, stop or continue a task</title>
         <desc id="archify-diagram-description">A sequence diagram generated by Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -1013,544 +1095,351 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
         <rect width="100%" height="100%" fill="url(#grid)"/>
 
         <!-- Time Segments -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="140" width="1004" height="426" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="145" width="824" height="361" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="574" width="1004" height="548" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="526" width="824" height="474" rx="10" class="c-lane" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="1146" width="1004" height="334" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="1020" width="824" height="270" rx="10" class="c-lane" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="3" x="48" y="1310" width="824" height="240" rx="10" class="c-lane" stroke-width="1"/>
 
         <!-- Lifelines -->
-        <path d="M 99 142 L 99 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 201 142 L 201 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 303 142 L 303 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 405 142 L 405 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 507 142 L 507 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 609 142 L 609 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 711 142 L 711 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 813 142 L 813 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 915 142 L 915 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
-        <path d="M 1017 142 L 1017 1511" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 116.5 142 L 116.5 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 258.3 142 L 258.3 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 400.1 142 L 400.1 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 541.9000000000001 142 L 541.9000000000001 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 683.7 142 L 683.7 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
+        <path d="M 825.5 142 L 825.5 1552" class="a-default" stroke-width="0.8" stroke-dasharray="3,7"/>
 
         <!-- Activations -->
-        <rect x="196" y="157" width="10" height="404" rx="3" class="c-mask"/>
-        <rect x="196" y="157" width="10" height="404" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="298" y="185" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="298" y="185" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="400" y="269" width="10" height="96" rx="3" class="c-mask"/>
-        <rect x="400" y="269" width="10" height="96" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="298" y="381" width="10" height="12" rx="3" class="c-mask"/>
-        <rect x="298" y="381" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="604" y="601" width="10" height="516" rx="3" class="c-mask"/>
-        <rect x="604" y="601" width="10" height="516" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="706" y="657" width="10" height="432" rx="3" class="c-mask"/>
-        <rect x="706" y="657" width="10" height="432" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="400" y="769" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="400" y="769" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="808" y="825" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="808" y="825" width="10" height="40" rx="3" class="c-external" stroke-width="1"/>
-        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-mask"/>
-        <rect x="1012" y="993" width="10" height="40" rx="3" class="c-security" stroke-width="1"/>
-        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-mask"/>
-        <rect x="196" y="1173" width="10" height="292" rx="3" class="c-backend" stroke-width="1"/>
-        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-mask"/>
-        <rect x="298" y="1397" width="10" height="12" rx="3" class="c-security" stroke-width="1"/>
+        <rect x="253.3" y="166" width="10" height="324" rx="3" class="c-mask"/>
+        <rect x="253.3" y="166" width="10" height="324" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="536.9000000000001" y="550" width="10" height="252" rx="3" class="c-mask"/>
+        <rect x="536.9000000000001" y="550" width="10" height="252" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="678.7" y="590" width="10" height="116" rx="3" class="c-mask"/>
+        <rect x="678.7" y="590" width="10" height="116" rx="3" class="c-external" stroke-width="1"/>
+        <rect x="820.5" y="732" width="10" height="68" rx="3" class="c-mask"/>
+        <rect x="820.5" y="732" width="10" height="68" rx="3" class="c-database" stroke-width="1"/>
+        <rect x="253.3" y="824" width="10" height="146" rx="3" class="c-mask"/>
+        <rect x="253.3" y="824" width="10" height="146" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="253.3" y="1044" width="10" height="148" rx="3" class="c-mask"/>
+        <rect x="253.3" y="1044" width="10" height="148" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="536.9000000000001" y="1210" width="10" height="60" rx="3" class="c-mask"/>
+        <rect x="536.9000000000001" y="1210" width="10" height="60" rx="3" class="c-backend" stroke-width="1"/>
+        <rect x="253.3" y="1334" width="10" height="198" rx="3" class="c-mask"/>
+        <rect x="253.3" y="1334" width="10" height="198" rx="3" class="c-backend" stroke-width="1"/>
 
         <!-- Messages -->
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="dispatch / continue" data-edge-key="0" data-edge-id="dispatch">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="dispatch" data-composition-points="106,160;194,160" d="M 106 160 L 194 160" class="a-emphasis" data-animate="edge" style="--step: 0;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="dispatch request" data-edge-key="0" data-edge-id="request">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="request" data-composition-points="123.5,170;251.3,170" d="M 123.5 170 L 251.3 170" class="a-emphasis" data-animate="edge" style="--step: 0;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="81.30000000000001" y="140" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="150" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch / continue</text>
+          <rect x="128.60000000000002" y="150" width="117.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="160" class="t-edge-emphasis" font-size="11" text-anchor="middle">dispatch request</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check fresh task resources" data-edge-key="1" data-edge-id="resource-check">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-check" data-composition-points="208,188;296,188" d="M 208 188 L 296 188" class="a-security" data-animate="edge" style="--step: 1;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="if pressure: not_created; stop" data-edge-key="1" data-edge-id="resource-refusal">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="resource-refusal" data-composition-points="251.3,208;123.5,208" d="M 251.3 208 L 123.5 208" class="a-dashed" data-animate="edge" style="--step: 1;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g>
-          <rect x="160.2" y="168" width="183.6" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="178" class="t-edge-security" font-size="11" text-anchor="middle">check fresh task resources</text>
+          <rect x="82.4" y="188" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="198" class="t-edge-dashed" font-size="11" text-anchor="middle">if pressure: not_created; stop</text>
+        </g>
+        <text x="135.5" y="226" class="t-muted" font-size="7"><tspan x="135.5" dy="0">Otherwise proceed below;</tspan><tspan x="135.5" dy="11">unknown metrics warn.</tspan></text>
+        </g>
+
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="if admitted: create immutable task" data-edge-key="2" data-edge-id="create-task">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="create-task" data-composition-points="265.3,292;818.5,292" d="M 265.3 292 L 818.5 292" class="a-emphasis" data-animate="edge" style="--step: 2;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g>
+          <rect x="423.7" y="272" width="236.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="282" class="t-edge-emphasis" font-size="11" text-anchor="middle">if admitted: create immutable task</text>
         </g>
         </g>
 
-        <g data-edge-from="resources" data-edge-to="delegate" data-edge-label="clear · unknown + warning · pressure" data-edge-key="2" data-edge-id="resource-result">
-          <path data-composition-edge-from="resources" data-composition-edge-to="delegate" data-composition-edge-id="resource-result" data-composition-points="296,216;208,216" d="M 296 216 L 208 216" class="a-default" data-animate="edge" style="--step: 2;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="stage exact row" data-edge-key="3" data-edge-id="stage-row">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="stage-row" data-composition-points="265.3,332;393.1,332" d="M 265.3 332 L 393.1 332" class="a-default" data-animate="edge" style="--step: 3;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="127.2" y="196" width="249.6" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="206" class="t-muted" font-size="11" text-anchor="middle">clear · unknown + warning · pressure</text>
+          <rect x="273.70000000000005" y="312" width="111" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="322" class="t-muted" font-size="11" text-anchor="middle">stage exact row</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="pressure: retry_later" data-edge-key="3" data-edge-id="pressure-refusal">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="pressure-refusal" data-composition-points="194,244;106,244" d="M 194 244 L 106 244" class="a-dashed" data-animate="edge" style="--step: 3;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="save queue receipt" data-edge-key="4" data-edge-id="save-receipt">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="save-receipt" data-composition-points="265.3,372;818.5,372" d="M 265.3 372 L 818.5 372" class="a-emphasis" data-animate="edge" style="--step: 4;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="74.7" y="224" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="234" class="t-edge-dashed" font-size="11" text-anchor="middle">pressure: retry_later</text>
+          <rect x="476.5" y="352" width="130.8" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="362" class="t-edge-emphasis" font-size="11" text-anchor="middle">save queue receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="prepare candidate" data-edge-key="4" data-edge-id="candidate">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="candidate" data-composition-points="208,272;398,272" d="M 208 272 L 398 272" class="a-emphasis" data-animate="edge" style="--step: 4;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="enqueue after receipt" data-edge-key="5" data-edge-id="enqueue">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="enqueue" data-composition-points="265.3,412;393.1,412" d="M 265.3 412 L 393.1 412" class="a-emphasis" data-animate="edge" style="--step: 5;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="240.9" y="252" width="124.19999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="262" class="t-edge-emphasis" font-size="11" text-anchor="middle">prepare candidate</text>
+          <rect x="253.90000000000003" y="392" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="402" class="t-edge-emphasis" font-size="11" text-anchor="middle">enqueue after receipt</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="pueue" data-edge-label="prepare supervisor" data-edge-key="5" data-edge-id="bind-supervisor">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="pueue" data-composition-edge-id="bind-supervisor" data-composition-points="412,300;500,300" d="M 412 300 L 500 300" class="a-default" data-animate="edge" style="--step: 5;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="task_record: created + task id" data-edge-key="6" data-edge-id="admitted">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="admitted" data-composition-points="251.3,460;123.5,460" d="M 251.3 460 L 123.5 460" class="a-default" data-animate="edge" style="--step: 6;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="390.6" y="280" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="456" y="290" class="t-muted" font-size="11" text-anchor="middle">prepare supervisor</text>
+          <rect x="82.4" y="440" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="450" class="t-muted" font-size="11" text-anchor="middle">task_record: created + task id</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="inspect" data-edge-label="strict, when required" data-edge-key="6" data-edge-id="strict-admission">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="inspect" data-composition-edge-id="strict-admission" data-composition-points="208,328;398,328" d="M 208 328 L 398 328" class="a-dashed" data-animate="edge" style="--step: 6;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="queue" data-edge-to="execution" data-edge-label="schedule task" data-edge-key="7" data-edge-id="scheduled">
+          <path data-composition-edge-from="queue" data-composition-edge-to="execution" data-composition-edge-id="scheduled" data-composition-points="407.1,554;534.9000000000001,554" d="M 407.1 554 L 534.9000000000001 554" class="a-emphasis" data-animate="edge" style="--step: 7;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="227.7" y="308" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="318" class="t-edge-dashed" font-size="11" text-anchor="middle">strict, when required</text>
+          <rect x="422.1000000000001" y="534" width="97.8" height="18" rx="3" class="c-mask"/>
+          <text x="471.00000000000006" y="544" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule task</text>
         </g>
         </g>
 
-        <g data-edge-from="inspect" data-edge-to="delegate" data-edge-label="admission plan" data-edge-key="7" data-edge-id="prepared">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="delegate" data-composition-edge-id="prepared" data-composition-points="398,356;208,356" d="M 398 356 L 208 356" class="a-default" data-animate="edge" style="--step: 7;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="execution" data-edge-to="provider" data-edge-label="preflight, then Start" data-edge-key="8" data-edge-id="start-provider">
+          <path data-composition-edge-from="execution" data-composition-edge-to="provider" data-composition-edge-id="start-provider" data-composition-points="548.9000000000001,594;676.7,594" d="M 548.9000000000001 594 L 676.7 594" class="a-emphasis" data-animate="edge" style="--step: 8;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="250.8" y="336" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="303" y="346" class="t-muted" font-size="11" text-anchor="middle">admission plan</text>
+          <rect x="537.5000000000001" y="574" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="612.8000000000001" y="584" class="t-edge-emphasis" font-size="11" text-anchor="middle">preflight, then Start</text>
+        </g>
+        <text x="560.9000000000001" y="612" class="t-muted" font-size="7"><tspan x="560.9000000000001" dy="0">Guardian owns the scope</tspan><tspan x="560.9000000000001" dy="11">and budget; runner</tspan><tspan x="560.9000000000001" dy="11">executes.</tspan></text>
+        </g>
+
+        <g data-edge-from="provider" data-edge-to="execution" data-edge-label="output + exit" data-edge-key="9" data-edge-id="provider-output">
+          <path data-composition-edge-from="provider" data-composition-edge-to="execution" data-composition-edge-id="provider-output" data-composition-points="676.7,696;548.9000000000001,696" d="M 676.7 696 L 548.9000000000001 696" class="a-default" data-animate="edge" style="--step: 9;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g>
+          <rect x="563.9000000000001" y="676" width="97.8" height="18" rx="3" class="c-mask"/>
+          <text x="612.8000000000001" y="686" class="t-muted" font-size="11" text-anchor="middle">output + exit</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="refresh only if stale or target changed" data-edge-key="8" data-edge-id="resource-refresh">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="resource-refresh" data-composition-points="208,384;296,384" d="M 208 384 L 296 384" class="a-dashed" data-animate="edge" style="--step: 8;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="after closure: seal + finalize" data-edge-key="10" data-edge-id="seal-finalize">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="seal-finalize" data-composition-points="548.9000000000001,736;818.5,736" d="M 548.9000000000001 736 L 818.5 736" class="a-emphasis" data-animate="edge" style="--step: 10;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="117.30000000000001" y="364" width="269.4" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="374" class="t-edge-dashed" font-size="11" text-anchor="middle">refresh only if stale or target changed</text>
+          <rect x="578.7" y="716" width="210" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="726" class="t-edge-emphasis" font-size="11" text-anchor="middle">after closure: seal + finalize</text>
+        </g>
+        <text x="560.9000000000001" y="754" class="t-muted" font-size="7"><tspan x="560.9000000000001" dy="0">TaskDir evaluates sealed</tspan><tspan x="560.9000000000001" dy="11">output and commits</tspan><tspan x="560.9000000000001" dy="11">outcome.json.</tspan></text>
+        </g>
+
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="collect TASK_ID" data-edge-key="11" data-edge-id="collect-request">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="collect-request" data-composition-points="123.5,828;251.3,828" d="M 123.5 828 L 251.3 828" class="a-default" data-animate="edge" style="--step: 11;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g>
+          <rect x="131.9" y="808" width="111" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="818" class="t-muted" font-size="11" text-anchor="middle">collect TASK_ID</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="late pressure: not_created" data-edge-key="9" data-edge-id="late-refusal">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="late-refusal" data-composition-points="194,412;106,412" d="M 194 412 L 106 412" class="a-dashed" data-animate="edge" style="--step: 9;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="read / reconcile outcome" data-edge-key="12" data-edge-id="read-outcome">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="read-outcome" data-composition-points="265.3,868;818.5,868" d="M 265.3 868 L 818.5 868" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="58.2" y="392" width="183.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="402" class="t-edge-dashed" font-size="11" text-anchor="middle">late pressure: not_created</text>
+          <rect x="456.7" y="848" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="858" class="t-muted" font-size="11" text-anchor="middle">read / reconcile outcome</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist immutable task" data-edge-key="10" data-edge-id="persist">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="persist" data-composition-points="208,440;908,440" d="M 208 440 L 908 440" class="a-emphasis" data-animate="edge" style="--step: 10;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="task-records" data-edge-to="control" data-edge-label="committed / rejected" data-edge-key="13" data-edge-id="saved-outcome">
+          <path data-composition-edge-from="task-records" data-composition-edge-to="control" data-composition-edge-id="saved-outcome" data-composition-points="818.5,908;265.3,908" d="M 818.5 908 L 265.3 908" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="479.4" y="420" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="430" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist immutable task</text>
+          <rect x="469.9" y="888" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="898" class="t-muted" font-size="11" text-anchor="middle">committed / rejected</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="add exact stashed row" data-edge-key="11" data-edge-id="stage">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stage" data-composition-points="208,468;500,468" d="M 208 468 L 500 468" class="a-default" data-animate="edge" style="--step: 11;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="task result" data-edge-key="14" data-edge-id="deliver-result">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="deliver-result" data-composition-points="251.3,948;123.5,948" d="M 251.3 948 L 123.5 948" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="278.7" y="448" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="458" class="t-muted" font-size="11" text-anchor="middle">add exact stashed row</text>
+          <rect x="145.10000000000002" y="928" width="84.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="938" class="t-muted" font-size="11" text-anchor="middle">task result</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist numeric receipt" data-edge-key="12" data-edge-id="receipt">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="receipt" data-composition-points="208,496;908,496" d="M 208 496 L 908 496" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="cancel ACTIVE_TASK_ID" data-edge-key="15" data-edge-id="cancel-active">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="cancel-active" data-composition-points="123.5,1048;251.3,1048" d="M 123.5 1048 L 251.3 1048" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
         <g>
-          <rect x="476.1" y="476" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="486" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist numeric receipt</text>
+          <rect x="112.10000000000001" y="1028" width="150.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1038" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel ACTIVE_TASK_ID</text>
+        </g>
+        <text x="135.5" y="1066" class="t-muted" font-size="7"><tspan x="135.5" dy="0">Separate path from B.</tspan><tspan x="135.5" dy="11">Terminal tasks return</tspan><tspan x="135.5" dy="11">unchanged.</tspan></text>
+        </g>
+
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="persist stop request" data-edge-key="16" data-edge-id="stop-request">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="stop-request" data-composition-points="265.3,1138;818.5,1138" d="M 265.3 1138 L 818.5 1138" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+        <g>
+          <rect x="469.9" y="1118" width="144" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="1128" class="t-edge-security" font-size="11" text-anchor="middle">persist stop request</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="enqueue after receipt" data-edge-key="13" data-edge-id="enqueue">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="enqueue" data-composition-points="208,524;500,524" d="M 208 524 L 500 524" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="stop requested; track task" data-edge-key="17" data-edge-id="stop-ack">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="stop-ack" data-composition-points="251.3,1176;123.5,1176" d="M 251.3 1176 L 123.5 1176" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="278.7" y="504" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="514" class="t-muted" font-size="11" text-anchor="middle">enqueue after receipt</text>
+          <rect x="95.60000000000001" y="1156" width="183.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1166" class="t-muted" font-size="11" text-anchor="middle">stop requested; track task</text>
         </g>
         </g>
 
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="task id · created · warnings" data-edge-key="14" data-edge-id="accepted">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="accepted" data-composition-points="194,552;106,552" d="M 194 552 L 106 552" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="close scope; record termination" data-edge-key="18" data-edge-id="termination">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="termination" data-composition-points="548.9000000000001,1214;818.5,1214" d="M 548.9000000000001 1214 L 818.5 1214" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
         <g>
-          <rect x="51.60000000000001" y="532" width="196.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="542" class="t-muted" font-size="11" text-anchor="middle">task id · created · warnings</text>
+          <rect x="575.4000000000001" y="1194" width="216.6" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="1204" class="t-edge-security" font-size="11" text-anchor="middle">close scope; record termination</text>
         </g>
         </g>
 
-        <g data-edge-from="pueue" data-edge-to="guardian" data-edge-label="schedule guardian row" data-edge-key="15" data-edge-id="schedule">
-          <path data-composition-edge-from="pueue" data-composition-edge-to="guardian" data-composition-edge-id="schedule" data-composition-points="514,604;602,604" d="M 514 604 L 602 604" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="seal + finalize stopped task" data-edge-key="19" data-edge-id="stopped-outcome">
+          <path data-composition-edge-from="execution" data-composition-edge-to="task-records" data-composition-edge-id="stopped-outcome" data-composition-points="548.9000000000001,1254;818.5,1254" d="M 548.9000000000001 1254 L 818.5 1254" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="482.7" y="584" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="594" class="t-edge-emphasis" font-size="11" text-anchor="middle">schedule guardian row</text>
+          <rect x="585.3000000000001" y="1234" width="196.79999999999998" height="18" rx="3" class="c-mask"/>
+          <text x="683.7" y="1244" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal + finalize stopped task</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="scope intent + registration" data-edge-key="16" data-edge-id="scope-intent">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="scope-intent" data-composition-points="616,632;908,632" d="M 616 632 L 908 632" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="continue eligible task" data-edge-key="20" data-edge-id="continue-eligible">
+          <path data-composition-edge-from="lead" data-composition-edge-to="control" data-composition-edge-id="continue-eligible" data-composition-points="123.5,1338;251.3,1338" d="M 123.5 1338 L 251.3 1338" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="666.9" y="612" width="190.2" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="622" class="t-muted" font-size="11" text-anchor="middle">scope intent + registration</text>
+          <rect x="108.80000000000001" y="1318" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="187.4" y="1328" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue eligible task</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="start exact worker" data-edge-key="17" data-edge-id="spawn">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="spawn" data-composition-points="616,660;704,660" d="M 616 660 L 704 660" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <g data-edge-from="control" data-edge-to="task-records" data-edge-label="load session; validate" data-edge-key="21" data-edge-id="load-session">
+          <path data-composition-edge-from="control" data-composition-edge-to="task-records" data-composition-edge-id="load-session" data-composition-points="265.3,1376;818.5,1376" d="M 265.3 1376 L 818.5 1376" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="594.6" y="640" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="650" class="t-edge-emphasis" font-size="11" text-anchor="middle">start exact worker</text>
+          <rect x="463.29999999999995" y="1356" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="541.9" y="1366" class="t-muted" font-size="11" text-anchor="middle">load session; validate</text>
         </g>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="record worker identity" data-edge-key="18" data-edge-id="worker-identity">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="worker-identity" data-composition-points="616,688;908,688" d="M 616 688 L 908 688" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="queue" data-edge-label="new task; same session" data-edge-key="22" data-edge-id="new-successor">
+          <path data-composition-edge-from="control" data-composition-edge-to="queue" data-composition-edge-id="new-successor" data-composition-points="265.3,1414;393.1,1414" d="M 265.3 1414 L 393.1 1414" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <g>
-          <rect x="683.4" y="668" width="157.2" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="678" class="t-muted" font-size="11" text-anchor="middle">record worker identity</text>
+          <rect x="250.60000000000005" y="1394" width="157.2" height="18" rx="3" class="c-mask"/>
+          <text x="329.20000000000005" y="1404" class="t-edge-emphasis" font-size="11" text-anchor="middle">new task; same session</text>
         </g>
+        <text x="277.3" y="1432" class="t-muted" font-size="7"><tspan x="277.3" dy="0">Fresh admission applies</tspan><tspan x="277.3" dy="11">again; predecessor records</tspan><tspan x="277.3" dy="11">stay unchanged.</tspan></text>
         </g>
 
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="identity acknowledged" data-edge-key="19" data-edge-id="worker-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="worker-ack" data-composition-points="616,716;704,716" d="M 616 716 L 704 716" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+        <g data-edge-from="control" data-edge-to="lead" data-edge-label="new task id" data-edge-key="23" data-edge-id="successor-id">
+          <path data-composition-edge-from="control" data-composition-edge-to="lead" data-composition-edge-id="successor-id" data-composition-points="251.3,1514;123.5,1514" d="M 251.3 1514 L 123.5 1514" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
         <g>
-          <rect x="584.7" y="696" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="706" class="t-muted" font-size="11" text-anchor="middle">identity acknowledged</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="read task + receipt" data-edge-key="20" data-edge-id="reconstruct">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="reconstruct" data-composition-points="718,744;908,744" d="M 718 744 L 908 744" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="744.3" y="724" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="734" class="t-muted" font-size="11" text-anchor="middle">read task + receipt</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="inspect" data-edge-label="fresh runtime preflight" data-edge-key="21" data-edge-id="fresh-probe">
-          <path data-composition-edge-from="runner" data-composition-edge-to="inspect" data-composition-edge-id="fresh-probe" data-composition-points="704,772;412,772" d="M 704 772 L 412 772" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g>
-          <rect x="476.1" y="752" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="762" class="t-edge-security" font-size="11" text-anchor="middle">fresh runtime preflight</text>
-        </g>
-        </g>
-
-        <g data-edge-from="inspect" data-edge-to="runner" data-edge-label="matched launch plan" data-edge-key="22" data-edge-id="launch-plan">
-          <path data-composition-edge-from="inspect" data-composition-edge-to="runner" data-composition-edge-id="launch-plan" data-composition-points="412,800;704,800" d="M 412 800 L 704 800" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="489.3" y="780" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="790" class="t-muted" font-size="11" text-anchor="middle">matched launch plan</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="provider" data-edge-label="Start after strict match" data-edge-key="23" data-edge-id="invoke">
-          <path data-composition-edge-from="runner" data-composition-edge-to="provider" data-composition-edge-id="invoke" data-composition-points="718,828;806,828" d="M 718 828 L 806 828" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="676.8" y="808" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="818" class="t-edge-emphasis" font-size="11" text-anchor="middle">Start after strict match</text>
-        </g>
-        </g>
-
-        <g data-edge-from="provider" data-edge-to="runner" data-edge-label="streams + exact Wait" data-edge-key="24" data-edge-id="capture">
-          <path data-composition-edge-from="provider" data-composition-edge-to="runner" data-composition-edge-id="capture" data-composition-points="806,856;718,856" d="M 806 856 L 718 856" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="690" y="836" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="846" class="t-muted" font-size="11" text-anchor="middle">streams + exact Wait</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="close task lifetime" data-edge-key="25" data-edge-id="close-lifetime">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="close-lifetime" data-composition-points="704,884;616,884" d="M 704 884 L 616 884" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g>
-          <rect x="591.3" y="864" width="137.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="874" class="t-edge-security" font-size="11" text-anchor="middle">close task lifetime</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="termination + empty scope" data-edge-key="26" data-edge-id="empty-scope">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="empty-scope" data-composition-points="616,912;908,912" d="M 616 912 L 908 912" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="673.5" y="892" width="177" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="902" class="t-edge-emphasis" font-size="11" text-anchor="middle">termination + empty scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="runner" data-edge-label="close acknowledged" data-edge-key="27" data-edge-id="close-ack">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="runner" data-composition-edge-id="close-ack" data-composition-points="616,940;704,940" d="M 616 940 L 704 940" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="594.6" y="920" width="130.8" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="930" class="t-muted" font-size="11" text-anchor="middle">close acknowledged</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="store" data-edge-label="seal evidence; finalize" data-edge-key="28" data-edge-id="seal">
-          <path data-composition-edge-from="runner" data-composition-edge-to="store" data-composition-edge-id="seal" data-composition-points="718,968;908,968" d="M 718 968 L 908 968" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="731.1" y="948" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="958" class="t-edge-emphasis" font-size="11" text-anchor="middle">seal evidence; finalize</text>
-        </g>
-        </g>
-
-        <g data-edge-from="store" data-edge-to="predicate" data-edge-label="evaluate sealed evidence" data-edge-key="29" data-edge-id="interpret">
-          <path data-composition-edge-from="store" data-composition-edge-to="predicate" data-composition-edge-id="interpret" data-composition-points="922,996;1010,996" d="M 922 996 L 1010 996" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="880.8" y="976" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="966" y="986" class="t-muted" font-size="11" text-anchor="middle">evaluate sealed evidence</text>
-        </g>
-        </g>
-
-        <g data-edge-from="predicate" data-edge-to="store" data-edge-label="interpretation" data-edge-key="30" data-edge-id="verdict">
-          <path data-composition-edge-from="predicate" data-composition-edge-to="store" data-composition-edge-id="verdict" data-composition-points="1010,1024;922,1024" d="M 1010 1024 L 922 1024" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="913.8" y="1004" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="966" y="1014" class="t-muted" font-size="11" text-anchor="middle">interpretation</text>
-        </g>
-        </g>
-
-        <g data-edge-from="store" data-edge-to="runner" data-edge-label="outcome.json verdict" data-edge-key="31" data-edge-id="outcome">
-          <path data-composition-edge-from="store" data-composition-edge-to="runner" data-composition-edge-id="outcome" data-composition-points="908,1052;718,1052" d="M 908 1052 L 718 1052" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="741" y="1032" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="813" y="1042" class="t-muted" font-size="11" text-anchor="middle">outcome.json verdict</text>
-        </g>
-        </g>
-
-        <g data-edge-from="runner" data-edge-to="guardian" data-edge-label="managed worker exits" data-edge-key="32" data-edge-id="worker-exit">
-          <path data-composition-edge-from="runner" data-composition-edge-to="guardian" data-composition-edge-id="worker-exit" data-composition-points="704,1080;616,1080" d="M 704 1080 L 616 1080" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="588" y="1060" width="144" height="18" rx="3" class="c-mask"/>
-          <text x="660" y="1070" class="t-muted" font-size="11" text-anchor="middle">managed worker exits</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="persist exact child Wait" data-edge-key="33" data-edge-id="lifetime-proof">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="lifetime-proof" data-composition-points="616,1108;908,1108" d="M 616 1108 L 908 1108" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="676.8" y="1088" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="1098" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist exact child Wait</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="status / logs / collect" data-edge-key="34" data-edge-id="observe">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="observe" data-composition-points="106,1176;194,1176" d="M 106 1176 L 194 1176" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="68.10000000000001" y="1156" width="163.79999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1166" class="t-muted" font-size="11" text-anchor="middle">status / logs / collect</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="observe and reconcile" data-edge-key="35" data-edge-id="read">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="read" data-composition-points="208,1204;908,1204" d="M 208 1204 L 908 1204" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="482.7" y="1184" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1194" class="t-muted" font-size="11" text-anchor="middle">observe and reconcile</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="bounded response" data-edge-key="36" data-edge-id="returned">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="returned" data-composition-points="194,1232;106,1232" d="M 194 1232 L 106 1232" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="91.2" y="1212" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1222" class="t-muted" font-size="11" text-anchor="middle">bounded response</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="cancel TASK_ID" data-edge-key="37" data-edge-id="cancel">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="cancel" data-composition-points="106,1260;194,1260" d="M 106 1260 L 194 1260" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g>
-          <rect x="97.80000000000001" y="1240" width="104.39999999999999" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1250" class="t-edge-dashed" font-size="11" text-anchor="middle">cancel TASK_ID</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="persist one stop request" data-edge-key="38" data-edge-id="cancel-request">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="cancel-request" data-composition-points="208,1288;908,1288" d="M 208 1288 L 908 1288" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="472.8" y="1268" width="170.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1278" class="t-edge-emphasis" font-size="11" text-anchor="middle">persist one stop request</text>
-        </g>
-        </g>
-
-        <g data-edge-from="guardian" data-edge-to="store" data-edge-label="active owner: terminate scope" data-edge-key="39" data-edge-id="guardian-cancel">
-          <path data-composition-edge-from="guardian" data-composition-edge-to="store" data-composition-edge-id="guardian-cancel" data-composition-points="616,1316;908,1316" d="M 616 1316 L 908 1316" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g>
-          <rect x="660.3" y="1296" width="203.39999999999998" height="18" rx="3" class="c-mask"/>
-          <text x="762" y="1306" class="t-edge-dashed" font-size="11" text-anchor="middle">active owner: terminate scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="pueue" data-edge-label="else, lease: stop row" data-edge-key="40" data-edge-id="stop">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="pueue" data-composition-edge-id="stop" data-composition-points="208,1344;500,1344" d="M 208 1344 L 500 1344" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
-        <g>
-          <rect x="278.7" y="1324" width="150.6" height="18" rx="3" class="c-mask"/>
-          <text x="354" y="1334" class="t-edge-dashed" font-size="11" text-anchor="middle">else, lease: stop row</text>
-        </g>
-        </g>
-
-        <g data-edge-from="caller" data-edge-to="delegate" data-edge-label="continue TASK_ID" data-edge-key="41" data-edge-id="continue">
-          <path data-composition-edge-from="caller" data-composition-edge-to="delegate" data-composition-edge-id="continue" data-composition-points="106,1372;194,1372" d="M 106 1372 L 194 1372" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="91.2" y="1352" width="117.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1362" class="t-edge-emphasis" font-size="11" text-anchor="middle">continue TASK_ID</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="resources" data-edge-label="check before successor work" data-edge-key="42" data-edge-id="continue-check">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="resources" data-composition-edge-id="continue-check" data-composition-points="208,1400;296,1400" d="M 208 1400 L 296 1400" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
-        <g>
-          <rect x="156.9" y="1380" width="190.2" height="18" rx="3" class="c-mask"/>
-          <text x="252" y="1390" class="t-edge-security" font-size="11" text-anchor="middle">check before successor work</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="store" data-edge-label="linked successor in caller scope" data-edge-key="43" data-edge-id="successor">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="store" data-composition-edge-id="successor" data-composition-points="208,1428;908,1428" d="M 208 1428 L 908 1428" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <g>
-          <rect x="446.4" y="1408" width="223.2" height="18" rx="3" class="c-mask"/>
-          <text x="558" y="1418" class="t-edge-emphasis" font-size="11" text-anchor="middle">linked successor in caller scope</text>
-        </g>
-        </g>
-
-        <g data-edge-from="delegate" data-edge-to="caller" data-edge-label="new task id" data-edge-key="44" data-edge-id="new-task">
-          <path data-composition-edge-from="delegate" data-composition-edge-to="caller" data-composition-edge-id="new-task" data-composition-points="194,1456;106,1456" d="M 194 1456 L 106 1456" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
-        <g>
-          <rect x="107.7" y="1436" width="84.6" height="18" rx="3" class="c-mask"/>
-          <text x="150" y="1446" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
+          <rect x="145.10000000000002" y="1494" width="84.6" height="18" rx="3" class="c-mask"/>
+          <text x="187.40000000000003" y="1504" class="t-muted" font-size="11" text-anchor="middle">new task id</text>
         </g>
         </g>
 
         <!-- Segment Labels -->
         <g data-graph-role="segment-label" data-segment-id="0">
-          <rect x="220.7" y="134" width="248" height="18" rx="3" class="c-mask"/>
-          <text x="226.7" y="147" class="t-muted" font-size="9" font-weight="600">Resource check, admission and durable enqueue</text>
+          <rect x="248.20000000000002" y="134" width="279.2" height="18" rx="3" class="c-mask"/>
+          <text x="254.20000000000002" y="147" class="t-muted" font-size="9" font-weight="600">A · Fresh request — pressure exits; otherwise admit</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="1">
-          <rect x="56" y="578" width="242.8" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="591" class="t-muted" font-size="9" font-weight="600">Guardian scope, fresh launch and publication</text>
+          <rect x="56" y="504" width="206.4" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="517" class="t-muted" font-size="9" font-weight="600">B · Admitted task — normal completion</text>
         </g>
         <g data-graph-role="segment-label" data-segment-id="2">
-          <rect x="56" y="1124" width="154.4" height="18" rx="3" class="c-mask"/>
-          <text x="62" y="1137" class="t-muted" font-size="9" font-weight="600">Observe, cancel or continue</text>
+          <rect x="56" y="998" width="232.4" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="1011" class="t-muted" font-size="9" font-weight="600">C · Alternative to B — cancel while active</text>
+        </g>
+        <g data-graph-role="segment-label" data-segment-id="3">
+          <rect x="56" y="1288" width="211.6" height="18" rx="3" class="c-mask"/>
+          <text x="62" y="1301" class="t-muted" font-size="9" font-weight="600">D · Eligible continuation — a new task</text>
         </g>
 
         <!-- Participants -->
-        <g id="node-caller" data-node-id="caller" data-node-label="Caller" tabindex="0" role="button" aria-label="Focus Caller, lead / automation, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="lead / automation" data-node-context="Sequence participant">
-          <title>Caller · lead / automation · Sequence participant</title>
-          <rect x="56" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="56" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step: 0; --flow-node-name: archify-relay-node-0;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(62 78) scale(0.6875)">
+        <g id="node-lead" data-node-id="lead" data-node-label="Lead" tabindex="0" role="button" aria-label="Focus Lead, caller or automation, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="caller or automation" data-node-context="Sequence participant">
+          <title>Lead · caller or automation · Sequence participant</title>
+          <rect x="62" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="62" y="72" width="109" height="60" rx="6" class="c-external" data-animate="node" style="--step: 0; --flow-node-name: archify-relay-node-0;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(68 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="99" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Caller</text>
-          <text x="99" y="122" class="t-muted" font-size="7" text-anchor="middle">lead / automation</text>
+          <text data-node-label="" x="116.5" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lead</text>
+          <text x="116.5" y="122" class="t-muted" font-size="7" text-anchor="middle">caller or automation</text>
         </g>
 
-        <g id="node-delegate" data-node-id="delegate" data-node-label="Lifecycle" tabindex="0" role="button" aria-label="Focus Lifecycle, app→tasklifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="app→tasklifecycle" data-node-context="Sequence participant">
-          <title>Lifecycle · app→tasklifecycle · Sequence participant</title>
-          <rect x="158" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="158" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(164 78) scale(0.6875)">
+        <g id="node-control" data-node-id="control" data-node-label="Delegate CLI" tabindex="0" role="button" aria-label="Focus Delegate CLI, task lifecycle, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="task lifecycle" data-node-context="Sequence participant">
+          <title>Delegate CLI · task lifecycle · Sequence participant</title>
+          <rect x="203.8" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="203.8" y="72" width="109" height="60" rx="6" class="c-backend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(209.8 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="201" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lifecycle</text>
-          <text x="201" y="122" class="t-muted" font-size="7" text-anchor="middle">app→tasklifecycle</text>
+          <text data-node-label="" x="258.3" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Delegate CLI</text>
+          <text x="258.3" y="122" class="t-muted" font-size="7" text-anchor="middle">task lifecycle</text>
         </g>
 
-        <g id="node-resources" data-node-id="resources" data-node-label="Resources" tabindex="0" role="button" aria-label="Focus Resources, fresh-task check, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="fresh-task check" data-node-context="Sequence participant">
-          <title>Resources · fresh-task check · Sequence participant</title>
-          <rect x="260" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="260" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step: 2; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(266 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="303" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resources</text>
-          <text x="303" y="122" class="t-muted" font-size="7" text-anchor="middle">fresh-task check</text>
-        </g>
-
-        <g id="node-inspect" data-node-id="inspect" data-node-label="Admission" tabindex="0" role="button" aria-label="Focus Admission, policy + probes, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="policy + probes" data-node-context="Sequence participant">
-          <title>Admission · policy + probes · Sequence participant</title>
-          <rect x="362" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="362" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(368 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="405" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admission</text>
-          <text x="405" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + probes</text>
-        </g>
-
-        <g id="node-pueue" data-node-id="pueue" data-node-label="Pueue" tabindex="0" role="button" aria-label="Focus Pueue, policy + rows, Sequence participant" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="policy + rows" data-node-context="Sequence participant">
-          <title>Pueue · policy + rows · Sequence participant</title>
-          <rect x="464" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="464" y="72" width="86" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(470 78) scale(0.6875)">
+        <g id="node-queue" data-node-id="queue" data-node-label="Task queue" tabindex="0" role="button" aria-label="Focus Task queue, Pueue, Sequence participant" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Pueue" data-node-context="Sequence participant">
+          <title>Task queue · Pueue · Sequence participant</title>
+          <rect x="345.6" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="345.6" y="72" width="109" height="60" rx="6" class="c-messagebus" data-animate="node" style="--step: 2; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(351.6 78) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="507" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pueue</text>
-          <text x="507" y="122" class="t-muted" font-size="7" text-anchor="middle">policy + rows</text>
+          <text data-node-label="" x="400.1" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task queue</text>
+          <text x="400.1" y="122" class="t-muted" font-size="7" text-anchor="middle">Pueue</text>
         </g>
 
-        <g id="node-guardian" data-node-id="guardian" data-node-label="Guardian" tabindex="0" role="button" aria-label="Focus Guardian, native lifetime, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="native lifetime" data-node-context="Sequence participant">
-          <title>Guardian · native lifetime · Sequence participant</title>
-          <rect x="566" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="566" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-6;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(572 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="609" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guardian</text>
-          <text x="609" y="122" class="t-muted" font-size="7" text-anchor="middle">native lifetime</text>
-        </g>
-
-        <g id="node-runner" data-node-id="runner" data-node-label="Runner" tabindex="0" role="button" aria-label="Focus Runner, delegate-run, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="delegate-run" data-node-context="Sequence participant">
-          <title>Runner · delegate-run · Sequence participant</title>
-          <rect x="668" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="668" y="72" width="86" height="60" rx="6" class="c-backend" data-animate="node" style="--step: 6; --flow-node-name: archify-relay-node-7;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(674 78) scale(0.6875)">
+        <g id="node-execution" data-node-id="execution" data-node-label="Execution" tabindex="0" role="button" aria-label="Focus Execution, guardian + runner, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-sublabel="guardian + runner" data-node-context="Sequence participant">
+          <title>Execution · guardian + runner · Sequence participant</title>
+          <rect x="487.4000000000001" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="487.4000000000001" y="72" width="109" height="60" rx="6" class="c-backend" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(493.4000000000001 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="711" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runner</text>
-          <text x="711" y="122" class="t-muted" font-size="7" text-anchor="middle">delegate-run</text>
+          <text data-node-label="" x="541.9000000000001" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Execution</text>
+          <text x="541.9000000000001" y="122" class="t-muted" font-size="7" text-anchor="middle">guardian + runner</text>
         </g>
 
-        <g id="node-provider" data-node-id="provider" data-node-label="Provider" tabindex="0" role="button" aria-label="Focus Provider, native CLI, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="native CLI" data-node-context="Sequence participant">
-          <title>Provider · native CLI · Sequence participant</title>
-          <rect x="770" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="770" y="72" width="86" height="60" rx="6" class="c-external" data-animate="node" style="--step: 7; --flow-node-name: archify-relay-node-8;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(776 78) scale(0.6875)">
+        <g id="node-provider" data-node-id="provider" data-node-label="Provider CLI" tabindex="0" role="button" aria-label="Focus Provider CLI, one native turn, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-sublabel="one native turn" data-node-context="Sequence participant">
+          <title>Provider CLI · one native turn · Sequence participant</title>
+          <rect x="629.2" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="629.2" y="72" width="109" height="60" rx="6" class="c-external" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(635.2 78) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="813" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider</text>
-          <text x="813" y="122" class="t-muted" font-size="7" text-anchor="middle">native CLI</text>
+          <text data-node-label="" x="683.7" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider CLI</text>
+          <text x="683.7" y="122" class="t-muted" font-size="7" text-anchor="middle">one native turn</text>
         </g>
 
-        <g id="node-store" data-node-id="store" data-node-label="TaskDir" tabindex="0" role="button" aria-label="Focus TaskDir, records + outcome, Sequence participant" aria-pressed="false" data-node-kind="database" data-node-sublabel="records + outcome" data-node-context="Sequence participant">
-          <title>TaskDir · records + outcome · Sequence participant</title>
-          <rect x="872" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="872" y="72" width="86" height="60" rx="6" class="c-database" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(878 78) scale(0.6875)">
+        <g id="node-task-records" data-node-id="task-records" data-node-label="Task records" tabindex="0" role="button" aria-label="Focus Task records, TaskDir / outcome.json, Sequence participant" aria-pressed="false" data-node-kind="database" data-node-sublabel="TaskDir / outcome.json" data-node-context="Sequence participant">
+          <title>Task records · TaskDir / outcome.json · Sequence participant</title>
+          <rect x="771" y="72" width="109" height="60" rx="6" class="c-mask"/>
+          <rect x="771" y="72" width="109" height="60" rx="6" class="c-database" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(777 78) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="915" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TaskDir</text>
-          <text x="915" y="122" class="t-muted" font-size="7" text-anchor="middle">records + outcome</text>
-        </g>
-
-        <g id="node-predicate" data-node-id="predicate" data-node-label="Predicate" tabindex="0" role="button" aria-label="Focus Predicate, sealed data rules, Sequence participant" aria-pressed="false" data-node-kind="security" data-node-sublabel="sealed data rules" data-node-context="Sequence participant">
-          <title>Predicate · sealed data rules · Sequence participant</title>
-          <rect x="974" y="72" width="86" height="60" rx="6" class="c-mask"/>
-          <rect x="974" y="72" width="86" height="60" rx="6" class="c-security" data-animate="node" style="--step: 9; --flow-node-name: archify-relay-node-9;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(980 78) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
-          </g>
-          <text data-node-label="" x="1017" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Predicate</text>
-          <text x="1017" y="122" class="t-muted" font-size="7" text-anchor="middle">sealed data rules</text>
+          <text data-node-label="" x="825.5" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task records</text>
+          <text x="825.5" y="122" class="t-muted" font-size="7" text-anchor="middle">TaskDir / outcome.json</text>
         </g>
 
         <!-- Legend -->
-
+        <g data-legend="">
+          <text x="40" y="1574" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="1594" data-legend-width="118">
+            <path d="M 40 1591 L 74 1591" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+            <text x="83" y="1594" class="t-muted" font-size="10" font-weight="500">main request</text>
+          </g>
+          <g data-legend-semantic-kind="return" data-legend-x="180" data-legend-baseline="1594" data-legend-width="81">
+            <path d="M 180 1591 L 214 1591" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)"/>
+            <text x="223" y="1594" class="t-muted" font-size="10" font-weight="500">return</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-x="283" data-legend-baseline="1594" data-legend-width="93">
+            <path d="M 283 1591 L 317 1591" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)"/>
+            <text x="326" y="1594" class="t-muted" font-size="10" font-weight="500">security</text>
+          </g>
+          <g data-legend-semantic-kind="dashed" data-legend-x="398" data-legend-baseline="1594" data-legend-width="112">
+            <path d="M 398 1591 L 432 1591" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)"/>
+            <text x="441" y="1594" class="t-muted" font-size="10" font-weight="500">async trace</text>
+          </g>
+          <g data-legend-semantic-kind="default" data-legend-x="532" data-legend-baseline="1594" data-legend-width="87">
+            <path d="M 532 1591 L 566 1591" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+            <text x="575" y="1594" class="t-muted" font-size="10" font-weight="500">message</text>
+          </g>
+        </g>
       </svg>
