@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TypeVar
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
-from scripts.delegate_acceptance.native_release.contract import ReleaseError
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_contract import (
@@ -46,8 +45,7 @@ class FixtureTree:
 
     Callers run each test-owned child operation through observe_operation, so the original
     error reaches the tree before any caller converts or sanitizes it. A bounded-command or
-    verifier error is unresolved only for the canonical ownership codes; a native-release
-    error only when it is incomplete; any other exception never. Where the caller requires a
+    verifier error is unresolved only for the canonical ownership codes; any other exception never. Where the caller requires a
     closure proof, any exception means that proof did not complete, so it is unresolved.
     The first unresolved original error is kept as is and never cleared or replaced, so a
     broad incomplete error may safely over-retain but never under-retains.
@@ -84,8 +82,6 @@ class FixtureTree:
             return
         if closure_required:
             unproven = True
-        elif isinstance(error, ReleaseError):
-            unproven = error.incomplete
         elif isinstance(error, (BoundedCommandError, VerificationError)):
             unproven = _failure_code(error) in UNRESOLVED_OWNERSHIP_CODES
         else:
@@ -156,6 +152,6 @@ def _failure_code(error: BaseException) -> str:
     """
     if isinstance(error, BoundedCommandError):
         return error.reason.value
-    if isinstance(error, (VerificationError, ReleaseError)):
+    if isinstance(error, VerificationError):
         return error.code
     return type(error).__name__

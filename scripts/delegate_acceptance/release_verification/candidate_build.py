@@ -22,7 +22,7 @@ from .candidate_build_artifacts import (
 )
 from .candidate_build_finalize import BuildOwners, settle
 from .candidate_build_plan import (
-    STAGE, BuildRequest, build_manifest, locator_bytes, require_package_version,
+    STAGE, BuildRequest, build_manifest, require_package_version,
 )
 from .candidate_build_source import (
     child_environment, clone_frozen, preflight_source,
@@ -33,17 +33,6 @@ from .candidate_manifest import (
 )
 from .contract import MAX_SOURCE_FILE, VerificationError
 from .filesystem import _bounded_file_bytes
-from .source import fingerprint_sources
-
-
-# Files whose static import closure and bytes identify the build harness.
-HARNESS_SEEDS = (
-    "scripts/build_development_candidate.py", "scripts/render-homebrew-formula.sh",
-    "scripts/fetch-pueue-assets.sh", ".goreleaser.yaml", ".github/workflows/ci.yml",
-)
-
-
-MAX_MANIFEST_FILE = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -54,7 +43,6 @@ class BuildPaths:
     receipt_path: Path
     goreleaser: Path
     python: str
-    harness_seeds: tuple[str, ...] = HARNESS_SEEDS
 
 
 def new_build_receipt(request: BuildRequest) -> dict:
@@ -111,9 +99,7 @@ def _build(request: BuildRequest, paths: BuildPaths, context: BuildContext) -> C
     require_package_version(
         _bounded_file_bytes(context.clone / "package.json", MAX_SOURCE_FILE, "package_json_unreadable"),
         request)
-    harness = fingerprint_sources(context.clone, paths.harness_seeds)
-    harness_sha256 = str(harness["sha256"])
-    inputs = observe_build_inputs(context, python=paths.python, harness_sha256=harness_sha256)
+    inputs = observe_build_inputs(context, python=paths.python)
     build_release_files(context)
     collect_goreleaser_files(context)
     pack_npm(context)
@@ -127,7 +113,6 @@ def _build(request: BuildRequest, paths: BuildPaths, context: BuildContext) -> C
         "tree": tree, "manifest_sha256": sha(manifest_bytes),
         "toolchains": {"go": inputs.toolchains.go, "goreleaser": inputs.toolchains.goreleaser,
                        "python": inputs.toolchains.python, "node": inputs.toolchains.node},
-        "harness": {"sha256": harness_sha256, "file_count": len(harness["files"])},
     })
     return manifest
 
@@ -154,13 +139,3 @@ def build_candidate(request: BuildRequest, paths: BuildPaths,
     if finalization_error is not None:
         raise finalization_error
     return manifest
-
-
-def write_locator(*, repository: str, run_id: int, run_attempt: int, artifact_id: int,
-                  artifact_digest: str, manifest_path: Path, output: Path) -> None:
-    """Write the external locator of an uploaded payload, binding its manifest bytes."""
-    manifest = _bounded_file_bytes(manifest_path, MAX_MANIFEST_FILE, "manifest_unreadable")
-    data = locator_bytes(
-        repository=repository, run_id=run_id, run_attempt=run_attempt, artifact_id=artifact_id,
-        artifact_digest=artifact_digest, manifest=manifest)
-    write_new(output, data)

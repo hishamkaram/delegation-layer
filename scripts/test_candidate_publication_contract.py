@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -12,21 +12,14 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification.candidate_history import (
-    PublicationAuthorization, encode_publication,
-)
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
     MANIFEST_PATH, ArtifactEntry, BuildInputs, CandidateLocator, CandidateManifest, SourceIdentity,
     Toolchains, encode_manifest, expected_inventory, npm_package_path, payload_paths,
 )
 from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    MAX_REFERENCE_BYTES, Absent, CandidatePromotion, CandidateReference, Delivery, ObservedRelease,
-    VERIFICATION_SUMMARY, ReleaseAsset, TapFormula, decide_npm, decide_release, decide_tap, encode_promotion,
-    encode_reference, npm_package, parse_reference, release_body, release_body_matches, release_text,
-    require_latest_delivery, verification_block,
-)
-from scripts.delegate_acceptance.release_verification.candidate_readiness import (
-    BoundCandidate, PublicationSource, publication_source,
+    Absent, ReleaseSubject, Delivery, ObservedRelease, VERIFICATION_SUMMARY, ReleaseAsset,
+    TapFormula, decide_npm, decide_release, decide_tap, npm_package, release_body,
+    release_body_matches, release_text, require_latest_delivery, verification_block,
 )
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_contract import (
@@ -37,10 +30,9 @@ from scripts.delegate_acceptance.release_verification.published_contract import 
 VERSION = "0.1.37"
 TAG = "v" + VERSION
 BUILD = "a1" * 20
-MERGED = "e5" * 20
+MERGED = BUILD
 BASE = "c3" * 20
 TREE = "b2" * 20
-FREEZE_COMMIT = "f7" * 20
 TGZ = npm_package_path(VERSION)
 FORMULA = "delegation-layer.rb"
 
@@ -53,7 +45,7 @@ def payload_files(**overrides: bytes) -> dict[str, bytes]:
 
 
 def manifest_for(files: dict[str, bytes]) -> CandidateManifest:
-    inputs = BuildInputs(harness_commit=BUILD, harness_sha256="3" * 64, goreleaser_config_sha256="1" * 64,
+    inputs = BuildInputs(goreleaser_config_sha256="1" * 64,
                          go_sum_sha256="2" * 64,
                          toolchains=Toolchains(go="1.27.3", goreleaser="2.18.1", python="3.12.13",
                                                node="22.11.0"))
@@ -65,29 +57,12 @@ def manifest_for(files: dict[str, bytes]) -> CandidateManifest:
                              build=inputs, artifacts=artifacts)
 
 
-def bound(files: dict[str, bytes]) -> BoundCandidate:
-    manifest = manifest_for(files)
+def promotion_for(files: dict[str, bytes] | None = None) -> ReleaseSubject:
+    manifest = manifest_for(payload_files() if files is None else files)
     locator = CandidateLocator(repository="owner/delegation-layer", run_id=39714439980, run_attempt=2,
                                artifact_id=12399736217, artifact_archive_sha256="9" * 64,
                                manifest_sha256=sha(encode_manifest(manifest)))
-    return BoundCandidate(locator=locator, manifest=manifest)
-
-
-def freeze_for(candidate: BoundCandidate, **changes: object) -> PublicationAuthorization:
-    values: dict[str, object] = {
-        "candidate_id": candidate.candidate_id, "attempt": 1, "evidence_parent": "d4" * 20,
-        "source_commit": BUILD, "source_tree": TREE, "proof_sha256s": ("5" * 64,),
-        "install_sha256s": ("6" * 64,), "triage_sha256s": (), "review_sha256": "7" * 64, **changes}
-    return PublicationAuthorization(**values)
-
-
-def promotion_for(files: dict[str, bytes] | None = None) -> CandidatePromotion:
-    candidate = bound(payload_files() if files is None else files)
-    return CandidatePromotion(
-        reference=CandidateReference(candidate_id=candidate.candidate_id, freeze_commit=FREEZE_COMMIT,
-                                     merged_commit=MERGED),
-        candidate=candidate, freeze=freeze_for(candidate),
-        source=publication_source(manifest=candidate.manifest, merged_commit=MERGED, merged_tree=TREE))
+    return ReleaseSubject(locator=locator, manifest=manifest)
 
 
 def release(*names: str, draft: bool = True, digests: dict[str, str] | None = None,
@@ -102,251 +77,11 @@ def release(*names: str, draft: bool = True, digests: dict[str, str] | None = No
                            body=release_body(promotion_for(files)) if body is None else body)
 
 
-# The public v0.1.37 release body as published, then after its maintainers added readable notes;
-# their SHA-256 digests are the archived page readback's and the edit verification's ``notes_sha256``.
-V37_CANONICAL = (
-    "Development candidate promotion\n"
-    "\n"
-    "Promotion predicate (canonical JSON):\n"
-    "{\"candidate_id\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6\",\"freeze\":{\"co"
-    "mmit\":\"374ecfa90f9e2e312f11901c635ae836c092e217\",\"record_sha256\":\"60a59852ca236f095f04569a25a737"
-    "d028fec6b4031f7b129300966c5206913c\"},\"kind\":\"delegation-layer-candidate-promotion\",\"locator\":{\"a"
-    "rtifact_archive_sha256\":\"3f526432ae337c2a73578c5f0175d12bb69b0935af0e954b0bba6d6c14319319\",\"arti"
-    "fact_id\":12556412583,\"manifest_sha256\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab"
-    "70ca2fc6\",\"repository\":\"hishamkaram/delegation-layer\",\"run_attempt\":1,\"run_id\":40084104373},\"mer"
-    "ged\":{\"commit\":\"2bf74534e51cee82cc8b6de6df03032e5eabbcce\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7"
-    "554860bcc6\"},\"original_build\":{\"base_commit\":\"95277e06024fce0135af6bb8b9d3e722837effb3\",\"commit\""
-    ":\"4391ad3dfbd9a33d1562ca8b0c358b487972ab85\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7554860bcc6\"},\""
-    "schema_version\":1}\n"
-    "\n"
-    "Payload SHA-256 digests:\n"
-    "46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6  candidate-manifest.json\n"
-    "4b26d7e43b37f591a7b730fba81cd0636aec8648c216e652b9a90cb3fc8d2d47  checksums.txt\n"
-    "b490041f008ec5d0f0fb1f9a09cb38fb8d16eb6e936c43e46a0da2b863e97294  delegation-layer-0.1.37.tgz\n"
-    "f18ca9dfdef4cb322e52b75d59d2556a36df99145125415e9cb034f9935dfea6  delegation-layer.rb\n"
-    "f9ac83009d936c21d0af94fa57689e53dcd22ea1855d71bf3d075eed8ac49084  delegation-layer_0.1.37_Darwin"
-    "_amd64.tar.gz\n"
-    "6f3c9fea154bb8d7a4df2440b63fe5152ef6b01913572cad25d5928dbf79f9f2  delegation-layer_0.1.37_Darwin"
-    "_arm64.tar.gz\n"
-    "617e7733125b927a1d7f8151d72de49997c7baad24dce5deff01ae69e7a952f4  delegation-layer_0.1.37_Linux_"
-    "amd64.tar.gz\n"
-    "1ef5197aec80a21e143a42add23547d86bfa0170b3a9e6ca72d20884a7311e5d  delegation-layer_0.1.37_Linux_"
-    "arm64.tar.gz"
-)
-
-
-V37_PUBLIC = (
-    "This maintenance release improves release verification, installation checks, and agent guidance."
-    "\n"
-    "\n"
-    "## What changed\n"
-    "\n"
-    "- **Verify before publishing:** build an immutable candidate and test it during development, the"
-    "n publish those same verified files.\n"
-    "- **Test real installations:** shell, npm, and Homebrew checks now run a task through the instal"
-    "led CLI, runner, and bundled supervisor on Linux and macOS.\n"
-    "- **Require development readiness:** source-bound test, installation, and review evidence is che"
-    "cked before merging and publishing.\n"
-    "- **Recover partial publications safely:** confirm existing GitHub, npm, and Homebrew content an"
-    "d complete only the missing delivery steps.\n"
-    "- **Clearer agent and contributor guidance:** distinguish setup blockers, test results, evidence"
-    ", and review approval, with focused skill evaluation cases.\n"
-    "- **Read-only evidence checks:** verify handoff indexes against their recorded source and files "
-    "without rewriting them.\n"
-    "\n"
-    "Implemented in [#101](https://github.com/hishamkaram/delegation-layer/pull/101).\n"
-    "\n"
-    "**Full changelog:** [v0.1.36…v0.1.37](https://github.com/hishamkaram/delegation-layer/compare/v0"
-    ".1.36...v0.1.37)\n"
-    "\n"
-    "<details>\n"
-    "<summary>Build verification details</summary>\n"
-    "\n"
-    "```text\n"
-    "Development candidate promotion\n"
-    "\n"
-    "Promotion predicate (canonical JSON):\n"
-    "{\"candidate_id\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6\",\"freeze\":{\"co"
-    "mmit\":\"374ecfa90f9e2e312f11901c635ae836c092e217\",\"record_sha256\":\"60a59852ca236f095f04569a25a737"
-    "d028fec6b4031f7b129300966c5206913c\"},\"kind\":\"delegation-layer-candidate-promotion\",\"locator\":{\"a"
-    "rtifact_archive_sha256\":\"3f526432ae337c2a73578c5f0175d12bb69b0935af0e954b0bba6d6c14319319\",\"arti"
-    "fact_id\":12556412583,\"manifest_sha256\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab"
-    "70ca2fc6\",\"repository\":\"hishamkaram/delegation-layer\",\"run_attempt\":1,\"run_id\":40084104373},\"mer"
-    "ged\":{\"commit\":\"2bf74534e51cee82cc8b6de6df03032e5eabbcce\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7"
-    "554860bcc6\"},\"original_build\":{\"base_commit\":\"95277e06024fce0135af6bb8b9d3e722837effb3\",\"commit\""
-    ":\"4391ad3dfbd9a33d1562ca8b0c358b487972ab85\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7554860bcc6\"},\""
-    "schema_version\":1}\n"
-    "\n"
-    "Payload SHA-256 digests:\n"
-    "46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6  candidate-manifest.json\n"
-    "4b26d7e43b37f591a7b730fba81cd0636aec8648c216e652b9a90cb3fc8d2d47  checksums.txt\n"
-    "b490041f008ec5d0f0fb1f9a09cb38fb8d16eb6e936c43e46a0da2b863e97294  delegation-layer-0.1.37.tgz\n"
-    "f18ca9dfdef4cb322e52b75d59d2556a36df99145125415e9cb034f9935dfea6  delegation-layer.rb\n"
-    "f9ac83009d936c21d0af94fa57689e53dcd22ea1855d71bf3d075eed8ac49084  delegation-layer_0.1.37_Darwin"
-    "_amd64.tar.gz\n"
-    "6f3c9fea154bb8d7a4df2440b63fe5152ef6b01913572cad25d5928dbf79f9f2  delegation-layer_0.1.37_Darwin"
-    "_arm64.tar.gz\n"
-    "617e7733125b927a1d7f8151d72de49997c7baad24dce5deff01ae69e7a952f4  delegation-layer_0.1.37_Linux_"
-    "amd64.tar.gz\n"
-    "1ef5197aec80a21e143a42add23547d86bfa0170b3a9e6ca72d20884a7311e5d  delegation-layer_0.1.37_Linux_"
-    "arm64.tar.gz\n"
-    "```\n"
-    "\n"
-    "</details>\n"
-)
-
-
-V37_CANONICAL_SHA256 = "c6d20f56976dc850947c2c036628447f5e42191bceb1e793667f19154c8dbae3"
-
-
-V37_PUBLIC_SHA256 = "dbe1b0211b25f11aaac6362fae02cf576ddeff9e64391d16fbc900f057e0f6b9"
-
-
 class ContractCase(unittest.TestCase):
     def assertCode(self, code, function, *args, **kwargs):
         with self.assertRaises(VerificationError) as caught:
             function(*args, **kwargs)
         self.assertEqual(caught.exception.code, code)
-
-
-class ReferenceCodecTests(ContractCase):
-    REFERENCE = CandidateReference(candidate_id="0a" * 32, freeze_commit=FREEZE_COMMIT, merged_commit=MERGED)
-
-    def test_encoding_is_exactly_the_three_sorted_fields_and_round_trips(self):
-        data = encode_reference(self.REFERENCE)
-        self.assertEqual(data, (f'{{"candidate_id":"{"0a" * 32}","freeze_commit":"{FREEZE_COMMIT}",'
-                                f'"merged_commit":"{MERGED}"}}\n').encode())
-        self.assertEqual(parse_reference(data), self.REFERENCE)
-
-    def test_the_largest_valid_reference_fits_the_decoding_bound(self):
-        widest = CandidateReference(candidate_id="1" * 64, freeze_commit="2" * 64, merged_commit="3" * 64)
-        data = encode_reference(widest)
-        self.assertLessEqual(len(data), MAX_REFERENCE_BYTES)
-        self.assertEqual(parse_reference(data), widest)
-
-    def test_extra_or_missing_fields_are_refused(self):
-        record = json.loads(encode_reference(self.REFERENCE))
-        extra = {**record, "native_validation_run_id": "1"}
-        missing = {key: value for key, value in record.items() if key != "freeze_commit"}
-        for value in (extra, missing):
-            data = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            self.assertCode("candidate_record_fields_invalid", parse_reference, data)
-
-    def test_malformed_field_values_are_refused(self):
-        record = json.loads(encode_reference(self.REFERENCE))
-        for key, value in (("candidate_id", "0A" * 32), ("candidate_id", "0a" * 20),
-                           ("freeze_commit", "f7" * 19 + "f"), ("merged_commit", "main"),
-                           ("merged_commit", 1), ("freeze_commit", None)):
-            data = (json.dumps({**record, key: value}, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            with self.subTest(key=key, value=value):
-                self.assertCode("candidate_field_invalid", parse_reference, data)
-
-    def test_non_canonical_duplicate_and_oversized_input_is_refused(self):
-        data = encode_reference(self.REFERENCE)
-        self.assertCode("candidate_record_not_canonical", parse_reference, data.rstrip(b"\n"))
-        self.assertCode("candidate_record_not_canonical", parse_reference, data.replace(b",", b", ", 1))
-        self.assertCode("candidate_record_not_canonical", parse_reference, b"[]\n")
-        duplicate = data.replace(b"{", b'{"merged_commit":"x",', 1)
-        self.assertLessEqual(len(duplicate), MAX_REFERENCE_BYTES)
-        self.assertCode("candidate_record_invalid", parse_reference, duplicate)
-        oversized = data[:-2] + b',"pad":"' + b"x" * MAX_REFERENCE_BYTES + b'"}\n'
-        self.assertCode("candidate_record_too_large", parse_reference, oversized)
-
-    def test_reference_is_immutable(self):
-        with self.assertRaises(FrozenInstanceError):
-            setattr(self.REFERENCE, "merged_commit", BUILD)
-
-
-class PromotionTests(ContractCase):
-    def predicate(self, promotion: CandidatePromotion) -> dict:
-        return json.loads(encode_promotion(promotion))
-
-    def test_original_build_and_merge_stay_distinct_facts(self):
-        value = self.predicate(promotion_for())
-        self.assertEqual(value["original_build"], {"commit": BUILD, "tree": TREE, "base_commit": BASE})
-        self.assertEqual(value["merged"], {"commit": MERGED, "tree": TREE})
-        self.assertEqual(set(value), {"schema_version", "kind", "candidate_id", "locator", "freeze",
-                                      "original_build", "merged"})
-
-    def test_candidate_locator_and_exact_freeze_record_are_bound(self):
-        promotion = promotion_for()
-        value = self.predicate(promotion)
-        candidate = promotion.candidate
-        self.assertEqual(value["candidate_id"], sha(encode_manifest(candidate.manifest)))
-        self.assertEqual(value["locator"]["manifest_sha256"], value["candidate_id"])
-        self.assertEqual(value["locator"]["artifact_id"], candidate.locator.artifact_id)
-        self.assertEqual(value["freeze"], {"commit": FREEZE_COMMIT,
-                                           "record_sha256": sha(encode_publication(promotion.freeze))})
-
-    def test_encoding_is_deterministic_and_canonical(self):
-        first, second = encode_promotion(promotion_for()), encode_promotion(promotion_for())
-        self.assertEqual(first, second)
-        canonical = (json.dumps(json.loads(first), sort_keys=True, separators=(",", ":")) + "\n").encode()
-        self.assertEqual(first, canonical)
-
-    def test_all_eight_subjects_are_the_exact_payload_file_digests(self):
-        files = payload_files()
-        promotion = promotion_for(files)
-        subjects = {subject.name: subject.sha256 for subject in promotion.subjects}
-        self.assertEqual(tuple(subject.name for subject in promotion.subjects), payload_paths(VERSION))
-        self.assertEqual(len(subjects), 8)
-        expected = {name: sha(data) for name, data in files.items()}
-        expected[MANIFEST_PATH] = sha(encode_manifest(manifest_for(files)))
-        self.assertEqual(subjects, expected)
-
-    def test_changing_one_file_changes_only_its_subject_and_the_manifest(self):
-        before = {subject.name: subject.sha256 for subject in promotion_for().subjects}
-        changed = payload_files(**{"checksums.txt": b"different checksums\n"})
-        after = {subject.name: subject.sha256 for subject in promotion_for(changed).subjects}
-        self.assertEqual({name for name in before if before[name] != after[name]},
-                         {"checksums.txt", MANIFEST_PATH})
-
-    def test_reference_must_name_this_candidate_and_merge(self):
-        promotion = promotion_for()
-        for changes in ({"candidate_id": "0" * 64}, {"merged_commit": BUILD}):
-            with self.subTest(changes=changes):
-                self.assertCode("candidate_reference_mismatch", replace, promotion,
-                                reference=replace(promotion.reference, **changes))
-
-    def test_freeze_must_bind_this_candidate_and_its_built_source(self):
-        promotion = promotion_for()
-        for changes in ({"candidate_id": "0" * 64}, {"source_commit": MERGED}, {"source_tree": "0" * 40}):
-            with self.subTest(changes=changes):
-                self.assertCode("candidate_promotion_freeze_mismatch", replace, promotion,
-                                freeze=freeze_for(promotion.candidate, **changes))
-
-    def test_source_equality_is_decided_by_the_publication_source_owner(self):
-        promotion = promotion_for()
-        self.assertCode("publication_tree_mismatch", replace, promotion,
-                        source=PublicationSource(build_commit=BUILD, merged_commit=MERGED, tree="0" * 40))
-        self.assertCode("candidate_promotion_source_mismatch", replace, promotion,
-                        source=PublicationSource(build_commit=MERGED, merged_commit=MERGED, tree=TREE))
-
-
-class ReleaseBodyTests(ContractCase):
-    def test_body_is_exactly_the_canonical_predicate_and_every_subject_digest(self):
-        files = payload_files()
-        promotion = promotion_for(files)
-        digests = {name: sha(data) for name, data in files.items()}
-        digests[MANIFEST_PATH] = sha(encode_manifest(manifest_for(files)))
-        lines = release_body(promotion).split("\n")
-        self.assertEqual(lines[:3], ["Development candidate promotion", "",
-                                     "Promotion predicate (canonical JSON):"])
-        self.assertEqual((lines[3] + "\n").encode(), encode_promotion(promotion))
-        self.assertEqual(lines[4:6], ["", "Payload SHA-256 digests:"])
-        self.assertEqual(lines[6:], [f"{digests[name]}  {name}" for name in payload_paths(VERSION)])
-
-    def test_body_keeps_original_build_and_merge_distinct_and_claims_no_builder(self):
-        predicate = json.loads(release_body(promotion_for()).split("\n")[3])
-        self.assertEqual(predicate["original_build"]["commit"], BUILD)
-        self.assertEqual(predicate["merged"]["commit"], MERGED)
-        self.assertNotEqual(BUILD, MERGED)
-        self.assertNotIn("built by", release_body(promotion_for()).lower())
-
-    def test_body_is_deterministic_and_follows_every_payload_byte(self):
-        self.assertEqual(release_body(promotion_for()), release_body(promotion_for()))
-        changed = promotion_for(payload_files(**{"checksums.txt": b"different checksums\n"}))
-        self.assertNotEqual(release_body(changed), release_body(promotion_for()))
 
 
 class VerificationBlockTests(ContractCase):
@@ -366,14 +101,6 @@ class VerificationBlockTests(ContractCase):
                      "  # Title\n\n- one\n\n" + self.BLOCK):
             with self.subTest(body=body[:12]):
                 self.assertTrue(release_body_matches(body, self.CANONICAL))
-
-    def test_the_corrected_public_v0_1_37_page_matches_its_published_canonical_body(self):
-        self.assertEqual((sha(V37_CANONICAL.encode()), sha(V37_PUBLIC.encode())),
-                         (V37_CANONICAL_SHA256, V37_PUBLIC_SHA256))
-        self.assertTrue(release_body_matches(V37_CANONICAL, V37_CANONICAL))
-        self.assertTrue(release_body_matches(V37_PUBLIC, V37_CANONICAL))
-        self.assertFalse(release_body_matches(V37_PUBLIC, self.CANONICAL))
-        self.assertFalse(release_body_matches(V37_PUBLIC.replace("4b26d7e4", "4b26d7e5"), V37_CANONICAL))
 
     def test_tampered_missing_truncated_duplicate_or_trailing_blocks_are_refused(self):
         other = release_body(promotion_for(payload_files(**{TGZ: b"other\n"})))
@@ -441,10 +168,10 @@ class ReleaseDecisionTests(ContractCase):
         self.assertCode("candidate_release_published_incomplete", self.decide,
                         release(*self.ALL[1:], draft=False))
 
-    def test_release_targeting_the_build_commit_instead_of_the_merge_is_refused(self):
-        self.assertCode("candidate_release_target_mismatch", self.decide, release(*self.ALL, target=BUILD))
+    def test_release_targeting_a_commit_other_than_the_built_source_is_refused(self):
+        self.assertCode("candidate_release_target_mismatch", self.decide, release(*self.ALL, target="f" * 40))
         self.assertCode("candidate_release_target_mismatch", self.decide,
-                        release(*self.ALL, draft=False, target=BUILD))
+                        release(*self.ALL, draft=False, target="f" * 40))
 
     def test_other_tag_or_prerelease_is_refused(self):
         self.assertCode("candidate_release_identity_mismatch", self.decide, release(*self.ALL, tag="v0.1.36"))
@@ -467,13 +194,11 @@ class ReleaseDecisionTests(ContractCase):
 
     def test_missing_malformed_or_tampered_body_is_refused_for_draft_and_published(self):
         lines = release_body(self.PROMOTION).split("\n")
-        predicate = json.loads(lines[3])
-        predicate["merged"]["commit"] = BUILD
-        other_predicate = json.dumps(predicate, sort_keys=True, separators=(",", ":"))
+        source_line = next(line for line in lines if BUILD in line)
         subject = lines[6]
         bodies = {
             "missing": "", "trailing_newline": "\n".join(lines) + "\n",
-            "truncated": "\n".join(lines[:-1]), "predicate": "\n".join(lines[:3] + [other_predicate] + lines[4:]),
+            "truncated": "\n".join(lines[:-1]), "source": "\n".join(lines).replace(source_line, source_line.replace(BUILD, "f" * 40)),
             "subject": "\n".join(lines[:6] + ["8" * 64 + subject[64:]] + lines[7:]),
             "other_candidate": release_body(promotion_for(payload_files(**{TGZ: b"other\n"}))),
         }
@@ -495,7 +220,7 @@ class ReleaseDecisionTests(ContractCase):
     def test_identity_and_target_refusals_precede_the_body_check(self):
         self.assertCode("candidate_release_identity_mismatch", self.decide,
                         release(*self.ALL, tag="v0.1.36", body=""))
-        self.assertCode("candidate_release_target_mismatch", self.decide, release(*self.ALL, target=BUILD, body=""))
+        self.assertCode("candidate_release_target_mismatch", self.decide, release(*self.ALL, target="f" * 40, body=""))
 
     def test_inconsistent_listing_is_not_an_observation(self):
         asset = ReleaseAsset(name=TGZ, sha256="8" * 64)

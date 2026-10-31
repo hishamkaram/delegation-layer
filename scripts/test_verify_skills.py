@@ -37,6 +37,14 @@ class SkillFixture(unittest.TestCase):
     def verify_demo(self):
         return checker.verify(self.root, required_skills=("demo",))
 
+    def write_authority_targets(self, name="go-reviewer"):
+        required = checker.REQUIRED_AUTHORITY_LINKS[name]
+        for relative in required:
+            target = self.root / relative.split("#", 1)[0]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Contract\n", encoding="utf-8")
+        return required
+
 
 class VerifySkillsTests(SkillFixture):
     def test_current_repository_has_valid_skills(self):
@@ -62,26 +70,105 @@ class VerifySkillsTests(SkillFixture):
         self.assertIn("required skill is missing", errors[0])
 
     def test_authority_links_are_required_for_go_reviewer(self):
-        (self.root / "agents" / "_data").mkdir(parents=True)
-        for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]:
-            target = self.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("# Contract\n", encoding="utf-8")
+        self.write_authority_targets()
         self.write_skill(name="go-reviewer", body="A review skill.\n")
         errors = checker.verify(self.root, required_skills=("go-reviewer",))
         self.assertTrue(any("required authoritative link" in error for error in errors))
 
     def test_authority_links_pass_when_all_required_destinations_are_linked(self):
-        for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]:
-            target = self.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("# Contract\n", encoding="utf-8")
+        required = self.write_authority_targets()
         links = "\n".join(
             f"Read [contract]({Path('..') / '..' / relative})."
-            for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]
+            for relative in required
         )
         self.write_skill(name="go-reviewer", body=links + "\n")
         self.assertEqual(checker.verify(self.root, required_skills=("go-reviewer",)), [])
+
+    def test_required_authorities_are_the_relevant_exact_sections(self):
+        self.assertEqual(checker.REQUIRED_AUTHORITY_LINKS, {
+            "add-an-adapter": (
+                "agents/_data/adapter-contract.md#2-launch-planning-and-preflight-policy",
+                "agents/_data/adapter-contract.md#4-evidence-capture-and-publication-predicates",
+            ),
+            "go-reviewer": (
+                "agents/_data/maintainability-contract.md#review-dimensions",
+                "agents/_data/code-quality-floor.md#3-testing-and-verification-discipline",
+            ),
+            "live-e2e": (
+                "agents/_data/maintainability-contract.md#provider-checks",
+                "agents/_data/delegation-invariants.md#3-supervision-deadlines-and-forbidden-signals",
+            ),
+            "supervisor-architect": (
+                "agents/_data/maintainability-contract.md#recovery-and-verification",
+                "agents/_data/delegation-invariants.md#4-supervisor-admission-ordering",
+            ),
+        })
+
+    def test_authority_whole_file_links_do_not_satisfy_required_sections(self):
+        required = self.write_authority_targets()
+        links = "\n".join(
+            f"[contract](../../{relative.split('#', 1)[0]})" for relative in required
+        )
+        self.write_skill(name="go-reviewer", body=links)
+        errors = checker.verify(self.root, required_skills=("go-reviewer",))
+        self.assertTrue(any("required authoritative link" in error for error in errors))
+
+    def test_authority_wrong_sections_do_not_satisfy_required_sections(self):
+        required = self.write_authority_targets()
+        links = "\n".join(
+            f"[contract](../../{relative.split('#', 1)[0]}#wrong-section)"
+            for relative in required
+        )
+        self.write_skill(name="go-reviewer", body=links)
+        errors = checker.verify(self.root, required_skills=("go-reviewer",))
+        self.assertTrue(any("required authoritative link" in error for error in errors))
+
+    def test_authority_sections_accept_canonical_paths_and_angle_links(self):
+        required = self.write_authority_targets()
+        links = "\n".join(
+            f"[contract](<../../{relative.replace('_data/', '_data/../_data/')}>)"
+            for relative in required
+        )
+        self.write_skill(name="go-reviewer", body=links)
+        self.assertEqual(checker.verify(self.root, required_skills=("go-reviewer",)), [])
+
+    def test_two_authority_sections_in_one_file_are_required_separately(self):
+        name = "add-an-adapter"
+        required = self.write_authority_targets(name)
+        for index, missing in enumerate(required):
+            with self.subTest(missing=missing):
+                links = "\n".join(
+                    f"[contract](../../{relative})"
+                    for other_index, relative in enumerate(required) if other_index != index
+                )
+                self.write_skill(name=name, body=links)
+                errors = checker.verify(self.root, required_skills=(name,))
+                self.assertEqual(errors, [
+                    f"{self.root / 'skills' / name / 'SKILL.md'}: "
+                    f"required authoritative link to {missing!r} is missing",
+                ])
+
+    def test_authority_sections_cannot_be_satisfied_by_external_paths(self):
+        required = self.write_authority_targets()
+        with tempfile.TemporaryDirectory(prefix="verify-skills-outside-") as outside:
+            relative_path, _, fragment = required[0].partition("#")
+            target = Path(outside) / relative_path
+            target.parent.mkdir(parents=True)
+            target.write_text("# Contract\n", encoding="utf-8")
+            for destination in (
+                f"https://example.invalid/{required[0]}",
+                f"//example.invalid/{required[0]}",
+                f"../../../{Path(outside).name}/{relative_path}#{fragment}",
+            ):
+                with self.subTest(destination=destination):
+                    links = [f"[external]({destination})"]
+                    links.extend(f"[contract](../../{relative})" for relative in required[1:])
+                    self.write_skill(name="go-reviewer", body="\n".join(links))
+                    errors = checker.verify(self.root, required_skills=("go-reviewer",))
+                    self.assertTrue(any(
+                        "required authoritative link" in error and repr(required[0]) in error
+                        for error in errors
+                    ))
 
     def test_default_required_skills_include_supervisor_architect(self):
         for name in checker.REQUIRED_SKILLS:
@@ -518,7 +605,7 @@ class SkillEvalCaseTests(SkillFixture):
     def test_judgment_controls_differ_from_their_case_in_exactly_one_fact(self):
         repository = Path(__file__).resolve().parent.parent
         expected = (
-            ("go-reviewer", 0, "handoff/summary.json", {"/claims/1/validator_result"}),
+            ("go-reviewer", 0, "checks/results.json", {"/checks/1/exit_code"}),
             ("live-e2e", 0, "evidence/acceptance-receipt.json", {"/executed_binary/sha256"}),
         )
         for skill, index, fixture, pointers in expected:
@@ -532,6 +619,32 @@ class SkillEvalCaseTests(SkillFixture):
                 self.assertEqual(fixtures.keys(), control_fixtures.keys())
                 self.assertEqual([path for path in fixtures if fixtures[path] != control_fixtures[path]], [fixture])
                 self.assertEqual(differing_leaves(json.loads(fixtures[fixture]), json.loads(control_fixtures[fixture])), pointers)
+
+    def test_reviewer_pair_judges_only_synthetic_check_results(self):
+        repository = Path(__file__).resolve().parent.parent
+        document = json.loads((repository / "skills/go-reviewer/evals/cases.json").read_text(encoding="utf-8"))
+        case = document["cases"][0]
+        self.assertEqual(case["visible"]["prompt"], case["control"]["visible"]["prompt"])
+        for scenario, exit_code, verdict in ((case, 1, "hold"), (case["control"], 0, "approve")):
+            with self.subTest(verdict=verdict):
+                inputs = scenario["visible"]["inputs"]
+                self.assertEqual([item["path"] for item in inputs], ["checks/results.json"])
+                self.assertEqual(json.loads(inputs[0]["content"]), {"checks": [
+                    {"kind": "fixture", "exit_code": 0},
+                    {"kind": "native", "exit_code": exit_code},
+                ]})
+                expected = scenario["hidden"]["expected"]
+                self.assertEqual(expected["outcome"], verdict)
+                self.assertEqual(expected["required_actions"], [
+                    {"type": "read-file", "target": "checks/results.json"},
+                ])
+                self.assertEqual(expected["forbidden_actions"], [
+                    {"type": "edit-file", "target": "checks/results.json"},
+                ])
+                self.assertEqual(expected["required_artifacts"], [{
+                    "path": "review/record.json", "check": "json-field",
+                    "locator": "/verdict", "value": verdict,
+                }])
 
     def test_paired_assignments_are_identical_and_do_not_leak_the_hidden_answer(self):
         repository = Path(__file__).resolve().parent.parent
@@ -605,10 +718,10 @@ class SkillEvalCaseTests(SkillFixture):
             self.assertIn(label, case["visible"]["prompt"])
             self.assertIn(label, control["visible"]["prompt"])
 
-        # Trusted-facts pair: identical assignment, one counterfactual fact.
+        # Synthetic check pair: identical assignment, one counterfactual fact.
         case, control = pair("go-reviewer", 0)
         self.assertEqual(case["visible"]["prompt"], control["visible"]["prompt"])
-        self.assertEqual(differing(case, control), ["handoff/summary.json"])
+        self.assertEqual(differing(case, control), ["checks/results.json"])
         for label in labels(case, control, "/verdict"):
             self.assertIn(label, case["visible"]["prompt"])
 

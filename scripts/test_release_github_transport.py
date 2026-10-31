@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.native_evidence.public_contract import MAX_PUBLIC_ZIP_BYTES
+from scripts.delegate_acceptance.release_verification.candidate_manifest import MAX_CONTAINER_BYTES
 from scripts.delegate_acceptance.processes import operations
 from scripts.delegate_acceptance.processes.contracts import (
     BoundedCommandError, BoundedCommandResult, CommandFailure,
@@ -436,7 +436,7 @@ class GitHubJsonBodyTests(FakeGhCase):
     def test_largest_supported_proof_fits_a_base64_git_blob_request(self):
         # Capacity only: the bytes are a pattern, not a semantic proof. If the public
         # proof bound grows past this transport's cap, this test fails before a PR does.
-        proof = (bytes(range(256)) * (MAX_PUBLIC_ZIP_BYTES // 256 + 1))[:MAX_PUBLIC_ZIP_BYTES]
+        proof = (bytes(range(256)) * (MAX_CONTAINER_BYTES // 256 + 1))[:MAX_CONTAINER_BYTES]
         body = {"content": base64.b64encode(proof).decode("ascii"), "encoding": "base64"}
         encoded = json.dumps(body, allow_nan=False, sort_keys=True, separators=(",", ":"))
         self.assertLess(len(encoded), github.MAX_REQUEST_BODY)

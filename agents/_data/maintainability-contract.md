@@ -1,1384 +1,196 @@
-# Project maintainability contract
+# Maintainability and architecture
 
-This is the shared engineering guidance for every maintained subsystem. The
-[delegation invariants](delegation-invariants.md), [adapter contract](adapter-contract.md),
-and [code-quality floor](code-quality-floor.md) remain authoritative for their
-respective requirements; this document adds the maintainability decisions that
-apply across the implementation, review, test, acceptance, and documentation
-skills.
+This document owns module boundaries, dependency policy and maintainability
+checks. [AGENTS](../../AGENTS.md) owns collaboration/check reporting; the
+[product boundary](product-boundary.md) owns product scope. Read only relevant
+sections. No contributor ledger, handoff index, private implementation baseline
+or universal full-contract read is required.
 
 ## Boundary and ownership
 
-- The core owns task admission and claims. The application lifetime state
-  machine owns all native-lifetime transition policy; the live guardian and
-  recovery paths enter that same state machine under one lifetime-owner lease.
-  Pueue owns scheduling and worker-row state. The execution runner owns
-  provider `Start`, pipes, capture, and provider `Wait`. The live guardian owns
-  its native scope handle and lifetime-owner lease until finalization completes.
-  Task or inspection storage owns the durable intent, registration, worker,
-  launch, termination, and managed-worker completion records. Only the state
-  machine may authorize native scope disposal.
-- An adapter owns its immutable identity, supported request options, runtime
-  capability profile, native argument/configuration preparation, identity semantics, and
-  versioned interpretation of sealed provider evidence. It never owns pipes,
-  capture, sealing, process lifetime, stopping, or publication.
-- Interfaces belong to the consumer that needs them. Keep each interface
-  narrow enough to express the real boundary, and use one explicit catalog at
-  startup rather than init registration, mutable global registries, dynamic
-  plugins, or a universal provider DSL.
-- Reuse existing task, execution, predicate, usage, and lifecycle value types.
-  A new abstraction needs a concrete consumer and a lower total maintenance
-  cost than the code it replaces. Provider-specific behavior must not leak into
-  task, execution, or publication code.
-- Give each lifecycle decision one canonical owner. A lower layer may expose a
-  narrow primitive or callback, but it must not duplicate application policy
-  for another record family or command path.
-- Managed runtime-only admission owns the static request and immutable required
-  capability digest; each task's runner owns the fresh runtime check inside its
-  guardian lifetime. Admission must not repeat that check or consume another
-  task's observation. Pending metadata carries no observed version, and the
-  execution boundary must enforce its required digest even if a plan drops the
-  pending marker. Native policy projections keep their strict inspection path.
-- Before adding a lifecycle branch, map all callers and both dependency
-  directions with the codebase graph, write the affected rows in the canonical
-  durable transition matrix below, and compare the proposed owner with existing
-  helpers. A new path must call the canonical resolver or policy gate rather
-  than copy its predicates.
+Name the authoritative owner, writers, readers and invariant before changing
+state or an interface. Mutable resources stay behind their owner; other modules
+consume a narrow public boundary or pure values. Interfaces belong to consumers.
 
-## Review dimensions
+Separate data, pure decisions and I/O. Small cohesive domains may keep values
+and validity rules in one package. Do not create empty layers, packages per
+helper, forwarding caches or global model/store/service dumping grounds.
+An abstraction needs a concrete consumer, invariant or demonstrated reuse.
 
-For every substantial change or review, record evidence about:
-
-1. ownership and resource lifetimes, including cleanup and failure paths;
-2. dependency direction and whether a new dependency is necessary;
-3. the interface owner and whether the boundary is real and narrow;
-4. duplicated lifecycle, capability-check, parser, or acceptance-harness logic;
-5. error context, compatibility behavior, and accidental secret exposure; and
-6. contributor effort, including whether the documented path is discoverable
-   and repeatable.
-
-The agreed source budgets and exact dependency edges are owned by
-[`subsystems.json`](subsystems.json) and its module fragments. Existing
-formatting, complexity, error, race, build, and vulnerability checks remain the
-project floor. There is no percentage-coverage target or name-based function
-exemption.
+The [delegation invariants](delegation-invariants.md#3-supervision-deadlines-and-forbidden-signals)
+own runtime lifecycle. The [adapter contract](adapter-contract.md) owns provider
+preparation/interpretation, not shared process/capture/publication mechanics.
+Use one startup catalog, not hidden singleton state or init registration.
 
 ## Subsystem boundaries and maintainability gates
 
-Each subsystem has one responsibility and an explicit state owner. Data types
-may guard their validity; business decisions operate on supplied facts; thin
-I/O boundaries collect observations and execute authorized operations.
-Dependencies point inward. Interfaces belong to their consumers. Plain values
-and pure rules can share a cohesive package in separate files; effectful
-implementations must not leak into a reusable pure contract.
-
-The registry gives every module one role and the gate checks its observed
-project imports against this direction, as well as the exact import allowlist:
+The [registry](subsystems.json) owns roles, budgets and allowed project imports.
+Observed imports do not automatically become allowed imports. Review a real
+boundary change before updating its entry.
 
 | Role | Allowed project dependency roles |
 | --- | --- |
-| `pure` | `pure` |
-| `runtime` | `pure`, `runtime` |
-| `application` | `pure`, `runtime`, `application` |
-| `tool` | `pure`, `runtime`, `application`, `tool` |
-| `test` | all five roles |
-
-An application composes runtime owners. Contributor tools may invoke that
-application; the application cannot depend on contributor tools or test
-fixtures. Acceptance-only Go binaries and their composition helpers have the
-`test` role. Acceptance command entrypoints have the `tool` role. A finite
-control adapter remains `runtime` when it only executes supplied control
-operations; an executable entry does not make it an orchestration owner.
-Classify the actual responsibility from source before changing a role. Do not
-relabel a real inversion to satisfy the table.
-
-Runtime implementations under a subsystem's `internal/` directory are sealed.
-Other subsystems use the runtime facade or the canonical pure contract, as
-registered for that consumer. Compatibility aliases refer to the same type and
-state; they never own a second cache, client, or implementation. Do not add a
-package per helper, a universal workflow engine, or global model/store/service
-packages.
-
-A helper object that only holds the original owner is not an ownership
-boundary. Use stateless functions within a cohesive subsystem when no new
-state or resource owner is needed. Keep compatibility methods on the canonical
-owner; do not add companion objects and forwarding caches to satisfy file
-budgets. Relocated behavior must preserve its real consumers and data flow,
-including values passed between newly extracted functions.
-
-Compatibility facades preserve their recorded export and signature contracts,
-including intentional standard-library re-exports. Mark those imports as
-explicit re-exports; no local usage does not authorize deleting a published
-name. Run the boundary's compatibility and module-identity tests before broader
-checks when those imports change.
-
-`make verify-maintainability` checks the maintained candidate, including
-untracked additions and build-excluded Go source. Ignored scratch files are
-outside that candidate. One policy validator consumes Go metadata/AST, Python
-AST, and Node static-module facts. Collectors do not learn allowed edges or
-change policy. Tests have explicit import roles and are included in source
-budgets; their suffix is not a waiver from checking.
-
-The hard physical file limits are 800 lines for production code and scripts,
-1,000 for tests and handwritten fixtures, and 1,800 for documentation, including
-the Archify architecture and sequence authoring JSON under `diagrams/`. Other
-JSON remains subject to the code budget unless it is explicitly generated. Every
-Go declaration is measured from parsed source, including build-excluded files,
-using the pinned `funlen` measurement and limit of 80, including tests. A test
-oracle verifies measurement parity with the pinned linter; the production audit
-does not depend on which files the host can build. Python's AST declaration
-span is 80. The Python call-site rule rejects eight or more positional
-arguments, including elements in literal starred tuples and lists. Name the
-arguments at their actual call site, including record construction; preserved
-declaration signatures do not need a waiver. Dynamic starred values are not
-resolved by this bounded static check. Keep newly extracted large helpers
-keyword-only. Use an immutable record only for an existing cohesive value,
-never as a holder for unrelated caller state.
-JavaScript has syntax, static dependency, finite lexical effect, file-size,
-packaging, and behavior checks; its collector does not prove semantic purity or
-measure function semantics with a regex parser. Generated
-outputs require an explicit generator entry and remain inventoried separately.
-
-Pure Go packages have exact import allowlists. They reject effectful imports,
-dot imports, `unsafe`, `go:linkname`, and explicit clock/effect references.
-Go import references use parser-bound local declarations to distinguish local
-shadows. Python and JavaScript alias observations remain conservative; their
-bounded collectors do not resolve every dynamic binding. Static
-checks prove their bounded rules, not semantic purity or lifecycle correctness.
-Those remain independent review and composed-test obligations.
-
-The strict JSON codec may use read-only reflection to inspect required fields.
-Across every file in a reflection-using module, the gate rejects mutation,
-unsafe access, and reflective invocation selectors conservatively. Package
-references have a read-only metadata allowlist. Reflection is not classified
-as I/O merely because the codec reads its supplied types and values.
-
-Freeze the maintained inputs before running full gates and independent review.
-Formatting consumes the same canonical maintained-file inventory as the audit.
-Keep untracked source in scope and ignored scratch or proof snapshots outside
-it; do not create a separate formatter discovery policy.
-The audit rechecks the maintained inventory before returning its findings and
-fails when it observes an edit, addition, or removal during the run. This check
-does not replace the frozen source snapshot required by the evidence contract.
-
-The Node module collector parses without linking or evaluating inspected code.
-Its experimental flag is explicit. It must pass on the declared Node 18
-minimum and CI's Node 22, and an unavailable parser fails the gate. Dynamic
-imports are not static dependency evidence; runtime installer modules use
-static callable imports and have no import-time CLI execution.
-
-New or unused registry entries, unused import permissions, unknown modules,
-forbidden edges, cycles, parser failures, and missing collector observations fail explicitly. Every gate
-has rejecting and corrected fixtures, including renamed/nested source, native
-build tags, test imports, boundary sizes, raw strings, and purity bypasses.
-
-During the staged refactor, the migration inventory may contain only exact
-findings from the recorded baseline, with a source digest, owner, and removal
-stage. A modified file cannot use its old waiver; resolved or unused entries
-are errors. A touched subsystem must be compliant before review. Final
-acceptance requires an empty inventory, zero exceptions, the complete project
-gate, and independent review with no unresolved P0/P1 or maintainability finding.
-`make check` runs the strict target and rejects any nonempty migration inventory.
-The non-strict target is only a progress check during this staged refactor.
-
-Before a worker starts, freeze the moved symbols, private access, method
-ownership, build tags, callback ports, error identities, persisted layout, and
-test consumers. Missing native/provider evidence blocks only dependent work.
-Keep mechanical relocation separate from corrections backed by a reproducing
-test. Hidden state access, repeated policy copies, and unrelated-module edits
-are design findings that require root-cause investigation before proceeding.
-
-Cross-version coordination is a compatibility surface: preserve lock paths,
-flock modes/order, writer-intent values, staging prefixes, and synchronization
-points. Native baseline-versus-candidate contention tests prove that the old
-and refactored binaries still coordinate on the same owned state root.
-
-## Lifecycle duplication guard
-
-Supervisor binding, migration, cleanup authorization, and evidence ownership
-are lifecycle policy. They must each have one application-level decision point.
-Infrastructure packages may report observations and execute an already
-authorized primitive; they must not decide which Delegate records are safe to
-reap or which successor a continuation should use. Reviewers must reject a
-second predicate that answers the same lifecycle question, even when it is
-located in a command-specific helper or test-only path.
-Acceptance harnesses use `scripts.delegate_acceptance.processes.operations.Process`
-and `Processes`
-for child ownership, waiting, and process receipts. Provider-specific stdin or
-bounded stdout behavior is supplied through their narrow options; a provider
-harness must not define another process class or registry. The ownership
-verifier enforces this boundary.
-
-Python acceptance implementations use the canonical `scripts.delegate_acceptance`
-namespace. Executable entrypoints and exactly two supported flat import entrypoints,
-`acceptance_supervisor_common.py` and `acceptance_provider_common.py`, bootstrap
-the repository path from `__file__`. These import-only bridges own transport,
-not behavior: no class copies, module aliasing, business rules, or extra bootstrap
-wrapper. Flat-first and package-first imports outside the repository must share
-the defining canonical objects and keep repeated path setup idempotent.
-After moving code, patch the name
-looked up by its actual consumer, following Python's
-[mock namespace guidance](https://docs.python.org/3/library/unittest.mock.html#where-to-patch).
-Do not restore facade-global forwarding, dynamic loaders, or `__module__` rewrites
-to preserve obsolete mocks. Moved test classes have one discovery location and an
-explicit old-to-new ID map. Reconcile discovery counts as well as IDs so duplicate
-execution cannot pass unnoticed.
-
-Provider workspace preconditions must be explicit in the adapter contract and
-its acceptance scenarios. Generic fixtures must not erase a precondition by
-initializing Git for every workspace. A changed workspace launch policy needs
-fresh and continuation coverage in each affected permission mode, including
-Git and non-Git controls where applicable. Persisted tasks must reconstruct
-their recorded launch requirements and interpretation unchanged. The native
-acceptance matrix has one definition owner; runners and validators derive
-their case lists and counts from it.
-
-## Durable transition matrix and composed tests
-
-Every lifecycle design, implementation, review, and handoff uses one canonical
-matrix. The required column order is: durable facts → owner/lease → permitted
-action → commit point → failure/recovery → consumer verdict → named test.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| Stable row ID plus the exact records and validated observations that exist before the transition | One policy owner and the named lease or lock it must hold | The single side effect authorized by those facts | The durable write or independently verified native fact after which consumers may advance | The retry entry point and classification for every partial or ambiguous result | The exact verdict each real consumer returns from the committed facts | The test that proves normal execution and recovery for this row |
-
-Rows follow durable state rather than call-stack phases. They name every writer,
-validator, and consumer of each record, and normal execution and recovery enter
-the same row. An in-memory flag, queue observation, process disappearance, or
-successful return is not a durable fact unless an authoritative contract makes
-it one. A commit point is the first fact from which all named consumers can
-reach the row's verdict after restart.
-
-Before tightening a shared gate, trace all indirect callers to their public
-commands and classify observation, optional maintenance, and admission
-separately. A function name is not evidence of its consumer's role. Pair a
-public allowed-read test and refused-mutation test against the same durable
-state. Actual cached and fresh reads revalidate observability inside their
-read lease; an earlier readiness result never authorizes a later mutation.
-Only a classified pre-mutation completion refusal can defer optional
-maintenance after fresh canonical observation succeeds. Joined faults and
-pending commands remain failures with their existing owners; a deferred
-Stashed observation still requires the matching durable receipt.
-Preparation owns suppression for one attempt. Returned observations describe
-that attempt; reusing an observation in a watch loop must not preserve an old
-maintenance decision or error across fresh client recovery.
-Error identities, CLI exit codes and JSON failure guidance are one boundary
-contract. Preserve the original consumer's classifications when adding a typed
-cause; do not broaden a shared sentinel to satisfy a new helper's test. Pair
-the helper cases with the actual public command and independent joined faults.
-
-### Whole-error pending classification
-
-A consumer decides "pending" or "busy" from the whole returned error with the
-canonical policy of the domain that owns the marker, not from a marker
-`errors.Is` alone. A joined error carries every cause, so a marker match can
-hide a lease-release, store, or evidence fault.
-
-For workspace-operation consumers, that policy is `workspaces.PendingError`
-([`operation_policy.go`](../../internal/workspaces/operation_policy.go)); do not
-test `errors.Is(err, workspace.ErrPending)` or `errors.Is(err, workspace.ErrBusy)`
-alone. Other domains keep their own markers and policy owners, and dependencies
-keep pointing inward: this rule adds no classifier, shared framework, or import,
-and does not move workspace policy into a lower layer such as Pueue.
-
-- `PendingError` first requires one of the two markers, then accepts the error
-  only when every leaf cause is a marker or a known pending cause (deadline,
-  lock-busy, in-flight or uncertain submission/enqueue). A bare deadline or
-  lock-busy is not pending. A concrete cause joined to a marker is always a
-  fault, whatever the deadline.
-- Each consumer keeps its preexisting marker semantics, such as pending-only or
-  pending-or-busy, and its public error identities, exit codes and JSON
-  guidance. The rule does not make every busy consumer accept or reject alike.
-- `Close` and unlock faults stay errors. Do not erase a marker or a cause to
-  reach a verdict.
-- Marker-identity checks and proof-reader translations remain valid where they
-  ask which marker an error carries, not whether the whole error is pending.
-- A change or review traces the indirect consumers to their public commands and
-  pairs, over the same durable state, a genuine pending case (including an
-  approved deadline), a busy-only case, and a joined concrete-fault case, each
-  from producer to public consumer.
-  [`pending_consumer_test.go`](../../internal/workspaces/pending_consumer_test.go) and
-  [`workspace_pending_consumer_test.go`](../../internal/app/workspace_pending_consumer_test.go)
-  illustrate the pending/deadline and joined-fault regression pairs.
-
-### Local release acceptance and hosted proof validation
-
-The native-release coordinator owns invocation stages and their create-once
-effect intents under the repository/tag lock. It composes the existing process,
-directory and evidence owners; it does not acquire a second launch, wait or
-cleanup policy. Private source receipts remain immutable. A public projection
-has its own bytes and digests, with original receipt digests as provenance.
-Hosted validation attests to that submitted evidence, not execution on CI.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| NR1: checked request, invocation identity and preflight intent | Native-release coordinator / repository-tag lock | Read Python, GitHub, tag, protected-main and source facts before paid work | Bound preflight result | Missing access blocks before archive or native launch | BLOCKED without paid work | PreflightTests.test_github_404_stops_before_archive_or_paid_work |
-| NR1N: native launch intent with exact input and child-capture identity | Native-release coordinator / repository-tag lock; canonical process owner | Run once, then read back natural completion and aggregate lifetime facts | Native result bound to exact completion and aggregate SHA | Interrupted or ambiguous ownership is INCOMPLETE; resume never launches paid work | Known failed work can be reported; unknown lifetime stays retained | ExecutionTests.test_interrupt_after_native_intent_is_incomplete_and_resume_never_launches, ExecutionTests.test_canonical_failed_aggregate_retains_raw_after_lifetime_closure |
-| NR1P: pre-paid stage creation identity and completed aggregate/archive/native source hashes | Canonical evidence stager / source lease and pinned destination lease | Reconcile expected file bytes through the existing atomic publisher, then commit the manifest | File and directory barriers precede create-once manifest publication | Identical bytes replay unchanged; owned partial staging files are recovered; conflicts, replacement and changed sources remain incomplete | Resume may finish projection without relaunching paid work | StagePublicationTests.test_canonical_staging_reenters_owned_partial_output, StagePublicationTests.test_real_crash_recovers_partial_temporary_file_and_link_publication, StagePublicationTests.test_manifest_publication_interruption_reconciles_committed_bytes |
-| NR2: public proof SHA, unique release asset name and upload intent | Native-release coordinator / repository-tag lock | Reconcile while pending, then persist intent before uploading once | Asset ID, size and SHA committed to invocation | Initial read failure stays pending; after intent, lost response only observes | No duplicate upload or overwrite | SubmissionTests.test_lost_upload_response_reconciles_exact_asset_once, SubmissionTests.test_crash_after_upload_intent_never_retries_missing_upload, CliRecoveryTests.test_initial_upload_read_failure_remains_pending_and_resume_uploads_once |
-| NR3: exact asset facts, inputs and workflow-dispatch intent | Native-release coordinator / repository-tag lock | Reconcile while pending, then persist intent before dispatching once | Bound workflow run ID committed to invocation | Initial read failure stays pending; lost mutation response never authorizes blind redispatch | Watch the original validation | SubmissionTests.test_lost_dispatch_response_uses_exact_run_and_original_models, SubmissionTests.test_crash_after_dispatch_intent_only_observes, CliRecoveryTests.test_initial_dispatch_read_failure_remains_pending_and_resume_posts_once |
-| NR4: authenticated sender/uploader, exact asset SHA, release/main/source/archive bindings | Hosted validation application / exact workflow attempt | Apply canonical portable case predicates and complete scoped history | Trusted attempt report, including admission and native verdict | Malformed or missing evidence cannot pass; a report before admission can record a correctable rejection | Admitted native failure blocks; retained failure states and case counts survive projection | HostedNativeValidationTests.test_case_schema_failure_after_admission_is_blocking_failure, NativeValidationHistoryTests.test_admitted_failure_survives_passing_control_and_rerun, PublicNativeProofTests.test_real_failed_stage_preserves_verdict_and_retained_sources |
-| NR5: complete native closure, consumed evidence and exact owned cleanup target | Native-release coordinator / repository-tag lock | Authorize existing directory journal and reconcile its result | Canonical cleanup journal and matching invocation result | Replacement or unresolved lifetime retains private state; replay uses the same identity | Cleanup never discards unresolved work | CleanupTests.test_replaced_target_before_cleanup_is_retained, CleanupTests.test_cleanup_replays_durable_canonical_journal_without_touching_replacement |
-
-The promotion gate and local observer use the same history classifier. A later
-passing control cannot erase an admitted failure for the same tag and current
-protected-main source. A missing report requires later resolution of that same
-proof; incomplete pagination fails closed. A native-result pass and a workflow
-history failure remain distinct facts. Submission recovery never relaunches
-provider work. Public installation uses isolated consumer environments without
-publication credentials and must not use authenticated downloads to conceal a
-private-repository failure.
-
-### Inspection claim replay
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| IC-R1: validated immutable submission or start guard; native lifetime may already be closed while independent worker-exit proof is pending | Inspection journal / canonical control transaction | Read the existing guard without issuing another permit; only an absent guard may reach the shared lifetime launch gate | Exact existing guard validated against the request digest and original admission window under the same transaction | Invalid or unreadable guards retain their evidence or I/O failure; canceled or expired callers cannot obtain readback; missing guards remain fenced after closure | Submission replay awaits canonical terminal evidence; start replay refuses another execution; neither changes the guard or creates launch authority | TestInspectionClosedClaimReplayRemainsReadbackOnly, TestInspectionClosedLifetimeRefusesMissingClaim, TestInspectionClosedClaimReplayRejectsInvalidGuard, TestInspectionClosedClaimReplayHonorsCallerContext, TestInspectionUnlaunchedFenceRefusesLateAuthority, TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallback |
-
-### Private supervisor generation transitions
-
-The private migration owner alone changes generation records under the existing
-exclusive bootstrap lock. Shared observers use its canonical generation facts;
-observability and transition completion grant different authority.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| PM-O1: exact published binding and daemon; absent or matching pre-stop intent and recovery alias | Private generation owner / shared generation lease | Observe task rows without queue or generation mutation | Exact publication, alias/config digest, phase and endpoint proof | Conflicting publication or any shutdown flag rejects observation | Existing task observation is available; no submission or cleanup authority | TestPreparedPrivateMigrationAllowsPublishedLegacyObservationAfterBusy, TestStatusDuringPreparedMigrationObservesExistingTask, TestStatusDuringPreparedMigrationObservesQueuedAndReceiptedStashedTasks, TestPrivateTaskStatusKeepsPreparedRecoveryAliasObservable |
-| PM-O2: shutdown intent or conflicting generation facts appear after observer preparation | Private generation owner / actual task-status read lease | Refuse both fresh and overlapping cached rows | Canonical observability revalidation before cache reuse or publication | Reopen only through the saved-task recovery owner; no readiness or cache hint grants authority | No matched observation or cache publication from unsafe state | TestPrivateTaskStatusRechecksPhaseInsideObservationLease, TestPreparedPrivateMigrationRejectsUnsafePublishedObservation, TestStatusRejectsUnsafeMigrationProgressWithoutMutation |
-| PM-O3: preparation was Complete; optional Stashed recovery meets a new pre-stop intent | Task observation attempt; existing mutation gate and fresh shared read lease | Defer only the classified pre-mutation refusal, then observe the saved task again | Matched current row and matching durable supervisor receipt | Joined faults, pending commands and invalid receipts remain failures; the next attempt gets fresh preparation | Stashed remains admitted without enqueue; no remembered deferral suppresses a later healthy attempt | TestStashedStatusConsumerDefersWhenCompleteClientBecomesPrepared, TestReconcileStatusDoesNotReusePriorMaintenanceDeferral, TestTaskMaintenanceDeferralPreservesIndependentFailures, TestPredecessorTerminatedPreservesSubmissionDeferral, TestPredecessorTerminatedNonEndedRemainsUnknown |
-| PM-C1: exact published generation; every transition and recovery record settled | Private generation owner / operation's generation lease | Authorize submission, scheduling repair or terminal maintenance through its existing gate; completed-task cleanup may report exact logical label absence after the same check under the shared lease | Completed publication and matching runtime target, rechecked inside the mutation's existing lease; a compatible runtime pair need not own published executable provenance; cleanup removes only after a fresh check and exact-label selection under the exclusive lease | Observable-only state remains ineligible; an earlier readiness probe or shared cleanup observation grants no mutation authority; only the shared lease's bare unentered missing-lock refusal falls back to the exclusive provisioning path | Completion-sensitive consumers stay strict; admission refuses before creating an ordinary task | TestPreparedPrivateMigrationDoesNotAuthorizeTerminalMaintenance, TestPreparedPrivateMigrationKeepsExclusiveConsumersStrict, TestPreparedPrivateMigrationKeepsHistoryTraversalStrict, TestPreparedMigrationRefusesAdmissionAndCleanupProbes, TestPreparedMigrationRefusesAdmissionAtLiveEndpoint, TestPreparedMigrationRefusesCompletedTaskRemovalFromHeldClient, TestPreparedMigrationRefusesCompletedTaskRemovalThroughRecoveryAlias, TestCompletedSuccessorAllowsCleanupThroughRecoveredPair, TestCompletedTaskCleanupObservesAbsenceBesideSharedLease, TestCompletedTaskCleanupRemovalWaitsForExclusiveLease, TestCompletedTaskCleanupReselectsUnderExclusiveLease, TestCompletedTaskCleanupUnreadableGenerationRefusesAbsence, TestCompletedTaskCleanupProvisionsMissingBootstrapLockExclusively, TestPrivateLeaseUninitializedRequiresBareUnenteredRefusal, TestPreparedMigrationRefusesQueuedRunnerMutationFromHeldClient, TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter, TestDispatchDuringPreparedMigrationRefusesBeforeTaskCreation |
-| PM-C2: readiness-gated identity publication interrupted after binding publication, with exact restart intent still pending | Private generation owner / exclusive bootstrap lock | Replay the canonical publication, then evaluate completion without claiming a pre-mutation refusal | Exact daemon identity published, publication journal removed, unfinished restart intent unchanged | A post-replay incomplete transition retains the migration-required postcondition error; it cannot defer as an untouched maintenance attempt | Strict refusal until the canonical recovery owner completes the same generation; no duplicate daemon launch | TestPublishedPreparationReplayDoesNotAdvertisePremutationRefusal, TestPublishedPairRestartRecoversInterruptedIdentityPublication, TestBindingPublicationIncompleteFailureIsNotPremutationRefusal |
-| PM-A1: exact ready legacy daemon identity and saved binding; logical owner publication absent | Existing bootstrap or saved-task recovery owner / exclusive bootstrap lock | Adopt the verified owner through the canonical create-once publisher before scheduling | Exact logical binding published; daemon launch identity unchanged | Unproven or unavailable ownership remains refused; existing task records remain immutable | Legacy admission and observation recover without restarting the ready daemon | TestPrivateAdmissionAdoptsReadyLegacyOwnerBeforeScheduling, TestStatusAdoptsExactReadyLegacyOwnerBeforeObservation, TestEnsurePrivateSupervisorBindingAdoptsLiveDaemonWithoutReplacingIdentity |
-| PM-W1: exact predecessor; selected successor recorded before queue authorization | Explicit migration owner / exclusive bootstrap lock; application queue authorizer | Publish prepared target intent, then refuse shutdown while work is active | Create-once target journal; Busy retains the predecessor, alias and target with no PID or shutdown flags | Retry the managed migration command after work drains; resolve inspection proposals against that same target | Blocked; ordinary observation remains available | TestPrivateMigrationBusyRetainsPreparedTargetWithoutShutdown, TestPrivateMigrationPublishesTargetBeforeQueueAuthorization, TestExplicitMigrationBusyPreservesSelectedInspectionSuccessor |
-| PM-W2: published current generation, matching alias, no shutdown; no connected completed history; explicit writer selects that generation | Explicit migration owner / exclusive bootstrap lock; application queue authorizer | Withdraw matching pre-stop intent and retire the alias only when quiescent | Existing journal clear and canonical alias removal with directory sync | Busy retains the alias; generic retirement still requires history; post-stop targets remain fixed | Exact current generation becomes complete without a fabricated history edge | TestPrivateLegacyWriterWithdrawsPreparedIntent, TestPrivateSameGenerationMigrationRetiresOnlyQuiescentAlias, TestPrivateGenericRetirementKeepsSameGenerationHistoryGuard |
-| PM-H1: exact completed publication and connected completed history for a retained alias or orphan artifacts | Private generation owner / exclusive bootstrap lock | Retire the historical alias through the canonical remover without queue authorization | Existing alias deletion order and directory sync | Invalid history rejects removal; interrupted missing-config and orphan cleanup use the same history proof | Historical alias settled even when the current queue is active; no shutdown authority granted | TestPrivatePublishedSuccessorRetryRetiresHistoricalAlias, TestPrivateHistoricalSameLogicalActiveFullProvenance, TestPrivateHistoricalRetirementPreservesCorruptHistory |
-
-### Private endpoint refusal recovery
-
-A normally completed nonzero control command whose exact Unix socket refuses
-connections is a typed observation (`PrivateEndpointRefused`, projected to
-`ErrPrivateEndpointRefused` for observers), never proof of absence. The existing bootstrap transition and election own repair under
-`WithBootstrapLockContext`; each start path first applies its existing
-generation, provenance, journal and binding checks, then enters the one closure
-`closeRefusedPrivateEndpoint`. The closure reuses the recorded-PID and process
-observers; only `removeStalePrivateEndpoint` removes a socket. Shared,
-status and maintenance observers never clean or start because of a refusal.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| EP1: authorized matching generation; refused owned socket under `.supervisor/run`, or at the exact compact endpoint `.supervisor/s` selected by the authenticated bound runtime config (config digest, resolved config digest, endpoint and recorded resolution; no client executable required); recorded PID absent or zombie | Existing bootstrap transition / exclusive bootstrap lock after election | Remove the owned stale socket, then start only the exact authorized generation | Directory sync after socket removal; readiness-gated daemon identity publication | A later attempt re-observes and enters EP5; the stopped migration resumes its recorded successor | Dispatch, public continue, saved recovery, retained-pair reconciliation and migrate succeed with one start; records keep their generation and a continued predecessor is unchanged | TestAdmissionClosesRefusedEndpointOfAbsentRecordedDaemon, TestContinueRepairsRefusedEndpointOfAbsentRecordedDaemon, TestControlClientRepairsCleanRefusedEndpoint, TestMigrateClosesRefusedEndpointOfAbsentRecordedDaemon, TestBindPrivateClosesRefusedEndpointOfAbsentRecordedDaemon, TestRecoverPrivateEntersExclusiveClosureForRefusedEndpoint, TestPendingMigrationRefusedEndpointStartsRecordedSuccessor, TestBindPrivateClosesRefusedCompactEndpointOfAbsentRecordedDaemon, TestRecoverPrivateClosesRefusedCompactEndpoint, TestWaitUnavailableRemovesRefusedCompactEndpoint, TestRefusedCompactEndpointClosureUnderLock, TestConcurrentBindPrivateRepairsRefusedCompactEndpointOnce, TestMigrationConfigClosesRefusedCompactEndpoint, TestPersistedRecoveryConfigClosesRefusedCompactEndpoint, TestDispatchedShutdownClosesRefusedEndpointWithoutLegacyClient, TestPrivateSupervisorNativeRefusedEndpointRepair |
-| EP2: the EP1 state seen by public status or an observation-only probe | Status reader / shared or no lease | Observe only | None | No resource or record changes | Status exits 1 with `unreachable`, active work `unknown` and its existing next action; the wrapped typed cause is retained | TestStatusReportsRefusedEndpointUnreachableWithoutMutation, TestLegacyStatusReportsRefusedEndpointUnreachable, TestRefusedEndpointObservationsRemainErrors, TestPrivateEndpointRefusalProjectsTypedObserverError, TestPrivateSupervisorNativeEndpointObservations |
-| EP3: refused socket with no recorded PID, or with any recorded PID present | Existing bootstrap transition / exclusive bootstrap lock | None | None | `PrivateRecoveryError` `endpoint_owner_unknown` or `endpoint_refused_live` wraps the refusal without migration-required | Admission `supervisor_setup_failed` and migrate `stop_and_report` carry the reason; continue creates no successor; socket inode, records and start count unchanged | TestRefusedEndpointWithoutRecordedPIDFailsClosed, TestRefusedEndpointWithPresentRecordedPIDFailsClosed, TestDispatchReportsRefusedEndpointOwnerReason, TestMigrateRefusedEndpointWithoutRecordedPIDStops, TestContinueRefusedEndpointWithUnprovenOwnerCreatesNoSuccessor, TestPrivateSupervisorNativeRefusedEndpointRepair |
-| EP4: binding conflict, pending transition, missing provenance, non-socket, symlink, or a path outside `.supervisor/run` other than the exact compact endpoint of the authenticated bound runtime config (an unselected sibling, a forged `s` for a config selecting another endpoint, or a config changed after binding included), observation error, pending command or joined capture fault | Existing fence owners / their existing leases | None beyond existing fences | None | Existing error identities; refusal cannot invent provenance or soften a joined fault; absent and refused are typed observations only for a whole-error ordinary completion, so a close, unlock, reader, protocol or limit fault stays an operational error with every identity, including through the control owner | Existing consumer verdicts; no authority broadened; supervisor clients reconcile only on the explicit missing-pair fact and recover only from a clean absent or refused observation | TestCommandCompletionClassifiesWholeError, TestControlOwnerRecordRoundTripKeepsCompletionClass, TestControlOwnerProcessClassifiesStatusCompletion, TestAbsentEndpointKeepsCommandFaults, TestRefusedObservationWithCloseFaultKeepsBothCauses, TestSupervisorClientsNeverRecoverObservationFault, TestCompletedMigrationDoesNotDiscardPreparationFault, TestRecoveringClientReconcileFailureKeepsPairCause, TestRefusedEndpointClosureRejectsNonSocketAndOutsidePath, TestRefusedCompactEndpointClosureFailsClosed, TestRefusedEndpointRequiresNormalCompletedCommand, TestRefusedEndpointClosureRevalidatesUnderLock, TestMissingMigrationBindingIsNotInventedFromRefusal |
-| EP5: crash after socket removal, or after start before identity publication | Existing bootstrap transition / exclusive bootstrap lock | Re-observe; an absent endpoint follows the existing start path and a ready daemon follows publication replay | Existing readiness-gated publication | Idempotent re-entry; no duplicate start for a ready daemon | Admission succeeds with exactly one start per proven absence | TestRefusedEndpointReentryAfterUnlinkStartsOnce, TestPreparePrivateAdmissionSupervisorRecoversPendingPublication |
-| EP6: concurrent admissions on the EP1 state | Private transition election, then exclusive bootstrap lock | One elected caller performs EP1; losers wait and re-probe | As EP1 | Losers never close or start independently | Every admission succeeds with one repair start | TestConcurrentAdmissionsRepairRefusedEndpointOnce |
-
-### Terminal maintenance recovery
-
-Candidate events select normal work; they never authorize removal. Full recovery
-uses the same evidence owner and mutation gates even when publication of a hint
-was interrupted.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| TM-R1: full-recovery wake, exact current queue snapshot, durable task or inspection evidence; candidate may be absent | Maintenance election owner; queue-identity lease for preparation and fresh mutation revalidation | Present all rows to the canonical evidence authorizer; remove only its revalidated exact terminal IDs | Successful removal, idempotent ticket/event retirement and completed wake generation | An unfinished publication command retains ownership through natural completion; full recovery does not depend on its missing hint | Proven rows reclaimed; active, ambiguous or unproven rows preserved; task and inspection outcomes unchanged | TestTerminalObservationPendingCannotLoseInspectionCleanupCandidate, TestPrivateTerminalEventJobsFiltersEventOnlyByNumericID, TestDelayedTerminalEventAfterNumericIDReuseCannotAuthorizeNewInspection |
-| TM-R2: begun private generation; closed lifetime custody may be pending for an ordinary task or a captured ended inspection | The same elected owner; `PrivateTerminalCustodyReleaser` runs with neither the generation lease nor queue identity. Its full-phase coordinator owns the immutable unique `TaskIDs` inventory, the open store and at most `closedTaskCustodyWorkers` (4) finite workers, all joined before the store closes and the phase returns | Full: one empty-candidate call over `taskdir` `TaskIDs` before the queue endpoint is captured; the coordinator hands the ids out in inventory order and each worker runs the canonical per-task release, which opens and closes its own task handle. Each capture: a deep copy of its candidates after protected preparation, before removal reacquires both leases and revalidates | The exact recorded pool's release after `guardian.ReadClosureProof`; candidates, task names, outcomes and row absence are discovery only | Every task is attempted and faults are joined in inventory order with their task ids; a worker checks cancellation after receiving an id and before the canonical call, so no call starts after it observes cancellation, and a pass that skipped an id joins the cancellation once; the attempt fails without withholding other authorized rows; a later positive wake retries, never a self-spin | Ordinary row removal is not custody-gated; ended-inspection removal keeps its custody gate; duplicate-label rows stay witnesses | TestFullPrivateMaintenanceReleasesCustodyBeforeUnavailableQueue, TestPrivateFullCustodyScopeReleasesTaskCustodyWithoutQueueRows, TestPrivateMaintenanceCustodyHoldsNoGenerationOrIdentityLease, TestPrivateMaintenanceCustodyScopeCannotAlterCapture, TestPrivateMaintenanceRevalidatesAfterCustody, TestScheduledPrivateMaintenanceCustodyFaultSettlesWithoutBlockingRemoval, TestElectedOwnerReleasesInspectionCustodyBeforeSamePassRemoval, TestCleanupCustodyRetainsOnlyUnreleasedInspectionRows, TestTaskCustodyCoordinatorBoundsOverlapAndCallsEachTaskOnce, TestTaskCustodyCoordinatorKeepsInventoryOrderOfFaults, TestTaskCustodyCoordinatorRefusesAlreadyCanceledPass, TestTaskCustodyCoordinatorJoinsBlockedReleasesAfterCancellation, TestFullCustodyPassReleasesClosedTasksConcurrentlyOverSharedStore, TestConcurrentTaskCustodyReleasesShareOneStore |
-| TM-R3: public `status` or `collect` of a task with a saved binding | Private: the task observer, read-only. External: the same observer's synchronous canonical custody retry | Private: read the closed-custody hint and reconcile the exact published row; a positive custody or exact-row hint persists one full wake through TM-R4's publication phase, separate from the observation context so it can add up to 5 seconds, then attempts the independent launcher only with a published-row client and a configured launcher; otherwise the durable wake waits for a later callback or admission. External: release through the exact recorded pool | The durable wake generation (private) or the pool release (external) | The optional private maintenance observer step adds no synchronous probe, EX repair, row removal or custody release (the command's own task observation, `ObserveTaskSupervisor`, is unchanged); the wake phase renews no provider, task or native budget; only when neither hint is positive does it request nothing; a malformed binding never falls back to the external path | Outcome, payload, JSON and exit code unchanged; faults are warnings | TestPrivateCollectRequestsMaintenanceForRetainedEndedRow, TestPrivateTaskObservationRefusesUnavailableAndMalformedBindings, TestPrivateObserverWakeOutlivesExhaustedObservationContext |
-| TM-R4: a guardian's run has finalized with closure records; the task is ordinary private, or a private inspection's direct release fails | Guardian after its run. Ordinary private: `handOffGuardianLifetimeCustody`, which never releases physically. Inspection and external: the unchanged direct `releaseGuardianLifetimeCustody` | Ordinary private: a read-only `closedLifetimeCustodyReleasePending` check bounded by the 10-second `lifetimeCustodyReleaseTimeout`; a positive answer or a check fault persists one full wake in a fresh cancel-independent phase bounded by `pueue.DefaultObservationTimeout`, then calls the configured independent maintenance launcher with the normalized executable and captured scope in its own phase with that bound. Private inspection: a release fault persists the same full wake before the guardian returns | The durable wake generation | Best-effort I/O: a check, wake-write or launch fault is logged and joined; a wake fault launches nothing; a launch fault or missing launcher keeps the published wake; no direct-release fallback; pending closure, released custody or no closure records request nothing; no provider, task or native budget is renewed | The guardian's own result is unchanged; TM-R2's elected pass that consumes the wake releases the exact recorded pool; inspection and external direct release are unchanged | TestOrdinaryPrivateGuardianHandsCustodyToLaunchedOwner, TestOrdinaryPrivateGuardianHandoffNeverReleasesDirectly, TestGuardianCustodyHandoffReportsFaultsWithoutReleasing, TestGuardianDirectCustodyReleaseRemainsForInspectionAndExternalRuns, TestGuardianWithoutClosureRequestsNoCustodyHandoff, TestGuardianCustodyFaultPersistsPrivateFullWake, TestGuardianCustodyRecoveryOutlivesExhaustedReleaseContext, TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance |
-| TM-R5: a late Pueue callback helper or maintenance wake for a root that disposal deleted, that has no `.supervisor`, or whose bootstrap or terminal-event lock is missing | Callback recorder under the existing terminal-event lock; legacy adoption under the existing bootstrap EX lock (`WithExistingBootstrapLockContext`) | Recover stages, recheck the ticket and record one event only under an existing lock; adopt only a legacy root whose bootstrap lock exists | The event record (recorder) or published binding (adoption); never a provisioned base, ancestor or lock | A missing event lock records no candidate and requests a full wake; a missing root or bootstrap lock returns `ErrPrivateSupervisorNotInitialized` and the wake stays pending | Nothing is recreated; ticket publication keeps provisioning; a genuine legacy root still adopts | TestQueueMaintenanceNeverRecreatesAbandonedRoot, TestWithExistingBootstrapLockContextNeverProvisions, TestRecordPrivateTerminalEventNeverProvisionsMissingEventLock, TestRecordPrivateTerminalEventRecoversStagesUnderExistingLock, TestQueueMaintenanceAdoptsLegacyOwnerOnlyWhenProven |
-| TM-R6: acceptance final disposal of a managed root that still has `.supervisor`; canonical closure and empty custody | `DisposalLeases` of `finalize_fixture`, the workspace context cleanup, or the candidate-install bootstrap (one value across its shutdown and owned-root removal): existing transition and bootstrap locks opened without creation, then the election lock; flocked election, transition, then bootstrap EX, each within the caller's existing deadline; a missing election lock is created once only after that validation, in a validated private `.supervisor` | Shut down under the held lease, keep it, recheck closure and custody under it, then remove the exact owned root | Verified absence of the exact owned root | Readiness waits run outside the current root's lease and a pending recheck releases only that root's lease, so roots already shut down stay held through deletion; a busy election past the deadline, an unsafe or replaced directory or lock, a late write or a deletion fault retains the root and reports an error; a missing lifecycle lock refuses before any creation; a lease release fault at owner teardown is a cleanup error recorded in the one FAIL receipt | Removal never overlaps an elected maintenance owner; held roots are never reopened; mid-scenario shutdowns and fixture seeding keep the transition lease | test_private_disposal_lease (DisposalLeaseTests, DisposalLeaseIdentityTests, FinalizerLeaseTeardownTests), test_acceptance_private_predecessor_shutdown, test_setup_ownership, test_candidate_install_bootstrap |
-
-### Continuation session handoff
-
-The `taskdir` session journal owns claims and create-once
-`<task>.release.json` records under `.session.lock`. `tasklifecycle` owns
-handoff policy: `PredecessorTerminated` and `ResolvePredecessor` for
-admission, and the continuation observer for `status` and `collect`. The single
-closure-interruption eligibility rule is `closureInterruption`.
-`outcome.json` remains the sole completion authority. Production publication
-uses the `taskdir` predicate path (`collectOwned`, then `evaluateAndPublish`),
-which requires a valid seal. The runner reaches it through `TaskDir.Finalize`
-after sealing; collection (`tasklifecycle.Collect`) and runner sealed recovery
-reach it through `TaskDir.Collect`. A queue-row end or a timestamp is never
-handoff proof.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| CH1: validated committed or rejected `outcome.json`; predecessor session claim | `tasklifecycle` terminal release (`ReleaseContinuationSession`) / released `.run.lock`, then `.session.lock` | Release the claim with the outcome `EvidenceSHA256` | Create-once release record | A failed release write keeps the winner; a later runner, collect or continue pass retries the same release | Successor claims the session; continue resolves the prior session | TestPredecessorTerminatedReleasesTerminalContinuation, TestCollectReleasesRecoveredContinuation, TestContinuationReleaseFailurePreservesWinnerAndRetries, TestCommittedOutcomeWinsOverClosedLifetime |
-| CH2: no outcome; terminated budget-stop observation, with or without a closed lifetime | `releaseHandedOffPredecessor` budget branch, checked before closure / released `.run.lock` | `ReleaseSessionAfterTimeout` with the first budget observation digest | Create-once release record | Held runner lease returns `task.ErrSessionBusy`; retry after the runner releases | Successor claims the session; the budget digest wins over a closure witness | TestBudgetStopHandoffPrecedesClosedLifetime, TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery |
-| CH3: no terminated budget-stop observation; `Inspect` reports publication unknown with no seal or outcome; canonical closed lifetime from `guardian.ReadClosureProof`, which carries the validated termination cause | `closureInterruption` for admission and observation; each caller keeps its runner-lease check on `.run.lock` | Admission: `ReleaseSessionAfterLifetimeClosure` with the preferred closure witness, whatever the displayed cause. Observation: the proof's termination cause classifies the offer: `budget` is `timed_out`, every other cause is `interrupted`; no stop annotation, status poll, or supervisor call is required | Create-once release record; observation writes nothing | Held lease: admission returns `task.ErrSessionBusy` at `resolve-predecessor`, observation offers nothing. Open lifetime or pending proof stays refused | Successor claims the session; for a `budget` cause `status` reports `timed_out` (exit 0) and `collect` reports `timed_out` pending publication (exit 3); otherwise `status` reports `interrupted` (exit 0) and `collect` reports `task_interrupted` (exit 1) | TestCollectFirstReportsBudgetClosureTimedOut, TestBudgetClosureClassificationIsOrderIndependent, TestBudgetClosureKeepsCancellationAndCausePrecedence, TestRebootInterruptionReleasesWithClosureWitness, TestPredecessorTerminatedReleasesRebootClosedContinuation, TestResolvePredecessorAcceptsRebootClosedContinuation, TestStatusAndCollectReportRebootInterruption, TestStatusOffersInterruptionOnlyWithoutPublication, TestHeldRunnerLeaseBlocksRebootInterruption, TestPredecessorTerminatedRefusesRebootWithoutClosedLifetime |
-| CH4: valid seal; no outcome; closed lifetime; released runner lease | `closureInterruption` refuses handoff; the `taskdir` publication path through `TaskDir.Collect` (`tasklifecycle.Collect`) / shared maintenance lock and exclusive `.run.lock` | No handoff. Collect evaluates the seal and publishes `outcome.json` | `outcome.json`; collect then releases as CH1 | Before collect, continue fails with exit 1, `resolve-predecessor`, `continuation_unavailable`, and the existing outcome-unavailable error; no successor, no release, records unchanged. Continue after collect follows CH1 | `status` gives no interrupted offer; after collect, `ResolvePredecessor` returns the prior session and the release digest equals the outcome evidence digest | TestContinueCollectsSealedRebootPredecessorFirst, TestPredecessorResolutionRefusesSealedRebootPredecessor, TestStatusOffersInterruptionOnlyWithoutPublication |
-| CH4P: defensive orphan-payload fault state: `result.txt` without `provider.exit` or `outcome.json`, so `Inspect` reports pending; closed lifetime; released runner lease | `closureInterruption` refuses handoff; the publication path requires a valid seal | None. Collect cannot publish without a seal (`task.ErrNoSeal`) | None | Continue fails with exit 1, `not_created`, `resolve-predecessor`, `continuation_unavailable`, `stop_and_report`, and the existing outcome-unavailable error. `PredecessorTerminated` and `ResolvePredecessor` refuse with that error | No interrupted offer; no successor, no release, session claim kept, records unchanged | TestOrphanPayloadRebootPredecessorIsNeverHandedOff |
-| CH5: malformed `provider.exit`, `outcome.json`, or lifetime termination record, on a sealed or unsealed predecessor | Each record's canonical reader: `Inspect`, the closure read, and reconciliation's guardian recovery | None | None | The concrete fault surfaces: a malformed seal or closure returns `task.ErrEvidenceFault` and a malformed outcome `task.ErrInvariantFault`. A sealed predecessor with a malformed closure skips the eligibility read but still returns `task.ErrEvidenceFault` from reconciliation | `status` exits 1 without an interrupted offer; continue refuses without a task record; no release; records unchanged | TestMalformedRebootEvidenceIsReportedNotHandedOff |
-| CH6: stored release whose digest is a closure witness; a later outcome, budget observation, or matching absence | `taskdir` session journal (`matchesHandoffProof`) / `.session.lock` | Keep the stored release; later release writers reconcile without rewriting it. `ReleaseSessionAfterLifetimeClosure` proves closure only | Original release bytes | A corrupt closure revokes only a closure-proven release; malformed lifetime records cannot revoke an outcome or budget release | The successor's claim stays valid | TestLifetimeClosureReleaseSurvivesLateOutcome, TestLifetimeClosureReleaseSurvivesLaterBudgetObservation, TestLegacyPreviousBootReleaseSurvivesLaterMatchingAbsence, TestCorruptClosureRevokesOnlyAClosureRelease, TestMalformedLifetimeCannotRevokeOutcomeOrBudgetRelease |
-
-### Provider transport protocol transitions
-
-`execution.Run` owns the single provider transport: stdin pipe, capture,
-writer, `Wait`, deadline and cleanup. A provider supplies only a pure
-`execution.Protocol` (`Start`, `Receive`, `Complete`); `InteractionProtocol`
-embeds it and adds `Encode` for the optional user channel on the same engine.
-`ValidateProtocolSelection` is the one selection rule: a non-interactive task
-uses finite stdin or a machine `Protocol`; an interactive task uses only
-`Interaction`. Later provider-factory validation calls it rather than copying
-the table. A machine protocol never opens, polls, writes, flushes, closes or
-seals the user interaction journal. `taskdir.BeginInteraction` keeps its
-interactive-request guard. A native `Done` ends the frame queue without
-blocking the protocol loop; the writer closes stdin after every earlier queued
-frame. It is never publication authority and never forgives a machine write
-failure. `outcome.json` remains the sole
-terminal authority, and protocol completion faults are seal diagnostics, not a
-missing seal. These rows add no supervisor or lifetime policy; deadline and
-cleanup stay with the budget owner and guardian.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| PT1: immutable `task.json` interactive flag; consumed start permit; supplied `Protocol`, `Interaction` and `Identity` options | `execution.Run` through `ValidateProtocolSelection` / held runner lease and consumed start guard | Select finite stdin, machine protocol or user interaction; otherwise refuse before provider `Start` | None: refusal discards raw writers and creates no interaction directory, start receipt or seal | `task.ErrInteractionUnavailable` for an invalid selection; a machine `Protocol` paired with a separate `Identity` observer is refused, while a user `Interaction` keeps its historical precedence and never invokes a supplied `Identity`. The consumed guard grants no retry | Runner reports the error; no launch, no seal, no outcome | TestValidateProtocolSelectionCoversEveryCombination, TestRunRejectsInvalidProtocolSelectionBeforeStart, TestRunRejectsIdentityObserverWithProtocol, TestRunInteractiveSelectionSupersedesSuppliedIdentityObserver |
-| PT2: valid machine selection; preflight and bind succeeded; budget start authorization | Execution runner / runner lease; budget owner for the single start | One `Start`; brief bytes go to `Protocol.Start` and its frames to the core-owned pipe; no interaction journal | Existing `provider.started.json` receipt | Start, preflight and bind failures seal `start-failed` as before; no relaunch | Collection treats the task as an ordinary launched turn | TestMachineProtocolExchangeSealsWithoutInteractionJournal |
-| PT3: raw stdout and stderr closed after natural EOF; `Done` observed; later records parsed and captured | Protocol engine, then the existing sealer / runner lease | Close the frame queue at `Done`; the writer closes stdin once after every earlier frame, even when the queue was full or the writer is blocked; reject post-`Done` outbound and every machine `Events` value | `provider.exit` with an empty diagnostic, then predicate publication | Missing `Done`, `Complete` failure, post-`Done` outbound, `Events`, queue saturation or any machine stdin write failure (including `EPIPE` and closed input after `Done`) become a `ReceiptError` and seal diagnostic. Only the user channel treats closed input after native completion as unknown delivery | The predicate decides; a diagnostic seal is rejected, never a missing seal | TestMachineProtocolExchangeSealsWithoutInteractionJournal, TestMachineProtocolIncompleteEOFSealsCompletionDiagnostic, TestMachineProtocolEventsRejectBeforeOutbound, TestMachineDoneWithSaturatedQueueWritesEveryEarlierFrame, TestMachineDoneDoesNotBlockProtocolBehindBlockedWriter, TestMachineWriteFailureAfterDoneIsReported, TestCompletionForgivesClosedInputOnlyForUserDelivery |
-| PT4: budget expiry observed before `Done`; prepared stop request | Budget owner and existing stopper or guardian / runner lease | Close stdin exactly once; await natural exit through the existing stop path; no second start | Existing stop records, then `provider.exit` with the incomplete-protocol diagnostic | Stop errors keep their existing `StopError` path; recovery follows the existing lifetime rows | Rejected outcome; no relaunch | TestMachineProtocolDeadlineClosesInputOnceWithoutRelaunch |
-| PT5: protocol `Start` or `Receive` fault, or machine `Events`, while output continues | Protocol engine / runner lease | Stop protocol consumption, close stdin, emit no further outbound, keep draining raw capture to EOF | `provider.exit` with the fault diagnostic after full raw capture | A capture or wait infrastructure fault still prevents sealing as before | Rejected outcome with complete raw evidence | TestMachineProtocolFaultDrainsRawCapture, TestMachineProtocolEventsRejectBeforeOutbound |
-
-User interaction keeps its historical rows and tests unchanged
-(`TestInteractionDeliveryAndNaturalInputClosure`,
-`TestInteractionCompletionPreservesUncertainConcurrentDelivery`,
-`TestRunInteractiveSelectionKeepsUserJournal`). Current record capture remains
-an optional `CurrentRecordInteractionProtocol` opt-in for either protocol kind
-(`TestConsumeRecordUsesCurrentCaptureOnlyWhenProtocolOptsIn`).
-
-### Managed workspace transitions
-
-The application workspace coordinator owns workspace state and exclusive usage.
-Task outcomes remain provider-turn authority; workspace capture receipts are
-independent immutable Git-content evidence. Checkpoint creation and removal
-receipts (CP1–CP7) are separate immutable evidence too; neither a provider
-outcome nor a capture receipt proves a checkpoint. All workspace subprocesses
-use the existing guardian policy through the control-lifetime journal.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| W1: request/task/workspace identity and committed-base intent | Workspace coordinator / workspace operation lock | Authorize one finite provision operation | Canonical intent and operation request | Reconcile the same mapping; preserve ambiguous submission | preparing, ready-unattached, or preparation failed | TestWorkspaceProvisionPurposeRecoveryKeepsCreateOnceMapping |
-| W2: source provenance, pinned common-directory identity, exact owned anchor disjoint from source, Git and state paths, pinned base, provision intent | Workspace coordinator / usage reservation; guardian / lifetime owner | Create and register exact detached checkout; a sibling checkout in the shared container may be the source | Validated checkout and Git backlink registration | Retain partial or changed paths; never adopt another worktree; refuse self, ancestor, symlink or identity aliases before creating any directory | ready or retained failure | TestWorkspaceRegistrationRecoveryClassifiesRecordStates, TestNativeSiblingProvisionFromDetachedLinkedSource, TestNativeProvisionRejectsOwnedPlacementOverlaps |
-| W3: usage reservation and capture obligation for typed subject | Workspace coordinator / usage reservation | Admit one task or verification operation | Task submission or durable aborted/not-launched disposition | Uncertain submission retains reservation; session resumability is separate | busy, active, or aborted; task status and collect select the task's own bound reservation over current resource availability | TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome, TestManagedTaskStatusProjectsItsOwnCaptureAcrossSuccessorUse, TestDescribeTaskKeepsOwnCaptureWhileSuccessorUsesWorkspace |
-| W3a: open task reservation with this task's capture obligation; consumed task start permit | Task runner inside its guardian lifetime / task start lease | Observe start tree, HEAD and real-index identity with the private-index capture algorithm in the task's preflight scope | Create-once turn baseline, then its owned tree ref, before provider Start | Any read, write, Git or deadline failure, or an existing baseline, refuses this launch; no second launch or renewed deadline | Capture compares with its own baseline; no baseline is `unavailable`, never unchanged | TestNativeTurnBaselinesObserveActualStartAndProjectExactCaptures, TestManagedTurnBaselineFailureRefusesProviderLaunch, TestNativeTurnBaselineHonorsExpiredTaskDeadline, TestTurnBaselineCreateOnceReplayConflictAndClosure |
-| W4: independently closed provider/verification lifetime and worker completion | Workspace coordinator / usage reservation | Start separate finite capture operation | Capture operation request and exact queue receipt | Reconcile authorized obligation; never restart provider or reopen expired scope | capture-pending | TestWorkspaceGuardianRequiresExactWorkerWaitBeforeAcceptance; native `_run_timeout` gate in `scripts/acceptance_workspaces.py` |
-| W5: immutable candidate with cumulative base-to-final tree, semantic identity of one frozen real-index image (flag tag, mode, object, stage, path and intent-to-add; never stat caches or HEAD; HEAD and worktree observed separately) and optional turn observation, owned tree/base refs, cumulative artifact descriptors plus a turn baseline-to-final pair exactly for an observed turn | Workspace coordinator / usage reservation | Seal core capture receipt | Canonical capture receipt | Resume a committed receipt unchanged; operational read errors retain the obligation; a changed common directory is refused; turn files without an observed turn, or an observed turn without them, are refused | captured or unavailable; original outcome unchanged | TestNativeCaptureKeepsCumulativeBaseAndLeavesRealIndexAndHEAD, TestNativeChangedCommonDirectoryIsRefused, TestNativeIndexFingerprintCoversFlagsButNotStatCache, TestNativeIndexFingerprintCoversConflictStagesAndOddPaths, TestNativeIndexFingerprintCoversLargeInventory, TestNativeIndexFingerprintDistinguishesIntentToAddFromStagedEmpty, TestNativeIndexFingerprintIgnoresHEADOnlyMove, TestNativeIntentToAddOnlyTurnReportsIndexChange, TestBuildCaptureFailsWhenVisibleIndexEntriesAreUnavailable, TestBuildCaptureObservesOneFrozenIndexImage, TestBuildCaptureRefusesUnreadableRealIndex, TestNativeIndexObservationsReadOneFrozenImage, TestNativeIndexObservationTreatsMissingIndexAsEmpty, TestNativeIndexIdentityIgnoresEmptyTreeReplacement, TestNativeTurnArtifactsAttributeOnlyCurrentTurnFiles, TestNativeFlagOnlyTurnReportsIndexChange, TestCaptureCandidateTurnEvidenceIsOptionalTypedAndValidated, TestWorkspaceCaptureReceiptRecoveryClassifiesRecordStates, TestWorkspaceCaptureFinalizesRecoveredClosureWithoutNativeWait, TestWorkspaceCaptureReadFailureKeepsObligationRetryable, TestWorkspacePreviousBootCaptureUsesValidatedResultAcrossRecoveryGap |
-| W6: exclusive usage, successful final capture or explicit discard | Workspace coordinator / usage reservation | Close use and remove exact owned checkout through Git | Release and verified cleanup result | Preserve identity mismatch; resume recorded cleanup | released, cleanup-pending, or removed | TestWorkspaceReleaseRecoveryClassifiesCleanupReceiptStates |
-| W7: completed cleanup and exact forget inventory, including turn-baseline refs and turn artifacts | Workspace coordinator / usage reservation | Remove matching owned refs and optional workspace artifacts | Forget intent before deletion; forgotten result after completion | Readers recognize covered intentional removal; mismatches remain retained; an unreadable baseline blocks the inventory; an inventory miss alone never proves a known owned ref absent, so a symbolic or operationally ambiguous ref remains retained | forgetting, forgotten, or partial failure | TestWorkspaceForgetRecoveryClassifiesTombstoneStates, TestForgetInventoryIncludesBaselineRefsAndRefusesCorruptBaseline, TestNativeChildSurvivesTransientSourceRemoval, TestNativeTurnArtifactsAttributeOnlyCurrentTurnFiles, TestNativeOwnedRefsRefuseDanglingSymbolicRefs |
-| CP1: explicit absolute canonical ordinary cwd outside every managed checkout, its pinned directory identity, fresh intent ID and finite helper budget | Workspaces checkpoint coordinator (`BeginOrdinaryCheckpoint`); no workspace resource, reservation or lease | Persist one immutable creation request and submit its finite helper | Durable creation request; the acknowledgement is authorized with that checkpoint ID | A later scheduling fault keeps the same request, which `status` redrives; never a second request or a renewed deadline | `create` exit 3 with `id` and `watch_checkpoint`; a concrete fault exits 1 with the acknowledged ID retained | TestOrdinaryCheckpointCreatesAndRemovesThroughCoordinatorWorkerAndGuardianCompletion, TestCheckpointOrdinaryLifecycleThroughCommands, TestCheckpointCreationIntentBindsRequestFields, TestCheckpointCommandsRefuseMissingRootWithoutInitializing |
-| CP2: managed workspace ID, reconciled use and a free use owner | Workspaces checkpoint coordinator (`BeginManagedCheckpoint`) / workspace use-owner lease and usage reservation | Reserve the use for this creation, record it in the resource, then enqueue its helper | Reservation naming the creation's operation and digest, then the resource operation reference | Owner contention whose every cause is lock-busy refuses without a request or ID; status repairs an interrupted admission's missing reference and redrives that same request once under a free owner; a forged or corrupt reservation is a fault and never another use | Busy refusal exit 3 `requested_action_not_authorized`/`retry_create` with no ID; accepted exit 3 `watch_checkpoint`; another checkpoint's reservation is left alone | TestManagedCheckpointAcknowledgesOnlyItsReservedRequestAndSettlesOnCompletion, TestCheckpointManagedCreationRefusesBusyUseOwner, TestUseOwnerContentionRequiresEveryCauseBusy, TestCheckpointStatusRedrivesInterruptedManagedAdmissionOnce, TestCheckpointStatusReplaysMatchingQueueRowWithoutResubmission, TestObserveManagedCheckpointRepairsInterruptedAdmission, TestCheckpointStatusLeavesAnotherCheckpointReservationAlone, TestObserveManagedCheckpointRefusesForgedReservationDigest, TestCheckpointStatusRefusesCorruptManagedReservation |
-| CP3: authorized creation request, validated target topology, scratch outside every Git context | Git owner inside the helper's guardian lifetime | Observe HEAD, build the full tree through the capture private index, hash the exact commit payload without writing it; later write that stored payload and pin `refs/delegate/ROOT/checkpoints/ID` create-only in the pinned common directory | Create-once journal candidate, then the verified create-only ref | A request that is not a checkpoint creation of the selected kind, or whose root ID, checkpoint ID or request digest cannot form the owned ref and payload trailers, or an ordinary target that is not its own source checkout, is refused before any Git command; target repository and checkout topology are then validated through Git, and a scratch directory overlapping the Git context is refused before content construction; a payload whose written hash differs, or an altered candidate, is refused before the pin; HEAD, attachment and the real index never change | Candidate only; a candidate or ref is never checkpoint success | TestPrepareManagedCheckpointHashesExactPayloadWithoutWriting, TestPrepareManagedCheckpointKeepsOnlyVerifiedCandidates, TestPrepareCheckpointRefusesBeforeAnyGitCommand, TestPrepareManagedCheckpointRefusesScratchInsideGitContext, TestNativeCheckpointOrdinaryTargetsBindExactCommit, TestNativeCheckpointManagedKeepsBaseProvenanceAndParentsObservedHEAD, TestPublishCheckpointRefusesHashMismatchBeforeAnyRefCommand, TestNativeCheckpointPublicationRefusesAlteredCandidatesBeforePin, TestNativeCheckpointPublicationIsCreateOnly |
-| CP4: canonically closed helper lifetime, its validated result and candidate; for managed creation, the still-open reservation | Workspaces coordinator: `QualifyCheckpoint` stored-first; ordinary `FinalizeCheckpoint`; managed settlement under the use owner | Seal one creation receipt; for managed creation, close that same reservation without capture work | Canonical creation receipt (`checkpointed` with candidate, or `unavailable` with reason), then reservation closure | A held result before the exact native Wait stays pending; recovered, legacy, unregistered and unlaunched closures never qualify success; concurrent finalizers converge on the stored winner; a held use owner leaves settlement to that owner | `status` exit 0 `checkpointed`/`usable: true`, or exit 0 `unavailable` with `stop_and_report`; a requested creation qualified unavailable exits 1 | TestCheckpointSuccessRequiresNativeClosureWhereGenericAcceptanceDoesNot, TestCheckpointHeldResultBeforeExactWaitStaysPending, TestCheckpointReceiptStoredFirstSurvivesChangedClosureFacts, TestCheckpointReceiptConcurrentFinalizersConvergeOnStoredWinner, TestCheckpointQualifiedSuccessWithoutCandidateIsAnEvidenceFault, TestManagedCheckpointSettlementRepairsReferenceAndClosesSameReservation, TestManagedCheckpointSettlementRecordsUnavailableRecoveredSuccess, TestManagedCheckpointUnexpectedCaptureObligationRefusesBeforeCapture, TestCheckpointStatusSettlesClosedManagedHelperOnce, TestObserveManagedCheckpointContentionKeepsQualification, TestCheckpointStatusObservesUnavailableCreationSuccessfully, TestCheckpointDescriptionSeparatesObservationFromRequestedCreation |
-| CP5: qualified creation receipt and a validated removal history (attempts 1..N, every earlier attempt `unavailable`) | Workspaces coordinator (`BeginCheckpointRemoval`); original journal append-only removal references; no lease | Redrive an unfinished head, return a successful head, or register and submit one fresh finite attempt after a closed failed head | Registered removal reference in the original journal | A pending creation is refused without an attempt; a losing registration request is never submitted; an attempt registered before enqueue is redriven with its own request; an earlier success or missing earlier receipt is an evidence fault | Exit 3 with `id`, `operation_id` and `watch_checkpoint`; exit 0 for an existing success; `retry_remove` with no `operation_id` | TestCheckpointRemovalBeforeQualificationIsRefusedWithoutAttempt, TestCheckpointRemovalRaceSubmitsOnlyRegisteredWinnerAndRetriesAfterClosedFailure, TestCheckpointRemovalLosingRequestNeverRuns, TestCheckpointRemovalRegisteredBeforeEnqueueRedrivesSameRequest, TestCheckpointRemovalHistoryRequiresEarlierNonSuccessReceipts, TestCheckpointRemovalAfterEarlierSuccessIsAnEvidenceFault, TestCheckpointRemovalHistoryAuthenticatesEveryRequestBeforeRankingHead, TestCheckpointRemovalHistoryAcceptsUnavailablePrefix |
-| CP6: registered removal attempt, the creation candidate and its pinned common-directory identity | Git owner inside the attempt's guardian lifetime; workspaces coordinator qualifies | Delete the owned ref only while it names the recorded commit, in the pinned common directory | Removal receipt for exactly that attempt | A missing or replaced common directory, or a symbolic, unreadable or conflicting ref, is refused, so that attempt is never `removed`; the source checkout is not needed; disposition derives from the candidate and native closure, never the helper's transient ref observation | `removed` or `nothing_to_remove`; `usable` stays false once any attempt is registered; workspace forget never removes this ref | TestCheckpointRemovalUsesOnlyCommonDirectoryAndRefusesItsLoss, TestNativeCheckpointRemovalRefusesUnverifiableState, TestRemoveCheckpointRefusesUnverifiableInputsBeforeAnyGitCommand, TestCheckpointRemovalDispositionDerivesFromCandidateAndNativeClosure |
-| CP7: committed creation and removal records read by public `status`, `status --operation` and `list` | Workspaces observers (`ObserveCheckpoint`, `ObserveCheckpointRemoval`, `ListCheckpoints`); app projection decides only exits | Status reconciles and describes; the selected attempt is authenticated, then advanced only while it heads the inventory; list reads metadata only | No new commit point: observation reaches the existing receipts | Pending-only is decided by `workspaces.PendingError` over the whole error; a pending marker joined to a concrete fault exits 1 with known IDs kept; unreadable descriptions are omitted; list skips only a cleanly absent request and fails every later load fault | Selected attempt's own receipt chooses 0/1/3 even beside a newer head; list exit 0 never implies usable entries; writer failure exits 1 without undoing acceptance | TestCheckpointSelectedFailedRemovalKeepsItsOwnExit, TestCheckpointOperationSelectorAuthenticatesRemovalOnly, TestObserveCheckpointRemovalStaysBoundToSelectedHead, TestObserveCheckpointRemovalHistoricalAttemptReadsCommittedRecordsOnly, TestObserveCheckpointRemovalSelectedHeadRuntimeFaultKeepsPendingIdentity, TestCheckpointSelectedRemovalKeepsAuthenticatedIDThroughFaults, TestObservePendingCreationJoinsHistoryFault, TestManagedCheckpointResponseKeepsOwnerFaultJoinedWithPending, TestManagedCheckpointResponsePendingOnly, TestCheckpointAcknowledgementSeparatesRefusedAndFailedActions, TestCheckpointListReadsMetadataOnly, TestListCheckpointsReadsMetadataOnlyInPages, TestListCheckpointsFaultsEveryLoadErrorAfterPresence, TestCheckpointListOfEmptyRootEmitsEmptyPage, TestCheckpointPublicWriterFailureExitsOne |
-
-The source checkout is provenance needed only to provision. Afterwards the
-shared common directory is the repository identity: capture, ref and cleanup
-commands run there, verify its pinned inode when recorded, and check the
-child's own checkout topology, so removing a transient parent checkout does
-not wedge a surviving child. A source recorded before the inode pin keeps the
-Git-level common-directory checks. Every owned Git command sets
-`GIT_TERMINAL_PROMPT=0` and `GIT_OPTIONAL_LOCKS=0` through the one environment
-builder; required writer locks still apply.
-
-Workspace operations use new operation identities after terminal lifetimes;
-recovery never renews an old deadline. Release retains snapshots and the base
-pin. Forgetting never deletes or rewrites provider evidence. Git-content
-snapshots do not promise ignored runtime data or independent filesystem
-containment. Tests must exercise these rows through production stores and the
-real action/verdict consumers before the feature is complete.
-
-`taskdir.LoadLifetimeEvidenceContext` owns lifetime evidence assembly for task,
-inspection, and workspace stores; `task.ResolveLifetimeClosure` owns closure
-policy. Records are create-once. The lifetime transition owner publishes their
-dependencies first, fences launches before termination, and refuses new startup
-after recovered absence. Readers follow reverse dependency order: completion,
-termination, launches, worker, registration, intent. This yields a consistent
-dependency set that may conservatively miss new closure evidence, not an atomic
-filesystem snapshot. Preserve the owner lease for transitions. The three-store
-interleavings are covered by
-`TestLifetimeEvidenceConcurrentPublicationKeepsDependencies`.
-
-Launch capacity is task policy: `task.MaxLifetimeLaunches` (4096) and the
-independent `task.MaxLifetimeLaunchBytes` (64 × `MaxControlRecordSize`) of
-individual canonical launch records; it is not a process-memory bound. Both
-stores inventory launch names through one rooted streaming reader, refuse a
-malformed, out-of-range or excess name before reading any record, and admit
-only 1..N, so a gap or a later record is never hidden by a fixed-range scan.
-Each record is counted by its canonical encoding after its store's validation
-(control stores verify exact canonical bytes first) and before it is appended
-or a candidate is published. The launch-set digest bytes are unchanged.
-Covered by `TestLifetimeGuardianPersistsLaunchesBeyondFormerLimitThroughControlStore`,
-`TestTaskLifetimeLaunchesPersistBeyondFormerLimit`,
-`TestControlLifetimeLaunchesPersistBeyondFormerLimit`,
-`TestTaskLifetimeLaunchesEnforceAggregateBytesBeforePublication`,
-`TestControlLifetimeOrphanFenceSeesEveryInventoriedLaunch` and
-`TestLifetimeLaunchSetDigestPreservesHistoricalBytes`.
-
-| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
-|---|---|---|---|---|---|---|
-| L1: validated registration, no termination, and an inventoried contiguous launch set 1..N whose persisted winners, each validated (control stores: canonical bytes verified), are counted within 4096 launches and 64 MiB of individual canonical records | Guardian through the task lifetime owner lease (TaskDir) or the control transaction under the operation's lifetime owner; `task` owns the capacity policy and set digest, each store's set reader derives the local capacity | Publish create-once launch N+1 after adding that one candidate to the capacity the set reader derived; an existing sequence is compared with its winner and never counted again | The linked, barrier-verified launch record N+1 | A count, byte, malformed-name, gap or out-of-namespace refusal publishes nothing (`ErrEvidenceFault` or `ErrIdentityMismatch`); a lost create rereads the winner set with a fresh accumulator; any reader recounts from persisted winners only | The guardian acknowledges `started` only after the record; a begin beyond the namespace is `invalid-order`; termination binds the launch count and set digest | TestLifetimeGuardianPersistsLaunchesBeyondFormerLimitThroughControlStore, TestTaskLifetimeLaunchesPersistBeyondFormerLimit, TestControlLifetimeLaunchesPersistBeyondFormerLimit, TestTaskLifetimeLaunchesEnforceAggregateBytesBeforePublication, TestControlLifetimeLaunchesEnforceAggregateBytesOnce |
-| L2: no registration; the run is admitted before its immutable deadline and its intent and registration are not yet durable | Guardian through the task lifetime owner lease (TaskDir) or the control transaction under the operation's lifetime owner | Persist intent and publish registration under one startup context bounded by the immutable deadline, or by an earlier caller deadline; new App lifetimes select no custody placement or executable pool | The registration record names this scope; an existing record retains any legacy cleanup placement unchanged | Expiry or a write failure starts no worker; a created unregistered scope is disposed under the live, independently bounded recovery context before the owner lease is released | Contended startup persistence waits up to the business deadline, not the store's no-deadline fallback; old views release only after canonical closure; owner, replay, worker, serve and finalization keep the caller's context | TestLifetimeGuardianStartupUsesImmutableDeadlineUnderBackgroundRun, TestLifetimeGuardianStartupKeepsEarlierCallerDeadline, TestLifetimeGuardianStartupDeadlineExpiresDuringRegistration, TestLifetimeGuardianStartupIntentWaitsPastStoreFallback, TestLifetimeGuardianWithoutPlacementDoesNotCreateCustody, TestLegacyCustodyReleasesOnlyAfterGuardianClosure |
-
-Capture uses the validated closure kind rather than requiring hashes for records
-that a recovery variant does not contain. A valid result has the same acceptance
-policy before and after previous-boot absence publication. Once a receipt is
-committed, reservation recovery uses that receipt without reconstructing its
-proof subset. Mixed terminal and operational errors cannot close a capture
-obligation. A missing result is classified only after the entire read transaction
-succeeds; `TestWorkspaceMissingResultDoesNotHideTransactionFailure` covers the
-unlock-failure boundary.
-
-Workspace helper diagnostics are bounded artifacts. Close and sync files and
-their directory entry before publishing result descriptors. A failed diagnostic
-write must still retain a known helper failure without advertising absent bytes.
-It must not convert a failed operation into pending or success.
-
-W2 and W6 share one Git topology owner: the canonical common-directory inode.
-Acquire its exclusive leaf lease separately for each native worktree add,
-list, unlock, and remove command. Reuse the existing lock engine and the
-supervised command runner. Transfer the held descriptor rather than issuing
-an unlock when the helper closes its reference; the inherited native command
-retains its lease until its last reference closes. Never pass private state
-locks to children, nest topology acquisition, hold it for a provider turn, or
-add a second process/deadline owner. Independent repositories stay independent.
-This is cooperative exclusion among Delegate operations, not exclusion of
-external Git commands or repair of crash-stranded native metadata.
-`TestWorktreeMetadataCommandsExcludeOtherOwners` covers the command boundary;
-`TestNativeGitRetainsTransferredLeaseThroughLaunchWrapper` covers native Git,
-production launch-wrapper inheritance, parent-reference closure, and final
-release. Run the latter and the managed-workspace capacity gate on both
-supported native operating systems before claiming portability.
-
-The workspace coordinator uses the existing admission coordinator for the
-published supervisor binding; executable inventory is not another binding
-authority. One scheduling transaction covers request publication, authorization,
-submission, numeric receipt and enqueue. Its context is independent of the
-short observer and bounded by both the original helper deadline and one fixed
-private-control cutoff. Expired replay can repair resource references and seal
-no-launch evidence under bounded control, but cannot invoke authorization
-callbacks or submit; it reads the published binding without bootstrapping.
-Verification joins the operation index only after its reservation is accepted.
-Recovery uses the same reservation-to-index-and-obligation writer, validates
-the owning resource and redrives that exact helper. A validated guardian intent
-makes scheduling replay a local no-op, with no supervisor bind or queue scan.
-The use owner carries one fixed control cutoff through reconciliation,
-completed-evidence acceptance, receipt publication, and reservation closure.
-Nested scheduling retains that cutoff and its parent's cancellation or earlier
-helper deadline; it never detaches again or renews the window. Only the outer
-coordinator boundary detaches a short observer. Completed evidence can finalize
-after helper expiry without granting another launch. This boundary is exercised
-by `TestWorkspaceClosedVerificationCaptureSurvivesObserverCancellationDuringReplay`
-and the `TestWorkspaceControlTransactionNestedCalls` cases.
-W1, W3, W4 and W7 are
-covered by `TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd`,
-`TestWorkspaceSchedulingReplayRetainsOriginalDeadlineAfterObserverCancellation`,
-`TestWorkspaceControlTransactionCutoffIsFixedAcrossElapsedTime`,
-`TestWorkspaceExplicitForgetRecoversExpiredUncreatedFirstHelper`,
-`TestWorkspaceVerificationRecoversObligationAfterReservationCrash`, and
-`TestWorkspaceVerificationRecoveryRejectsAnotherResourceOrReservation`.
-
-Every affected row requires a composed lifecycle test through each affected
-production record store and each real consumer that turns the records into an
-action or verdict. When the same record family has task and inspection stores,
-or another production variant, exercise every affected implementation. Fakes
-and in-memory stores may test isolated protocol ordering only; they cannot prove
-durable commit, restart recovery, create-once classification, or a consumer
-verdict. Fault injection may wrap a production store, but the test must retain
-its real serialization, create-once behavior, reader, and consumer.
-
-## Upgrade recovery verification
-
-For supervisor upgrades, distinguish active identity, daemon launch provenance,
-and staged executable inventory. Bind the exact protected paths returned by
-installation; never reread mutable inventory to select a generation. Legacy
-adoption must verify the recorded predecessor, not a prepared successor.
-Same-byte relocation needs explicit durable intent before launch and must
-resume that target after interruption. Missing target bytes retain that intent
-and block replacement; they never authorize choosing staged inventory. Resolve
-all validated primary and alternate inspection proposals against the private
-migration owner's recorded target, and reject ambiguous matches. Keep saved
-recovery lock waits bounded even when a caller supplies a background context.
-An immutable inspection head can predate same-logical private upgrades. Use the
-canonical successor resolver for that lineage; do not require a single direct
-private edge from the head's historical executable paths. Record publication
-and target-generation comparisons remain strict.
-A metadata-only repair must preserve
-daemon provenance and task history and reject unresolved transitions or
-history references. Verify old-package removal and launch-before-publication
-interruption through production stores and consumers, then run the packaged
-upgrade scenario natively on Linux and macOS. Compilation and hand-seeded
-publication records alone do not prove interruption recovery.
+| pure | pure |
+| runtime | pure, runtime |
+| application | pure, runtime, application |
+| tool | pure, runtime, application, tool |
+| test | all roles |
+
+Applications compose runtime owners, never contributor tools or test fixtures.
+Subsystem internal implementations remain sealed. A wrapper holding another
+owner is not a new boundary. Preserve real supported consumers, persisted
+formats and error identities, not every private export/signature/test ID.
+
+The maintained inventory includes tests, fixtures, untracked source and
+build-excluded Go. Ignored scratch is excluded. Formatting uses the same
+inventory; an audit rejects concurrent edits to it.
+
+Physical limits are 800 lines for code/scripts, 1,000 for tests/handwritten
+fixtures and 1,800 for documentation, including authored diagram JSON. Other
+JSON uses the code limit unless explicitly generated. Go declarations use the
+pinned funlen measurement and limit of 80, including tests. Python AST spans
+have the same limit. Eight or more positional Python arguments are rejected,
+including literal starred arguments: name arguments rather than pass an
+unrelated local-state bundle. Keep new large helpers keyword-only.
+
+Pure-package checks enforce exact imports and reject effects, unsafe access,
+dot imports and linkname. Keep read-only codec reflection within its existing
+policy. JavaScript collectors parse without evaluating source. Static checks
+prove their bounded rules, not semantic purity. Preserve rejecting/corrected
+fixtures; never learn architectural allowlists from the current graph.
+
+Unknown modules, unused permissions, cycles, parser failures and exceeded
+budgets fail. Strict completion requires an empty migration inventory and no
+size exceptions; changed code cannot reuse an old exemption. The
+[code-quality floor](code-quality-floor.md) owns compiler/linter/formatter policy.
+The standalone `make verify-maintainability-strict` is useful during edits;
+the final aggregate must not invoke its same test suite twice.
+
+## Lifecycle tests
+
+The [delegation invariants](delegation-invariants.md) own terminal authority,
+create-once recovery, process ownership and launch ordering. Normal execution
+and recovery reuse the same policy, resolver and finalizer. No command,
+adapter or record family gets a second lifecycle implementation.
+
+Trace indirect consumers before tightening a shared gate. Separate observation,
+optional maintenance and mutation authority; pair allowed reads and refused
+mutations in the same durable state. Preserve error identities, exit codes and
+JSON guidance through the actual public consumer, not just helper tests.
+
+Durable-write/crash/recovery tests use production stores and real consumers,
+covering absent/matching/conflicting/unreadable create-once results. Fakes prove
+isolated ordering, not native containment or durable recovery. No mandatory
+transition IDs, matrix, handoff schema or source-symbol inventory is needed.
+
+Concurrency tests synchronize at the owner's boundary. Sleeps and launch
+barriers do not prove internal overlap. Separate hang watchdogs from latency
+requirements and join owned children/goroutines on failure. Running capacity
+requires live tasks/leases/scopes together; queue depth and dispatch-burst
+throughput are different measurements.
+
+## Whole-error pending classification
+
+Classify pending/busy with the owning domain's canonical policy over the whole
+error. A marker errors.Is check can hide a joined storage or unlock fault.
+Workspace operations use workspaces.PendingError; other domains keep their
+own owners and marker semantics, not a new global framework.
+
+The workspace policy requires its marker and only known pending leaf causes.
+A bare deadline is not pending; a concrete fault joined to a marker remains
+a fault. Preserve Close/unlock errors and the consumer's pending-only or
+pending-or-busy meaning. Test pending/deadline, busy and joined faults through
+the actual public consumer.
 
 ## Recovery and verification
 
-Apply the canonical matrix to normal execution and journal resumption together.
-Every durable row must have a retry path that preserves recorded progress;
-create-once publication must not reconstruct an earlier phase. Once a
-predecessor is durably stopped, finish its recorded successor before choosing
-a later installation. Publication and cleanup use the same implementation in
-normal execution and recovery.
-
-Python acceptance tests run each test-owned child operation through the
-canonical [`FixtureTree.observe_operation`](../../scripts/acceptance_tests/release_fixture.py)
-before any test boundary converts or sanitizes the original I/O error. The tree
-alone classifies closure and retains its contents while closure is unknown; only
-the test's independent proof that no child can still write permits
-`remove_retained`. The same original failure reaches every tree that owns the
-child's inputs, outputs, or containing directories: the operation's own tree and
-each other owner the caller passes explicitly as `dependencies`. Each tree keeps
-its own first unresolved fact; owners are never discovered automatically. While
-closure is unknown, never clear that fact, and never reset, reuse, or restore
-the files of any such tree, including a shared class fixture. Fault doubles must
-keep the real directory owner's identity-token checks and the descriptor
-consumption described below; a double that bypasses them leaks pins.
-
-For provider lifetime, the required order is: acquire the owner lease; persist
-the deterministic scope intent; create that exact native scope; persist its
-registration; start the managed worker; if it starts, persist its exact identity
-before acknowledging its hello; authorize and persist each observed provider
-launch; fence the worker and prove the scope empty; persist termination; persist
-one completion disposition (`not-started` or the started child's exact `Wait`);
-dispose the native scope; then release the guardian's scope handle and owner
-lease.
-Recovery resumes from the last durable record and uses the same finalization
-policy. An intent-only scope without registration may be disposed because
-commit order proves that worker start was not authorized. A registered
-cooperative scope without its exact live owner may clean durable process
-identities but cannot publish empty-scope termination. A registered scope is
-never disposed before termination and the worker completion disposition is
-durable,
-and a worker never disposes a scope merely because its own process is ending. A
-deterministic scope collision enters this same recovery policy while the owner
-lease remains held. Apply the invariants' [ambiguous create-once
-rule](delegation-invariants.md#ambiguous-create-once-writes) to every durable
-record family. Registration is not a special case: each affected transition row
-must cover absent, matching, conflicting, and unreadable results under its
-canonical owner and lease.
-
-Only a missing requested record establishes absence. Once that record has been
-read, a missing validation dependency, including a later digest reread, is an
-unreadable record. Storage marks that failure without hiding its underlying
-error; action- and verdict-producing consumers use `task.RecordAbsent` rather
-than testing `os.ErrNotExist` alone. Regression tests cover both direct absence
-and a dependency disappearing between reads through the production store.
-
-Before removing operational state, identify every consumer that still needs
-it. Persist independently observed terminal evidence first, then make those
-consumers able to finish from that evidence without the queue row. A worker's
-own completion is not proof of its process exit. For every fresh inspection, the
-guardian may publish that evidence only after durably proving the native scope
-empty and recording either `not-started` or the exact child `Wait` through the
-shared finalization policy. Pueue terminal events and exact status remain
-fallback observations. Both
-outcomes validate the immutable submission receipt. Success also requires its
-bound completion; exact failure may be terminal without a completion because
-the worker can exit before publishing one. Validate uniqueness over the whole
-observed queue before publishing per-task authority;
-rejecting a later
-duplicate must not leave an earlier ambiguous row promoted to trusted proof.
-Test cleanup racing an active observer, including failed worker exits.
-Treat supervisor numeric IDs as reusable operational handles. Exact identity
-observation and numeric mutation (removal, stopping, or runner replacement)
-must share an exclusive supervisor lock that excludes submissions and other
-mutations; a stale snapshot must never authorize
-an action on a reused ID. Retain that lock until any in-flight mutation settles.
-
-Supervisor observation must classify pending transitions and apply the
-application's final gate within the same generation lease. Shared leases may
-observe published state; directory repair, identity publication, inspection
-group creation, and recovery-alias retirement require exclusive ownership.
-Test concurrent callers and unfinished commands as well as stored queue size;
-a queue containing 200 rows does not prove 200 concurrent admissions work.
-Measure running-task capacity and dispatch-burst throughput separately. A
-capacity test must hold the requested number of tasks in Running together;
-record the number of concurrent dispatch callers without treating it as a
-product concurrency limit. Give gated fixture tasks enough budget for the
-whole scenario, and reject timed-out tasks even if a stale queue row still
-says Running.
-An external process-launch barrier proves concurrent invocation, not that every
-process crossed an internal single-flight boundary before publication. Prove an
-exact shared flight with a deterministic boundary gate. An ungated native burst
-may prove observable coalescing by recording fewer backend snapshots than
-callers, but it must not require one snapshot or add a stale-result window to
-make scheduler timing pass.
-Healthy no-change paths must not acquire exclusive transition ownership merely
-to discover there is nothing to change. Reuse the same validation and planning
-functions for a shared probe and the fresh exclusive mutation check.
-Pueue's terminal callback and an independently accepted terminal inspection are
-cleanup triggers; Delegate's durable task and inspection journals are the sole
-removal authority. Admission records its verdict and never waits for cleanup.
-Every current ordinary and inspection submission installs a callback ticket
-before enqueue. The callback publishes a durable ID-scoped candidate first,
-then requests a candidate pass. An exact application observation revalidates an
-ended inspection row under queue identity, publishes the same candidate when
-needed, and starts an independent `delegate-run` maintenance process. Candidate
-publication failure requests a conservative full-recovery pass; the candidate
-never owns task authority.
-
-The candidate-event directory is the durable inbox when journal publication or
-process handoff fails. The per-root journal owns requested, attempted,
-successful, and full-recovery generations, while the election lock is the sole
-live-owner authority. Election is nonblocking for callback contenders. After a
-bounded quiet window, the winner captures the latest generation for one pass;
-it rechecks durable progress after releasing ownership so the last wake cannot
-be stranded. A wake arriving during a pass remains above the attempted
-watermark and receives the same quiet window before the next pass. An
-interrupted or still-running control command remains unattempted and owned
-through natural completion. The owner must observe release of every election
-lease retained by that command before retrying; pending-result visibility alone
-does not authorize re-election. A completed failed attempt waits for a later
-wake instead of spinning. Validated root activation resumes retained inbox or
-journal work.
-This election does not occupy the lifecycle-transition election used by
-admission or recovery. A normal pass exposes only event-backed ordinary and
-inspection rows from one streamed snapshot and retains all same-label rows for
-ambiguity checks. A full-recovery pass exposes the complete current snapshot,
-including ordinary and inspection rows without event candidates. Missing hints
-cannot hide durable terminal evidence. In both cases, Delegate's journals
-decide which exact rows may be removed. A later callback or independently
-accepted terminal observation creates the wake that retries rows whose earlier
-maintenance attempt failed; cleanup failure never changes task or inspection
-authority. Historical private roots without the callback keep the exact
-journal-reconciliation path and do not require event candidates.
-The event lock also owns recovery of the publisher's reserved temporary-file
-namespace. An exclusive pass removes exact-shaped uncommitted stages left at
-any publication crash point before it validates committed ticket and event
-records. Temporary stages never carry authority; committed filenames and
-payloads remain strict, and every other directory entry fails closed.
-
-A queue writer publishes intent under a dedicated live-owner lock before it
-waits for exclusive queue identity. Readers check intent before and again while
-crossing the short gate; once intent is visible, only the finite readers that
-already crossed may drain. An abandoned intent may be reset only after
-exclusive acquisition of its owner lock proves no writer remains. Supervisor
-control contexts compose every nested generation, intent, gate, and identity
-lease; adding an inner lease must never replace an outer one. A one-shot
-control owner inherits duplicates of the complete set until its exact child
-`Wait`, including after observer timeout or caller exit. The initial snapshot,
-candidate selection and application evidence preparation share the queue
-identity mutation lease. Preparation may retain independently observed legacy
-inspection exits or enter existing nonblocking lifetime recovery; it must not
-bind a supervisor, nest a generation lease, submit work or wake a workspace.
-Migration uses its already-held exclusive bootstrap owner for the same phase.
-Application authorization only reads that durable evidence and runs outside
-queue identity, then one
-exclusive queue-identity mutation takes a fresh same-scope snapshot, verifies
-that every authorized row still has the same terminal identity, removes those
-exact numeric IDs, and clears their callback state only after successful
-removal. A failed removal retains the candidate for retry. Every new ordinary
-or inspection submission resets callback classification before enqueue while
-holding the queue-identity lease, so a stale ID-scoped hint cannot cross Pueue
-numeric-ID reuse. A queued inspection stop clears classification before its
-authorized `remove`. If durable terminal evidence exists while a row still
-reports running, maintenance releases queue identity during settlement and
-reacquires it for a fresh snapshot. The supervisor adapter never infers
-terminal state or removal authority itself.
-
-`TestPrivateInspectionPreparationWorksUnderExistingGenerationOwner` covers
-shared maintenance and exclusive migration through the production store and
-admission reader. `TestPrivateInspectionPreparationDoesNotWaitForLiveLifetimeOwner`
-retains a live guardian. `TestPrivateInspectionAuthorizationCannotPublishItsOwnExitProof`
-keeps the authorizer pure. `TestPrivateCleanupProtectsPreparationAndReleasesIdentityBeforeAuthorization`
-proves queue identity protection, authorization outside that lease, and the two
-snapshot protocol.
-
-The stable terminal-callback path is a versioned protocol endpoint. A compatible
-helper implementation may be atomically refreshed at that path so existing
-private daemons receive current maintenance behavior without config drift; an
-incompatible callback contract requires a new versioned path.
-Preserve failed load receipts and distinguish host contention
-from demonstrated application defects rather than assuming either cause.
-For a published private generation, warm admission validates the binding,
-executable bytes, resolved config, migration completion, and exact-generation
-scheduling receipt under the shared generation lease, then probes the Unix
-endpoint directly. It must not launch a supervisor control process. Missing,
-refused, changed, or stale state falls through to the elected exclusive path,
-which performs the protocol-level group check before repair or startup. Treat
-the scheduling receipt as Delegate's authority for its own default-group policy
-and staged add/enqueue capability. Probe that command surface only in the
-elected receipt-repair path; warm submission and staged recovery consume the
-same receipt instead of launching repeated help commands. Manual supervisor
-mutation is outside the public lifecycle boundary.
-
-Keep supervisor lifecycle work out of an already-running task's data path.
-Dispatch and explicit observation own bootstrap, migration, repair, and queue
-reconciliation. Add ordinary tasks and managed inspections with
-`add --stashed --print-task-id`, persist that exact numeric receipt against the
-immutable task, then enqueue only that ID. A managed runner can start only
-after this commit; it validates the durable receipt and starts from its saved binding
-without bootstrapping the supervisor or scanning the queue. Keep a conservative
-reconciliation path only for legacy, custom, or direct runner invocations that
-lack the internal supervised launch marker. Test that concurrent supervised
-runners and inspection workers issue zero startup control commands, including
-when receipt publication fails or enqueue becomes uncertain. Those failures
-leave the exact row stashed for status recovery and must never submit again.
-
-The process that calls `exec.Cmd.Start` owns exactly one `Wait`. Detachment
-from the command caller does not remove the obligation to reap a child while
-its parent remains alive. Review the waiter, pipes, parent exit, and failure
-paths together; do not infer process exit solely from socket disappearance.
-Acceptance cleanup owns only directories created or immediately adopted by the
-current invocation. That owner records the directory and parent identities at
-creation and keeps both directory descriptors pinned until cleanup or release
-consumes its authority. Explicitly owned FIFO cleanup likewise keeps the FIFO
-and parent descriptors pinned through removal; saved inode numbers alone do
-not survive inode reuse. Removal uses the verified parent descriptor and
-rejects a replaced path. Shared/default parents such as `/tmp`, `$HOME`, and
-`/Users/Shared` are never disposable merely because a child was created there.
-Raw process captures require the same identity token; a boolean or pathname is
-not cleanup authority.
-Deferred cleanup must capture the acquired resource independently of named
-return values, which an error return can overwrite. Preserve pending-command
-handles until ownership cleanup is arranged; redact diagnostics at the outer
-boundary afterward.
-Persist one managed-worker completion disposition for every registered scope.
-If `Start` succeeded, bind the exact child-`Wait` result to the durable worker
-and registration identities. If `Start` failed, record `not-started` with no
-process identity. Scope disposal and lifetime-owner release require both
-empty-scope termination and that durable disposition. Queue terminal state
-remains operational evidence and cannot replace this proof.
-Distinguish watcher timeouts from the deadline of the worker that owns startup.
-An admitted runner must not abandon startup merely because a shorter watcher
-window elapsed. Scope any longer observation window to that lifecycle phase;
-retain the original client for stop control and cleanup. Prove delayed success
-and deadline expiry with the same owned command, without redispatching.
-Task-directory persistence owns the local fallback for control and journal I/O.
-A guardian's record interface uses context-aware methods for every read and
-write. The guardian selects the phase context; storage preserves it. Audit the
-whole interface when changing this boundary. Compatibility wrappers remain for
-callers without a context.
-A finite caller deadline remains authoritative through every nested lock and
-record write; an inner layer must not replace it with a shorter convenience
-timeout. A caller without a deadline receives the bounded local fallback.
-Cancellation may stop lock acquisition or work before staging starts, while a
-durable write that has started retains ownership through its barriers and stage
-cleanup. Tests must cover caller deadlines longer and shorter than the fallback,
-direct background calls, and replay after a result commits without its bound
-completion.
-An unfinished control probe is uncertainty, not proof of binding drift or
-incompatibility. Preserve its pending-command owner through error classification,
-without discarding independently established binding or storage failures. Test
-pending and completed invalid probes separately at the shared policy boundary.
-An inspection worker's failure is not evidence that a provider is unavailable
-or misconfigured: it may precede native inspection. Preserve that distinction
-in public failure classification, including replay of recorded worker failures.
-A supervisor shutdown acknowledgement proves receipt of the request, not process
-exit. Restart acceptance must establish that the owned predecessor and endpoint
-have stopped before claiming to test recovery of a stopped supervisor. Keep
-shutdown-in-progress races as a separate scenario rather than conflating them
-with completed shutdown.
-
-Before selecting a new lifecycle design, consult current primary documentation
-and Context7 where available, then reproduce the relevant behavior with the
-pinned toolchain. Record what the sources establish and what local experiments
-prove separately. An unavailable source is a disclosed limitation.
-
-### Native portability proof
-
-Cross-platform compilation and a dependency's platform support prove only that
-the binaries can run on those platforms. They do not prove Delegate's process
-identity, descendant discovery, signaling, waiting, endpoint, descriptor, or
-crash-recovery behavior. Pueue owns queueing and worker-row state; its
-cross-platform process handling does not replace Delegate's lifetime owner,
-durable evidence, or empty-scope proof.
-
-Before changing any native lifecycle boundary, name the owner and invariant for
-each supported OS and verify the exact primitive against current primary
-documentation. Keep the state machine and policy shared. Put only the primitive
-behind an OS-specific implementation when semantics differ. Never infer Darwin
-behavior from Linux, infer Linux behavior from Darwin, or use a cross-compiled
-binary, container, fixture on another kernel, or dependency claim as native
-runtime evidence.
-
-Validate every generated Unix-domain endpoint against the target OS byte limit
-before publishing its config. The config remains the sole endpoint authority;
-when the ordinary state-rooted name is too long, select a shorter path inside
-the same private supervisor directory. An interrupted-bootstrap repair may
-replace only the exact Delegate-generated legacy config while the bootstrap
-journal is present and no daemon identity, active binding, migration, recovery,
-publication, migration history, scheduling receipt, socket, PID, runtime, or
-data state exists. The pending journal also requires a directory barrier on
-every readable-config retry, because an atomic replacement may have become
-visible before its final barrier reported failure. Boundary tests must cover
-the exact native limit and one byte beyond it, and native packaged-path
-acceptance must exercise the generated endpoint.
-
-Private supervisor launch is a native boundary owned by the Pueue client. The
-Pueue client owns the launch decision and waiter; `internal/lifetime` owns the
-shared Unix-session primitive. A new daemon inherits the descriptor limit
-already available to Delegate and starts in an independent Unix session. Native
-Linux and macOS tests must prove descriptor inheritance and caller-process-group
-interruption. Cross-compilation proves only that the platform implementation
-builds.
-
-#### Portable paths and temporary files
-
-Linux and macOS are the proven supported hosts; the matrix below is their
-canonical inventory. Keep shared data and behavior OS-neutral so another host
-can be added behind the existing boundaries without a rewrite. Windows is not
-implemented or claimed, and the unsupported target has no gate of its own.
-
-- **Temporary files.** Allocate scratch files and directories with the language's
-  native APIs: Go `t.TempDir`, `os.MkdirTemp`, and `os.CreateTemp`, and Python
-  `tempfile`. Use the returned path and native path joins; do not hard-code a
-  shared temporary root or a literal host separator. A parent the caller owns is
-  valid, as are a stable user-supplied state root and an observed absolute
-  artifact path. Absolute paths are not banned. A shared parent is never
-  disposable.
-- **Filesystem identity.** Where an owner records filesystem identity,
-  canonicalize once and carry that form to every comparison. macOS exposes
-  temporary directories through logical `/var` or `/tmp` aliases whose physical
-  paths live under `/private`. A test of a strict no-symlink boundary derives its
-  expected identities from its canonical, test-owned root, including a path
-  returned by `os.Executable`, and uses a test-created symlink alias rather than
-  an OS temporary literal. It must separately prove that a deliberate symlinked
-  parent is rejected. Do not weaken a production symlink or path check to accept
-  a platform alias.
-- **Wire formats.** Repository-relative POSIX path strings in Git output and
-  manifests are wire formats validated at the boundary, not host filesystem
-  paths. Preserve their wire-format path semantics; convert to host paths with
-  native path APIs at the filesystem boundary.
-- **Primitives.** The existing process and filesystem owners own OS primitives,
-  signals, locks, sockets, file modes, and device flags. A platform-specific test
-  probe lives at one isolated adapter point, not in a new framework. Use
-  `os.devnull` where the host null device is needed. If an optional primitive
-  flag is missing, keep the guarantee through the owned implementation or return
-  a stable unsupported failure; never raise `AttributeError` or silently weaken
-  the guarantee.
-- **Evidence.** A changed path on a supported host needs native proof on that
-  host under [native portability proof](#native-portability-proof). Cross-builds
-  and containers on another kernel do not prove it.
-
-#### Native backend and assurance matrix
-
-| Native host | Backend | Assurance | Claim boundary |
-|---|---|---|---|
-| Linux | cgroup v2 | exact | Kernel cgroup identity and emptiness may establish exact scope containment when the native receipt proves the required controls and operations. |
-| Linux | process group | cooperative | Emptiness is publishable only while the exact live guardian owns and observes the scope; ownerless recovery remains unverifiable except for previous-boot proof. |
-| macOS | process group | cooperative | Emptiness is publishable only while the identity-pinned live guardian owns and observes the scope; ownerless recovery remains unverifiable except for previous-boot proof. |
-
-No backend may inherit another row's assurance. Every production scope creation
-uses `lifetime.Prepare` to select and validate one row, persists the exact
-returned plan as durable scope intent, and only then calls
-`lifetime.CreatePrepared` with that persisted plan. This
-`Prepare` → persisted intent → `CreatePrepared` path is the sole production
-creation path. Creation must not select a new backend, recompute an identity, or
-fall back after the intent commit.
-
-Native evidence contains two bound receipts. The primitive receipt records the
-native host kernel and architecture, selected backend, persisted-plan digest,
-scope identity, invoked primitive and observed result, and executable
-fingerprint. The assurance receipt references the primitive-receipt digest and
-records `exact` or `cooperative`, the lifetime owner and lease, the proof used,
-and every unresolved limit. A generic success flag, backend name, or queue row
-cannot substitute for either receipt.
-
-Required evidence for an affected supported OS is a native test or acceptance
-run covering the changed success and failure paths. Process-lifetime changes
-must exercise start, exact child `Wait`, deadline termination, descendants that
-create another group or session, identity reuse protection, interruption and
-recovery, and cleanup. Supervisor changes must also exercise an existing state
-root across an executable-path or byte-identity change. Capacity claims require
-the requested tasks to be concurrently running on that OS while every counted
-task holds its live lifetime-owner lease and native scope. Cross-compilation,
-race tests, and hermetic fixtures remain additional gates, not substitutes.
-
-Native fixtures must acknowledge the tested ownership handoff before observing
-its consequence. For inherited-lease proof, await successful parent-reference
-closure and child readiness before probing contention. Deadline proof requires
-the actual stop request, successful native termination, and the corresponding
-joined process result; an arbitrary error or gate abort is not timeout evidence.
-Use existing budget, command, and native-scope owners for fixture cleanup and
-retain errors. Keep a primitive fixture's serialization distinct from claims
-about production guardian recovery or progress through a stalled native Start.
-
-A native fixture has one process owner at a time. While a live guardian or
-other scope owner is bound to the test process, the fixture must not start an
-independent scope bound to that same process; a cooperative backend would
-claim it as the owner's. Record live observations inside the owned launch
-under test, and run every other query before the owner starts or after it
-joins. The fixture's launch boundary refuses such a query explicitly. Backend
-coverage names the backend actually selected, never only the OS label, and a
-fixture asserts the project contract rather than version-dependent upstream
-tool output.
-
-The research basis is the official [Go `os/exec` contract](https://pkg.go.dev/os/exec),
-which assigns one `Wait` and documents process-only default cancellation;
-[Pueue's platform statement](https://github.com/Nukesor/pueue#features), which
-describes its queue and process-group support; and Apple's
-[XNU process identity implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_proc.c),
-which validates audit-token signals with Darwin-specific process identity.
-
-Distinguish seeded journal-state tests, actual interrupted transitions, fixture
-processes, and real supervisor/provider acceptance. A native fixture test proves
-that fixture on that OS, not live provider acceptance. Give fixture setup its
-own bounded deadline; preserve the short fault deadline and all assertions for
-the operation under test. A focused retry passing does not erase a failed full
-gate. Exercise large retained history and the required concurrency explicitly.
-Acceptance clients must use each command's actual JSON and exit-code contract;
-dispatch failure envelopes are not observation schemas. After an uncertain
-submission creates a task, observe that same task without resubmitting it.
-Retain each response and exit code, and never treat an operational observation
-error as success merely because its JSON also contains an admitted task.
-
-### Live acceptance proof
-
-Live acceptance must satisfy all applicable requirements below in addition to
-the transition-row tests:
-
-- **Lifetime closure before cleanup**: commit evidence that every admitted or
-  started task reached the shared lifetime finalizer, the native scope is
-  independently proven empty at its declared assurance, and the managed worker
-  has an exact `Wait` or `not-started` disposition before deleting an owned
-  state root or raw process capture. Supervisor shutdown acknowledgement alone
-  is not closure.
-- **Exact packaged/default-path proof**: a claim about packaged or default use
-  invokes the packaged executable through the documented default path
-  resolution. Its receipt records the resolved absolute path, SHA-256 binary
-  fingerprint, package/build identity, and default-path observation. An
-  explicitly supplied development binary proves only that binary's scenario.
-- **Live lease capacity proof**: a capacity claim holds the requested number of
-  real tasks concurrently after each has a durable owner-lease record, live
-  lease, and created native scope. The receipt identifies every counted task
-  and the overlap interval; queue depth, `Running` labels, dispatch callers, or
-  fixture gates alone are insufficient.
-- **Always-finalized bounded failure receipts**: the harness installs its receipt
-  finalizer before risky setup and gives finalization its own finite deadline.
-  Every success, failure, timeout, blocked prerequisite, and cleanup error
-  commits a sanitized terminal receipt that names the last completed stage,
-  lifetime-closure result, cleanup result, retained evidence, and unresolved
-  facts. A missing or incomplete receipt is failed evidence, never a passing or
-  silently skipped run.
-- **Model-scoped proof after compaction**: the evidence-compaction owner
-  validates and retains the exact requested model and effort in the compact
-  receipt's canonical `source_proof` before deleting source receipts. An
-  explicit null records no requested override; missing,
-  invalid, or contradictory option evidence does not. A passing case proves
-  only the recorded request options, not every model exposed by that provider.
-- **Native failure disposition and retention**: native acceptance owns the
-  terminal classification; the shared cleanup owner alone retains or removes
-  identity-owned directories. Success and neutral authentication/prerequisite
-  blocks clean their temporary state after verified closure. Genuine failures
-  retain the private task state and workspace needed to inspect sealed errors,
-  payloads, and session references. Hash-only diagnostics do not replace that
-  source evidence. Retained creation identities belong in the cleanup receipt;
-  private provider data never enters public artifacts. Recognize authentication
-  blocks from validated structured evidence, never free-form text matching.
-
-Fixture protocol, live provider, and native lifecycle/supervisor results are
-separate claims with separate verdicts and bound receipts. A pass in one class
-does not satisfy or upgrade another class.
-
-## Compatibility and evidence
-
-Preserve existing provider IDs, persisted request normalization, native login
-flows, historical predicate revisions, and nullable usage scope. Explicitly
-unsupported options fail before admission; they are never silently discarded.
-Collection is observational and must not launch, retry, or resume paid work.
-Missing prerequisites or inconclusive native evidence are `BLOCKED`, never a
-passing skip. A rejected task may have a rejection payload; rejection is
-established by the authoritative outcome record and its evidence, not by an
-assumption that the payload is empty.
-
-Use meaningful tests for observable behavior, error branches, writer failures,
-boundaries, and compatibility. Do not copy lifecycle or capability-check tests
-into every provider. Keep provider interpretation pure over sealed evidence and
-keep acceptance orchestration in the shipped dispatcher/runner and shared
-harness.
-
-Concurrency ordering tests, including subprocess cohorts, must synchronize at
-the owner's entry and release boundaries instead of using short wall-clock
-waits as ordering evidence. Keep hang watchdogs separate from latency
-requirements, and release and join owned goroutines and child processes on
-assertion failures. Real deadline and native latency claims still require their
-recorded clocks and native evidence.
-
-### Handoff evidence
-
-Every design, implementation, test, and review handoff identifies the affected
-canonical transition row IDs and, for each row, its policy owner, lease, record
-writer, validator, and every action- or verdict-producing consumer. It includes:
-
-- an exact source snapshot: repository baseline and reviewed revision when
-  available, plus a path and SHA-256 manifest for every changed or untracked
-  file in the build, test, or review input; untracked inputs must never be
-  hidden behind a generic working-tree description;
-- every executed binary's resolved path, SHA-256 fingerprint, version/build
-  identity, and whether it came from the package/default path or an explicit
-  development path; an external provider CLI is the exception: record its
-  resolved path and any reported version, never an executable content hash or
-  exact-byte attestation, as the [product boundary](product-boundary.md) owns;
-- commands, exit codes, named tests, and immutable receipt paths/digests,
-  separated into fixture, provider, and native claim classes; and
-- unresolved findings, missing or inconclusive evidence, retained resources,
-  and the exact claim each limitation prevents.
-
-The handoff is incomplete when its source or binary snapshot, excluding
-external provider CLIs, cannot reproduce the evidence, a named consumer lacks a
-verdict, or an unresolved item is presented as passed.
-
-Root owns integration, independent review, commits, pull requests, CI, and
-merges. Contributors may prepare bounded changes and
-receipts, but must not transfer those responsibilities or install global
-skills/configuration. A review record is incomplete when its output is
-inconclusive or when actionable findings remain unresolved.
-
-### Worker check levels
-
-A worker report keeps these levels apart and never promotes one to another:
-
-- **Worker-local result**: a check the worker ran in its own checkout on its own
-  post-images, reported with command, exit code, and tool identity. A new
-  regression test that fails on its intended assertion before the fix is
-  *expected red*: report the failing assertion as proof the test detects the
-  defect. A failure for any other reason (a compile error outside the change, a
-  missing tool, an unrelated test) is not expected red.
-- **Setup failure**: a required tool, toolchain, cache, credential, or path is
-  missing or unusable before the behavior under test runs, for example a wrong
-  `GOROOT` or a command that is not found. Every check that depends on it is
-  `BLOCKED`; the failure is not a test result. The worker reports it and does not
-  repair a global cache, toolchain, or configuration to obtain a pass.
-- **Integrated gate**: the project gate Root runs on the combined snapshot after
-  every owned change is applied. Worker-local success does not satisfy it.
-- **Review**: independent examination of the exact snapshot after the relevant
-  gates pass on it (see [evidence status](#evidence-status-is-not-approval)).
-
-Root names the base revision, the owned files, and the interface prerequisites
-when it assigns work. A prerequisite counts when its post-image is applied and
-verified in the worker's checkout; it need not be merged. When Root provides a
-usable environment, the worker confirms in its own launch context that the tools
-it relies on run, and needs only the tools its assignment uses: a documentation
-or read-only review assignment is not blocked by an unusable Go toolchain, while
-a Go change with an unusable toolchain is `BLOCKED` and its checks stay
-unverified. A handoff lists the changed post-images (paths and digests), not
-just the owned files. An explicitly requested patch proposal is a valid
-deliverable, labeled as a proposal; it is not an implementation and does not
-complete an implementation assignment.
-
-A change to a shared Python callable's signature or required options
-inventories its direct and indirect consumers, tests included, through imports,
-aliases, attribute references and callbacks passed to helpers, not only through
-the changed file paths; an unchanged test module that hands the callable to a
-helper is a consumer. Focused test groups selected by file name support
-iteration but never replace the integrated gate: before the next candidate
-build, Root runs the existing `make test-python` on the complete combined
-post-image.
-
-#### Delivery slices and the initial brief
-
-Before coding starts, Root splits an issue into coherent behavior slices. Each
-slice can be reviewed and merged on its own. Behavior sets the size: never split
-by an arbitrary line count, and never split one behavior artificially. A
-foundation slice need not absorb the whole epic, but no authorized requirement
-or confirmed defect is dropped quietly: each has an owning slice or an explicit
-`OPEN` entry.
-
-Root writes the initial brief in the existing plan or assignment; this contract
-is its only format, with no separate template, schema, or tracker. The brief
-names:
-
-- the behavior, with its positive and failure cases;
-- the actual completion entry point, such as the public command or gate that
-  shows the outcome, and every affected consumer;
-- dependencies, interface prerequisites, and the base revision;
-- the owned files, including any fixture, registry, build, default-suite, and
-  documentation wiring the slice needs;
-- the check and review plan for each [stage](#check-and-review-stages); and
-- the done condition, including the requested finish, such as required CI and
-  merge.
-
-A field found missing later is an ownership or wiring omission in the brief;
-Root amends the brief rather than treating the fix as worker scope creep.
-
-A proposed new guarantee or restriction must fit the
-[product boundary](product-boundary.md). Before code, it cites an explicit user
-need or a canonical product responsibility, names the observed failure and its
-user impact, compares the simplest option, and discloses its state, dependency,
-compatibility, and native-proof costs. A new product promise needs the user's
-scope decision; ordinary authorized fixes gain no new approval checkpoint. Root
-resolves the fit and records it through the existing findings and handoff
-workflow. Universal adjectives such as immutable, secure, or reliable do not by
-themselves authorize a new feature or ownership of an external tool.
-
-Once required OS/provider primitives and interface prerequisites are proven,
-build the thinnest real path through the shipped CLI that shows the requested
-outcome before expanding supporting infrastructure. Agree owner interfaces
-before dependent work starts, then run independent file owners in parallel.
-Exclude a shared file from a worker's ownership only for an actual concurrent
-writer or a named hazard, and record that file's owner and the integration
-dependency. A review of an upstream interface is labeled as interface review; it
-is not the final review.
-
-A finite, closed execution may end with a criterion still `OPEN` or `BLOCKED`.
-It records the criterion, cause, owner, dependency, and next action, and stays
-with the same owner until Root explicitly transfers it. A staged checkpoint is
-not completion.
-
-#### Check and review stages
-
-Each stage keeps its own evidence; a later stage never replaces an earlier one.
-
-1. **Edit**: focused tests for the changed behavior, with expected red for each
-   new regression test.
-2. **Peer review**: a scoped review of the exact snapshot after
-   `make verify-maintainability-strict` and the applicable checks pass on it.
-3. **Correction**: review the delta, its affected consumers and invariants, and
-   every prior finding. When the impact is uncertain, broaden to a full review.
-4. **Merge candidate**: on a stable candidate, run the full required combined
-   gates, the applicable native, provider, and candidate proofs, and then the
-   final integrated review.
-
-Do not start a comprehensive readiness run while a known applicable defect is
-unfixed. A run made anyway is labeled diagnostic and cannot approve. Each
-repeated broad check or review names the inputs that changed since its last run
-and why a narrower check is not enough. There is no cap on correction rounds
-and no waiver of a required check.
-
-#### Findings and evidence reuse
-
-Classify every new finding as one of:
-
-- a **blocker**: it is in the current change, breaks an affected invariant or
-  acceptance criterion, or is independently an unsafe P0 or P1 defect; or
-- a **follow-up**: a separately owned item with a named owner, outside the
-  current change.
-
-Classification does not defer an authorized fix: an explicit authorization to
-fix every finding still applies until the user changes it.
-
-Reuse earlier evidence only after assessing its source, dependency, binary,
-environment, and claim bindings against the current snapshot; reuse never
-replaces a required native or final check. A new head needs a new verdict: it
-invalidates earlier approval, while earlier findings stay open until rechecked
-on the new snapshot. Reopen an agreed architecture when a concrete finding or
-changed requirement invalidates it.
-
-Report progress by acceptance milestones, remaining gaps, and the next blocking
-dependency, with component test results as supporting evidence. A status record
-is a short current summary that links immutable history records; it does not
-accumulate history itself. A new issue starts in a fresh lead thread from a
-self-contained handoff, and work already in flight is not restarted to adopt a
-newer cycle. This sequencing preserves the full approved scope and never
-authorizes hiding gaps, weakening checks, or deferring requirements without
-authorization.
-
-### Evidence status is not approval
-
-These statuses are separate, and each needs its own evidence:
-
-- **source captured**: the exact files exist in a snapshot;
-- **index complete**: the handoff index declares every input it was asked to
-  require and no unresolved item. This is declared input completeness only;
-- **receipt validated**: the owning validator accepted a bound receipt for its
-  claim class; and
-- **review approved**: an independent reviewer examined the exact snapshot and
-  recorded no actionable finding.
-
-None implies another. A complete index can carry a failed native receipt, a
-captured source can have a stale index, and a validated receipt can describe a
-different binary even when the version string is the same. Report the weakest
-status that was actually established.
-
-A memory note, earlier summary, or other dated reference is a pointer, not
-authority. Before relying on one for a current fact (a pin, version, path, or
-decision), read the current source or the accepted decision record and cite
-that. When they disagree the current source wins; report the disagreement and
-which record superseded which. Historical failures and proposals stay
-identifiable as historical. The repository does not control external memory or
-autosave tools, so treat anything they return as a dated pointer.
-
-### Verifying a handoff index
-
-`python3 scripts/handoff_evidence.py --root <repo> --verify <index>` checks that
-an index still matches the inputs it declares. It is read-only: it writes no
-index and no output file, and it refuses generation options. It regenerates the
-document through the same canonical source and fingerprint policy that wrote the
-index, from the baseline, binaries, receipts, requirements, transition rows, and
-unresolved items recorded in it, then compares: head and baseline revisions, the
-complete changed, untracked, and deleted source inventory with SHA-256 values,
-binary and receipt paths and digests, and the declared verdict. The checkout
-path and branch name are informational.
-
-A stale, missing, conflicting, symlinked, or oversized input fails, as does an
-index that is malformed, has duplicate keys, declares failure, or uses an
-unsupported version. A binary or receipt with the same identity but different
-bytes is stale. The command prints one bounded JSON report on stdout. Exit codes
-mirror generation: `0` verified and declared complete, `2` verified and declared
-incomplete, `1` anything else.
-
-Verification proves the index still matches its inputs. It does not read
-receipts for outcomes, classify native results, or judge readiness: those remain
-receipt validation and review decisions.
-
-## Repository skill format
-
-The repository skills under `skills/` intentionally use a small, documented
-metadata format so the verifier is deterministic without becoming a YAML
-parser. Each `skills/<name>/SKILL.md` starts with exactly this frontmatter:
-
-```text
----
-name: lower-case-hyphenated-name
-description: one non-empty single-line description
----
-```
-
-Only `name` and `description` are allowed, each exactly once. The name must
-match its directory and use lowercase letters, digits, and single hyphens
-between words and be at most 64 characters. Unquoted metadata values are plain strings that begin with an
-ASCII letter and do not use YAML-special scalar forms; quote values that begin
-with punctuation or digits or contain `: `. Each skill body should make its trigger, inputs, workflow,
-deliverables, and exit criteria easy to find; the verifier deliberately does
-not require particular Markdown headings.
-
-Repository links in a skill use relative Markdown paths in an inline
-parenthesized destination. Parentheses in a destination are balanced, and an
-angle-bracket destination may contain spaces; a fragment after `#` is allowed
-and ignored for file existence checks. Link titles are unsupported; put explanatory text in the label or surrounding prose.
-Reference-style links/definitions and
-other unsupported Markdown shapes are rejected explicitly. External URLs may
-be used when genuinely useful, but they are not a substitute for links to the
-applicable repository contracts.
-
-The verifier recognizes a one-target inline `make <target>` command when it is
-written as inline code or as a command-shaped line. The target must exist in
-the Makefile. Options, variable assignments, extra targets, shell operators,
-and other trailing command text are unsupported and fail explicitly. A command
-that is intentionally future work must carry the explicit marker `[planned]`
-or `(planned)` on the same line; that marker is accepted only when the line has
-one unambiguous command. Unfinished scaffolding uses explicit uppercase tokens
-such as `TODO`, `FIXME`, `TBD`, `PLACEHOLDER`, `<YOUR_NAME>`, or
-`{{REPLACE_ME}}`; ordinary prose such as “todo list” is not a marker.
-
-### Skill evaluation cases
-
-A skill may ship unprimed evaluation data at `skills/<name>/evals/cases.json`,
-owned by that skill. `make verify-skills` checks structure only: it never runs a
-model and never reads a prompt, rationale, or expected outcome for meaning. Root
-runs evaluations privately; a worker does not run paid model evaluations.
-
-The file is an object with `schema_version` (`1`), `skill` (the directory name),
-and non-empty `cases`. A case and its `control` share one shape: `id` (lowercase
-hyphenated, unique in the file), `visible` (`prompt` and `inputs`, a list of
-`{path, content}` fixture files with safe relative paths), and `hidden`
-(`expected` and `rationale`). A runner shows an agent only `visible`, and visible
-text must not contain either scenario ID. The control is a valid counterpart
-where the opposite behavior is correct, so its `expected` differs from the case's.
-Fixtures are synthetic. A case about a bounded judgment, such as byte binding or
-whether trusted claim results support approval, states that scope in its visible
-assignment and takes the other facts as given by their owners; it is not
-canonical receipt acceptance or real native proof. Both sides of a pair must be
-correct under that same assignment and differ only in the discriminating fact.
-
-`expected` grades actions and artifacts, not keywords: an `outcome`,
-`required_actions` and `forbidden_actions` (`{type, target}`), and
-`required_artifacts` (`{path, check, locator, value}`). At least one required
-action or artifact is needed, and no action is both required and forbidden. An
-action `target` is an exact path for file actions, a command prefix for
-`run-command`, a status label for `report-status`, and a topic for
-`request-clarification`. An artifact check compares a JSON field's exact scalar
-value, or a whole line, never a keyword. The closed vocabularies live in
-`scripts/skill_eval_cases.py`.
+Normal execution and journal resumption share one policy. Preserve committed
+progress; never reconstruct an earlier launch after an ambiguous write. Keep
+durable barriers and cleanup owned after staging starts despite cancellation.
+Propagate phase contexts through locks/storage; a watcher timeout cannot replace
+the worker's deadline or authorize another launch.
+
+Only absence of the requested record establishes absence. A missing validation
+dependency after reading it is unreadable evidence. Preserve underlying errors
+and use the store's canonical absence classifier.
+
+Numeric supervisor IDs are reusable. Identity validation and numeric mutation
+share the exclusive supervisor lock until in-flight operations settle. Observers
+revalidate under their read lease; cached readiness grants no mutation authority.
+Keep bootstrap, migration and queue scans out of supervised-worker startup.
+
+Cleanup triggers/queue rows are observations, not removal authority. Preserve
+consumers that need operational state until they can finish from durable facts.
+Admission does not wait for background maintenance. Shutdown acknowledgement
+is not independently observed process exit.
+
+One Start owner owns one Wait. Retain pending-command handles, original errors
+and resource cleanup before outer-boundary sanitization. Directory/FIFO removal
+requires pinned invocation-owned object and parent identities; replacement,
+unknown closure or a pathname alone cannot authorize deletion. Never remove
+a shared/default parent. Failed maintenance needs a later request/event, not a
+busy loop. Current runtime details live in the [architecture guide](../../docs/architecture.md#failure-and-recovery).
+
+## Managed workspace changes
+
+The application coordinator owns workspace lifecycle; Git only executes
+authorized operations. Preserve common-directory resolution, topology leases,
+immutable bindings, checkpoint lineage, capture/finalization and retained
+recovery. Test fresh/continuation paths in affected permission modes, including
+Git/non-Git controls. Never initialize Git in every generic fixture. See
+[workspace architecture](../../docs/architecture.md#managed-git-workspace-lifecycle)
+and [agent guidance](../../skills/agent-integration/references/workspaces.md).
+
+## Portable paths and temporary files
+
+Use Go t.TempDir/os.MkdirTemp/os.CreateTemp or Python tempfile and native joins.
+Do not hard-code shared temp roots, host separators or null devices. An explicit
+state root or observed absolute artifact path is valid; absolute paths are not
+inherently wrong, and shared parents are never disposable.
+
+Canonicalize filesystem identity at its owner and carry that form through
+comparisons. Test macOS aliases using a test-owned symlink and canonical control,
+not fixed /tmp or /var spellings. Preserve intentional no-symlink boundaries.
+Git/manifest POSIX strings are wire paths: validate them and convert at the I/O
+edge. Isolate OS primitives. Missing optional flags must preserve the guarantee
+or return a stable unsupported failure, never AttributeError or silent downgrade.
+
+## Native platform checks
+
+Linux/macOS are supported native hosts. Verify new primitives on the actual
+affected host before dependent implementation. Cross-builds, another kernel's
+containers and upstream portability claims do not prove native process,
+endpoint, descriptor or recovery behavior. Windows is not currently claimed.
+
+Keep policy shared and only primitives OS-specific. Preserve the backend's
+assurance: cgroup identity can provide exact containment; cooperative sessions
+need their exact live owner to prove emptiness. Persist prepared intent before
+creation; do not reselect a backend afterward.
+
+Changed native paths need appropriate start/Wait, deadline/descendant,
+identity-reuse, interruption/recovery and cleanup cases. Endpoint limits and
+descriptor/session behavior need native checks. Fixture, native-lifecycle,
+package-path and live-provider results establish different claims. Preserve
+functional bounds and disclose unavailable hosts.
+
+## Provider checks
+
+Use the requested provider/model/effort/native permissions and existing auth.
+Do not alter settings, install a substitute or retry uncertain paid work for
+a pass. Follow [agent integration](../../skills/agent-integration/SKILL.md) for
+external work and observation.
+
+Run affected scenarios when behavior needs them, not a full paid matrix for
+unchanged runtime. Missing prerequisites are blocked/unverified. A development
+binary does not prove the default installation. Preserve test-driver closure,
+bounded finalization and identity-owned cleanup; keep private output out of
+public artifacts and report actual request options. No contributor ledger or
+custom proof receipt is required.
+
+## Review dimensions
+
+Review integrated behavior, ownership, dependencies, real consumer compatibility,
+errors and secret handling. Size checks alone do not prove cohesion. Fix
+in-scope findings and recheck affected consumers; report unrelated findings
+separately instead of expanding the ticket. Skill authoring/evaluation format
+belongs in the [contributor guide](../../docs/contributing.md#repository-skills).

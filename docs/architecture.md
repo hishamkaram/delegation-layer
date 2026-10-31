@@ -210,10 +210,10 @@ fixed; a change to any of those contracts is rejected before launch. See
 ### Managed Git workspace lifecycle
 
 Managed Git workspaces are optional and have one application-level coordinator
-as their usage owner. The canonical W1–W7 rows cover committed-base intent,
+as their usage owner. Its lifecycle covers committed-base intent,
 checkout registration, usage reservation, provider closure, Git-content capture,
-release, and explicit forgetting; see the [maintainability transition
-matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+release, and explicit forgetting; see the [workspace boundary
+guidance](../agents/_data/maintainability-contract.md#managed-workspace-changes)
 and the [agent-facing workspace reference](../skills/agent-integration/references/workspaces.md).
 Ordinary non-Git dispatch remains on the existing path.
 
@@ -274,8 +274,8 @@ Failed workspace helpers retain a bounded `error.txt` artifact when its bytes ca
 be durably written. Public responses expose descriptors; they do not inline that
 diagnostic. File closure and directory synchronization precede result publication.
 
-Git checkpoints reuse the same workspace-operation runtime; see rows CP1–CP7
-of the [transition matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+Git checkpoints reuse the same workspace-operation runtime; see the
+[workspace boundary](../agents/_data/maintainability-contract.md#managed-workspace-changes)
 and the [checkpoint guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints).
 The workspaces coordinator (`internal/workspaces`) owns admission,
 scheduling, qualification, removal registration, and description. The Git

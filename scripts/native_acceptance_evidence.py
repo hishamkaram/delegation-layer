@@ -196,10 +196,6 @@ from scripts.delegate_acceptance.native_evidence.aggregate import (
     _parse_matrix as _parse_matrix,
     build_aggregate as build_aggregate,
 )
-from scripts.delegate_acceptance.native_evidence.staging import (
-    _stage_evidence_locked as _stage_evidence_locked,
-    stage_evidence as stage_evidence,
-)
 from scripts.delegate_acceptance.native_evidence.cli import (
     _command as _command,
     main as main,

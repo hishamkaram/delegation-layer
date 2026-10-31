@@ -1,81 +1,36 @@
 ---
 name: docs-updater
-description: Update repository guidance and local maintenance records so claims match implemented behavior.
+description: Keep user and contributor guidance aligned with implemented behavior and actual validation.
 ---
 
 # Documentation updater
 
-## Trigger
+Use when behavior, commands, contributor rules or diagrams need reconciliation.
+Read the authoritative source and only the relevant [review guidance](../../agents/_data/maintainability-contract.md#review-dimensions)
+or product/provider rule. Documentation work is not blocked by an unrelated
+compiler setup failure.
 
-Use this skill when a code or acceptance change requires updates to product
-documentation, a contract link, a handoff, a receipt, or contributor guidance.
-Keep local planning and evidence records out of the product documentation tree.
+## Work
 
-Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
-[delegation invariants](../../agents/_data/delegation-invariants.md),
-[adapter contract](../../agents/_data/adapter-contract.md), and
-[contributor guide](../../docs/contributing.md).
+1. Verify claims against current code, actual commands and observations. Treat
+   dated notes as pointers and distinguish current behavior from future work.
+2. Edit the smallest relevant sections. Keep one owner per rule; link to it
+   rather than copy policy, symbol inventories or a mandatory workflow template.
+3. Preserve useful public CLI guidance and product receipt semantics. Remove
+   retired contributor proof/ledger commands and inaccurate install/runtime
+   requirements. Keep local plans/private diagnostics out of product docs.
+4. Reconcile examples, links and Make targets. For agent integration, preserve
+   the canonical response-handling reference and synchronized plugin copy;
+   do not introduce a second provider decision list.
+5. For diagram changes use Archify and implementation-backed content. Publish
+   full-diagram SVG/PNG exports, not cropped viewport screenshots. Check both
+   themes, every authored node/relationship and clipping; update diagram
+   checksums last. A byte checksum alone is not visual validation.
 
-## Inputs
+## Result and checks
 
-- the exact changed head and behavior/test/acceptance evidence;
-- the authoritative source and document section to update;
-- current provider IDs, profile/predicate revisions, commands, and platform
-  scope; and
-- deferred work that must remain explicitly scoped.
-
-## Workflow
-
-1. Read the authoritative source and the changed code/receipts before writing.
-   Preserve useful history in the local archive and label current behavior from
-   actual evidence only. When a document cites a decision, memory note, or
-   earlier receipt, link the resolved or accepted record and name what it
-   supersedes; verify a dated reference against current source before presenting
-   it as current, and keep the historical record identifiable as historical.
-2. Update the smallest applicable section. Reconcile commands, links, provider
-   metadata, task/session identities, digests, and platform limits. Mark work
-   that has no implementation or receipt as deferred rather than presenting it
-   as available.
-3. Keep ownership and boundary guidance in the shared maintainability contract;
-   link to it from role skills instead of copying the same rules into several
-   documents.
-4. Remove stale acceptance claims, future commands presented as available, and
-   receipts that expose credentials, tokens, private paths, or raw output.
-5. Compare provider tables against the native catalog and execute changed shell
-   examples, including nonzero exits with errexit enabled. Keep detailed agent
-   response decisions in the canonical result-handling reference and synchronize
-   the plugin skill distribution; do not add another decision list.
-6. For repository diagrams, pin a reachable implementation commit and refresh
-   source ranges from that snapshot. Finalize each canonical JSON/HTML through
-   Archify, then capture both themes at the required viewport sizes. Inspect
-   every capture before claiming visual acceptance. Keep raw receipts unchanged
-   in the ignored local archive: their absolute paths and hashes bind exact
-   artifacts. Archive obsolete contact sheets and proof only after replacement
-   captures pass. Keep viewport captures in the ignored local archive; they
-   may show only part of a tall diagram and are not published illustrations.
-   Use the viewer's Export menu to publish full-diagram SVG and PNG assets in
-   both themes. Verify that every authored node and relationship is present,
-   inspect the bottom edge for clipping, and exclude viewer controls. Publish
-   those exports with the canonical specs and HTML, then generate
-   `diagrams/SHA256SUMS` last. Run `make verify-diagram-checksums`.
-   Checksums prove byte integrity only; they do not prove capture freshness or
-   visual correctness. Do not rewrite receipt paths to make proof publishable.
-7. Run `make verify-skills` for skill/link/command changes and the affected
-   documentation or code checks. Report the exact evidence and leave root to
-   integrate the final documentation changes.
-
-## Deliverables
-
-- a focused documentation diff with relative links and current behavior;
-- reconciled commands, scenarios, and evidence identifiers; and
-- a short provenance note naming the source behavior and validation command.
-
-## Exit criteria
-
-- Every implemented claim has matching code or executed evidence; every future
-  item is clearly marked as deferred.
-- Links resolve, command names match the Makefile, and no unfinished scaffold
-  marker remains.
-- Historical facts remain identifiable as historical, while incomplete native
-  evidence remains `BLOCKED` rather than a passing skip.
-- Root can review the changed document without guessing which claims are new.
+Return changed guidance, source/command support and unresolved claims. Run
+`make verify-skills` for skill/link changes and affected documentation checks.
+Diagram changes use `make verify-diagram-checksums`. Reuse unchanged results;
+do not run runtime/provider matrices merely for contributor prose. Root owns
+integration, Git and the final independent review.

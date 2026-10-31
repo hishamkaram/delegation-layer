@@ -46,9 +46,8 @@ This document specifies the non-negotiable engineering floor for the repository.
 - **Unit Testing**: Pure unit tests exercise local error branches, writer
   failures, and boundaries with injected in-memory mocks and no background or
   external subprocesses.
-- **Lifecycle Composition**: Durable lifecycle changes must satisfy the
-  [canonical transition-matrix and composed-test
-  contract](maintainability-contract.md#durable-transition-matrix-and-composed-tests).
+- **Lifecycle Composition**: Durable lifecycle changes use the
+  [production-store and real-consumer tests](maintainability-contract.md#lifecycle-tests).
   Fake-only coverage establishes isolated protocol ordering, not durable
   recovery or a real consumer verdict.
 - **Gate Rejection Fixtures**: `scripts/verify-gates.sh` proves linter enforcement against isolated temporary modules for each forbidden pattern and verifies that corrected counterparts pass.

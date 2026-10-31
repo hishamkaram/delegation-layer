@@ -1,17 +1,9 @@
-"""Load one development candidate from its immutable hosted Actions artifact.
+"""Load a GitHub artifact ID and verify its entire distribution payload.
 
-The caller supplies the trusted external locator, a container path that does not
-exist yet, and an empty payload directory it owns; both stay exclusive to this
-load. The loader reads the repository, the canonical CI workflow descriptor, the
-exact artifact and run attempt, downloads the container once, and streams each
-payload member into a new file. It returns only after every member matches the
-manifest the locator binds. Any failure raises and leaves whatever was written
-for the caller's retention policy: this module never removes files or
-directories, retries, launches a provider, edits a receipt, or decides readiness.
-
-Artifact metadata carries no run attempt. The attempt binding rests on the
-trusted locator, the immutable artifact ID and digest, and the producer's
-artifact name: a producer convention, not a service attestation.
+GitHub supplies repository/run identity, container digest and size. The artifact
+name identifies its producer attempt; publication separately checks full job
+history. The caller owns an absent container path and empty payload directory.
+Failures leave written bytes for the caller's cleanup and retention policy.
 """
 
 from __future__ import annotations
@@ -21,6 +13,7 @@ import errno
 import hashlib
 import os
 from pathlib import Path
+import re
 import stat
 from typing import BinaryIO
 import zipfile
@@ -29,8 +22,7 @@ import zlib
 from .candidate_codec import positive_int, revision
 from .candidate_manifest import (
     CANDIDATE_WORKFLOW_FILE, CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, MAX_CONTAINER_BYTES,
-    MAX_MANIFEST_BYTES, PAYLOAD_MEMBER_COUNT, CandidateLocator, CandidateManifest, bind_manifest,
-    candidate_artifact_name, payload_paths,
+    MAX_MANIFEST_BYTES, PAYLOAD_MEMBER_COUNT, CandidateLocator, CandidateManifest, parse_manifest, payload_paths,
 )
 from .contract import MAX_OUTPUT, VerificationError
 from .filesystem import create_new_file, write_all
@@ -128,23 +120,26 @@ class CandidateArtifact:
         }
 
 
-def load_candidate_artifact(client: GitHubClient, locator: CandidateLocator, *, container: Path,
+def load_candidate_artifact(client: GitHubClient, artifact_id: int, *, repository: str, container: Path,
                             payload: Path) -> CandidateArtifact:
-    """Download and verify the candidate the locator names; raise on any mismatch."""
+    """Load an immutable artifact ID, deriving its run and producer attempt from GitHub."""
     _require_empty_payload(payload, container)
-    repository_id = _observe_repository(client, locator)
-    workflow = _observe_workflow(client, locator.repository)
-    artifact = _observe_artifact(client, locator, repository_id)
-    attempt = _observe_attempt(client, locator, repository_id, workflow)
-    if artifact.head_sha != attempt.head_sha:
+    positive_int(artifact_id, STAGE)
+    repository_id = _observe_repository(client, repository)
+    workflow = _observe_workflow(client, repository)
+    artifact, producer_attempt = _observe_artifact(client, repository, artifact_id, repository_id)
+    attempt = _observe_attempt(client, repository, artifact.run_id, repository_id, workflow)
+    if artifact.head_sha != attempt.head_sha or producer_attempt > attempt.run_attempt:
         raise VerificationError("candidate_source_mismatch", STAGE)
-    download = client.download_artifact(locator.repository, locator.artifact_id, container,
-                                        limit=artifact.size)
+    download = client.download_artifact(repository, artifact_id, container, limit=artifact.size)
     if (download.size, download.sha256) != (artifact.size, artifact.sha256):
         raise VerificationError("candidate_container_mismatch", STAGE)
     with _open_container(container) as raw:
         _require_container(raw, download.size)
-        manifest = _verify_payload(raw, locator, head_sha=attempt.head_sha, payload=payload)
+        manifest, manifest_digest = _verify_payload(raw, head_sha=attempt.head_sha, payload=payload)
+    locator = CandidateLocator(repository=repository, run_id=artifact.run_id, run_attempt=producer_attempt,
+                               artifact_id=artifact_id, artifact_archive_sha256=artifact.sha256,
+                               manifest_sha256=manifest_digest)
     return CandidateArtifact(
         locator=locator, manifest=manifest, repository_id=repository_id, workflow=workflow,
         attempt=attempt, artifact=artifact, container=download, payload=payload)
@@ -187,10 +182,10 @@ def _nested_id(record: dict[str, object], key: str) -> int:
     return positive_id(object_value(record.get(key), STAGE).get("id"), STAGE)
 
 
-def _observe_repository(client: GitHubClient, locator: CandidateLocator) -> int:
-    record = _get(client, f"repos/{locator.repository}")
+def _observe_repository(client: GitHubClient, repository: str) -> int:
+    record = _get(client, f"repos/{repository}")
     repository_id = positive_id(record.get("id"), STAGE)
-    if _text(record, "full_name") != locator.repository:
+    if _text(record, "full_name") != repository:
         raise VerificationError("candidate_repository_mismatch", STAGE)
     return repository_id
 
@@ -205,33 +200,33 @@ def _observe_workflow(client: GitHubClient, repository: str) -> WorkflowObservat
     return workflow
 
 
-def _observe_artifact(client: GitHubClient, locator: CandidateLocator,
-                      repository_id: int) -> ArtifactObservation:
-    record = _get(client, f"repos/{locator.repository}/actions/artifacts/{locator.artifact_id}")
+def _observe_artifact(client: GitHubClient, repository: str, artifact_id: int,
+                      repository_id: int) -> tuple[ArtifactObservation, int]:
+    record = _get(client, f"repos/{repository}/actions/artifacts/{artifact_id}")
     run = object_value(record.get("workflow_run"), STAGE)
+    name, digest = _text(record, "name"), _text(record, "digest")
+    matched = re.fullmatch(r"development-candidate-([1-9][0-9]*)-([1-9][0-9]*)", name)
+    if matched is None or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
+        raise VerificationError("candidate_artifact_mismatch", STAGE)
     artifact = ArtifactObservation(
-        id=positive_id(record.get("id"), STAGE), name=_text(record, "name"),
-        size=positive_int(record.get("size_in_bytes"), STAGE), sha256=locator.artifact_archive_sha256,
+        id=positive_id(record.get("id"), STAGE), name=name,
+        size=positive_int(record.get("size_in_bytes"), STAGE), sha256=digest[7:],
         run_id=positive_id(run.get("id"), STAGE), head_sha=revision(run.get("head_sha"), STAGE))
     repositories = (positive_id(run.get("repository_id"), STAGE),
                     positive_id(run.get("head_repository_id"), STAGE))
-    if _text(record, "digest") != "sha256:" + locator.artifact_archive_sha256:
-        raise VerificationError("candidate_artifact_digest_mismatch", STAGE)
-    if (artifact.id != locator.artifact_id or artifact.run_id != locator.run_id
-            or artifact.name != candidate_artifact_name(locator.run_id, locator.run_attempt)
+    if (artifact.id != artifact_id or int(matched[1]) != artifact.run_id
             or repositories != (repository_id, repository_id)):
         raise VerificationError("candidate_artifact_mismatch", STAGE)
     if _flag(record, "expired"):
         raise VerificationError("candidate_artifact_expired", STAGE)
     if artifact.size > MAX_CONTAINER_BYTES:
         raise VerificationError("candidate_artifact_too_large", STAGE)
-    return artifact
+    return artifact, int(matched[2])
 
 
-def _observe_attempt(client: GitHubClient, locator: CandidateLocator, repository_id: int,
+def _observe_attempt(client: GitHubClient, repository: str, run_id: int, repository_id: int,
                      workflow: WorkflowObservation) -> AttemptObservation:
-    endpoint = (f"repos/{locator.repository}/actions/runs/{locator.run_id}"
-                f"/attempts/{locator.run_attempt}")
+    endpoint = f"repos/{repository}/actions/runs/{run_id}"
     record = _get(client, endpoint, limit=_ATTEMPT_RESPONSE_LIMIT)
     attempt = AttemptObservation(
         run_id=positive_id(record.get("id"), STAGE),
@@ -240,10 +235,10 @@ def _observe_attempt(client: GitHubClient, locator: CandidateLocator, repository
         head_sha=revision(record.get("head_sha"), STAGE), path=_text(record, "path"),
         status=_optional_text(record, "status"), conclusion=_optional_text(record, "conclusion"))
     repositories = (_nested_id(record, "repository"), _nested_id(record, "head_repository"))
-    if ((attempt.run_id, attempt.run_attempt) != (locator.run_id, locator.run_attempt)
+    if (attempt.run_id != run_id
             or repositories != (repository_id, repository_id)):
         raise VerificationError("candidate_attempt_mismatch", STAGE)
-    if attempt.workflow_id != workflow.id:
+    if attempt.workflow_id != workflow.id or attempt.path.partition("@")[0] != workflow.path:
         raise VerificationError("candidate_workflow_mismatch", STAGE)
     return attempt
 
@@ -298,8 +293,8 @@ class _BoundedZipInput:
         return self._raw.seekable()
 
 
-def _verify_payload(raw: BinaryIO, locator: CandidateLocator, *, head_sha: str,
-                    payload: Path) -> CandidateManifest:
+def _verify_payload(raw: BinaryIO, *, head_sha: str,
+                    payload: Path) -> tuple[CandidateManifest, str]:
     """Check every member before any write, then stream each one into a new payload file."""
     try:
         bundle = zipfile.ZipFile(_BoundedZipInput(raw))
@@ -310,17 +305,19 @@ def _verify_payload(raw: BinaryIO, locator: CandidateLocator, *, head_sha: str,
         if MANIFEST_PATH not in members:
             raise VerificationError("candidate_zip_inventory_mismatch", STAGE)
         manifest_info = members[MANIFEST_PATH]
-        manifest = bind_manifest(locator, _read_manifest(bundle, manifest_info))
+        manifest_bytes = _read_manifest(bundle, manifest_info)
+        manifest = parse_manifest(manifest_bytes)
+        manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
         if manifest.source.commit != head_sha:
             raise VerificationError("candidate_source_mismatch", STAGE)
         if tuple(sorted(members)) != payload_paths(manifest.version):
             raise VerificationError("candidate_zip_inventory_mismatch", STAGE)
         _copy_member(bundle, manifest_info, payload / MANIFEST_PATH,
-                     size=manifest_info.file_size, sha256=locator.manifest_sha256)
+                     size=manifest_info.file_size, sha256=manifest_digest)
         for entry in manifest.artifacts:
             _copy_member(bundle, members[entry.path], payload / entry.path, size=entry.size,
                          sha256=entry.sha256)
-    return manifest
+    return manifest, manifest_digest
 
 
 def _flat_members(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:

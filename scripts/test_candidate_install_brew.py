@@ -28,15 +28,7 @@ from scripts.delegate_acceptance.release_verification import candidate_install a
 from scripts.delegate_acceptance.release_verification import published_homebrew
 from scripts.delegate_acceptance.release_verification.assets import exercise_default_path, inspect_binaries
 from scripts.delegate_acceptance.release_verification.candidate_install_brew import observe_brew_install
-from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    ArtifactRef, BootstrapTarget, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest, HarnessIdentity, InstallChannel,
-    InstallProof, ManifestArtifactBinding, RequestRecord, SourceFileBinding, encode_install_proof, encode_install_witness,
-    read_install_proof,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    ArtifactEntry, ArtifactKind, BuildInputs, CandidateManifest, SourceIdentity, Toolchains, encode_manifest,
-    expected_inventory,
-)
+from scripts.delegate_acceptance.release_verification.candidate_install_contract import BootstrapTarget, CandidateFiles, CandidateInstallRequest
 from scripts.delegate_acceptance.release_verification import commands
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import (
@@ -663,64 +655,6 @@ class FixtureLifetimeTest(BrewCase):
         self.assertEqual(launches.call_count, 0)
         self.tree.remove_retained()
         self.assertFalse(self.tree.root.exists())
-
-
-class ProofRoundTripTest(BrewCase):
-    """A real Brew observation encodes into a witness the canonical reader accepts."""
-
-    def manifest(self) -> CandidateManifest:
-        entries = []
-        for path, kind, os_name, arch in expected_inventory(VERSION):
-            data = FORMULA if kind is ArtifactKind.HOMEBREW_FORMULA else None
-            if kind is ArtifactKind.ARCHIVE and (os_name, arch) == ("Darwin", "arm64"):
-                data = self.archive.read_bytes()
-            entries.append(ArtifactEntry(path, kind, os_name, arch, len(data) if data else 1,
-                                         sha(data) if data else "0" * 64))
-        return CandidateManifest(VERSION, TAG, SourceIdentity("a" * 40, "b" * 40, "c" * 40),
-                                 BuildInputs("d" * 40, "1" * 64, "2" * 64, "3" * 64,
-                                             Toolchains("1.24.0", "2.0.0", "3.12.0", "22.0.0")),
-                                 tuple(entries))
-
-    def evidence(self, **changes):
-        manifest = self.manifest()
-        observation = self.observe()
-        facts = CandidateInstallFacts(TAG, (("archive", sha(self.archive.read_bytes())), ("formula", sha(FORMULA))),
-                                      (observation,), platform=("Darwin", "arm64"))
-        witness = encode_install_witness(facts)
-        refs = {entry.kind: ArtifactRef(entry.kind, entry.path, entry.sha256) for entry in manifest.artifacts
-                if entry.kind is ArtifactKind.HOMEBREW_FORMULA or (entry.os, entry.arch) == ("Darwin", "arm64")}
-        consumed = tuple(sorted((refs[ArtifactKind.ARCHIVE], refs[ArtifactKind.HOMEBREW_FORMULA]),
-                                key=lambda ref: ref.path))
-        fields = {
-            "candidate_id": sha(encode_manifest(manifest)), "os": "Darwin", "arch": "arm64",
-            "channel": InstallChannel.BREW, "consumed": consumed,
-            "installer": ManifestArtifactBinding(refs[ArtifactKind.HOMEBREW_FORMULA]),
-            "harness": HarnessIdentity("e" * 40, "4" * 64),
-            "binaries": parse_binary_digests(dict(observation.binaries), "test"),
-            "delegate_version": observation.delegate_version, "default_state": observation.default_state,
-            "bootstrap": observation.bootstrap, "witness_sha256": sha(witness), **changes}
-        return manifest, InstallProof(**fields), witness, facts
-
-    def read(self, manifest, proof, witness):
-        return read_install_proof(encode_install_proof(proof), witness, manifest=manifest, installer_source=None,
-                                  repository=REPO)
-
-    def test_brew_observation_round_trips_through_the_canonical_reader(self):
-        manifest, proof, witness, _facts = self.evidence()
-        self.assertEqual(self.read(manifest, proof, witness), proof)
-
-    def test_reader_refuses_requests_a_source_binding_or_another_default_state(self):
-        manifest, proof, _witness, facts = self.evidence()
-        fetched = replace(facts.installs[0], requests=(RequestRecord("served", "https://example.invalid/x"),))
-        forged = encode_install_witness(replace(facts, installs=(fetched,)))
-        with self.assertRaises(VerificationError) as caught:
-            self.read(manifest, InstallProof(**{**proof.__dict__, "witness_sha256": sha(forged)}), forged)
-        self.assertEqual(caught.exception.code, "install_witness_mismatch")
-        for changes in ({"installer": SourceFileBinding("a" * 40, "install.sh", "5" * 64)},
-                        {"default_state": ("present", "not_initialized", "absent")}):
-            with self.subTest(changes=list(changes)), self.assertRaises(VerificationError) as caught:
-                InstallProof(**{**proof.__dict__, **changes})
-            self.assertEqual(caught.exception.code, "install_proof_invalid")
 
 
 class LegacyDefaultPathTest(unittest.TestCase):

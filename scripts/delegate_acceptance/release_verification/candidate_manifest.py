@@ -1,11 +1,4 @@
-"""Development candidate manifest and its external hosted-artifact locator.
-
-The manifest owns the exact package inventory of one development build. It
-never contains its own digest or the digest of the hosted container artifact
-that carries it; the external locator binds both, so neither record is
-circular. The manifest's source commit is the build's actual VCS revision; a
-later squash-merge commit is a separate publication fact.
-"""
+"""Exact distribution payload manifest and API-derived artifact identity."""
 
 from __future__ import annotations
 
@@ -14,7 +7,6 @@ from enum import Enum
 import posixpath
 import re
 
-from ..evidence.digests import sha
 from .candidate_codec import (
     HEX_SHA256, VERSION_RE, encode_record, exact_fields, load_record, object_list,
     positive_int, require_header, revision, sha256_hex, text,
@@ -23,22 +15,13 @@ from .contract import MAX_ARCHIVE, MAX_OUTPUT, VerificationError, expected_archi
 from .published_contract import MAX_PACKAGE
 
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 
 MANIFEST_KIND = "delegation-layer-development-candidate"
 
 
-LOCATOR_SCHEMA_VERSION = 1
-
-
-LOCATOR_KIND = "delegation-layer-candidate-locator"
-
-
 MAX_MANIFEST_BYTES = 64 * 1024
-
-
-MAX_LOCATOR_BYTES = 4 * 1024
 
 
 # Bounds decoding; the exact inventory check owns the accepted count.
@@ -47,9 +30,6 @@ MAX_ARTIFACT_ENTRIES = 64
 
 # Development builds always produce these four native archives.
 PLATFORMS = (("Darwin", "amd64"), ("Darwin", "arm64"), ("Linux", "amd64"), ("Linux", "arm64"))
-
-
-REQUIRED_OSES = ("Darwin", "Linux")
 
 
 # The candidate payload holds the manifest beside the seven inventory files.
@@ -62,7 +42,7 @@ CHECKSUMS_PATH = "checksums.txt"
 HOMEBREW_FORMULA_PATH = "delegation-layer.rb"
 
 
-# The CI workflow whose manual job builds and uploads every candidate payload.
+# The CI workflow whose distribution job builds and uploads every candidate payload.
 CANDIDATE_WORKFLOW_FILE = "ci.yml"
 
 
@@ -168,22 +148,13 @@ class Toolchains:
 
 @dataclass(frozen=True)
 class BuildInputs:
-    """Harness, toolchain, configuration and dependency identity of the build.
+    """Toolchain, configuration and dependency identity of the build."""
 
-    ``harness_sha256`` is the build harness source fingerprint computed by the
-    existing ``release_verification.source.fingerprint_sources`` owner. It is
-    distinct from the source commit and from any native proof fingerprint.
-    """
-
-    harness_commit: str
-    harness_sha256: str
     goreleaser_config_sha256: str
     go_sum_sha256: str
     toolchains: Toolchains
 
     def __post_init__(self) -> None:
-        revision(self.harness_commit, STAGE)
-        sha256_hex(self.harness_sha256, STAGE)
         sha256_hex(self.goreleaser_config_sha256, STAGE)
         sha256_hex(self.go_sum_sha256, STAGE)
 
@@ -234,7 +205,7 @@ class CandidateManifest:
 
 @dataclass(frozen=True)
 class CandidateLocator:
-    """External binding of one hosted workflow artifact to its manifest bytes."""
+    """Artifact identity derived by the loader from GitHub and verified manifest bytes."""
 
     repository: str
     run_id: int
@@ -274,8 +245,6 @@ def encode_manifest(manifest: CandidateManifest) -> bytes:
         "source": {"commit": manifest.source.commit, "tree": manifest.source.tree,
                    "base_commit": manifest.source.base_commit},
         "build": {
-            "harness_commit": manifest.build.harness_commit,
-            "harness_sha256": manifest.build.harness_sha256,
             "goreleaser_config_sha256": manifest.build.goreleaser_config_sha256,
             "go_sum_sha256": manifest.build.go_sum_sha256,
             "toolchains": {"go": toolchains.go, "goreleaser": toolchains.goreleaser,
@@ -300,11 +269,10 @@ def _parse_artifact(value: object) -> ArtifactEntry:
 
 def _parse_build(value: object) -> BuildInputs:
     fields = exact_fields(value, frozenset({
-        "harness_commit", "harness_sha256", "goreleaser_config_sha256", "go_sum_sha256",
+        "goreleaser_config_sha256", "go_sum_sha256",
         "toolchains"}), STAGE)
     tools = exact_fields(fields["toolchains"], frozenset({"go", "goreleaser", "python", "node"}), STAGE)
     return BuildInputs(
-        harness_commit=fields["harness_commit"], harness_sha256=fields["harness_sha256"],
         goreleaser_config_sha256=fields["goreleaser_config_sha256"],
         go_sum_sha256=fields["go_sum_sha256"],
         toolchains=Toolchains(go=tools["go"], goreleaser=tools["goreleaser"],
@@ -327,34 +295,3 @@ def parse_manifest(data: bytes) -> CandidateManifest:
         build=_parse_build(fields["build"]),
         artifacts=tuple(_parse_artifact(item) for item in artifacts),
     )
-
-
-def encode_locator(locator: CandidateLocator) -> bytes:
-    return encode_record({
-        "schema_version": LOCATOR_SCHEMA_VERSION, "kind": LOCATOR_KIND,
-        "repository": locator.repository, "run_id": locator.run_id,
-        "run_attempt": locator.run_attempt, "artifact_id": locator.artifact_id,
-        "artifact_archive_sha256": locator.artifact_archive_sha256,
-        "manifest_sha256": locator.manifest_sha256,
-    }, LOCATOR_STAGE)
-
-
-def parse_locator(data: bytes) -> CandidateLocator:
-    value = load_record(data, max_bytes=MAX_LOCATOR_BYTES, stage=LOCATOR_STAGE)
-    require_header(value, schema_version=LOCATOR_SCHEMA_VERSION, kind=LOCATOR_KIND,
-                   error="candidate_locator_kind_invalid", stage=LOCATOR_STAGE)
-    fields = exact_fields(value, frozenset({
-        "schema_version", "kind", "repository", "run_id", "run_attempt", "artifact_id",
-        "artifact_archive_sha256", "manifest_sha256"}), LOCATOR_STAGE)
-    return CandidateLocator(
-        repository=fields["repository"], run_id=fields["run_id"], run_attempt=fields["run_attempt"],
-        artifact_id=fields["artifact_id"], artifact_archive_sha256=fields["artifact_archive_sha256"],
-        manifest_sha256=fields["manifest_sha256"],
-    )
-
-
-def bind_manifest(locator: CandidateLocator, data: bytes) -> CandidateManifest:
-    """Parse manifest bytes only after they match the locator's digest."""
-    if sha(data) != locator.manifest_sha256:
-        raise VerificationError("candidate_manifest_digest_mismatch", LOCATOR_STAGE)
-    return parse_manifest(data)

@@ -7,7 +7,6 @@ from pathlib import Path
 import os
 import re
 import shlex
-import sys
 import textwrap
 import unittest
 from unittest import mock
@@ -16,7 +15,6 @@ from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
 from scripts.delegate_acceptance.processes.operations import run_bounded_command
 from scripts.test_candidate_source_support import ChildFault, settle_retained
-from scripts.test_published_install import PublishedBase, REVISION, TAG
 
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github/workflows"
@@ -33,10 +31,10 @@ def workflow_job(source: str, name: str) -> str:
 
 # The one trusted-main publication job and its one effect step.
 PUBLICATION_JOB = "publish"
-PUBLISH_STEP = "Publish exact candidate bytes"
-RECEIPT_STEP = "Retain the publication receipt"
+PUBLISH_STEP = "Publish the tested distribution bytes"
+RECEIPT_STEP = "Retain publication result"
 PUBLISH_COMMAND = ('python3 scripts/publish_development_candidate.py '
-                   '--output-dir "${RUNNER_TEMP}/candidate-publication"')
+                   '--output-dir "${RUNNER_TEMP}/distribution-publication"')
 # Retired tag-push, rebuild, repack, attestation and post-publication install or behavior work.
 RETIRED = ("push:", "tags:", "setup-go", "make ", "goreleaser", "npm pack", "npm publish", "npm install",
            "gh release", "attest", "id-token", "release-consumer.yml", "publish-homebrew-formula.sh",
@@ -119,7 +117,7 @@ def run_publish_step(tree: FixtureTree, environment: dict[str, str]) -> tuple[in
         cwd=root))
     argv = record.read_text(encoding="utf-8").splitlines() if record.exists() else []
     return result.exit_code, [item.replace(str(runner), "${RUNNER_TEMP}") for item in argv], (
-        runner / "candidate-publication").exists()
+        runner / "distribution-publication").exists()
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -170,7 +168,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         exit_code, argv, created = run_publish_step(self.publish_tree(), {})
         self.assertEqual(exit_code, 0)
         self.assertEqual(argv, ["scripts/publish_development_candidate.py", "--output-dir",
-                                "${RUNNER_TEMP}/candidate-publication"])
+                                "${RUNNER_TEMP}/distribution-publication"])
         self.assertFalse(created)
 
     def test_an_unproven_publication_step_child_retains_its_tree(self):
@@ -196,14 +194,6 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("  queue: max", concurrency)
         self.assertIn("  cancel-in-progress: false", concurrency)
         self.assertNotRegex(source.split("\njobs:\n", 1)[1], r"(?m)^ +concurrency:")
-
-    def test_native_reports_have_a_documented_public_promotion_window(self):
-        source = (WORKFLOWS / "release-native-acceptance.yml").read_text(encoding="utf-8")
-        self.assertIn("retention-days: 90", source)
-        documentation = (WORKFLOWS.parent.parent / "docs/contributing.md").read_text(encoding="utf-8")
-        self.assertIn("Attempt reports request 90-day retention", documentation)
-        self.assertIn("all tags", documentation)
-
 
 REPOSITORY = WORKFLOWS.parent.parent
 # The one discovery of every Python test; standard unittest owns which files it selects and runs.
@@ -306,51 +296,6 @@ class PythonGateContractTests(unittest.TestCase):
         self.assertEqual(len(selected), len(set(selected)), "a test file was selected more than once")
         self.assertEqual(sorted(set(selected) - {hidden}), sorted([*on_disk, *future]))
         self.assertNotIn(hidden, selected, "a test file outside any package is never discovered")
-
-
-class ConsumerReceiptIntegrationTests(PublishedBase):
-    def workflow_python(self, name: str) -> None:
-        source = (WORKFLOWS / "release-consumer.yml").read_text(encoding="utf-8")
-        step = workflow_step(source, name)
-        code = step.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
-        env = {"TAG": TAG, "CHANNEL": self.channel, "GITHUB_SHA": REVISION,
-               "RUNNER_TEMP": str(self.runner_temp), "GITHUB_OUTPUT": str(self.root / "outputs")}
-        result = self.run_child([sys.executable, "-c", textwrap.dedent(code)], env,
-                                max_output=4096, capture=True, timeout=10)
-        self.assertEqual(result.exit_code, 0, result.output.decode())
-
-    def initialize_workflow(self) -> None:
-        self.receipt_path = self.runner_temp / "published-install-receipt.json"
-        self.workflow_python("Initialize partial-publication failure receipt before setup")
-        self.assertFalse(self.receipt_path.exists())
-
-    def selected_report(self) -> Path:
-        self.workflow_python("Select consumer report without replacing verifier state")
-        value = (self.root / "outputs").read_text().strip()
-        self.assertTrue(value.startswith("path="))
-        return Path(value.removeprefix("path="))
-
-    def test_workflow_bootstrap_allows_real_consumer_verification(self):
-        self.initialize_workflow()
-        self.assertEqual(self.publish(), 0)
-        before = self.receipt_path.read_bytes()
-        self.assertEqual(self.selected_report(), self.receipt_path)
-        self.assertEqual(self.receipt_path.read_bytes(), before)
-        self.assertEqual(self.receipt()["verdict"], "pass")
-
-    def test_setup_failure_retains_fallback_without_creating_verifier_state(self):
-        self.initialize_workflow()
-        report = self.selected_report()
-        self.assertEqual(report.name, "published-install-setup-failure.json")
-        self.assertIn("published_verification_incomplete", report.read_text())
-        self.assertFalse(self.receipt_path.exists())
-
-    def test_verifier_failure_is_preserved_instead_of_setup_fallback(self):
-        self.initialize_workflow()
-        self.world.view_overrides = {"dist.integrity": "invalid"}
-        self.assertEqual(self.publish(), 1)
-        self.assertEqual(self.selected_report(), self.receipt_path)
-        self.assertEqual(self.receipt()["verdict"], "fail")
 
 
 if __name__ == "__main__":

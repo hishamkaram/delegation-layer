@@ -15,6 +15,7 @@
       "py:hashlib",
       "py:os",
       "py:pathlib",
+      "py:re",
       "py:stat",
       "py:typing",
       "py:zipfile",

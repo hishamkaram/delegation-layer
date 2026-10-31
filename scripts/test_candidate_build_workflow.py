@@ -44,17 +44,20 @@ class CandidateWorkflowTests(unittest.TestCase):
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
-        for name in ("build_candidate", "candidate_version", "candidate_base_commit", "prove_candidate_installs"):
+        for name in ("build_candidate", "candidate_version", "candidate_base_commit"):
             self.assertIn(f"      {name}:\n", dispatch)
-        for name in ("build_candidate", "prove_candidate_installs"):
+        for name in ("build_candidate",):
             self.assertRegex(dispatch, rf"{name}:\n(?:        .*\n)*?        default: false\n(?:        .*\n)*?        type: boolean\n")
         self.assertIn("  push:\n    branches: [\"main\"]", self.source)
 
-    def test_job_runs_only_on_manual_dispatch_of_a_task_branch(self):
+    def test_one_ordinary_pr_or_main_run_builds_the_distribution(self):
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split())
         for requirement in ("github.event_name == 'workflow_dispatch'", "inputs.build_candidate",
-                            "github.ref_type == 'branch'", "github.ref != 'refs/heads/main'"):
+                            "github.ref_type == 'branch'"):
             self.assertIn(requirement, condition)
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertIn("github.event_name == 'push'", condition)
+        self.assertNotIn("github.ref != 'refs/heads/main'", condition)
         self.assertNotIn("needs:", self.job)
 
     def test_job_is_read_only_and_never_publishes_or_tags(self):
@@ -67,8 +70,8 @@ class CandidateWorkflowTests(unittest.TestCase):
 
     def test_build_step_passes_exact_expectations_and_no_credentials(self):
         build = self.steps["Build the candidate from the clean committed checkout"]
-        for argument in ('--version "${CANDIDATE_VERSION}"', '--commit "${GITHUB_SHA}"',
-                         '--base-commit "${CANDIDATE_BASE_COMMIT}"', '--repository "${GITHUB_REPOSITORY}"',
+        for argument in ('--version "${candidate_version}"', '--commit "${GITHUB_SHA}"',
+                         '--base-commit "${CANDIDATE_BASE_COMMIT:-$GITHUB_SHA}"', '--repository "${GITHUB_REPOSITORY}"',
                          '--goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser"'):
             self.assertIn(argument, build)
         self.assertIn("scripts/build_development_candidate.py build", build)
@@ -85,22 +88,9 @@ class CandidateWorkflowTests(unittest.TestCase):
                         "name: development-candidate-${{ github.run_id }}-${{ github.run_attempt }}"):
             self.assertIn(setting, upload)
 
-    def test_locator_is_encoded_after_upload_and_retained_outside_the_payload(self):
-        names = list(self.steps)
-        self.assertLess(names.index("Upload the immutable candidate payload"),
-                        names.index("Encode the external candidate locator"))
-        encode = self.steps["Encode the external candidate locator"]
-        for fragment in ("steps.candidate.outputs.artifact-id", "steps.candidate.outputs.artifact-digest",
-                         "candidate-payload/candidate-manifest.json", "candidate-locator/candidate-locator.json"):
-            self.assertIn(fragment, encode)
-        locator = self.steps["Retain the candidate locator outside the payload"]
-        self.assertIn("path: ${{ runner.temp }}/candidate-locator/candidate-locator.json", locator)
-        self.assertNotIn("candidate-payload", locator)
-        self.assertIn("overwrite: false", locator)
-
     def test_every_upload_is_pinned_and_none_overwrites(self):
         uploads = [block for block in self.steps.values() if "upload-artifact" in block]
-        self.assertEqual(len(uploads), 3)
+        self.assertEqual(len(uploads), 2)
         for block in uploads:
             self.assertIn(f"uses: {UPLOAD_ACTION}\n", block)
             self.assertIn("overwrite: false", block)
@@ -116,26 +106,22 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.job = job_text(self.source, "development-candidate-install")
         self.steps = steps(self.job)
 
-    def test_producer_publishes_its_generated_locator_as_the_only_job_output(self):
-        self.assertIn("    outputs:\n      candidate-locator: ${{ steps.locator.outputs.locator }}\n", self.producer)
-        encode = steps(self.producer)["Encode the external candidate locator"]
-        self.assertIn("id: locator\n", encode)
-        written = "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
-        self.assertIn(f'printf \'locator=%s\\n\' "$(cat "{written}")" >> "${{GITHUB_OUTPUT}}"', encode)
-        self.assertLess(encode.index("build_development_candidate.py locator"), encode.index("GITHUB_OUTPUT"))
-        self.assertEqual(self.producer.count("outputs:"), 1)
+    def test_producer_exposes_the_immutable_artifact_id_without_an_external_locator(self):
+        self.assertIn("    outputs:\n      artifact-id: ${{ steps.candidate.outputs.artifact-id }}\n",
+                      self.producer)
+        self.assertNotIn("candidate-locator", self.producer)
 
     def test_no_gate_depends_on_the_candidate_jobs(self):
         for name in (*EXISTING_JOBS, "development-candidate"):
             with self.subTest(job=name):
                 self.assertNotIn("needs:", job_text(self.source, name))
 
-    def test_job_runs_only_after_the_build_and_on_both_explicit_opt_ins(self):
+    def test_installs_follow_every_distribution_build(self):
         self.assertIn("    needs: development-candidate\n", self.job)
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split("    if:", 1)[1].split())
         for requirement in ("github.event_name == 'workflow_dispatch'", "inputs.build_candidate",
-                            "inputs.prove_candidate_installs", "github.ref_type == 'branch'",
-                            "github.ref != 'refs/heads/main'"):
+                            "github.ref_type == 'branch'", "github.event_name == 'pull_request'",
+                            "github.event_name == 'push'"):
             self.assertIn(requirement, condition)
         self.assertNotIn("always()", condition)
 
@@ -173,23 +159,14 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         for tool in ("setup-go", "make tools"):
             self.assertNotIn(tool, self.job)
 
-    def test_locator_is_the_producers_bytes_never_rebuilt_or_refetched(self):
-        write = self.steps["Write the producer's candidate locator"]
-        self.assertIn("CANDIDATE_LOCATOR: ${{ needs.development-candidate.outputs.candidate-locator }}", write)
-        self.assertIn('if [ -z "${CANDIDATE_LOCATOR}" ]; then', write)
-        self.assertIn("exit 1", write)
-        self.assertIn("printf '%s\\n' \"${CANDIDATE_LOCATOR}\"", write)
-        for rebuilt in ("build_development_candidate", "github.run_id", "github.run_attempt",
-                        "artifact-id", "download-artifact"):
-            self.assertNotIn(rebuilt, write)
+    def test_installs_select_the_exact_producer_artifact_id_without_rebuilding(self):
         proof = self.steps["Prove the candidate install through the channel"]
-        for argument in ('--locator "${RUNNER_TEMP}/candidate-install-input/candidate-locator.json"',
-                         '--channel "${CHANNEL}"', '--output-dir "${RUNNER_TEMP}/candidate-install-proof"',
-                         "--github-auth environment", "python3 scripts/prove_candidate_install.py"):
+        self.assertIn("ARTIFACT_ID: ${{ needs.development-candidate.outputs.artifact-id }}", proof)
+        for argument in ('--artifact-id "${ARTIFACT_ID}"', '--channel "${CHANNEL}"',
+                         '--output-dir "${RUNNER_TEMP}/candidate-install-proof"', "--github-auth environment"):
             self.assertIn(argument, proof)
-        self.assertNotIn("--bootstrap-parent", proof)
-        self.assertEqual(re.findall(r"^          (\w+): ", proof.split("env:", 1)[1].split("run:", 1)[0], re.M),
-                         ["GH_TOKEN", "CHANNEL"])
+        self.assertNotIn("candidate-locator", self.job)
+        self.assertNotIn("build_development_candidate", self.job)
 
     def test_native_platform_is_checked_before_any_install_work(self):
         names = list(self.steps)
@@ -198,8 +175,6 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.assertIn("EXPECTED_ARCH: ${{ matrix.host_arch }}", check)
         self.assertIn("import platform_identity", check)
         self.assertLess(names.index("Require the intended native platform"),
-                        names.index("Write the producer's candidate locator"))
-        self.assertLess(names.index("Write the producer's candidate locator"),
                         names.index("Prove the candidate install through the channel"))
 
     def test_only_the_linux_homebrew_leg_exposes_the_preinstalled_brew(self):
@@ -212,7 +187,7 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.assertLess(names.index("Expose the preinstalled Linux Homebrew"),
                         names.index("Prove the candidate install through the channel"))
 
-    def test_only_the_three_evidence_files_are_uploaded_under_a_unique_name(self):
+    def test_only_the_actual_install_result_is_uploaded_under_a_unique_name(self):
         uploads = [name for name, block in self.steps.items() if "upload-artifact" in block]
         self.assertEqual(uploads, ["Retain the install proof evidence"])
         upload = self.steps[uploads[0]]
@@ -223,7 +198,7 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         paths = upload.split("path: |\n", 1)[1].split("          if-no-files-found", 1)[0].split("\n")
         self.assertEqual([path.strip() for path in paths if path.strip()],
                          [f"${{{{ runner.temp }}}}/candidate-install-proof/{name}"
-                          for name in ("receipt.json", "install-proof.json", "install-witness.json")])
+                          for name in ("receipt.json",)])
         for setting in ("overwrite: false", "retention-days: 90"):
             self.assertIn(setting, upload)
 

@@ -17,7 +17,12 @@ from scripts.delegate_acceptance.native_evidence.lifetime_closure import (
     TASK_FACT_KEYS,
     lifetime_closure_error,
 )
-from scripts.delegate_acceptance.native_evidence.public_contract import DENIED_KEYS
+DENIED_KEYS = frozenset({
+    "argv", "env", "environment", "stdout", "stderr", "output", "provider_output",
+    "failure", "failure_detail", "diagnostic_text", "receipt_path", "archive_path",
+    "checksums_path", "journal_path", "executable", "provider_runtime_identities",
+    "creation_identity", "command", "commands",
+})
 
 
 def acceptance_for(fixture: InspectionFixture, tasks: dict[str, str], *,

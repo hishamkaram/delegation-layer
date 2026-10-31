@@ -25,7 +25,6 @@ from scripts.delegate_acceptance.native_evidence.block_reason import (
 from scripts.delegate_acceptance.native_evidence.contract import (
     BlockReason, EvidenceError, SCHEMA_VERSION,
 )
-from scripts.delegate_acceptance.release_verification.candidate_readiness import NEUTRAL_BLOCK_REASONS
 
 
 class LookalikeReason(Enum):
@@ -141,7 +140,6 @@ class CompactCodecTests(unittest.TestCase):
         legacy = compact(version=SCHEMA_VERSION)
         self.assertEqual(contract.COMPACT_CASE_LEGACY_SCHEMA_VERSION, SCHEMA_VERSION)
         self.assertIs(compact_block_reason(legacy), BlockReason.UNCLASSIFIED)
-        self.assertNotIn(compact_block_reason(legacy), NEUTRAL_BLOCK_REASONS)
 
     def test_legacy_version_one_pass_and_fail_have_no_reason(self):
         for status in ("PASS", "FAIL"):

@@ -71,13 +71,6 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
             ], gh_environment(auth_mode=auth_mode), timeout=120)
         receipt["stage"] = "verify-checksum"
         archive = verify_checksum(assets, name, receipt)
-        command(receipt, "github-attestation-verify", [
-            "gh", "attestation", "verify", str(archive), "--repo", args.repo,
-            "--signer-workflow", f"{args.repo}/.github/workflows/release.yml",
-            "--source-ref", release_identity["ref"],
-            "--source-digest", release_identity["commit_sha"],
-        ], gh_environment(auth_mode=auth_mode), timeout=60)
-        receipt["artifact"]["attestation"] = "verified"
         receipt["stage"] = "extract-archive"
         extract_archive(archive, extracted, owner, receipt)
         paths = inspect_binaries(extracted, receipt)
@@ -150,7 +143,7 @@ def _verify_archived_artifact(
     artifact = archived.get("artifact")
     archive_name = expected_archive(info, tag)
     archive_file, checksum_file = assets / archive_name, assets / "checksums.txt"
-    if (not isinstance(artifact, dict) or artifact.get("attestation") != "verified"
+    if (not isinstance(artifact, dict)
             or not re.fullmatch(r"[0-9a-f]{64}", str(artifact.get("archive_sha256", "")))
             or not re.fullmatch(r"[0-9a-f]{64}", str(artifact.get("checksums_sha256", "")))
             or artifact.get("archive_name") != archive_name

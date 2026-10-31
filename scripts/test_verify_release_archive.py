@@ -260,7 +260,6 @@ esac
         self.assertEqual(receipt["verdict"], "pass")
         self.assertEqual(receipt["tag"], TAG)
         self.assertEqual(receipt["package_version"], "1.2.3")
-        self.assertEqual(receipt["artifact"]["attestation"], "verified")
         self.assertEqual(receipt["artifact"]["archive_sha256"], hashlib.sha256(
             (self.assets / self.archive_name).read_bytes()
         ).hexdigest())
@@ -295,11 +294,6 @@ esac
             "ref": f"refs/tags/{TAG}", "commit_sha": RELEASE_COMMIT,
         })
         ref_command = next(row for row in receipt["commands"] if row["name"] == "github-release-ref")
-        attestation = next(row for row in receipt["commands"]
-                           if row["name"] == "github-attestation-verify")
-        self.assertIn("--source-ref", attestation["argv"])
-        self.assertIn(f"refs/tags/{TAG}", attestation["argv"])
-        self.assertIn("--source-digest", attestation["argv"])
         self.assertEqual(ref_command["exit_code"], 0)
         self.assertEqual(len(receipt["source_harness"]["sha256"]), 64)
         fingerprint_paths = {item["path"] for item in receipt["source_harness"]["files"]}
@@ -487,19 +481,13 @@ esac
                             for item in receipt["native_acceptance"]["case_receipt_hashes"]))
         self.assertEqual(receipt["cleanup"]["status"], "complete")
         self.assertFalse(self.assets.exists())
-        staged = self.root / "staged-native-evidence"
-        manifest = evidence.stage_evidence(
-            aggregate_receipt,
-            staged,
-            archive_receipt=self.receipt_path,
-            native_receipt=final_receipt_path,
-            expected_tag=TAG,
-            expected_source_revision=REVISION,
-        )
-        self.assertEqual(len(manifest["release_cleanup_journals"]), 1)
-        self.assertTrue(
-            (staged / manifest["release_cleanup_journals"][0]["path"]).is_file(),
-        )
+        transaction = receipt["cleanup"]["transaction"]
+        journal_data = Path(transaction["journal_path"]).read_bytes()
+        self.assertEqual(hashlib.sha256(journal_data).hexdigest(), transaction["journal_sha256"])
+        journal = json.loads(journal_data)
+        self.assertEqual(journal["state"], "complete")
+        self.assertEqual(journal["authorization_sha256"], transaction["authorization_sha256"])
+        self.assertEqual(journal["target"], transaction["target_identity"])
 
     def test_native_finalizer_binds_every_case_digest_and_rejects_tampering(self):
         self.assertEqual(self.verify(), 0)

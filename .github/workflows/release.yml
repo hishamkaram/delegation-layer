@@ -1,46 +1,17 @@
 name: Release
 
-run-name: Candidate publication ${{ inputs.invocation_id }} ${{ inputs.request_sha256 }}
-
 on:
   workflow_dispatch:
     inputs:
-      candidate_id:
-        description: 'Frozen candidate ID (64 lowercase hex)'
-        required: true
-        type: string
-      freeze_commit:
-        description: 'Evidence store commit that froze the candidate'
-        required: true
-        type: string
-      merged_commit:
-        description: 'Squash merge commit M on main'
-        required: true
-        type: string
-      readiness_run_id:
-        description: 'Selected development readiness run ID'
-        required: true
-        type: string
-      readiness_run_attempt:
-        description: 'Selected development readiness run attempt'
+      artifact_id:
+        description: 'Immutable distribution artifact from successful CI on main'
         required: true
         type: string
       resume_published:
-        description: 'Exactly true or false; true only observes and finishes an already published candidate'
+        description: 'Observe an already published release and finish only the tap'
         required: true
-        type: string
-      invocation_id:
-        description: 'Root publication invocation ID (32 lowercase hex)'
-        required: true
-        type: string
-      request_sha256:
-        description: 'SHA-256 of the canonical publication request'
-        required: true
-        type: string
-      harness:
-        description: 'Trusted main publication code revision H; must equal this run head'
-        required: true
-        type: string
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -56,12 +27,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       actions: read
-      checks: read
       contents: write
-      pull-requests: read
-      statuses: read
     steps:
-      - name: Checkout trusted publication harness
+      - name: Checkout trusted publication code
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.sha }}
@@ -78,27 +46,21 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Publish exact candidate bytes
+      - name: Publish the tested distribution bytes
         env:
-          CANDIDATE_ID: ${{ inputs.candidate_id }}
-          FREEZE_COMMIT: ${{ inputs.freeze_commit }}
-          MERGED_COMMIT: ${{ inputs.merged_commit }}
-          READINESS_RUN_ID: ${{ inputs.readiness_run_id }}
-          READINESS_RUN_ATTEMPT: ${{ inputs.readiness_run_attempt }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
           RESUME_PUBLISHED: ${{ inputs.resume_published }}
-          INVOCATION_ID: ${{ inputs.invocation_id }}
-          REQUEST_SHA256: ${{ inputs.request_sha256 }}
-          HARNESS: ${{ inputs.harness }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: python3 scripts/publish_development_candidate.py --output-dir "${RUNNER_TEMP}/candidate-publication"
+        run: python3 scripts/publish_development_candidate.py --output-dir "${RUNNER_TEMP}/distribution-publication"
 
-      - name: Retain the publication receipt
+      - name: Retain publication result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: candidate-publication-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate-publication/receipt.json
-          if-no-files-found: error
+          name: distribution-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/distribution-publication/receipt.json
+          # Input/context refusals can happen before the invocation owns an output directory.
+          if-no-files-found: ignore
           retention-days: 90

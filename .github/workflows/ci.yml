@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       build_candidate:
-        description: 'Build the immutable development candidate from this task branch'
+        description: 'Build distribution artifacts from this branch, including main'
         required: false
         default: false
         type: boolean
@@ -18,15 +18,10 @@ on:
         default: ''
         type: string
       candidate_base_commit:
-        description: 'Exact full commit the task branch is built against'
+        description: 'Build base commit (defaults to the source commit)'
         required: false
         default: ''
         type: string
-      prove_candidate_installs:
-        description: 'With build_candidate, prove the candidate on disposable hosted runners through each install channel'
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -349,16 +344,16 @@ jobs:
           if-no-files-found: error
 
   development-candidate:
-    name: Development candidate (manual task-branch build)
+    name: Distribution build
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' && inputs.build_candidate &&
-      github.ref_type == 'branch' && github.ref != 'refs/heads/main' }}
+      ${{ github.event_name == 'pull_request' || github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
     outputs:
-      candidate-locator: ${{ steps.locator.outputs.locator }}
+      artifact-id: ${{ steps.candidate.outputs.artifact-id }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -392,15 +387,16 @@ jobs:
         env:
           CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           CANDIDATE_BASE_COMMIT: ${{ inputs.candidate_base_commit }}
-        run: >-
-          python3 scripts/build_development_candidate.py build
-          --version "${CANDIDATE_VERSION}"
-          --commit "${GITHUB_SHA}"
-          --base-commit "${CANDIDATE_BASE_COMMIT}"
-          --repository "${GITHUB_REPOSITORY}"
-          --goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser"
-          --work-dir "${RUNNER_TEMP}/candidate-work"
-          --output-dir "${RUNNER_TEMP}/candidate-payload"
+        run: |
+          candidate_version="${CANDIDATE_VERSION:-$(node -p 'require("./package.json").version')}"
+          python3 scripts/build_development_candidate.py build \
+          --version "${candidate_version}" \
+          --commit "${GITHUB_SHA}" \
+          --base-commit "${CANDIDATE_BASE_COMMIT:-$GITHUB_SHA}" \
+          --repository "${GITHUB_REPOSITORY}" \
+          --goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser" \
+          --work-dir "${RUNNER_TEMP}/candidate-work" \
+          --output-dir "${RUNNER_TEMP}/candidate-payload" \
           --receipt "${RUNNER_TEMP}/candidate-build-receipt.json"
 
       - name: Upload the immutable candidate payload
@@ -409,38 +405,6 @@ jobs:
         with:
           name: development-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-payload/
-          if-no-files-found: error
-          retention-days: 90
-          overwrite: false
-
-      - name: Encode the external candidate locator
-        id: locator
-        env:
-          ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
-          ARTIFACT_DIGEST: ${{ steps.candidate.outputs.artifact-digest }}
-        run: |
-          mkdir "${RUNNER_TEMP}/candidate-locator"
-          python3 scripts/build_development_candidate.py locator \
-            --repository "${GITHUB_REPOSITORY}" \
-            --run-id "${GITHUB_RUN_ID}" \
-            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --artifact-id "${ARTIFACT_ID}" \
-            --artifact-digest "${ARTIFACT_DIGEST}" \
-            --manifest "${RUNNER_TEMP}/candidate-payload/candidate-manifest.json" \
-            --output "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
-          printf 'locator=%s\n' "$(cat "${RUNNER_TEMP}/candidate-locator/candidate-locator.json")" >> "${GITHUB_OUTPUT}"
-          {
-            echo '### Development candidate locator'
-            echo '```json'
-            cat "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
-            echo '```'
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Retain the candidate locator outside the payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: development-candidate-locator-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate-locator/candidate-locator.json
           if-no-files-found: error
           retention-days: 90
           overwrite: false
@@ -456,12 +420,11 @@ jobs:
           overwrite: false
 
   development-candidate-install:
-    name: Candidate install proof (${{ matrix.os }}, ${{ matrix.channel }})
+    name: Distribution install (${{ matrix.os }}, ${{ matrix.channel }})
     needs: development-candidate
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' && inputs.build_candidate &&
-      inputs.prove_candidate_installs && github.ref_type == 'branch' &&
-      github.ref != 'refs/heads/main' }}
+      ${{ github.event_name == 'pull_request' || github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
@@ -523,24 +486,14 @@ jobs:
           test -x "${brew_bin}/brew"
           echo "${brew_bin}" >> "${GITHUB_PATH}"
 
-      - name: Write the producer's candidate locator
-        env:
-          CANDIDATE_LOCATOR: ${{ needs.development-candidate.outputs.candidate-locator }}
-        run: |
-          if [ -z "${CANDIDATE_LOCATOR}" ]; then
-            echo '::error::the development-candidate job published no candidate locator'
-            exit 1
-          fi
-          mkdir "${RUNNER_TEMP}/candidate-install-input"
-          printf '%s\n' "${CANDIDATE_LOCATOR}" > "${RUNNER_TEMP}/candidate-install-input/candidate-locator.json"
-
       - name: Prove the candidate install through the channel
         env:
           GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ matrix.channel }}
+          ARTIFACT_ID: ${{ needs.development-candidate.outputs.artifact-id }}
         run: >-
           python3 scripts/prove_candidate_install.py
-          --locator "${RUNNER_TEMP}/candidate-install-input/candidate-locator.json"
+          --artifact-id "${ARTIFACT_ID}"
           --channel "${CHANNEL}"
           --output-dir "${RUNNER_TEMP}/candidate-install-proof"
           --github-auth environment
@@ -552,8 +505,6 @@ jobs:
           name: candidate-install-${{ matrix.os }}-${{ matrix.channel }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/candidate-install-proof/receipt.json
-            ${{ runner.temp }}/candidate-install-proof/install-proof.json
-            ${{ runner.temp }}/candidate-install-proof/install-witness.json
           if-no-files-found: warn
           retention-days: 90
           overwrite: false

@@ -8,20 +8,12 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from scripts import native_acceptance_evidence as evidence
 from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.native_evidence.contract import (
     MAX_AGGREGATE_BYTES,
     MAX_RECEIPT_BYTES,
 )
-from scripts.delegate_acceptance.native_evidence.public_contract import (
-    CASE_DEFINITIONS,
-    MAX_PUBLIC_ZIP_BYTES,
-    ProofExpectation,
-    sha256,
-)
-from scripts.delegate_acceptance.native_evidence.public_projection import build_public_proof
-from scripts.delegate_acceptance.native_evidence.public_validation import validate_public_proof
+from scripts.delegate_acceptance.evidence.digests import sha as sha256
 from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
 from scripts.delegate_acceptance.release_verification.contract import (
     MAX_RECEIPT,
@@ -54,134 +46,6 @@ class ReleaseReceiptBudgetTests(unittest.TestCase):
         tree = FixtureTree.open(prefix=prefix, label=f"{prefix} tree")
         self.addCleanup(tree.dispose)
         return tree
-
-    def test_long_paths_project_real_large_native_receipts_with_all_bindings(self) -> None:
-        from scripts.test_public_native_proof import _PublicNativeFixture
-
-        outer = self._containing_tree("release-receipt-budget")
-        private_root = _long_private_root(outer.root)
-        inner_parent = private_root / "release-fixtures"
-        inner_parent.mkdir()
-        outer_root = private_root / "outer-aggregate-root"
-        outer_root.mkdir()
-        producer = _PublicNativeFixture(outer_root.resolve(strict=True), release_parent=inner_parent,
-                                        containing=(outer,))
-        stage = producer.build_stage()
-        fixture_root = producer.release_root
-        if fixture_root is None:
-            raise AssertionError("release fixture root missing")
-        self.assertEqual(fixture_root.parent, inner_parent)
-        self.assertGreaterEqual(len(str(outer_root / "aggregate")), 512)
-        self.assertGreaterEqual(len(str(fixture_root)), 512)
-        self._assert_large_public_proof(stage, outer_root, [fixture_root], producer.expectation)
-
-    def _assert_large_public_proof(
-            self, stage: Path, root: Path, fixture_roots: list[Path],
-            expectation: ProofExpectation | None) -> None:
-        self.assertIsNotNone(expectation)
-        if expectation is None:
-            raise AssertionError("producer expectation missing")
-        archive_bytes = (stage / "archive-receipt.json").read_bytes()
-        native_bytes = (stage / "native-acceptance-receipt.json").read_bytes()
-        self.assertLessEqual(len(archive_bytes), MAX_AGGREGATE_BYTES)
-        self.assertGreater(len(native_bytes), MAX_RECEIPT_BYTES)
-        self.assertLessEqual(len(native_bytes), MAX_AGGREGATE_BYTES)
-        archive = _json_object(archive_bytes, "archive receipt")
-        native = _json_object(native_bytes, "native receipt")
-        self._assert_receipt_bindings(archive, native, expectation, sha256(archive_bytes))
-        stage_snapshot = {
-            path.relative_to(stage).as_posix(): sha256(path.read_bytes())
-            for path in stage.rglob("*") if path.is_file()
-        }
-        public_path = root / "public-proof.zip"
-        projected = build_public_proof(stage, public_path, expectation)
-        self.assertEqual(projected.get("status"), "PASS")
-        public_bytes = public_path.read_bytes()
-        self.assertLessEqual(len(public_bytes), MAX_PUBLIC_ZIP_BYTES)
-        result = validate_public_proof(public_bytes, expectation)
-        self.assertEqual(result.get("status"), "PASS")
-        self.assertEqual(result.get("case_results_verdict"), "PASS")
-        self.assertEqual(result.get("expected_case_count"), len(CASE_DEFINITIONS))
-        identity = _mapping(result.get("identity"), "validated public identity")
-        self.assertEqual(
-            _mapping(identity.get("source_harness"), "public source fingerprint").get("sha256"),
-            _mapping(native.get("source_harness"), "native source fingerprint").get("sha256"),
-        )
-        self.assertEqual(
-            _mapping(identity.get("archive_source_harness"), "public archive fingerprint").get(
-                "sha256",
-            ),
-            _mapping(archive.get("source_harness"), "archive source fingerprint").get("sha256"),
-        )
-        self.assertEqual(identity.get("release_identity"), archive.get("release_identity"))
-        self.assertEqual(
-            _mapping(identity.get("archive"), "public archive").get("sha256"),
-            expectation.archive_sha256,
-        )
-        native_binaries = _mapping(native.get("binaries"), "native binaries")
-        self.assertEqual(identity.get("binaries"), {
-            "delegate": _mapping(native_binaries.get("delegate"), "delegate").get("sha256"),
-            "runner": _mapping(native_binaries.get("delegate-run"), "delegate-run").get("sha256"),
-            "pueue": _mapping(native_binaries.get("pueue"), "pueue").get("sha256"),
-            "pueued": _mapping(native_binaries.get("pueued"), "pueued").get("sha256"),
-        })
-        self.assertEqual(stage_snapshot, {
-            path.relative_to(stage).as_posix(): sha256(path.read_bytes())
-            for path in stage.rglob("*") if path.is_file()
-        })
-        self.assertNotIn(str(root).encode(), public_bytes)
-        self.assertNotIn(str(fixture_roots[0]).encode(), public_bytes)
-
-    def _assert_receipt_bindings(
-            self, archive: dict[str, object], native: dict[str, object],
-            expectation: ProofExpectation, archive_digest: str) -> None:
-        rows = _mapping(native.get("native_acceptance"), "native acceptance").get(
-            "case_receipt_hashes",
-        )
-        if not isinstance(rows, list):
-            raise AssertionError("native case receipt hashes missing")
-        case_ids = {_mapping(row, "case receipt hash").get("case_id") for row in rows}
-        self.assertEqual(case_ids, {case.case_id for case in evidence.EXPECTED_CASES})
-        self.assertEqual(len(rows), len(evidence.EXPECTED_CASES))
-        self._assert_fingerprint(archive.get("source_harness"), None)
-        self._assert_fingerprint(native.get("source_harness"), expectation.source_harness_sha256)
-        self.assertEqual(
-            _mapping(native.get("source_harness"), "native source fingerprint").get("sha256"),
-            expectation.source_harness_sha256,
-        )
-        self.assertEqual(native.get("archive_receipt_sha256"), archive_digest)
-        archive_artifact = _mapping(archive.get("artifact"), "archive artifact")
-        self.assertEqual(archive_artifact.get("archive_sha256"), expectation.archive_sha256)
-        native_binaries = _mapping(native.get("binaries"), "native binaries")
-        archive_binaries = _mapping(archive.get("binaries"), "archive binaries")
-        native_hashes = {
-            "delegate": _mapping(native_binaries.get("delegate"), "delegate").get("sha256"),
-            "runner": _mapping(native_binaries.get("delegate-run"), "delegate-run").get("sha256"),
-            "pueue": _mapping(native_binaries.get("pueue"), "pueue").get("sha256"),
-            "pueued": _mapping(native_binaries.get("pueued"), "pueued").get("sha256"),
-        }
-        archive_hashes = {
-            "delegate": _mapping(archive_binaries.get("delegate"), "delegate").get("sha256"),
-            "runner": _mapping(archive_binaries.get("delegate-run"), "delegate-run").get("sha256"),
-            "pueue": _mapping(archive_binaries.get("pueue"), "pueue").get("sha256"),
-            "pueued": _mapping(archive_binaries.get("pueued"), "pueued").get("sha256"),
-        }
-        self.assertEqual(native_hashes, archive_hashes)
-        self.assertEqual(native_hashes, {
-            "delegate": expectation.delegate_sha256,
-            "runner": expectation.runner_sha256,
-            "pueue": expectation.pueue_sha256,
-            "pueued": expectation.pueued_sha256,
-        })
-
-    def _assert_fingerprint(self, value: object, expected_digest: str | None) -> None:
-        fingerprint = _mapping(value, "source fingerprint")
-        files = fingerprint.get("files")
-        self.assertIsInstance(files, list)
-        digest = sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode())
-        self.assertEqual(fingerprint.get("sha256"), digest)
-        if expected_digest is not None:
-            self.assertEqual(digest, expected_digest)
 
     def test_large_prepared_receipt_replays_and_keeps_both_size_limits(self) -> None:
         from scripts import verify_release_archive as verifier
@@ -224,10 +88,9 @@ class ReleaseReceiptBudgetTests(unittest.TestCase):
         self.assertEqual(fixture.receipt_path.read_bytes(), archive_bytes)
         terminal = _json_object(terminal_bytes, "terminal native receipt")
         archived = _json_object(archive_bytes, "archive receipt")
-        self._assert_receipt_bindings(
-            archived, terminal, _expectation_from_receipts(archived, terminal),
-            sha256(archive_bytes),
-        )
+        self.assertEqual(terminal["archive_receipt_sha256"], sha256(archive_bytes))
+        self.assertEqual(terminal["artifact"], archived["artifact"])
+        self.assertEqual(terminal["delegate_build_identity"], archived["delegate_build_identity"])
         self.assertEqual(terminal.get("source_harness"), prepared.get("source_harness"))
         self.assertEqual(
             _mapping(terminal.get("native_acceptance"), "terminal acceptance").get(
@@ -307,40 +170,6 @@ class ReleaseReceiptBudgetTests(unittest.TestCase):
         self.assertEqual(journal.get("target"), transaction.get("target_identity"))
         self.assertEqual(transaction.get("journal_sha256"), sha256(journal_bytes))
 
-
-def _expectation_from_receipts(
-        archive: dict[str, object], native: dict[str, object]) -> ProofExpectation:
-    release = _mapping(archive.get("release_identity"), "release identity")
-    platform = _mapping(archive.get("platform"), "platform")
-    artifact = _mapping(archive.get("artifact"), "artifact")
-    binaries = _mapping(native.get("binaries"), "native binaries")
-    source = _mapping(native.get("source_harness"), "source fingerprint")
-
-    def binary_hash(name: str) -> str:
-        value = _mapping(binaries.get(name), name).get("sha256")
-        if not isinstance(value, str):
-            raise AssertionError(f"{name} binary hash missing")
-        return value
-
-    return ProofExpectation(
-        repo=_text(release.get("repository"), "repository"),
-        tag=_text(archive.get("tag"), "tag"),
-        release_revision=_text(release.get("commit_sha"), "release revision"),
-        harness_revision=_text(archive.get("harness_revision"), "harness revision"),
-        platform_os=_text(platform.get("os"), "platform OS"),
-        platform_arch=_text(platform.get("arch"), "platform architecture"),
-        opencode_model="fixture-model", ccr_model="fixture-model",
-        source_harness_sha256=_text(source.get("sha256"), "source fingerprint"),
-        archive_sha256=_text(artifact.get("archive_sha256"), "archive digest"),
-        delegate_sha256=binary_hash("delegate"), runner_sha256=binary_hash("delegate-run"),
-        pueue_sha256=binary_hash("pueue"), pueued_sha256=binary_hash("pueued"),
-    )
-
-
-def _text(value: object, label: str) -> str:
-    if not isinstance(value, str):
-        raise AssertionError(f"{label} missing")
-    return value
 
 
 if __name__ == "__main__":

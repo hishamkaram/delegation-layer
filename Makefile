@@ -19,6 +19,7 @@ GORELEASER_BIN := $(BIN_DIR)/goreleaser
 # only these because test-python already runs every Python test.
 VERIFY_SKILLS := python3 scripts/verify_skills.py
 VERIFY_ACCEPTANCE_OWNERSHIP := python3 scripts/verify_acceptance_ownership.py
+VERIFY_MAINTAINABILITY := go run ./cmd/maintainability --strict
 
 .PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-python test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-private-cli-default-stop acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
@@ -86,7 +87,7 @@ verify-maintainability: tool-versions
 
 verify-maintainability-strict: tool-versions
 	go test -race -count=1 ./internal/maintainability/...
-	go run ./cmd/maintainability --strict
+	$(VERIFY_MAINTAINABILITY)
 
 skill-package-check:
 	./scripts/check-skill-package.sh
@@ -109,26 +110,13 @@ test-native-harness:
 	python3 -m unittest discover -s scripts/acceptance_tests -t scripts -p 'test_*.py' -v
 
 test-evidence-tools:
-	python3 -m unittest discover -s scripts -p 'test_handoff_evidence.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_acceptance_evidence.py' -v
 	python3 -m unittest discover -s scripts -p 'test_verify_release_archive.py' -v
-	python3 -m unittest discover -s scripts -p 'test_public_native_*.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_release*.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_*request.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_*history.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_submission.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_hosted_validation.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_promotion.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_projection_recovery.py' -v
-	python3 -m unittest discover -s scripts -p 'test_stage_publication.py' -v
 	python3 -m unittest discover -s scripts -p 'test_release_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_published_install*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_candidate_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_homebrew_formula_render.py' -v
 	python3 -m unittest discover -s scripts -p 'test_actions_artifacts.py' -v
-	python3 -m unittest discover -s scripts -p 'test_development_readiness_workflow.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_publication_contract.py' -v
-	python3 -m unittest discover -s scripts -p 'test_native_publication_root.py' -v
 
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64
@@ -280,7 +268,7 @@ vuln: tool-versions
 
 check:
 	$(MAKE) tool-versions
-	$(MAKE) verify-maintainability-strict
+	$(VERIFY_MAINTAINABILITY)
 	$(VERIFY_SKILLS)
 	$(MAKE) verify-diagram-checksums
 	$(VERIFY_ACCEPTANCE_OWNERSHIP)

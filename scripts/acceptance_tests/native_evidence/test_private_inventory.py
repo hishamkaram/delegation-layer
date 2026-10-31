@@ -6,19 +6,8 @@ import tempfile
 import unittest
 
 from scripts import native_acceptance_evidence as evidence
-from scripts.delegate_acceptance.directories.journal import directory_identity_record
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.native_evidence.contract import (
-    PRIVATE_INVENTORY_MAX_BYTES,
-    PRIVATE_INVENTORY_MAX_ENTRIES,
-    PUBLIC_STAGING_MAX_ENTRIES,
-)
+from scripts.delegate_acceptance.native_evidence.contract import PRIVATE_INVENTORY_MAX_BYTES, PRIVATE_INVENTORY_MAX_ENTRIES
 from scripts.delegate_acceptance.native_evidence.filesystem import _tree_summary
-from scripts.delegate_acceptance.native_evidence.stage_publication import (
-    StagePlan,
-    _inventory,
-    publish_stage,
-)
 # Import the module, not the TestCase, so its tests are discovered only once.
 from scripts import test_native_acceptance_evidence as evidence_tests
 
@@ -125,53 +114,6 @@ class InventoryAggregateTests(unittest.TestCase):
                          (True, OBSERVED_ENTRIES - 1, OBSERVED_BYTES))
         self.assertTrue((failed / "raw-provider-output").is_file())
         self.assertFalse(passed.exists())
-
-
-class PublicStagingCapTests(unittest.TestCase):
-    def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="native-public-staging-cap-")
-        self.addCleanup(temporary.cleanup)
-        parent = Path(temporary.name).resolve(strict=True) / "owned-parent"
-        parent.mkdir()
-        self.output = parent / "stage"
-        owner = DirectoryOwner()
-        try:
-            self.identity = directory_identity_record(
-                owner.create("test stage", self.output, parent))
-        finally:
-            owner.release()
-
-    def plan(self, count: int) -> StagePlan:
-        plan = StagePlan(self.output)
-        for index in range(count - 1):
-            plan.put(self.output / "cases" / f"{index:04d}.json", b"{}")
-        plan.put(self.output / "manifest.json", b"{}")
-        return plan
-
-    def test_plan_cap_is_unchanged(self):
-        self.assertEqual(PUBLIC_STAGING_MAX_ENTRIES, 4096)
-        plan = self.plan(PUBLIC_STAGING_MAX_ENTRIES)
-        with self.assertRaisesRegex(evidence.EvidenceError, "stage_plan_invalid"):
-            plan.put(self.output / "extra.json", b"{}")
-
-    def test_staged_tree_scan_cap_is_unchanged(self):
-        # The planned cases directory is an entry too: 4,095 files fill the cap.
-        at_cap = self.plan(PUBLIC_STAGING_MAX_ENTRIES - 1)
-        (self.output / "cases").mkdir(mode=0o700)
-        for item in at_cap.files():
-            (self.output / item.name).write_bytes(item.data)
-        owner = DirectoryOwner()
-        try:
-            root = owner.adopt_created("test stage", self.output, self.output.parent)
-            observed, temporary = _inventory(root, at_cap.files())
-        finally:
-            owner.release()
-        self.assertEqual((len(observed), temporary), (PUBLIC_STAGING_MAX_ENTRIES - 1, []))
-        over_cap = self.plan(PUBLIC_STAGING_MAX_ENTRIES)
-        extra = over_cap.files()[-2]
-        (self.output / extra.name).write_bytes(extra.data)
-        with self.assertRaisesRegex(evidence.EvidenceError, "stage_inventory_too_large"):
-            publish_stage(over_cap, self.identity)
 
 
 if __name__ == "__main__":

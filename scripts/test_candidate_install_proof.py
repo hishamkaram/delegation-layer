@@ -34,17 +34,16 @@ from scripts.delegate_acceptance.release_verification import candidate_install_p
 from scripts.delegate_acceptance.release_verification import cleanup, commands, filesystem, github, source
 from scripts.delegate_acceptance.release_verification.assets import platform_identity
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    CHANNEL_RULES, WITNESS_ROLE_KINDS, HarnessIdentity, InstallChannel, SourceFileBinding, read_install_proof,
+    CHANNEL_RULES, WITNESS_ROLE_KINDS, InstallChannel,
 )
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CHECKSUMS_PATH, PLATFORMS, ArtifactKind, SourceIdentity, encode_locator, expected_inventory, parse_manifest,
+    CHECKSUMS_PATH, PLATFORMS, ArtifactKind, SourceIdentity, expected_inventory, parse_manifest,
 )
+from scripts.delegate_acceptance.release_verification.candidate_source_observation import TreeEntry, tree_entries
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import BINARIES, VerificationError, expected_archive
 from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
-from scripts.test_candidate_artifact_support import (
-    DOWNLOAD, ENDPOINTS, REPOSITORY, VERSION, CandidateArtifactCase, manifest_bytes, payload_files,
-)
+from scripts.test_candidate_artifact_support import ARTIFACT_ID, DOWNLOAD, ENDPOINTS, VERSION, CandidateArtifactCase, manifest_bytes, payload_files
 from scripts.test_candidate_install_support import RecordingProbe, fake_binary, observed_children
 from scripts.test_candidate_source_support import ChildFault, SourceRepository, settle_retained
 
@@ -53,7 +52,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = b"#!/bin/sh\necho committed installer\n"
 HARNESS_FILES = {
     source.PARSER_SOURCE: (REPO_ROOT / source.PARSER_SOURCE).read_bytes(),
-    app.CLI_SEED: b"VALUE = 'executing harness'\n",
     "install.sh": INSTALL_SH,
 }
 
@@ -81,10 +79,10 @@ class ProofCase(unittest.TestCase):
         self.assertEqual(caught.exception.code, code)
         return caught.exception
 
-    def request(self, *, output: Path | None = None, locator: Path | None = None,
+    def request(self, *, output: Path | None = None,
                 channel: InstallChannel = InstallChannel.SHELL) -> app.ProofRequest:
         return app.ProofRequest(
-            locator=locator or self.tree.root / "locator.json", channel=channel,
+            artifact_id=ARTIFACT_ID, channel=channel,
             output_dir=output or self.tree.root / "output", checkout=self.checkout, github_auth="local-config")
 
     def receipt(self, output: Path) -> dict:
@@ -148,32 +146,6 @@ class InstallerSourceTests(ProofCase):
         self.assertNotIn(caught.exception.code, {"registry_file_missing", "registry_file_not_regular"})
 
 
-class HarnessTests(ProofCase):
-    def observe(self) -> object:
-        return self.call(app.executing_harness, {"commands": []}, self.checkout)
-
-    def test_a_committed_harness_differing_from_the_build_harness_is_accepted(self) -> None:
-        identity = self.observe()
-        self.assertEqual(identity.commit, self.head)
-        self.assertEqual(identity.sha256, source.fingerprint_sources(self.checkout, (app.CLI_SEED,))["sha256"])
-        self.assertNotEqual((identity.commit, identity.sha256),
-                            (self.manifest.build.harness_commit, self.manifest.build.harness_sha256))
-
-    def test_a_working_tree_harness_mutation_refuses(self) -> None:
-        (self.checkout / app.CLI_SEED).write_bytes(b"VALUE = 'substituted'\n")
-        self.assertRefused("candidate_install_harness_not_committed", app.executing_harness,
-                           {"commands": []}, self.checkout)
-
-    def test_a_replacement_object_cannot_make_substituted_bytes_committed(self) -> None:
-        substituted = b"VALUE = 'substituted'\n"
-        original = self.repository.git("rev-parse", f"{self.head}:{app.CLI_SEED}")
-        (self.checkout / app.CLI_SEED).write_bytes(substituted)
-        replacement = self.repository.git("hash-object", "-w", app.CLI_SEED)
-        self.repository.git("replace", original, replacement)
-        self.assertRefused("candidate_install_harness_not_committed", app.executing_harness,
-                           {"commands": []}, self.checkout)
-
-
 class OutputDirectoryTests(ProofCase):
     def test_unownable_output_directories_refuse_before_anything_is_created(self) -> None:
         existing = self.tree.root / "existing"
@@ -188,12 +160,6 @@ class OutputDirectoryTests(ProofCase):
                 self.assertRefused(code, app.prove_candidate_install, request)
         self.assertFalse((self.checkout / "output").exists())
         self.assertEqual(list(existing.iterdir()), [])
-
-    def test_a_locator_inside_the_output_directory_overlaps(self) -> None:
-        output = self.tree.root / "output"
-        self.assertRefused("candidate_install_output_overlap", app.require_output_dir,
-                           self.request(output=output, locator=output / "locator.json"))
-
 
 class BootstrapParentTests(ProofCase):
     """The bootstrap root's parent is resolved once at the application boundary; HOME stays the default."""
@@ -210,7 +176,7 @@ class BootstrapParentTests(ProofCase):
         """The request the real contributor CLI builds, captured before any proof step runs."""
         requests: list[app.ProofRequest] = []
         with mock.patch.object(cli, "prove_candidate_install", lambda request: requests.append(request) or 0):
-            self.assertEqual(cli.main(["--locator", "locator.json", "--channel", "shell",
+            self.assertEqual(cli.main(["--artifact-id", str(ARTIFACT_ID), "--channel", "shell",
                                        "--output-dir", str(self.tree.root / "output"), *extra]), 0)
         (request,) = requests
         return request
@@ -285,36 +251,12 @@ class ExportTests(ProofCase):
 
 
 class GateTests(ProofCase):
-    def write_locator(self) -> Path:
-        path = self.tree.root / "locator.json"
-        path.write_bytes(encode_locator(fx.locator_for(fx.manifest())))
-        return path
-
-    def test_an_uncommitted_harness_fails_before_any_workspace_or_github_request(self) -> None:
-        (self.checkout / app.CLI_SEED).write_bytes(b"VALUE = 'substituted'\n")
-        output = self.tree.root / "output"
-        self.assertEqual(self.call(app.prove_candidate_install, self.request(locator=self.write_locator())), 1)
-        receipt = self.receipt(output)
-        self.assertEqual(receipt["failure"]["code"], "candidate_install_harness_not_committed")
-        self.assertEqual((receipt["verdict"], receipt["cleanup"]["status"]), ("fail", "retained-for-investigation"))
-        self.assertFalse((output / app.WORKSPACE_NAME).exists())
-        self.assertFalse(any(record["name"] == "github-api" for record in receipt["commands"]))
-
-    def test_an_unreadable_locator_fails_with_the_committed_harness_recorded(self) -> None:
-        output = self.tree.root / "output"
-        self.assertEqual(self.call(app.prove_candidate_install, self.request()), 1)
-        receipt = self.receipt(output)
-        self.assertEqual(receipt["failure"]["code"], "candidate_locator_unreadable")
-        self.assertEqual(receipt["source_harness"]["revision"], self.head)
-        self.assertEqual(receipt["claim"], app.CLAIM)
-        self.assertEqual(receipt["gate"], "candidate-install-shell")
-
     def test_an_unproven_github_child_retains_the_workspace_and_reports_it(self) -> None:
         output = self.tree.root / "output"
         fault = ChildFault(lambda argv: argv[:1] == ["gh"])
         with mock.patch.object(commands, "run_bounded_command", fault), \
                 mock.patch.object(github, "run_bounded_command", fault):
-            code = self.call(app.prove_candidate_install, self.request(locator=self.write_locator()))
+            code = self.call(app.prove_candidate_install, self.request())
         # The tree observed the original fault before the gate converted it into the receipt.
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
@@ -325,7 +267,6 @@ class GateTests(ProofCase):
         workspace = output / app.WORKSPACE_NAME
         self.assertEqual(receipt["candidate_install"]["unresolved_ownership"]["workspace"], str(workspace))
         self.assertIn(str(workspace.resolve()), receipt["cleanup"]["retained_paths"])
-        self.assertFalse((output / app.PROOF_NAME).exists())
         settle_retained(self, self.tree, fault, (workspace, output / app.RECEIPT_NAME))
 
 
@@ -352,9 +293,7 @@ class FullFlowTests(CandidateArtifactCase):
         self.repository = SourceRepository(self.tree, "checkout")
         self.source_commit = self.repository.commit(
             {"install.sh": (REPO_ROOT / "install.sh").read_bytes()}, "source")
-        self.head = self.repository.commit(
-            {source.PARSER_SOURCE: HARNESS_FILES[source.PARSER_SOURCE], app.CLI_SEED: HARNESS_FILES[app.CLI_SEED]},
-            "executing harness")
+        self.head = self.source_commit
         info = platform_identity()
         archive_name = expected_archive(info, "v" + VERSION)
         archives = {path: host_archive({name: fake_binary(name, VERSION) for name in BINARIES})
@@ -370,8 +309,6 @@ class FullFlowTests(CandidateArtifactCase):
 
         self.served = self.serve(files=files, manifest=manifest, change=head_sha)
         self.manifest = parse_manifest(manifest)
-        self.locator_path = self.root / "locator.json"
-        self.locator_path.write_bytes(encode_locator(self.served.locator))
         self.output = self.root / "output"
         # The operator HOME below which the bootstrap probe creates its short private root.
         self.home = self.root / "home"
@@ -407,20 +344,19 @@ class FullFlowTests(CandidateArtifactCase):
         def prepare(*args, **kwargs):
             self.events.append("cleanup")
             self.at_cleanup.update({name: (self.output / name).exists()
-                                    for name in (app.PROOF_NAME, app.WITNESS_NAME, app.WORKSPACE_NAME)})
+                                    for name in (app.WORKSPACE_NAME,)})
             return real_prepare(*args, **kwargs)
 
         environment = {"PATH": os.pathsep.join([str(self.root / "bin"), os.environ["PATH"]]),
                        "FIXTURE_LOG": str(self.log_path), "FIXTURE_ROUTES": str(self.routes_path),
                        "GH_TOKEN": "private-canary", "HOME": str(self.home)}
-        request = app.ProofRequest(locator=self.locator_path, channel=InstallChannel.SHELL, output_dir=self.output,
+        request = app.ProofRequest(artifact_id=ARTIFACT_ID, channel=InstallChannel.SHELL, output_dir=self.output,
                                    checkout=self.repository.path, bootstrap_parent=bootstrap_parent)
         ports = ConsumerPorts(run=self.run_child, which=shutil.which)
         probe = (contextlib.nullcontext() if self.probe is None
                  else mock.patch.object(app, "InstalledBootstrapProbe", self.probe))
         with mock.patch.dict(os.environ, environment), observed_children(self.tree), probe, \
-                self.spy(app, "executing_harness", "harness"), self.spy(app, "export_file", "export"), \
-                self.spy(app, "read_install_proof", "readback"), \
+                self.spy(app, "export_file", "export"), \
                 mock.patch.object(cleanup, "prepare_directory_cleanup", side_effect=prepare), \
                 contextlib.redirect_stderr(io.StringIO()):
             return app.prove_candidate_install(request, ports=ports)
@@ -428,28 +364,16 @@ class FullFlowTests(CandidateArtifactCase):
     def receipt(self) -> dict:
         return json.loads((self.output / app.RECEIPT_NAME).read_text(encoding="utf-8"))
 
-    def test_a_proven_install_reads_back_and_rechecks_the_harness_before_cleanup(self) -> None:
+    def test_a_verified_install_records_actual_facts_and_cleans_the_workspace(self) -> None:
         self.assertEqual(self.prove(), 0)
-        # The harness recheck precedes the proof pair; the pair's readback precedes cleanup.
-        self.assertEqual(self.events, ["harness", "export", "harness", "export", "export", "readback", "cleanup"])
-        self.assertEqual(self.at_cleanup, {app.PROOF_NAME: True, app.WITNESS_NAME: True, app.WORKSPACE_NAME: True})
+        self.assertEqual(self.events, ["export", "cleanup"])
+        self.assertEqual(self.at_cleanup, {app.WORKSPACE_NAME: True})
         self.assertFalse((self.output / app.WORKSPACE_NAME).exists())
-        proof, witness = ((self.output / name).read_bytes() for name in (app.PROOF_NAME, app.WITNESS_NAME))
-        value = read_install_proof(proof, witness, manifest=self.manifest,
-                                   installer_source=(REPO_ROOT / "install.sh").read_bytes(), repository=REPOSITORY)
-        executing = HarnessIdentity(
-            commit=self.head, sha256=source.fingerprint_sources(self.repository.path, (app.CLI_SEED,))["sha256"])
-        self.assertEqual(value.harness, executing)
-        self.assertNotEqual(executing.sha256, self.manifest.build.harness_sha256)
-        self.assertNotEqual(self.head, self.source_commit)
-        self.assertEqual(value.installer, SourceFileBinding(
-            source_commit=self.source_commit, repo_path="install.sh",
-            sha256=sha((REPO_ROOT / "install.sh").read_bytes())))
-        self.assertEqual((value.channel, value.candidate_id), (InstallChannel.SHELL, self.served.locator.candidate_id))
         receipt = self.receipt()
         self.assertEqual((receipt["verdict"], receipt["cleanup"]["status"]), ("pass", "complete"))
-        self.assertEqual(receipt["candidate_install"]["proof"]["sha256"], sha(proof))
-        self.assertEqual(receipt["candidate_install"]["witness"]["sha256"], sha(witness))
+        facts = receipt["candidate_install"]
+        self.assertEqual((facts["status"], facts["artifact_id"]), ("verified", ARTIFACT_ID))
+        self.assertEqual(facts["installation"]["tag"], self.manifest.build_tag)
         self.assertEqual(self.requested(), [*ENDPOINTS.values(), DOWNLOAD])
         self.assertNotIn("private-canary", json.dumps(receipt))
 
@@ -464,7 +388,6 @@ class FullFlowTests(CandidateArtifactCase):
         self.assertIn(str(root), receipt["cleanup"]["retained_paths"])
         self.assertEqual((bootstrap["status"], bootstrap["failure"]["type"]), ("failed", "RuntimeError"))
         self.assertEqual(len(bootstrap["unresolved_ownership"]), 1)
-        self.assertFalse((self.output / app.PROOF_NAME).exists())
         self.assertNotIn("private-canary", json.dumps(receipt))
         # The test's own proof before the tree removes the root: the stand-in exited 8 and left no state.
         dispatch = json.loads((root / "r" / "packaged-dispatch.json").read_text(encoding="utf-8"))
@@ -536,71 +459,39 @@ class FullFlowTests(CandidateArtifactCase):
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),
                          ("command_timeout", "candidate-shell-install"))
 
-    def test_a_harness_commit_during_the_run_retains_the_workspace(self) -> None:
-        def commit_once(name: str) -> None:
-            if name == "candidate-shell-install" and self.after is not None:
-                self.after = None
-                self.repository.commit({"later.txt": b"later\n"}, "later")
-        self.after = commit_once
-        self.assertEqual(self.prove(), 1)
-        self.assertRetained("candidate_install_harness_changed")
-        # Only install.sh was exported; no consumable proof names the changed harness.
-        self.assertEqual(self.events, ["harness", "export", "harness"])
-        self.assertFalse((self.output / app.PROOF_NAME).exists())
-        self.assertFalse((self.output / app.WITNESS_NAME).exists())
-
-    def test_an_interrupted_proof_export_escapes_unchanged_after_retaining_the_workspace(self) -> None:
-        interrupt, real_write, writes = KeyboardInterrupt(), filesystem.write_all, []
-
-        def write(descriptor: int, data: bytes) -> None:
-            writes.append(len(data))
-            if len(writes) == 2:
-                raise interrupt
-            real_write(descriptor, data)
-        with mock.patch.object(filesystem, "write_all", side_effect=write), \
-                self.assertRaises(KeyboardInterrupt) as caught:
-            self.prove()
-        self.assertIs(caught.exception, interrupt)
-        self.assertFalse(hasattr(interrupt, "__notes__"))
-        self.assertRetained("verification_interrupted")
-        self.assertEqual(self.receipt()["failure"]["stage"], app.EXPORT_STAGE)
-        self.assertEqual(self.events, ["harness", "export", "harness", "export"])
-        self.assertFalse((self.output / app.WITNESS_NAME).exists())
-        # The gate owner's pins and the receipt lock are proven released by the case's final descriptor check.
-
-    def test_an_export_fault_retains_the_workspace_and_reads_nothing_back(self) -> None:
-        def occupy(name: str) -> None:
-            if name == "candidate-shell-install":
-                (self.output / app.PROOF_NAME).write_bytes(b"foreign")
-        self.after = occupy
-        self.assertEqual(self.prove(), 1)
-        self.assertRetained("candidate_install_evidence_unwritable")
-        self.assertNotIn("readback", self.events)
-        self.assertEqual((self.output / app.PROOF_NAME).read_bytes(), b"foreign")
-
-    def test_a_changed_readback_retains_the_workspace(self) -> None:
-        real = app.read_bounded_regular_file
-
-        def changed(path: Path, limit: int) -> bytes:
-            data = real(path, limit)
-            return data[:-1] + b" " if path.name == app.WITNESS_NAME else data
-        with mock.patch.object(app, "read_bounded_regular_file", side_effect=changed):
-            self.assertEqual(self.prove(), 1)
-        self.assertRetained("candidate_install_evidence_readback_failed")
-        self.assertNotIn("readback", self.events)
-
-
 class ImportClosureTests(unittest.TestCase):
-    def test_the_application_imports_no_test_fixture_store_or_readiness_owner(self) -> None:
-        files = {row["path"] for row in source.fingerprint_sources(REPO_ROOT, (app.CLI_SEED,))["files"]}
-        self.assertIn("scripts/delegate_acceptance/release_verification/candidate_install_proof.py", files)
-        forbidden = ("scripts/acceptance_tests/", "candidate_store", "candidate_readiness", "scripts/test_")
-        self.assertEqual([path for path in files if any(part in path for part in forbidden)], [])
-
     def test_artifact_kinds_of_every_channel_installer_are_consumed(self) -> None:
         for rule in CHANNEL_RULES.values():
             self.assertTrue(rule.installer_kind is None or rule.installer_kind in rule.consumed)
         self.assertIs(WITNESS_ROLE_KINDS["formula"], ArtifactKind.HOMEBREW_FORMULA)
+
+
+class TreeEntryTests(unittest.TestCase):
+    def assertCode(self, code, function, *args):
+        with self.assertRaises(VerificationError) as caught:
+            function(*args)
+        self.assertEqual(caught.exception.code, code)
+
+    def test_entries_decode_exact_paths_and_modes(self):
+        oid = "a" * 40
+        output = (f"100644 blob {oid}\t{"file.json"}\x00100755 blob {oid}\tbin/tool\0"
+                  f"120000 blob {oid}\tlink.json\x00040000 tree {oid}\tdir\x00160000 commit {oid}\tmodule\0"
+                  f"100644 blob {oid}\tname\nwith newline\0").encode()
+        entries = tree_entries(output)
+        self.assertEqual(entries["file.json"], TreeEntry(mode="100644", kind="blob", object_id=oid))
+        self.assertEqual({path for path, entry in entries.items() if entry.regular_blob},
+                         {"file.json", "bin/tool", "name\nwith newline"})
+        self.assertEqual(tree_entries(b""), {})
+
+    def test_malformed_listing_is_refused(self):
+        oid = "a" * 40
+        for output, code in ((f"100644 blob {oid}\ta".encode(), "git_output_invalid"),
+                             (f"100644 blob {oid}\ta\x00100644 blob {oid}\ta\0".encode(), "git_output_invalid"),
+                             (f"100644 blob {oid[:39]}\ta\0".encode(), "git_output_invalid"),
+                             (f"10064 blob {oid}\ta\0".encode(), "git_output_invalid"),
+                             (f"100644 blob {oid}\tbad".encode() + b"\xff\0", "source_path_not_utf8")):
+            with self.subTest(output=output):
+                self.assertCode(code, tree_entries, output)
 
 
 if __name__ == "__main__":

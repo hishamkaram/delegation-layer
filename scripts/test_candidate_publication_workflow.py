@@ -10,11 +10,10 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.native_release.publication_contract import (
-    INPUT_NAMES, PUBLICATION_WORKFLOW, publication_title,
-)
+PUBLICATION_WORKFLOW = "release.yml"
+INPUT_NAMES = ("artifact_id", "resume_published")
 from scripts.delegate_acceptance.release_verification.candidate_publication_delivery import (
-    NPM_TOKEN_VARIABLE, RECEIPT_NAME, TAP_TOKEN_VARIABLE,
+    RECEIPT_NAME,
 )
 from scripts.test_release_workflow_contracts import (
     PUBLICATION_JOB, PUBLISH_STEP, RECEIPT_STEP, WORKFLOWS, conditions, job_steps, workflow_job, workflow_step,
@@ -29,9 +28,10 @@ PINNED_ACTIONS = {
     "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
 }
-JOB_PERMISSIONS = {"actions": "read", "checks": "read", "contents": "write", "pull-requests": "read",
-                   "statuses": "read"}
-OUTPUT_DIR = "candidate-publication"
+JOB_PERMISSIONS = {"actions": "read", "contents": "write"}
+NPM_TOKEN_VARIABLE = "NPM_TOKEN"
+TAP_TOKEN_VARIABLE = "HOMEBREW_TAP_TOKEN"
+OUTPUT_DIR = "distribution-publication"
 
 
 def inputs_block() -> str:
@@ -43,25 +43,19 @@ def mapping(block: str, indent: int) -> dict[str, str]:
 
 
 class DispatchContractTests(unittest.TestCase):
-    def test_the_inputs_are_exactly_the_nine_required_protocol_strings(self):
+    def test_the_inputs_are_exactly_artifact_id_and_explicit_resume(self):
         block = inputs_block()
         names = re.findall(r"(?m)^      ([a-z_0-9]+):$", block)
         self.assertEqual(tuple(names), INPUT_NAMES)
         for name, body in zip(names, re.split(r"(?m)^      [a-z_0-9]+:\n", block)[1:]):
             with self.subTest(name=name):
                 fields = mapping(body, 8)
-                self.assertEqual((fields["required"], fields["type"]), ("true", "string"))
-                self.assertNotIn("default", fields)
-
-    def test_the_run_name_renders_the_shared_title(self):
-        template = re.search(r"(?m)^run-name: (.+)$", SOURCE)
-        self.assertIsNotNone(template)
-        if template is None:
-            raise AssertionError("run-name missing")
-        invocation, digest = "5" * 32, "a" * 64
-        rendered = (template.group(1).replace("${{ inputs.invocation_id }}", invocation)
-                    .replace("${{ inputs.request_sha256 }}", digest))
-        self.assertEqual(rendered, publication_title(invocation, digest))
+                self.assertEqual(fields["required"], "true")
+                self.assertEqual(fields["type"], "string" if name == "artifact_id" else "boolean")
+                if name == "resume_published":
+                    self.assertEqual(fields["default"], "false")
+                else:
+                    self.assertNotIn("default", fields)
 
     def test_the_cli_receives_every_input_by_its_upper_cased_name(self):
         env = mapping(workflow_step(SOURCE, PUBLISH_STEP).split("        env:\n", 1)[1], 10)
@@ -82,7 +76,7 @@ class TrustAndCredentialTests(unittest.TestCase):
 
     def test_the_checkout_is_exactly_h_without_persisted_credentials(self):
         steps = job_steps(workflow_job(SOURCE, PUBLICATION_JOB))
-        checkout = steps["Checkout trusted publication harness"]
+        checkout = steps["Checkout trusted publication code"]
         self.assertEqual(mapping(checkout, 10), {"ref": "${{ github.sha }}", "fetch-depth": "0",
                                                   "persist-credentials": "false"})
         self.assertEqual(SOURCE.count("actions/checkout@"), 1)
@@ -111,9 +105,9 @@ class ReportArtifactTests(unittest.TestCase):
         self.assertEqual([condition.strip() for condition in conditions(step, 8)], ["always()"])
         self.assertNotIn("continue-on-error", step)
         self.assertEqual(mapping(step, 10), {
-            "name": "candidate-publication-${{ github.run_id }}-${{ github.run_attempt }}",
+            "name": "distribution-publication-${{ github.run_id }}-${{ github.run_attempt }}",
             "path": f"${{{{ runner.temp }}}}/{OUTPUT_DIR}/{RECEIPT_NAME}",
-            "if-no-files-found": "error", "retention-days": "90"})
+            "if-no-files-found": "ignore", "retention-days": "90"})
         self.assertIn(f'--output-dir "${{RUNNER_TEMP}}/{OUTPUT_DIR}"', workflow_step(SOURCE, PUBLISH_STEP))
 
 

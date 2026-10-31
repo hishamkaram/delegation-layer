@@ -68,7 +68,6 @@
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:delegate_acceptance.native_evidence.lifetime_closure",
-      "py:delegate_acceptance.native_evidence.public_contract",
       "py:json",
       "py:pathlib",
       "py:shutil",
@@ -471,12 +470,6 @@
     ]
   },
   {
-    "name": "py:test_acceptance_private_dispatch",
-    "owner": "py:test_acceptance_private_dispatch",
-    "layer": "test",
-    "imports": []
-  },
-  {
     "name": "py:test_acceptance_private_ownership",
     "owner": "py:test_acceptance_private_ownership",
     "layer": "test",
@@ -633,30 +626,6 @@
     ]
   },
   {
-    "name": "py:test_handoff_evidence",
-    "owner": "py:test_handoff_evidence",
-    "layer": "test",
-    "imports": [
-      "py:__future__",
-      "py:acceptance_tests.evidence.test_bounded_files",
-      "py:contextlib",
-      "py:delegate_acceptance.evidence.bounded_files",
-      "py:errno",
-      "py:handoff_evidence",
-      "py:handoff_index",
-      "py:hashlib",
-      "py:io",
-      "py:json",
-      "py:os",
-      "py:pathlib",
-      "py:subprocess",
-      "py:tempfile",
-      "py:tracemalloc",
-      "py:unittest",
-      "py:unittest.mock"
-    ]
-  },
-  {
     "name": "py:test_native_acceptance_evidence",
     "owner": "py:test_native_acceptance_evidence",
     "layer": "test",
@@ -674,7 +643,6 @@
       "py:native_acceptance_evidence",
       "py:os",
       "py:pathlib",
-      "py:shutil",
       "py:sys",
       "py:tempfile",
       "py:unittest",
@@ -772,12 +740,12 @@
     ]
   },
   {
-    "name": "py:acceptance_tests.test_relocation_contract",
+    "name": "py:acceptance_tests.test_discovery",
     "owner": "py:acceptance_tests",
     "layer": "test",
     "imports": [
       "py:collections",
-      "py:json",
+      "py:inspect",
       "py:pathlib",
       "py:unittest"
     ]

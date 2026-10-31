@@ -1,163 +1,51 @@
 ---
 name: live-e2e
-description: Execute bounded live provider and supervisor acceptance through the shipped dispatcher and runner with durable evidence.
+description: Verify affected CLI, provider and supervisor behavior using existing bounded drivers and honest platform claims.
 ---
 
-# Live provider acceptance
+# Live E2E
 
-## Trigger
-
-Use this skill only when the requested evidence requires a real provider CLI,
-real authentication, a real isolated supervisor, or a filesystem containment
-probe. Use unit/contract tests for deterministic parser and policy behavior.
-
-Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
-[adapter contract](../../agents/_data/adapter-contract.md),
-[delegation invariants](../../agents/_data/delegation-invariants.md), and the
-[security guide](../../docs/security.md).
-
-For supervisor changes, apply the recovery and verification section of the
-[shared contract](../../agents/_data/maintainability-contract.md#recovery-and-verification).
-For process, supervisor, endpoint, or cleanup changes, also apply its
-[native portability proof](../../agents/_data/maintainability-contract.md#native-portability-proof).
+Use for a real CLI/provider/supervisor acceptance check. Read [provider checks](../../agents/_data/maintainability-contract.md#provider-checks)
+and [lifetime ownership](../../agents/_data/delegation-invariants.md#3-supervision-deadlines-and-forbidden-signals).
+For process/OS changes, also use [native checks](../../agents/_data/maintainability-contract.md#native-platform-checks).
 
 ## Inputs
 
-- the adapter's supported profile, resolved provider path, output-predicate
-  revision, and runtime capability result;
-- an isolated workspace, state root, supervisor configuration, and finite task
-  budget;
-- existing authentication and required executable/configuration prerequisites;
-- the exact success, continuation, refusal, timeout, containment, and replay
-  scenarios required by the plan; and
-- the claim class (fixture, live provider, or native lifecycle), affected
-  transition row IDs, selected native backend/assurance, and whether packaged or
-  default-path behavior is being claimed.
+Changed behavior and cases, actual binary/path under test, requested provider,
+model/effort/permissions, finite budgets and available native host/authentication.
+Use existing driver targets from the [contributor guide](../../docs/contributing.md).
+No new ledger, handoff manifest or hosted proof submission is required.
 
-For managed workspace acceptance, use the canonical [W1–W7 transition
-rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
-and [workspace reference](../agent-integration/references/workspaces.md).
-The coordinator owns one workspace use; auxiliary deadlines never renew a
-provider scope; exact native closure precedes capture and cleanup; and owned
-native proof controls cleanup. Do not add a provider-specific Git subprocess
-owner.
+## Work
 
-## Workflow
+1. Build/use the actual changed CLI and runner. A supplied development pair
+   proves its own scenario; a package/default-path claim must exercise that
+   path. Do not silently replace the selected binaries or provider.
+2. Choose affected success/failure controls. Native write modes need observable
+   creation/edit/command results; native read-only behavior is provider-owned,
+   not an independent Delegate sandbox. Use Git only where required.
+3. Use [agent integration](../agent-integration/SKILL.md) for external work.
+   Capture admission once; observe the same created task. Never redispatch for
+   missing output, infer success from a queue row or bypass a Delegate blocker.
+4. Verify the terminal outcome and requested result/artifacts. Committed
+   publication alone does not prove assignment fulfillment. For continuation,
+   verify the actual recorded native session and preserved predecessor.
+5. Use canonical process/directory owners. Keep pending operations owned until
+   completion. A shutdown acknowledgement is not lifetime closure. Remove only
+   invocation-owned paths after canonical closure; retain diagnostic state if
+   closure is unknown. Never delete shared parents or user runtime settings.
+6. Distinguish fixtures, native lifecycle, default installation and real provider
+   results. Use existing driver outputs for diagnosis, including failed/bounded
+   finalization. Missing auth/tool/host is blocked, not a passing skip.
+7. Preserve actual model/effort and selected backend/assurance in the report.
+   Private raw output and credentials stay out of public logs/artifacts. Do not
+   add receipt/hash obligations unrelated to the changed behavior.
 
-1. Verify prerequisites and record sanitized platform, executable, profile,
-   configuration-source, task/session, timing, and digest metadata. Runtime
-   preflight must locate an executable, verify it is executable, run help, and
-   confirm the adapter's stable runtime flags are advertised. The current probe
-   records the resolved provider path and leaves version and provider SHA-256
-   fields empty; it does not extract versions from help. Historically populated
-   provider diagnostics remain validated history, never readiness gates.
-   Provider-specific
-   forwarded options are proven by the live turn. Never put
-   credentials, tokens, unrelated environment values, or private raw logs in a
-   receipt.
-   Apply the contract's [native backend matrix and bound receipt
-   requirements](../../agents/_data/maintainability-contract.md#native-portability-proof).
-   Keep fixture, provider, and native lifecycle claims separate; when credentials
-   exist only in an interactive login context, launch the rebuilt Delegate
-   inside that exact login context rather than calling the provider directly.
-   Run this during development, before the pull request, with the exact package
-   or binary under test: record its resolved path, SHA-256, and build identity,
-   and bind them to the source snapshot. A binary whose digest differs from the
-   one recorded, or that does not match the snapshot, is `BLOCKED` even when the
-   version string is the same.
-2. Launch through the shipped dispatcher/runner with its isolated private
-   supervisor and finite stdin followed by EOF for ordinary tasks, or the
-   explicit interactive profile with core-owned protocol stdin until native
-   completion. Exercise native
-   question replies and steering only where advertised; waiting retains the
-   original finite budget. Do not call the provider directly, pass the brief in
-   argv, or mutate global config. Apply the invariants' [canonical
-   forbidden-signal policy and narrow acceptance-driver
-   exception](../../agents/_data/delegation-invariants.md#forbidden-signal-policy).
-3. Inspect filesystem and sealed evidence directly. Exercise the profile's
-   positive behavior and any advertised native access boundary, then exact
-   session continuation and observational replay. Preserve predecessor records
-   byte-for-byte.
-   Before cleanup, enumerate every consumer of each resource or operational
-   record being removed, including workers, observers, recovery, fixtures,
-   provider harnesses, and receipt finalizers; record how each consumer reaches
-   its verdict from durable evidence. Cleanup remains unauthorized until every
-   listed consumer can finish from that evidence.
-4. Apply the plan's result predicates. A missing prerequisite or inconclusive
-   control is `BLOCKED`, never pass. A rejected task is evaluated from its
-   authoritative outcome and sealed evidence; it is not required to have an
-   empty rejection payload.
-5. Satisfy every applicable item in the contract's [live acceptance
-   proof](../../agents/_data/maintainability-contract.md#live-acceptance-proof):
-   lifetime closure before cleanup, exact packaged/default-path proof, live
-   lease capacity proof, and always-finalized bounded failure receipts.
-   Keep fixture, native-lifecycle, packaged/default-path, and live-provider
-   claims as separate verdicts with separate receipts; one class cannot upgrade
-   another.
-6. Finalize sanitized receipts for every exit and report the exact command,
-   status, identities, observations, artifact digests, and independent claim
-   verdicts. Do not retry paid work automatically.
-7. Create one unique, disposable state root for each live test. Remove that
-   root only after the canonical lifetime-closure receipt is committed. Record
-   the root and parent identities when this invocation creates the root, and
-   delete only through that token; a pathname, prefix, or boolean is not cleanup
-   authority. Never remove a shared/default parent.
-   Successful runs remove only invocation-owned raw process captures while
-   retaining compact receipts. On a failure with unresolved process ownership,
-   retain the evidence output and every owned root, and record the reason;
-   never use broad prefix deletion or remove user state. The skill-routing
-   harness additionally proves its private queue and daemon closure; only the
-   nested Delegate task records can supply guardian empty-scope evidence.
-   Reuse the shared cleanup helper and test both the closed and unclosed paths.
+## Checks and result
 
-All acceptance harnesses share the canonical process owner in
-`../../scripts/delegate_acceptance/processes/operations.py`;
-`../../scripts/acceptance_supervisor_common.py` exports the same class objects.
-A provider harness may supply a
-narrow stdin or bounded-output hook, but it must not add its own `Popen`, wait,
-process registry, or cleanup implementation. Run the ownership verifier after
-changing an acceptance harness.
-
-Use `make acceptance-native` for the shared native mode matrix. Unattended write
-scenarios must prove file creation, editing, shell execution, exact continuation,
-and observational replay. Do not require outside-workspace denial from a mode
-that delegates its access policy to the provider. Keep historical denial
-fixtures as tests of their original contracts.
-
-For release acceptance, prove the development candidate during development,
-before its pull request, through the
-[candidate pipeline](../../docs/contributing.md#candidate-pipeline). Record the
-attempt intent before native work, and let the canonical record commands write
-the candidate store. Keep provider credentials on the authenticated local host.
-Recovery never reruns paid native cases. Retain any visibility or GitHub-access
-prerequisite block. Tag-based public proof ZIP submission applies only to
-[legacy receipts](../../docs/contributing.md#legacy-tag-based-native-receipts).
-
-## Deliverables
-
-- the contract's [handoff evidence
-  manifest](../../agents/_data/maintainability-contract.md#handoff-evidence) with
-  sanitized acceptance receipts;
-- task/session identities and direct filesystem observations;
-- command, exact source, Delegate binary, and evidence fingerprints, platform,
-  native primitive and assurance receipts, profile, and predicate revision;
-- optional historically reported provider diagnostics;
-- separate fixture, live-provider, and native-lifecycle verdicts; and
-- a named `passed`, `failed`, or `BLOCKED` result with the reason.
-
-## Exit criteria
-
-- Every required probe for the selected profile and requested scenario ran through the
-  normal dispatch, execution, capture, sealing, collection, and publication
-  path.
-- Required positive controls, denial controls, session identity, replay
-  immutability, and timeout/refusal behavior have direct evidence.
-- No provider credential or private raw output entered the repository.
-- Missing, unsupported, or inconclusive prerequisites remain explicitly
-  `BLOCKED`; they are never reported as acceptance success.
-- Lifetime closure precedes owned-state cleanup; packaged/default-path and live
-  capacity claims have the exact receipts required by the shared contract; and
-  every bounded failure path has a finalized receipt.
-- Every claimed OS-sensitive behavior names the native host kernel and
-  architecture; build-only and foreign-kernel evidence remain separately
-  labeled.
+Run the relevant existing scenario once on stable input. Do not run a full paid
+matrix for unchanged runtime, repeat the aggregate after its subsets or install
+another account/provider for a green result. Functional deadline and cleanup
+bounds remain meaningful. Report command, binary/version/path, platform,
+task/scenario outcome, cleanup and unavailable checks without claiming universal
+proof. Root owns final integration/review and any Git or publication operation.
