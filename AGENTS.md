@@ -22,8 +22,13 @@ users and providers own their CLI installations, settings and accounts.
 5. Verify source and required native/provider facts before choosing a design.
    An unavailable tool blocks only dependent work. Do not repair global
    configuration or substitute a provider to obtain a pass.
-6. Use native path/temp APIs and isolate OS primitives. A cross-build or another
-   kernel does not prove native behavior. Windows is a future, unverified host.
+6. Construct, parse and compare values through domain APIs using the contract's
+   semantics: value, structure or identity. Check required representation and
+   input/safety constraints separately; equivalence alone does not prove validity.
+   Derive expected results independently from verified requirements and fixture
+   facts, not incidental output from one host. Use native path/temp APIs and
+   isolate OS primitives. A cross-build or another kernel does not prove native
+   behavior. Windows is a future, unverified host.
 7. Tests, fixtures, installers and contributor tools are maintained code. Keep
    architectural boundaries and meaningful checks; never weaken assertions,
    suppress a finding or relabel handwritten code to obtain a pass.
