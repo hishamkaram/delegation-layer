@@ -63,7 +63,7 @@ def validate_provider_runtime_metadata(
         launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
         started_evidence: dict[str, object] | None = None,
         label: str = "provider runtime metadata") -> dict[str, str] | None:
-    """Validate metadata and launch evidence; observed_version is diagnostic only."""
+    """Validate recorded runtime facts; ignore observed_version for legacy API compatibility."""
     require(isinstance(meta, dict), f"{label} is not an object")
     require(not (launch_evidence is not None and started_evidence is not None),
             f"{label} launch evidence modes are mutually exclusive")

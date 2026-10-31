@@ -391,8 +391,8 @@ class InspectionHarnessTests(unittest.TestCase):
                 with self.assertRaises(AcceptanceFailure):
                     provider_common.validate_provider_runtime_metadata(changed)
 
-    def test_provider_runtime_metadata_keeps_historical_version_equality(self):
-        """Historical metadata stays unchanged; the observed version is diagnostic."""
+    def test_provider_runtime_metadata_keeps_legacy_diagnostic_argument(self):
+        """Legacy observed_version calls preserve authoritative historical metadata."""
         meta = {
             "provider_executable": "/fixture/provider",
             "provider_version": "fixture-v1",

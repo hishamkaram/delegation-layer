@@ -250,9 +250,7 @@ def validate_task_request(*, name: str, task: str, directory: Path, root_id: str
 
 
 def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
-                       claude: Path, provider_version: str | None, workspace: Path,
-                       provider_sha256: str,
-                       provider: str, mode: str, approval: str,
+                       workspace: Path, mode: str, approval: str,
                        revision: str) -> tuple[dict[str, object], str]:
     meta = _read_task_record(directory, task, "meta.json")
     validate_provider_runtime_metadata(meta, label=f"{name} provider runtime metadata")

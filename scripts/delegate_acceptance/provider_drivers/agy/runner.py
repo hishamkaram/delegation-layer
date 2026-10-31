@@ -290,8 +290,8 @@ class NativeRun:
         validate_start_records(name, task, start, started, self.root_id)
         meta = self.read_record(task, "meta.json")
         predicate = validate_meta_supervisor(name, meta, supervisor)
-        policy, pending_runtime, profile_revision = validate_effective_policy(
-            name, meta, self.prepared.workspace, self.provider_sha256)
+        policy, profile_revision = validate_effective_policy(
+            name, meta, self.prepared.workspace)
         if self.profile_revision is None:
             self.profile_revision = profile_revision
         require(profile_revision == self.profile_revision,
@@ -299,8 +299,7 @@ class NativeRun:
         validate_policy_sources(name, policy, self.environment, profile_revision)
         provider_exit = self.read_record(task, "provider.exit")
         validate_provider_exit(
-            name=name, task=task, meta=meta, started=started, provider_exit=provider_exit, pending_runtime=pending_runtime,
-            agy=self.agy,
+            name=name, task=task, meta=meta, started=started, provider_exit=provider_exit,
             root_id=self.root_id, predicate=predicate, expected_verdict=expected_verdict)
         outcome = self.read_record(task, "outcome.json")
         payload_bytes = validate_outcome(

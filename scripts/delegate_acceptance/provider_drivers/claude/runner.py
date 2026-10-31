@@ -324,8 +324,8 @@ class ClaudeAcceptance:
     def _validate_task_meta(self, name: str, task: str,
                             directory: Path) -> dict[str, object]:
         meta, profile_revision = validate_claude_task_meta(
-            name=name, task=task, directory=directory, root_id=self.root_id, claude=self.claude, provider_version=self.provider_version,
-            workspace=self.workspace, provider_sha256=self.provider_sha256, provider=PROVIDER, mode=MODE,
+            name=name, task=task, directory=directory, root_id=self.root_id,
+            workspace=self.workspace, mode=MODE,
             approval=APPROVAL,
             revision=NATIVE_PROFILE_REVISION)
         if self.profile_revision is None:

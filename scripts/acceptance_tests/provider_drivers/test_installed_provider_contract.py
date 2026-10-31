@@ -47,17 +47,14 @@ def validate_meta(kind: str, directory: Path, meta: dict[str, object]) -> None:
     write_json(directory / "meta.json", meta, replace=True)
     if kind == "agy":
         meta["effective_config"]["containment"] = AGY_MODE
-        agy_evidence.validate_effective_policy("fixture", meta, directory, "f" * 64)
+        agy_evidence.validate_effective_policy("fixture", meta, directory)
         return
     module = claude_evidence if kind == "claude" else codex_evidence
     arguments = {
         "name": "fixture", "task": TASK, "directory": directory, "root_id": ROOT,
-        kind: Path("/installed/new-provider"), "provider_version": "different diagnostic",
-        "workspace": directory, "provider_sha256": "f" * 64,
+        "workspace": directory,
         "mode": "read-only", "approval": "plan", "revision": "native-permissions-v1",
     }
-    if kind == "claude":
-        arguments["provider"] = "claude:print"
     module.validate_task_meta(**arguments)
 
 
@@ -94,8 +91,7 @@ def validate_launch(kind: str, directory: Path, meta: dict[str, object],
         started = json.loads((directory / "provider.started.json").read_text())
         agy_evidence.validate_provider_exit(
             name="fixture", task=TASK, meta=meta, started=started, provider_exit=seal,
-            pending_runtime="runtime_preflight_sha256" in meta,
-            agy=Path("/installed/old-provider"), root_id=ROOT,
+            root_id=ROOT,
             predicate=meta["predicate"], expected_verdict="committed")
         return
     module = claude_evidence if kind == "claude" else codex_evidence
