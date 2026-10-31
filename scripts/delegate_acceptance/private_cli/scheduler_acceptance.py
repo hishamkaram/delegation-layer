@@ -14,7 +14,10 @@ from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
 from scripts.delegate_acceptance.private_cli.fixture_setup import prepare_fixture
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
-from scripts.delegate_acceptance.private_cli.scheduler_cases import CASE_SECONDS, SchedulerCase, run_overlap_stop, run_successive
+from scripts.delegate_acceptance.private_cli.scheduler_cases import (
+    CASE_SECONDS, SUCCESSIVE_SECONDS, SchedulerCase, run_overlap_stop,
+)
+from scripts.delegate_acceptance.private_cli.scheduler_sequence import run_successive
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 
@@ -75,6 +78,19 @@ def retain_unknown_service(lifetime: FixtureLifetime, receipt: AcceptanceReceipt
         release_owned_directories(lifetime.old_layout_owned)
 
 
+def retire_case_services(case: SchedulerCase) -> None:
+    """Every owned generation gets a retirement attempt, including on failure."""
+    errors: list[BaseException] = []
+    for service in (case.service, *case.previous_services):
+        service.deadline = time.monotonic() + 30
+        try:
+            service.retire()
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("scheduler service retirement failed", errors)
+
+
 def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetime: FixtureLifetime,
                 receipt: AcceptanceReceipt, failure: BaseException | None) -> None:
     service = case.service if case is not None else None
@@ -96,7 +112,7 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
                 lifetime.old_libexec / "pueue", lifetime.private_config, lifetime.env,
                 state=case.fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
             )
-            case.service.retire()
+            retire_case_services(case)
         except BaseException as cleanup_error:
             failure = cleanup_error
     finalize_fixture(args, failure, lifetime, receipt, failure is None)
@@ -106,7 +122,7 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
 
 def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
     selected = replace(args, output=output / (name + ".json"), scenario=name)
-    receipt = AcceptanceReceipt(selected.output, 2 if name == "successive" else 1, 1,
+    receipt = AcceptanceReceipt(selected.output, 3 if name == "successive" else 1, 1,
                                 {"delegate": args.delegate, "delegate-run": args.runner,
                                  "pueue": args.pueue, "pueued": args.pueued})
     receipt.add_details(scenario="scheduler-" + name, acceptance_scope="native fixture; no AI account")
@@ -118,7 +134,7 @@ def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
         fixture = prepare_fixture(selected, uuid.uuid4().hex, False, lifetime, responses, receipt)
         if lifetime.old_install is None:
             raise RuntimeError("scheduler fixture lost its installed executable")
-        deadline = time.monotonic() + CASE_SECONDS
+        deadline = time.monotonic() + (SUCCESSIVE_SECONDS if name == "successive" else CASE_SECONDS)
         service = SchedulerService(lifetime, fixture.state, lifetime.old_install / "delegate", deadline)
         case = SchedulerCase(fixture, lifetime, responses, receipt, service, deadline)
         receipt.add_details(service={"host": service.system, "unit": service.unit, "target": service.target,

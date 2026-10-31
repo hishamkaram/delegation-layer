@@ -97,15 +97,31 @@ func (td *TaskDir) UserStopRequestedContext(ctx context.Context) (bool, error) {
 // ProveUnlaunchedTaskContext elects the existing lifetime owner before taking
 // the run lock. A busy owner is not proof. Durable refusal fences later owners.
 func (td *TaskDir) ProveUnlaunchedTaskContext(ctx context.Context) (proven bool, resultErr error) {
+	proven, _, resultErr = td.ProveUnlaunchedTaskReferenceContext(ctx)
+	return proven, resultErr
+}
+
+// ProveUnlaunchedTaskReferenceContext returns the validated permanent refusal's
+// canonical digest under the same lifetime/run ownership as the existing proof.
+// Unlike fencing, this also accepts submitted tasks and never writes a refusal.
+func (td *TaskDir) ProveUnlaunchedTaskReferenceContext(ctx context.Context) (proven bool, referenceSHA256 string, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			proven, referenceSHA256 = false, ""
+		}
+	}()
+	if td == nil {
+		return false, "", task.ErrInvalidPermit
+	}
 	owner, err := td.TryAcquireLifetimeOwnerContext(ctx)
 	if unlaunchedTaskLockBusy(err) {
-		return false, nil
+		return false, "", nil
 	}
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
-	return td.ProveUnlaunchedTaskOwnedContext(ctx)
+	return td.withUnlaunchedTaskRunLockContext(ctx, false)
 }
 
 // ProveUnlaunchedTaskOwnedContext requires the caller's lifetime-owner lease.

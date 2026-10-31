@@ -21,6 +21,9 @@ func scheduleCommand(a Arguments, deps storeDependencies) (result commandResult)
 	if a.ScheduleAction == "create" {
 		return createScheduleCommand(a, deps)
 	}
+	if a.ScheduleAction == "history" || a.ScheduleAction == "execution" {
+		return scheduleQueryCommand(a, deps)
+	}
 	response := newResponse("schedule")
 	if err := validateScheduleRequest(a); err != nil {
 		return failed(response, err, 2)
@@ -63,6 +66,13 @@ func scheduleCommand(a Arguments, deps storeDependencies) (result commandResult)
 func validateScheduleRequest(a Arguments) error {
 	if a.ScheduleAction == "list" {
 		return contract.ValidateSchedulePage(contract.SchedulePage{AfterScheduleID: a.ScheduleAfter, Limit: a.ScheduleLimit})
+	}
+	if a.ScheduleAction == "history" {
+		_, err := scheduleHistoryPage(a)
+		return err
+	}
+	if a.ScheduleAction == "execution" {
+		return task.ValidateTaskID(a.TaskID)
 	}
 	return task.ValidateTaskID(a.ScheduleID)
 }

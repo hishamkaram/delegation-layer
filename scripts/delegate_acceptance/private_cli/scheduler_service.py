@@ -104,6 +104,7 @@ class SchedulerService:
     state: Path
     delegate: Path
     deadline: float
+    generation: int = 0
     attempted: bool = False
     started: bool = False
     stopped: bool = False
@@ -115,8 +116,9 @@ class SchedulerService:
             raise AcceptanceBlocked("unsupported-scheduler-service-host")
         if self.lifetime.base is None:
             raise RuntimeError("scheduler service requires an owned fixture")
+        directory_name = "scheduler-service" if self.generation == 0 else f"scheduler-service-{self.generation}"
         self.directory = self.lifetime.ownership.create(
-            "scheduler service files", self.lifetime.base / "scheduler-service", self.lifetime.base
+            "scheduler service files", self.lifetime.base / directory_name, self.lifetime.base
         ).directory
         self.label = "org.delegate.scheduler-acceptance." + uuid.uuid4().hex
         self.unit = self.label + ".service"

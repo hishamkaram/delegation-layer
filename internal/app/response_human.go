@@ -33,6 +33,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	if response.Command == "schedule" && response.Schedule != nil && response.Schedule.Request != nil && output.Len() > 2<<20 {
 		return ErrJSONResponseTooLarge
 	}
+	if (response.ScheduleHistory != nil || response.ScheduleExecution != nil) && output.Len() > MaxJSONResponseBytes {
+		return ErrJSONResponseTooLarge
+	}
 	return writeAll(w, []byte(output.String()))
 }
 

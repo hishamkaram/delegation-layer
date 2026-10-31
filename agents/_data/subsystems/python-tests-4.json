@@ -499,6 +499,7 @@
       "py:delegate_acceptance.private_cli.scheduler_acceptance",
       "py:delegate_acceptance.private_cli.scheduler_cases",
       "py:delegate_acceptance.private_cli.scheduler_occurrences",
+      "py:delegate_acceptance.private_cli.scheduler_sequence",
       "py:delegate_acceptance.private_cli.scheduler_service",
       "py:fcntl",
       "py:hashlib",

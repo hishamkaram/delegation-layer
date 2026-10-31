@@ -10,6 +10,70 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+func TestSchedulerObservationDiagnosticPreservesReleaseAndNextDispatch(t *testing.T) {
+	store := database(t)
+	created := instant("2026-01-01T00:00:00Z")
+	create(t, store, 1, created)
+	prior := claimPrior(t, store, 1, 90, created, created.Add(time.Minute))
+	clock := newClock(created.Add(90 * time.Second))
+	observed := make(chan string, 1)
+	started := make(chan DispatchRequest, 1)
+	state := pending(clock.Now(), task.AdmissionAdmitted)
+	state.Observation.Liveness = task.LivenessEnded
+	state.Observation.FaultCode = "collection_failed"
+	state.Release = &contract.Release{
+		ReleasedAt: clock.Now(), Kind: contract.ReleaseClosed,
+		Ref: task.ComputeSHA256([]byte("validated native closure")),
+	}
+	diagnostic := errors.New("collection diagnostic after valid local re-read")
+	tasks := taskFuncs{
+		observe: func(taskID string) (TaskState, error) {
+			observed <- taskID
+			return state, diagnostic
+		},
+		dispatch: func(request DispatchRequest) (TaskState, error) {
+			started <- request
+			return pending(clock.Now(), task.AdmissionAdmitted), nil
+		},
+	}
+	var events []Event
+	l, ctx := testLoop(t, Config{Store: store, Clock: clock, Tasks: tasks, Report: func(event Event) { events = append(events, event) }})
+	scan(t, ctx, l)
+	if taskID := receive(t, observed); taskID != prior.TaskID {
+		t.Fatalf("observed task=%s, want prior %s", taskID, prior.TaskID)
+	}
+	finish(t, ctx, l)
+	assertSchedulerDiagnosticRelease(t, ctx, store, prior.TaskID, state)
+	clock.set(created.Add(2 * time.Minute))
+	scan(t, ctx, l)
+	request := receive(t, started)
+	if request.Definition.ScheduleID != prior.ScheduleID || request.TaskID == prior.TaskID {
+		t.Fatalf("next occurrence was blocked or reused the old task: %+v", request)
+	}
+	finish(t, ctx, l)
+	next, err := store.GetOccurrence(ctx, request.TaskID)
+	if err != nil || !next.Due.Equal(created.Add(2*time.Minute)) {
+		t.Fatalf("next eligible minute was not dispatched: %+v %v", next, err)
+	}
+	for _, event := range events {
+		if event.TaskID == prior.TaskID && event.Phase == "observe" && event.Code == "task_error" {
+			return
+		}
+	}
+	t.Fatal("release succeeded but task diagnostic was not reported")
+}
+
+func assertSchedulerDiagnosticRelease(t *testing.T, ctx context.Context, store contract.Store, taskID string, state TaskState) {
+	t.Helper()
+	stored, err := store.GetOccurrence(ctx, taskID)
+	if err != nil || stored.Release == nil || stored.Release.Kind != state.Release.Kind || stored.Release.Ref != state.Release.Ref || !stored.Release.ReleasedAt.Equal(state.Release.ReleasedAt) {
+		t.Fatalf("task diagnostic discarded valid release: %+v %v", stored, err)
+	}
+	if stored.Observation == nil || !stored.Observation.ObservedAt.Equal(state.Observation.ObservedAt) || stored.Observation.Admission != task.AdmissionAdmitted || stored.Observation.Liveness != task.LivenessEnded || stored.Observation.Publication != task.PublicationPending || stored.Observation.FaultCode != "collection_failed" {
+		t.Fatalf("task diagnostic discarded valid observation: %+v", stored.Observation)
+	}
+}
+
 func TestSchedulerTaskEvidenceFaultBlocksOnlyAffectedSchedule(t *testing.T) {
 	store := database(t)
 	created := instant("2026-01-01T00:00:00Z")

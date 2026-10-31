@@ -60,7 +60,7 @@ func scheduleAction(args []string) (string, []string, error) {
 		remaining := append(append([]string(nil), args[:i]...), args[i+1:]...)
 		return arg, remaining, nil
 	}
-	return "", nil, errors.New("schedule requires create, list, show, pause, resume, or delete")
+	return "", nil, errors.New("schedule requires create, list, show, history, execution, pause, resume, or delete")
 }
 
 func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
@@ -84,6 +84,9 @@ func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 	case "list":
 		fs.StringVar(&a.ScheduleAfter, "after", "", "schedule cursor")
 		fs.IntVar(&a.ScheduleLimit, "limit", defaultSchedulePageSize, "schedules per page")
+	case "history":
+		fs.StringVar(&a.ScheduleBefore, "before", "", "exclusive RFC3339Nano history cursor")
+		fs.IntVar(&a.ScheduleLimit, "limit", defaultSchedulePageSize, "history entries per page")
 	}
 }
 
@@ -91,11 +94,17 @@ func validateSchedulePositionals(a *Arguments, positional []string) error {
 	switch a.ScheduleAction {
 	case "create", "list":
 		return validateNoPositional("schedule "+a.ScheduleAction, positional)
-	case "show", "pause", "resume", "delete":
+	case "show", "history", "pause", "resume", "delete":
 		if len(positional) != 1 {
 			return fmt.Errorf("schedule %s requires exactly one schedule ID", a.ScheduleAction)
 		}
 		a.ScheduleID = positional[0]
+		return nil
+	case "execution":
+		if len(positional) != 1 {
+			return errors.New("schedule execution requires exactly one task ID")
+		}
+		a.TaskID = positional[0]
 		return nil
 	default:
 		return fmt.Errorf("unknown schedule action %q", a.ScheduleAction)

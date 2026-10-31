@@ -17,6 +17,7 @@ from unittest.mock import patch
 from scripts.delegate_acceptance.private_cli import scheduler_acceptance as application
 from scripts.delegate_acceptance.private_cli import scheduler_cases as cases
 from scripts.delegate_acceptance.private_cli import scheduler_service as native
+from scripts.delegate_acceptance.private_cli import scheduler_sequence as sequence
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
 from scripts.delegate_acceptance.private_cli.fixture_records import FixtureInstallation
@@ -187,6 +188,65 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         env_index = command.index("/usr/bin/env")
         self.assertEqual(command[env_index + 1], "-i")
         self.assertIn("HOME=" + self.lifetime.env["HOME"], command)
+
+    def test_restart_uses_separate_owned_service_and_retains_original_for_cleanup(self):
+        case = self.case(self.service())
+        original = case.service
+        with patch.object(original, "stop") as stop, patch.object(native.SchedulerService, "start") as start:
+            case.restart()
+        stop.assert_called_once()
+        start.assert_called_once()
+        self.assertEqual(case.previous_services, [original])
+        self.assertNotEqual(case.service.directory, original.directory)
+        self.assertNotEqual(case.service.unit, original.unit)
+        self.assertEqual(case.service.state, original.state)
+
+    def test_retirement_attempts_prior_generation_after_current_failure(self):
+        case = self.case(self.service())
+        previous = native.SchedulerService(self.lifetime, self.state, self.base / "delegate", time.monotonic() + 30,
+                                           generation=1)
+        case.previous_services.append(previous)
+        failure = RuntimeError("current retirement failed")
+        with (patch.object(case.service, "retire", side_effect=failure),
+              patch.object(previous, "retire") as retire_previous):
+            with self.assertRaises(BaseExceptionGroup) as raised:
+                application.retire_case_services(case)
+        retire_previous.assert_called_once()
+        self.assertEqual(raised.exception.exceptions, (failure,))
+
+    def test_public_history_rejects_unknown_or_malformed_row_kind(self):
+        for entry in ({"kind": "future"}, {"kind": "occurrence", "occurrence": []},
+                      {"kind": "skip", "skip": {"from": "2026-01-01T00:02:00Z", "to": "2026-01-01T00:01:00Z"}}):
+            with self.subTest(entry=entry), self.assertRaises(RuntimeError):
+                sequence.history_occurrences({"schedule_history": {"entries": [entry]}})
+
+    def test_execution_evidence_refuses_another_occurrence_and_incomplete_inspection(self):
+        row = Occurrence(FIRST_ID, SCHEDULE_ID, MINUTE_NS)
+        occurrence = {"task_id": FIRST_ID, "schedule_id": SCHEDULE_ID}
+        base = {"occurrence": occurrence, "complete": True, "local_evidence": {"provenance": "validated_local"}}
+        for changed in ({**base, "occurrence": {**occurrence, "task_id": SECOND_ID}},
+                        {**base, "complete": False}, {**base, "local_evidence": {"provenance": "cached"}}):
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                sequence.execution_evidence({"schedule_execution": changed}, row)
+
+    def test_public_sealed_logs_must_match_both_manifest_and_real_bytes(self):
+        directory = self.base / "sealed-task"
+        (directory / "raw").mkdir(parents=True)
+        manifest, descriptors = [], []
+        for name, content in (("stdout", b"answer"), ("stderr", b"diagnostic")):
+            path = directory / "raw" / name
+            path.write_bytes(content)
+            digest = hashlib.sha256(content).hexdigest()
+            manifest.append({"path": "raw/" + name, "size": len(content), "sha256": digest})
+            descriptors.append({"path": str(path), "available": True, "sealed": True,
+                                "size": len(content), "sha256": digest})
+        (directory / "provider.exit").write_text(json.dumps({"raw_manifest": manifest}))
+        sequence.require_public_logs({"raw": descriptors}, directory)
+        for fault in ({"sha256": "0" * 64}, {"sealed": False}, {"available": False},
+                      {"path": str(directory / "other")}, {"size": 100}):
+            changed = [{**descriptors[0], **fault}, descriptors[1]]
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                sequence.require_public_logs({"raw": changed}, directory)
 
     def test_unavailable_manager_is_blocked_before_service_registration(self):
         service = self.service()

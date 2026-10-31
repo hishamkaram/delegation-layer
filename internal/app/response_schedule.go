@@ -59,6 +59,8 @@ func scheduleShow(item contract.Schedule) (ScheduleResponse, error) {
 }
 
 func writeHumanScheduleResponse(output *strings.Builder, response Response) error {
+	writeHumanScheduleHistory(output, response.ScheduleHistory)
+	writeHumanScheduleExecution(output, response.ScheduleExecution)
 	if item := response.Schedule; item != nil {
 		fmt.Fprintf(output, "schedule id=%s state=%s", item.ID, item.State)
 		if item.NextAction != "" {

@@ -281,6 +281,22 @@ Recurrence calculation is isolated in
 interface and keeps provider preparation in the existing execution path.
 Ordinary dispatch, status and collect do not depend on the database.
 
+History reads occurrence rows and compact skipped intervals from that same
+store. Each occurrence keeps at most its last cached observation, explicitly
+dated; it is not a second task lifecycle or a journal of every status poll.
+Execution detail joins the occurrence with validated local task records through
+a passive, rooted reader. Neither query calls task recovery, probes filesystem
+capabilities or changes the cache. Task files remain authoritative even when a
+historic cache is stale or its referenced files are unavailable.
+
+At proven native closure, the application adapter can finish sealed-result
+publication through the existing collection owner before recording its final
+observation. Release and publication remain separate facts. A never-launched
+disposition needs the existing permanent refusal plus complete lifecycle proof;
+a missing queue row or elapsed time is not enough. See
+[scheduled result handling](../skills/agent-integration/references/result-handling.md#scheduled-execution-results)
+for inspection and same-task recovery decisions.
+
 The scheduler owner lease alone may initialize or migrate
 `<root>/.scheduler/schedules.sqlite`. Opening does not initialize or migrate it.
 The database and directory must be private, user-owned and not symlinks.
@@ -297,6 +313,9 @@ its busy timeout, with `fullfsync` on macOS. It refuses incompatible schemas or
 modes rather than converting them. Durability remains SQLite's documented
 semantics; a database transaction alone cannot promise exactly-once external
 execution. The scheduler's contract and sealed adapter retain this boundary.
+Existing compatible schema/data are reopened unchanged. Unsupported or corrupt
+schemas fail explicitly; inspection does not repair them. Scheduler storage does
+not migrate ordinary task JSON, results or logs into SQLite.
 
 ## Failure and recovery
 

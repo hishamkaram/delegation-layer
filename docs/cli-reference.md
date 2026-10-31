@@ -22,6 +22,7 @@ Use `delegate help` for the installed build's command surface.
 | `reply`, `steer`, `events` | [Interaction](../skills/agent-integration/references/interaction.md) |
 | `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
 | `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
+| `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
 | `scheduler run` | [Independent scheduler](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
@@ -51,6 +52,11 @@ A macOS LaunchAgent runs in the logged-in user's `gui/UID` domain with
 Service stop joins pending admissions and
 control work without a shutdown-time guarantee. An already accepted admission
 may finish during stop; the service does not wait for every admitted task to finish.
+Restart by starting the same command with the same root after its previous
+owner exits. The service uses persisted definitions and occurrence identities;
+it does not replay missed appointments. See the
+[runtime policies](../skills/agent-integration/references/command-reference.md#scheduler-runtime).
+History and execution inspection do not require stopping or starting the service.
 Provider settings/accounts remain owned by the user and provider CLI.
 
 ## Dispatch

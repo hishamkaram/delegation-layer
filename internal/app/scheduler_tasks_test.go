@@ -1,23 +1,153 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func schedulerObservationFixture(store *taskdir.Store) schedulerTasks {
 	deps := Dependencies{PredicateRegistry: predicate.Default, Environment: []string{}}.normalized()
 	deps.SupervisorOptions.WaitForPendingClose = true
 	return schedulerTasks{root: store.Root, rootID: store.RootID, dependencies: deps}
+}
+
+func TestSchedulerObservationReleasesCancelledSubmittedNeverLaunchedTask(t *testing.T) {
+	store, td, tasks := schedulerSubmittedFixture(t)
+	id := strings.Repeat("d", 32)
+	request, err := td.PrepareStop(id, "user", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(request.Consume(), request.Release()); err != nil {
+		t.Fatal(err)
+	}
+	assertSchedulerMissingQueueUnlaunched(t, store, td, tasks)
+	state, err := tasks.Observe(td.TaskID)
+	if !tasklifecycle.IsPureSupervisorUncertaintyError(err) || state.Release == nil || state.Release.Kind != contract.ReleaseClosed {
+		t.Fatalf("cancelled submitted task remained reserved: %+v, %v", state, err)
+	}
+	stop, err := td.ReadStopRequest(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := task.MarshalCanonical(stop)
+	if err != nil || state.Release.Ref != task.ComputeSHA256(data) {
+		t.Fatalf("release does not reference validated refusal: %+v, %v", state, err)
+	}
+	if state.Observation.Publication != task.PublicationUnknown || state.Observation.OutcomeSHA256 != "" {
+		t.Fatalf("never-started task fabricated publication: %+v", state)
+	}
+	if _, err = guardian.ReadClosureProof(t.Context(), td); !errors.Is(err, guardian.ErrProofPending) {
+		t.Fatalf("refusal fabricated native termination: %v", err)
+	}
+}
+
+func assertSchedulerMissingQueueUnlaunched(t *testing.T, store *taskdir.Store, td *taskdir.TaskDir, tasks schedulerTasks) {
+	t.Helper()
+	observed, statusErr := tasklifecycle.Status(store, td, observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup()), "", tasks.dependencies.Catalog)
+	if statusErr == nil || !tasklifecycle.IsPureSupervisorUncertaintyError(statusErr) || !observed.ControlObservation || observed.Admission != task.AdmissionUnknown || observed.Pending != "" {
+		t.Fatalf("missing-row Status classification: %+v, %v", observed, statusErr)
+	}
+	proven, err := td.ProveUnlaunchedTaskContext(t.Context())
+	if err != nil || !proven {
+		t.Fatalf("fixture lacks existing complete never-launched proof: %t, %v", proven, err)
+	}
+}
+
+// This finite supervisor fixture can only report version and an empty queue.
+// Production Status therefore encounters a genuinely missing numeric row;
+// there is no daemon, Add, enqueue, worker or provider behind the fixture.
+func schedulerSubmittedFixture(t *testing.T) (*taskdir.Store, *taskdir.TaskDir, schedulerTasks) {
+	t.Helper()
+	store, template, original := newAppTestTask(t, false)
+	t.Cleanup(func() { closeAppTestTask(t, store, template) })
+	base := supervisorfixture.CanonicalTempDir(t)
+	executable, configPath := filepath.Join(base, "pueue"), filepath.Join(base, "pueue.json")
+	supervisorfixture.WriteExecutable(t, executable, `#!/bin/sh
+set -eu
+case "${3-}" in
+  --version) printf '%s\n' 'pueue 4.0.4' ;;
+  status) printf '%s\n' '{"tasks":{},"groups":{}}' ;;
+  *) exit 64 ;;
+esac
+`)
+	shared := map[string]string{}
+	for _, name := range []string{"pueue_directory", "runtime_directory", "unix_socket_path", "alias_file", "pid_path", "shared_secret_path", "daemon_cert", "daemon_key"} {
+		shared[name] = filepath.Join(base, name)
+	}
+	data, err := json.Marshal(struct {
+		Shared map[string]string `json:"shared"`
+	}{shared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAppTestFile(t, configPath, data)
+	client, err := pueue.Bind(t.Context(), executable, configPath, pueue.Options{Environment: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := client.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	_, meta, err := template.PreparedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := *original
+	req.TaskID = strings.Repeat("a", 32)
+	meta.TaskID, meta.SupervisorConfig = req.TaskID, client.Binding()
+	td, err := store.CreateTask(req.TaskID, &req, []byte("brief"), meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := td.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	submit, err := td.PrepareSubmission(meta.SupervisorConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(submit.Consume(), submit.Release()); err != nil {
+		t.Fatal(err)
+	}
+	recordSchedulerFixtureReceipt(t, td)
+	return store, td, schedulerObservationFixture(store)
+}
+
+func recordSchedulerFixtureReceipt(t *testing.T, td *taskdir.TaskDir) {
+	t.Helper()
+	req, meta, spec, metaHash, err := td.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := (pueue.Observation{
+		Matched: true, NumericTaskID: 7, Binding: meta.SupervisorConfig,
+		Identity: tasklifecycle.TaskIdentity(req, meta, spec, metaHash, nil),
+	}).Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordSupervisorReceipt(*receipt); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSchedulerObservationDistinguishesWholeAbsenceFromPartialTask(t *testing.T) {
@@ -81,6 +211,20 @@ func TestSchedulerObservationDoesNotReleaseForPublicationAlone(t *testing.T) {
 	}
 	if state.Observation.OutcomeSHA256 != task.ComputeSHA256(data) {
 		t.Fatal("observation does not reference the actual validated outcome file")
+	}
+}
+
+func TestSchedulerObservationCollectsSealedResultAtProvenClosure(t *testing.T) {
+	store, td, request := newAppTestTask(t, true)
+	t.Cleanup(func() { closeAppTestTask(t, store, td) })
+	recordCustodyLifetime(t, td, nil, task.LifetimeTerminationCompleted)
+	state, err := schedulerObservationFixture(store).Observe(request.TaskID)
+	if err != nil || state.Release == nil || state.Observation.Publication != task.PublicationCommitted || state.Observation.OutcomeSHA256 == "" {
+		t.Fatalf("closed sealed task was not collected: %+v, %v", state, err)
+	}
+	outcome, err := td.OutcomeReference()
+	if err != nil || state.Observation.OutcomeSHA256 != outcome {
+		t.Fatalf("observation does not match published winner: %+v, %q, %v", state, outcome, err)
 	}
 }
 

@@ -20,7 +20,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `recheck TASK --json` | Reassess eligible evidence offline | None |
 | `reply`, `steer`, `events` | [Active interaction](interaction.md) | No new launch |
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
-| `schedule` | [Recurring definitions](#schedules) | None |
+| `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
 | `scheduler run` | [Independent scheduler](#scheduler-runtime) | Admits due occurrences through normal dispatch |
 
 Prefix every task command with `delegate --root ROOT`, using the same
@@ -72,9 +72,9 @@ Correct it only under the returned task-creation guidance.
 
 ## Schedules
 
-These commands manage saved definitions. They do not start a scheduler, launch
-a provider, or prove that a task ran. Start the [scheduler](#scheduler-runtime)
-separately to execute due occurrences.
+The management commands below save and inspect definitions. They do not start
+a scheduler, launch a provider, or prove that a task ran. Start the
+[scheduler](#scheduler-runtime) separately to execute due occurrences.
 
 ```text
 delegate --root ROOT schedule create --brief FILE --cwd ABS \
@@ -127,6 +127,36 @@ input/state transitions and `1` for not-found, conflicts or operational failures
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
 
+### Schedule history and execution
+
+```text
+delegate --root ROOT schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit N] --json
+delegate --root ROOT schedule execution TASK_ID --json
+```
+
+`history` returns occurrence summaries and compact skipped intervals together,
+newest first by occurrence due time or interval end. It defaults to 50 entries,
+at most 100. The returned continuation timestamp is the exclusive `--before`
+cursor; use it unchanged for the next page. Newer entries appear when you start
+a fresh first page, not as a frozen snapshot across requests. A skip is one
+stored `(from, to]` interval with a reason, not an invented task for each minute.
+
+`execution` accepts the task ID of one scheduled occurrence, including a released
+one. It joins validated local task evidence with the occurrence and its cached
+observation. It does not observe live OS/provider state or infer unrecorded
+events. Returned result and log descriptors refer to existing evidence; contents
+are not inlined. An ordinary task without an occurrence is not a scheduled
+execution.
+
+Both commands are passive: no provider/supervisor call, task control, filesystem
+capability probe, initialization, migration or repair. They work with the
+scheduler running or stopped, subject to the database busy timeout. Paused and
+deleted schedules retain history. An existing schedule with no history returns
+an empty page; missing root, database, schedule or occurrence returns not-found.
+Missing task files and corrupt evidence are distinct; see
+[scheduled result handling](result-handling.md#scheduled-execution-results)
+for freshness, no-result states, response bounds, exit codes and recovery.
+
 ## Scheduler runtime
 
 ```text
@@ -141,8 +171,10 @@ See [operator hosting](https://github.com/hishamkaram/delegation-layer/blob/main
 Startup skips past appointments. Expired, overlapping or capacity-limited
 appointments are skipped with a recorded reason; no catch-up queue or automatic
 retry/continuation is added. Pause/delete prevent new claims, without canceling
-already claimed tasks. Results remain available through task status/collect;
-schedule history queries are separate ongoing work.
+already claimed tasks. Use [history and execution](#schedule-history-and-execution)
+to inspect recorded work, and [result handling](result-handling.md#scheduled-execution-results)
+to collect its answer. Schedule reservation release is separate from result
+publication.
 
 Each appointment starts a fresh leader with its saved budget or the normal
 provider default. Overlap protection covers that leader. Independently admitted

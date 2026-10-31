@@ -13,10 +13,71 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	lifecyclefixture "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
 )
+
+func TestScheduledUnlaunchedProofRetainsSubmittedCancellationReference(t *testing.T) {
+	store, td, _ := lifecyclefixture.NewAppTestTask(t, false)
+	t.Cleanup(func() { lifecyclefixture.CloseAppTestTask(t, store, td) })
+	prepareScheduledNeverStartedSubmission(t, td)
+	id := "dddddddddddddddddddddddddddddddd"
+	permit, err := td.PrepareStop(id, "user", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(permit.Consume(), permit.Release()); err != nil {
+		t.Fatal(err)
+	}
+	// Fence deliberately excludes submission. The nonfencing wrapper uses
+	// the existing permanent refusal without relaxing the fence's policy.
+	fenced, _, err := FenceScheduledTaskContext(t.Context(), td)
+	if err != nil || fenced {
+		t.Fatalf("submitted task unexpectedly eligible for abandonment: %v %v", fenced, err)
+	}
+	proven, ref, err := ProveScheduledTaskUnlaunchedContext(t.Context(), td)
+	if err != nil || !proven {
+		t.Fatalf("existing submitted refusal not proven: %v %q %v", proven, ref, err)
+	}
+	record, err := td.ReadStopRequest(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := task.MarshalCanonical(record)
+	if err != nil || task.ComputeSHA256(data) != ref {
+		t.Fatalf("proof reference differs from validated refusal: %q %v", ref, err)
+	}
+	if _, err = guardian.ReadClosureProof(t.Context(), td); !errors.Is(err, guardian.ErrProofPending) {
+		t.Fatalf("proof fabricated native closure: %v", err)
+	}
+}
+
+func prepareScheduledNeverStartedSubmission(t *testing.T, td *taskdir.TaskDir) {
+	t.Helper()
+	req, meta, spec, metaHash, err := td.PreparedIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	permit, err := td.PrepareSubmission(meta.SupervisorConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(permit.Consume(), permit.Release()); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := (pueue.Observation{
+		Matched: true, NumericTaskID: 7, Binding: meta.SupervisorConfig,
+		Identity: TaskIdentity(req, meta, spec, metaHash, nil),
+	}).Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordSupervisorReceipt(*receipt); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestScheduledFenceReadersPreserveAutomaticCauseWithoutTerminalFacts(t *testing.T) {
 	store, td, _ := lifecyclefixture.NewAppTestTask(t, false)

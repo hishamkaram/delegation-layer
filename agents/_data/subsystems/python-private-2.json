@@ -567,6 +567,7 @@
       "py:delegate_acceptance.private_cli.fixture_setup",
       "py:delegate_acceptance.private_cli.receipt",
       "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_sequence",
       "py:delegate_acceptance.private_cli.scheduler_service",
       "py:delegate_acceptance.private_cli.supervisor",
       "py:pathlib",
@@ -611,6 +612,21 @@
       "py:re",
       "py:sqlite3",
       "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.scheduler_sequence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_occurrences",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.tasks.publication",
+      "py:pathlib"
     ]
   },
   {
