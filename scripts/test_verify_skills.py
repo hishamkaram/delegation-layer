@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import skill_eval_cases
 import verify_skills as checker
@@ -17,7 +18,7 @@ class SkillFixture(unittest.TestCase):
 
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory(prefix="verify-skills-")
-        self.root = Path(self.tempdir.name)
+        self.root = Path(self.tempdir.name).resolve()
         (self.root / "skills").mkdir()
         (self.root / "Makefile").write_text("check:\n\t@true\n", encoding="utf-8")
 
@@ -147,6 +148,31 @@ class VerifySkillsTests(SkillFixture):
                     f"{self.root / 'skills' / name / 'SKILL.md'}: "
                     f"required authoritative link to {missing!r} is missing",
                 ])
+
+    def test_fixture_resolves_owned_temp_alias_for_exact_authority_diagnostics(self):
+        with tempfile.TemporaryDirectory(prefix="verify-skills-alias-") as directory:
+            parent = Path(directory).resolve()
+            target = parent / "target"
+            target.mkdir()
+            alias = parent / "alias"
+            alias.symlink_to(target, target_is_directory=True)
+            temporary = tempfile.TemporaryDirectory(prefix="repository-", dir=alias)
+            with temporary:
+                fixture = SkillFixture()
+                with patch.object(tempfile, "TemporaryDirectory", return_value=temporary):
+                    fixture.setUp()
+                raw_root = Path(temporary.name)
+                canonical_root = raw_root.resolve()
+                self.assertNotEqual(raw_root, canonical_root)
+                self.assertEqual(fixture.root, canonical_root)
+                name = "add-an-adapter"
+                required = fixture.write_authority_targets(name)
+                fixture.write_skill(name=name, body=f"[contract](../../{required[0]})")
+                expected = [
+                    f"{canonical_root / 'skills' / name / 'SKILL.md'}: "
+                    f"required authoritative link to {required[1]!r} is missing",
+                ]
+                self.assertEqual(checker.verify(raw_root, required_skills=(name,)), expected)
 
     def test_authority_sections_cannot_be_satisfied_by_external_paths(self):
         required = self.write_authority_targets()

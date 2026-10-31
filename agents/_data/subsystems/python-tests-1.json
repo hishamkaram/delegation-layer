@@ -736,6 +736,7 @@
       "py:skill_eval_cases",
       "py:tempfile",
       "py:unittest",
+      "py:unittest.mock",
       "py:verify_skills"
     ]
   },

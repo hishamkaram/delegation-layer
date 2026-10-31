@@ -18,6 +18,7 @@ REAL_OPEN = os.open
 REAL_CLOSE = os.close
 REAL_STAT = os.stat
 REAL_FCHMOD = os.fchmod
+REAL_PATH_RENAME = Path.rename
 REAL_RENAME_NOREPLACE = directory_operations._rename_noreplace
 
 
@@ -39,12 +40,21 @@ def _identity(result):
     return (result.st_dev, result.st_ino)
 
 
+def _require_rename_owner_write(source, destination):
+    if stat.S_ISDIR(source.st_mode) and not source.st_mode & stat.S_IWUSR:
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), os.fspath(destination))
+
+
 def _old_xnu_rename(source_fd, source_name, destination_fd, destination_name):
     """Emulate xnu-11417: any directory rename needs owner write on the directory itself."""
     source = REAL_STAT(source_name, dir_fd=source_fd, follow_symlinks=False)
-    if stat.S_ISDIR(source.st_mode) and not source.st_mode & stat.S_IWUSR:
-        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), destination_name)
+    _require_rename_owner_write(source, destination_name)
     REAL_RENAME_NOREPLACE(source_fd, source_name, destination_fd, destination_name)
+
+
+def _old_xnu_path_rename(source, destination):
+    _require_rename_owner_write(source.lstat(), destination)
+    return REAL_PATH_RENAME(source, destination)
 
 
 class CleanupRecorder:
@@ -206,6 +216,13 @@ class SealedOwnedCleanupTests(unittest.TestCase):
         self.assertFalse((self.root / "owned").exists())
 
     def test_replacement_before_grant_receives_no_chmod_and_stays_in_place(self):
+        self.assert_replacement_before_grant_is_preserved()
+
+    def test_replacement_before_grant_when_directory_rename_needs_owner_write(self):
+        with patch.object(Path, "rename", _old_xnu_path_rename):
+            self.assert_replacement_before_grant_is_preserved()
+
+    def assert_replacement_before_grant_is_preserved(self):
         target = self.root / "target.txt"
         target.write_text("target")
         target.chmod(0o640)
@@ -226,23 +243,26 @@ class SealedOwnedCleanupTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 workspace = self.fresh_workspace(kind)
                 token = self.owned_tree(workspace)
-                _seal_bottom_up(token.directory)
                 original = workspace / "original"
                 replaced = []
 
                 def replace_before_open(path, token=token, original=original,
                                         make_replacement=make_replacement, replaced=replaced):
                     if path == "owned" and not replaced:
+                        # Some kernels require owner write for this fixture's
+                        # rename. Seal the displaced original before replacing it.
                         token.directory.rename(original)
+                        _seal_bottom_up(original)
                         make_replacement(token.directory)
                         result = token.directory.lstat()
                         replaced.append((_identity(result), stat.S_IMODE(result.st_mode)))
 
                 recorder = CleanupRecorder(on_open=replace_before_open)
                 with recorder.active():
-                    with self.assertRaises((OSError, RuntimeError)):
+                    with self.assertRaises((OSError, RuntimeError)) as raised:
                         directory_operations.remove_owned_directory(token)
 
+                self.assertEqual(len(replaced), 1, "replacement fixture failed: " + repr(raised.exception))
                 self.assertEqual(recorder.granted, [])
                 self.assertEqual(recorder.live, {})
                 self.assertEqual(self.isolated_entries(workspace), ())
