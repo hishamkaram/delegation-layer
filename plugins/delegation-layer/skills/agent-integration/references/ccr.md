@@ -3,18 +3,21 @@
 Use this reference when asked to consult Claude Code Router (CCR), use one of
 its configured model aliases, or compare its models with other harnesses.
 CCR runs Claude Code against a configured third-party or local provider.
+`ROOT` below is the exact absolute state root selected for dispatch; use it
+unchanged for model discovery and dispatch.
 
 1. Resolve CCR through `delegate providers --json`; its profile is `ccr:print`.
 2. Preserve an explicitly requested CCR alias as `--model ALIAS`. Do not replace
    it with an upstream model ID or reject it solely because discovery omitted it.
 3. If no alias was chosen, run
-   `delegate models --provider ccr:print --cwd ABSOLUTE_WORKSPACE --json`.
+   `delegate --root ROOT models --provider ccr:print --cwd ABSOLUTE_WORKSPACE --json`.
    Choose a suitable configured alias from the available metadata and report
    the choice. Clarify when the intended model remains ambiguous. If discovery
    is unavailable and no alias is known, report the blocker; do not guess.
-4. Dispatch through Delegate with `--provider ccr:print --model ALIAS`, the brief,
-   workspace, permission, finite budget, and `--json`. Use the normal status,
-   collect, and continuation procedure from the main skill.
+4. Dispatch through Delegate with the same `--root ROOT`,
+   `--provider ccr:print --model ALIAS`, the brief, workspace, permission, finite
+   budget, and `--json`. Use the normal status, collect, and continuation procedure
+   from the main skill.
 
 CCR requires an explicit alias. Unspecified external collaboration still uses
 `dispatch --auto`; do not prefer CCR unless the request calls for it. Multiple

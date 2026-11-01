@@ -2,51 +2,15 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Delegate — Task lifecycle components",
+    "title": "Delegate — Tasks and recurring work",
     "locale": "en",
     "output": "diagrams/components.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "2f15f72d4da54a40489b77d5d5f43a51b6f20ff7",
+      "revision": "aaed68f2f2086c070539503d347efead89c20f87",
       "link_mode": "local-only"
-    },
-    "views": [
-      {
-        "id": "task",
-        "label": "Run a task",
-        "focus": [
-          "lead",
-          "control",
-          "queue",
-          "execution",
-          "provider"
-        ],
-        "note": "The lead requests a task. Pueue schedules it; the guardian and runner supervise the provider turn."
-      },
-      {
-        "id": "result",
-        "label": "Retrieve the result",
-        "focus": [
-          "lead",
-          "control",
-          "execution",
-          "task-records"
-        ],
-        "note": "TaskDir owns the terminal outcome. The lead observes and collects that saved result."
-      },
-      {
-        "id": "workspace",
-        "label": "Optional Git workspace",
-        "focus": [
-          "control",
-          "execution",
-          "provider",
-          "workspace"
-        ],
-        "note": "Git isolation and capture are optional. Workspace capture stays separate from the provider's task outcome."
-      }
-    ]
+    }
   },
   "components": [
     {
@@ -59,14 +23,14 @@
         40
       ],
       "size": [
-        190,
-        90
+        210,
+        120
       ],
       "sources": [
         {
           "path": "cmd/delegate/main.go",
-          "line": 15,
-          "end_line": 21,
+          "line": 18,
+          "end_line": 28,
           "label": "CLI entry"
         }
       ]
@@ -74,34 +38,34 @@
     {
       "id": "control",
       "type": "backend",
-      "label": "Delegate CLI",
-      "sublabel": "dispatch · cancel · continue",
+      "label": "CLI + task lifecycle",
+      "sublabel": "dispatch · observe · manage",
       "pos": [
-        390,
+        440,
         40
       ],
       "size": [
-        230,
-        100
+        260,
+        120
       ],
       "sources": [
         {
-          "path": "internal/app/dispatch_composition.go",
-          "line": 34,
-          "end_line": 44,
-          "label": "Dispatch and continuation composition"
+          "path": "internal/tasklifecycle/dispatch.go",
+          "line": 12,
+          "end_line": 98,
+          "label": "Resolve Team before fresh admission"
+        },
+        {
+          "path": "internal/tasklifecycle/team_dispatch.go",
+          "line": 17,
+          "end_line": 60,
+          "label": "Current defaults or recorded context"
         },
         {
           "path": "internal/tasklifecycle/creation.go",
-          "line": 18,
-          "end_line": 56,
-          "label": "Create task before queue submission"
-        },
-        {
-          "path": "internal/app/task_observation.go",
-          "line": 46,
-          "end_line": 80,
-          "label": "Collect and project saved results"
+          "line": 20,
+          "end_line": 60,
+          "label": "Create records before submission"
         }
       ]
     },
@@ -109,14 +73,14 @@
       "id": "queue",
       "type": "messagebus",
       "label": "Task queue",
-      "sublabel": "private Pueue by default",
+      "sublabel": "Pueue starts queued workers",
       "pos": [
-        830,
+        860,
         40
       ],
       "size": [
-        240,
-        100
+        260,
+        120
       ],
       "sources": [
         {
@@ -140,12 +104,12 @@
       "label": "Task execution",
       "sublabel": "guardian + delegate-run",
       "pos": [
-        1260,
+        1300,
         40
       ],
       "size": [
         240,
-        100
+        120
       ],
       "sources": [
         {
@@ -173,14 +137,14 @@
       "id": "provider",
       "type": "external",
       "label": "Provider CLI",
-      "sublabel": "native configuration + session",
+      "sublabel": "native settings + session",
       "pos": [
-        1260,
-        350
+        1300,
+        370
       ],
       "size": [
         240,
-        100
+        120
       ],
       "sources": [
         {
@@ -201,14 +165,14 @@
       "id": "task-records",
       "type": "database",
       "label": "Task records + result",
-      "sublabel": "outcome.json is the final verdict",
+      "sublabel": "saved Team context + outcome.json",
       "pos": [
-        610,
-        350
+        860,
+        370
       ],
       "size": [
-        270,
-        110
+        260,
+        120
       ],
       "sources": [
         {
@@ -238,8 +202,8 @@
       "label": "Selected workspace",
       "sublabel": "caller directory or Git checkout",
       "pos": [
-        1260,
-        650
+        1300,
+        710
       ],
       "size": [
         240,
@@ -266,6 +230,134 @@
         }
       ],
       "tag": "Git isolation + capture: optional"
+    },
+    {
+      "id": "user-start",
+      "type": "external",
+      "label": "User terminal / tmux",
+      "sublabel": "start once for this state root",
+      "tag": "foreground: scheduler serve",
+      "pos": [
+        440,
+        710
+      ],
+      "size": [
+        260,
+        110
+      ],
+      "sources": [
+        {
+          "path": "internal/app/scheduler_host.go",
+          "line": 39,
+          "end_line": 86,
+          "label": "Independent foreground host startup"
+        }
+      ]
+    },
+    {
+      "id": "recurring",
+      "type": "backend",
+      "label": "Scheduler host + runtime",
+      "sublabel": "Host supervises resident child",
+      "tag": "Runtime: calendar · GoCron wake hints",
+      "pos": [
+        440,
+        350
+      ],
+      "size": [
+        260,
+        160
+      ],
+      "sources": [
+        {
+          "path": "internal/app/scheduler_run.go",
+          "line": 66,
+          "end_line": 142,
+          "label": "Resident runtime and pulse composition"
+        },
+        {
+          "path": "internal/scheduler/runtime/admission.go",
+          "line": 14,
+          "end_line": 132,
+          "label": "Only a new committed claim dispatches"
+        },
+        {
+          "path": "internal/app/scheduler_tasks.go",
+          "line": 16,
+          "end_line": 53,
+          "label": "In-process ordinary lifecycle handoff"
+        }
+      ]
+    },
+    {
+      "id": "calendar",
+      "type": "database",
+      "label": "Scheduler SQLite calendar",
+      "sublabel": "definitions · claims · skips",
+      "tag": "one active occurrence per schedule",
+      "pos": [
+        40,
+        370
+      ],
+      "size": [
+        230,
+        120
+      ],
+      "sources": [
+        {
+          "path": "internal/app/schedule_create.go",
+          "line": 15,
+          "end_line": 58,
+          "label": "Schedule creation initializes storage"
+        },
+        {
+          "path": "internal/scheduler/internal/sqlitestore/schema.go",
+          "line": 52,
+          "end_line": 139,
+          "label": "Definitions, active claims and skips"
+        },
+        {
+          "path": "internal/scheduler/internal/sqlitestore/occurrences.go",
+          "line": 14,
+          "end_line": 83,
+          "label": "Atomic claim and cursor advancement"
+        }
+      ]
+    },
+    {
+      "id": "teams",
+      "type": "database",
+      "label": "Optional Team catalog",
+      "sublabel": "Members · Roles · execution defaults",
+      "tag": "Team management owns catalog writes",
+      "pos": [
+        860,
+        710
+      ],
+      "size": [
+        260,
+        110
+      ],
+      "sources": [
+        {
+          "path": "internal/teams/mutations.go",
+          "line": 14,
+          "end_line": 59,
+          "label": "Team management writes catalog"
+        },
+        {
+          "path": "internal/teams/reads.go",
+          "line": 72,
+          "end_line": 100,
+          "label": "Resolve Member in one snapshot"
+        },
+        {
+          "path": "internal/teams/contract/selection.go",
+          "line": 17,
+          "end_line": 65,
+          "label": "Caller choices and descriptive context"
+        }
+      ]
     }
   ],
   "connections": [
@@ -291,10 +383,10 @@
       "variant": "emphasis"
     },
     {
-      "id": "schedule-task",
+      "id": "start-worker",
       "from": "queue",
       "to": "execution",
-      "label": "schedule",
+      "label": "start worker",
       "variant": "emphasis"
     },
     {
@@ -329,40 +421,84 @@
       "from": "provider",
       "to": "workspace",
       "label": "use selected directory"
+    },
+    {
+      "id": "user-starts-host",
+      "from": "user-start",
+      "to": "recurring",
+      "label": "serve",
+      "variant": "emphasis"
+    },
+    {
+      "id": "scheduled-admission",
+      "from": "recurring",
+      "to": "control",
+      "label": "new claim: in process",
+      "variant": "emphasis"
+    },
+    {
+      "id": "calendar-execution",
+      "from": "recurring",
+      "to": "calendar",
+      "label": "claim / observe / skip"
+    },
+    {
+      "id": "save-schedule",
+      "from": "control",
+      "to": "calendar",
+      "label": "save definition"
+    },
+    {
+      "id": "team-management-resolution",
+      "from": "control",
+      "to": "teams",
+      "label": "manage / resolve",
+      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Who owns the task?",
+      "title": "Saved is not running",
       "items": [
-        "Pueue schedules the task. The guardian owns its lifetime; delegate-run starts the provider and captures its output.",
-        "Fresh preflight runs before provider Start. Scope closure precedes sealing and publication."
-      ]
-    },
-    {
-      "dot": "emerald",
-      "title": "Where is the answer?",
-      "items": [
-        "TaskDir evaluates sealed evidence and commits outcome.json. That record establishes the terminal verdict.",
-        "The lead uses status, logs and collect to observe the same task; collection does not request another provider turn."
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "Optional workspace capture",
-      "items": [
-        "Managed Git isolation adds a checkout and independent capture receipts; it does not change the provider's task outcome.",
-        "Workspace helpers reuse the supervised task path. The lead reviews the capture and explicitly releases the retained checkout."
+        "Save the first schedule, then start scheduler serve once in an independent user terminal or tmux pane with the same root. Saving never starts the host (internal/app/schedule_host_result.go:5–37).",
+        "The host supervises/restarts its resident child. The child runs the calendar loop; GoCron only offers wake hints, with no definition or claim authority (internal/scheduler/pulse/source.go:18–54).",
+        "Boxes show responsibilities, not one OS process per box. If the installed CLI only supports scheduler run, start that foreground runtime yourself; it has no host restart loop (internal/app/scheduler_run.go:52–88)."
       ]
     },
     {
       "dot": "amber",
-      "title": "Refusal, stopping and continuation",
+      "title": "Recovery and stopping",
       "items": [
-        "Confirmed resource pressure refuses a fresh task before task creation. An unavailable metric alone warns rather than refuses.",
-        "Cancellation records a stop request for an active task; cancel on a terminal task returns without changing it (internal/tasklifecycle/cancel.go:13–41).",
-        "Eligible continuation creates a linked successor in the caller's scope with the recorded provider session; predecessor records stay unchanged (internal/tasklifecycle/continue.go:10–90)."
+        "A retryable child exit recovers with backoff while the host lives. Host/pane loss or reboot needs manual start again; permanent host faults stop retries (internal/scheduler/host/lifecycle.go:61–113).",
+        "Downtime becomes compact skipped history, with no catch-up backlog. Active or uncertain occurrences block overlap (internal/scheduler/runtime/decision.go:26–69).",
+        "Stop acceptance is not completed shutdown. Wait for host/child closure; already admitted independent workers continue under their own supervisors and budgets (internal/scheduler/host/lifecycle.go:116–190; internal/scheduler/runtime/loop.go:41–45)."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Team defaults and recorded context",
+      "items": [
+        "Team commands mutate the separate catalog (internal/app/teams_commands.go:114–133). New Team-targeted tasks resolve current Member defaults before admission; caller choices stay authoritative. Roles describe work and grant no permissions.",
+        "Each new scheduled occurrence resolves current defaults. Same-task replay uses recorded selection; continuation inherits recorded Team context and config under explicit caller override rules (internal/app/teams_schedule_create.go:25–51; internal/tasklifecycle/continuation_request.go:9–26).",
+        "Calendar dispatch calls the existing lifecycle in process only after a definitely new committed claim. Existing claims or uncertain readback do not authorize another invocation."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "One task path and result owner",
+      "items": [
+        "Pueue queues worker starts, not calendar recurrence. The guardian owns the task lifetime; delegate-run performs fresh preflight, starts the selected provider and captures output. Receipt precedes enqueue; closure precedes sealing and publication.",
+        "TaskDir evaluates sealed evidence and commits outcome.json. Status, logs and collect observe that task; collection can reconcile saved evidence without launching a provider turn (internal/tasklifecycle/collection.go:13–63).",
+        "Confirmed resource pressure refuses a fresh task before record creation; unavailable metrics alone warn. Cancellation stops active work; terminal tasks stay unchanged. Eligible continuation creates a linked successor using the recorded native session (internal/tasklifecycle/cancel.go:13–41; continue.go:10–90)."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Optional workspace capture",
+      "items": [
+        "Managed Git isolation adds a checkout and capture receipts. Capture stays independent of the provider task outcome and requires its helper lifetime to close.",
+        "Workspace helpers reuse the supervised task path. The lead reviews the capture and explicitly releases the retained checkout. Provider installations, settings and accounts stay user/provider-owned."
       ]
     }
   ]

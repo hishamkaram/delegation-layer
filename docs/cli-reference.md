@@ -39,6 +39,11 @@ The [scheduler reference](../skills/agent-integration/references/command-referen
 owns command syntax and timing/budget behavior. Check `delegate help` for the
 installed build's commands.
 
+For the complete save/start/readiness/result/stop walkthrough, use
+[getting started](getting-started.md#recurring-tasks), including the older-build
+path when help lists only `scheduler run`. The host controls below require a
+build that provides them.
+
 The user starts one foreground host per execution root in an independent
 terminal or tmux pane and leaves it running:
 
@@ -56,7 +61,8 @@ An agent must never start the persistent host inside its own bounded task.
 Delegate does not install an OS service or start a detached host automatically.
 
 Create/resume save the definition and its ID, then check for a compatible live
-host. Without one, exit `3` reports `schedule.saved: true` and
+host. Whenever `schedule.saved: true` is returned, retain that ID on any exit
+code. Without a host, exit `3` reports `schedule.saved: true` and
 `scheduler.next_action: start_required`, retaining the same ID and exact
 `scheduler.serve_command` JSON argv array. Give that array intact to the user;
 do not create the definition again. Host readiness does not prove an occurrence
@@ -126,19 +132,31 @@ Provider settings/accounts remain owned by the user and provider CLI.
 
 ### Scheduler upgrades
 
-Before creating or using Team-targeted schedules:
+Use stop-update-restart for **every CLI upgrade**, including foreground legacy
+`run` to `serve`, before any package manager or installer replaces the binaries:
 
-1. Request `delegate --root ROOT scheduler stop` and wait for completed host and
-   child shutdown, rather than only acceptance of the request. For a legacy
-   `scheduler run` service, stop it through its service host and wait for the
-   previous owner to exit. Preserve independently admitted tasks; do not force
-   their teardown to complete an upgrade.
-2. Update the CLI, `delegate-run` and the binary/command used by the scheduler
-   host to the same new build.
-3. Have the user run `delegate --root ROOT scheduler serve` independently with
-   that build, the same execution root and intended user configuration context.
-   An operator retaining legacy OS hosting restarts that service instead.
-4. Create or use Team-targeted definitions only after that restart.
+1. Keep the exact execution root and saved IDs. For a managed `serve` host,
+   request `delegate --root ROOT scheduler stop --json` and wait for confirmed
+   completed host/child shutdown and the foreground command to exit. Acceptance
+   alone or exit `3` is pending. For a foreground `scheduler run`, press Ctrl-C
+   in its original terminal/tmux pane and wait for exit; older run-only builds
+   have no host stop command. For optional legacy OS hosting, stop `run` through
+   that host and wait for its previous scheduler owner to exit. Preserve
+   independently admitted tasks and their supervisors/budgets.
+2. Only then update the CLI and colocated `delegate-run` to the same new build,
+   including the executable/command used by any legacy service host. This order
+   applies to `brew upgrade hishamkaram/tap/delegation-layer` and every other
+   installer. Replacing a live managed host's executable can make its next
+   child restart fail permanently with `incompatible_build`.
+3. Check the upgraded build's `delegate help`. Have the user start
+   `delegate --root ROOT scheduler serve` independently when available, or
+   foreground `scheduler run` if that remains the supported surface, with the
+   same root and intended native user context. An operator retaining legacy OS
+   hosting restarts that service instead. Use the
+   [walkthrough](getting-started.md#recurring-tasks) to check readiness where
+   supported and actual occurrence evidence.
+4. Create definitions using newly supported fields, including Team targets,
+   only after the compatible scheduler restart.
 
 Old binaries strictly reject the new saved request fields. Mixed-version
 rolling readers are unsupported: do not keep an old scheduler reading new

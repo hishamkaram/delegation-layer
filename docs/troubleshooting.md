@@ -3,8 +3,10 @@
 Use the saved JSON response and exit status. For task creation, observation,
 retry, rejection, or recovery decisions, follow
 [result handling](../skills/agent-integration/references/result-handling.md).
-A delegation blocker does not authorize environment repair; diagnose setup
-only when troubleshooting was requested.
+Use [bounded failure diagnosis](../skills/agent-integration/references/result-handling.md#failure-diagnosis)
+to inspect available evidence and relevant local read-only metadata without
+another generic troubleshooting request. Environment changes, retries and
+destination replacement still need authorization covering that action.
 
 | Symptom | Guidance |
 | --- | --- |
@@ -16,7 +18,7 @@ only when troubleshooting was requested.
 | No task was created or creation is uncertain | Follow [task creation](../skills/agent-integration/references/result-handling.md#task-creation); a returned ID alone is insufficient. |
 | Resource-pressure refusal | Follow the bounded choice in [task creation](../skills/agent-integration/references/result-handling.md#task-creation). |
 | Task still pending, or lifetime finalization pending | Follow [observation](../skills/agent-integration/references/result-handling.md#observe-and-collect) on the same task. |
-| Schedule has no runs | Check [recurring-task setup](installation.md#recurring-task-setup), the saved definition and [scheduler hosting](cli-reference.md#scheduler-hosting). Saving a schedule does not start its service. |
+| Schedule has no runs | Follow the [scheduler walkthrough](getting-started.md#recurring-tasks) to check the saved definition, installed command surface and independently started foreground scheduler. Saving a schedule does not start it; readiness does not prove an occurrence ran. |
 | Schedule history looks stale, a reservation remains active, or a released run has no answer | Inspect the same task using [scheduled result handling](../skills/agent-integration/references/result-handling.md#scheduled-execution-results). |
 | Schedule query reports database busy, missing storage or schema/evidence errors | Keep the root and IDs. See [history/read behavior](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) and [storage rules](architecture.md#scheduler-storage); do not delete state or create another task as repair. |
 | Timed out, interrupted, cancelled, or continuation busy | [Continuation](../skills/agent-integration/references/continuation.md) owns precedence and exact-session recovery. |
@@ -37,8 +39,10 @@ do not move an existing task's state as a recovery shortcut.
 
 On macOS, a login available in a GUI terminal or tmux does not prove an existing
 supervisor started from SSH has the same access. Compare the exact execution
-contexts under a separately requested troubleshooting task. A later command
-does not relocate the running supervisor.
+contexts within [bounded failure diagnosis](../skills/agent-integration/references/result-handling.md#failure-diagnosis),
+without exposing credentials or inherited environments. A later command does
+not relocate the running supervisor; changing its context needs covering
+authorization.
 
 ## Provider starts but the result is rejected
 

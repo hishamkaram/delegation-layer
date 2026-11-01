@@ -109,29 +109,36 @@ delegate providers --json
 The provider catalog describes compiled support. A task still needs the
 selected provider's native runtime and login.
 
+For a source build of current main, follow
+[Development setup](contributing.md#development-setup). It owns the compiler,
+repository tools, colocated binaries and supervisor prerequisites.
+
 ## Recurring-task setup
 
-Use the same explicit state root for schedule management, the scheduler and
-result inspection. Create the first definition with
-[`schedule create`](../skills/agent-integration/references/command-reference.md#schedules);
-it prepares absent schedule storage without launching a provider. Existing
-compatible definitions and ordinary task state are retained. Incompatible or
-unsafe database storage is refused; see [storage and migration](architecture.md#scheduler-storage).
+Follow the [scheduler walkthrough](getting-started.md#recurring-tasks) to save
+the first definition, start the supported foreground command yourself in an
+independent user terminal or tmux pane, and inspect a real result. Use the same
+explicit absolute state root throughout. `schedule create` initializes absent
+schedule storage; `scheduler serve` requires it to exist. Existing compatible
+definitions and ordinary task state are retained; incompatible or unsafe
+storage is refused. See [storage rules](architecture.md#scheduler-storage).
 
-Before hosting the scheduler, make the selected provider CLI, native login and
-saved workspace usable from the service's environment. An interactive terminal's
-PATH or login context does not establish service readiness. Follow
-[scheduler hosting](cli-reference.md#scheduler-hosting) to start, stop and restart
-the foreground command through your chosen host. Delegate does not install or
-register a scheduler service for you.
+Check installed help: prefer `scheduler serve` when available, or use the
+walkthrough's foreground `scheduler run` path for older builds. Use colocated
+`delegate`/`delegate-run` from the same build, without `--runner`, in the intended
+native user context with the selected provider CLI, login and saved workspace
+available. Delegate does not install or register an OS service. Advanced
+[legacy OS hosting](cli-reference.md#optional-legacy-os-hosting) remains optional.
 
 ## Updates
 
 Update a plugin through its host plugin manager. For a standard Skills install,
 use `npx skills update`. For the guided installer, rerun its original command;
-`--force` authorizes replacing existing skill files. Update the CLI with the
-same installer you chose (`brew upgrade hishamkaram/tap/delegation-layer`
-for Homebrew). Restart the harness and review changed hooks as required.
+`--force` authorizes replacing existing skill files. Before any CLI replacement,
+follow the [scheduler stop-update-restart procedure](cli-reference.md#scheduler-upgrades),
+then update with the same installer you chose
+(`brew upgrade hishamkaram/tap/delegation-layer` for Homebrew).
+Restart the harness and review changed hooks as required.
 
 Keep existing task state. For an explicit migration response, follow
 [result handling](../skills/agent-integration/references/result-handling.md#task-creation);

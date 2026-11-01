@@ -8,47 +8,9 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "2f15f72d4da54a40489b77d5d5f43a51b6f20ff7",
+      "revision": "aaed68f2f2086c070539503d347efead89c20f87",
       "link_mode": "local-only"
-    },
-    "views": [
-      {
-        "id": "admission",
-        "label": "Admit a fresh task",
-        "focus": [
-          "lead",
-          "control",
-          "queue",
-          "task-records"
-        ],
-        "note": "Confirmed pressure exits before task creation. Only an admitted request continues to staging and enqueue."
-      },
-      {
-        "id": "completion",
-        "label": "Complete and collect",
-        "focus": [
-          "lead",
-          "control",
-          "queue",
-          "execution",
-          "provider",
-          "task-records"
-        ],
-        "note": "Preflight precedes Start; lifetime closure precedes sealed evidence and TaskDir's terminal outcome."
-      },
-      {
-        "id": "alternatives",
-        "label": "Stop or continue",
-        "focus": [
-          "lead",
-          "control",
-          "execution",
-          "task-records",
-          "queue"
-        ],
-        "note": "Cancellation is an active-task alternative. Eligible continuation creates a new task after the predecessor ends."
-      }
-    ]
+    }
   },
   "participants": [
     {
@@ -59,23 +21,35 @@
       "sources": [
         {
           "path": "cmd/delegate/main.go",
-          "line": 15,
-          "end_line": 21,
+          "line": 18,
+          "end_line": 28,
           "label": "Caller enters the CLI"
+        },
+        {
+          "path": "internal/app/scheduler_tasks.go",
+          "line": 36,
+          "end_line": 53,
+          "label": "Scheduled entry calls same lifecycle"
+        },
+        {
+          "path": "internal/scheduler/runtime/admission.go",
+          "line": 86,
+          "end_line": 132,
+          "label": "New committed claim precondition"
         }
       ]
     },
     {
       "id": "control",
       "type": "backend",
-      "label": "Delegate CLI",
-      "sublabel": "task lifecycle",
+      "label": "CLI / lifecycle",
+      "sublabel": "same task path",
       "sources": [
         {
           "path": "internal/tasklifecycle/dispatch.go",
           "line": 12,
-          "end_line": 90,
-          "label": "Resource gate and task admission"
+          "end_line": 98,
+          "label": "Team resolution before resource gate"
         },
         {
           "path": "internal/tasklifecycle/cancel.go",
@@ -92,10 +66,36 @@
       ]
     },
     {
+      "id": "teams",
+      "type": "database",
+      "label": "Team catalog",
+      "sublabel": "optional selection",
+      "sources": [
+        {
+          "path": "internal/tasklifecycle/team_dispatch.go",
+          "line": 17,
+          "end_line": 60,
+          "label": "New defaults versus recorded replay"
+        },
+        {
+          "path": "internal/teams/reads.go",
+          "line": 72,
+          "end_line": 100,
+          "label": "Read current Member snapshot"
+        },
+        {
+          "path": "internal/teams/contract/selection.go",
+          "line": 17,
+          "end_line": 65,
+          "label": "Explicit caller choices take precedence"
+        }
+      ]
+    },
+    {
       "id": "queue",
       "type": "messagebus",
       "label": "Task queue",
-      "sublabel": "Pueue",
+      "sublabel": "Pueue worker queue",
       "sources": [
         {
           "path": "internal/pueue/internal/control/staged.go",
@@ -161,7 +161,7 @@
       "id": "task-records",
       "type": "database",
       "label": "Task records",
-      "sublabel": "TaskDir / outcome.json",
+      "sublabel": "saved context + outcome",
       "sources": [
         {
           "path": "internal/taskdir/taskdir.go",
@@ -187,22 +187,22 @@
   "segments": [
     {
       "from": 145,
-      "to": 506,
-      "label": "A · Fresh request — pressure exits; otherwise admit"
+      "to": 806,
+      "label": "A · Fresh admission — optional Team, then pressure gate"
     },
     {
-      "from": 526,
-      "to": 1000,
+      "from": 826,
+      "to": 1300,
       "label": "B · Admitted task — normal completion"
     },
     {
-      "from": 1020,
-      "to": 1290,
+      "from": 1320,
+      "to": 1590,
       "label": "C · Alternative to B — cancel while active"
     },
     {
-      "from": 1310,
-      "to": 1550,
+      "from": 1610,
+      "to": 1870,
       "label": "D · Eligible continuation — a new task"
     }
   ],
@@ -213,13 +213,37 @@
       "to": "control",
       "y": 170,
       "label": "dispatch request",
-      "variant": "emphasis"
+      "variant": "emphasis",
+      "note": "Scheduled entry: only after a definitely new committed claim; call lifecycle in process."
+    },
+    {
+      "id": "read-recorded-context",
+      "from": "control",
+      "to": "task-records",
+      "y": 280,
+      "label": "same-ID replay: load saved context",
+      "note": "Reuse recorded selection; catalog edits do not change the task."
+    },
+    {
+      "id": "resolve-member",
+      "from": "control",
+      "to": "teams",
+      "y": 390,
+      "label": "if new + Team: resolve Member"
+    },
+    {
+      "id": "member-context",
+      "from": "teams",
+      "to": "control",
+      "y": 430,
+      "label": "current defaults + context",
+      "variant": "return"
     },
     {
       "id": "resource-refusal",
       "from": "control",
       "to": "lead",
-      "y": 208,
+      "y": 508,
       "label": "if pressure: not_created; stop",
       "variant": "dashed",
       "note": "Otherwise proceed below; unknown metrics warn."
@@ -228,22 +252,22 @@
       "id": "create-task",
       "from": "control",
       "to": "task-records",
-      "y": 292,
-      "label": "if admitted: create immutable task",
+      "y": 592,
+      "label": "if admitted: save task + Team context",
       "variant": "emphasis"
     },
     {
       "id": "stage-row",
       "from": "control",
       "to": "queue",
-      "y": 332,
+      "y": 632,
       "label": "stage exact row"
     },
     {
       "id": "save-receipt",
       "from": "control",
       "to": "task-records",
-      "y": 372,
+      "y": 672,
       "label": "save queue receipt",
       "variant": "emphasis"
     },
@@ -251,7 +275,7 @@
       "id": "enqueue",
       "from": "control",
       "to": "queue",
-      "y": 412,
+      "y": 712,
       "label": "enqueue after receipt",
       "variant": "emphasis"
     },
@@ -259,7 +283,7 @@
       "id": "admitted",
       "from": "control",
       "to": "lead",
-      "y": 460,
+      "y": 760,
       "label": "task_record: created + task id",
       "variant": "return"
     },
@@ -267,15 +291,15 @@
       "id": "scheduled",
       "from": "queue",
       "to": "execution",
-      "y": 554,
-      "label": "schedule task",
+      "y": 854,
+      "label": "start queued worker",
       "variant": "emphasis"
     },
     {
       "id": "start-provider",
       "from": "execution",
       "to": "provider",
-      "y": 594,
+      "y": 894,
       "label": "preflight, then Start",
       "variant": "emphasis",
       "note": "Guardian owns the scope and budget; runner executes."
@@ -284,7 +308,7 @@
       "id": "provider-output",
       "from": "provider",
       "to": "execution",
-      "y": 696,
+      "y": 996,
       "label": "output + exit",
       "variant": "return"
     },
@@ -292,7 +316,7 @@
       "id": "seal-finalize",
       "from": "execution",
       "to": "task-records",
-      "y": 736,
+      "y": 1036,
       "label": "after closure: seal + finalize",
       "variant": "emphasis",
       "note": "TaskDir evaluates sealed output and commits outcome.json."
@@ -301,21 +325,21 @@
       "id": "collect-request",
       "from": "lead",
       "to": "control",
-      "y": 828,
+      "y": 1128,
       "label": "collect TASK_ID"
     },
     {
       "id": "read-outcome",
       "from": "control",
       "to": "task-records",
-      "y": 868,
+      "y": 1168,
       "label": "read / reconcile outcome"
     },
     {
       "id": "saved-outcome",
       "from": "task-records",
       "to": "control",
-      "y": 908,
+      "y": 1208,
       "label": "committed / rejected",
       "variant": "return"
     },
@@ -323,7 +347,7 @@
       "id": "deliver-result",
       "from": "control",
       "to": "lead",
-      "y": 948,
+      "y": 1248,
       "label": "task result",
       "variant": "return"
     },
@@ -331,7 +355,7 @@
       "id": "cancel-active",
       "from": "lead",
       "to": "control",
-      "y": 1048,
+      "y": 1348,
       "label": "cancel ACTIVE_TASK_ID",
       "variant": "dashed",
       "note": "Separate path from B. Terminal tasks return unchanged."
@@ -340,7 +364,7 @@
       "id": "stop-request",
       "from": "control",
       "to": "task-records",
-      "y": 1138,
+      "y": 1438,
       "label": "persist stop request",
       "variant": "security"
     },
@@ -348,7 +372,7 @@
       "id": "stop-ack",
       "from": "control",
       "to": "lead",
-      "y": 1176,
+      "y": 1476,
       "label": "stop requested; track task",
       "variant": "return"
     },
@@ -356,7 +380,7 @@
       "id": "termination",
       "from": "execution",
       "to": "task-records",
-      "y": 1214,
+      "y": 1514,
       "label": "close scope; record termination",
       "variant": "security"
     },
@@ -364,7 +388,7 @@
       "id": "stopped-outcome",
       "from": "execution",
       "to": "task-records",
-      "y": 1254,
+      "y": 1554,
       "label": "seal + finalize stopped task",
       "variant": "emphasis"
     },
@@ -372,7 +396,7 @@
       "id": "continue-eligible",
       "from": "lead",
       "to": "control",
-      "y": 1338,
+      "y": 1638,
       "label": "continue eligible task",
       "variant": "emphasis"
     },
@@ -380,23 +404,23 @@
       "id": "load-session",
       "from": "control",
       "to": "task-records",
-      "y": 1376,
-      "label": "load session; validate"
+      "y": 1676,
+      "label": "load saved session + Team context"
     },
     {
       "id": "new-successor",
       "from": "control",
       "to": "queue",
-      "y": 1414,
+      "y": 1714,
       "label": "new task; same session",
       "variant": "emphasis",
-      "note": "Fresh admission applies again; predecessor records stay unchanged."
+      "note": "Fresh admission again; recorded Team context and config inherit, with allowed caller overrides."
     },
     {
       "id": "successor-id",
       "from": "control",
       "to": "lead",
-      "y": 1514,
+      "y": 1834,
       "label": "new task id",
       "variant": "return"
     }
@@ -405,53 +429,62 @@
     {
       "participant": "control",
       "from": 166,
-      "to": 490,
+      "to": 790,
       "type": "backend"
     },
     {
       "participant": "execution",
-      "from": 550,
-      "to": 802,
+      "from": 850,
+      "to": 1102,
       "type": "backend"
     },
     {
       "participant": "provider",
-      "from": 590,
-      "to": 706,
+      "from": 890,
+      "to": 1006,
       "type": "external"
     },
     {
       "participant": "task-records",
-      "from": 732,
-      "to": 800,
+      "from": 1032,
+      "to": 1100,
       "type": "database"
     },
     {
       "participant": "control",
-      "from": 824,
-      "to": 970,
-      "type": "backend"
-    },
-    {
-      "participant": "control",
-      "from": 1044,
-      "to": 1192,
-      "type": "backend"
-    },
-    {
-      "participant": "execution",
-      "from": 1210,
+      "from": 1124,
       "to": 1270,
       "type": "backend"
     },
     {
       "participant": "control",
-      "from": 1334,
-      "to": 1532,
+      "from": 1344,
+      "to": 1492,
+      "type": "backend"
+    },
+    {
+      "participant": "execution",
+      "from": 1510,
+      "to": 1570,
+      "type": "backend"
+    },
+    {
+      "participant": "control",
+      "from": 1634,
+      "to": 1852,
       "type": "backend"
     }
   ],
   "cards": [
+    {
+      "dot": "violet",
+      "title": "Two entries; one task lifecycle",
+      "items": [
+        "The lead requests one bounded task. A scheduled occurrence enters the same lifecycle in process only after a definitely new committed claim; it does not launch another delegate CLI. Host startup, GoCron wakes and calendar ownership are shown in the component map.",
+        "Optional Team selection reads current Member defaults before fresh admission. Every new scheduled occurrence resolves them anew; explicit caller choices stay authoritative and Roles grant no permissions (internal/app/teams_schedule_create.go:25–51).",
+        "Same-ID replay uses saved Team selection. Continuation inherits the recorded Team context, provider session and config under existing explicit caller override rules (internal/tasklifecycle/continuation_request.go:9–26)."
+      ]
+    },
     {
       "dot": "cyan",
       "title": "How to read the alternatives",
