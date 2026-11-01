@@ -49,7 +49,7 @@ func TestSourceResumesAfterElapsedClockJump(t *testing.T) {
 	// Also model hosts whose elapsed clock includes suspension. One late timer
 	// fires, then production resumes at the next interval without a wake backlog.
 	f.monotonic.Advance(90*time.Second + 500*time.Millisecond)
-	await(t, f.monitor.completed)
+	f.awaitCompleted(t)
 	next := await(t, f.armed)
 	if next.duration != 500*time.Millisecond {
 		t.Fatalf("resume delay=%s, want the next future half-second", next.duration)
@@ -63,7 +63,7 @@ func TestSourceResumesAfterElapsedClockJump(t *testing.T) {
 	default:
 	}
 	f.monotonic.Advance(500 * time.Millisecond)
-	await(t, f.monitor.completed)
+	f.awaitCompleted(t)
 	if err := f.source.Wait(waitContext(t)); err != nil {
 		t.Fatal(err)
 	}
