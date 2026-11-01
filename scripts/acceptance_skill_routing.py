@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Capture natural-prompt skill selection. Transcripts require evidence-backed review.
 
-Run with the normal harness profile so competing skills/plugins remain visible.
-Only disposable workspaces receive the candidate skill; no user setup is edited.
+Ordinary routing keeps the normal profile and competing integrations. Diagnosis
+handoffs instead use invocation-local isolation to bound paid work. Only
+disposable workspaces receive the candidate skill; no user setup is edited.
 """
 import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import shlex
+import socket
 import tempfile
 import time
+import skill_eval_cases
+import skill_routing_delegate_fixture as routing_fixture
 
 from acceptance_provider_common import validate_managed_lifetime_closure
 from acceptance_supervisor_common import (
@@ -27,6 +32,10 @@ import sys
 REPO = Path(__file__).resolve().parents[1]
 CASES = REPO / "skills/agent-integration/evals/routing.json"
 SKILL = REPO / "skills/agent-integration"
+DIAGNOSIS_DISABLED_FEATURES = (
+    "hooks", "plugins", "remote_plugin", "apps", "multi_agent", "multi_agent_v2",
+    "browser_use", "computer_use", "image_generation", "skill_mcp_dependency_install",
+)
 
 
 def digest(path):
@@ -43,10 +52,11 @@ def write_json(path, value):
         stream.write("\n")
 
 
-def command(harness, model, prompt):
+def command(harness, model, prompt, *, diagnosis=False):
     if harness == "codex":
         argv = ["codex", "exec", "--json", "--skip-git-repo-check",
-                "--sandbox", "danger-full-access", "-c", 'approval_policy="never"']
+                "--sandbox", "workspace-write" if diagnosis else "danger-full-access",
+                "-c", 'approval_policy="never"']
         if model:
             argv += ["--model", model]
         return argv + ["-"], prompt
@@ -62,9 +72,137 @@ def command(harness, model, prompt):
     return argv, ""
 
 
+def diagnosis_arguments(workspace, fixture):
+    """Native, invocation-local controls; preserve the user's auth installation."""
+    disabled = []
+    for root in (Path.home() / ".agents/skills", Path.home() / ".codex/skills"):
+        skill = root / "agent-integration"
+        for path in (skill, skill / "SKILL.md", skill.resolve(), (skill / "SKILL.md").resolve()):
+            disabled.append({"path": str(path), "enabled": False})
+    arguments = ["--ignore-user-config", "--ignore-rules", "--add-dir", str(fixture),
+                 "-c", "project_doc_max_bytes=0", "-c", 'web_search="disabled"',
+                 "-c", "mcp_servers={}", "-c", "agents.enabled=false", "-c", "notify=[]",
+                 "-c", "developer_instructions=" + json.dumps(read_json(SKILL / "references/routing-rule.json")),
+                 "-c", "sandbox_workspace_write.network_access=false",
+                 "-c", "skills.bundled.enabled=false",
+                 "-c", "skills.config=[" + ",".join(
+                     "{path=" + json.dumps(entry["path"]) + ",enabled=false}"
+                     for entry in disabled) + "]"]
+    for feature in DIAGNOSIS_DISABLED_FEATURES:
+        arguments.extend(("--disable", feature))
+    return arguments
+
+
+def validate_diagnosis_context(document, workspace):
+    """Accept only the copied skill and a model-free local tool surface."""
+    if not isinstance(document, list):
+        raise ValueError("invalid native prompt context")
+    texts, namespaces = [], []
+    for item in document:
+        if not isinstance(item, dict):
+            raise ValueError("invalid native prompt context")
+        if item.get("type") == "additional_tools":
+            tools = item.get("tools")
+            if not isinstance(tools, list) or not all(isinstance(tool, dict) for tool in tools):
+                raise ValueError("invalid native tool context")
+            namespaces.extend(tool.get("name") for tool in tools)
+        content = item.get("content", [])
+        if not isinstance(content, list):
+            raise ValueError("invalid native instruction context")
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                texts.append((item.get("role"), block["text"]))
+    if not namespaces or any(name not in ("functions", "clock") for name in namespaces):
+        raise ValueError("native context still exposes external collaboration/tools")
+    rule = read_json(SKILL / "references/routing-rule.json")
+    instruction_blocks = [index for index, (role, text) in enumerate(texts)
+                          if role == "developer" and text == rule]
+    if len(instruction_blocks) != 1:
+        raise ValueError("exact candidate routing instruction was not established")
+    rule_prefix = rule.split(". ", 1)[0]
+    for index, (_, block) in enumerate(texts):
+        if index == instruction_blocks[0]:
+            continue
+        metadata = "### Available skills" in block
+        if rule_prefix in block or (not metadata and ("Delegate" in block or "agent-integration" in block)):
+            raise ValueError("additional delegation instructions contaminate the candidate context")
+    text = "\n".join(text for _, text in texts)
+    aliases = dict(re.findall(r"- `([^`]+)` = `([^`]+)`", text))
+    entries = re.findall(r"^- [^\n]*agent-integration[^\n]*\(file: ([^)]+)\)", text, re.MULTILINE)
+    candidate = workspace / ".agents/skills/agent-integration/SKILL.md"
+    paths = []
+    for entry in entries:
+        first, separator, rest = entry.partition("/")
+        paths.append(Path(aliases[first]) / rest if separator and first in aliases else Path(entry))
+    if paths != [candidate] or candidate.read_bytes() != (SKILL / "SKILL.md").read_bytes():
+        raise ValueError("candidate-only skill context was not established")
+    return {"candidate_skill": str(candidate), "tool_namespaces": namespaces,
+            "routing_rule_sha256": digest(SKILL / "references/routing-rule.json")}
+
+
+def verify_network_boundary(owner, executable, *, ownership):
+    """Probe real connectivity to an owned listener outside actor writable roots."""
+    directory = Path(tempfile.mkdtemp(prefix=".delegate-eval-", dir=Path.home()))
+    ownership.adopt_created("diagnosis IPC listener", directory, Path.home())
+    address = directory / "probe.sock"
+    probe = (
+        "import json,socket,sys\n"
+        "for family in (socket.AF_INET,socket.AF_INET6):\n"
+        " try: connection=socket.socket(family)\n"
+        " except PermissionError: continue\n"
+        " connection.close()\n"
+        " raise SystemExit('native sandbox permits an IP socket')\n"
+        "try:\n"
+        " connection=socket.socket(socket.AF_UNIX)\n"
+        "except PermissionError: pass\n"
+        "else:\n"
+        " with connection:\n"
+        "  try: connection.connect(sys.argv[1])\n"
+        "  except PermissionError: pass\n"
+        "  else: raise SystemExit('native sandbox permits outside IPC connection')\n"
+        "print(json.dumps({'network_and_ipc_connections':'denied'}))\n"
+    )
+    with socket.socket(socket.AF_UNIX) as listener:
+        listener.bind(str(address))
+        listener.listen(1)
+        try:
+            proof = owner.capture("diagnosis-sandbox", [executable,
+                "-c", 'sandbox_mode="workspace-write"', "-c", "sandbox_workspace_write.network_access=false",
+                "sandbox", "--", sys.executable, "-c", probe, str(address)])
+        finally:
+            address.unlink(missing_ok=True)
+    if read_json(proof) != {"network_and_ipc_connections": "denied"}:
+        raise RuntimeError("native diagnosis sandbox proof is invalid")
+    return proof
+
+
+def verify_diagnosis_controls(owner, executable, workspace, *, ownership, model=None):
+    """Exercise the native boundaries without invoking a model."""
+    help_text = owner.capture("diagnosis-help", [executable, "exec", "--help"]).read_text()
+    if any(flag not in help_text for flag in ("--ignore-user-config", "--ignore-rules", "--disable")):
+        raise RuntimeError("diagnosis isolation requires unavailable native controls")
+    proof = verify_network_boundary(owner, executable, ownership=ownership)
+    # debug prompt-input has no ignore-user-config/add-dir flags. Explicitly
+    # override its instruction/integration sources using the same settings;
+    # exec additionally ignores user configuration. This is a conservative
+    # gate: an unexpected tool surface blocks the paid invocation.
+    fixture = workspace.parent / "fixture"
+    arguments = diagnosis_arguments(workspace, fixture)
+    omitted = {"--ignore-user-config", "--ignore-rules", "--add-dir", str(fixture)}
+    arguments = [argument for argument in arguments if argument not in omitted]
+    if model is not None:
+        arguments.extend(("-c", "model=" + json.dumps(model)))
+    context = owner.capture("diagnosis-context", [executable, *arguments, "debug", "prompt-input"])
+    validated = validate_diagnosis_context(read_json(context), workspace)
+    return dict(validated, network_and_ipc_connections="denied", proof_sha256=digest(proof),
+                context_sha256=digest(context), disabled_features=list(DIAGNOSIS_DISABLED_FEATURES),
+                routing_delivery="inline-isolated", legacy_notify="disabled")
+
+
 def prepare_workspace(path, harness):
     location = {"codex": ".agents", "claude": ".claude", "hermes": ".hermes"}[harness]
-    shutil.copytree(SKILL, path / location / "skills/agent-integration")
+    shutil.copytree(SKILL, path / location / "skills/agent-integration",
+                    ignore=shutil.ignore_patterns("evals"))
     (path / "pricing.py").write_text(
         "def discounted_price(price, percent):\n    return price - percent\n", encoding="utf-8")
     (path / "README.md").write_text(
@@ -75,6 +213,53 @@ def prepare_workspace(path, harness):
 def candidate_digests(root=SKILL):
     return {str(p.relative_to(root)): digest(p)
             for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def paired_scenarios(suite):
+    """Join routing selections to structurally validated, grader-owned pairs."""
+    errors = skill_eval_cases.check_skill(SKILL)
+    if errors:
+        raise ValueError("; ".join(errors))
+    paired = [case for case in suite if "paired_case_id" in case]
+    if not paired:
+        return {}
+    document = read_json(SKILL / "evals/cases.json")
+    leaves = {leaf["id"]: leaf for case in document["cases"] for leaf in (case, case["control"])}
+    references = [case["paired_case_id"] for case in paired]
+    if (len(references) != len(leaves) or not all(isinstance(ref, str) for ref in references)
+            or set(references) != set(leaves) or len(set(references)) != len(references)):
+        raise ValueError("paired routing references must cover every scenario exactly once")
+    for case in paired:
+        leaf = leaves[case["paired_case_id"]]
+        if (case.get("external") is not False or case.get("prompt") != leaf["visible"]["prompt"]
+                or case.get("fixture_scenario") != case.get("name")
+                or case["name"] not in routing_fixture.DIAGNOSIS_SCENARIOS
+                or "provider" not in case):
+            raise ValueError("invalid paired routing selection")
+    names = [case["name"] for case in suite]
+    if len(set(names)) != len(names):
+        raise ValueError("duplicate routing case name")
+    return leaves
+
+
+def materialize_diagnosis(fixture, workspace, state_root, case):
+    leaves = paired_scenarios(read_json(CASES)["cases"])
+    leaf = leaves[case["paired_case_id"]]
+    replacements = {
+        "@ROOT_ID@": routing_fixture.root_id(state_root),
+        "@TASK_ID@": routing_fixture.task_id(state_root, case["fixture_scenario"]),
+    }
+    for entry in leaf["visible"]["inputs"]:
+        path = workspace / entry["path"]
+        if path.exists() or not path.resolve().is_relative_to(workspace.resolve()):
+            raise ValueError("diagnosis input collides with the candidate workspace")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = entry["content"]
+        for token, value in replacements.items():
+            text = text.replace(token, value)
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write(text)
+    routing_fixture.initialize_diagnosis(fixture, workspace, state_root, case["fixture_scenario"])
 
 
 class AttemptSupervisor:
@@ -294,6 +479,15 @@ def _candidate_shadow_reason(harness) -> str | None:
     return None
 
 
+def capture_candidate_metadata(owner, delegate_bin):
+    """Observe Delegate's own identity/catalog; provider releases are not queried."""
+    if delegate_bin is None:
+        return {}
+    version = owner.capture("delegate-version", [str(delegate_bin), "--version"])
+    catalog = owner.capture("delegate-catalog", [str(delegate_bin), "providers", "--json"])
+    return {"delegate_version": version.read_text().strip(), "delegate_catalog_sha256": digest(catalog)}
+
+
 def _prepare_routing_fixture(run, owner, env, case, delegate_bin) -> None:
     fixture = run / "fixture"
     fixture.mkdir()
@@ -311,6 +505,8 @@ def _prepare_routing_fixture(run, owner, env, case, delegate_bin) -> None:
         "scenario": case.get("fixture_scenario"),
         "provider": case.get("provider") if isinstance(case.get("provider"), str) else None,
     })
+    if "paired_case_id" in case:
+        materialize_diagnosis(fixture, run / "workspace", Path(env["DELEGATE_ROOT"]), case)
     executable = fixture / "delegate"
     shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
     executable.chmod(0o700)
@@ -368,8 +564,13 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         prepare_workspace(workspace, harness)
         prompt = case["prompt"]
         (run / "prompt.txt").write_text(prompt, encoding="utf-8")
-        argv, stdin = command(harness, model, prompt)
-        if routing_context:
+        diagnosis = "paired_case_id" in case
+        if diagnosis and (harness != "codex" or mode != "routing" or not routing_context):
+            raise ValueError("paired diagnosis requires Codex routing with candidate context")
+        argv, stdin = command(harness, model, prompt, diagnosis=diagnosis)
+        if diagnosis:
+            argv += diagnosis_arguments(workspace, run / "fixture")
+        if routing_context and not diagnosis:
             argv += routing_hook_arguments(harness, workspace)
         # Keep supervisor state beside the captured evidence. This makes the
         # acceptance run self-contained and works when the user's home is read-only.
@@ -382,7 +583,8 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
                    "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
                    "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
                    "routing_context": routing_context,
-                   "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native",
+                   "hook_trust": "disabled" if diagnosis else (
+                       "vetted-per-invocation" if routing_context and harness == "codex" else "native"),
                    "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None}
         if delegate_bin is not None:
             receipt["delegate_executable"] = str(delegate_bin)
@@ -408,18 +610,16 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         # caller-owned queues and makes outer cleanup observe paid child work.
         owner.processes.environment["DELEGATE_PUEUE_CONFIG"] = str(owner.config)
         owner.start()
-        version = owner.capture("version", [executable, "--version"])
-        receipt["harness_version"] = version.read_text().strip()
         git = shutil.which("git")
         if not git:
             raise FileNotFoundError("git is required for disposable provider workspaces")
         owner.capture("git-init", [git, "init", "--quiet", str(workspace)])
         if mode == "routing":
             _prepare_routing_fixture(run, owner, env, case, delegate_bin)
-        if delegate_bin is not None:
-            receipt["delegate_version"] = owner.capture("delegate-version", [str(delegate_bin), "--version"]).read_text().strip()
-            catalog = owner.capture("delegate-catalog", [str(delegate_bin), "providers", "--json"])
-            receipt["delegate_catalog_sha256"] = digest(catalog)
+        receipt.update(capture_candidate_metadata(owner, delegate_bin))
+        if diagnosis:
+            receipt["diagnosis_controls"] = verify_diagnosis_controls(
+                owner, executable, workspace, ownership=ownership, model=model)
         receipt["supervisor_result"] = owner.execute(argv, stdin, budget)
     except FileNotFoundError:
         receipt.update(status="blocked", reason="required_executable_missing")
@@ -471,6 +671,17 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                             raise ValueError(f"changed transcript: {run / name}")
                     if receipt["status"] in ("failed", "blocked") and judgment["status"] == "passed":
                         raise ValueError(f"unsuccessful capture cannot pass: {run}")
+                    if "paired_case_id" in case and judgment["status"] == "passed":
+                        controls = receipt.get("diagnosis_controls")
+                        if (not isinstance(controls, dict)
+                                or controls.get("network_and_ipc_connections") != "denied"
+                                or controls.get("routing_delivery") != "inline-isolated"
+                                or controls.get("legacy_notify") != "disabled"
+                                or controls.get("disabled_features") != list(DIAGNOSIS_DISABLED_FEATURES)
+                                or controls.get("routing_rule_sha256") != digest(SKILL / "references/routing-rule.json")
+                                or controls.get("proof_sha256") != digest(run / "diagnosis-sandbox/stdout.txt")
+                                or controls.get("context_sha256") != digest(run / "diagnosis-context/stdout.txt")):
+                            raise ValueError(f"diagnosis isolation was not verified: {run}")
                     if (mode == "routing" and case["external"] and case.get("provider") != "unavailable"
                             and case.get("native_alternative_for") != harness
                             and judgment["status"] == "passed"
@@ -507,11 +718,16 @@ def main():
     if args.routing_context and args.harness == "hermes":
         parser.error("Hermes currently supports skill-only acceptance")
     suite = read_json(CASES)["cases"]
+    paired_scenarios(suite)
     names = {c["name"] for c in suite}
     if args.repetitions < 1 or args.budget_seconds < 1 or set(args.case) - names:
         parser.error("positive repetitions and known case names are required")
     cases = [c for c in suite if (args.split == "all" or c["split"] == args.split)
              and (not args.case or c["name"] in args.case)]
+    if args.harness != "codex" or args.mode != "routing" or not args.routing_context:
+        if args.case and any("paired_case_id" in case for case in cases):
+            parser.error("paired diagnosis requires Codex routing with candidate context")
+        cases = [case for case in cases if "paired_case_id" not in case]
     if not cases:
         parser.error("selection contains no cases")
     output = args.output.resolve()

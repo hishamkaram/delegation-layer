@@ -92,6 +92,8 @@ class RoutingTests(unittest.TestCase):
         self.assertFalse((workspace / "CLAUDE.md").exists())
         self.assertFalse((workspace / "AGENTS.md").exists())
         self.assertFalse((workspace / ".claude/settings.json").exists())
+        self.assertFalse((workspace / ".claude/skills/agent-integration/evals").exists())
+        self.assertIn("evals/routing.json", gate.candidate_digests())
         owner.rollback()
 
     def test_missing_executable_produces_blocked_receipt(self):
@@ -157,12 +159,62 @@ class RoutingTests(unittest.TestCase):
                 gate.summarize(output=self.root, cases=[self.case], repetitions=1, harness="codex")
 
     def test_failed_catalog_still_records_attempt(self):
+        candidate = self.root / "candidate"
+        candidate.write_text("test candidate")
+        candidate.chmod(0o700)
+        capture = self.root / "capture.txt"
+        capture.write_text("fixture capture")
+        def capture_prerequisite(name, argv):
+            if name == "delegate-catalog":
+                raise RuntimeError("supervised delegate-catalog prerequisite failed")
+            return capture
         with patch.object(gate, "AttemptSupervisor") as owner, patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
-            owner.return_value.capture.side_effect = ValueError("bad catalog")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1, mode="routing")
+            owner.return_value.processes.environment = {}
+            owner.return_value.client = "/mock/bin/pueue"
+            owner.return_value.daemon_path = "/mock/bin/pueued"
+            owner.return_value.capture.side_effect = capture_prerequisite
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case,
+                          repetition=1, mode="routing", delegate_bin=candidate)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
+        self.assertEqual(owner.return_value.capture.call_args.args[0], "delegate-catalog")
+        owner.return_value.execute.assert_not_called()
         owner.return_value.close.assert_called_once()
+
+    def test_live_and_routing_reach_scenario_without_provider_version(self):
+        capture = self.root / "capture.txt"
+        capture.write_text("fixture capture")
+        candidate = self.root / "candidate"
+        candidate.write_text("test candidate")
+        candidate.chmod(0o700)
+        for repetition, mode in enumerate(("live", "routing"), 1):
+            with self.subTest(mode=mode), patch.object(gate, "AttemptSupervisor") as supervisor, \
+                    patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
+                owner = supervisor.return_value
+                owner.client = "/mock/bin/pueue"
+                owner.daemon_path = "/mock/bin/pueued"
+                owner.processes.environment = {}
+                owner.capture.return_value = capture
+                owner.execute.return_value = {"result": "Success"}
+                gate.run_case(output=self.root, harness="codex", model=None, case=self.case,
+                              repetition=repetition, mode=mode, delegate_bin=candidate)
+                owner.execute.assert_called_once()
+                self.assertEqual([call.args[0] for call in owner.capture.call_args_list],
+                                 ["git-init", "delegate-version", "delegate-catalog"])
+                receipt = gate.read_json(self.root / f"review-{repetition}/receipt.json")
+                self.assertNotIn("harness_version", receipt)
+                self.assertEqual(receipt["status"], "unreviewed")
+
+    def test_legacy_optional_harness_version_does_not_change_receipt_reading(self):
+        run = self.receipt()
+        receipt = gate.read_json(run / "receipt.json")
+        receipt["harness_version"] = "historical optional release"
+        (run / "receipt.json").write_text(json.dumps(receipt))
+        self.judgment(run)
+        original = (run / "receipt.json").read_bytes()
+        self.assertEqual(gate.summarize(output=self.root, cases=[self.case], repetitions=1,
+                                        harness="codex")["status"], "passed")
+        self.assertEqual((run / "receipt.json").read_bytes(), original)
 
     def test_deadline_and_cleanup_failure_are_never_passes(self):
         with patch.object(gate, "AttemptSupervisor") as owner, patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
@@ -243,6 +295,7 @@ class RoutingTests(unittest.TestCase):
             self.assertNotIn("--safe-mode", argv)
             self.assertNotIn("--append-system-prompt", argv)
             self.assertTrue(stdin == self.case["prompt"] or self.case["prompt"] in argv)
+
 
     def test_copied_receipt_is_not_an_independent_repetition(self):
         run = self.receipt()
@@ -728,6 +781,14 @@ class RoutingTests(unittest.TestCase):
     def test_suite_is_balanced_with_fixed_holdout(self):
         cases = gate.read_json(gate.CASES)["cases"]
         self.assertEqual(len({c["name"] for c in cases}), len(cases))
+        diagnosis = [case for case in cases if "paired_case_id" in case]
+        leaves = gate.paired_scenarios(cases)
+        self.assertEqual(len(diagnosis), 6)
+        self.assertEqual(len(gate.read_json(gate.SKILL / "evals/cases.json")["cases"]), 3)
+        self.assertEqual({case["paired_case_id"] for case in diagnosis}, set(leaves))
+        self.assertEqual(len({case["fixture_scenario"] for case in diagnosis}), 6)
+        self.assertTrue(all(case["external"] is False for case in diagnosis))
+        cases = [case for case in cases if "paired_case_id" not in case]
         holdouts = [c for c in cases if c.get("holdout")]
         self.assertEqual({c["name"] for c in holdouts}, {
             "recheck-recoverable", "recheck-still-rejected",

@@ -279,6 +279,97 @@ class ClaudeOracleTests(unittest.TestCase):
                             claude_protocol.parse_claude_events(stream([changed, answer_event()])))["api_key_source"],
                         source)
 
+    def test_fresh_and_resume_accept_optional_version_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            sibling = root / "sibling"
+            nonce_file = workspace / "nonce.txt"
+            for scenario in ("fresh", "resume"):
+                for version_fields in ({}, {"claude_code_version": ""},
+                                       {"claude_code_version": 42},
+                                       {"claude_code_version": " 2.1.270 "},
+                                       {"claude_code_version": "2.1.270"}):
+                    with self.subTest(scenario=scenario, version_fields=version_fields):
+                        if scenario == "fresh":
+                            values = [json.loads(line) for line in fresh_stream(
+                                nonce_file=nonce_file, workspace=workspace).splitlines()]
+                        else:
+                            values = [init_event(), answer_event()]
+                        values[0].pop("claude_code_version")
+                        values[0].update(version_fields)
+                        parsed = claude_protocol.parse_claude_events(stream(values))
+                        profile = claude_protocol.validate_init_profile(parsed, SESSION)
+                        self.assertEqual(profile, {
+                            "session_id": SESSION,
+                            "tools": ["Bash"] if scenario == "fresh" else ["Read", "Glob", "Grep"],
+                            "permission_mode": "plan", "api_key_source": "none",
+                            "mcp_server_count": 0,
+                        })
+                        if scenario == "fresh":
+                            controls = claude_protocol.validate_fresh_controls(
+                                parsed, nonce_file, workspace, sibling, NONCE, SESSION)
+                            self.assertTrue(controls["nonce_read"])
+                            self.assertEqual(controls["nonce_read_count"], 1)
+                        else:
+                            controls = claude_protocol.validate_tool_free_resume(parsed, NONCE, SESSION)
+                            self.assertTrue(controls["tool_free"])
+                        self.assertEqual(controls["session_id"], SESSION)
+                        self.assertNotIn("claude_code_version", controls)
+
+    def test_optional_version_preserves_required_evidence_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            sibling = root / "sibling"
+            nonce_file = workspace / "nonce.txt"
+            def change_session(values: list[dict[str, object]]) -> None:
+                for value in values:
+                    value["session_id"] = "0199a213-81c0-7800-8aa1-bbab2a035a54"
+
+            cases = (
+                ("wrong-session", change_session, "session identity mismatch"),
+                ("permission", lambda values: values[0].update({
+                    "permissionMode": "acceptEdits"}), "permission mode"),
+                ("missing-workspace", lambda values: values[0].pop("cwd"), "cwd"),
+                ("answer", lambda values: values[-1].update({"result": "other"}), "answer"),
+                ("duplicate-tools", lambda values: values[0].update({
+                    "tools": ["Read", "Read"]}), "duplicated"),
+                ("missing-apiKeySource", lambda values: values[0].pop("apiKeySource"), "apiKeySource"),
+            )
+            for scenario in ("fresh", "resume"):
+                if scenario == "fresh":
+                    scenario_cases = cases + (
+                        ("wrong-workspace", lambda values: values[0].update({
+                            "cwd": str(sibling)}), "workspace"),
+                        ("duplicate-tool-id", lambda values: values.insert(2, values[1]), "IDs are not unique"),
+                    )
+                else:
+                    scenario_cases = cases + (
+                        ("tool-use", lambda values: values.insert(1, tool_use(
+                            "unexpected", "Read", file_path=str(nonce_file))), "used a tool"),
+                        ("tool-result", lambda values: values.insert(1, tool_result(
+                            "unexpected", NONCE.decode())), "returned a tool result"),
+                        ("permission-denial", lambda values: values[-1].update({
+                            "permission_denials": [permission_denial("Read")]}), "permission-denial"),
+                    )
+                for name, mutate, message in scenario_cases:
+                    with self.subTest(scenario=scenario, invalid_evidence=name):
+                        if scenario == "fresh":
+                            values = [json.loads(line) for line in fresh_stream(
+                                nonce_file=nonce_file, workspace=workspace).splitlines()]
+                        else:
+                            values = [init_event(), answer_event()]
+                        values[0].pop("claude_code_version")
+                        mutate(values)
+                        with self.assertRaisesRegex(AcceptanceFailure, message):
+                            parsed = claude_protocol.parse_claude_events(stream(values))
+                            if scenario == "fresh":
+                                claude_protocol.validate_fresh_controls(
+                                    parsed, nonce_file, workspace, sibling, NONCE, SESSION)
+                            else:
+                                claude_protocol.validate_tool_free_resume(parsed, NONCE, SESSION)
+
     def test_fresh_controls_require_exact_nonce_tool_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

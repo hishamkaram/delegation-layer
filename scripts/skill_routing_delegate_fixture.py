@@ -33,6 +33,7 @@ SCENARIOS = {
     "recoverable-rejection": "recovered",
     "still-rejected-recheck": "rejected",
 }
+DIAGNOSIS_SCENARIOS = frozenset("handoff-" + char for char in "abcdef")
 
 
 def digest_bytes(data):
@@ -431,44 +432,143 @@ def synthetic_response(root, runtime, argv, command, normal):
     return response, code
 
 
-root = Path(os.environ["DELEGATE_ROUTING_FIXTURE"])
-argv = sys.argv[1:]
-with (root / "calls.jsonl").open("a", encoding="utf-8") as stream:
-    stream.write(json.dumps(argv) + "\n")
-runtime = read_json(root / "runtime.json")
+def initialize_diagnosis(fixture, workspace, state_root, scenario):
+    """Bind a synthetic handoff and its diagnostic bytes without real task work."""
+    response = read_json(workspace / "handoff.json")
+    if (response.get("task_id") != task_id(state_root, scenario)
+            or response.get("root_id") != root_id(state_root)):
+        raise ValueError("diagnosis handoff identity mismatch")
+    raw = workspace / "evidence/stderr.txt"
+    descriptor = {"path": str(raw.resolve(strict=True)), "available": True,
+                  "sealed": True, "size": raw.stat().st_size, "sha256": digest(raw)}
+    state = {"evidence_source": SYNTHETIC_EVIDENCE, "scenario": scenario,
+             "root": str(state_root), "task_id": response["task_id"],
+             "response": response, "raw": [descriptor], "refused_commands": 0}
+    write_json(fixture / STATE_NAME, state)
+    (fixture / "calls.jsonl").touch(exist_ok=False)
+    append_json(fixture / EVENTS_NAME, {
+        "source": SYNTHETIC_EVIDENCE, "scenario": scenario, "action": "handoff",
+        "root": str(state_root), "task_id": response["task_id"],
+    })
 
-# Only this child loses provider executables. The initiating harness keeps its
-# normal profile, PATH, and competing integrations, so bypasses remain observable.
-try:
-    result = subprocess.run([runtime["delegate"], *argv],
-                            env=dict(os.environ, PATH=runtime["path"]),
-                            capture_output=True, text=True, check=False)
-except OSError as error:
-    # A missing Delegate binary is a fixture blocker, never synthetic success.
-    print("routing fixture validation unavailable: " + type(error).__name__, file=sys.stderr)
-    sys.exit(1)
 
-command = command_name(argv)
-normal = parsed_response(result, command)
-normal_for_fixture = None if normal is None else dict(normal, _exit_code=result.returncode)
-synthetic = synthetic_response(root, runtime, argv, command, normal_for_fixture)
-if synthetic is not None:
-    response, code = synthetic
-    response.pop("_exit_code", None)
-    print(json.dumps(response))
-    sys.exit(code)
+def diagnosis_response(root, runtime, argv):
+    """Read-only synthetic task surface; never forward a new or unknown action."""
+    if runtime.get("scenario") not in DIAGNOSIS_SCENARIOS:
+        return None
+    # Only a public read command following the explicit global root is eligible.
+    # Do not mistake a later argument of dispatch/continue for a read command.
+    tail = argv[2:] if len(argv) >= 2 and argv[0] == "--root" else (
+        argv[1:] if argv and argv[0].startswith("--root=") else [])
+    static_tail = tail or argv
+    if (static_tail in (["--version"], ["version"])
+            or static_tail and static_tail[0] in ("providers", "capabilities")):
+        return None  # Existing real static catalog/version path; no provider turn.
+    command = tail[0] if tail else None
+    state_path = root / STATE_NAME
+    with state_lock(state_path):
+        state = load_state(state_path)
+        if state is None:
+            raise RuntimeError("diagnosis handoff was not initialized")
+        same_root = requested_root(argv) == Path(state["root"])
+        task_read = (command in ("status", "collect", "logs")
+                     and requested_task(argv, command) == state["task_id"]
+                     and state["response"].get("task_record") not in ("not_created", "unknown"))
+        static_check = (command == "preflight" and "--live" not in argv
+                        and option_value(argv, "--provider") in PROVIDERS
+                        and bool(option_value(argv, "--cwd"))
+                        and Path(option_value(argv, "--cwd")).is_absolute())
+        allowed_flags = {"--root", "--json"}
+        if command == "collect":
+            allowed_flags.add("--watch")
+        if command == "preflight":
+            allowed_flags.update(("--provider", "--permission", "--cwd"))
+            static_check = static_check and option_value(argv, "--permission") in (None, "read-only", "workspace-write")
+        flags_valid = all(value.split("=", 1)[0] in allowed_flags
+                          for value in argv if value.startswith("-"))
+        permitted = same_root and json_requested(argv) and flags_valid and (task_read or static_check)
+        if permitted:
+            if static_check:
+                response = {
+                    "schema_version": 1, "command": "preflight", "status": "ready",
+                    "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+                    "capability": {
+                        "contract": "runtime-capability-v1", "provider": option_value(argv, "--provider"),
+                        "status": "ready", "verification": "preflight", "reason_code": "static_admission_ready",
+                        "live_acceptance": {"status": "not_run", "authentication": "unknown",
+                                            "reason_code": "runtime_probe_not_run"},
+                    },
+                }
+            else:
+                response = dict(state["response"], command=command)
+                if command == "logs":
+                    response["raw"] = state["raw"]
+            code = 4 if command == "collect" else 0
+        else:
+            state["refused_commands"] += 1
+            response = {"schema_version": 1, "command": command or "unsupported",
+                        "failure": {"code": "synthetic_action_refused",
+                                    "next_action": "stop_and_report"},
+                        "error": "This handoff authorizes existing evidence reads only."}
+            code = 2
+        write_json(state_path, state)
+        append_json(root / EVENTS_NAME, {
+            "source": SYNTHETIC_EVIDENCE, "scenario": state["scenario"],
+            "action": "read" if permitted else "refused", "command": command,
+            "root": state["root"], "task_id": state["task_id"],
+        })
+    return response, code
 
-# Keep model selection deterministic, but only after real parsing accepted a
-# CCR discovery request. Syntax errors retain their actual error response.
-if isinstance(normal, dict) and normal.get("command") == "models" \
-        and normal.get("provider") == "ccr:print" \
-        and normal.get("reason_code") == "discovery_unavailable" \
-        and result.returncode == 2:
-    normal.update(status="available", reason_code="ok", complete=True,
-                  source="ccr model list", efforts=None,
-                  models=[{"id": "local-review", "name": "Local review model", "efforts": None}])
-    print(json.dumps(normal))
-    sys.exit(0)
-sys.stdout.write(result.stdout)
-sys.stderr.write(result.stderr)
-sys.exit(result.returncode)
+
+def main():
+    root = Path(os.environ["DELEGATE_ROUTING_FIXTURE"])
+    argv = sys.argv[1:]
+    with (root / "calls.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(argv) + "\n")
+    runtime = read_json(root / "runtime.json")
+
+    diagnostic = diagnosis_response(root, runtime, argv)
+    if diagnostic is not None:
+        response, code = diagnostic
+        print(json.dumps(response))
+        sys.exit(code)
+
+    # Only this child loses provider executables. The initiating harness keeps its
+    # normal profile, PATH, and competing integrations, so bypasses remain observable.
+    try:
+        result = subprocess.run([runtime["delegate"], *argv],
+                                env=dict(os.environ, PATH=runtime["path"]),
+                                capture_output=True, text=True, check=False)
+    except OSError as error:
+        # A missing Delegate binary is a fixture blocker, never synthetic success.
+        print("routing fixture validation unavailable: " + type(error).__name__, file=sys.stderr)
+        sys.exit(1)
+
+    command = command_name(argv)
+    normal = parsed_response(result, command)
+    normal_for_fixture = None if normal is None else dict(normal, _exit_code=result.returncode)
+    synthetic = synthetic_response(root, runtime, argv, command, normal_for_fixture)
+    if synthetic is not None:
+        response, code = synthetic
+        response.pop("_exit_code", None)
+        print(json.dumps(response))
+        sys.exit(code)
+
+    # Keep model selection deterministic, but only after real parsing accepted a
+    # CCR discovery request. Syntax errors retain their actual error response.
+    if isinstance(normal, dict) and normal.get("command") == "models" \
+            and normal.get("provider") == "ccr:print" \
+            and normal.get("reason_code") == "discovery_unavailable" \
+            and result.returncode == 2:
+        normal.update(status="available", reason_code="ok", complete=True,
+                      source="ccr model list", efforts=None,
+                      models=[{"id": "local-review", "name": "Local review model", "efforts": None}])
+        print(json.dumps(normal))
+        sys.exit(0)
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+    sys.exit(result.returncode)
+
+
+if __name__ == "__main__":
+    main()

@@ -354,9 +354,6 @@ def validate_init_profile(parsed: dict[str, object], expected_session: str | Non
     require(is_session_id(session), "Claude init session identity is invalid")
     if expected_session is not None:
         require(session == expected_session, "Claude init session identity mismatch")
-    version = init.get("claude_code_version")
-    require(isinstance(version, str) and version.strip() == version and version,
-            "Claude init runtime version is absent or malformed")
     cwd = init.get("cwd")
     require(isinstance(cwd, str) and cwd and "\x00" not in cwd,
             "Claude init cwd is absent or malformed")

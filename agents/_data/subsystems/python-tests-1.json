@@ -547,6 +547,22 @@
     ]
   },
   {
+    "name": "py:test_skill_diagnosis_routing",
+    "owner": "py:test_skill_diagnosis_routing",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_skill_routing",
+      "py:contextlib",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:runpy",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:test_acceptance_supervisor",
     "owner": "py:test_acceptance_supervisor",
     "layer": "test",

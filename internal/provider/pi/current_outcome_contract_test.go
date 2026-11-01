@@ -169,29 +169,52 @@ func TestPiV9ContractBindsOutcomePolicyAndPriorBytesStayDistinct(t *testing.T) {
 
 func TestPiReconstructionKeepsPriorFreshDefaultRecordsOnTheirRecordedPredicate(t *testing.T) {
 	for _, reference := range []task.PredicateRef{readOnlyV6Reference(), workspaceWriteV8Reference()} {
-		t.Run(reference.Mode, func(t *testing.T) {
-			request, now := profileReconstructionFixture(t, reference.Mode)
-			fresh := finalizeProfile(t, mustPrepareCandidate(t, request), now)
-			if !fresh.Plan.Predicate.Equal(ReferenceForMode(reference.Mode)) || fresh.Plan.Predicate.Equal(reference) {
-				t.Fatalf("fresh admission predicate=%+v", fresh.Plan.Predicate)
-			}
-			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: fresh.Effective}, os.Environ())
-			if err != nil {
-				t.Fatal(err)
-			}
-			rebuilt := finalizeProfile(t, candidate, now)
-			// The recorded predicate is retained while the launch contract of the
-			// prior fresh default (current tools, startup controls, runtime
-			// requirements) is reconstructed exactly.
-			if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, fresh.Plan.Arguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, fresh.Effective) {
-				t.Fatalf("prior record reconstruction changed: %+v", rebuilt.Plan)
-			}
-			wantFlags := RuntimeRequirements(reference.Mode).RequiredFlags
-			if candidate.Inspection == nil || candidate.Inspection.Runtime == nil || !slices.Equal(candidate.Inspection.Runtime.RequiredFlags, wantFlags) {
-				t.Fatalf("prior record runtime requirements=%+v want %q", candidate.Inspection, wantFlags)
-			}
-		})
+		for _, effort := range []string{"", "default", "off", "minimal", "low", "medium", "high", "xhigh", "max"} {
+			t.Run(reference.Mode+"/effort="+effort, func(t *testing.T) {
+				testPiPriorEffortReconstruction(t, reference, effort)
+			})
+		}
 	}
+}
+
+func testPiPriorEffortReconstruction(t *testing.T, reference task.PredicateRef, effort string) {
+	t.Helper()
+	registry, err := predicate.New(Registration().Interpreters...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, now := profileReconstructionFixture(t, reference.Mode)
+	request.RequestedConfig.Model = "fixture-model"
+	request.RequestedConfig.Effort = effort
+	fresh := finalizeProfile(t, mustPrepareCandidate(t, request), now)
+	if !fresh.Plan.Predicate.Equal(ReferenceForMode(reference.Mode)) || fresh.Plan.Predicate.Equal(reference) {
+		t.Fatalf("fresh admission predicate=%+v", fresh.Plan.Predicate)
+	}
+	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: fresh.Effective}, os.Environ())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := finalizeProfile(t, candidate, now)
+	// v6/v8 use the current launch profile but retain their recorded
+	// predicate and frozen interpretation of native outcome fields.
+	if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, fresh.Plan.Arguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, fresh.Effective) {
+		t.Fatal("prior record reconstruction changed predicate, argv or effective configuration")
+	}
+	wantFlags := RuntimeRequirements(reference.Mode).RequiredFlags
+	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil || !slices.Equal(candidate.Inspection.Runtime.RequiredFlags, wantFlags) {
+		t.Fatal("prior record runtime requirements changed")
+	}
+	frozen, err := registry.Resolve(rebuilt.Plan.Predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := registry.Resolve(fresh.Plan.Predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := withPiLines(piStream(testUUID, "frozen answer", true), `{"type":"agent_settled","aborted":true}`)
+	requirePiOutcomeCommitted(t, evaluateWith(t, frozen, stdout), "frozen answer")
+	requirePiOutcomeRejected(t, evaluateWith(t, current, stdout), refusalProviderFailed)
 }
 
 type piSuccessorFixture struct {

@@ -84,7 +84,6 @@ func TestJSONArgumentsRejectUnsupportedRequests(t *testing.T) {
 		"permission mismatch": func(r *task.TaskRecord) { r.RequestedConfig.Permission = config.ModeWorkspaceWrite },
 		"unknown mode":        func(r *task.TaskRecord) { r.Mode = "prompt"; r.RequestedConfig.Permission = "prompt" },
 		"native timeout":      func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "1s" },
-		"thinking":            func(r *task.TaskRecord) { r.RequestedConfig.Effort = "turbo" },
 		"bad model":           func(r *task.TaskRecord) { r.RequestedConfig.Model = " model" },
 		"budget":              func(r *task.TaskRecord) { r.BudgetNanos = 0 },
 		"brief":               func(r *task.TaskRecord) { r.BriefLength = 0 },
@@ -100,6 +99,117 @@ func TestJSONArgumentsRejectUnsupportedRequests(t *testing.T) {
 			mutate(&request)
 			if _, err := printArguments(request); !errors.Is(err, ErrUnsupportedProfile) {
 				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareCandidatePreservesThinkingLiterals(t *testing.T) {
+	cases := []struct{ name, effort string }{
+		{"omitted", ""},
+		{"default", "default"},
+		{"off", "off"},
+		{"minimal", "minimal"},
+		{"low", "low"},
+		{"medium", "medium"},
+		{"high", "high"},
+		{"xhigh", "xhigh"},
+		{"max", "max"},
+		{"future", "turbo"},
+		{"case", "HIGH"},
+		{"internal space", "future effort"},
+		{"punctuation", `future:"level"/v2;$(literal)\value`},
+		{"unicode", "思考-é"},
+		{"replacement rune", "\ufffd"},
+		{"internal unicode space", "future\u00a0effort"},
+		{"byte limit", strings.Repeat("a", task.MaxControlRecordSize)},
+		{"unicode byte limit", strings.Repeat("é", task.MaxControlRecordSize/2)},
+	}
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		for _, testCase := range cases {
+			t.Run(mode+"/"+testCase.name, func(t *testing.T) {
+				testThinkingLiteralPreparation(t, mode, testCase.effort)
+			})
+		}
+	}
+}
+
+func testThinkingLiteralPreparation(t *testing.T, mode, effort string) {
+	t.Helper()
+	request, now := profileReconstructionFixture(t, mode)
+	sessionDir, err := config.CanonicalizePath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(piSessionDirEnv, sessionDir)
+	request.RequestedConfig.Model = "fixture-model"
+	baseline := finalizeProfile(t, mustPrepareCandidate(t, request), now)
+	request.RequestedConfig.Effort = effort
+	candidate := mustPrepareCandidate(t, request)
+	prepared := finalizeProfile(t, candidate, now)
+	want := []string{"--mode", "json", "--tools", "read,bash,edit,write"}
+	if mode == ModeReadOnly {
+		want = []string{"--mode", "json", "--tools", "read,grep,find,ls", "--no-extensions", "--session-dir", sessionDir}
+	}
+	want = append(want, "--model", "fixture-model")
+	if effort != "" && effort != "default" {
+		want = append(want, "--thinking", effort)
+	}
+	if !slices.Equal(prepared.Plan.Arguments, want) {
+		t.Fatal("prepared argv did not preserve the exact thinking literal as one value")
+	}
+	if !task.CompareEffectiveConfigs(prepared.Effective, baseline.Effective) || !prepared.Plan.Predicate.Equal(baseline.Plan.Predicate) {
+		t.Fatal("thinking selection changed effective configuration or predicate")
+	}
+	if candidate.Admit == nil {
+		t.Fatal("current candidate has no static admission")
+	}
+	admitted, err := candidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(admitted.Plan.Arguments, want) || !task.CompareEffectiveConfigs(admitted.Effective, baseline.Effective) || !admitted.Plan.Predicate.Equal(baseline.Plan.Predicate) {
+		t.Fatal("static admission changed thinking argv, effective configuration or predicate")
+	}
+}
+
+func TestPrepareCandidateRejectsMalformedThinkingLiterals(t *testing.T) {
+	cases := []struct{ name, effort string }{
+		{"leading space", " high"},
+		{"trailing space", "high "},
+		{"blank", " "},
+		{"padded default", "default "},
+		{"leading unicode space", "\u00a0high"},
+		{"trailing unicode space", "high\u2003"},
+		{"tab", "hi\tgh"},
+		{"NUL", "hi\x00gh"},
+		{"newline", "hi\ngh"},
+		{"carriage return", "hi\rgh"},
+		{"C0 start", "hi\x01gh"},
+		{"C0 end", "hi\x1fgh"},
+		{"C1 start", "hi\u0080gh"},
+		{"C1 space", "hi\u0085gh"},
+		{"C1 end", "hi\u009fgh"},
+		{"DEL", "hi\x7fgh"},
+		{"invalid UTF-8", "hi\xffgh"},
+		{"overlong UTF-8", "hi\xc0\xafgh"},
+		{"over byte limit", strings.Repeat("a", task.MaxControlRecordSize+1)},
+		{"over unicode byte limit", strings.Repeat("é", task.MaxControlRecordSize/2) + "a"},
+		{"dash", "-"},
+		{"option", "--help"},
+		{"short option", "-h"},
+	}
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			request, _ := profileReconstructionFixture(t, mode)
+			for _, testCase := range cases {
+				t.Run(testCase.name, func(t *testing.T) {
+					request := request
+					request.RequestedConfig.Effort = testCase.effort
+					if _, err := PrepareCandidate(request, []string{"HOME=" + t.TempDir()}); !errors.Is(err, ErrUnsupportedProfile) || !strings.Contains(err.Error(), "thinking") {
+						t.Fatalf("malformed thinking literal error=%v want thinking validation before executable lookup", err)
+					}
+				})
 			}
 		})
 	}

@@ -35,10 +35,12 @@ and the independent [scheduler runtime](references/command-reference.md#schedule
 - Permissions request native behavior, not an independent sandbox.
   `workspace-write` authorizes unattended commands and edits; native access
   can extend beyond the workspace.
-- Report a Delegate blocker without provider commands, plugins, API fallback,
-  setup diagnosis, or configuration changes. A `stop_and_report` ends that
-  attempt; keep it reported while independent requests may proceed.
-  Troubleshooting needs a separate request.
+- A `stop_and_report` ends that attempt, not investigation of its cause.
+  Follow [failure diagnosis](references/result-handling.md#failure-diagnosis)
+  without another generic troubleshooting request: inspect bounded evidence,
+  distinguish facts from uncertainty, and propose a concrete next step.
+  Do not retry, substitute an integration, or change configuration without
+  authorization covering that action. Independent requests may proceed.
 - Observe through Delegate `status`, `collect`, or `events`; do not use
   process searches or Pueue commands. Delegate manages its supervisor.
 - Keep credentials and unrestricted private provider output out of briefs,
@@ -169,6 +171,7 @@ predecessor for an exact-session follow-up. The
 Use observed responses and validated evidence. Report each original task ID,
 returned provider ID, admission/liveness/publication fields, terminal outcome,
 evidence descriptors, and any successor or blocked authentication state.
-For a `not_created` stop, name the requested destination and include its
-saved JSON failure verbatim. Do not infer installation, authentication,
-configuration, or paths from a failure.
+For a `not_created` stop, name the requested destination and preserve its
+saved JSON failure with sensitive content redacted. Report the evidence-backed
+cause or what remains unknown and a specific next step; do not invent paths
+or infer installation, authentication or configuration from rejection alone.
