@@ -461,7 +461,11 @@ def diagnosis_response(root, runtime, argv):
     tail = argv[2:] if len(argv) >= 2 and argv[0] == "--root" else (
         argv[1:] if argv and argv[0].startswith("--root=") else [])
     static_tail = tail or argv
+    help_query = (static_tail in (["--help"], ["-h"], ["help"])
+                  or len(static_tail) == 2 and static_tail[0] in ("logs", "status", "collect", "preflight")
+                  and static_tail[1] == "--help")
     if (static_tail in (["--version"], ["version"])
+            or help_query
             or static_tail and static_tail[0] in ("providers", "capabilities")):
         return None  # Existing real static catalog/version path; no provider turn.
     command = tail[0] if tail else None

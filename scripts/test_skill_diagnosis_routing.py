@@ -127,7 +127,8 @@ class DiagnosisRoutingTests(unittest.TestCase):
                     ["logs", "f" * 32], ["status", "unknown"],
                     ["preflight", "--provider", case["provider"], "--live"],
                     ["preflight", "--provider", case["provider"], "--live=true"],
-                    ["dispatch", "logs", task_id], ["logs", task_id, "--unknown"])
+                    ["dispatch", "logs", task_id], ["logs", task_id, "--unknown"],
+                    ["dispatch", "--model", "--help"], ["continue", "--brief", "--help"])
         original = gate.read_json(fixture / "routing-state.json")["response"]
         for command in commands:
             with self.subTest(command=command):
@@ -156,17 +157,20 @@ class DiagnosisRoutingTests(unittest.TestCase):
 
     def test_diagnosis_keeps_real_static_catalog_and_control_version(self):
         fixture, _, state, _ = self.prepare_diagnosis()
-        for argv, answer in ((["--version"], "delegate candidate\n"),
-                             (["providers", "--json"], '{"providers": []}\n')):
-            stdout = io.StringIO()
+        for argv, code, answer, diagnostic in ((["--version"], 0, "delegate candidate\n", ""),
+                                               (["providers", "--json"], 0, '{"providers": []}\n', ""),
+                                               (["logs", "--help"], 2, "", "Usage error: delegate\n")):
+            stdout, stderr = io.StringIO(), io.StringIO()
             with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(fixture),
                                              "DELEGATE_ROOT": str(state)}), \
                     patch.object(gate.sys, "argv", ["delegate", *argv]), \
-                    patch("subprocess.run", return_value=Mock(returncode=0, stdout=answer, stderr="")) as run, \
-                    contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as stopped:
+                    patch("subprocess.run", return_value=Mock(returncode=code, stdout=answer, stderr=diagnostic)) as run, \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                    self.assertRaises(SystemExit) as stopped:
                 runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
-            self.assertEqual(stopped.exception.code, 0)
+            self.assertEqual(stopped.exception.code, code)
             self.assertEqual(stdout.getvalue(), answer)
+            self.assertEqual(stderr.getvalue(), diagnostic)
             self.assertEqual(run.call_args.args[0], ["/not-called", *argv])
 
     def test_diagnosis_materialization_refuses_collisions_and_unsafe_paths(self):
