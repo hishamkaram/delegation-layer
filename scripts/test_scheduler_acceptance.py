@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -18,6 +19,7 @@ from scripts.delegate_acceptance.private_cli import scheduler_acceptance as appl
 from scripts.delegate_acceptance.private_cli import scheduler_cases as cases
 from scripts.delegate_acceptance.private_cli import scheduler_service as native
 from scripts.delegate_acceptance.private_cli import scheduler_sequence as sequence
+from scripts.delegate_acceptance.private_cli import scheduler_host as foreground
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
 from scripts.delegate_acceptance.private_cli.fixture_records import FixtureInstallation
@@ -31,6 +33,74 @@ ROOT_ID = "a" * 32
 SCHEDULE_ID = "b" * 32
 FIRST_ID = "c" * 32
 SECOND_ID = "d" * 32
+
+
+CLI_FIXTURE = '''import json
+import os
+from pathlib import Path
+import sys
+import time
+
+root = Path(sys.argv[sys.argv.index("--root") + 1])
+family, action = sys.argv[3:5]
+mode_path = root / "mode"
+mode = mode_path.read_text() if mode_path.exists() else ""
+with (root / "calls").open("a") as stream:
+    stream.write(json.dumps([family, action, sys.argv[5:]]) + "\\n")
+schedule_file = root / "definition.json"
+schedule_id = "b" * 32
+scheduler = {"state": "no_host_observed", "next_action": "start_required", "serve_command": [str(Path(sys.argv[0])), "--root", str(root), "scheduler", "serve"]}
+response = {"root_id": "a" * 32}
+code = 0
+if family == "schedule":
+    if action == "create":
+        schedule = {"id": schedule_id, "created_at": "1970-01-01T00:00:10Z", "state": "enabled"}
+        schedule_file.write_text(json.dumps(schedule))
+    else:
+        schedule = json.loads(schedule_file.read_text())
+    if action in ("pause", "resume"):
+        schedule["state"] = "paused" if action == "pause" else "enabled"
+        schedule_file.write_text(json.dumps(schedule))
+    if action in ("create", "resume"):
+        schedule["saved"] = mode != "bad-saved"
+        schedule["next_action"] = "start_required"
+        response["scheduler"] = scheduler
+        response["pending"] = {"kind": "start_required"}
+        code = 3 if mode != "wrong-create-exit" else 0
+    if action == "show" and mode == "bad-show":
+        schedule["id"] = "c" * 32
+    if action == "resume" and mode == "bad-resume-id":
+        schedule["id"] = "c" * 32
+    if mode == "bad-start-command":
+        scheduler["serve_command"] = ["different-executable", "scheduler", "serve"]
+    response["schedule"] = schedule
+elif action == "serve":
+    if mode == "early-exit":
+        sys.exit(17)
+    (root / "started").write_text(json.dumps({"pid": os.getpid(), "sid": os.getsid(0)}))
+    print("finite foreground fixture", flush=True)
+    print("private diagnostic", file=sys.stderr, flush=True)
+    expires = time.monotonic() + 5
+    while not (root / "release").exists() and time.monotonic() < expires:
+        time.sleep(0.01)
+    sys.exit(0)
+elif action == "status":
+    state = "ready" if (root / "started").exists() else "starting"
+    if mode == "unready":
+        state = "backoff"
+    response["scheduler"] = {"state": state}
+    if mode == "malformed-status":
+        response["scheduler"] = "ready"
+elif action == "stop":
+    if mode != "pending-stop":
+        (root / "release").touch()
+    response["scheduler"] = {"state": "stopping", "stop_accepted": True}
+    code = 3
+    if mode == "fault-stop":
+        response["error"] = "controlled stop reply fault"
+print(json.dumps(response))
+sys.exit(code)
+'''
 
 
 class SchedulerAcceptanceTests(unittest.TestCase):
@@ -54,6 +124,235 @@ class SchedulerAcceptanceTests(unittest.TestCase):
     def service(self, system="Linux"):
         with patch.object(native.platform, "system", return_value=system):
             return native.SchedulerService(self.lifetime, self.state, self.base / "delegate", time.monotonic() + 30)
+
+    def host(self, mode=""):
+        self.lifetime.old_install = self.base
+        delegate = self.base / "delegate"
+        delegate.write_text("#!" + sys.executable + "\n" + CLI_FIXTURE)
+        delegate.chmod(0o700)
+        (self.state / "mode").write_text(mode)
+        host = foreground.SchedulerHost(self.lifetime, self.state, delegate, time.monotonic() + 10)
+        self.addCleanup(self.close_host, host)
+        return host
+
+    def close_host(self, host):
+        # Test-owned finite fixture has a cooperative release even when a
+        # control reply fails. Production cleanup never gets this bypass.
+        (self.state / "release").touch()
+        host.deadline = time.monotonic() + 7
+        for process in host.processes.entries:
+            process.wait(timeout=host.remaining(), expected=None)
+
+    def calls(self):
+        return [json.loads(line)[:2] for line in (self.state / "calls").read_text().splitlines()]
+
+    def test_saved_host_guidance_uses_resolved_cellar_executable(self):
+        host = self.host()
+        cellar = self.base / "Cellar" / "0.1.0" / "delegate"
+        cellar.parent.mkdir(parents=True)
+        host.delegate.rename(cellar)
+        host.delegate.symlink_to(cellar)
+        case = self.case(host)
+        response = {"root_id": ROOT_ID, "schedule": {"id": SCHEDULE_ID, "saved": True, "next_action": "start_required"},
+                    "pending": {"kind": "start_required"}, "scheduler": {"state": "no_host_observed", "next_action": "start_required",
+                    "serve_command": [str(cellar), "--root", str(self.state), "scheduler", "serve"]}}
+        case.require_start_required(response)
+        response["scheduler"]["serve_command"][0] = str(self.base / "wrong-delegate")
+        with self.assertRaisesRegex(RuntimeError, "different host start command"):
+            case.require_start_required(response)
+
+    def test_occurrence_wait_retries_native_busy_without_hiding_other_sqlite_errors(self):
+        case = self.case(self.host())
+        row = Occurrence(FIRST_ID, SCHEDULE_ID, MINUTE_NS)
+        busy = sqlite3.OperationalError("fixture database locked")
+        busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        with patch.object(case, "discover", side_effect=[busy, (row,)]) as discover:
+            self.assertEqual(case.occurrences(1), (row,))
+        self.assertEqual(discover.call_count, 2)
+        failure = sqlite3.OperationalError("fixture schema mismatch")
+        failure.sqlite_errorcode = sqlite3.SQLITE_ERROR
+        with patch.object(case, "discover", side_effect=failure) as discover:
+            with self.assertRaises(sqlite3.OperationalError):
+                case.occurrences(1)
+        self.assertEqual(discover.call_count, 1)
+
+    def test_busy_occurrence_discovery_is_not_safe_cleanup_authority(self):
+        case = self.case(self.host())
+        busy = sqlite3.OperationalError("fixture database locked")
+        busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        with patch.object(cases, "read_occurrences", side_effect=busy):
+            with self.assertRaises(sqlite3.OperationalError):
+                case.discover()
+
+    def test_foreground_host_uses_owned_independent_session_and_public_ready_then_stop_wait(self):
+        host = self.host()
+        host.start()
+        process = host.process
+        started = json.loads((self.state / "started").read_text())
+        self.assertEqual(started["pid"], process.pid)
+        self.assertEqual(started["sid"], process.pid)
+        self.assertNotEqual(started["sid"], os.getsid(0))
+        self.assertEqual(process.argv, [str(host.delegate), "--root", str(self.state), "scheduler", "serve"])
+        invocation = json.loads((process.directory / "invocation.json").read_text())
+        self.assertEqual(invocation["stdin"], "DEVNULL")
+        self.assertIs(invocation["environment_values_in_record"], False)
+        self.assertIsNone(process.result)
+        host.stop()
+        host.stop()
+        self.assertTrue(host.stopped)
+        self.assertEqual(process.result["exit_code"], 0)
+        self.assertTrue(process.result["natural_wait"])
+        self.assertTrue(process.stdout.closed and process.stderr.closed)
+        self.assertTrue(host.processes.finished_naturally())
+        self.assertEqual(self.calls().count(["scheduler", "stop"]), 1)
+        self.assertIn(["scheduler", "status"], self.calls())
+
+    def test_pending_stop_reply_does_not_close_or_kill_its_host(self):
+        host = self.host("pending-stop")
+        host.start()
+        host.deadline = time.monotonic() + 0.25
+        with self.assertRaises(BaseExceptionGroup):
+            host.stop()
+        self.assertFalse(host.stopped)
+        self.assertIsNone(host.process.process.poll())
+        self.assertFalse(host.process.stdout.closed)
+        with self.assertRaisesRegex(RuntimeError, "requires exact Wait"):
+            host.retire()
+        (self.state / "release").touch()
+        host.deadline = time.monotonic() + 5
+        host.process.wait(timeout=5)
+        host.stop()
+        host.retire()
+        self.assertTrue(host.stopped)
+
+    def test_failed_stop_reply_still_joins_exact_wait_and_preserves_failure(self):
+        host = self.host("fault-stop")
+        host.start()
+        with self.assertRaises(BaseExceptionGroup) as raised:
+            host.stop()
+        self.assertEqual(len(raised.exception.exceptions), 1)
+        self.assertEqual(host.process.result["exit_code"], 0)
+        self.assertFalse(host.stopped)
+        self.assertTrue(host.processes.finished_naturally())
+
+    def test_host_exit_before_ready_is_joined_as_failure(self):
+        host = self.host("early-exit")
+        with self.assertRaisesRegex(RuntimeError, "exited"):
+            host.start()
+        with self.assertRaises(BaseExceptionGroup):
+            host.stop()
+        self.assertEqual(host.process.result["exit_code"], 17)
+        self.assertNotIn(["scheduler", "stop"], self.calls())
+
+    def test_readiness_requires_public_object_and_live_host(self):
+        host = self.host("malformed-status")
+        with self.assertRaisesRegex(RuntimeError, "JSON object"):
+            host.start()
+        self.assertIsNone(host.process.process.poll())
+        (self.state / "mode").write_text("")
+        host.stop()
+
+    def test_backoff_state_is_not_ready_or_permission_to_replace_process(self):
+        host = self.host("unready")
+        observe = foreground.wait_until
+
+        def one_unready_observation(predicate, **_options):
+            # Synchronize on the finite fixture's actual Start before refusing
+            # readiness. Process startup time is not the property under test.
+            observe(lambda: (self.state / "started").exists(), timeout=5)
+            self.assertFalse(predicate())
+            raise RuntimeError("controlled readiness observation expired")
+
+        with patch.object(foreground, "wait_until", side_effect=one_unready_observation):
+            with self.assertRaisesRegex(RuntimeError, "controlled readiness"):
+                host.start()
+        self.assertFalse(host.stopped)
+        self.assertEqual(len([item for item in self.calls() if item == ["scheduler", "serve"]]), 1)
+        with self.assertRaisesRegex(RuntimeError, "already started"):
+            host.start()
+        host.deadline = time.monotonic() + 5
+        host.stop()
+
+    def test_partial_launch_keeps_registry_uncertainty_and_never_stops_another_host(self):
+        host = self.host()
+        with patch("scripts.delegate_acceptance.processes.operations.subprocess.Popen", side_effect=OSError("uncertain start")):
+            with self.assertRaises(OSError):
+                host.start()
+        self.assertIsNone(host.process)
+        with self.assertRaises(BaseExceptionGroup):
+            host.stop()
+        self.assertFalse(host.processes.finished_naturally())
+        self.assertFalse((self.state / "calls").exists())
+        self.assertTrue(next(self.lifetime.capture_token.directory.iterdir()).is_dir())
+
+    def test_post_start_receipt_fault_keeps_exact_handle_for_cooperative_stop_and_wait(self):
+        host = self.host()
+        from scripts.delegate_acceptance.processes import operations
+        write = operations.write_json
+
+        def fail_started(path, value):
+            if path.name == "started.json":
+                raise OSError("controlled started receipt fault")
+            return write(path, value)
+
+        with patch.object(operations, "write_json", side_effect=fail_started):
+            with self.assertRaises(OSError):
+                host.start()
+        self.assertIsNotNone(host.process)
+        self.assertIs(host.processes.entries[0], host.process)
+        host.stop()
+        self.assertEqual(host.process.result["exit_code"], 0)
+        self.assertTrue(host.stopped)
+
+    def test_unknown_foreground_wait_retains_fixture_and_original_case_failure(self):
+        host = self.host("pending-stop")
+        host.start()
+        case = self.case(host)
+        failure = RuntimeError("original scheduler assertion")
+        def bounded_stop(current):
+            host.deadline = time.monotonic() + 0.25
+            host.stop()
+
+        with (patch.object(application, "stop_case_hosts", side_effect=bounded_stop),
+              patch.object(application, "finalize_fixture") as finalize,
+              patch.object(case, "discover") as discover):
+            with self.assertRaisesRegex(RuntimeError, "fixture retained") as raised:
+                application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
+                                        receipt=case.receipt, failure=failure)
+        self.assertIs(raised.exception.__cause__.exceptions[0], failure)
+        finalize.assert_not_called()
+        discover.assert_not_called()
+        self.assertTrue(self.base.is_dir())
+        self.assertIsNone(host.process.process.poll())
+        self.assertEqual(json.loads(case.receipt.output.read_text())["cleanup"]["host_closure"], "unknown")
+
+    def test_saved_partial_create_and_resume_use_same_id_before_start(self):
+        host = self.host()
+        case = self.case(host)
+        with (patch.object(cases.time, "time_ns", return_value=10_000_000_000),
+              patch.object(case, "discover", return_value=()), patch.object(host, "start") as start):
+            case.create(held=False)
+        start.assert_called_once()
+        self.assertEqual(case.schedule_id, SCHEDULE_ID)
+        saved = json.loads((self.state / "definition.json").read_text())
+        self.assertEqual(saved["id"], SCHEDULE_ID)
+        self.assertEqual(saved["state"], "enabled")
+        self.assertEqual(self.calls(), [["schedule", action] for action in ("create", "pause", "resume", "show")])
+
+    def test_bad_partial_create_or_readback_never_launches_host_or_recreates_definition(self):
+        for mode in ("bad-saved", "bad-show", "bad-resume-id", "bad-start-command", "wrong-create-exit"):
+            with self.subTest(mode=mode):
+                host = self.host(mode)
+                case = self.case(host)
+                calls = self.state / "calls"
+                calls.unlink(missing_ok=True)
+                with (patch.object(cases.time, "time_ns", return_value=10_000_000_000),
+                      patch.object(case, "discover", return_value=()), patch.object(host, "start") as start):
+                    with self.assertRaises(RuntimeError):
+                        case.create(held=False)
+                start.assert_not_called()
+                self.assertTrue((self.state / "definition.json").is_file())
+                self.assertEqual(self.calls().count(["schedule", "create"]), 1)
 
     def properties(self, service):
         return {"Id": service.unit, "Description": service.unit, "Transient": "yes", "KillMode": "process", "Delegate": "yes", "ExitType": "cgroup",
@@ -219,6 +518,21 @@ class SchedulerAcceptanceTests(unittest.TestCase):
                       {"kind": "skip", "skip": {"from": "2026-01-01T00:02:00Z", "to": "2026-01-01T00:01:00Z"}}):
             with self.subTest(entry=entry), self.assertRaises(RuntimeError):
                 sequence.history_occurrences({"schedule_history": {"entries": [entry]}})
+
+    def test_overlap_history_requires_actual_skip_with_canonical_open_closed_interval(self):
+        case = self.case(self.service())
+        case.first_due_ns = MINUTE_NS
+        occurrence = {"kind": "occurrence", "occurrence": {"due": "1970-01-01T00:01:00Z"}}
+        skipped = {"from": "1970-01-01T00:01:00Z", "to": "1970-01-01T00:02:00Z", "reason": "overlap_active"}
+        history = {"schedule_id": SCHEDULE_ID, "entries": [occurrence, {"kind": "skip", "skip": skipped}]}
+        with patch.object(case, "command", return_value={"schedule_history": history}):
+            sequence.require_overlap_history(case)
+        for change in ({"reason": "missed_unavailable"}, {"from": "1970-01-01T00:02:00Z", "to": "1970-01-01T00:03:00Z"},
+                       {"to": "1970-01-01T00:01:59Z"}):
+            changed = {**history, "entries": [occurrence, {"kind": "skip", "skip": {**skipped, **change}}]}
+            with self.subTest(change=change), patch.object(case, "command", return_value={"schedule_history": changed}):
+                with self.assertRaisesRegex(RuntimeError, "omitted"):
+                    sequence.require_overlap_history(case)
 
     def test_execution_evidence_refuses_another_occurrence_and_incomplete_inspection(self):
         row = Occurrence(FIRST_ID, SCHEDULE_ID, MINUTE_NS)
@@ -548,7 +862,13 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         self.assertEqual(selected.pueue, application.REPOSITORY / "bin" / "test-supervisor" / "pueue")
         self.assertEqual(selected.pueued, application.REPOSITORY / "bin" / "test-supervisor" / "pueued")
         self.assertIsNone(selected.output)
+        self.assertEqual(selected.hosting, "managed-host")
         self.assertEqual(replace(selected, scenario="successive").scenario, "successive")
+
+    def test_explicit_service_mode_preserves_optional_legacy_hosting(self):
+        self.assertEqual(application.parse_arguments(["--hosting", "service"]).hosting, "service")
+        with self.assertRaises(SystemExit):
+            application.parse_arguments(["--hosting", "other"])
 
 
 if __name__ == "__main__":

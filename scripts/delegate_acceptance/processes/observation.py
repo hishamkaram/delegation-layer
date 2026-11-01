@@ -9,6 +9,20 @@ from typing import Mapping
 from scripts.delegate_acceptance.directories.policy import require
 
 
+def validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
+    if not isinstance(timeout, (int, float)):
+        raise ValueError("bounded command timeout must be finite and positive")
+    try:
+        timeout = float(timeout)
+    except OverflowError:
+        raise ValueError("bounded command timeout must be finite and positive") from None
+    if not 0 < timeout < float("inf"):
+        raise ValueError("bounded command timeout must be finite and positive")
+    if not isinstance(max_output, int) or max_output < 0:
+        raise ValueError("bounded command capture limit must be a nonnegative integer")
+    return timeout
+
+
 def failure_cleanup_deadline(timeout):
     """Return one finite monotonic deadline for failure-path observation."""
     require(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0,

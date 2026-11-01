@@ -22,6 +22,7 @@ type ScheduleListRow struct {
 // ScheduleResponse is an acknowledgement or a complete, brief-free show.
 type ScheduleResponse struct {
 	ID                string            `json:"id"`
+	Saved             bool              `json:"saved,omitempty"`
 	State             contract.State    `json:"state,omitempty"`
 	CreatedAt         *time.Time        `json:"created_at,omitempty"`
 	Cursor            *time.Time        `json:"cursor,omitempty"`
@@ -59,10 +60,14 @@ func scheduleShow(item contract.Schedule) (ScheduleResponse, error) {
 }
 
 func writeHumanScheduleResponse(output *strings.Builder, response Response) error {
+	writeHumanSchedulerResponse(output, response.Scheduler)
 	writeHumanScheduleHistory(output, response.ScheduleHistory)
 	writeHumanScheduleExecution(output, response.ScheduleExecution)
 	if item := response.Schedule; item != nil {
 		fmt.Fprintf(output, "schedule id=%s state=%s", item.ID, item.State)
+		if item.Saved {
+			output.WriteString(" saved=true")
+		}
 		if item.NextAction != "" {
 			fmt.Fprintf(output, " next_action=%s", item.NextAction)
 		}

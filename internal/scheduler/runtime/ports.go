@@ -51,11 +51,18 @@ type Tasks interface {
 	Observe(string) (TaskState, error)
 }
 
-// Clock keeps time and waiting at the I/O boundary. Wait returns ctx.Err() on
-// cancellation and nil after its duration; implementations own their timer.
+// Clock supplies business wall time for calendar decisions and persisted facts.
+// Wake cadence is independent of wall-clock changes and belongs to Waker.
 type Clock interface {
 	Now() time.Time
-	Wait(context.Context, time.Duration) error
+}
+
+// Waker waits for a rescan hint, returning nil on a wake or ctx.Err() on
+// cancellation. Implementations must settle before returning on cancellation;
+// the loop cancels and joins every wait when a worker result arrives first.
+// Wakes confer no claim or dispatch authority. The caller owns source lifecycle.
+type Waker interface {
+	Wait(context.Context) error
 }
 
 // Event contains bounded public identifiers/codes, never provider output or an
@@ -67,13 +74,15 @@ type Event struct {
 	Code       string
 }
 
-// Config supplies the existing owners. Clock and NewTaskID may be nil to select
-// native time and the existing task ID generator. Report is optional. Store
-// lifetime and the exclusive scheduler owner lease belong to the caller.
+// Config supplies the existing owners. Nil Clock, Waker and NewTaskID select
+// native wall time, an interruptible IdleInterval timer and the existing task ID
+// generator. Report is optional. Store, Waker lifecycle and the exclusive
+// scheduler owner lease belong to the caller.
 type Config struct {
 	Store     contract.Store
 	Tasks     Tasks
 	Clock     Clock
+	Waker     Waker
 	NewTaskID func() (string, error)
 	Report    func(Event)
 }

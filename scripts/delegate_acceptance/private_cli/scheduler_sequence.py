@@ -121,6 +121,28 @@ def failure_marker(case: SchedulerCase) -> Path:
     return case.lifetime.gate.with_name(case.lifetime.gate.name + ".scheduler-fail")
 
 
+def require_overlap_history(case: SchedulerCase) -> None:
+    response = case.command("history-overlap-final", ["schedule", "history", case.schedule_id])
+    history = json_object(response.get("schedule_history"))
+    require(history.get("schedule_id") == case.schedule_id, "overlap history changed schedule identity")
+    occurrences = history_occurrences(response)
+    require(len(occurrences) == 1 and timestamp_ns(occurrences[0].get("due")) == case.first_due_ns,
+            "overlap history changed its admitted minute inventory")
+    entries = history.get("entries")
+    if not isinstance(entries, list):
+        raise RuntimeError("overlap history has no entries array")
+    due = case.first_due_ns + MINUTE_NS
+    for entry in entries:
+        row = json_object(entry)
+        if row.get("kind") == "skip":
+            skipped = json_object(row.get("skip"))
+            # contract.SkipSpan owns (From, To] coverage semantics.
+            if (skipped.get("reason") == "overlap_active"
+                    and timestamp_ns(skipped.get("from")) < due <= timestamp_ns(skipped.get("to"))):
+                return
+    raise RuntimeError("public history omitted the actual overlap skip")
+
+
 def run_successive(case: SchedulerCase) -> None:
     case.create(held=False, controlled_failure=True)
     first, = case.occurrences(1)

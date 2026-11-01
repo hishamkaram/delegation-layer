@@ -22,7 +22,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
 | `teams` | [Optional configuration and Member selection](#teams) | None |
 | `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
-| `scheduler run` | [Independent scheduler](#scheduler-runtime) | Admits due occurrences through normal dispatch |
+| `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
 
 Prefix every task command with `delegate --root ROOT`, using the same
 explicit root across invocations.
@@ -186,9 +186,14 @@ not prove admission, provider readiness or successful publication.
 
 ## Schedules
 
-The management commands below save and inspect definitions. They do not start
-a scheduler, launch a provider, or prove that a task ran. Start the
-[scheduler](#scheduler-runtime) separately to execute due occurrences.
+The management commands below save and inspect definitions. Create/resume check
+for a compatible live [scheduler host](#scheduler-runtime) after saving; they do
+not start one, launch a provider themselves, or prove that a task ran. Without a
+host, retain the saved ID and give the returned `scheduler.serve_command` argv
+array intact to the user for an independent terminal or tmux pane. Never start
+that persistent host inside the agent's bounded task or submit another create
+to obtain a running host.
+See [definition and host results](result-handling.md#schedule-definition-and-host-results).
 
 ```text
 delegate --root ROOT schedule create --brief FILE --cwd ABS \
@@ -235,7 +240,9 @@ delegate --root ROOT schedule delete SCHEDULE_ID --json
 - Definitions are immutable. Pause blocks future admissions; resume skips the
   interval from the stored cursor through now without catch-up. A clock behind
   the cursor leaves that cursor unchanged. Delete is terminal and retains
-  history. Pause/delete do not cancel an active occurrence.
+  history. Pause/delete do not cancel an active occurrence or require a live
+  host. Create/resume preserve the saved definition even when the host is
+  absent, starting, in backoff or otherwise not confirmed ready.
 - Only create initializes absent schedule storage. An absent store lists as
   empty; show/state commands report not found. List defaults to 50 rows, at most
   100, including paused/deleted definitions. Use the returned cursor to page.
@@ -244,8 +251,11 @@ delegate --root ROOT schedule delete SCHEDULE_ID --json
   when output or storage reports uncertainty; inspect it with show rather than
   submitting another create. Reusing an existing ID conflicts.
 
-Handler results use exit `0` for success/advisory warnings, `2` for invalid
-input/state transitions and `1` for not-found, conflicts or operational failures.
+Handler results use exit `0` for confirmed completion/advisory warnings, `2` for
+invalid input/state transitions and `1` for not-found, conflicts or operational
+failures. Create/resume use exit `3` for saved definitions needing user host start
+or pending host readiness; keep the same ID and follow
+[result handling](result-handling.md#schedule-definition-and-host-results).
 `--json` applies to handler responses; argument/usage errors retain the CLI's
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
@@ -282,11 +292,89 @@ for freshness, no-result states, response bounds, exit codes and recovery.
 
 ## Scheduler runtime
 
+Use `serve`, `status` and `stop` to manage the user-started host. Check
+`delegate help` for the installed build's command surface. `run` is the
+compatibility foreground path.
+
 ```text
+delegate --root ROOT scheduler serve
+delegate --root ROOT scheduler status
+delegate --root ROOT scheduler stop
 delegate --root ROOT scheduler run [--pueue-config ABS] [--json]
 ```
 
-The scheduler requires the automatic managed worker. Use colocated `delegate`
+The user starts one foreground `serve` host per canonical execution root in an
+independent terminal or tmux pane and leaves it running. It manages every saved
+schedule in that root. Agents give the exact returned argv array to the user; they
+must not start the persistent host inside their own bounded task. The guard
+recognizes an explicit Delegate task-scope marker and, on Linux, native Delegate
+cgroup membership. It does not reconstruct guardian ownership or detect every
+enclosing ancestor. A successful check or missing marker does not prove
+independent placement; independent user launch remains required. Delegate
+installs no OS service, enables no reboot/login startup and
+does not automatically launch a detached host.
+
+`scheduler.serve_command` preserves spaces and shell metacharacters as separate
+arguments. Human output also prints JSON argv, not an unquoted shell string.
+Preserve those boundaries; see the [scheduler response fields](result-handling.md#schedule-definition-and-host-results).
+
+Serve requires existing schedule storage; create owns initialization. A second
+host or competing `run` cannot acquire the same root's ownership. The host uses
+its retained launch context and the saved requested provider choices. For
+Team-targeted schedules, new occurrences read the pinned catalog's latest Member
+defaults through normal admission; existing task IDs retain saved settings. Use
+the intended user configuration context, or a different catalog instance fails
+admission even when Team/Member IDs match. Context changes require completed stop
+and a fresh user start; full launch environments are not persisted.
+
+While the host lives, it restarts its scheduler child after an unexpected exit,
+including a clean exit while running is still desired. A successful Start needs
+its exact child Wait before replacement; a definitively failed Start that
+created no child may retry without Wait. Retry delays are 1, 2, 4, 8, 16, 30, 60,
+120 and 300 seconds, capped at five minutes indefinitely. Five continuous healthy
+minutes reset the policy;
+elapsed healthy time and delays use monotonic timing. Create/resume/status do not
+reset cooldown. A live but unready child or uncertain launch is not replaced.
+Before the child reports Ready or scans for due work, the application's
+before-Ready check validates every current saved definition. An incompatible
+definition leaves the host degraded and stops automatic child restart for that
+incompatibility; it does not enter an endless crash/retry loop. Preserve the
+saved definitions and report the compatibility fault.
+If the host, terminal/tmux pane or machine stops, automatic recovery ends; the
+user must run serve again.
+
+`scheduler status` is passive: it does not start, migrate, repair or clean
+anything. It observes starting, ready, backoff, degraded, stopping or stopped
+state, or a compatibility runtime's `foreground` generation, and available
+attempt, bounded diagnostic and retry information. Optional
+`scheduler.fault: true` is the host owner's permanent fault decision; degraded state or
+`last_error` alone is not that decision. After a definition is saved,
+transport-only unreachability returns pending exit `3` without a top-level
+`error`; a permanent host fault returns exit `1`, retaining
+`schedule.saved: true` and the same ID.
+
+`scheduler stop` persists a stopped fence, interrupts backoff, ends admission and
+joins accepted controls, GoCron shutdown and child Wait. The host remains
+responsive to authenticated status/stop while joining its child or waiting for a
+prior execution owner. Under host ownership, it writes a closure witness once
+execution ownership is free. Completed stop requires that witness and exact
+host absence; acceptance, timeout or host death alone is not completion.
+Authenticated acceptance remains visible even if later readback fails; concrete
+faults remain visible too. SIGINT, SIGTERM and SIGHUP use the same fenced shutdown
+path. Independently admitted tasks retain their own supervisors and budgets.
+See [host result decisions](result-handling.md#schedule-definition-and-host-results).
+
+`scheduler run` runs the foreground runtime directly and remains a compatibility
+path without automatic child restart. It shares root ownership with serve and
+announces its current foreground generation, which an older managed-host stop
+receipt cannot hide. Status reports `scheduler.state: foreground`.
+`scheduler stop` does not terminate the raw invocation: it returns
+`stop_accepted: false` and `next_action: stop_foreground_runtime`. The user ends
+it with Ctrl-C in its original pane; prefer `scheduler serve` for managed
+recovery. The existing manual OS-service hosting option is separate from the new
+foreground host path; see [operator hosting](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#scheduler-hosting).
+
+Serve and run require the automatic managed worker. Use colocated `delegate`
 and `delegate-run` binaries from the same build and omit the advanced `--runner`
 override. An override selects custom ownership even when it names the bundled
 worker; startup rejects it with exit `2` before opening storage or acquiring a
@@ -294,19 +382,11 @@ lease. Ordinary explicit custom-runner dispatch and continuation retain their
 existing compatibility rules. Historical custom-runner claims are not
 automatically repaired or released.
 
-This foreground command requires existing schedule storage. One process owns
-each root; a second fails busy. It uses the service launch environment and the
-saved requested provider choices. Saving a definition never starts the service.
-For Team-targeted schedules, new occurrences read the pinned catalog's latest
-Member defaults through normal admission; existing task IDs retain saved settings.
-Use the same intended user configuration context as creation, or a different
-catalog instance fails admission even when Team/Member IDs match.
-See [operator hosting](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#scheduler-hosting).
-
 Startup skips past appointments. Expired, overlapping or capacity-limited
 appointments are skipped with a recorded reason; no catch-up queue or automatic
-retry/continuation is added. Pause/delete prevent new claims, without canceling
-already claimed tasks. Use [history and execution](#schedule-history-and-execution)
+provider retry/continuation is added. Downtime is recorded in compact skipped
+intervals, never replayed minute by minute. Pause/delete prevent new claims,
+without canceling already claimed tasks. Use [history and execution](#schedule-history-and-execution)
 to inspect recorded work, and [result handling](result-handling.md#scheduled-execution-results)
 to collect its answer. Schedule reservation release is separate from result
 publication.
@@ -317,12 +397,12 @@ Delegate workers keep their own budgets; provider-native in-session subagents do
 not acquire independent Delegate lifetimes. The workflow owns saved progress,
 worker IDs and deduplication; unknown acknowledgment is not permission to resend.
 
-Interrupting the service joins its admission/control work before releasing its
-owner lease. Accepted lifecycle calls settle independently of the stop signal;
+Interrupting the compatibility runtime joins its admission/control work before
+releasing its owner lease. Accepted lifecycle calls settle independently of the stop signal;
 there is no shutdown-time guarantee. Already admitted tasks continue under their
-own supervisors. The
-service reports bounded identifiers/codes on stderr; `--json` selects the final
-command response, not an event stream or daemon-control protocol. Uncertain task
+own supervisors. The compatibility command reports bounded identifiers/codes on
+stderr; `--json` selects the final command response, not an event stream or
+daemon-control protocol. Uncertain task
 evidence blocks only its schedule until the existing owners can prove closure.
 
 ## Codex review

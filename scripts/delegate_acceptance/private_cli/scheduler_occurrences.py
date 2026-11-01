@@ -20,6 +20,12 @@ def identity(value: object) -> str:
     return value
 
 
+def occurrence_read_busy(error: sqlite3.OperationalError) -> bool:
+    """Only native SQLite lock contention is a retryable observation."""
+    code = getattr(error, "sqlite_errorcode", None)
+    return type(code) is int and code & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
 def json_object(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise RuntimeError("scheduler acceptance expected a JSON object")

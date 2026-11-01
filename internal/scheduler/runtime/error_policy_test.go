@@ -134,6 +134,7 @@ func TestSchedulerRootIdentityFaultStopsRun(t *testing.T) {
 	created := instant("2026-01-01T00:00:00Z")
 	create(t, store, 1, created)
 	clock := newClock(created.Add(30 * time.Second))
+	waker := newWaker()
 	tasks := blockedTasks(t.Context(), make(chan DispatchRequest, 1))
 	tasks.dispatch = func(DispatchRequest) (TaskState, error) {
 		return TaskState{}, errors.Join(ErrRootIdentity, task.ErrIdentityMismatch)
@@ -141,9 +142,12 @@ func TestSchedulerRootIdentityFaultStopsRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	finished := make(chan struct{})
-	go func() { defer close(finished); done <- Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock}) }()
+	go func() {
+		defer close(finished)
+		done <- Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock, Waker: waker})
+	}()
 	t.Cleanup(func() { cancel(); receive(t, finished) })
-	wait := nextWait(t, clock)
+	wait := nextWait(t, waker)
 	clock.set(created.Add(time.Minute))
 	close(wait.wake)
 	if err := receive(t, done); !errors.Is(err, ErrRootIdentity) || !errors.Is(err, task.ErrIdentityMismatch) {

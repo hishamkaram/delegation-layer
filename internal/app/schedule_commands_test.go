@@ -156,7 +156,11 @@ func assertScheduleStateSequence(t *testing.T, root string) {
 	t.Helper()
 	for _, action := range []string{"pause", "pause", "resume", "delete", "delete"} {
 		response, code, _ := runScheduleTest(t, root, action, scheduleTestID)
-		if code != 0 || response.Schedule == nil || response.Schedule.ID != scheduleTestID {
+		wantCode := 0
+		if action == "resume" {
+			wantCode = 3
+		}
+		if code != wantCode || response.Schedule == nil || response.Schedule.ID != scheduleTestID {
 			t.Fatalf("%s code=%d response=%+v", action, code, response)
 		}
 	}
@@ -185,7 +189,7 @@ func TestScheduleResumeBehindCursor(t *testing.T) {
 		t.Fatalf("pause code=%d", code)
 	}
 	response, code, _ := runScheduleTest(t, root, "resume", scheduleTestID)
-	if code != 0 || len(response.ScheduleWarnings) != 1 || response.ScheduleWarnings[0].Code != "clock_behind_cursor" {
+	if code != 3 || !response.Schedule.Saved || len(response.ScheduleWarnings) != 1 || response.ScheduleWarnings[0].Code != "clock_behind_cursor" {
 		t.Fatalf("resume code=%d response=%+v", code, response)
 	}
 	item, err := store.GetSchedule(t.Context(), scheduleTestID)

@@ -17,7 +17,8 @@ from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.delegate_acceptance.private_cli.scheduler_cases import (
     CASE_SECONDS, SUCCESSIVE_SECONDS, SchedulerCase, run_overlap_stop,
 )
-from scripts.delegate_acceptance.private_cli.scheduler_sequence import run_successive
+from scripts.delegate_acceptance.private_cli.scheduler_sequence import require_overlap_history, run_successive
+from scripts.delegate_acceptance.private_cli.scheduler_host import SchedulerHost
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 
@@ -30,6 +31,7 @@ class SchedulerArguments:
     pueued: Path
     output: Path | None
     scenario: str = "all"
+    hosting: str = "managed-host"
     # prepare_fixture consumes the same installation options as the existing
     # private CLI cases. Scheduler acceptance never selects a legacy upgrade.
     upgraded_delegate: None = None
@@ -45,8 +47,10 @@ def parse_arguments(argv: list[str] | None = None) -> SchedulerArguments:
     parser.add_argument("--pueued", type=Path, default=REPOSITORY / "bin" / "test-supervisor" / "pueued")
     parser.add_argument("--output", type=Path, help="fresh private output directory; default: a new directory under HOME")
     parser.add_argument("--scenario", choices=("all", "successive", "overlap-stop"), default="all")
+    parser.add_argument("--hosting", choices=("managed-host", "service"), default="managed-host")
     args = parser.parse_args(argv)
-    return SchedulerArguments(args.delegate, args.runner, args.pueue, args.pueued, args.output, args.scenario)
+    return SchedulerArguments(args.delegate, args.runner, args.pueue, args.pueued, args.output,
+                              scenario=args.scenario, hosting=args.hosting)
 
 
 def output_directory(requested: Path | None, owner: DirectoryOwner) -> Path:
@@ -69,7 +73,7 @@ def retain_unknown_service(lifetime: FixtureLifetime, receipt: AcceptanceReceipt
             faults.append(type(release_error).__name__)
     receipt.add_details(cleanup_uncertain=True, cleanup_error_types=faults,
                         retained_fixture=str(lifetime.base) if lifetime.base else None)
-    receipt.write("FAIL", {"status": "retained", "service_closure": "unknown"}, error)
+    receipt.write("FAIL", {"status": "retained", "host_closure": "unknown", "service_closure": "unknown"}, error)
     # These operations only close identity tokens and keep all filesystem
     # content, including service payload and captures, available to the caller.
     try:
@@ -91,18 +95,31 @@ def retire_case_services(case: SchedulerCase) -> None:
         raise BaseExceptionGroup("scheduler service retirement failed", errors)
 
 
+def stop_case_hosts(case: SchedulerCase) -> None:
+    """Join every generation before discovery, supervisor cleanup or deletion."""
+    deadline = time.monotonic() + 45
+    errors: list[BaseException] = []
+    for service in (case.service, *case.previous_services):
+        service.deadline = deadline
+        try:
+            service.stop()
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise BaseExceptionGroup("scheduler hosting closure failed", errors)
+
+
 def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetime: FixtureLifetime,
                 receipt: AcceptanceReceipt, failure: BaseException | None) -> None:
-    service = case.service if case is not None else None
     try:
-        if service is not None:
-            service.deadline = time.monotonic() + 45
-            service.stop()
         if case is not None:
+            stop_case_hosts(case)
             case.discover()
     except BaseException as cleanup_error:
+        if failure is not None:
+            cleanup_error = BaseExceptionGroup("scheduler case and closure failed", [failure, cleanup_error])
         retain_unknown_service(lifetime, receipt, cleanup_error)
-        raise RuntimeError("scheduler service or occurrence discovery remains uncertain; fixture retained") from cleanup_error
+        raise RuntimeError("scheduler hosting or occurrence discovery remains uncertain; fixture retained") from cleanup_error
     if failure is None and case is not None:
         try:
             if lifetime.private_config is None or lifetime.old_libexec is None:
@@ -125,7 +142,7 @@ def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
     receipt = AcceptanceReceipt(selected.output, 3 if name == "successive" else 1, 1,
                                 {"delegate": args.delegate, "delegate-run": args.runner,
                                  "pueue": args.pueue, "pueued": args.pueued})
-    receipt.add_details(scenario="scheduler-" + name, acceptance_scope="native fixture; no AI account")
+    receipt.add_details(scenario="scheduler-" + name, acceptance_scope="native fixture; no AI account", hosting=args.hosting)
     lifetime = FixtureLifetime()
     case = None
     failure = None
@@ -135,14 +152,17 @@ def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
         if lifetime.old_install is None:
             raise RuntimeError("scheduler fixture lost its installed executable")
         deadline = time.monotonic() + (SUCCESSIVE_SECONDS if name == "successive" else CASE_SECONDS)
-        service = SchedulerService(lifetime, fixture.state, lifetime.old_install / "delegate", deadline)
+        hosting_type = SchedulerHost if args.hosting == "managed-host" else SchedulerService
+        service = hosting_type(lifetime, fixture.state, lifetime.old_install / "delegate", deadline)
         case = SchedulerCase(fixture, lifetime, responses, receipt, service, deadline)
-        receipt.add_details(service={"host": service.system, "unit": service.unit, "target": service.target,
-                                     "files": str(service.directory)})
+        if isinstance(service, SchedulerService):
+            receipt.add_details(service={"host": service.system, "unit": service.unit, "target": service.target,
+                                         "files": str(service.directory)})
         if name == "successive":
             run_successive(case)
         else:
             run_overlap_stop(case)
+            require_overlap_history(case)
         case.discover()
         receipt.update_counts(admitted_task_count=len(lifetime.attempted_task_ids))
         receipt.stage("scheduler-native-case-proved")

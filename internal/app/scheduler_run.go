@@ -8,6 +8,9 @@ import (
 	"sync"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
+	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	"github.com/hishamkaram/delegation-layer/internal/scheduler/host"
+	"github.com/hishamkaram/delegation-layer/internal/scheduler/pulse"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -39,25 +42,87 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		return failed(response, schedulerStorageError(err), 1)
 	}
 	var lease *scheduler.OwnerLease
+	var hostLease *host.Lease
+	var foreground *host.Foreground
 	defer func() {
-		mergeCommandClose(&result, schedules.Close)
-		if lease != nil {
-			mergeCommandClose(&result, lease.Close)
-		}
+		mergeCommandClose(&result, func() error {
+			return closeSchedulerRuntimeOwners(context.WithoutCancel(ctx), schedules, lease, hostLease, foreground)
+		})
 	}()
+	if !a.schedulerResident {
+		hostLease, err = host.AcquireHostLease(ctx, store)
+		if err != nil {
+			return failed(response, err, 1)
+		}
+		self, selfErr := schedulerExecutable()
+		if selfErr != nil {
+			return failed(response, selfErr, 1)
+		}
+		foreground, err = hostLease.AnnounceForeground(ctx, store, self.SHA256)
+		if err != nil {
+			return failed(response, err, 1)
+		}
+	}
 	lease, err = scheduler.AcquireOwnerLease(ctx, store)
 	if err != nil {
+		if a.schedulerResident && task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) }) {
+			return failed(response, err, host.ChildBusyExitCode)
+		}
 		return failed(response, schedulerStorageError(err), 1)
 	}
+	run := func(runCtx context.Context) error {
+		return schedulerRuntime(runCtx, root, store.RootID, schedules, a, deps, stderr)
+	}
+	if a.schedulerResident {
+		self, selfErr := schedulerExecutable()
+		if selfErr != nil {
+			return failed(response, selfErr, 1)
+		}
+		err = host.RunChild(ctx, host.ChildConfig{
+			RootID: store.RootID, BuildID: self.SHA256,
+			ReadFD: a.schedulerHostReadFD, WriteFD: a.schedulerHostWriteFD,
+			BeforeReady: func(checkCtx context.Context) error { return checkSchedulerDefinitions(checkCtx, schedules) },
+		}, run)
+	} else {
+		err = run(ctx)
+	}
+	return failed(response, err, schedulerResultCode(err))
+}
+
+func closeSchedulerRuntimeOwners(ctx context.Context, schedules contract.Store, execution *scheduler.OwnerLease, controller *host.Lease, foreground *host.Foreground) error {
+	resultErr := schedules.Close()
+	if execution != nil {
+		closeErr := execution.Close()
+		resultErr = errors.Join(resultErr, closeErr)
+		if closeErr == nil && foreground != nil {
+			resultErr = errors.Join(resultErr, foreground.Finish(ctx))
+		}
+	}
+	if foreground != nil {
+		resultErr = errors.Join(resultErr, foreground.Close())
+	}
+	if controller != nil {
+		resultErr = errors.Join(resultErr, controller.Close())
+	}
+	return resultErr
+}
+
+func schedulerRuntime(ctx context.Context, root, rootID string, schedules contract.Store, a Arguments, deps Dependencies, stderr io.Writer) (resultErr error) {
 	deps.SupervisorOptions.WaitForPendingClose = true
 	deps = deps.withCapturedEnvironment()
-	tasks := schedulerTasks{root: root, rootID: store.RootID, arguments: a, dependencies: deps}
+	wakes, err := pulse.New()
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, wakes.Close()) }()
+	wakes.Start()
+	tasks := schedulerTasks{root: root, rootID: rootID, arguments: a, dependencies: deps}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var reportMu sync.Mutex
 	var reportErr error
 	err = schedulerruntime.Run(runCtx, schedulerruntime.Config{
-		Store: schedules, Tasks: tasks,
+		Store: schedules, Tasks: tasks, Waker: wakes,
 		Report: func(event schedulerruntime.Event) {
 			reportMu.Lock()
 			defer reportMu.Unlock()
@@ -71,7 +136,10 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		},
 	})
 	err = errors.Join(err, reportErr)
-	return failed(response, err, schedulerResultCode(err))
+	if a.schedulerResident && (errors.Is(err, task.ErrUnsupportedSchema) || errors.Is(err, task.ErrInvariantFault)) {
+		return fmt.Errorf("%w: scheduler storage validation failed: %w", host.ErrIncompatible, err)
+	}
+	return err
 }
 
 func schedulerStorageError(err error) error {

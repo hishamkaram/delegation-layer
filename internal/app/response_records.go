@@ -76,6 +76,7 @@ type Response struct {
 	ScheduleHistory    *ScheduleHistoryResponse                `json:"schedule_history,omitempty"`
 	ScheduleExecution  *ScheduleExecutionResponse              `json:"schedule_execution,omitempty"`
 	ScheduleQueryError *ScheduleQueryErrorResponse             `json:"schedule_query_error,omitempty"`
+	Scheduler          *SchedulerResponse                      `json:"scheduler,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without

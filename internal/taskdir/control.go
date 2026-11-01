@@ -205,7 +205,11 @@ func (d *ControlDir) put(ctx context.Context, name string, record any) (created 
 }
 
 func (d *ControlDir) verifyCanonicalRecord(name string, data []byte) error {
-	existing, err := d.store.readBytes(filepath.Join(d.dir, name), int64(len(data)))
+	return d.store.verifyCanonicalControlRecord(d.dir, name, data)
+}
+
+func (s *Store) verifyCanonicalControlRecord(dir, name string, data []byte) error {
+	existing, err := s.readBytes(filepath.Join(dir, name), int64(len(data)))
 	if err != nil {
 		return errors.Join(task.ErrEvidenceFault, err)
 	}
@@ -215,7 +219,7 @@ func (d *ControlDir) verifyCanonicalRecord(name string, data []byte) error {
 	// The original writer may have linked this winner before a failed
 	// directory barrier. Reestablish that barrier before accepting it;
 	// this still never grants a fresh guard to the caller.
-	if err := d.store.barrierDirectoryEntry(d.dir, filepath.Dir(d.dir), d.store.faultInjector); err != nil {
+	if err := s.barrierDirectoryEntry(dir, filepath.Dir(dir), s.faultInjector); err != nil {
 		return errors.Join(task.ErrEvidenceFault, err)
 	}
 	return nil

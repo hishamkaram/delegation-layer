@@ -95,6 +95,9 @@ type Arguments struct {
 	// empty unsupported supervisor option is rejected too.
 	supervisorPueueConfigSet bool
 	supervisorRunnerSet      bool
+	schedulerHostReadFD      int
+	schedulerHostWriteFD     int
+	schedulerResident        bool
 }
 
 func ParseArguments(args []string) (Arguments, error) {
@@ -118,7 +121,7 @@ func ParseArguments(args []string) (Arguments, error) {
 	if command == "scheduler" {
 		a.SchedulerAction, rest, err = parseSupervisorAction(rest)
 		if err != nil {
-			return Arguments{}, errors.New("scheduler requires run")
+			return Arguments{}, errors.New("scheduler requires serve, status, stop or run")
 		}
 	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -135,20 +138,29 @@ func ParseArguments(args []string) (Arguments, error) {
 	if err := fs.Parse(ordered); err != nil {
 		return Arguments{}, err
 	}
-	if command == "supervisor" {
-		fs.Visit(func(flag *flag.Flag) {
-			switch flag.Name {
+	noteControlFlags(fs, &a)
+	if err := a.validate(fs.Args(), watch); err != nil {
+		return Arguments{}, err
+	}
+	return a, nil
+}
+
+func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
+	fs.Visit(func(selected *flag.Flag) {
+		switch a.Command {
+		case "supervisor":
+			switch selected.Name {
 			case "pueue-config":
 				a.supervisorPueueConfigSet = true
 			case "runner":
 				a.supervisorRunnerSet = true
 			}
-		})
-	}
-	if err := a.validate(fs.Args(), watch); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
+		case "scheduler":
+			if selected.Name == "scheduler-host-read-fd" || selected.Name == "scheduler-host-write-fd" {
+				a.schedulerResident = true
+			}
+		}
+	})
 }
 
 // Management commands have their own subcommand grammar and validation.
@@ -221,6 +233,10 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	if a.Command == "supervisor" || a.Command == "scheduler" {
+		if a.Command == "scheduler" && a.SchedulerAction == "run" {
+			fs.IntVar(&a.schedulerHostReadFD, "scheduler-host-read-fd", 0, "private host channel")
+			fs.IntVar(&a.schedulerHostWriteFD, "scheduler-host-write-fd", 0, "private resident channel")
+		}
 		return
 	}
 	if a.Command == "collect" || a.Command == "events" {
@@ -334,10 +350,15 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 	case "supervisor":
 		return a.validateSupervisor(positional)
 	case "scheduler":
-		if a.SchedulerAction != "run" {
-			return errors.New("scheduler requires run")
+		if a.schedulerResident && (a.SchedulerAction != "run" || a.schedulerHostReadFD != 3 || a.schedulerHostWriteFD != 4) {
+			return errors.New("scheduler resident requires its exact inherited host channels")
 		}
-		return validateNoPositional("scheduler run", positional)
+		switch a.SchedulerAction {
+		case "serve", "status", "stop", "run":
+			return validateNoPositional("scheduler "+a.SchedulerAction, positional)
+		default:
+			return errors.New("scheduler requires serve, status, stop or run")
+		}
 	case "models":
 		return a.validateModels(positional)
 	case "capabilities":

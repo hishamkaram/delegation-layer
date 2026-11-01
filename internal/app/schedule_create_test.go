@@ -36,7 +36,8 @@ func TestScheduleCreatePersistsRequestedDefinition(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
 		t.Fatalf("response %q err=%v stderr=%q", stdout.String(), err, stderr.String())
 	}
-	if code != 0 || created.Schedule == nil || created.Schedule.ID != scheduleTestID || created.Schedule.State != contract.StateEnabled || providerCalls != 0 || supervisorCalls != 0 || len(created.ScheduleWarnings) == 0 || strings.Contains(stdout.String(), "requested brief") {
+	assertScheduleStartRequired(t, code, created)
+	if created.Schedule.ID != scheduleTestID || created.Schedule.State != contract.StateEnabled || providerCalls != 0 || supervisorCalls != 0 || len(created.ScheduleWarnings) == 0 || strings.Contains(stdout.String(), "requested brief") {
 		t.Fatalf("create code=%d response=%+v provider calls=%d supervisor calls=%d", code, created, providerCalls, supervisorCalls)
 	}
 	assertCreatedScheduleShow(t, a.Root)
@@ -46,6 +47,19 @@ func TestScheduleCreatePersistsRequestedDefinition(t *testing.T) {
 	var conflict Response
 	if err := json.Unmarshal(stdout.Bytes(), &conflict); err != nil || code != 1 || conflict.Schedule == nil || conflict.Schedule.ID != scheduleTestID || conflict.Schedule.NextAction != "inspect_schedule" {
 		t.Fatalf("duplicate code=%d response=%+v err=%v", code, conflict, err)
+	}
+}
+
+func assertScheduleStartRequired(t *testing.T, code int, response Response) {
+	t.Helper()
+	if code != 3 || response.Schedule == nil || !response.Schedule.Saved || response.Schedule.NextAction != "start_required" {
+		t.Fatalf("definition was not reported saved with start_required: code=%d response=%+v", code, response)
+	}
+	if response.Scheduler == nil || response.Scheduler.NextAction != "start_required" || response.Scheduler.State != "no_host_observed" || response.Scheduler.Ready {
+		t.Fatalf("saved definition reported an incorrect host observation: %+v", response.Scheduler)
+	}
+	if response.Pending == nil || response.Pending.Kind != "start_required" || len(response.Scheduler.ServeCommand) == 0 {
+		t.Fatalf("saved definition omitted its start guidance: %+v", response)
 	}
 }
 
@@ -87,7 +101,7 @@ func TestScheduleCreateOmittedTimezoneSnapshotsNativeDefault(t *testing.T) {
 	a := scheduleCreateArgs(t)
 	argv := []string{"--root", a.Root, "schedule", "create", "--brief", a.Brief, "--cwd", a.Cwd, "--auto", "--cron", a.ScheduleCron, "--id", scheduleTestID, "--json"}
 	var stdout, stderr bytes.Buffer
-	if code := Run(argv, &stdout, &stderr, Dependencies{}); code != 0 {
+	if code := Run(argv, &stdout, &stderr, Dependencies{}); code != 3 {
 		t.Fatalf("create code=%d output=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	t.Setenv("TZ", "Europe/Berlin")
@@ -104,7 +118,7 @@ func TestScheduleCreateMaximumBriefIsNotEmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := Run(scheduleCreateArgv(a), &stdout, &stderr, Dependencies{}); code != 0 {
+	if code := Run(scheduleCreateArgv(a), &stdout, &stderr, Dependencies{}); code != 3 {
 		t.Fatalf("create code=%d output=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	show, code, output := runScheduleTest(t, a.Root, "show", scheduleTestID)

@@ -82,7 +82,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | --- | --- |
 | `make acceptance-private-cli` | Current CLI/private-supervisor bootstrap, dispatch/status/collect and 200-running-task capacity with finite provider fixtures. |
 | `make acceptance-private-cli-default-stop` | User and budget stop behavior. |
-| `make acceptance-scheduler` | Native scheduler ticks and service-stop isolation using finite fixtures and an available systemd user manager or launchd. |
+| `make acceptance-scheduler` | Native ticks and stop isolation with finite fixtures. The driver defaults to `--hosting managed-host` for foreground `scheduler serve`, without an OS service manager. Optional `--hosting service` retains the legacy `scheduler run` service path. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |
@@ -92,6 +92,42 @@ Choose affected scenarios; CI's actual configured checks are visible in its
 workflow. The private capacity scenario proves concurrent live owner leases and
 scopes, not merely queue depth. Its four dispatch callers are a load-generator
 setting, not a product limit or a 200-call burst guarantee.
+
+Verify the user-started scheduler host natively on Linux and macOS.
+`scripts/acceptance_scheduler.py` accepts
+`--hosting managed-host|service` and defaults to `managed-host`, which needs no
+systemd user manager or launchd. Choose `--hosting service` explicitly for the
+optional legacy service cases. Keep results from those modes separate; the flag's
+presence and finite-fixture coverage do not establish real-provider or recovery
+verification.
+For the new path, run the actual candidate CLI/runner on Linux and macOS with a
+user-started `scheduler serve` in an independent terminal or tmux pane. Verify
+child failure followed by owned Wait, backoff, restart and a later scheduled
+provider result; stop and terminal signals must fence/join host and child without
+respawn while independent tasks retain their lifetimes. During joined stop,
+check authenticated status/stop remain responsive while the owned child or a
+predecessor holds execution ownership. Completed stop needs the owner-written
+closure witness and exact host absence; killing the host before the witness
+must not manufacture completion. Preserve authenticated acceptance when later
+readback fails. Also check no-host
+create/resume preserves its saved ID and start guidance, status stays passive,
+explicit task-scope markers and native Linux Delegate cgroup positives refuse
+serve, and host loss requires explicit user restart. The guard does not detect
+all ancestors or reconstruct guardian ownership; negative marker observations
+cannot establish independent placement. Verify the before-Ready callback checks
+all current saved definitions and an incompatible definition produces degraded
+state with automatic child restart stopped for that fault. After saving,
+transport-only unreachability must remain pending exit `3` without a top-level
+error; an owner-derived permanent `scheduler.fault: true` must yield exit `1`
+and retain `schedule.saved: true`. Check a raw `scheduler run` after an older
+managed host stopped: status must report its current `foreground` generation,
+and public stop must leave it running with `stop_accepted: false` and
+`next_action: stop_foreground_runtime`. End that owned invocation in its original
+pane with Ctrl-C. These corrections still require integrated native verification.
+Prototype results, simulated clocks and cross-builds do not pass these checks.
+Native suspend/resume remains unverified until actually exercised. The hosting
+and [upgrade procedure](cli-reference.md#scheduler-upgrades) own operator guidance;
+agents must not launch the persistent host inside a bounded task.
 
 Use the [shared workspace boundary](../agents/_data/maintainability-contract.md#managed-workspace-changes)
 and [workspace guide](../skills/agent-integration/references/workspaces.md).
