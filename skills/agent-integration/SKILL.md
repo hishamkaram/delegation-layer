@@ -73,7 +73,9 @@ An exact requested ID passes unchanged even when discovery omits it. Ask for
 an exact ID only when a name remains ambiguous.
 
 For work likely to need questions or guidance, read
-[interaction](references/interaction.md) and use `--interactive` when supported.
+[interaction](references/interaction.md) before dispatch and use `--interactive`
+when supported. Check clarification and steering separately; automatic
+interactive selection does not require steering support.
 For explicit native Codex review, read
 [review scope](references/command-reference.md#codex-review).
 

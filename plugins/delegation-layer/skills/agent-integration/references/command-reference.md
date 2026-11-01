@@ -50,7 +50,7 @@ delegate --root ROOT dispatch [--auto | --provider ID] --brief FILE \
 | `--model MODEL` | Exact selector for a profile advertising `model`: Codex, CCR, Claude, AGY, Pi, or OpenCode. CCR requires a configured alias. |
 | `--effort VALUE` | Advertised effort selector; omitted or `default` preserves native defaults. |
 | `--native-timeout DURATION` | Antigravity print timeout, no greater than `--budget`. |
-| `--interactive` | Enable advertised native clarification/steering; see [interaction](interaction.md). |
+| `--interactive` | Enable the profile's advertised native interaction; steering is a separate capability. See [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
 | `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
 | `--team-scope`, `--team`, `--member` | Supply all three to choose one explicit [Member](#using-a-member); no implicit Team or Role-only target. |
