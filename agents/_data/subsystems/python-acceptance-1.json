@@ -266,8 +266,12 @@
       "py:json",
       "py:os",
       "py:pathlib",
+      "py:re",
       "py:shlex",
       "py:shutil",
+      "py:skill_eval_cases",
+      "py:skill_routing_delegate_fixture",
+      "py:socket",
       "py:sys",
       "py:tempfile",
       "py:time"

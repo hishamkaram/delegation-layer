@@ -8,15 +8,21 @@ Delegate commands; do not open a terminal session with the provider.
 
 Read the selected provider's `interaction` capability and
 `interaction.supported_modes`. `clarification` and `steering` are independent.
+Clarification answers a provider's native structured question; steering sends
+new guidance to an open turn. The current `claude:print` profile advertises
+clarification only; `codex:exec` advertises both. Use the returned capabilities
+for the selected provider and mode rather than assuming the two are paired.
 Add `--interactive` to dispatch when the chosen provider and permission mode
 support the interaction you need. Keep the user's exact provider, model,
 effort, workspace, permission, and budget.
 
 Without a named provider, `dispatch --auto --interactive` selects among
-providers that support interaction. If a named provider does not support it,
-use ordinary bounded turns and `continue` for discussion when native
-continuation is available. Explain that questions cannot be answered during
-that provider's active turn. Never replace the requested provider silently.
+providers that support interaction; it does not require steering. When steering
+is needed, explicitly select a provider advertising `steering: true`. If a
+named provider lacks the needed capability, explain that limit without denying
+any supported clarification. When native continuation is available, offer a
+later bounded turn through `continue` as an alternative. Never replace the
+requested provider or change the interaction workflow silently.
 
 In the worker brief, explicitly request **native structured clarification**:
 "Use your native question tool to request clarification and await its answer.
@@ -28,6 +34,10 @@ Assign the actual work directly; the worker should not start another delegate.
 No change is needed for self-contained tasks that do not need mid-turn input.
 Continuation inherits interaction from its predecessor. `continue --task ID
 --interactive` can enable it for a previously ordinary task.
+That creates a new eligible turn; it does not enable a channel on an already
+running task. Distinguish an unsupported provider capability from a task that
+was not admitted with `--interactive`, a closed turn, or the absence of a native
+question. A printed question alone is not a pending reply request.
 
 ## Respond to questions
 
@@ -49,7 +59,7 @@ Continuation inherits interaction from its predecessor. `continue --task ID
    ```
 
 5. Allocate a new 32-character lowercase hexadecimal message ID and save it
-   together with the exact answers. Submit once:
+   together with the exact answers. Submit the reply:
 
    ```sh
    delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" reply "$task_id" \
@@ -70,11 +80,14 @@ processes or dispatch a replacement task.
 ## Guide active work
 
 When `interaction.capabilities.steering` is true and the task is active, put
-additional guidance in a brief file and submit:
+additional guidance in a brief file. Allocate and save a new 32-character
+lowercase hexadecimal `steering_message_id` for this new message, distinct from
+reply IDs and earlier steering IDs. Submit it; for a lost response, follow the
+[delivery rules](#interpret-delivery-precisely) with the same ID and content:
 
 ```sh
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" steer "$task_id" \
-  --brief "$guidance_file" --id "$message_id" --json
+  --brief "$guidance_file" --id "$steering_message_id" --json
 ```
 
 Steering is guidance to the existing turn. It does not change provider, model,

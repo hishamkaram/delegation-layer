@@ -417,7 +417,7 @@ func validateMetaRuntime(r *MetaRecord) error {
 		return err
 	}
 	if !nonblank(r.PublisherBuild) || !nonblank(r.PublisherVersion) {
-		return errors.New("missing provider version or publisher build/version")
+		return errors.New("missing publisher build/version")
 	}
 	if err := ValidateSupervisorRef(r.SupervisorConfig); err != nil {
 		return err

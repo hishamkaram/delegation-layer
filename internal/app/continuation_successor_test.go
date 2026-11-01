@@ -398,6 +398,7 @@ func continuationCCRInspectionFacts(t *testing.T, candidate commonprovider.Profi
 }
 
 func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T) {
+	// Unknown well-formed levels pass through; an option-like literal is invalid.
 	for _, testCase := range []struct {
 		name string
 		run  func(continuationSuccessorTestState, *task.TaskRecord, Dependencies) commandResult
@@ -407,7 +408,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			run: func(fixture continuationSuccessorTestState, predecessor *task.TaskRecord, deps Dependencies) commandResult {
 				return continueTask(Arguments{
 					Root: fixture.store.Root, TaskID: predecessor.TaskID,
-					Config: task.TaskConfig{Effort: "turbo"},
+					Config: task.TaskConfig{Effort: "--tools"},
 				}, deps)
 			},
 		},
@@ -417,7 +418,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 				return dispatch(Arguments{
 					Root: fixture.store.Root, Provider: pi.Provider, Cwd: predecessor.CanonicalCwd,
 					BriefBytes: []byte("continue the exact Pi session"), ResumeTask: predecessor.TaskID,
-					Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m", Effort: "turbo"},
+					Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m", Effort: "--tools"},
 				}, deps)
 			},
 		},
@@ -431,7 +432,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			result := testCase.run(fixture, predecessor, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 
 			if result.code != 2 || !errors.Is(result.err, pi.ErrUnsupportedProfile) {
-				t.Fatalf("invalid Pi continuation result=%+v, want static unsupported effort before supervisor recovery", result)
+				t.Fatalf("invalid Pi continuation result=%+v, want malformed effort rejection before supervisor recovery", result)
 			}
 			if result.response.TaskRecord != "not_created" {
 				t.Fatalf("invalid Pi continuation created a successor: %+v", result.response)

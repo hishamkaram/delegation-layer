@@ -271,6 +271,60 @@
       "expectation": "Respect the explicit direct integration choice; this bounded test proves bypass permission, not task completion.",
       "split": "validation",
       "regression": true
+    },
+    {
+      "name": "handoff-a",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "antigravity:print",
+      "split": "validation",
+      "fixture_scenario": "handoff-a",
+      "paired_case_id": "denial-supported"
+    },
+    {
+      "name": "handoff-b",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "antigravity:print",
+      "split": "validation",
+      "fixture_scenario": "handoff-b",
+      "paired_case_id": "denial-unresolved"
+    },
+    {
+      "name": "handoff-c",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "claude:print",
+      "split": "validation",
+      "fixture_scenario": "handoff-c",
+      "paired_case_id": "setup-supported"
+    },
+    {
+      "name": "handoff-d",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "claude:print",
+      "split": "validation",
+      "fixture_scenario": "handoff-d",
+      "paired_case_id": "setup-unresolved"
+    },
+    {
+      "name": "handoff-e",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "codex:exec",
+      "split": "validation",
+      "fixture_scenario": "handoff-e",
+      "paired_case_id": "delegate-supported"
+    },
+    {
+      "name": "handoff-f",
+      "prompt": "The earlier delegation has returned. Continue from handoff.json and tell me the outcome and next step.",
+      "external": false,
+      "provider": "codex:exec",
+      "split": "validation",
+      "fixture_scenario": "handoff-f",
+      "paired_case_id": "delegate-unresolved"
     }
   ]
 }

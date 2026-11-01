@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -118,7 +119,7 @@ func validateOptions(request task.TaskRecord) error {
 		return fmt.Errorf("%w: Pi has no native timeout option", ErrUnsupportedProfile)
 	}
 	if request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default" && !validThinkingLevel(request.RequestedConfig.Effort) {
-		return fmt.Errorf("%w: unsupported Pi thinking level", ErrUnsupportedProfile)
+		return fmt.Errorf("%w: Pi thinking level must be a bounded, unpadded UTF-8 literal without controls or a leading dash", ErrUnsupportedProfile)
 	}
 	if strings.ContainsAny(request.RequestedConfig.Model, "\x00\r\n") || strings.TrimSpace(request.RequestedConfig.Model) != request.RequestedConfig.Model {
 		return fmt.Errorf("%w: model must be a literal nonblank value", ErrUnsupportedProfile)
@@ -137,10 +138,13 @@ func validateBounds(request task.TaskRecord) error {
 }
 
 func validThinkingLevel(value string) bool {
-	switch value {
-	case "off", "minimal", "low", "medium", "high", "xhigh", "max":
-		return true
-	default:
+	if value == "" || len(value) > task.MaxControlRecordSize || !utf8.ValidString(value) || strings.TrimSpace(value) != value || strings.HasPrefix(value, "-") {
 		return false
 	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f || character >= 0x80 && character <= 0x9f {
+			return false
+		}
+	}
+	return true
 }
