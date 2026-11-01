@@ -145,7 +145,7 @@ func TestTeamContinuationReplayCreationConflictKeepsSuccessorOverrides(t *testin
 
 func teamContinuationCreationRaceOptions(t *testing.T, fixture teamDispatchFixture, request *DispatchRequest, winner task.TaskRecord, calls *int) DispatchOptions {
 	t.Helper()
-	supervisor, configPath := schedulerDispatchSupervisor(t, t.TempDir())
+	supervisor, configPath := schedulerDispatchSupervisor(t, supervisorfixture.CanonicalTempDir(t))
 	runner := filepath.Join(fixture.request.CanonicalCwd, "continuation-runner")
 	supervisorfixture.WriteExecutable(t, runner, "#!/bin/sh\nexit 64\n")
 	request.Selection.Runner, request.Selection.ConfigPath = runner, configPath

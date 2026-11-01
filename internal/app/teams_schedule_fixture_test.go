@@ -16,6 +16,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	schedulecontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/teams"
@@ -173,7 +174,7 @@ func (f *teamsScheduleFixture) persistTasks(t *testing.T) {
 	deps := f.deps
 	deps.InitialSupervisorExecutable, deps.SupervisorOptions, deps.Environment = client.Binding().ClientExecutable, options, options.Environment
 	deps.SupervisorOptions.WaitForPendingClose, deps.PublisherVersion = true, "teams-schedule-test"
-	paths := t.TempDir()
+	paths := supervisorfixture.CanonicalTempDir(t)
 	deps.RunnerExecutable = filepath.Join(paths, "runner")
 	writeRunnerFixture(t, deps.RunnerExecutable, "#!/bin/sh\nexit 98\n")
 	f.provider, f.providerMarker = filepath.Join(paths, "provider"), filepath.Join(paths, "provider-launched")
