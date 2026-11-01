@@ -16,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
 
@@ -172,4 +173,39 @@ func TestTeamsProjectIsolationNaturalFinishJoinsChildAndLeavesUnrelatedProcessRe
 	}
 	requireTeamsIsolationReaped(t, fds)
 	requireTeamsIsolationResponsive(t, unrelated)
+}
+
+func waitTeamsIsolationDone(t *testing.T, process *teamsIsolationProcess) error {
+	t.Helper()
+	select {
+	case <-process.done:
+		return process.err
+	case <-time.After(15 * time.Second):
+		t.Fatal("native command did not join its owner")
+		return errors.New("native command watchdog expired")
+	}
+}
+
+func resolveIsolatedTeamsDirectory(t *testing.T) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, state, configuration := filepath.Join(base, "project"), filepath.Join(base, "state"), filepath.Join(base, "configuration")
+	if mkdirErr := os.Mkdir(project, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+	deps := Dependencies{Environment: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + base, "XDG_CONFIG_HOME=" + configuration, "DELEGATE_ROOT=" + state}}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	got, err := resolveTeamsProject(ctx, project, project, deps)
+	if err != nil || got != (task.TeamProject{Kind: "directory", Path: project}) {
+		t.Fatalf("in-process project resolution = %+v, %v", got, err)
+	}
+	for _, path := range []string{state, configuration} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("passive project resolution changed %s: %v", path, err)
+		}
+	}
 }
