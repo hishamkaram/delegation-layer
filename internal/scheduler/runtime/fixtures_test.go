@@ -16,19 +16,25 @@ import (
 )
 
 type controlledClock struct {
-	mu    sync.Mutex
-	now   time.Time
-	waits chan clockWait
+	mu  sync.Mutex
+	now time.Time
 }
 
-type clockWait struct {
-	ctx      context.Context
-	wake     chan struct{}
-	duration time.Duration
+type controlledWaker struct {
+	waits chan wakeWait
+}
+
+type wakeWait struct {
+	ctx  context.Context
+	wake chan struct{}
 }
 
 func newClock(now time.Time) *controlledClock {
-	return &controlledClock{now: now, waits: make(chan clockWait, 8)}
+	return &controlledClock{now: now}
+}
+
+func newWaker() *controlledWaker {
+	return &controlledWaker{waits: make(chan wakeWait, 8)}
 }
 
 func (c *controlledClock) Now() time.Time {
@@ -43,10 +49,10 @@ func (c *controlledClock) set(now time.Time) {
 	c.now = now
 }
 
-func (c *controlledClock) Wait(ctx context.Context, duration time.Duration) error {
-	wait := clockWait{ctx: ctx, wake: make(chan struct{}), duration: duration}
+func (w *controlledWaker) Wait(ctx context.Context) error {
+	wait := wakeWait{ctx: ctx, wake: make(chan struct{})}
 	select {
-	case c.waits <- wait:
+	case w.waits <- wait:
 	case <-ctx.Done():
 		return ctx.Err()
 	}

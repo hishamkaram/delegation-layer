@@ -45,7 +45,7 @@ func TestScheduleCreateBusyInitializationHasNoInspectGuidance(t *testing.T) {
 	if err = owner.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if response, code = runScheduleCreateResponse(t, a); code != 0 {
+	if response, code = runScheduleCreateResponse(t, a); code != 3 || !response.Schedule.Saved {
 		t.Fatalf("create after owner release code=%d response=%+v", code, response)
 	}
 	show, showCode, _ := runScheduleTest(t, a.Root, "show", scheduleTestID)

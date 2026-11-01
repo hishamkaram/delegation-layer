@@ -44,7 +44,7 @@ Commands:
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
   schedule      Manage recurring definitions and inspect executions
-  scheduler     Run the independent local scheduler
+  scheduler     Serve, inspect, stop, or run the local scheduler
   teams         Register, update, inspect, and explicitly select optional Teams
   help          Show this help message
   version       Print version information
@@ -84,7 +84,8 @@ Recurring definitions:
   schedule show|pause|resume|delete ID --json
   schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit 50] --json
   schedule execution TASK_ID --json
-  Saving a definition does not start a scheduler or launch a provider.
+  Saving a definition never launches a provider. If no scheduler host is
+  ready, the saved ID is retained and start_required gives the user command.
   History and execution are passive reads; collect TASK_ID recovers publication.
 
 Optional Teams:
@@ -101,11 +102,17 @@ Optional Teams:
   --project-root ABS. Defaults guide explicit selection; they never auto-route.
 
 Independent scheduler:
+  scheduler serve [--root ABS] [--pueue-config ABS]
+  scheduler status --json
+  scheduler stop --json
   scheduler run [--root ABS] [--pueue-config ABS]
   Requires the automatic managed worker. Use colocated delegate/delegate-run
   binaries from the same build and omit the advanced --runner override.
-  Runs in the foreground until interrupted. Use an external service host for
-  caller-independent operation. Existing admitted tasks continue after it stops.
+  Start serve yourself in an independent terminal or tmux pane. It stays in
+  the foreground and restarts its scheduler child after unexpected exits.
+  Stop ends the host cooperatively. Host loss/reboot requires another serve.
+  Run is the compatibility foreground runtime without child recovery.
+  Existing admitted tasks continue after the scheduler stops.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -283,7 +290,7 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	}
 	var result commandResult
 	if parsed.Command == "scheduler" {
-		result = runScheduler(context.Background(), parsed, normalized, stderr)
+		result = runSchedulerCommand(context.Background(), parsed, normalized, stderr)
 	} else {
 		result = runCommand(parsed, normalized)
 	}
@@ -299,9 +306,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		return argumentUsageError(stderr, err)
 	}
 	if parsed.Command != "scheduler" {
-		return writeCLIError(stderr, errors.New("context execution requires scheduler run"), 2)
+		return writeCLIError(stderr, errors.New("context execution requires a scheduler command"), 2)
 	}
-	result := runScheduler(ctx, parsed, deps.withCapturedEnvironment().normalized(), stderr)
+	result := runSchedulerCommand(ctx, parsed, deps.withCapturedEnvironment().normalized(), stderr)
 	return presentCommandResult(parsed, result, stdout, stderr)
 }
 

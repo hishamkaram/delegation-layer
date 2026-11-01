@@ -49,11 +49,11 @@ func TestSchedulerArgumentsRejectInvalidRequests(t *testing.T) {
 		argv []string
 		want string
 	}{
-		{"missing action", []string{"scheduler"}, "scheduler requires run"},
-		{"missing action with globals", []string{"--root", root, "scheduler", "--json"}, "scheduler requires run"},
-		{"invalid action", []string{"scheduler", "start"}, "scheduler requires run"},
-		{"supervisor action", []string{"scheduler", "migrate"}, "scheduler requires run"},
-		{"case sensitive action", []string{"scheduler", "Run"}, "scheduler requires run"},
+		{"missing action", []string{"scheduler"}, "scheduler requires serve, status, stop or run"},
+		{"missing action with globals", []string{"--root", root, "scheduler", "--json"}, "scheduler requires serve, status, stop or run"},
+		{"invalid action", []string{"scheduler", "start"}, "scheduler requires serve, status, stop or run"},
+		{"supervisor action", []string{"scheduler", "migrate"}, "scheduler requires serve, status, stop or run"},
+		{"case sensitive action", []string{"scheduler", "Run"}, "scheduler requires serve, status, stop or run"},
 		{"extra argument", []string{"scheduler", "run", "extra"}, "unexpected extra argument"},
 		{"extra action", []string{"scheduler", "run", "run"}, "unexpected extra argument"},
 		{"argument after separator", []string{"scheduler", "run", "--", "extra"}, "unexpected extra argument"},

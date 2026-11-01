@@ -9,7 +9,13 @@ import (
 	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 )
 
-func scheduleCommandWithTeams(a Arguments, deps Dependencies) commandResult {
+func scheduleCommandWithTeams(a Arguments, deps Dependencies) (result commandResult) {
+	if a.ScheduleAction == "create" || a.ScheduleAction == "resume" {
+		if err := checkScheduleHostBeforeMutation(a, deps); err != nil {
+			return failed(newResponse("schedule"), err, schedulerHostResultCode(err))
+		}
+		defer func() { result = finishScheduleHost(a, deps, result) }()
+	}
 	if a.ScheduleAction == "create" && requestedTeamTarget(a) != nil {
 		return createTeamScheduleCommand(a, deps)
 	}

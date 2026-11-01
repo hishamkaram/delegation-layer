@@ -18,7 +18,9 @@ from scripts.delegate_acceptance.evidence.files import digest, read_json, write_
 from scripts.delegate_acceptance.processes.contracts import (
     BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture, OutputSink,
 )
-from scripts.delegate_acceptance.processes.observation import inherited_environment, selected_environment
+from scripts.delegate_acceptance.processes.observation import (
+    inherited_environment, selected_environment, validate_bounded_command_bounds,
+)
 from pathlib import Path
 from typing import IO, Callable, Mapping, NoReturn
 
@@ -42,7 +44,8 @@ class Process:
                  stdin=None, stdout_capture: OutputCapture | None = None,
                  environment_keys_only=False, return_result=False,
                  failure_type=RuntimeError,
-                 on_start_uncertain: Callable[[Process], None] | None = None):
+                 on_start_uncertain: Callable[[Process], None] | None = None,
+                 start_new_session: bool = False):
         self.directory = Path(directory)
         self.argv = [str(arg) for arg in argv]
         self.cwd = Path(cwd)
@@ -86,6 +89,7 @@ class Process:
                 stderr=self.stderr,
                 shell=False,
                 close_fds=True,
+                start_new_session=start_new_session,
             )
         except BaseException as error:
             try:
@@ -285,7 +289,8 @@ class Processes:
         # sequence number, and is read only as detached observation records.
         self._uncertain_starts = []
 
-    def start(self, name, argv, cwd, stdin=None, on_spawned=None, *, environment: Mapping[str, str] | None = None):
+    def start(self, name, argv, cwd, stdin=None, on_spawned=None, *,
+              environment: Mapping[str, str] | None = None, start_new_session: bool = False):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
         launch_environment = self.environment if environment is None else selected_environment(environment, self.failure_type)
@@ -310,7 +315,8 @@ class Processes:
                           return_result=self.return_result,
                           failure_type=self.failure_type,
                           on_started=register_started,
-                          on_start_uncertain=register_uncertain)
+                          on_start_uncertain=register_uncertain,
+                          start_new_session=start_new_session)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -736,20 +742,6 @@ def _close_bounded_command_pipes(
     raise error
 
 
-def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
-    if not isinstance(timeout, (int, float)):
-        raise ValueError("bounded command timeout must be finite and positive")
-    try:
-        timeout = float(timeout)
-    except OverflowError:
-        raise ValueError("bounded command timeout must be finite and positive") from None
-    if not 0 < timeout < float("inf"):
-        raise ValueError("bounded command timeout must be finite and positive")
-    if not isinstance(max_output, int) or max_output < 0:
-        raise ValueError("bounded command capture limit must be a nonnegative integer")
-    return timeout
-
-
 def run_bounded_command(
         argv: list[str], environment: dict[str, str], *, max_output: int,
         capture: bool = False, capture_stderr: bool = False, timeout: float = 30,
@@ -766,7 +758,7 @@ def run_bounded_command(
     ``BoundedCommandResult.stderr``; the streams are never merged and share the
     one ``max_output`` bound (sink-delivered bytes included) and one deadline.
     """
-    timeout = _validate_bounded_command_bounds(timeout, max_output)
+    timeout = validate_bounded_command_bounds(timeout, max_output)
     if sink is not None and not capture:
         raise ValueError("bounded command sink requires capture")
     if capture_stderr and not capture:

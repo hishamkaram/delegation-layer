@@ -1,7 +1,7 @@
 """Two bounded, real-minute scheduler cases using the existing finite pi fixture."""
-
 from dataclasses import dataclass, field
 from pathlib import Path
+import sqlite3
 import time
 
 from scripts.delegate_acceptance.evidence.validation import require
@@ -14,9 +14,10 @@ from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort, 
 from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_supervisor_pair
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.delegate_acceptance.private_cli.scheduler_occurrences import (
-    MINUTE_NS, Occurrence, identity, json_object, read_occurrences, require_occurrences, timestamp_ns,
+    MINUTE_NS, Occurrence, identity, json_object, occurrence_read_busy, read_occurrences, require_occurrences, timestamp_ns,
 )
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
+from scripts.delegate_acceptance.private_cli.scheduler_host import SchedulerHost
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.processes.observation import wait_until
 from scripts.delegate_acceptance.tasks.publication import verify_collected_outcome
@@ -29,19 +30,19 @@ EXPECTED_PAYLOAD = b"private supervisor acceptance passed"
 
 @dataclass
 class SchedulerCase:
-    """The outer fixture owns its service and discovered task IDs, never task state."""
+    """The fixture owns hosting and discovered task IDs, never task state."""
 
     fixture: FixtureInstallation
     lifetime: FixtureLifetime
     responses: Path
     receipt: AcceptanceReceipt
-    service: SchedulerService
+    service: SchedulerService | SchedulerHost
     deadline: float
     root_id: str = ""
     schedule_id: str = ""
     first_due_ns: int = 0
     command_count: int = 0
-    previous_services: list[SchedulerService] = field(default_factory=list)
+    previous_services: list[SchedulerService | SchedulerHost] = field(default_factory=list)
 
     @property
     def delegate(self) -> Path:
@@ -66,11 +67,7 @@ class SchedulerCase:
         for marker in (self.fixture.old_daemon_marker, self.fixture.upgraded_daemon_marker):
             require(not marker.exists(), "private daemon ran before the scheduler service")
 
-    def create(self, *, held: bool, controlled_failure: bool = False) -> None:
-        # Leave a real startup window before the first due time. A slow host
-        # that misses it fails; no timestamp, DB cursor, or wall clock is changed.
-        wait_until(lambda: time.time_ns() % MINUTE_NS < 20_000_000_000,
-                   timeout=self.remaining(), description="real schedule creation window")
+    def brief(self, *, held: bool, controlled_failure: bool) -> Path:
         brief = self.fixture.brief
         if held:
             if self.lifetime.gate is None or self.lifetime.base is None:
@@ -85,14 +82,43 @@ class SchedulerCase:
             brief = self.lifetime.base / "scheduler-controlled-brief.md"
             brief.write_text("DELEGATE_SCHEDULER_CONTROLLED_FAILURE\n", encoding="utf-8")
             brief.chmod(0o600)
+        return brief
+
+    def require_start_required(self, response: dict[str, object]) -> None:
+        require(not response.get("error") and not response.get("failure"), "saved schedule reported an operational failure")
+        schedule = json_object(response.get("schedule"))
+        require(response.get("root_id") == self.root_id and schedule.get("id") == self.schedule_id,
+                "saved schedule identity changed before hosting")
+        require(schedule.get("saved") is True, "no-host schedule was not reported saved")
+        scheduler = json_object(response.get("scheduler"))
+        require(scheduler.get("state") in ("no_host_observed", "stopped")
+                and scheduler.get("next_action") == schedule.get("next_action") == "start_required"
+                and json_object(response.get("pending")).get("kind") == "start_required",
+                "no-host schedule did not require user start")
+        require(scheduler.get("serve_command") == [str(self.delegate.resolve(strict=True)), "--root", str(self.fixture.state), "scheduler", "serve"],
+                "saved schedule returned a different host start command")
+
+    def create(self, *, held: bool, controlled_failure: bool = False) -> None:
+        # Leave a real startup window before the first due time. A slow host
+        # that misses it fails; no timestamp, DB cursor, or wall clock is changed.
+        wait_until(lambda: time.time_ns() % MINUTE_NS < 20_000_000_000,
+                   timeout=self.remaining(), description="real schedule creation window")
+        brief = self.brief(held=held, controlled_failure=controlled_failure)
         self.receipt.phase("schedule_create")
+        managed = isinstance(self.service, SchedulerHost)
         response = self.command("create", [
             "schedule", "create", "--provider", "pi:json", "--cron", "* * * * *", "--timezone", "UTC",
             "--brief", str(brief), "--cwd", str(self.fixture.workspace), "--permission", "read-only", "--budget", "4m",
-        ])
+        ], (3,) if managed else (0, 3))
         self.root_id = identity(response.get("root_id"))
         self.schedule_id = identity(json_object(response.get("schedule")).get("id"))
+        if managed:
+            self.require_start_required(response)
+            self.command("pause-before-host", ["schedule", "pause", self.schedule_id])
+            resumed = self.command("resume-before-host", ["schedule", "resume", self.schedule_id], (3,))
+            self.require_start_required(resumed)
         shown = json_object(self.command("show", ["schedule", "show", self.schedule_id]).get("schedule"))
+        require(shown.get("id") == self.schedule_id, "saved schedule cannot be read by its original ID")
         created = timestamp_ns(shown.get("created_at"))
         self.first_due_ns = (created // MINUTE_NS + 1) * MINUTE_NS
         require(time.time_ns() < self.first_due_ns, "create caller did not exit before the first actual occurrence")
@@ -100,9 +126,9 @@ class SchedulerCase:
         require(not self.discover(), "schedule creation invoked a task")
         self.receipt.add_details(scheduler={"schedule_id": self.schedule_id, "root_id": self.root_id,
                                            "create_caller_exited_before_first_due": True, "cold_supervisor": True})
-        self.receipt.phase("scheduler_service")
+        self.receipt.phase("scheduler_hosting")
         self.service.start()
-        require(time.time_ns() < self.first_due_ns, "service missed its first real-minute startup window")
+        require(time.time_ns() < self.first_due_ns, "scheduler missed its first real-minute startup window")
 
     def discover(self) -> tuple[Occurrence, ...]:
         if not self.root_id:
@@ -118,7 +144,12 @@ class SchedulerCase:
 
     def occurrences(self, count: int) -> tuple[Occurrence, ...]:
         def ready():
-            rows = self.discover()
+            try:
+                rows = self.discover()
+            except sqlite3.OperationalError as error:
+                if occurrence_read_busy(error):
+                    return ()
+                raise
             require(len(rows) <= count, "scheduler admitted an unexpected extra occurrence")
             require(all(row.schedule_id == self.schedule_id for row in rows), "scheduler used a different schedule")
             return rows if len(rows) == count else ()
@@ -201,11 +232,11 @@ class SchedulerCase:
                 "held scheduled worker published before gate release")
 
     def restart(self) -> None:
-        """Keep both exact service identities until canonical fixture cleanup."""
+        """Keep both exact hosting generations until canonical fixture cleanup."""
         previous = self.service
         previous.stop()
         self.previous_services.append(previous)
-        self.service = SchedulerService(
+        self.service = type(previous)(
             self.lifetime, self.fixture.state, previous.delegate, self.deadline,
             generation=len(self.previous_services),
         )

@@ -498,9 +498,11 @@
       "py:delegate_acceptance.private_cli.receipt",
       "py:delegate_acceptance.private_cli.scheduler_acceptance",
       "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_host",
       "py:delegate_acceptance.private_cli.scheduler_occurrences",
       "py:delegate_acceptance.private_cli.scheduler_sequence",
       "py:delegate_acceptance.private_cli.scheduler_service",
+      "py:delegate_acceptance.processes.operations",
       "py:fcntl",
       "py:hashlib",
       "py:json",
@@ -508,8 +510,25 @@
       "py:pathlib",
       "py:sqlite3",
       "py:subprocess",
+      "py:sys",
       "py:tempfile",
       "py:time",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:test_scheduler_host_process",
+    "owner": "py:test_scheduler_host_process",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.processes.operations",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
       "py:unittest",
       "py:unittest.mock"
     ]

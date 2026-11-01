@@ -24,7 +24,7 @@ Use `delegate help` for the installed build's command surface.
 | `teams register/update/delete/list/show`, `teams default show/set/clear` | [Team syntax and responses](../skills/agent-integration/references/command-reference.md#teams) · [Teams guide](teams.md) |
 | `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
 | `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
-| `scheduler run` | [Independent scheduler](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
+| `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
 Global paths must be absolute. The CLI's default root is the user's
@@ -36,16 +36,76 @@ supervisor for advanced integrations.
 ## Scheduler hosting
 
 The [scheduler reference](../skills/agent-integration/references/command-reference.md#scheduler-runtime)
-owns command syntax and timing/budget behavior. Use an existing per-user service
-host when scheduling must outlive an interactive agent session; the command does
-not install a service, enable login/reboot startup or send notifications.
+owns command syntax and timing/budget behavior. Check `delegate help` for the
+installed build's commands.
 
-The scheduler requires the automatic managed worker. Use colocated `delegate`
+The user starts one foreground host per execution root in an independent
+terminal or tmux pane and leaves it running:
+
+```text
+delegate --root ROOT scheduler serve
+```
+
+That host manages every schedule in the root and restarts its scheduler child
+after unexpected exits using bounded backoff. If the host or pane ends, or the
+machine reboots, the user must run the command again. Independent launch is the
+user's responsibility. The guard checks an explicit Delegate task-scope marker
+and native Linux cgroup evidence; it does not reconstruct guardian ancestry.
+An absence of those positives is not proof of independent placement.
+An agent must never start the persistent host inside its own bounded task.
+Delegate does not install an OS service or start a detached host automatically.
+
+Create/resume save the definition and its ID, then check for a compatible live
+host. Without one, exit `3` reports `schedule.saved: true` and
+`scheduler.next_action: start_required`, retaining the same ID and exact
+`scheduler.serve_command` JSON argv array. Give that array intact to the user;
+do not create the definition again. Host readiness does not prove an occurrence
+ran. See [definition and host results](../skills/agent-integration/references/result-handling.md#schedule-definition-and-host-results).
+Human output also prints JSON argv after `run independently (argv):`; preserve
+argument boundaries, including spaces, instead of joining it into an unquoted
+shell command.
+Temporary host unreachability after saving returns exit `3` with pending
+observation guidance and no top-level `error`. An owner-reported
+`scheduler.fault: true` identifies a permanent host fault: create/resume return
+exit `1` while retaining `schedule.saved: true` and the ID. A diagnostic string
+or degraded state alone does not establish that fault.
+
+`scheduler status` is passive. `scheduler stop` fences stopped intent and joins
+the child and accepted control work before completing. The host keeps responding
+to status/stop while it waits for its child and any prior execution owner. It
+records a closure witness after execution ownership is free and before releasing
+host ownership; completed stop requires that witness and exact host absence.
+Acceptance alone, timeout or host death before the witness is not completion.
+Authenticated `stop_accepted: true` remains true if later readback fails; report
+the accompanying fault too. Already admitted tasks retain their own supervisors
+and budgets.
+
+`scheduler run` remains the compatibility foreground runtime without automatic
+child restart. Its current generation appears as `scheduler.state: foreground`,
+even after an older managed host stopped. `scheduler stop` does not terminate
+that invocation: it reports `stop_accepted: false` and
+`next_action: stop_foreground_runtime`. The user ends it in its original pane
+with Ctrl-C; prefer `scheduler serve` for managed recovery. History and execution
+inspection work with the host stopped.
+Before readiness, every current saved definition is checked for compatibility.
+An incompatible definition leaves the host degraded and stops automatic child
+restart for that fault; report it while retaining the saved IDs.
+
+Executing schedules requires the automatic managed worker. Use colocated `delegate`
 and `delegate-run` binaries from the same build and omit the advanced `--runner`
 override; see the [scheduler requirement](../skills/agent-integration/references/command-reference.md#scheduler-runtime).
 
-The host must stop the scheduler process without terminating its independently
-supervised tasks. For orderly stop on systemd 255, use `Delegate=yes`,
+### Optional legacy OS hosting
+
+The existing manual service setup for `scheduler run` remains an operator option
+outside the new user-started host path. It is not installed or enabled by
+Delegate. The acceptance driver's optional `--hosting service` mode selects this
+legacy path; its default `managed-host` mode uses the foreground host without an
+OS service manager. See [native scenarios](contributing.md#native-and-cli-scenarios)
+for coverage requirements and evidence limits.
+
+An operator's service host must stop the scheduler process without terminating
+its independently supervised tasks. For orderly stop on systemd 255, use `Delegate=yes`,
 `ExitType=cgroup`, `KillMode=process`, `SendSIGKILL=no`, `TimeoutStopSec=infinity`
 and `Restart=no`. Request `systemctl --user --no-block stop UNIT` while its main
 process is live. The scheduler exits, while the unit can stay `deactivating`
@@ -54,7 +114,7 @@ waits behind the outstanding stop. This is not a guarantee for host crashes or
 forced teardown. See [systemd service lifetime](https://www.freedesktop.org/software/systemd/man/255/systemd.service.html#ExitType=).
 A macOS LaunchAgent runs in the logged-in user's `gui/UID` domain with
 `AbandonProcessGroup=true` so independent process groups survive.
-Service stop joins pending admissions and
+For this legacy path, service stop joins pending admissions and
 control work without a shutdown-time guarantee. An already accepted admission
 may finish during stop; the service does not wait for every admitted task to finish.
 Restart by starting the same command with the same root after its previous
@@ -68,13 +128,16 @@ Provider settings/accounts remain owned by the user and provider CLI.
 
 Before creating or using Team-targeted schedules:
 
-1. Stop the owned resident scheduler through its service host and wait for its
-   previous owner to exit. Preserve independently admitted tasks using the
-   hosting policy above; do not force their teardown to complete an upgrade.
+1. Request `delegate --root ROOT scheduler stop` and wait for completed host and
+   child shutdown, rather than only acceptance of the request. For a legacy
+   `scheduler run` service, stop it through its service host and wait for the
+   previous owner to exit. Preserve independently admitted tasks; do not force
+   their teardown to complete an upgrade.
 2. Update the CLI, `delegate-run` and the binary/command used by the scheduler
-   service to the same new build.
-3. Restart the scheduler with that build and the same execution root and
-   intended user configuration context.
+   host to the same new build.
+3. Have the user run `delegate --root ROOT scheduler serve` independently with
+   that build, the same execution root and intended user configuration context.
+   An operator retaining legacy OS hosting restarts that service instead.
 4. Create or use Team-targeted definitions only after that restart.
 
 Old binaries strictly reject the new saved request fields. Mixed-version

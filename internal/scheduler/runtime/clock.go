@@ -9,8 +9,11 @@ type nativeClock struct{}
 
 func (nativeClock) Now() time.Time { return time.Now().UTC() }
 
-func (nativeClock) Wait(ctx context.Context, duration time.Duration) error {
-	timer := time.NewTimer(duration)
+// timerWaker preserves standalone Run callers without starting a shared source.
+type timerWaker struct{}
+
+func (timerWaker) Wait(ctx context.Context) error {
+	timer := time.NewTimer(IdleInterval)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

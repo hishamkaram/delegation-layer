@@ -50,6 +50,9 @@ func Run(ctx context.Context, config Config) (runErr error) {
 	if config.Clock == nil {
 		config.Clock = nativeClock{}
 	}
+	if config.Waker == nil {
+		config.Waker = timerWaker{}
+	}
 	if config.NewTaskID == nil {
 		config.NewTaskID = randomid.NewRandomID
 	}
@@ -117,12 +120,12 @@ func (l *loop) drain(ctx context.Context) error {
 	}
 }
 
-// wait owns and joins its interruptible clock wait even when a worker wakes
-// the loop early. No timer or waiting goroutine survives this call.
+// wait owns and joins its interruptible wake wait even when a worker wakes
+// the loop early. No waiting goroutine survives this call.
 func (l *loop) wait(ctx context.Context) error {
 	waitCtx, cancel := context.WithCancel(ctx)
 	waited := make(chan error, 1)
-	go func() { waited <- l.config.Clock.Wait(waitCtx, IdleInterval) }()
+	go func() { waited <- l.config.Waker.Wait(waitCtx) }()
 	select {
 	case err := <-waited:
 		cancel()

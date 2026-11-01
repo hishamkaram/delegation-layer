@@ -12,14 +12,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func nextWait(t *testing.T, clock *controlledClock) clockWait {
+func nextWait(t *testing.T, waker *controlledWaker) wakeWait {
 	t.Helper()
 	for {
-		wait := receive(t, clock.waits)
+		wait := receive(t, waker.waits)
 		if wait.ctx.Err() == nil {
-			if wait.duration > time.Second {
-				t.Fatalf("idle wait=%s", wait.duration)
-			}
 			return wait
 		}
 	}
@@ -30,6 +27,7 @@ func TestSchedulerRunShutdownJoinsHeldPendingControl(t *testing.T) {
 	created := instant("2026-01-01T00:00:00Z")
 	create(t, store, 1, created)
 	clock := newClock(created.Add(30 * time.Second))
+	waker := newWaker()
 	started := make(chan DispatchRequest, 4)
 	settle := make(chan struct{})
 	ownerCtx := t.Context()
@@ -54,18 +52,18 @@ func TestSchedulerRunShutdownJoinsHeldPendingControl(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		err := Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock})
+		err := Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock, Waker: waker})
 		done <- runResult{err: errors.Join(err, lease.Close()), settled: settled.Load()}
 	}()
 	t.Cleanup(func() {
 		cancel()
 		receive(t, finished)
 	})
-	wait := nextWait(t, clock)
+	wait := nextWait(t, waker)
 	clock.set(created.Add(time.Minute))
 	close(wait.wake)
 	request := receive(t, started)
-	wait = nextWait(t, clock)
+	wait = nextWait(t, waker)
 	cancel()
 	receive(t, wait.ctx.Done())
 	assertOwnerHeld(t, taskStore)
@@ -92,6 +90,7 @@ func TestSchedulerRunJoinsObservationOnCancellation(t *testing.T) {
 	create(t, store, 1, created)
 	prior := claimPrior(t, store, 1, 90, created, created.Add(time.Minute))
 	clock := newClock(created.Add(90 * time.Second))
+	waker := newWaker()
 	observed := make(chan string, 1)
 	settle := make(chan struct{})
 	ownerCtx := t.Context()
@@ -116,14 +115,14 @@ func TestSchedulerRunJoinsObservationOnCancellation(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		err := Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock})
+		err := Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock, Waker: waker})
 		done <- runResult{err: err, settled: settled.Load()}
 	}()
 	t.Cleanup(func() { cancel(); receive(t, finished) })
 	if got := receive(t, observed); got != prior.TaskID {
 		t.Fatalf("observed %s", got)
 	}
-	wait := nextWait(t, clock)
+	wait := nextWait(t, waker)
 	cancel()
 	receive(t, wait.ctx.Done())
 	close(settle)
@@ -136,7 +135,7 @@ func TestSchedulerRunJoinsObservationOnCancellation(t *testing.T) {
 func TestSchedulerNativeClockCancellationAndRequiredOwners(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := (nativeClock{}).Wait(ctx, time.Hour); !errors.Is(err, context.Canceled) {
+	if err := (timerWaker{}).Wait(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("native wait: %v", err)
 	}
 	if err := Run(ctx, Config{}); err == nil {
@@ -156,6 +155,7 @@ func TestSchedulerRunPreservesRootIdentityFaultOnShutdown(t *testing.T) {
 	created := instant("2026-01-01T00:00:00Z")
 	create(t, store, 1, created)
 	clock := newClock(created.Add(30 * time.Second))
+	waker := newWaker()
 	started := make(chan DispatchRequest, 1)
 	settle := make(chan struct{})
 	ownerCtx := t.Context()
@@ -172,13 +172,16 @@ func TestSchedulerRunPreservesRootIdentityFaultOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	finished := make(chan struct{})
-	go func() { defer close(finished); done <- Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock}) }()
+	go func() {
+		defer close(finished)
+		done <- Run(ctx, Config{Store: store, Tasks: tasks, Clock: clock, Waker: waker})
+	}()
 	t.Cleanup(func() { cancel(); receive(t, finished) })
-	wait := nextWait(t, clock)
+	wait := nextWait(t, waker)
 	clock.set(created.Add(time.Minute))
 	close(wait.wake)
 	receive(t, started)
-	wait = nextWait(t, clock)
+	wait = nextWait(t, waker)
 	cancel()
 	receive(t, wait.ctx.Done())
 	close(settle)

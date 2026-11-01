@@ -166,6 +166,66 @@ asking again, but never infer it from a rejection or silently substitute a
 destination. Keep the original failed attempt reported as failed; independent
 requests and explicitly allowed recovery paths retain their existing rules.
 
+## Schedule definition and host results
+
+Use the installed build's help to check `scheduler serve/status/stop` support.
+Keep three facts separate: the definition was
+saved, the host is ready, and an occurrence produced an accepted provider result.
+Neither saving nor host readiness proves that a task ran.
+
+Schedule create/resume report confirmed persistence as `schedule.saved: true`;
+keep `schedule.id` even if the command exits nonzero. The separate top-level
+`scheduler` object carries host observation and guidance:
+
+| JSON field | Meaning |
+| --- | --- |
+| `scheduler.state` | Observed lifecycle or availability state, including `foreground` for a current raw `scheduler run`. Read it with `ready` and the process exit. |
+| `scheduler.epoch`, `scheduler.attempt` | Owner generation string and numeric child attempt, when known. Omission does not identify an owner. |
+| `scheduler.ready` | Whether this observation confirms host/child readiness; it is not an occurrence result. |
+| `scheduler.fault` | Optional `true` for a permanent fault reported by the host owner. Do not infer it from degraded state or `last_error`; omission is not proof that the whole command is fault-free. |
+| `scheduler.next_retry_at` | Optional next retry timestamp during recovery. Observation does not reset it. |
+| `scheduler.last_error` | Optional bounded host diagnostic. Keep it alongside pending or readiness facts. |
+| `scheduler.next_action` | Caller guidance, such as `start_required`, `inspect_scheduler` or `stop_foreground_runtime`. |
+| `scheduler.serve_command` | Optional exact argv array for an independent user start. Preserve every element and its argument boundary. |
+| `scheduler.stop_accepted` | Optional boolean for acceptance of this stop request. `true` is accepted, `false` is explicitly not accepted, and omission is unknown. Acceptance does not prove shutdown completed. |
+
+For `start_required`, both `schedule.next_action` and `scheduler.next_action`
+carry that guidance. `scheduler.serve_command` is JSON argv, including the
+resolved executable and exact root. Human output also prints JSON argv after
+`run independently (argv):`, for example:
+
+```text
+run independently (argv): ["/installation with spaces/delegate","--root","/state with spaces","scheduler","serve"]
+```
+
+Forward the array intact. It is not an unquoted shell command: do not join its
+elements with spaces or pass the joined text through a shell. The user starts
+serve independently with those exact argument boundaries; the agent must not
+execute it inside its bounded task. An omitted `schedule.saved` does not confirm
+persistence; preserve any ID and follow the reported storage/error guidance.
+
+| Response or observation | Next action |
+| --- | --- |
+| Create/resume saved the definition and confirmed a compatible ready host; exit `0` | Keep its schedule ID/root. The host will handle future due work; use history/execution for actual occurrence evidence. |
+| Create/resume returns exit `3`, `schedule.saved: true` and `scheduler.next_action: start_required` | The definition remains saved. Preserve the returned schedule ID/root and give `scheduler.serve_command` unchanged to the user to run in an independent terminal or tmux pane. Never start it inside the agent's bounded task, detach it in the background, or submit another create. |
+| Create/resume saved the definition but reports starting, backoff or pending readiness; exit `3` | Keep the same ID and report its host state and available retry time. Use passive scheduler status for later observation; do not create another definition, start a competing host or reset cooldown. |
+| Create/resume saved the definition but the host is temporarily unreachable; exit `3`, pending guidance and no top-level `error` | Preserve `schedule.saved: true` and the same ID. Use passive status to observe the uncertainty. A transport failure does not establish owner death or a permanent host fault. |
+| Create/resume saved the definition and the host reports `scheduler.fault: true`; exit `1` | Report the permanent fault and available `scheduler.last_error`; retain `schedule.saved: true` and the ID. For an incompatible saved definition, the before-Ready check stops automatic child restart. Repeated create, serve or status calls are not a repair. |
+| Scheduler status observes starting, ready, backoff, degraded, stopping or stopped; exit `0` | Observation completed. Report the observed state; exit `0` does not mean ready or that an occurrence succeeded. Status does not start, migrate, repair or clean resources. |
+| Scheduler stop confirms completed stop; exit `0` | The exact stopped intent has a validated owner-written closure witness and the exact host is absent. The witness follows joined child shutdown and free execution ownership. Independently admitted tasks keep their existing lifetimes. A later host needs a fresh explicit user-run serve command. |
+| Scheduler stop has `scheduler.stop_accepted: true` but completion is pending; exit `3` | Preserve its acceptance and pending state. The host remains control-responsive while joining its child or waiting for a prior execution owner. Host death before the closure witness does not complete stop. Observe the same generation; do not claim stopped, launch a replacement or repeat schedule creation. An omitted `stop_accepted` is unknown, not false. |
+| Scheduler stop has authenticated `scheduler.stop_accepted: true` and a later readback fault; exit `1` | Preserve the accepted fact and report the concrete fault. Readback failure does not revoke acceptance or establish completed shutdown. |
+| Status reports `scheduler.state: foreground`, or stop returns exit `3` with that state, `stop_accepted: false` and `next_action: stop_foreground_runtime` | The current compatibility `scheduler run` owns this generation; an older managed-host receipt cannot hide it. Public stop does not terminate it. Have the user end that invocation with Ctrl-C in its original pane. Prefer managed `scheduler serve` afterward. |
+| Invalid input/state; exit `2`, or concrete operational/compatibility/cleanup fault; exit `1` | Report the error and retain any saved ID or accepted-control fact. A concrete fault joined to pending work remains a fault; it is not a pending-only result. |
+
+If the host dies, its pane closes or the machine reboots, the user must start
+serve again. Child crash recovery applies only while that host remains alive.
+An absent heartbeat or unresponsive endpoint is uncertainty, not permission to
+replace an owner. Do not install a service or invoke a detached bootstrap as a
+recovery step. Pause/delete affect future claims and need no live host; they do
+not cancel already admitted occurrences. [Scheduler runtime](command-reference.md#scheduler-runtime)
+owns launch, backoff and calendar behavior.
+
 ## Scheduled execution results
 
 Use [schedule history and execution](command-reference.md#schedule-history-and-execution)

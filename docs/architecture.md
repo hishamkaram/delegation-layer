@@ -308,7 +308,7 @@ The
 [schedule commands](../skills/agent-integration/references/command-reference.md#schedules)
 manage definitions without launching providers. The separate foreground
 [scheduler runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime)
-drives due work independently of interactive sessions under one owner per root.
+drives due work under one execution owner per root.
 Its application loop composes short claims, bounded admission and reconciliation
 through consumer-owned ports. Task records remain execution/closure authority;
 the database stores occurrence identity, reservations and cached observations.
@@ -316,6 +316,82 @@ Recurrence calculation is isolated in
 `internal/scheduler/recurrence`; the application composes it with the storage
 interface and keeps provider preparation in the existing execution path.
 Ordinary dispatch, status and collect do not depend on the scheduler database.
+
+### User-started scheduler host
+
+The host design is under implementation; the following ownership contract is
+not a claim of completed integrated or native acceptance.
+
+The user starts `delegate --root ROOT scheduler serve` in an independent
+terminal or tmux pane. The foreground host owns one exclusive host lease H per
+canonical root, its desired-state writes, generation/attempt identity, child
+channel, Start/Wait and restart timing. The scheduler child owns execution lease
+E throughout joined runtime shutdown. Acquire H before E; compatibility
+`scheduler run` uses the same arbitration and runs without automatic restart.
+
+It announces its own foreground generation under H before acquiring E. Passive
+status reports `foreground`; an older managed-host stop receipt cannot mask the
+current invocation. Its joined-finish receipt is distinct from managed stop
+acceptance. Public stop does not terminate it and instead returns
+`stop_accepted: false` with `next_action: stop_foreground_runtime`; the user ends
+the raw invocation in its original pane with Ctrl-C. Managed `serve` is preferred.
+
+SQLite remains the sole durable calendar authority. The host does not keep a
+second schedule list, create a Pueue infrastructure row, or gain provider retry
+authority; admitted tasks keep their existing Pueue and guardian owners.
+
+The host retains the user's launch context in memory and passes it explicitly
+to each child, without persisting a full environment. The child uses an
+independent session and an owned pollable control/readiness channel. Exact
+root/generation/attempt and live host confirmation fence readiness and the first
+scan. One successful Start owns one Wait; a readiness timeout, busy E or missing
+heartbeat cannot authorize a replacement. A settled unexpected child exit or a
+definitively failed Start that created no child can enter the host's
+[restart policy](../skills/agent-integration/references/command-reference.md#scheduler-runtime).
+Application composition supplies the child's before-Ready callback, which reads
+and validates every current saved definition before readiness or the first scan.
+An incompatible definition reports degraded state and disables automatic child
+restart for that incompatibility, preserving definitions rather than retrying
+the same unreadable input indefinitely.
+
+Create/resume preserve the saved definition and ID, then check a compatible live
+host. An absent host produces exit `3`, `schedule.saved: true`,
+`scheduler.next_action: start_required` and exact `scheduler.serve_command` argv.
+Application composition owns this response projection; JSON and human output
+preserve argument boundaries. The [response contract](../skills/agent-integration/references/result-handling.md#schedule-definition-and-host-results)
+keeps host readiness and optional stop acceptance separate from saved definitions
+and completed shutdown. Pure transport unreachability after saving is pending
+exit `3` without a top-level error; an owner-derived permanent
+`scheduler.fault: true` yields exit `1` while preserving `schedule.saved` and its
+ID. The host owns that fault decision; CLI projections do not infer it from
+diagnostic strings or degraded state. These commands do not start a detached
+host or reset an existing cooldown. Passive `scheduler status` observes the host
+without spawning, migrating, repairing or cleaning anything.
+
+Stop durably fences stopped intent and ends admission. H remains held and the
+host keeps authenticated status/stop responsive while joining its child and
+waiting for any predecessor that still holds E. After E is free, the H owner
+acquires E and publishes a closure witness bound to the exact stopped intent.
+It then finishes accepted controls and releases E before H. Completed stop
+requires the validated witness and exact host absence; host death before the
+witness remains accepted but pending. A validated authenticated acceptance
+survives a later readback error, alongside that error. Timeout is not completed
+shutdown. Independent tasks keep their owners.
+
+Child crashes can recover while the host lives. Loss of the host/pane or reboot
+requires a new explicit user start. The lifetime guard recognizes an explicit
+Delegate task-scope marker and native Linux Delegate cgroup membership. It does
+not reconstruct guardian ownership or historical ancestry, and cannot detect
+every enclosing ancestor. Missing positives or a successful check do not attest
+independent placement; the independent user-start contract remains explicit.
+There is no OS service
+installation, automatic detached bootstrap, new daemon dependency or negative
+ancestry proof. Native
+Linux/macOS candidate runs must verify this composed path. The acceptance driver
+defaults to `managed-host` and keeps `service` as an optional legacy mode; adding
+that mode does not establish completed native or real-provider verification.
+
+### Calendar storage and evidence
 
 History reads occurrence rows and compact skipped intervals from that same
 store. Each occurrence keeps at most its last cached observation, explicitly
@@ -335,6 +411,7 @@ for inspection and same-task recovery decisions.
 
 The scheduler owner lease alone may initialize or migrate
 `<root>/.scheduler/schedules.sqlite`. Opening does not initialize or migrate it.
+Schedule create owns initialization; serve requires existing schedule storage.
 The database and directory must be private, user-owned and not symlinks.
 Task files and artifacts are preserved; there is no task-history backfill.
 
@@ -343,6 +420,8 @@ tables. Transactions verify schema/root identity and required SQLite settings.
 One unreleased occurrence per schedule is database-enforced. Short immediate
 transactions use a reserved connection; uncertain commits require readback.
 Only a newly committed claim authorizes its invocation, not a rediscovered row.
+Startup after downtime skips past appointments in compact spans; host/child
+recovery never builds a catch-up queue or redispatches an uncertain task.
 
 The adapter requires rollback `DELETE`, foreign keys, `synchronous=EXTRA` and
 its busy timeout, with `fullfsync` on macOS. It refuses incompatible schemas or

@@ -17,7 +17,7 @@ const usageText = app.UsageText
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if parsed, err := app.ParseArguments(args); err == nil && parsed.Command == "scheduler" {
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 		defer stop()
 		return app.RunContext(ctx, args, stdout, stderr, app.Dependencies{PublisherVersion: version, Input: os.Stdin})
 	}
