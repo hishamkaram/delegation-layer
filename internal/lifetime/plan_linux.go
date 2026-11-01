@@ -56,7 +56,7 @@ func processGroupFallback(rootID, ownerKind, taskID string, cgroupUnavailable er
 	return processGroupPlan(rootID, ownerKind, taskID), nil
 }
 
-func createPreparedPlatformScope(plan Plan) (*Scope, error) {
+func createPreparedPlatformScope(ctx context.Context, plan Plan) (*Scope, error) {
 	if plan.kind == KindProcessGroup {
 		if err := requireLinuxPidfd(); err != nil {
 			return nil, err
@@ -65,17 +65,23 @@ func createPreparedPlatformScope(plan Plan) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		return openProcessGroupScope(context.Background(), ref)
+		return openProcessGroupScope(ctx, ref)
 	}
-	locator, parent, err := openPlannedCgroupParent(plan)
+	locator, parent, err := openPlannedCgroupParent(ctx, plan)
 	if err != nil {
 		return nil, err
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, closePlannedCgroupParent(parent, contextErr)
 	}
 	if err = unix.Mkdirat(int(parent.Fd()), locator.name, 0o700); err != nil {
 		if errors.Is(err, unix.EEXIST) {
 			return nil, closePlannedCgroupParent(parent, fmt.Errorf("%w: planned cgroup already exists", ErrScopeExists))
 		}
 		return nil, closePlannedCgroupParent(parent, fmt.Errorf("create planned cgroup: %w", err))
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, closePlannedCgroupParent(parent, discardPreparedCgroup(parent, locator.name, nil, contextErr))
 	}
 	child, err := openCgroupDirectoryAt(parent, locator.name)
 	if err != nil {
@@ -86,8 +92,8 @@ func createPreparedPlatformScope(plan Plan) (*Scope, error) {
 		return nil, closePlannedCgroupParent(parent, discardPreparedCgroup(parent, locator.name, child, controlErr))
 	}
 	dev, ino, identityErr := cgroupIdentity(child)
-	if identityErr != nil {
-		return nil, closePlannedCgroupParent(parent, discardPreparedCgroup(parent, locator.name, child, identityErr))
+	if identityErr != nil || ctx.Err() != nil {
+		return nil, closePlannedCgroupParent(parent, discardPreparedCgroup(parent, locator.name, child, errors.Join(identityErr, ctx.Err())))
 	}
 	ref, refErr := NewRef(KindCgroupV2, AssuranceExact, encodeCgroupIdentifier(path, dev, ino))
 	if refErr != nil {
@@ -104,11 +110,11 @@ func createPreparedPlatformScope(plan Plan) (*Scope, error) {
 	return scope, nil
 }
 
-func openPreparedPlatformScope(plan Plan) (*Scope, error) {
+func openPreparedPlatformScope(ctx context.Context, plan Plan) (*Scope, error) {
 	if plan.kind == KindProcessGroup {
 		return nil, ErrScopeAbsent
 	}
-	locator, parent, err := openPlannedCgroupParent(plan)
+	locator, parent, err := openPlannedCgroupParent(ctx, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +151,7 @@ func openRegisteredPlatformScope(ctx context.Context, plan Plan, ref Ref) (*Scop
 	if plan.kind == KindProcessGroup {
 		return openRegisteredProcessGroupScope(ctx, plan, ref)
 	}
-	return openRegisteredCgroupScope(plan, ref)
+	return openRegisteredCgroupScope(ctx, plan, ref)
 }
 
 func openRegisteredProcessGroupScope(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
@@ -158,11 +164,11 @@ func openRegisteredProcessGroupScope(ctx context.Context, plan Plan, ref Ref) (*
 	return openProcessGroupScope(ctx, ref)
 }
 
-func openRegisteredCgroupScope(plan Plan, ref Ref) (*Scope, error) {
+func openRegisteredCgroupScope(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
 	if ref.kind != KindCgroupV2 || ref.assurance != AssuranceExact {
 		return nil, ErrInvalidRef
 	}
-	locator, parent, err := openPlannedCgroupParent(plan)
+	locator, parent, err := openPlannedCgroupParent(ctx, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +176,7 @@ func openRegisteredCgroupScope(plan Plan, ref Ref) (*Scope, error) {
 	if err != nil || path != filepath.Join(locator.parent, locator.name) {
 		return nil, closePlannedCgroupParent(parent, errors.Join(ErrInvalidRef, err))
 	}
-	child, err := openRegisteredCgroupChild(parent, locator, path, wantDev, wantIno)
+	child, err := openRegisteredCgroupChild(ctx, parent, locator, path, wantDev, wantIno)
 	if err != nil {
 		return nil, closePlannedCgroupParent(parent, err)
 	}
@@ -181,7 +187,10 @@ func openRegisteredCgroupScope(plan Plan, ref Ref) (*Scope, error) {
 	return scope, nil
 }
 
-func openRegisteredCgroupChild(parent *os.File, locator cgroupPlanLocator, path string, wantDev, wantIno uint64) (*os.File, error) {
+func openRegisteredCgroupChild(ctx context.Context, parent *os.File, locator cgroupPlanLocator, path string, wantDev, wantIno uint64) (*os.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	child, err := openCgroupDirectoryAt(parent, locator.name)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ENOENT) {
@@ -196,6 +205,9 @@ func openRegisteredCgroupChild(parent *os.File, locator cgroupPlanLocator, path 
 	if controlErr := checkCgroupControlsAt(child); controlErr != nil {
 		return nil, errors.Join(fmt.Errorf("registered cgroup controls: %w", controlErr), child.Close())
 	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, errors.Join(contextErr, child.Close())
+	}
 	return child, nil
 }
 
@@ -204,7 +216,10 @@ func validatePlatformPlan(plan Plan) error {
 	return err
 }
 
-func openPlannedCgroupParent(plan Plan) (cgroupPlanLocator, *os.File, error) {
+func openPlannedCgroupParent(ctx context.Context, plan Plan) (cgroupPlanLocator, *os.File, error) {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return cgroupPlanLocator{}, nil, contextErr
+	}
 	locator, err := decodeCgroupPlan(plan.identifier)
 	if err != nil {
 		return cgroupPlanLocator{}, nil, err
@@ -216,6 +231,9 @@ func openPlannedCgroupParent(plan Plan) (cgroupPlanLocator, *os.File, error) {
 	if err = validatePlannedCgroupParent(location.mountPath, locator); err != nil {
 		return cgroupPlanLocator{}, nil, fmt.Errorf("%w: planned parent is outside cgroup mount", ErrInvalidRef)
 	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return cgroupPlanLocator{}, nil, contextErr
+	}
 	parent, err := openCgroupDirectory(locator.parent)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -226,6 +244,9 @@ func openPlannedCgroupParent(plan Plan) (cgroupPlanLocator, *os.File, error) {
 	dev, ino, identityErr := cgroupIdentity(parent)
 	if identityErr != nil || dev != locator.dev || ino != locator.ino {
 		return cgroupPlanLocator{}, nil, errors.Join(fmt.Errorf("%w: planned cgroup parent identity changed", ErrInvalidRef), identityErr, parent.Close())
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return cgroupPlanLocator{}, nil, closePlannedCgroupParent(parent, contextErr)
 	}
 	return locator, parent, nil
 }

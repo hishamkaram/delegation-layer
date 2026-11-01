@@ -29,7 +29,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.
 	defer taskMaintenanceObserver{root: root, options: deps.supervisorControlScope()}.observe(td)
-	defer func() { fillManagedTaskWorkspace(store, td, deps.Environment, &result) }()
+	defer func() { fillRecordedTaskContext(store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
@@ -61,7 +61,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.
 	defer taskMaintenanceObserver{root: root, options: deps.supervisorOptions}.observe(td)
-	defer func() { fillManagedTaskWorkspace(store, td, deps.environment, &result) }()
+	defer func() { fillRecordedTaskContext(store, td, deps.environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
 	applyTaskObservation(&response, observed.Observation, root)

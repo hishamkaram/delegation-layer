@@ -9,6 +9,7 @@ Start with [installation](installation.md), then the
 | Find commands and operator settings | [CLI reference](cli-reference.md) |
 | Integrate JSON responses | [API index](api.md) |
 | Choose a provider | [Provider guide](providers.md) |
+| Save and explicitly select scoped Teams and Members | [Teams](teams.md) |
 | Interpret task creation, results, and failures | [Result handling](../skills/agent-integration/references/result-handling.md) |
 | Continue a conversation | [Continuation](../skills/agent-integration/references/continuation.md) |
 | Answer or steer an active task | [Interaction](../skills/agent-integration/references/interaction.md) |

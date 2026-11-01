@@ -16,6 +16,8 @@ func BuildContinuationRequest(a DispatchRequest, root string, predecessor *task.
 	continuationArgs.BriefPath = ""
 	continuationArgs.BriefBytes = brief
 	continuationArgs.Cwd = predecessor.CanonicalCwd
+	continuationArgs.TeamTarget = nil
+	continuationArgs.TeamContext = predecessor.Team.Clone()
 	if predecessor.Workspace != nil {
 		binding := *predecessor.Workspace
 		continuationArgs.WorkspaceID = binding.ID

@@ -36,7 +36,7 @@ func TestManagedTaskWorkspaceViewDeadlineRemainsUndetermined(t *testing.T) {
 	sealAppTaskUse(t, resource, use, managedTaskCaptureID)
 
 	readable := resumableTaskProjection(store, use.td)
-	fillManagedTaskWorkspace(store, use.td, os.Environ(), &readable)
+	fillRecordedTaskContext(store, use.td, os.Environ(), &readable)
 	baseline := readable.response.Workspace
 	requireReadableNonretainedView(t, baseline)
 	if readable.response.Continuation.Resumable || readable.response.Continuation.ContinueCommand != "" || readable.response.Continuation.Reason != "managed workspace is "+baseline.State {
@@ -47,7 +47,7 @@ func TestManagedTaskWorkspaceViewDeadlineRemainsUndetermined(t *testing.T) {
 	releaseLock, lockReleased := holdWorkspaceControlLock(t, store, baseline.ID)
 	contended := resumableTaskProjection(store, use.td)
 	before, envelope := contended, taskProjectionWithoutWorkspace(t, contended)
-	fillManagedTaskWorkspace(store, use.td, os.Environ(), &contended)
+	fillRecordedTaskContext(store, use.td, os.Environ(), &contended)
 	requireLockStillHeld(t, lockReleased)
 	requireUnobservedWorkspaceView(t, contended.response.Workspace, baseline)
 	if !contended.response.Continuation.Resumable || contended.response.Continuation.ContinueCommand == "" {
@@ -59,7 +59,7 @@ func TestManagedTaskWorkspaceViewDeadlineRemainsUndetermined(t *testing.T) {
 	releaseLock()
 	<-lockReleased
 	later := resumableTaskProjection(store, use.td)
-	fillManagedTaskWorkspace(store, use.td, os.Environ(), &later)
+	fillRecordedTaskContext(store, use.td, os.Environ(), &later)
 	if !reflect.DeepEqual(later.response.Workspace, baseline) || !reflect.DeepEqual(later.response.Continuation, readable.response.Continuation) {
 		t.Errorf("released view differs from the uncontended view: %+v %+v", later.response.Workspace, later.response.Continuation)
 	}

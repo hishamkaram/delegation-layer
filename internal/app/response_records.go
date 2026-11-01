@@ -37,6 +37,7 @@ type Response struct {
 	RootID            string                     `json:"root_id,omitempty"`
 	TaskID            string                     `json:"task_id,omitempty"`
 	TaskRecord        string                     `json:"task_record,omitempty"`
+	Team              *task.TeamContext          `json:"team,omitempty"`
 	ParentTaskID      string                     `json:"parent_task_id,omitempty"`
 	Status            string                     `json:"status,omitempty"`
 	Admission         string                     `json:"admission"`

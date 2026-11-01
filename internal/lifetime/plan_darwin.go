@@ -8,15 +8,15 @@ func preparePlatformPlan(rootID, ownerKind, taskID string) (Plan, error) {
 	return processGroupPlan(rootID, ownerKind, taskID), nil
 }
 
-func createPreparedPlatformScope(plan Plan) (*Scope, error) {
+func createPreparedPlatformScope(ctx context.Context, plan Plan) (*Scope, error) {
 	ref, err := NewRef(plan.kind, plan.assurance, plan.identifier)
 	if err != nil {
 		return nil, err
 	}
-	return openProcessGroupScope(context.Background(), ref)
+	return openProcessGroupScope(ctx, ref)
 }
 
-func openPreparedPlatformScope(Plan) (*Scope, error) {
+func openPreparedPlatformScope(context.Context, Plan) (*Scope, error) {
 	return nil, ErrScopeAbsent
 }
 

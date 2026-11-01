@@ -95,6 +95,7 @@
       "go:fmt",
       "go:internal/task",
       "go:internal/taskdir",
+      "go:internal/workspace",
       "go:internal/workspace/contract",
       "go:io",
       "go:os",

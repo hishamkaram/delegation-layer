@@ -339,12 +339,9 @@ func (td *TaskDir) loadAndValidatePreparedSetWithReader(brief briefIdentity, rea
 	if err != nil {
 		return nil, nil, "", "", err
 	}
-	var req task.TaskRecord
 	var meta task.MetaRecord
-	if err = task.DecodeStrict(reqBytes, &req); err != nil {
-		return nil, nil, "", "", err
-	}
-	if err = task.ValidateTaskRecord(&req); err != nil {
+	req, err := td.decodeTaskRequest(reqBytes)
+	if err != nil {
 		return nil, nil, "", "", err
 	}
 	if err = task.DecodeStrict(metaBytes, &meta); err != nil {

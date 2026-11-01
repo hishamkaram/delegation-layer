@@ -106,6 +106,7 @@ type TaskRecord struct {
 	BriefSHA256     string            `json:"brief_sha256"`
 	BriefLength     int64             `json:"brief_length"`
 	Workspace       *WorkspaceBinding `json:"workspace,omitempty"`
+	Team            *TeamContext      `json:"team,omitempty"`
 }
 
 // WorkspaceBinding identifies the resource usage owned by this request. The

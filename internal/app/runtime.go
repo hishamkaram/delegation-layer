@@ -45,6 +45,7 @@ Commands:
   checkpoint    Create, observe, list, or remove a Git content checkpoint
   schedule      Manage recurring definitions and inspect executions
   scheduler     Run the independent local scheduler
+  teams         Register, update, inspect, and explicitly select optional Teams
   help          Show this help message
   version       Print version information
 
@@ -86,8 +87,23 @@ Recurring definitions:
   Saving a definition does not start a scheduler or launch a provider.
   History and execution are passive reads; collect TASK_ID recovers publication.
 
+Optional Teams:
+  teams register --scope user|project --definition FILE [--cwd ABS] --json
+  teams show --scope user|project --team ID [--cwd ABS] --json
+  teams update --scope user|project --team ID --expected-revision N --definition FILE [--cwd ABS] --json
+  teams delete --scope user|project --team ID --expected-revision N [--cwd ABS] --json
+  teams list [--cwd ABS] [--limit 50] [--after CURSOR] --json
+  teams default show|clear --cwd ABS --json
+  teams default set --cwd ABS --team-scope user|project --team ID --json
+  dispatch ... --team-scope user|project --team ID --member ID
+  schedule create ... --team-scope user|project --team ID --member ID
+  Use --definition - for stdin. Outside Git, Local scope also requires
+  --project-root ABS. Defaults guide explicit selection; they never auto-route.
+
 Independent scheduler:
-  scheduler run [--root ABS] [--pueue-config ABS] [--runner ABS]
+  scheduler run [--root ABS] [--pueue-config ABS]
+  Requires the automatic managed worker. Use colocated delegate/delegate-run
+  binaries from the same build and omit the advanced --runner override.
   Runs in the foreground until interrupted. Use an external service host for
   caller-independent operation. Existing admitted tasks continue after it stops.
 
@@ -105,6 +121,10 @@ Use --json on task, providers, capabilities, models, preflight, continue, and re
 // hermetic acceptance harness. Production leaves hooks and profile selection at
 // their safe defaults; acceptance supplies a compiled finite profile directly.
 type Dependencies struct {
+	// TeamCatalogPath and Input are explicit command-edge dependencies. An empty
+	// catalog path is resolved from the captured user environment only on demand.
+	TeamCatalogPath string
+	Input           io.Reader
 	// Catalog is the immutable provider composition for this command. When it
 	// is empty, normalized constructs the production catalog once.
 	Catalog                     commonprovider.Catalog
@@ -224,6 +244,9 @@ func (d Dependencies) normalized() Dependencies {
 
 // Run parses and executes one public delegate command.
 func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	if code, handled := execution.RunCommandOwnerMode(args); handled {
+		return code
+	}
 	deps = deps.withCapturedEnvironment()
 	parsed, err := ParseArguments(args)
 	if err != nil {
@@ -240,6 +263,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 			return 1
 		}
 		return 0
+	}
+	if parsed.Command == "teams" {
+		return runTeams(parsed, deps, stdout, stderr)
 	}
 
 	normalized := deps
@@ -336,7 +362,7 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 	case "checkpoint":
 		return checkpointCommand(a, deps)
 	case "schedule":
-		return scheduleCommand(a, deps.storeDependencies())
+		return scheduleCommandWithTeams(a, deps)
 	default:
 		return commandResult{response: newResponse(a.Command), code: 2, err: fmt.Errorf("unknown command %q", a.Command)}
 	}

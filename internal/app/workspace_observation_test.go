@@ -77,7 +77,7 @@ func TestManagedTaskWorkspaceFailureReportsTypedCause(t *testing.T) {
 		}
 	}()
 	result := commandResult{response: newResponse("status")}
-	fillManagedTaskWorkspace(store, td, os.Environ(), &result)
+	fillRecordedTaskContext(store, td, os.Environ(), &result)
 	if result.code != 0 || result.response.Workspace == nil || result.response.Workspace.ReasonCode != "workspace_wake_state_unavailable" || result.response.Workspace.NextAction != "stop_and_report" {
 		t.Fatalf("workspace failure lost its cause or changed task authority: %+v", result)
 	}

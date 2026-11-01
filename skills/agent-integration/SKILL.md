@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration.
+description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. Also manage optional Delegate Teams and explicit Member selection. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration.
 ---
 
 # Delegation Layer
@@ -17,6 +17,11 @@ Ordinary subagents inside the current harness remain available, even when that
 harness is named. A separate CLI session uses Delegate, including another
 instance of your current harness. Discussing, documenting, or configuring a
 tool is local work. Respect an explicit user choice of another integration.
+
+For optional Team management or explicit Member selection, use
+[Teams](references/command-reference.md#teams). Management is local configuration
+through Delegate CLI and does not launch a provider. Teams are never required
+for ordinary delegation.
 
 For recurring tasks, use the [schedule commands](references/command-reference.md#schedules)
 and the independent [scheduler runtime](references/command-reference.md#scheduler-runtime).
@@ -52,7 +57,10 @@ the CLI. A trusted plugin startup hook normally handles bootstrap.
 
 ### 2. Discover only when useful
 
-If no destination was named, use `--auto`. Otherwise resolve the named
+If a Team/Member was requested, inspect the scoped target and follow
+[Member selection](references/command-reference.md#using-a-member). Preserve
+explicit caller choices; do not replace a missing requested Member with another.
+Without a Team target, if no destination was named, use `--auto`. Otherwise resolve the named
 destination through `providers --json` and preserve it with `--provider`.
 Read [providers and capabilities](references/command-reference.md#providers-and-capabilities)
 for discovery and required options. Catalog support is not host readiness;
@@ -146,6 +154,7 @@ predecessor for an exact-session follow-up. The
 ## Details when needed
 
 - [Commands and discovery](references/command-reference.md)
+- [Optional Teams and Members](references/command-reference.md#teams)
 - [Task/result decisions](references/result-handling.md), including conditional offline recheck
 - [Continuation](references/continuation.md)
 - [Interaction](references/interaction.md)

@@ -1,6 +1,8 @@
 package tasklifecycle
 
 import (
+	"errors"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -40,9 +42,6 @@ func createTask(selection supervisorcore.AdmissionSelection, options CreationOpt
 			return creationFailure(result, CreationBrief, admissioncore.WithStage("read-brief", err))
 		}
 	}
-	if err = workspaces.RecordTaskCapture(store, req); err != nil {
-		return creationFailure(result, CreationCapture, admissioncore.WithStage("record-workspace-capture", err))
-	}
 	td, err := store.CreateTask(req.TaskID, &req, brief, &meta)
 	if err != nil {
 		result.TaskRecord = CreationRecordUnknown
@@ -50,6 +49,12 @@ func createTask(selection supervisorcore.AdmissionSelection, options CreationOpt
 		return creationFailure(result, CreationRecord, admissioncore.WithStage("create-task-record", err))
 	}
 	result.TaskRecord = CreationRecordCreated
+	// The canonical task decides the winner before any capture obligation is
+	// bound to its hash. Existing recovery repairs a missing obligation from
+	// that same saved request; submission always follows a successful capture.
+	if err = workspaces.RecordTaskCapture(store, req); err != nil {
+		return creationFailure(result, CreationCapture, admissioncore.WithStage("record-workspace-capture", errors.Join(err, td.Close())))
+	}
 	submitted := SubmitWithProfile(td, &req, &meta, supervisor, profile, SubmissionOptions{RequestedRunner: runner, DefaultRunner: options.Admission.Supervisor.RunnerExecutable, OpenValidationStore: options.OpenValidationStore})
 	result.Submission = &submitted
 	return result

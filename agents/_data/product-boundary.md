@@ -6,7 +6,8 @@ guarantee or restriction. Implemented behavior belongs in the current guides.
 ## What Delegate is
 
 Delegate manages the local lifecycle of one bounded task run by an agent CLI that
-the user installed. It is not a team or general workflow product.
+the user installed. Optional Teams provide reusable task-selection configuration
+without adding general workflow orchestration.
 
 ## Delegate owns
 

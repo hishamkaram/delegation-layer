@@ -16,12 +16,18 @@ func DispatchRecordLookup(requestedTaskID string, exists bool, lookupErr error) 
 }
 
 func WorkspaceDispatchRequest(request DispatchRequest) workspaces.DispatchRequest {
-	return workspaces.DispatchRequest{
+	result := workspaces.DispatchRequest{
 		Isolation: request.Isolation, WorkspaceID: request.WorkspaceID, Base: request.Base,
 		Provider: request.Provider, Auto: request.Auto, Config: request.Config,
 		WorkspaceBudget: request.WorkspaceBudget, Cwd: request.Cwd,
 		HasWorkspaceBinding: request.WorkspaceBinding != nil, RunnerOwnership: supervisorcore.RequestedRunnerOwnership(request.Selection),
 	}
+	if request.TeamContext != nil {
+		// Keep workspace identity about requested intent, not mutable defaults.
+		target, intent := request.TeamContext.Target.Clone(), request.TeamContext.Intent
+		result.Team, result.TeamIntent = &target, &intent
+	}
+	return result
 }
 
 func (result DispatchResult) RecordPresence() TaskRecordPresence {

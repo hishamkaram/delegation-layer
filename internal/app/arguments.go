@@ -68,6 +68,19 @@ type Arguments struct {
 	ScheduleBefore      string
 	ScheduleLimit       int
 
+	TeamAction           string
+	TeamDefaultAction    string
+	TeamScope            string
+	TeamID               string
+	MemberID             string
+	TeamDefinition       string
+	TeamExpectedRevision int64
+	TeamAfter            string
+	TeamLimit            int
+	ProjectRoot          string
+	teamTarget           *task.TeamTarget
+	teamContext          *task.TeamContext
+
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
 	// public argv; continuation admission must reuse that exact authority.
@@ -90,14 +103,9 @@ func ParseArguments(args []string) (Arguments, error) {
 		return Arguments{}, err
 	}
 	a := Arguments{Command: command}
-	if command == "workspace" {
-		return parseWorkspaceArguments(a, rest)
-	}
-	if command == "checkpoint" {
-		return parseCheckpointArguments(a, rest)
-	}
-	if command == "schedule" {
-		return parseScheduleArguments(a, rest)
+	switch command {
+	case "workspace", "checkpoint", "schedule", "teams":
+		return parseManagementArguments(a, rest)
 	}
 	if command == "supervisor" {
 		var action string
@@ -143,6 +151,22 @@ func ParseArguments(args []string) (Arguments, error) {
 	return a, nil
 }
 
+// Management commands have their own subcommand grammar and validation.
+func parseManagementArguments(a Arguments, rest []string) (Arguments, error) {
+	switch a.Command {
+	case "workspace":
+		return parseWorkspaceArguments(a, rest)
+	case "checkpoint":
+		return parseCheckpointArguments(a, rest)
+	case "schedule":
+		return parseScheduleArguments(a, rest)
+	case "teams":
+		return parseTeamsArguments(a, rest)
+	default:
+		return Arguments{}, fmt.Errorf("unknown management command %q", a.Command)
+	}
+}
+
 func parseSupervisorAction(rest []string) (string, []string, error) {
 	for i := 0; i < len(rest); i++ {
 		if strings.HasPrefix(rest[i], "-") {
@@ -177,7 +201,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -252,6 +276,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.StringVar(&a.WorkspaceID, "workspace", "", "retained managed workspace ID")
 	fs.StringVar(&a.Base, "base", "", "committed Git base (default: HEAD)")
 	fs.StringVar(&a.WorkspaceBudget, "workspace-budget", "", "finite workspace helper budget (default: 5m)")
+	registerTeamTargetFlags(fs, a)
 }
 
 // orderFlags permits documented ID --json placement without silently accepting
@@ -493,10 +518,16 @@ func parseReviewTarget(value string) (task.ReviewTarget, error) {
 }
 
 func (a *Arguments) validateDispatchProvider() error {
+	if err := validateTeamTargetInputs(*a); err != nil {
+		return err
+	}
 	if a.Auto {
 		if a.Provider != "" {
 			return errors.New("--auto and --provider cannot be used together")
 		}
+		return nil
+	}
+	if a.Provider == "" && requestedTeamTarget(*a) != nil {
 		return nil
 	}
 	return config.ValidateProvider(a.Provider)

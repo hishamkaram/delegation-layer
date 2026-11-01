@@ -99,6 +99,16 @@ The application owns lifecycle; the Lead owns landing changes. Checkpoint
 pending/busy classifications use workspaces.PendingError over the whole error,
 not a marker match that hides a joined fault.
 
+For Teams changes, [the guide](teams.md) owns user behavior and
+[the architecture](architecture.md#optional-team-selection) names catalog,
+project-identity and immutable-task owners. Exercise the real SQLite catalog,
+CLI stdin/JSON boundaries and saved direct/scheduled task consumers. Keep
+no-Team controls, worktree/clone scope controls, revision/tombstone checks and
+same-ID/continuation cases alongside new-ID latest-default cases. Validate the
+[scheduler stop–update–restart path](cli-reference.md#scheduler-upgrades);
+mixed-version readers are not a compatibility target. Fixture checks do not
+establish native model availability or live agent routing.
+
 Live profile targets include `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-codex-review`, `make acceptance-claude`, `make acceptance-pi`
 and `make acceptance-opencode`. `make acceptance-native` is the explicit full

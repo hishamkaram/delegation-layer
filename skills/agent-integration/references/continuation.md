@@ -49,6 +49,14 @@ by the predecessor, so the exact recorded session must be available there. If
 credentials or settings from another environment, choose a fresh session or
 another provider, or dispatch again to repair the failure.
 
+A Team-targeted predecessor carries its recorded selection context forward
+without reading the catalog. Current Member defaults, deletion or a stale
+project default cannot retarget it. Do not add `--team-scope`, `--team`,
+`--member` or `--project-root` to continuation; supported explicit model,
+effort and budget overrides keep their existing meaning. A separately
+authorized new dispatch with a new ID instead resolves latest Member defaults;
+see [Member selection](command-reference.md#using-a-member).
+
 When the predecessor is bound to a managed workspace, `continue --task` carries
 the recorded workspace, working directory, and provider session to the new task
 ID. The new turn runs in the calling environment. It does not mutate the predecessor's immutable request or

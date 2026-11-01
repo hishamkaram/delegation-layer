@@ -19,9 +19,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if parsed, err := app.ParseArguments(args); err == nil && parsed.Command == "scheduler" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return app.RunContext(ctx, args, stdout, stderr, app.Dependencies{PublisherVersion: version})
+		return app.RunContext(ctx, args, stdout, stderr, app.Dependencies{PublisherVersion: version, Input: os.Stdin})
 	}
-	return app.Run(args, stdout, stderr, app.Dependencies{PublisherVersion: version})
+	return app.Run(args, stdout, stderr, app.Dependencies{PublisherVersion: version, Input: os.Stdin})
 }
 
 func main() {

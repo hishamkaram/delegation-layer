@@ -9,6 +9,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
@@ -18,6 +20,9 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 	response := newResponse("scheduler")
 	if ctx == nil {
 		return failed(response, errors.New("scheduler requires a context"), 2)
+	}
+	if supervisorcore.RequestedRunnerOwnership(supervisorAdmissionSelection(a, deps)) != task.RunnerOwnershipManaged {
+		return failed(response, errors.New("scheduler run requires Delegate's managed worker; omit --runner and invoke the matching colocated delegate/delegate-run build"), 2)
 	}
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -16,10 +17,11 @@ import (
 // each occurrence. Per-turn identities such as a prior session or workspace
 // binding are absent by type.
 type Request struct {
-	Provider     string          `json:"provider,omitempty"`
-	Auto         bool            `json:"auto,omitempty"`
-	CanonicalCwd string          `json:"canonical_cwd"`
-	Config       task.TaskConfig `json:"config"`
+	Provider     string           `json:"provider,omitempty"`
+	Auto         bool             `json:"auto,omitempty"`
+	CanonicalCwd string           `json:"canonical_cwd"`
+	Config       task.TaskConfig  `json:"config"`
+	Team         *task.TeamTarget `json:"team,omitempty"`
 }
 
 // MarshalRequest validates a supplied request without probing the filesystem,
@@ -71,6 +73,10 @@ func encodeRequest(request Request) ([]byte, error) {
 }
 
 func sameRequest(left, right Request) bool {
+	if !reflect.DeepEqual(left.Team, right.Team) {
+		return false
+	}
+	left.Team, right.Team = nil, nil
 	leftTarget, rightTarget := left.Config.ReviewTarget, right.Config.ReviewTarget
 	left.Config.ReviewTarget, right.Config.ReviewTarget = nil, nil
 	if left != right {
@@ -83,7 +89,7 @@ func sameRequest(left, right Request) bool {
 }
 
 func validateRequestFields(request Request) error {
-	if err := validateSelection(request.Provider, request.Auto); err != nil {
+	if err := validateRequestSelection(request); err != nil {
 		return err
 	}
 	if !task.IsCanonicalCwd(request.CanonicalCwd) {
@@ -94,6 +100,19 @@ func validateRequestFields(request Request) error {
 	}
 	if err := task.ValidateRequestedOptions(request.Config); err != nil {
 		return fmt.Errorf("schedule request options: %w", err)
+	}
+	return nil
+}
+
+func validateRequestSelection(request Request) error {
+	if request.Team == nil {
+		return validateSelection(request.Provider, request.Auto)
+	}
+	if err := task.ValidateTeamTarget(*request.Team, true); err != nil {
+		return err
+	}
+	if request.Provider != "" || request.Auto {
+		return validateSelection(request.Provider, request.Auto)
 	}
 	return nil
 }
@@ -116,6 +135,10 @@ func validateSelection(provider string, auto bool) error {
 
 // clone returns a request whose review target no longer aliases the input.
 func (request Request) clone() Request {
+	if request.Team != nil {
+		target := request.Team.Clone()
+		request.Team = &target
+	}
 	if request.Config.ReviewTarget != nil {
 		target := *request.Config.ReviewTarget
 		request.Config.ReviewTarget = &target

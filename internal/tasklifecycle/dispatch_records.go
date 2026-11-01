@@ -19,6 +19,9 @@ type DispatchRequest struct {
 	Isolation, WorkspaceID, Base, WorkspaceBudget string
 	WorkspaceBinding                              *task.WorkspaceBinding
 	Selection                                     supervisorcore.AdmissionSelection
+	TeamTarget                                    *task.TeamTarget
+	TeamContext                                   *task.TeamContext
+	ProjectRoot                                   string
 }
 
 type TaskRecordPresence uint8
@@ -47,6 +50,7 @@ const (
 // execution order. It is not a second task state or an authorization cache.
 type DispatchResult struct {
 	Root, RootID, TaskID, Provider string
+	Team                           *task.TeamContext
 	Record                         TaskRecordPresence
 	Creation                       *CreationResult
 	Existing                       *ExistingTaskResult

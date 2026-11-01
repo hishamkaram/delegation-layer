@@ -1,11 +1,14 @@
 package tasklifecycle
 
 import (
+	"context"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
@@ -18,6 +21,12 @@ type TaskStoreOpener func(root string, create bool) (*taskdir.Store, error)
 // retain their existing semantics.
 type ContinuationProfiles func(task.MetaRecord, []string) admissioncore.Profiles
 
+// MemberLookup is the lifecycle's narrow read port; no catalog is opened for a
+// request without a Team target or for recovery of an already persisted task.
+type MemberLookup func(context.Context, task.TeamTarget, string, string, string) (teamcontract.ResolvedMember, error)
+
+type TeamProjectCheck func(context.Context, task.TeamReference, string, string) error
+
 // DispatchOptions carries one launch scope: Creation.Admission.Profiles owns
 // it, and every workflow consumer derives its environment from that value.
 type DispatchOptions struct {
@@ -28,7 +37,9 @@ type DispatchOptions struct {
 	ContinuationProfiles ContinuationProfiles
 	// Resources checks fresh ordinary admissions only. Nil selects the native
 	// resourceadmission checker when a fresh admission first needs it.
-	Resources ResourceChecker
+	Resources        ResourceChecker
+	Members          MemberLookup
+	CheckTeamProject TeamProjectCheck
 	// resourceAssessment is the invocation-local assessment a continuation
 	// already took for the dispatch it owns, so the dispatch does not sample
 	// again. Freshness is still enforced before the task record is written.

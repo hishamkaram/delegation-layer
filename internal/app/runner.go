@@ -38,6 +38,9 @@ type runnerArguments struct {
 // RunRunner executes one saved task from the supervisor's exact root/task
 // command. It shares the public runtime and never accepts a provider argv.
 func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	if code, handled := execution.RunCommandOwnerMode(args); handled {
+		return code
+	}
 	deps = deps.withCapturedEnvironment()
 	if code, handled := pueue.RunControlOwnerMode(args); handled {
 		return code

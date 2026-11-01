@@ -19,15 +19,16 @@ type Admission struct {
 }
 
 type dispatchIdentity struct {
-	TaskID               string          `json:"task_id"`
-	Provider             string          `json:"provider"`
-	Auto                 bool            `json:"auto"`
-	SourceCwd            string          `json:"source_cwd"`
-	WorkspaceID          string          `json:"workspace_id,omitempty"`
-	Base                 string          `json:"base"`
-	Config               task.TaskConfig `json:"config"`
-	BriefSHA256          string          `json:"brief_sha256"`
-	WorkspaceBudgetNanos int64           `json:"workspace_budget_nanos"`
+	TaskID               string           `json:"task_id"`
+	Provider             string           `json:"provider"`
+	Auto                 bool             `json:"auto"`
+	SourceCwd            string           `json:"source_cwd"`
+	WorkspaceID          string           `json:"workspace_id,omitempty"`
+	Base                 string           `json:"base"`
+	Config               task.TaskConfig  `json:"config"`
+	BriefSHA256          string           `json:"brief_sha256"`
+	WorkspaceBudgetNanos int64            `json:"workspace_budget_nanos"`
+	Team                 *task.TeamTarget `json:"team,omitempty"`
 }
 
 // DispatchRequest contains only immutable workspace admission inputs.
@@ -42,6 +43,8 @@ type DispatchRequest struct {
 	Cwd                 string
 	HasWorkspaceBinding bool
 	RunnerOwnership     string
+	Team                *task.TeamTarget
+	TeamIntent          *task.TeamIntent
 }
 
 // AdmissionFinish separates the original finalization stages for presentation.

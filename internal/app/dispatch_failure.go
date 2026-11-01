@@ -22,6 +22,11 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	if errors.As(err, &staged) {
 		stage = staged.Stage()
 	}
+	if teamDispatchStage(stage) && !errors.Is(err, task.ErrRequestConflict) {
+		failure := teamDispatchFailure(err)
+		failure.Stage = stage
+		return failure
+	}
 
 	code := dispatchFailureCode(err, stage, taskRecord)
 	failure := DispatchFailureResponse{
@@ -278,6 +283,8 @@ func dispatchFailureRecoveryCommand(code, taskRecord string) string {
 }
 
 var dispatchFailureMessages = map[string]string{
+	"team_selection_invalid":             "The requested Team or Member cannot be selected. Inspect its scope, project and current definition; correct the request before trying again.",
+	"team_catalog_unavailable":           "Delegate could not read the Team catalog or verify its project context. Inspect the catalog and project before retrying; no replacement Member was selected.",
 	"invalid_request":                    "Delegate could not accept the dispatch request.",
 	"unsupported_option":                 "The selected provider does not support one of the requested options.",
 	"task_request_conflict":              "The dispatch request conflicts with an existing immutable task.",

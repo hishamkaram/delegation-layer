@@ -11,6 +11,11 @@ import (
 
 func DispatchDigest(a DispatchRequest, id, cwd string, brief []byte, budget time.Duration, resource *workspace.Resource) (string, error) {
 	identity := dispatchIdentity{TaskID: id, Provider: a.Provider, Auto: a.Auto, SourceCwd: cwd, WorkspaceID: a.WorkspaceID, Base: a.Base, Config: a.Config, BriefSHA256: task.ComputeSHA256(brief), WorkspaceBudgetNanos: int64(budget)}
+	if a.Team != nil && a.TeamIntent != nil {
+		target := a.Team.Clone()
+		identity.Team = &target
+		identity.Provider, identity.Auto, identity.Config = a.TeamIntent.Provider, a.TeamIntent.Auto, a.TeamIntent.Config
+	}
 	if resource != nil && a.WorkspaceID != "" {
 		identity.SourceCwd = ""
 		initial := resource.Request()
