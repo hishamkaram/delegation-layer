@@ -18,8 +18,8 @@ harness is named. A separate CLI session uses Delegate, including another
 instance of your current harness. Discussing, documenting, or configuring a
 tool is local work. Respect an explicit user choice of another integration.
 
-For recurring definitions, use the [schedule commands](references/command-reference.md#schedules).
-Runtime scheduling is ongoing: saving a definition does not execute future tasks.
+For recurring tasks, use the [schedule commands](references/command-reference.md#schedules)
+and the independent [scheduler runtime](references/command-reference.md#scheduler-runtime).
 
 ## Boundaries
 
