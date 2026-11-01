@@ -165,7 +165,12 @@ func fixtureRuntime(ctx context.Context) error {
 			return err
 		}
 		content := fmt.Sprintf("%t\n%s\n%s\n%d", present, value, cwd, sid)
-		if err = os.WriteFile(filepath.Join(directory, "context"), []byte(content), 0o600); err != nil {
+		pending := filepath.Join(directory, "context.pending")
+		if err = os.WriteFile(pending, []byte(content), 0o600); err != nil {
+			return err
+		}
+		// The final path is the fixture's publication boundary for its reader.
+		if err = os.Rename(pending, filepath.Join(directory, "context")); err != nil {
 			return err
 		}
 	}
