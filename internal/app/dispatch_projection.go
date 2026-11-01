@@ -6,6 +6,7 @@ func dispatchCommandResult(observed tasklifecycle.DispatchResult) commandResult 
 	response := newResponse("dispatch")
 	response.RootID, response.TaskID = observed.RootID, observed.TaskID
 	response.TaskRecord = taskRecordPresence(observed.Record)
+	response.Team = observed.Team.Clone()
 	result := dispatchPrimaryResult(response, observed)
 	result.response.ResourceAdmission = resourceAdmissionResponse(observed.Resources)
 	if observed.Workspace != nil {
@@ -29,6 +30,9 @@ func dispatchPrimaryResult(response Response, observed tasklifecycle.DispatchRes
 	case tasklifecycle.DispatchOpenState, tasklifecycle.DispatchProviderLookup, tasklifecycle.DispatchPredecessor, tasklifecycle.DispatchOpenTask:
 	case tasklifecycle.DispatchGenerateID, tasklifecycle.DispatchResources:
 		return failed(response, observed.Failure, 1)
+	}
+	if code, teamFailure := teamDispatchExitCode(observed.Failure); teamFailure {
+		fallback = code
 	}
 	return failed(response, observed.Failure, classifyCode(observed.Failure, fallback))
 }

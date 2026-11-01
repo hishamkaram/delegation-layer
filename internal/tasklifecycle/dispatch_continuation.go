@@ -32,7 +32,7 @@ func prepareDispatchContinuation(store *taskdir.Store, options DispatchOptions, 
 	if predecessorID == "" {
 		return options, nil, nil
 	}
-	continuationOptions, meta, err := ContinuationOptionsForTask(store, options, predecessorID)
+	continuationOptions, predecessor, meta, err := continuationOptionsForTask(store, options, predecessorID)
 	if err != nil {
 		return options, nil, err
 	}
@@ -44,28 +44,34 @@ func prepareDispatchContinuation(store *taskdir.Store, options DispatchOptions, 
 		return options, nil, err
 	}
 	request.PriorSession = prior
+	request.Team = predecessor.Team.Clone()
 	return continuationOptions, meta, nil
 }
 
-func ContinuationOptionsForTask(store *taskdir.Store, options DispatchOptions, id string) (result DispatchOptions, predecessorMeta *task.MetaRecord, resultErr error) {
+func ContinuationOptionsForTask(store *taskdir.Store, options DispatchOptions, id string) (DispatchOptions, *task.MetaRecord, error) {
+	result, _, meta, err := continuationOptionsForTask(store, options, id)
+	return result, meta, err
+}
+
+func continuationOptionsForTask(store *taskdir.Store, options DispatchOptions, id string) (result DispatchOptions, predecessor *task.TaskRecord, predecessorMeta *task.MetaRecord, resultErr error) {
 	result = options
 	td, err := store.OpenTask(id)
 	if err != nil {
-		return options, nil, err
+		return options, nil, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	_, meta, err := td.PreparedRecords()
+	predecessor, meta, err := td.PreparedRecords()
 	if err != nil {
-		return options, nil, err
+		return options, nil, nil, err
 	}
 	if meta == nil {
-		return options, nil, errors.New("continuation unavailable: predecessor metadata is not recorded")
+		return options, nil, nil, errors.New("continuation unavailable: predecessor metadata is not recorded")
 	}
 	if options.ContinuationProfiles == nil {
-		return options, nil, task.ErrEvidenceFault
+		return options, nil, nil, task.ErrEvidenceFault
 	}
 	result.Creation.Admission.Profiles = options.ContinuationProfiles(*meta, options.Creation.Admission.Profiles.Environment())
-	return result, meta, nil
+	return result, predecessor, meta, nil
 }
 
 // newSuccessorCreation binds a new continuation task's creation to the

@@ -1,6 +1,6 @@
 # CLI reference
 
-This page indexes task and schedule commands and owns operator supervisor configuration.
+This page indexes task, schedule and Team commands and owns operator supervisor configuration.
 The packaged [command reference](../skills/agent-integration/references/command-reference.md)
 is the shared syntax/default owner; [result handling](../skills/agent-integration/references/result-handling.md)
 owns JSON decisions and exit codes.
@@ -21,6 +21,7 @@ Use `delegate help` for the installed build's command surface.
 | `recheck` | [Offline evidence recovery](../skills/agent-integration/references/result-handling.md#offline-recovery) |
 | `reply`, `steer`, `events` | [Interaction](../skills/agent-integration/references/interaction.md) |
 | `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
+| `teams register/update/delete/list/show`, `teams default show/set/clear` | [Team syntax and responses](../skills/agent-integration/references/command-reference.md#teams) · [Teams guide](teams.md) |
 | `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
 | `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
 | `scheduler run` | [Independent scheduler](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
@@ -59,6 +60,26 @@ it does not replay missed appointments. See the
 History and execution inspection do not require stopping or starting the service.
 Provider settings/accounts remain owned by the user and provider CLI.
 
+### Scheduler upgrades
+
+Before creating or using Team-targeted schedules:
+
+1. Stop the owned resident scheduler through its service host and wait for its
+   previous owner to exit. Preserve independently admitted tasks using the
+   hosting policy above; do not force their teardown to complete an upgrade.
+2. Update the CLI, `delegate-run` and the binary/command used by the scheduler
+   service to the same new build.
+3. Restart the scheduler with that build and the same execution root and
+   intended user configuration context.
+4. Create or use Team-targeted definitions only after that restart.
+
+Old binaries strictly reject the new saved request fields. Mixed-version
+rolling readers are unsupported: do not keep an old scheduler reading new
+targeted definitions. The upgraded runtime preserves existing definitions;
+there is no task-JSON rewrite or automatic service restart. See
+[scheduled Members](teams.md#scheduled-members-and-upgrades) for catalog identity
+and latest-default behavior.
+
 ## Dispatch
 
 See [dispatch](../skills/agent-integration/references/command-reference.md#dispatch)
@@ -69,6 +90,15 @@ and the canonical [manual example](../skills/agent-integration/examples/read-onl
 See [admission results](../skills/agent-integration/references/result-handling.md#task-creation)
 for caller decisions and [architecture](architecture.md#fresh-admission-resource-check)
 for signals and limits.
+
+## Teams
+
+See the [Teams guide](teams.md) for CLI-managed SQLite configuration, scope,
+validation versus availability, revisions and optional project defaults.
+The packaged reference owns [management syntax](../skills/agent-integration/references/command-reference.md#teams),
+[explicit Member targeting](../skills/agent-integration/references/command-reference.md#using-a-member),
+and [admitted task inspection](../skills/agent-integration/references/command-reference.md#team-task-context).
+No-Team delegation requires no catalog setup.
 
 ## Managed Git workspaces
 
@@ -113,6 +143,8 @@ See [offline recovery](../skills/agent-integration/references/result-handling.md
 
 See [task control responses](../skills/agent-integration/references/result-handling.md#task-control-response)
 and [exit codes](../skills/agent-integration/references/result-handling.md#exit-codes).
+Team management uses its own [typed envelope and exits](../skills/agent-integration/references/command-reference.md#teams);
+task responses can include [persisted Team context](../skills/agent-integration/references/command-reference.md#team-task-context).
 
 ### Required provider options
 

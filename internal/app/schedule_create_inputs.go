@@ -49,7 +49,7 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 	if err != nil {
 		return scheduleCreateInput{}, classifyScheduleDirectoryError(err)
 	}
-	request := contract.Request{Provider: a.Provider, Auto: a.Auto, CanonicalCwd: cwd, Config: a.Config}
+	request := contract.Request{Provider: a.Provider, Auto: a.Auto, CanonicalCwd: cwd, Config: a.Config, Team: a.teamTarget}
 	if request.Config.ReviewTarget != nil {
 		target := *request.Config.ReviewTarget
 		request.Config.ReviewTarget = &target

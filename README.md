@@ -7,6 +7,7 @@ and retrieving results with evidence.
 **[Install](https://github.com/hishamkaram/delegation-layer/blob/main/docs/installation.md)**
 · [Example](#ask-naturally)
 · [Providers](https://github.com/hishamkaram/delegation-layer/blob/main/docs/providers.md)
+· [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
 · [Docs](https://github.com/hishamkaram/delegation-layer/blob/main/docs/README.md)
 
 <p align="center">
@@ -24,12 +25,21 @@ and retrieving results with evidence.
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
 | Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
+| Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
 
 ## Ask naturally
 
 Inside Claude, after installing and trusting the integration, try:
 
 > Ask Codex to review the current changes and return confirmed issues and recommendations.
+
+For reusable task selection, try:
+
+> Register a project review Team with a primary Member using Codex defaults.
+> Show its saved configuration, then ask that Member to review the changes,
+> read-only, with a 30-minute budget.
+
+[Teams](docs/teams.md) are optional; direct delegation needs no catalog setup.
 
 The lead loads its installed skill, sends a bounded task through Delegate,
 tracks it, then collects and evaluates the answer. Your provider keeps its

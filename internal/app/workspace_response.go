@@ -13,9 +13,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
-func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, environment []string, result *commandResult) {
+func fillRecordedTaskContext(store *taskdir.Store, td *taskdir.TaskDir, environment []string, result *commandResult) {
 	request, _, err := td.PreparedRecords()
-	if err != nil || request.Workspace == nil {
+	if err != nil {
+		return
+	}
+	result.response.Team = request.Team.Clone()
+	if request.Workspace == nil {
 		return
 	}
 	response := WorkspaceResponse{ID: request.Workspace.ID, Isolation: "git-worktree", State: "unreadable", ReasonCode: "workspace_observation_failed", NextAction: "stop_and_report", EvidenceState: "unknown"}

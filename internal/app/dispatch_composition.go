@@ -1,10 +1,13 @@
 package app
 
 import (
+	"context"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 )
 
 func dispatchRequest(a Arguments, deps Dependencies) tasklifecycle.DispatchRequest {
@@ -13,6 +16,7 @@ func dispatchRequest(a Arguments, deps Dependencies) tasklifecycle.DispatchReque
 		Provider: a.Provider, Auto: a.Auto, Config: a.Config, Cwd: a.Cwd, BriefPath: a.Brief, BriefBytes: a.BriefBytes,
 		Isolation: a.Isolation, WorkspaceID: a.WorkspaceID, Base: a.Base, WorkspaceBudget: a.WorkspaceBudget,
 		WorkspaceBinding: a.workspaceBinding, Selection: supervisorAdmissionSelection(a, deps),
+		TeamTarget: requestedTeamTarget(a), TeamContext: a.teamContext.Clone(), ProjectRoot: a.ProjectRoot,
 	}
 }
 
@@ -31,6 +35,12 @@ func dispatchOptions(deps Dependencies, continuation bool) tasklifecycle.Dispatc
 			return profilesForEnvironment(continuationDependencies(deps, meta), environment)
 		},
 		Resources: deps.ResourceChecker,
+		Members: func(ctx context.Context, target task.TeamTarget, root, cwd, projectRoot string) (teamcontract.ResolvedMember, error) {
+			return lookupTeamMember(ctx, target, root, cwd, projectRoot, deps)
+		},
+		CheckTeamProject: func(ctx context.Context, reference task.TeamReference, cwd, projectRoot string) error {
+			return checkTeamProject(ctx, reference, cwd, projectRoot, deps)
+		},
 	}
 }
 

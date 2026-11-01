@@ -11,7 +11,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `capabilities --provider ID --json` | Read a compiled contract | None |
 | `models --provider ID [--cwd ABS] --json` | Discover model/effort facts | Native inspection, no admitted task |
 | `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
-| `dispatch (--auto \| --provider ID) ... --json` | Admit a bounded turn | At most one launch attempt |
+| `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
 | `logs TASK --json` | Read validated stream descriptors | No launch |
@@ -20,6 +20,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `recheck TASK --json` | Reassess eligible evidence offline | None |
 | `reply`, `steer`, `events` | [Active interaction](interaction.md) | No new launch |
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
+| `teams` | [Optional configuration and Member selection](#teams) | None |
 | `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
 | `scheduler run` | [Independent scheduler](#scheduler-runtime) | Admits due occurrences through normal dispatch |
 
@@ -29,10 +30,12 @@ explicit root across invocations.
 ## Dispatch
 
 ```text
-delegate --root ROOT dispatch (--auto | --provider ID) --brief FILE \
+delegate --root ROOT dispatch [--auto | --provider ID] --brief FILE \
   --cwd ABS [--id TASK_ID] [--permission MODE] [--budget DURATION] \
   [--model MODEL] [--effort EFFORT] [--native-timeout DURATION] \
-  [--interactive] [--review-target TARGET] [--resume-task TASK_ID] --json
+  [--interactive] [--review-target TARGET] [--resume-task TASK_ID] \
+  [--team-scope user|project --team TEAM_ID --member MEMBER_ID] \
+  [--project-root ABS] --json
 ```
 
 | Option | Contract |
@@ -50,6 +53,12 @@ delegate --root ROOT dispatch (--auto | --provider ID) --brief FILE \
 | `--interactive` | Enable advertised native clarification/steering; see [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
 | `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
+| `--team-scope`, `--team`, `--member` | Supply all three to choose one explicit [Member](#using-a-member); no implicit Team or Role-only target. |
+| `--project-root ABS` | Explicit containing root for a non-Git project-scoped Member; invalid without that target or in a Git context. |
+
+Without a Team target, exactly one of `--provider` and `--auto` is required.
+A bound Member may supply an omitted destination; an unbound Member still
+requires an explicit provider or auto. See [Teams](#teams) for saved defaults.
 
 Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a
 native parameter for interactive turns. CCR, Claude, and AGY pass their native
@@ -70,6 +79,111 @@ conflicting with managed workspaces or a predecessor returns `invalid_request`
 with `managed_workspace_runner_conflict` or `continuation_runner_conflict`.
 Correct it only under the returned task-creation guidance.
 
+## Teams
+
+Teams are optional configuration managed through the CLI and stored in SQLite.
+The [Teams guide](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
+owns definition examples, scopes/worktrees, safe edits, optional project defaults,
+availability, saved-task semantics and limitations. Do not edit the catalog as
+JSON or introduce another catalog file. `--root` remains an execution-state
+option; it does not select a Team catalog or initialize execution state for
+management commands.
+
+```text
+delegate teams register --scope user|project --definition FILE_OR_DASH \
+  [--cwd ABS] [--project-root ABS] --json
+delegate teams update --scope user|project --team TEAM_ID --expected-revision N \
+  --definition FILE_OR_DASH [--cwd ABS] [--project-root ABS] --json
+delegate teams delete --scope user|project --team TEAM_ID --expected-revision N \
+  [--cwd ABS] [--project-root ABS] --json
+delegate teams list [--cwd ABS] [--project-root ABS] [--limit N] [--after CURSOR] --json
+delegate teams show --scope user|project --team TEAM_ID \
+  [--cwd ABS] [--project-root ABS] --json
+delegate teams default show --cwd ABS [--project-root ABS] --json
+delegate teams default set --cwd ABS [--project-root ABS] \
+  --team-scope user|project --team TEAM_ID --json
+delegate teams default clear --cwd ABS [--project-root ABS] --json
+```
+
+- `--definition` reads a strict bounded definition from a file, or stdin when
+  its value is `-`. Register takes the Team ID from that definition; update
+  requires it to match `--team`. Update/delete require a positive current
+  `--expected-revision`; read it with show before deciding on a mutation.
+- `--scope user` management takes no project context. `--scope project` requires
+  explicit `--cwd`; non-Git context also requires `--project-root`. List without
+  `--cwd` returns user Teams only; with context it also includes project Teams.
+  List defaults to 50 rows, at most 100. Pass returned `next_cursor` unchanged
+  as the exclusive `--after` cursor, retaining the same project context.
+- Default commands always require project context. Set references a user Team
+  or a Team in that project. Show reports `unset`, `resolved` or `stale`;
+  clear is idempotent. The preference never selects a Member automatically.
+- List, show and default show are passive; they neither initialize/migrate/repair
+  storage nor inspect provider readiness. A missing catalog lists as empty;
+  unreadable/corrupt storage remains an error. Safe partial listings carry
+  diagnostics, including unresolved project context or invalid individual rows.
+
+Management JSON uses `schema_version: 1`, `command: "teams"`, `action`,
+optional `default_action`, and `status` (`ok`, `empty`, `partial`, or `failed`).
+Optional typed fields are `catalog_id`, `team`, `teams`, `next_cursor`,
+`mutation`, `default`, `diagnostics`, `failure`, and `error` with
+`error_truncated` when needed. Show's `team` has `reference`, `revision`,
+and `definition`; list returns summaries, not complete definitions.
+Register/update return `mutation.validation` with `definition: "validated"`,
+`provider_capabilities: "validated"`, and `readiness: "not_checked"`.
+Management never claims that a provider/model can execute.
+
+Handler exit `0` means a successful read/mutation, including empty/no-default
+and safe partial results. Exit `2` means invalid input/definition, an unknown
+explicit target, revision conflict or project/catalog identity mismatch.
+Exit `1` means operational/storage/schema failure. These do not replace task
+or scheduler exit semantics. Argument errors may retain normal stderr usage
+without JSON. Responses are bounded to 2 MiB; a successful mutation with output
+failure is not permission to repeat it. Inspect the same target/default first.
+For a revision conflict, inspect the current revision; for uncertain storage
+or close errors, inspect durable state before deciding on another mutation.
+
+### Using a Member
+
+The lead inspects list/show and optional project-default guidance, then passes
+all three target flags on dispatch or schedule creation. Match a named provider
+through the existing provider catalog; preserve exact caller model/effort IDs.
+Models are advisory, not an admission allowlist. Blocked optional discovery
+does not prevent registration of a valid supported definition.
+
+Caller options override Member defaults. A provider change discards model/effort
+inherited from the previous provider; explicit replacement values survive.
+`--auto` conflicts with a provider-bound Member. Roles grant no permission,
+budget or routing authority. Keep the requested workspace, root and permissions.
+For a Local target, the canonical source project owns identity across linked
+worktrees; reject a mismatch rather than retargeting.
+
+New task IDs and new scheduled occurrences resolve latest defaults once.
+Same-ID replay/recovery and exact-session continuation retain saved selection
+and settings without a catalog read. Continuation accepts its existing supported
+overrides but rejects new Team/Member targeting flags. Preserve explicit target
+failures; no substitution or automatic retry is added. If no Team target was
+requested, ordinary provider/auto delegation stays available without catalog
+setup, even when there is no matching Team or project default.
+
+### Team task context
+
+After a task record is created, inspect the same ID and root:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
+```
+
+Dispatch/status/collect optionally expose top-level `team`, the admitted
+immutable context from the task request. It includes the scoped target and
+catalog ID, Team revision, names/purpose, Roles, Member and original caller
+intent. Human output includes scope, Team ID, Member ID and revision. These
+reads do not consult the catalog; an edit or deletion cannot change that saved
+view. This differs from the live catalog record returned by `teams show`.
+The task's canonical execution fields remain authoritative. Apply normal
+[result decisions](result-handling.md#task-control-response); Team context does
+not prove admission, provider readiness or successful publication.
+
 ## Schedules
 
 The management commands below save and inspect definitions. They do not start
@@ -78,10 +192,12 @@ a scheduler, launch a provider, or prove that a task ran. Start the
 
 ```text
 delegate --root ROOT schedule create --brief FILE --cwd ABS \
-  (--auto | --provider ID) --cron 'MIN HOUR DOM MONTH DOW' \
+  [--auto | --provider ID] --cron 'MIN HOUR DOM MONTH DOW' \
   [--timezone ZONE] [--id SCHEDULE_ID] [--model MODEL] [--effort EFFORT] \
   [--permission MODE] [--budget DURATION] [--native-timeout DURATION] \
-  [--review-target TARGET] --json
+  [--review-target TARGET] \
+  [--team-scope user|project --team TEAM_ID --member MEMBER_ID] \
+  [--project-root ABS] --json
 delegate --root ROOT schedule list [--after SCHEDULE_ID] [--limit N] --json
 delegate --root ROOT schedule show SCHEDULE_ID --json
 delegate --root ROOT schedule pause SCHEDULE_ID --json
@@ -93,6 +209,13 @@ delegate --root ROOT schedule delete SCHEDULE_ID --json
   validates inputs without checking provider installation, authentication or
   readiness. It does not create a managed workspace. Interactive requests,
   continuation/session options and supervisor/runner overrides are unsupported.
+- Optional [Member targeting](#using-a-member) follows dispatch's destination
+  requirements. Creation validates the target and pins its catalog instance ID,
+  while saving raw caller overrides/omissions. Each new occurrence resolves
+  latest defaults; a different catalog instance or missing target fails without
+  fallback. A saved target change needs a new schedule. Follow the operator
+  [scheduler upgrade procedure](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#scheduler-upgrades)
+  before using Team-targeted definitions; mixed-version readers are unsupported.
 - Cron has five fields and minute precision. Lists, ranges, steps and month/day
   names are supported. Sunday is `0` or `SUN`, not `7`. `N/step` runs from `N`
   through that field's maximum. Descriptors such as `@daily`, seconds, years,
@@ -166,6 +289,10 @@ delegate --root ROOT scheduler run [--pueue-config ABS] [--runner ABS] [--json]
 This foreground command requires existing schedule storage. One process owns
 each root; a second fails busy. It uses the service launch environment and the
 saved requested provider choices. Saving a definition never starts the service.
+For Team-targeted schedules, new occurrences read the pinned catalog's latest
+Member defaults through normal admission; existing task IDs retain saved settings.
+Use the same intended user configuration context as creation, or a different
+catalog instance fails admission even when Team/Member IDs match.
 See [operator hosting](https://github.com/hishamkaram/delegation-layer/blob/main/docs/cli-reference.md#scheduler-hosting).
 
 Startup skips past appointments. Expired, overlapping or capacity-limited

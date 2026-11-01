@@ -15,6 +15,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		writeHumanSummary(&output, response)
 	}
 	writeHumanResourceAdmission(&output, response.ResourceAdmission)
+	if selected := response.Team; selected != nil {
+		fmt.Fprintf(&output, "team scope=%s id=%s member=%s revision=%d\n", selected.Target.Team.Scope, selected.Target.Team.TeamID, selected.Target.MemberID, selected.TeamRevision)
+	}
 	writeHumanSupervisor(&output, response.SupervisorControl)
 	writeHumanContinuation(&output, response.Continuation)
 	writeHumanPayload(&output, response.Payload)

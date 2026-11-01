@@ -21,6 +21,7 @@ own shared public procedures and response decisions.
 | Owner | Responsibility |
 | --- | --- |
 | `internal/app` | Compose commands, capture caller context and project CLI responses. |
+| `internal/teams/contract` / `internal/teams` | Pure Team definitions/default merging / the authoritative SQLite catalog, project identity and optional project-default references. |
 | `internal/task` / `internal/taskdir` | Task values and validity rules / durable records and terminal publication. |
 | `internal/provider` | Prepare provider launches and interpret native evidence through pure contracts. |
 | `internal/admission` | Required inspections and their admission evidence. |
@@ -56,6 +57,41 @@ A normal task passes through these boundaries:
 
 The plugin's SessionStart bootstrap precedes this lifecycle. It makes the
 control CLI available; it does not own task admission or execution.
+
+### Optional Team selection
+
+The [Teams guide](teams.md) owns public configuration and selection rules.
+`internal/teams` owns mutable definitions, per-Team revisions/tombstones,
+immutable catalog identity and project-default references. Only explicit CLI
+mutations write them. Passive reads do not create, migrate or repair the catalog.
+Its user-configuration location is independent of execution `--root` and provider
+launch environments.
+
+`internal/task` owns selection intent and admitted context as pure task evidence.
+`internal/tasklifecycle` consumes a narrow Member resolver supplied by app
+composition. For a definitely new task ID, it reads a committed Member once
+before workspace provisioning and merges caller choices through the pure
+contract. Project identity comes from the canonical source workspace through
+the existing Git owner; a prepared linked worktree is revalidated before launch.
+Existing-ID recovery adopts the saved request, including a concurrent creation
+winner. No-Team requests and exact-session continuation do not read the catalog.
+
+Passive project Git probes use `execution.RunIsolatedCommand` in a dedicated
+one-shot helper, so the CLI/scheduler process neither calls `BindOwnerProcess`
+nor becomes a subreaper. The helper owns native process-group identity and
+cleanup on deadline or caller disconnect; the parent joins stream draining and
+`Wait`, without creating a task, supervisor, execution root or journal. This
+read-only ephemeral probe explicitly selects the cooperative backend to avoid
+unrecoverable cgroup allocation; task/guardian backend selection is unchanged.
+
+The existing task create-once boundary remains execution authority. Admitted
+context records the catalog ID, scoped target, revision and explanatory Role
+information; it does not become a second settings store. Dispatch/status/collect
+project that context from saved task evidence, without refreshing the catalog.
+Schedule definitions pin a catalog instance and preserve raw caller choices;
+each new occurrence uses this same resolver. Existing task IDs keep immutable
+settings. See [scheduler upgrades](cli-reference.md#scheduler-upgrades) before
+introducing new targeted definitions to a resident scheduler.
 
 ### Caller context and native settings
 
@@ -279,7 +315,7 @@ the database stores occurrence identity, reservations and cached observations.
 Recurrence calculation is isolated in
 `internal/scheduler/recurrence`; the application composes it with the storage
 interface and keeps provider preparation in the existing execution path.
-Ordinary dispatch, status and collect do not depend on the database.
+Ordinary dispatch, status and collect do not depend on the scheduler database.
 
 History reads occurrence rows and compact skipped intervals from that same
 store. Each occurrence keeps at most its last cached observation, explicitly

@@ -38,6 +38,11 @@ func parseScheduleArguments(a Arguments, rest []string) (Arguments, error) {
 	if err = validateSchedulePositionals(&a, fs.Args()); err != nil {
 		return Arguments{}, err
 	}
+	if a.ScheduleAction == "create" {
+		if err = validateTeamTargetInputs(a); err != nil {
+			return Arguments{}, err
+		}
+	}
 	return a, nil
 }
 
@@ -68,6 +73,7 @@ func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	switch a.ScheduleAction {
 	case "create":
+		registerTeamTargetFlags(fs, a)
 		fs.StringVar(&a.ScheduleID, "id", "", "schedule ID")
 		fs.StringVar(&a.Brief, "brief", "", "brief file")
 		fs.StringVar(&a.Cwd, "cwd", "", "working directory")

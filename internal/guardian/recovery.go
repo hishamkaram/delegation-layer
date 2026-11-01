@@ -225,7 +225,7 @@ func reconcileUnregisteredLifetimeIntent(ctx context.Context, intent *task.Lifet
 	if err != nil {
 		return err
 	}
-	scope, err := lifetime.OpenPrepared(plan)
+	scope, err := lifetime.OpenPreparedContext(ctx, plan)
 	if errors.Is(err, lifetime.ErrScopeAbsent) {
 		return nil
 	}

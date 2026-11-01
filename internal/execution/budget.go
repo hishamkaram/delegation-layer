@@ -37,13 +37,23 @@ func armBudget(clock Clock, budget time.Duration, opts Options) (*budgetOwner, t
 }
 
 func armBudgetUntil(clock Clock, deadline time.Time, opts Options) *budgetOwner {
-	ctx, cancel := context.WithCancel(context.Background())
-	workContext, workCancel := context.WithCancel(deadlineContext{Context: context.Background(), deadline: deadline})
+	return armBudgetUntilContext(context.Background(), clock, deadline, opts)
+}
+
+func armBudgetUntilContext(parent context.Context, clock Clock, deadline time.Time, opts Options) *budgetOwner {
+	// Stop observation is independently joined by the budget owner. Stop
+	// requests receive caller cancellation; native owners detach bounded cleanup.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	stopContext, stopCancel := context.WithCancel(parent)
+	if inherited, ok := parent.Deadline(); ok && inherited.Before(deadline) {
+		deadline = inherited
+	}
+	workContext, workCancel := context.WithCancel(deadlineContext{Context: parent, deadline: deadline})
 	b := &budgetOwner{
 		clock:        clock,
 		deadline:     deadline,
 		timer:        clock.NewTimer(max(0, deadline.Sub(clock.Now()))),
-		cancel:       cancel,
+		cancel:       func() { cancel(); stopCancel() },
 		workContext:  workContext,
 		workCancel:   workCancel,
 		wake:         make(chan struct{}, 1),
@@ -51,17 +61,17 @@ func armBudgetUntil(clock Clock, deadline time.Time, opts Options) *budgetOwner 
 		done:         make(chan struct{}),
 	}
 	ready := make(chan struct{})
-	go b.observe(ctx, b.deadline, opts, ready)
+	go b.observe(ctx, stopContext, b.deadline, opts, ready)
 	<-ready
 	return b
 }
 
-func (b *budgetOwner) observe(ctx context.Context, deadline time.Time, opts Options, ready chan<- struct{}) {
+func (b *budgetOwner) observe(observerContext, ctx context.Context, deadline time.Time, opts Options, ready chan<- struct{}) {
 	defer close(b.done)
 	opts.emit("timer-armed")
 	close(ready)
 	select {
-	case <-ctx.Done():
+	case <-observerContext.Done():
 		return
 	case <-b.timer.C():
 	case <-b.wake:
@@ -124,6 +134,10 @@ func (b *budgetOwner) authorizeAndStart(opts Options, start func() error) error 
 		b.mu.Unlock()
 		return b.authorize(opts, "start-authorized")
 	}
+	if err := b.workContext.Err(); err != nil {
+		b.mu.Unlock()
+		return err
+	}
 	opts.emit("start-authorized")
 	b.mu.Unlock()
 	startErr := start()
@@ -154,6 +168,10 @@ func (b *budgetOwner) authorize(opts Options, event string) error {
 		}
 		<-prepared
 		return errBudgetExpiredBeforeStart
+	}
+	if err := b.workContext.Err(); err != nil {
+		b.mu.Unlock()
+		return err
 	}
 	opts.emit(event)
 	b.mu.Unlock()

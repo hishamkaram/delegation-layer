@@ -31,6 +31,10 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 		return dispatchFailure(result, DispatchGenerateID, "generate-task-id", err)
 	}
 	result.TaskID = id
+	request, err = resolveDispatchTeam(request, options, store, id, cwd)
+	if err != nil {
+		return dispatchFailure(result, DispatchValidate, "resolve-team-member", err)
+	}
 	gate, resourceErr := openResourceGate(request, options, store, id)
 	result.Resources = gate.current()
 	if resourceErr != nil {
@@ -47,6 +51,9 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 		return dispatchFailure(result, DispatchWorkspace, "prepare-workspace", workspaceErr)
 	}
 	cwd = managedCwd
+	if err = validatePreparedTeamProject(request, options, cwd); err != nil {
+		return dispatchFailure(result, DispatchWorkspace, "validate-team-project", err)
+	}
 	if managed != nil {
 		request.WorkspaceBinding = managed.Binding()
 	}
@@ -65,6 +72,7 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 		return dispatchFailure(result, DispatchValidate, "validate-request", err)
 	}
 	base.Workspace = request.WorkspaceBinding
+	base.Team = request.TeamContext.Clone()
 	options, predecessorMeta, err := prepareDispatchContinuation(store, options, &base, request.ResumeTask)
 	if err != nil {
 		return dispatchFailure(result, DispatchPredecessor, "resolve-predecessor", err)
@@ -73,6 +81,12 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 	td, openErr := store.OpenTask(result.TaskID)
 	if openErr == nil {
 		result.Record = RecordCreated
+		if request.ResumeTask == "" {
+			if err = rebaseExistingTeam(td, &base); err != nil {
+				return dispatchFailure(result, DispatchOpenTask, "compare-team-request", errors.Join(err, td.Close()))
+			}
+		}
+		result.Team = base.Team.Clone()
 		existing := DispatchExisting(ExistingTaskOptions{Creation: options.Creation, Selection: request.Selection, RequestedBudget: request.Config.Budget, BriefPath: request.BriefPath}, store, td, base)
 		result.Existing = &existing
 		return result
@@ -85,6 +99,12 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 	creation, selection := newSuccessorCreation(options.Creation, request.Selection, store.Root, predecessorMeta)
 	created := createTask(selection, creation, store, base, brief, request.BriefPath, gate)
 	result.Creation = &created
+	if created.TaskRecord == CreationRecordCreated {
+		result.Team = base.Team.Clone()
+	}
 	result.Resources = gate.current()
+	if request.ResumeTask == "" && base.Team != nil && created.Submission == nil && created.Stage == CreationRecord && teamCreationConflict(created.Err()) {
+		return adoptCreatedTeamWinner(request, options, store, base, result)
+	}
 	return result
 }

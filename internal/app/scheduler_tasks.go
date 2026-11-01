@@ -39,6 +39,7 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 	arguments.Root, arguments.TaskID = tasks.root, request.TaskID
 	arguments.Provider, arguments.Auto = definition.Request.Provider, definition.Request.Auto
 	arguments.Config, arguments.Cwd = definition.Request.Config, definition.Request.CanonicalCwd
+	arguments.teamTarget = definition.Request.Team
 	arguments.Brief, arguments.BriefBytes = "", definition.Brief
 	options := dispatchOptions(tasks.dependencies, false)
 	options.OpenStore = tasks.openStore

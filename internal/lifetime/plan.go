@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -47,10 +48,29 @@ func Prepare(rootID, ownerKind, taskID string) (Plan, error) {
 // CreatePrepared creates exactly the durable plan. It never selects a fallback
 // backend after the plan has been persisted.
 func CreatePrepared(plan Plan) (*Scope, error) {
+	return CreatePreparedContext(context.Background(), plan)
+}
+
+// CreatePreparedContext retains cancellation through native creation and
+// identity checks. Until return, this call owns cleanup of the empty scope.
+func CreatePreparedContext(ctx context.Context, plan Plan) (*Scope, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
 	if err := validatePlanShape(plan); err != nil {
 		return nil, err
 	}
-	return createPreparedPlatformScope(plan)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	scope, err := createPreparedPlatformScope(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, scope.DestroyEmpty(), scope.Release())
+	}
+	return scope, nil
 }
 
 // OpenPrepared opens an existing resource at the exact planned location. It
@@ -58,10 +78,29 @@ func CreatePrepared(plan Plan) (*Scope, error) {
 // Process-group plans have no persistent resource before a launch and report
 // ErrScopeAbsent.
 func OpenPrepared(plan Plan) (*Scope, error) {
+	return OpenPreparedContext(context.Background(), plan)
+}
+
+// OpenPreparedContext retains recovery's cancellation while inspecting an
+// existing resource. Cancellation releases handles without deleting that resource.
+func OpenPreparedContext(ctx context.Context, plan Plan) (*Scope, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
 	if err := validatePlanShape(plan); err != nil {
 		return nil, err
 	}
-	return openPreparedPlatformScope(plan)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	scope, err := openPreparedPlatformScope(ctx, plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, scope.Release())
+	}
+	return scope, nil
 }
 
 // OpenRegistered reopens a registered scope through its original durable

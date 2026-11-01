@@ -23,6 +23,9 @@ func CompareRequests(a, b *TaskRecord) bool {
 	if !reflect.DeepEqual(a.RequestedConfig, b.RequestedConfig) {
 		return false
 	}
+	if !reflect.DeepEqual(a.Team, b.Team) {
+		return false
+	}
 	if !sameWorkspaceBinding(a.Workspace, b.Workspace) {
 		return false
 	}

@@ -123,11 +123,21 @@ type SupervisedOptions struct {
 // This function reuses the ordinary budget owner and retains its stop observer
 // after work returns. Work must join every owned command and capture itself.
 func RunSupervised(deadline time.Time, opts SupervisedOptions, work func(PreflightScope) error) (workErr, stopErr error) {
+	return RunSupervisedContext(context.Background(), deadline, opts, work)
+}
+
+// RunSupervisedContext inherits values and cancellation for work authorization.
+// Cancellation never transfers process ownership: work must join its commands,
+// and the existing Lifetime owns termination and its bounded cleanup policy.
+func RunSupervisedContext(ctx context.Context, deadline time.Time, opts SupervisedOptions, work func(PreflightScope) error) (workErr, stopErr error) {
+	if ctx == nil {
+		return errors.New("nil supervised inspection context"), nil
+	}
 	if deadline.IsZero() || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
 	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime}
-	budget := armBudgetUntil(executionOptions.clock(), deadline, executionOptions)
+	budget := armBudgetUntilContext(ctx, executionOptions.clock(), deadline, executionOptions)
 	workErr = budget.runScoped(executionOptions, work)
 	if workErr == nil {
 		workErr = budget.authorize(executionOptions, "inspection-completed-before-deadline")
@@ -140,8 +150,11 @@ func RunSupervised(deadline time.Time, opts SupervisedOptions, work func(Preflig
 		workErr = errors.Join(workErr, errBudgetExpiredBeforeStart)
 	}
 	stopErr = budget.await()
+	workErr = errors.Join(workErr, ctx.Err())
 	if opts.Lifetime != nil {
-		workErr = errors.Join(workErr, opts.Lifetime.CloseTask(context.Background()))
+		// Work cancellation must not revoke cleanup of an owned native scope.
+		// The Lifetime implementation retains its existing bounded stop policy.
+		workErr = errors.Join(workErr, opts.Lifetime.CloseTask(context.WithoutCancel(ctx)))
 	}
 	return workErr, stopErr
 }

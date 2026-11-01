@@ -1,8 +1,15 @@
 package workspace
 
-import "github.com/hishamkaram/delegation-layer/internal/workspace/internal/git"
+import (
+	"github.com/hishamkaram/delegation-layer/internal/workspace/contract"
+	"github.com/hishamkaram/delegation-layer/internal/workspace/internal/git"
+)
 
 // Git is the sole managed Git command boundary. It retains its existing API.
 type Git = git.Git
 
 type CommandRunner = git.CommandRunner
+
+type RepositoryIdentity = contract.RepositoryIdentity
+
+var ErrNotGitRepository = contract.ErrNotGitRepository

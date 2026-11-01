@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -31,6 +32,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if exit, handled := execution.RunCommandOwnerMode(os.Args[1:]); handled {
+		os.Exit(exit)
+	}
 	if exit, handled := runLifetimeLaunchGateMode(os.Args[1:], os.Stderr); handled {
 		os.Exit(exit)
 	}

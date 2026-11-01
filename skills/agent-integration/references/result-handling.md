@@ -18,8 +18,15 @@ Queue state is not a liveness value. Optional `status` describes
 `timed_out`, `interrupted`, or `blocked`. Responses can also include
 `task_record`, `parent_task_id`, `capability`, `continuation`,
 `supervisor`, `raw`, `pending`, `stops`, `stop`, `failure`,
-`resource_admission`, `diagnostics`, `recheck`, `workspace`, and `error`
+`resource_admission`, `diagnostics`, `recheck`, `workspace`, `team`, and `error`
 with `error_truncated` where applicable.
+
+Optional `team` on dispatch/status/collect is admitted immutable Team context
+from the saved task request, not a fresh catalog lookup or execution settings
+owner. It retains scope/project, catalog ID, Team revision, names, purpose,
+Member, Roles and original caller intent after catalog edits/deletion. See
+[Team inspection](command-reference.md#team-task-context). Its presence is not
+admission, readiness, liveness or publication authority.
 
 `outcome` is terminal authority after validation. Its verdict, evidence
 digest, and payload descriptor describe the accepted or rejected evidence.
