@@ -319,8 +319,9 @@ Ordinary dispatch, status and collect do not depend on the scheduler database.
 
 ### User-started scheduler host
 
-The host design is under implementation; the following ownership contract is
-not a claim of completed integrated or native acceptance.
+The foreground host implements the ownership below. Implementation presence
+does not establish native or real-provider acceptance for a particular build
+or platform; those require the explicit checks described below.
 
 The user starts `delegate --root ROOT scheduler serve` in an independent
 terminal or tmux pane. The foreground host owns one exclusive host lease H per

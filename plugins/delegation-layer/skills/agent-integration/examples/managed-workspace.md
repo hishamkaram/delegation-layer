@@ -34,17 +34,34 @@ else
   status_exit=$?
 fi
 printf '%s\n' "$status_exit" >"$RESPONSE.status.exit"
+cat "$RESPONSE.status"
+```
+
+Read the saved status JSON and apply
+[Observe and collect](../references/result-handling.md#observe-and-collect)
+before running another command. Run the collection below only when that
+guidance calls for it.
+
+```sh
 if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json >"$RESPONSE.collect"; then
   collect_exit=0
 else
   collect_exit=$?
 fi
 printf '%s\n' "$collect_exit" >"$RESPONSE.collect.exit"
+cat "$RESPONSE.collect"
 ```
 
-Continue observing that created task when collection exits `3`. Wait for the
-workspace to return to `state: retained` and inspect its final capture. Only
-after the Lead explicitly chooses release, run:
+Apply that same decision order to the collection JSON before treating exit `3`
+as pending. Cancellation, `failure.code: "task_cancelled"` or
+`failure.next_action: "stop_and_report"` ends pending polling; do not continue
+the task or dispatch a replacement. Bounded
+[failure diagnosis](../references/result-handling.md#failure-diagnosis)
+remains available. Keep observing the same task with a finite watch only when
+the canonical guidance calls for it.
+
+Before release, wait for the workspace to return to `state: retained` and inspect
+its final capture. Only after the Lead explicitly chooses release, run:
 
 ```sh
 if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" workspace release WORKSPACE_ID \
@@ -62,10 +79,11 @@ Follow the same result decisions rather than assuming either response is
 completed cleanup.
 
 Save each response and exit code once. A created task is observed with
-`status` first and collected in the foreground. Exit `3` means pending, not
-success; continue observing the same task. The Lead reviews the capture and
-owns landing any changes. `workspace release` is explicit; no automatic
-apply, commit, branch merge, TTL eviction, or provider-CLI fallback occurs.
+`status` first and collected in the foreground, following the canonical
+observation decisions before each next step. Exit `3` alone is not a reason
+to keep polling. The Lead reviews the capture and owns landing any changes.
+`workspace release` is explicit; no automatic apply, commit, branch merge,
+TTL eviction, or provider-CLI fallback occurs.
 
 ## Fork from a checkpoint
 

@@ -50,13 +50,18 @@ lifecycle or native guidance only when the change affects those boundaries.
    must not be treated as fallback. Present empty or contradictory output is
    evidence. Verify writer completion at process exit and stream EOF; a stable
    file alone is insufficient.
-   For continuation, supply `PreparedProfile.Identity` using the existing
-   bounded `execution.IdentityObserver` interface. Report validated session
-   identity through its runner-owned callback so the core persists the session
-   reference. Returning a session from the sealed-evidence interpreter alone
-   does not create that reference. Test chunked observation, identity mismatch,
-   parser bounds and callback errors, then prove fresh-to-resume dispatch with
-   the compiled CLI.
+   For finite profiles with continuation, supply `PreparedProfile.Identity`
+   using the bounded `execution.IdentityObserver` interface. Non-interactive
+   machine channels use `PreparedProfile.Protocol`; explicit native user
+   interaction uses `PreparedProfile.Interaction`. Follow the
+   [canonical transport selection rules](../../internal/execution/interaction_contract.go):
+   a machine Protocol cannot be combined with Identity or Interaction. The
+   selected native protocol is the sole stdout observer. Each selected path
+   reports validated session identity through its runner-owned callback so the
+   core persists the session reference. Returning a session from the
+   sealed-evidence interpreter alone does not create that reference. Test
+   chunked observation, identity mismatch, parser bounds and callback errors,
+   then prove fresh-to-resume dispatch with the compiled CLI.
 3. Register the adapter once in the explicit catalog. `Registration.Prepare`
    accepts the shared `PrepareCandidate` hook. For an ordinary finite profile
    factory, use `provider.ReadyCandidate(Prepare)`; no inspection implementation
@@ -79,9 +84,11 @@ lifecycle or native guidance only when the change affects those boundaries.
    for ordinary discovery. Use `make test-native-harness` as a focused target;
    the final aggregate already includes these Python tests.
 5. Run the provider through the shipped dispatcher/runner with isolated pueue,
-   finite stdin followed by EOF, existing authentication, and the exact plan
-   budgets. Inspect sealed raw evidence and filesystem effects directly; do not
-   use direct signals, shell wrappers, or global configuration changes.
+   existing authentication, and the exact plan budgets. Finite profiles receive
+   the brief on stdin followed by EOF. Machine Protocol and native Interaction
+   profiles exchange core-owned frames until native completion closes stdin.
+   Inspect sealed raw evidence and filesystem effects directly; do not use
+   direct signals, shell wrappers, or global configuration changes.
 6. Match filesystem controls to the advertised native mode. Unattended write
    modes must prove creation, editing, and shell execution from filesystem and
    sealed evidence; they do not promise outside-workspace denial. Preserve
@@ -110,9 +117,11 @@ lifecycle or native guidance only when the change affects those boundaries.
 
 - Provider behavior is contained behind a real narrow boundary; shared lifecycle,
   capture, sealing, and publication code is reused without exceptions.
-- Success requires valid versioned sealed evidence, matching identities, and a
-  non-whitespace answer; conflict, refusal, timeout, or unsealed evidence does
-  not publish.
+- Committed success requires valid versioned sealed evidence, matching
+  identities, a non-whitespace answer and a satisfied success predicate.
+  A valid sealed rejected interpretation may publish a rejected `outcome.json`
+  and rejection payload.
+  Unsealed evidence or evidence/identity validation errors prevent publication.
 - Unit/fault tests and required supervisor/live acceptance pass with sanitized
   evidence, or a missing prerequisite is recorded as `BLOCKED`.
 - Historical collection remains available without the current executable, and

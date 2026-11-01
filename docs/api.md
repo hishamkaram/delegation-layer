@@ -53,8 +53,12 @@ See [observation and result decisions](../skills/agent-integration/references/re
 
 ## Operator integration limits
 
-Complete JSON responses are bounded to 1 MiB. Oversized diagnostic text is
-shortened while authority fields and descriptors are retained.
+Ordinary complete JSON responses are bounded to 1 MiB.
+[Saved-schedule detail](../skills/agent-integration/references/command-reference.md#schedules)
+responses containing the saved request and
+[Team management responses](../skills/agent-integration/references/command-reference.md#teams)
+have a 2 MiB bound. Task/schedule envelopes can shorten oversized diagnostic
+text to fit their bound while retaining authority fields and descriptors.
 Native event streams and answer files have their own evidence bounds; they
 are not embedded as unrestricted text in the control envelope.
 

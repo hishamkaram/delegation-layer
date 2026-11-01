@@ -2,11 +2,24 @@
 
 ## Development setup
 
-Use the Go release in [`.go-version`](../.go-version), Python 3.12, Node.js 22
-or newer and repository-local pinned tools. `make tool-versions` checks the
-compiler with GOTOOLCHAIN unset or local. Node is for installer/plugin checks;
+These repository guides describe main; published installs may lag. For a source
+build, install the Go release in [`.go-version`](../.go-version) yourself and put
+it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js 22 or
+newer and repository-local pinned tools. Node is for installer/plugin checks;
 Python is for repository tooling and black-box tests, not the Go CLI runtime.
-Use `make tools` to install the project's tools under ignored bin/.
+Run `make tools` to install the project's tools under ignored `bin/`; it does
+not install Go. Then run `make build`, which requires both that compiler and the
+pinned tools checked by `make tool-versions`. Keep the native `bin/delegate`
+and `bin/delegate-run` from the same build colocated.
+
+Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
+relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
+`pueued` must sit beside the resolved client, rather than elsewhere on `PATH`.
+`make build` does not supply that pair. Runtime compatibility follows required
+command/schema behavior; `4.0.4` is the
+[test download](../scripts/install-test-supervisor.sh) and
+[fixture baseline](../internal/pueue/testdata/README.md), not a runtime version
+pin or provider allowlist.
 
 Keep the behavior, affected area, non-goals and done condition in the existing
 plan. [AGENTS](../AGENTS.md) owns collaboration/scope defaults; load only the
@@ -14,10 +27,13 @@ specialized rule or skill relevant to the work.
 
 ## Development checks
 
-Run focused tests while editing. Known documentation, skill-content, and
-diagram changes use `make check-docs`. Text-only pull requests and pushes to
-main both use the light content checks. Runtime, install/build logic, CI policy,
-and uncertain or mixed changes use the full project gate on stable source:
+Run focused tests while editing. Recognized documentation, skill-content, and
+diagram changes use `make check-docs`. Pull requests and pushes to main use the
+light content checks only when every changed entry matches the content paths
+and ordinary non-executable file modes in the authoritative
+[CI selector](../scripts/ci_scope.py). Unknown paths, including historical
+fixtures under `internal/`, unexpected modes, runtime, install/build logic, CI
+policy, and uncertain or mixed changes use the full project gate on stable source:
 
 ```sh
 make check

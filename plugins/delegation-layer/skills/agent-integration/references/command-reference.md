@@ -22,7 +22,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `workspace`, `checkpoint` | [Git resources](workspaces.md) | Helpers, not provider turns |
 | `teams` | [Optional configuration and Member selection](#teams) | None |
 | `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
-| `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
+| `scheduler serve/status/stop` (when supported), `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
 
 Prefix every task command with `delegate --root ROOT`, using the same
 explicit root across invocations.
@@ -186,13 +186,15 @@ not prove admission, provider readiness or successful publication.
 
 ## Schedules
 
-The management commands below save and inspect definitions. Create/resume check
-for a compatible live [scheduler host](#scheduler-runtime) after saving; they do
-not start one, launch a provider themselves, or prove that a task ran. Without a
-host, retain the saved ID and give the returned `scheduler.serve_command` argv
-array intact to the user for an independent terminal or tmux pane. Never start
-that persistent host inside the agent's bounded task or submit another create
-to obtain a running host.
+The management commands below save and inspect definitions; they do not start a
+scheduler, launch a provider themselves, or prove that a task ran. On builds with
+[host controls](#scheduler-runtime), create/resume check for a compatible live
+host after saving. When a response includes `scheduler.serve_command`, retain
+the saved ID and give that argv array intact to the user for an independent
+terminal or tmux pane. For run-only builds, use the
+[compatibility instructions](#scheduler-runtime); do not expect those host fields.
+Never start a persistent scheduler inside the agent's bounded task or submit
+another create to obtain a running scheduler.
 See [definition and host results](result-handling.md#schedule-definition-and-host-results).
 
 ```text
@@ -253,9 +255,9 @@ delegate --root ROOT schedule delete SCHEDULE_ID --json
 
 Handler results use exit `0` for confirmed completion/advisory warnings, `2` for
 invalid input/state transitions and `1` for not-found, conflicts or operational
-failures. Create/resume use exit `3` for saved definitions needing user host start
-or pending host readiness; keep the same ID and follow
-[result handling](result-handling.md#schedule-definition-and-host-results).
+failures. On builds with host controls, create/resume also use exit `3` for saved
+definitions needing user host start or pending host readiness; keep the same ID
+and follow [result handling](result-handling.md#schedule-definition-and-host-results).
 `--json` applies to handler responses; argument/usage errors retain the CLI's
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
@@ -292,9 +294,10 @@ for freshness, no-result states, response bounds, exit codes and recovery.
 
 ## Scheduler runtime
 
-Use `serve`, `status` and `stop` to manage the user-started host. Check
-`delegate help` for the installed build's command surface. `run` is the
-compatibility foreground path.
+Check `delegate help` for the installed build's command surface. Use `serve`,
+`status` and `stop` only when that help advertises them; prefer `serve` for managed
+recovery. The signatures below describe the current command surface. Keep the
+same explicit absolute `ROOT` used by the schedule commands.
 
 ```text
 delegate --root ROOT scheduler serve
@@ -303,19 +306,30 @@ delegate --root ROOT scheduler stop
 delegate --root ROOT scheduler run [--pueue-config ABS] [--json]
 ```
 
+If installed help offers only `scheduler run`, the user runs
+`delegate --root ROOT scheduler run` in an independent terminal or tmux pane and
+leaves it in the foreground. Ctrl-C in its original pane stops it; it has no
+automatic child restart. Keep the saved schedule ID and inspect
+[history and execution](#schedule-history-and-execution) for actual occurrences.
+Do not issue unsupported `scheduler status` or `scheduler stop` commands, or
+expect `start_required` or `scheduler.serve_command` fields from that build.
+The managed-host controls and response fields below apply only when installed
+help supports them.
+
 The user starts one foreground `serve` host per canonical execution root in an
 independent terminal or tmux pane and leaves it running. It manages every saved
-schedule in that root. Agents give the exact returned argv array to the user; they
-must not start the persistent host inside their own bounded task. The guard
-recognizes an explicit Delegate task-scope marker and, on Linux, native Delegate
+schedule in that root. When returned, agents give the exact
+`scheduler.serve_command` argv array to the user. Agents must not start either
+persistent scheduler command inside their own bounded task. The guard recognizes
+an explicit Delegate task-scope marker and, on Linux, native Delegate
 cgroup membership. It does not reconstruct guardian ownership or detect every
 enclosing ancestor. A successful check or missing marker does not prove
 independent placement; independent user launch remains required. Delegate
 installs no OS service, enables no reboot/login startup and
 does not automatically launch a detached host.
 
-`scheduler.serve_command` preserves spaces and shell metacharacters as separate
-arguments. Human output also prints JSON argv, not an unquoted shell string.
+When present, `scheduler.serve_command` preserves spaces and shell metacharacters
+as separate arguments. Human output also prints JSON argv, not an unquoted shell string.
 Preserve those boundaries; see the [scheduler response fields](result-handling.md#schedule-definition-and-host-results).
 
 Serve requires existing schedule storage; create owns initialization. A second
@@ -365,8 +379,9 @@ path. Independently admitted tasks retain their own supervisors and budgets.
 See [host result decisions](result-handling.md#schedule-definition-and-host-results).
 
 `scheduler run` runs the foreground runtime directly and remains a compatibility
-path without automatic child restart. It shares root ownership with serve and
-announces its current foreground generation, which an older managed-host stop
+path without automatic child restart. On builds with host controls, it shares
+root ownership with serve and announces its current foreground generation,
+which an older managed-host stop
 receipt cannot hide. Status reports `scheduler.state: foreground`.
 `scheduler stop` does not terminate the raw invocation: it returns
 `stop_accepted: false` and `next_action: stop_foreground_runtime`. The user ends
@@ -377,8 +392,10 @@ foreground host path; see [operator hosting](https://github.com/hishamkaram/dele
 Serve and run require the automatic managed worker. Use colocated `delegate`
 and `delegate-run` binaries from the same build and omit the advanced `--runner`
 override. An override selects custom ownership even when it names the bundled
-worker; startup rejects it with exit `2` before opening storage or acquiring a
-lease. Ordinary explicit custom-runner dispatch and continuation retain their
+worker. `scheduler run` rejects it with exit `2` before opening storage or
+acquiring a lease. `scheduler serve` checks existing state and schedule storage
+before rejecting the override with exit `2`, so a storage error can take
+precedence. Ordinary explicit custom-runner dispatch and continuation retain their
 existing compatibility rules. Historical custom-runner claims are not
 automatically repaired or released.
 

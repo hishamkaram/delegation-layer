@@ -8,6 +8,7 @@ and retrieving results with evidence.
 · [Example](#ask-naturally)
 · [Providers](https://github.com/hishamkaram/delegation-layer/blob/main/docs/providers.md)
 · [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
+· [Start recurring tasks](docs/getting-started.md#recurring-tasks)
 · [Docs](https://github.com/hishamkaram/delegation-layer/blob/main/docs/README.md)
 
 <p align="center">
@@ -54,6 +55,10 @@ for activation and limits.
 
 For a manual CLI task, use the packaged
 [read-only example](skills/agent-integration/examples/read-only-task.md).
+
+For recurring work, follow the [scheduler walkthrough](docs/getting-started.md#recurring-tasks)
+to save a definition, start the scheduler in your own terminal or tmux pane,
+inspect its first result and stop or restart it.
 
 ## Help and contributing
 

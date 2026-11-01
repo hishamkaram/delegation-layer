@@ -42,7 +42,11 @@ This document specifies the non-negotiable engineering floor for the repository.
 - **Sequential Gate:** The root [Makefile](../../Makefile) `check` target is
   authoritative. Keep this contract aligned by referring to that recipe
   rather than copying its command sequence here.
-- **Race Detection**: All unit and integration tests run under `-race -count=1`.
+- **Race Detection**: The full Go unit and integration gate requires
+  `-race -count=1` via `make test-race`. The narrower `make check-docs` target
+  runs one Go documentation-consistency test with `-count=1` and without
+  `-race`; it does not establish runtime or race coverage. Runtime changes
+  retain the full Go race requirement.
 - **Unit Testing**: Pure unit tests exercise local error branches, writer
   failures, and boundaries with injected in-memory mocks and no background or
   external subprocesses.
