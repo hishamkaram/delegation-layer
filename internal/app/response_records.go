@@ -66,12 +66,15 @@ type Response struct {
 	Checkpoint        *CheckpointResponse        `json:"checkpoint,omitempty"`
 	// Checkpoints is set only by a successful list. The pointer keeps an
 	// empty page as [] there while every other command omits the field.
-	Checkpoints      *[]workspacescore.CheckpointDescription `json:"checkpoints,omitempty"`
-	CheckpointCursor string                                  `json:"checkpoint_cursor,omitempty"`
-	Schedule         *ScheduleResponse                       `json:"schedule,omitempty"`
-	Schedules        *[]ScheduleListRow                      `json:"schedules,omitempty"`
-	ScheduleCursor   string                                  `json:"schedule_cursor,omitempty"`
-	ScheduleWarnings []ScheduleWarning                       `json:"schedule_warnings,omitempty"`
+	Checkpoints        *[]workspacescore.CheckpointDescription `json:"checkpoints,omitempty"`
+	CheckpointCursor   string                                  `json:"checkpoint_cursor,omitempty"`
+	Schedule           *ScheduleResponse                       `json:"schedule,omitempty"`
+	Schedules          *[]ScheduleListRow                      `json:"schedules,omitempty"`
+	ScheduleCursor     string                                  `json:"schedule_cursor,omitempty"`
+	ScheduleWarnings   []ScheduleWarning                       `json:"schedule_warnings,omitempty"`
+	ScheduleHistory    *ScheduleHistoryResponse                `json:"schedule_history,omitempty"`
+	ScheduleExecution  *ScheduleExecutionResponse              `json:"schedule_execution,omitempty"`
+	ScheduleQueryError *ScheduleQueryErrorResponse             `json:"schedule_query_error,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without

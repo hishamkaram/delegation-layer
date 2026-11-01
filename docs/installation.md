@@ -109,6 +109,22 @@ delegate providers --json
 The provider catalog describes compiled support. A task still needs the
 selected provider's native runtime and login.
 
+## Recurring-task setup
+
+Use the same explicit state root for schedule management, the scheduler and
+result inspection. Create the first definition with
+[`schedule create`](../skills/agent-integration/references/command-reference.md#schedules);
+it prepares absent schedule storage without launching a provider. Existing
+compatible definitions and ordinary task state are retained. Incompatible or
+unsafe database storage is refused; see [storage and migration](architecture.md#scheduler-storage).
+
+Before hosting the scheduler, make the selected provider CLI, native login and
+saved workspace usable from the service's environment. An interactive terminal's
+PATH or login context does not establish service readiness. Follow
+[scheduler hosting](cli-reference.md#scheduler-hosting) to start, stop and restart
+the foreground command through your chosen host. Delegate does not install or
+register a scheduler service for you.
+
 ## Updates
 
 Update a plugin through its host plugin manager. For a standard Skills install,

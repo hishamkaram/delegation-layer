@@ -1,7 +1,8 @@
 """Run native scheduler acceptance; Root supplies the current CLI/runner builds.
 
 Usage: python3 scripts/acceptance_scheduler.py --scenario all --output FRESH_DIRECTORY
-Each case observes two actual UTC minute ticks within a four-minute watchdog.
+The successive case covers three actual UTC ticks, failure and restart within
+five minutes; overlap/stop covers two ticks within four minutes.
 The controlled pi fixture performs no AI requests. See --help for binary paths.
 """
 

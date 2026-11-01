@@ -114,6 +114,75 @@ the report. They are bounded diagnostics, not a new recovery instruction.
 Follow `failure.next_action`; do not infer provider authentication or settings
 from an inspection-worker or supervisor-observation failure.
 
+## Scheduled execution results
+
+Use [schedule history and execution](command-reference.md#schedule-history-and-execution)
+for passive reads. Their exit `0` means inspection completed, not that a
+provider succeeded. A rejected or pending task can appear in a successful read;
+these commands neither use exit `4` for rejection nor wait for publication.
+Exit `2` means invalid input; `1` means an operational, not-found, database-busy
+or evidence error. Argument/usage errors retain the normal stderr behavior.
+Responses keep the ordinary 1 MiB limit without truncating authoritative IDs,
+cursors or descriptors. If a history page exceeds it, request fewer entries.
+
+History's `schedule_history.entries` mixes `kind: "occurrence"` and
+`kind: "skip"` rows. An occurrence's `observation.provenance` is `cached` or
+`unobserved`; `observed_at` belongs to that cached observation. It is not the
+time of a new liveness check. `next_before`, when present, is the next-page
+cursor. The reservation and its release are separate from that observation.
+
+Execution detail reads validated local facts for the selected task. It keeps
+them separate from the cached observation and does not claim live supervisor
+or process knowledge. `schedule_execution.occurrence` contains the scheduler
+facts; `local_evidence.provenance: "validated_local"` identifies the separate
+local read. `complete: true` means inspection completed, not that execution
+finished. `task_presence` is `present` or `absent`; missing task files do not
+erase the occurrence. A read error can retain the occurrence with `complete:
+false`, a classified `schedule_query_error.code` and the command's `error`.
+A teardown error can retain validated facts and `complete: true`, while still
+returning exit `1` with `schedule_query_error.code: "query_failed"`.
+Missing timestamps remain unknown; publication has no fabricated timestamp.
+Unsealed logs report availability, not immutable evidence.
+The payload and recorded captures are this MVP's artifacts; the saved schedule
+does not request managed-workspace or checkpoint capture.
+
+| Recorded fact | Meaning and action |
+| --- | --- |
+| Skipped interval | No task was admitted for those appointments. Keep the stored reason; do not expand it into tasks or replay it. |
+| Unreleased occurrence, task directory absent | The occurrence is armed, not proven successful or safely repeatable. Keep its task ID; the runtime owns reservation recovery. |
+| Validated never-created or never-started disposition | No answer is required. Publication may remain `unknown`; do not wait for a result that was never produced. |
+| Reservation released | This permits future scheduling; it does not prove successful execution, publication or current availability of referenced files. |
+| Committed or rejected publication | Validate the outcome and descriptors, then apply [normal result handling](#observe-and-collect). A successful passive read does not change the recorded verdict. |
+| Partial, conflicting or unreadable evidence | Keep independently validated occurrence facts and report the inspection error. Absence of one dependency is not proof the task never started. |
+
+At proven native closure, the runtime makes one non-watching collection attempt
+from existing evidence before saving its observation and release. A collection
+diagnostic does not invalidate independently proven closure when the subsequent
+local evidence read validates. Uncertain identity or evidence still blocks
+release; neither queue disappearance, elapsed age nor a cancel acknowledgment
+is sufficient. A cancelled, submitted task releases only after permanent refusal
+and complete never-launched proof. Unknown evidence may keep the schedule
+reserved until its existing owners can prove the disposition.
+
+For an older released occurrence whose publication is unfinished, use the
+existing collection command with the same root and task ID:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 0s --json
+```
+
+Follow its own response and exit using [observation guidance](#observe-and-collect).
+Collection does not repeat provider work and does not require stopping the
+scheduler or Pueue. It can publish only from validated sealed evidence, without
+replacing a terminal outcome. Canonical closure with released runner ownership
+and no seal/outcome can establish interruption, not rejection; release alone
+does not prove that case.
+
+Inspect the task again with `schedule execution` after recovery. History may
+still show its last cached observation; manual collection does not promise to
+refresh it. There is no historical repair scan, replacement dispatch, automatic
+retry/continuation, forced expiry or general corruption repair.
+
 ## Managed workspace results
 
 Treat `response.workspace` as a separate resource and Git-content evidence
@@ -241,3 +310,6 @@ troubleshooting or a new provider task.
 
 For model-discovery status/exit pairs use the
 [model contract](command-reference.md#choosing-models-and-effort).
+Passive schedule reads have their own
+[result semantics](#scheduled-execution-results): failed/rejected/pending task
+facts remain data in a completed read.

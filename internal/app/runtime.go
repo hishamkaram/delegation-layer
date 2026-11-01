@@ -43,7 +43,7 @@ Commands:
   supervisor    Inspect or migrate Delegate's private supervisor
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
-  schedule      Manage recurring definitions
+  schedule      Manage recurring definitions and inspect executions
   scheduler     Run the independent local scheduler
   help          Show this help message
   version       Print version information
@@ -81,7 +81,10 @@ Recurring definitions:
   schedule create --brief FILE --cwd ABS (--provider ID | --auto) --cron RULE [--timezone ZONE] --json
   schedule list [--after ID] [--limit N] --json
   schedule show|pause|resume|delete ID --json
+  schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit 50] --json
+  schedule execution TASK_ID --json
   Saving a definition does not start a scheduler or launch a provider.
+  History and execution are passive reads; collect TASK_ID recovers publication.
 
 Independent scheduler:
   scheduler run [--root ABS] [--pueue-config ABS] [--runner ABS]

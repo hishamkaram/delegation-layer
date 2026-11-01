@@ -23,7 +23,7 @@ and retrieving results with evidence.
 | Exact-session continuation | Follow up in the recorded provider conversation. | Available | [Continuation](skills/agent-integration/references/continuation.md) |
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
-| Recurring background tasks | Local recurring-task groundwork is underway; scheduling is incomplete. | Ongoing | [Epic #119](https://github.com/hishamkaram/delegation-layer/issues/119) |
+| Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
 
 ## Ask naturally
 

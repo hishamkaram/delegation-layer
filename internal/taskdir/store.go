@@ -270,6 +270,23 @@ func openStoreMetadata(rootPath string, registry predicate.Registry) (*Store, er
 }
 
 func openStoreMetadataContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	s, err := readExistingStoreMetadataContext(ctx, rootPath, registry)
+	if err != nil {
+		return nil, err
+	}
+	mLock, err := openExistingStoreMaintenanceLock(ctx, s)
+	if err != nil {
+		closeRootHandleQuietly(s.rootHandle)
+		return nil, err
+	}
+	s.maintLock = mLock
+	s.maintLock.faultSource = s.FaultInjector
+	return s, nil
+}
+
+// readExistingStoreMetadataContext supplies only rooted validated reads. The
+// ordinary opener adds maintenance ownership and probes before returning Store.
+func readExistingStoreMetadataContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
 	cleanRoot, err := resolveExistingStoreRoot(ctx, rootPath)
 	if err != nil {
 		return nil, err
@@ -284,22 +301,12 @@ func openStoreMetadataContext(ctx context.Context, rootPath string, registry pre
 		closeRootHandleQuietly(rootHandle)
 		return nil, err
 	}
-	mLock, err := openExistingStoreMaintenanceLock(ctx, tempStore)
-	if err != nil {
-		closeRootHandleQuietly(rootHandle)
-		return nil, err
-	}
-
 	s := &Store{
 		predicates: registry,
 		Root:       cleanRoot,
 		RootID:     rootRec.RootID,
 		rootHandle: rootHandle,
-		maintLock:  mLock,
 	}
-
-	s.maintLock.faultSource = s.FaultInjector
-
 	return s, nil
 }
 

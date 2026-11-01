@@ -53,24 +53,17 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 }
 
 func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState, resultErr error) {
-	defer func() {
-		if resultErr != nil {
-			state.Release = nil
-			// An incomplete read does not replace the last validated observation.
-			state.Observation = contract.Observation{}
-		}
-	}()
-	state.Observation = contract.Observation{ObservedAt: time.Now().UTC()}
 	store, err := tasks.openStore(tasks.root, false)
 	if err != nil {
 		return state, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	defer func() { clearSchedulerStateOnCloseFault(&state, &resultErr, store.Close()) }()
 	exists, err := store.TaskEntryExists(id)
 	if err != nil {
 		return state, err
 	}
 	if !exists {
+		state.Observation = contract.Observation{ObservedAt: time.Now().UTC()}
 		state.Observation.Admission = task.AdmissionNotAdmitted
 		state.Release = &contract.Release{ReleasedAt: time.Now().UTC(), Kind: contract.ReleaseNotCreated, Ref: "task_absent"}
 		return state, nil
@@ -80,13 +73,39 @@ func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState
 		// Missing locks in an existing directory are partial evidence.
 		return state, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+	defer func() { clearSchedulerStateOnCloseFault(&state, &resultErr, td.Close()) }()
 	options := observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup())
 	observed, err := tasklifecycle.Status(store, td, options, tasks.dependencies.RunnerExecutable, tasks.dependencies.Catalog)
-	state.Observation, resultErr = schedulerObservation(td, observed)
-	if err != nil || resultErr != nil {
-		state.Observation.FaultCode = "observation_failed"
-		return state, errors.Join(err, resultErr)
+	return tasks.observeStatus(td, observed, err)
+}
+
+// Local read/close faults discard this pass; task diagnostics accompanying a
+// fully validated observation and release do not erase those independent facts.
+func clearSchedulerStateOnCloseFault(state *schedulerruntime.TaskState, resultErr *error, closeErr error) {
+	if closeErr != nil {
+		*state = schedulerruntime.TaskState{}
+		*resultErr = errors.Join(*resultErr, closeErr)
+	}
+}
+
+func (tasks schedulerTasks) observeStatus(td *taskdir.TaskDir, observed tasklifecycle.StatusResult, statusErr error) (schedulerruntime.TaskState, error) {
+	observation, err := schedulerObservation(td, observed)
+	if err != nil {
+		return schedulerruntime.TaskState{}, errors.Join(statusErr, err)
+	}
+	state := schedulerruntime.TaskState{Observation: observation}
+	if statusErr != nil {
+		if !observed.ControlObservation || !tasklifecycle.IsPureSupervisorUncertaintyError(statusErr) {
+			return schedulerruntime.TaskState{}, statusErr
+		}
+		// A missing queue row is not closure. Only the existing permanent
+		// refusal plus complete never-launched proof can resolve this case.
+		state, err = tasks.observeNeverStarted(td, observed, state, false)
+		if err != nil || state.Release == nil {
+			return schedulerruntime.TaskState{}, errors.Join(statusErr, err)
+		}
+		state.Observation.FaultCode = "supervisor_unknown"
+		return state, statusErr
 	}
 	proof, err := guardian.ReadClosureProof(context.Background(), td)
 	if err == nil && proof.Closed() {
@@ -95,12 +114,40 @@ func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState
 			ref = proof.WorkerWaitSHA256()
 		}
 		state.Release = &contract.Release{ReleasedAt: time.Now().UTC(), Kind: contract.ReleaseClosed, Ref: ref}
-		return state, nil
+		return tasks.collectAtClosure(td, observed, state)
 	}
 	if !errors.Is(err, guardian.ErrProofPending) {
-		return state, err
+		return schedulerruntime.TaskState{}, err
 	}
-	return tasks.observeNeverStarted(td, observed, state)
+	return tasks.observeNeverStarted(td, observed, state, true)
+}
+
+// Collect owns recovery from the existing seal. Native closure has already
+// been validated; a diagnostic from Collect cannot invalidate that proof when
+// the subsequent local evidence read succeeds.
+func (tasks schedulerTasks) collectAtClosure(td *taskdir.TaskDir, observed tasklifecycle.StatusResult, state schedulerruntime.TaskState) (schedulerruntime.TaskState, error) {
+	if state.Observation.Publication != task.PublicationPending {
+		return state, nil
+	}
+	options := tasks.dependencies.storeDependencies().collectionOptions(0)
+	options.ObserveSupervisor = false
+	collected, collectErr := tasklifecycle.Collect(tasks.root, td, options)
+	inspection, err := td.Inspect()
+	if err != nil {
+		return schedulerruntime.TaskState{}, errors.Join(collectErr, err)
+	}
+	observed.Inspection = inspection
+	state.Observation, err = schedulerObservation(td, observed)
+	if err != nil {
+		return schedulerruntime.TaskState{}, errors.Join(collectErr, err)
+	}
+	switch {
+	case collectErr != nil && !tasklifecycle.IsPureCollectionPendingError(collectErr):
+		state.Observation.FaultCode = "collection_failed"
+	case collectErr != nil || collected.Waiting || collected.Pending != "":
+		state.Observation.FaultCode = "collection_pending"
+	}
+	return state, collectErr
 }
 
 func schedulerObservation(td *taskdir.TaskDir, observed tasklifecycle.StatusResult) (contract.Observation, error) {
@@ -123,13 +170,20 @@ func schedulerObservation(td *taskdir.TaskDir, observed tasklifecycle.StatusResu
 	return observation, nil
 }
 
-func (tasks schedulerTasks) observeNeverStarted(td *taskdir.TaskDir, observed tasklifecycle.StatusResult, state schedulerruntime.TaskState) (schedulerruntime.TaskState, error) {
-	if observed.Pending != "" || !observed.AdmissionObserved || observed.Admission != task.AdmissionNotAdmitted {
+func (tasks schedulerTasks) observeNeverStarted(td *taskdir.TaskDir, observed tasklifecycle.StatusResult, state schedulerruntime.TaskState, allowFence bool) (schedulerruntime.TaskState, error) {
+	if observed.Pending != "" {
 		return state, nil
 	}
-	proven, ref, err := tasklifecycle.FenceScheduledTaskContext(context.Background(), td)
+	var proven bool
+	var ref string
+	var err error
+	if allowFence && observed.AdmissionObserved && observed.Admission == task.AdmissionNotAdmitted {
+		proven, ref, err = tasklifecycle.FenceScheduledTaskContext(context.Background(), td)
+	} else {
+		proven, ref, err = tasklifecycle.ProveScheduledTaskUnlaunchedContext(context.Background(), td)
+	}
 	if err != nil {
-		return state, err
+		return schedulerruntime.TaskState{}, err
 	}
 	if proven {
 		state.Release = &contract.Release{ReleasedAt: time.Now().UTC(), Kind: contract.ReleaseClosed, Ref: ref}

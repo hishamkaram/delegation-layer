@@ -1,6 +1,6 @@
 """Two bounded, real-minute scheduler cases using the existing finite pi fixture."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 
@@ -23,6 +23,7 @@ from scripts.delegate_acceptance.tasks.publication import verify_collected_outco
 
 
 CASE_SECONDS = 240
+SUCCESSIVE_SECONDS = 300
 EXPECTED_PAYLOAD = b"private supervisor acceptance passed"
 
 
@@ -40,6 +41,7 @@ class SchedulerCase:
     schedule_id: str = ""
     first_due_ns: int = 0
     command_count: int = 0
+    previous_services: list[SchedulerService] = field(default_factory=list)
 
     @property
     def delegate(self) -> Path:
@@ -64,7 +66,7 @@ class SchedulerCase:
         for marker in (self.fixture.old_daemon_marker, self.fixture.upgraded_daemon_marker):
             require(not marker.exists(), "private daemon ran before the scheduler service")
 
-    def create(self, *, held: bool) -> None:
+    def create(self, *, held: bool, controlled_failure: bool = False) -> None:
         # Leave a real startup window before the first due time. A slow host
         # that misses it fails; no timestamp, DB cursor, or wall clock is changed.
         wait_until(lambda: time.time_ns() % MINUTE_NS < 20_000_000_000,
@@ -76,6 +78,12 @@ class SchedulerCase:
             self.lifetime.release_gate = LockedReleaseGate.acquire(self.lifetime.gate)
             brief = self.lifetime.base / "scheduler-held-brief.md"
             brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n", encoding="utf-8")
+            brief.chmod(0o600)
+        elif controlled_failure:
+            if self.lifetime.base is None:
+                raise RuntimeError("scheduler fixture lost its owned directory")
+            brief = self.lifetime.base / "scheduler-controlled-brief.md"
+            brief.write_text("DELEGATE_SCHEDULER_CONTROLLED_FAILURE\n", encoding="utf-8")
             brief.chmod(0o600)
         self.receipt.phase("schedule_create")
         response = self.command("create", [
@@ -192,19 +200,16 @@ class SchedulerCase:
         require(not (self.fixture.state / "tasks" / row.task_id / "outcome.json").exists(),
                 "held scheduled worker published before gate release")
 
-
-def run_successive(case: SchedulerCase) -> None:
-    case.create(held=False)
-    first, = case.occurrences(1)
-    require_occurrences((first,), case.schedule_id, (case.first_due_ns,))
-    case.collect(first)
-    rows = case.occurrences(2)
-    require_occurrences(rows, case.schedule_id, (case.first_due_ns, case.first_due_ns + MINUTE_NS))
-    case.service.stop()
-    case.discover()
-    case.collect(rows[1])
-    require_occurrences(case.discover(), case.schedule_id, tuple(row.due_ns for row in rows))
-    case.receipt.add_details(actual_minute_occurrences=2, independent_task_ids=[row.task_id for row in rows])
+    def restart(self) -> None:
+        """Keep both exact service identities until canonical fixture cleanup."""
+        previous = self.service
+        previous.stop()
+        self.previous_services.append(previous)
+        self.service = SchedulerService(
+            self.lifetime, self.fixture.state, previous.delegate, self.deadline,
+            generation=len(self.previous_services),
+        )
+        self.service.start()
 
 
 def run_overlap_stop(case: SchedulerCase) -> None:

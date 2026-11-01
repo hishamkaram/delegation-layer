@@ -16,3 +16,11 @@ import (
 func FenceScheduledTaskContext(ctx context.Context, td *taskdir.TaskDir) (proven bool, referenceSHA256 string, err error) {
 	return td.FenceUnlaunchedTaskContext(ctx)
 }
+
+// ProveScheduledTaskUnlaunchedContext recognizes an existing permanent refusal,
+// including for submitted tasks. It never creates a fence or native closure.
+// The caller must exclude unsettled Dispatch/control work; only supervisor-only
+// Status uncertainty may be bypassed, never a local evidence or identity fault.
+func ProveScheduledTaskUnlaunchedContext(ctx context.Context, td *taskdir.TaskDir) (proven bool, referenceSHA256 string, err error) {
+	return td.ProveUnlaunchedTaskReferenceContext(ctx)
+}

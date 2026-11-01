@@ -36,6 +36,12 @@ fi
 
 prompt=$(/bin/cat)
 case "$prompt" in
+  *DELEGATE_SCHEDULER_CONTROLLED_FAILURE*)
+    if [ -f "$gate_path.scheduler-fail" ]; then
+      printf '%s\n' 'controlled scheduler fixture failure' >&2
+      exit 17
+    fi
+    ;;
   *DELEGATE_PRIVATE_UPGRADE_WAIT*)
     exec __PYTHON_EXECUTABLE__ -c __PI_WAIT_PROGRAM__ \
       "$gate_path" "$waiter_directory" "$lease_nonce"

@@ -33,6 +33,16 @@ func Open(ctx context.Context, store *taskdir.Store) (contract.Store, error) {
 	return opened, nil
 }
 
+// OpenReadOnly opens existing scheduler metadata for passive commands without
+// acquiring execution capabilities or running task-store filesystem probes.
+// SQLite retains its normal bounded transaction and contention semantics.
+func OpenReadOnly(ctx context.Context, store *taskdir.ReadOnlyStore) (contract.Store, error) {
+	if store == nil {
+		return nil, errors.New("scheduler read requires a state reader")
+	}
+	return sqlitestore.Open(ctx, store.Root(), store.RootID())
+}
+
 // OwnerLease is the exclusive scheduler owner of one state root. Acquire it
 // before any task or supervisor lease and never while holding one; taskdir
 // does not enforce that order at runtime. It is the only authority to create

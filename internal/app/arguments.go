@@ -58,13 +58,14 @@ type Arguments struct {
 	CheckpointLimit       int
 	CheckpointBudget      string
 
-	// Schedule values record the requested definition and list cursor only.
+	// Schedule values record the requested definition and query cursors only.
 	ScheduleAction      string
 	ScheduleID          string
 	ScheduleCron        string
 	ScheduleTimezone    string
 	ScheduleTimezoneSet bool
 	ScheduleAfter       string
+	ScheduleBefore      string
 	ScheduleLimit       int
 
 	// savedSupervisor is populated only by the continuation command after the
