@@ -149,6 +149,10 @@ under the guise of diagnosis.
 3. State the supported cause, separate current facts from historical inference,
    and propose one concrete remedy or evidence-gathering step. If the cause is
    still unknown, name the missing evidence and the specific check needed.
+   Explain which component failed instead of only repeating an error code.
+   A returned `failure.inspection.class: inspection_worker_failed` identifies
+   Delegate's inspection worker as the failed component, not provider setup;
+   the worker's underlying cause can still be unknown.
    Ask for a real decision, not permission to perform the bounded diagnosis
    already authorized here.
 
