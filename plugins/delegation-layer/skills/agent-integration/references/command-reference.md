@@ -283,8 +283,16 @@ for freshness, no-result states, response bounds, exit codes and recovery.
 ## Scheduler runtime
 
 ```text
-delegate --root ROOT scheduler run [--pueue-config ABS] [--runner ABS] [--json]
+delegate --root ROOT scheduler run [--pueue-config ABS] [--json]
 ```
+
+The scheduler requires the automatic managed worker. Use colocated `delegate`
+and `delegate-run` binaries from the same build and omit the advanced `--runner`
+override. An override selects custom ownership even when it names the bundled
+worker; startup rejects it with exit `2` before opening storage or acquiring a
+lease. Ordinary explicit custom-runner dispatch and continuation retain their
+existing compatibility rules. Historical custom-runner claims are not
+automatically repaired or released.
 
 This foreground command requires existing schedule storage. One process owns
 each root; a second fails busy. It uses the service launch environment and the

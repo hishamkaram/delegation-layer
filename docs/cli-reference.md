@@ -40,6 +40,10 @@ owns command syntax and timing/budget behavior. Use an existing per-user service
 host when scheduling must outlive an interactive agent session; the command does
 not install a service, enable login/reboot startup or send notifications.
 
+The scheduler requires the automatic managed worker. Use colocated `delegate`
+and `delegate-run` binaries from the same build and omit the advanced `--runner`
+override; see the [scheduler requirement](../skills/agent-integration/references/command-reference.md#scheduler-runtime).
+
 The host must stop the scheduler process without terminating its independently
 supervised tasks. For orderly stop on systemd 255, use `Delegate=yes`,
 `ExitType=cgroup`, `KillMode=process`, `SendSIGKILL=no`, `TimeoutStopSec=infinity`

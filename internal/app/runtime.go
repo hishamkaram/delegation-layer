@@ -101,7 +101,9 @@ Optional Teams:
   --project-root ABS. Defaults guide explicit selection; they never auto-route.
 
 Independent scheduler:
-  scheduler run [--root ABS] [--pueue-config ABS] [--runner ABS]
+  scheduler run [--root ABS] [--pueue-config ABS]
+  Requires the automatic managed worker. Use colocated delegate/delegate-run
+  binaries from the same build and omit the advanced --runner override.
   Runs in the foreground until interrupted. Use an external service host for
   caller-independent operation. Existing admitted tasks continue after it stops.
 
