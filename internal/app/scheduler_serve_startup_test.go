@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
@@ -72,24 +73,60 @@ func TestSchedulerServeInitializesEmptyStorageBeforeHostOwnership(t *testing.T) 
 			t.Error(err)
 		}
 	})
-	response, code := schedulerServeJSON(t, schedulerStartupContext(t), store.Root, schedulerServeDependencies(t))
-	if code != 3 || response.RootID != store.RootID || !strings.Contains(response.Error, host.ErrPending.Error()) {
-		t.Fatalf("serve did not reach the occupied host boundary: code=%d response=%+v", code, response)
-	}
-	schedules, err := scheduler.Open(t.Context(), store)
-	if err != nil {
-		t.Fatalf("serve did not initialize missing scheduler storage: %v", err)
-	}
-	if err := schedules.Close(); err != nil {
-		t.Fatal(err)
-	}
-	// Initialization must release E before trying H, even when H is occupied.
-	execution, err := scheduler.AcquireOwnerLease(t.Context(), store)
-	if err != nil {
-		t.Fatalf("serve retained initialization ownership: %v", err)
+	ctx, cancel := context.WithCancel(schedulerStartupContext(t))
+	finished := make(chan commandResult, 1)
+	deps := schedulerServeDependencies(t)
+	go func() { finished <- serveScheduler(ctx, Arguments{Root: store.Root}, deps) }()
+	joined := false
+	t.Cleanup(func() {
+		cancel()
+		if !joined {
+			<-finished
+		}
+	})
+	// Observe the actual publication and E release while H remains occupied;
+	// native filesystem speed must not select which timeout branch is tested.
+	execution := awaitSchedulerInitialization(t, ctx, store)
+	cancel()
+	result := <-finished
+	joined = true
+	if result.code == 0 || result.response.RootID != store.RootID || !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("serve did not join cancellation at the occupied host boundary: %+v", result)
 	}
 	if err := execution.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func awaitSchedulerInitialization(t *testing.T, ctx context.Context, store *taskdir.Store) *scheduler.OwnerLease {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	var last error
+	for {
+		opened, err := scheduler.Open(ctx, store)
+		if err == nil {
+			if err := opened.Close(); err != nil {
+				t.Fatal(err)
+			}
+			lease, err := scheduler.AcquireOwnerLease(ctx, store)
+			if err == nil {
+				t.Cleanup(func() {
+					if err := lease.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				return lease
+			}
+			last = err
+		} else {
+			last = err
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("scheduler initialization did not publish and release E: %v", last)
+		case <-ticker.C:
+		}
 	}
 }
 
