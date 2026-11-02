@@ -60,13 +60,13 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	}
 	store, err := openStoreContext(ctx, root, deps.storeDependencies(), true)
 	if err != nil {
-		return failed(response, schedulerStorageError(err), 1)
+		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
 	schedules, err := openOrInitializeSchedules(ctx, store)
 	if err != nil {
-		return failed(response, schedulerStorageError(err), 1)
+		return failed(response, err, 1)
 	}
 	if err = schedules.Close(); err != nil {
 		return failed(response, err, 1)
