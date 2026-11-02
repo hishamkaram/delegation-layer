@@ -569,6 +569,7 @@
       "py:delegate_acceptance.private_cli.fixture_setup",
       "py:delegate_acceptance.private_cli.receipt",
       "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_default",
       "py:delegate_acceptance.private_cli.scheduler_host",
       "py:delegate_acceptance.private_cli.scheduler_sequence",
       "py:delegate_acceptance.private_cli.scheduler_service",
@@ -761,6 +762,26 @@
       "py:pathlib",
       "py:platform",
       "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.scheduler_default",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.packaged_defaults",
+      "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_host",
+      "py:delegate_acceptance.private_cli.scheduler_occurrences",
+      "py:delegate_acceptance.private_cli.scheduler_sequence",
+      "py:delegate_acceptance.processes.observation",
+      "py:pathlib",
+      "py:time",
+      "py:uuid"
     ]
   }
 ]

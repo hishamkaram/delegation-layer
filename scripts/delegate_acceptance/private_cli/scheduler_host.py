@@ -26,6 +26,7 @@ class SchedulerHost:
     delegate: Path
     deadline: float
     generation: int = 0
+    default_root: bool = False
     attempted: bool = field(default=False, init=False)
     stopped: bool = field(default=False, init=False)
     process: Process | None = field(default=None, init=False, repr=False)
@@ -45,12 +46,24 @@ class SchedulerHost:
     def remaining(self) -> float:
         return max(0, self.deadline - time.monotonic())
 
+    @property
+    def prefix(self) -> list[str]:
+        return [] if self.default_root else ["--root", str(self.state)]
+
+    @property
+    def directory(self) -> Path:
+        if self.default_root:
+            if self.lifetime.base is None:
+                raise RuntimeError("scheduler host lost its owned fixture directory")
+            return self.lifetime.base
+        return self.state
+
     def command(self, action: str, expected: tuple[int, ...] = (0,)) -> dict[str, object]:
         require(self.remaining() > 0, "scheduler host command deadline expired")
         command = self.processes.run(
             f"scheduler-{self.generation}-{action}",
-            [self.delegate, "--root", str(self.state), "scheduler", action, "--json"],
-            self.state, timeout=min(30, self.remaining()), expected=expected,
+            [self.delegate, *self.prefix, "scheduler", action, "--json"],
+            self.directory, timeout=min(30, self.remaining()), expected=expected,
         )
         response = json_object(command.json())
         require(not response.get("error") and not response.get("failure"),
@@ -67,8 +80,8 @@ class SchedulerHost:
         self.attempted = True
         self.processes.start(
             f"scheduler-host-{self.generation}",
-            [self.delegate, "--root", str(self.state), "scheduler", "serve"],
-            self.state, on_spawned=self._observe_started, start_new_session=True,
+            [self.delegate, *self.prefix, "scheduler", "serve"],
+            self.directory, on_spawned=self._observe_started, start_new_session=True,
         )
         wait_until(self.ready, timeout=self.remaining(), description="public scheduler host readiness")
 

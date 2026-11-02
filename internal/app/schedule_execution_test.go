@@ -22,7 +22,7 @@ func scheduleExecutionFixture(t *testing.T, sealed bool) (*taskdir.Store, *taskd
 	t.Helper()
 	state, td, request := newAppTestTask(t, sealed)
 	t.Cleanup(func() { closeAppTestTask(t, state, td) })
-	store, err := openScheduleForCreate(t.Context(), state)
+	store, err := openOrInitializeSchedules(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}

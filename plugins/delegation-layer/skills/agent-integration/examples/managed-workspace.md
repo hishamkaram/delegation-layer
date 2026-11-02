@@ -3,14 +3,18 @@
 Use this example for independent write work that should be isolated in a
 retained Git worktree. The source must be a Git checkout and the state root
 must remain outside provider-writable workspaces.
+Commands use the CLI default under the main skill's
+[root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief); preserve any
+explicit custom or recorded historical root on all related commands.
 
 ```sh
 SOURCE="$PWD"
-BRIEF="$(mktemp)"
-RESPONSE="$(mktemp)"
+BRIEF="$(mktemp)" || exit 1
+RESPONSE="$(mktemp)" || exit 1
 printf '%s\n' 'Implement the requested change and report the files changed.' >"$BRIEF"
+printf 'Saved response: %s\n' "$RESPONSE"
 
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
+if delegate dispatch --auto \
   --brief "$BRIEF" --cwd "$SOURCE" \
   --permission workspace-write --isolation git-worktree \
   --base HEAD --workspace-budget 5m --budget 30m --json >"$RESPONSE"; then
@@ -26,9 +30,13 @@ Read the saved JSON before running another command. When
 `task_record: "created"`, use its `task_id` as `TASK_ID` below. When no task
 was created, follow the [result decisions](../references/result-handling.md#managed-workspace-results);
 do not run task status or collection against that nonexistent record.
+Each later block is a separate shell invocation. Replace `ABS_SAVED_RESPONSE`
+with the printed absolute response path and the ID placeholders with the actual
+returned IDs; reassign the path in each invocation.
 
 ```sh
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json >"$RESPONSE.status"; then
+RESPONSE="ABS_SAVED_RESPONSE"
+if delegate status TASK_ID --json >"$RESPONSE.status"; then
   status_exit=0
 else
   status_exit=$?
@@ -43,7 +51,8 @@ before running another command. Run the collection below only when that
 guidance calls for it.
 
 ```sh
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json >"$RESPONSE.collect"; then
+RESPONSE="ABS_SAVED_RESPONSE"
+if delegate collect TASK_ID --watch 5s --json >"$RESPONSE.collect"; then
   collect_exit=0
 else
   collect_exit=$?
@@ -64,7 +73,8 @@ Before release, wait for the workspace to return to `state: retained` and inspec
 its final capture. Only after the Lead explicitly chooses release, run:
 
 ```sh
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" workspace release WORKSPACE_ID \
+RESPONSE="ABS_SAVED_RESPONSE"
+if delegate workspace release WORKSPACE_ID \
   --budget 5m --json >"$RESPONSE.release"; then
   release_exit=0
 else
@@ -95,8 +105,9 @@ owns every response decision.
 
 ```sh
 SOURCE="$PWD"
-RESPONSE="$(mktemp)"
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint create \
+RESPONSE="$(mktemp)" || exit 1
+printf 'Saved response: %s\n' "$RESPONSE"
+if delegate checkpoint create \
   --cwd "$SOURCE" --budget 5m --json >"$RESPONSE.checkpoint"; then
   checkpoint_exit=0
 else
@@ -109,9 +120,12 @@ cat "$RESPONSE.checkpoint"
 Exit `3` with `checkpoint.id` and `next_action: "watch_checkpoint"` means the
 request was accepted, not captured. Use that `checkpoint.id` as
 `CHECKPOINT_ID`. Do not run `create` again.
+For the later checkpoint blocks, replace `ABS_SAVED_RESPONSE` with the absolute
+response path printed by this checkpoint invocation.
 
 ```sh
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint status CHECKPOINT_ID \
+RESPONSE="ABS_SAVED_RESPONSE"
+if delegate checkpoint status CHECKPOINT_ID \
   --watch 30s --json >"$RESPONSE.checkpoint.status"; then
   checkpoint_status_exit=0
 else
@@ -130,7 +144,8 @@ dispatch example, replacing `--base HEAD` with `--base COMMIT_OID`. Report a
 When the Lead no longer needs the checkpoint, remove it explicitly:
 
 ```sh
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint remove CHECKPOINT_ID \
+RESPONSE="ABS_SAVED_RESPONSE"
+if delegate checkpoint remove CHECKPOINT_ID \
   --budget 5m --json >"$RESPONSE.checkpoint.remove"; then
   checkpoint_remove_exit=0
 else

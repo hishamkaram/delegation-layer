@@ -30,10 +30,15 @@ No new ledger, handoff manifest or hosted proof submission is required.
 4. Verify the terminal outcome and requested result/artifacts. Committed
    publication alone does not prove assignment fulfillment. For continuation,
    verify the actual recorded native session and preserved predecessor.
-5. Use canonical process/directory owners. Keep pending operations owned until
-   completion. A shutdown acknowledgement is not lifetime closure. Remove only
-   invocation-owned paths after canonical closure; retain diagnostic state if
-   closure is unknown. Never delete shared parents or user runtime settings.
+5. Apply the project [cleanup rule](../../AGENTS.md#test-and-experiment-cleanup).
+   Register exact owned resource handles and cleanup actions as they are
+   created, using existing cleanup/finally/defer facilities. Delete owned test
+   schedules to prevent further launches, then independently close admitted
+   tasks. Stop only an owned host; a deleted definition or stop acknowledgement
+   does not prove task closure. Verify canonical closure before releasing owned
+   workspaces and removing temporary binaries, fixtures or profiles. Check the
+   same cleanup after failed setup; report unresolved resources without deleting
+   shared parents, retained history or user runtime settings.
 6. Distinguish fixtures, native lifecycle, default installation and real provider
    results. Use existing driver outputs for diagnosis, including failed/bounded
    finalization. Missing auth/tool/host is blocked, not a passing skip.

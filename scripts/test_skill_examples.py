@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,12 +19,12 @@ class CollaborationExampleTests(unittest.TestCase):
             encoding="utf-8"
         )
         example = source.split("```sh\n", 1)[1].split("```", 1)[0]
-        for shell, use_alias in itertools.product(
-            (("/bin/sh",), ("/bin/bash", "-e")), (False, True)
+        for shell, use_alias, ambient_root in itertools.product(
+            (("/bin/sh",), ("/bin/bash", "-e")), (False, True), (False, True)
         ):
             for record, code in (("created", 0), ("created", 1),
                                  ("not_created", 2), ("unknown", 1)):
-                with self.subTest(shell=shell, alias=use_alias, record=record, code=code):
+                with self.subTest(shell=shell, alias=use_alias, ambient=ambient_root, record=record, code=code):
                     with tempfile.TemporaryDirectory(prefix="delegate-single-example-") as temp:
                         root = Path(temp)
                         workspace = root / "workspace"
@@ -44,9 +45,11 @@ class CollaborationExampleTests(unittest.TestCase):
                         )
                         stub.chmod(0o700)
                         env = dict(os.environ, PATH=str(root) + os.pathsep + os.defpath)
+                        env.pop("DELEGATE_ROOT", None)
+                        if ambient_root:
+                            env["DELEGATE_ROOT"] = str(root / "unrelated-ambient-state")
                         env.update(
                             PWD=str(workspace), TMPDIR=str(root),
-                            DELEGATE_ROOT=str(root / "state"),
                             EXAMPLE_CALLS=str(root / "calls"), EXAMPLE_ARGV=str(root / "argv"),
                             EXAMPLE_RESPONSE=json.dumps(response), EXAMPLE_EXIT=str(code),
                         )
@@ -57,8 +60,9 @@ class CollaborationExampleTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual((root / "calls").read_text(), "called\n")
                         argv = (root / "argv").read_text().splitlines()
-                        self.assertEqual(argv[:4], ["--root", str(root / "state"),
-                                                   "dispatch", "--auto"])
+                        self.assertEqual(argv[:2], ["dispatch", "--auto"])
+                        self.assertFalse(any(value == "--root" or value.startswith("--root=") for value in argv))
+                        self.assertFalse((root / "unrelated-ambient-state").exists())
                         emitted_workspace = Path(argv[argv.index("--cwd") + 1])
                         self.assertTrue(emitted_workspace.is_absolute())
                         self.assertEqual(emitted_workspace.resolve(), workspace.resolve())
@@ -74,27 +78,23 @@ class CollaborationExampleTests(unittest.TestCase):
             encoding="utf-8"
         )
         example = source.split("```sh\n", 1)[1].split("```", 1)[0]
-        for shell in (("/bin/sh",), ("/bin/bash", "-e")):
+        for shell, ambient_root in itertools.product((("/bin/sh",), ("/bin/bash", "-e")), (False, True)):
             for exits in ((2, 4), (0, 2), (2, 0), (0, 0)):
-                with self.subTest(shell=shell, exits=exits):
-                    self.run_example(example, shell, exits)
+                with self.subTest(shell=shell, exits=exits, ambient=ambient_root):
+                    self.run_example(example, shell, exits, ambient_root=ambient_root)
 
-    def run_example(self, example, shell, exits):
+    def run_example(self, example, shell, exits, *, ambient_root):
         with tempfile.TemporaryDirectory(prefix="delegate-skill-example-") as temp:
             root = Path(temp)
             stub = root / "delegate"
             stub.write_text(
-                "#!/bin/sh\n"
-                "while [ \"$1\" != --provider ]; do shift; done\n"
-                "provider=$2\n"
-                "case $provider in\n"
-                "  provider-a) code=$EXIT_A ;;\n"
-                "  provider-b) code=$EXIT_B ;;\n"
-                "  *) exit 99 ;;\n"
-                "esac\n"
-                "printf '{\"provider\":\"%s\"}\\n' \"$provider\"\n"
-                "printf 'diagnostic:%s\\n' \"$provider\" >&2\n"
-                "exit \"$code\"\n",
+                "#!" + sys.executable + "\n"
+                "import json,os,sys\nfrom pathlib import Path\n"
+                "argv=sys.argv[1:]\nprovider=argv[argv.index('--provider')+1]\n"
+                "code={'provider-a':os.environ['EXIT_A'],'provider-b':os.environ['EXIT_B']}[provider]\n"
+                "(Path(os.environ['EXAMPLE_TEMP'])/('argv.'+provider)).write_text(json.dumps(argv))\n"
+                "print(json.dumps({'provider':provider}))\n"
+                "print('diagnostic:'+provider,file=sys.stderr)\nsys.exit(int(code))\n",
                 encoding="utf-8",
             )
             stub.chmod(0o700)
@@ -107,6 +107,9 @@ class CollaborationExampleTests(unittest.TestCase):
             )
             temporary.chmod(0o700)
             env = dict(os.environ, PATH=str(root) + os.pathsep + os.defpath)
+            env.pop("DELEGATE_ROOT", None)
+            if ambient_root:
+                env["DELEGATE_ROOT"] = str(root / "unrelated-ambient-state")
             env.update(
                 PROVIDER_A="provider-a", PROVIDER_B="provider-b",
                 BRIEF_A=str(root / "a.md"), BRIEF_B=str(root / "b.md"),
@@ -121,6 +124,9 @@ class CollaborationExampleTests(unittest.TestCase):
             receipts = list(root.glob("receipts.*"))
             self.assertEqual(len(receipts), 1, result.stdout)
             for label, code in zip(("a", "b"), exits):
+                argv = json.loads((root / ("argv.provider-" + label)).read_text())
+                self.assertEqual(argv[0], "dispatch")
+                self.assertFalse(any(value == "--root" or value.startswith("--root=") for value in argv))
                 prefix = receipts[0] / ("review-" + label)
                 self.assertEqual(
                     json.loads(prefix.with_suffix(".json").read_text()),
@@ -131,6 +137,7 @@ class CollaborationExampleTests(unittest.TestCase):
                     prefix.with_suffix(".stderr").read_text(),
                     f"diagnostic:provider-{label}\n",
                 )
+            self.assertFalse((root / "unrelated-ambient-state").exists())
 
 
 if __name__ == "__main__":

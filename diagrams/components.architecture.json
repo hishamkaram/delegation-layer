@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "aaed68f2f2086c070539503d347efead89c20f87",
+      "revision": "8a0ca355b9961c0129a67ed8066e195e86d99a4f",
       "link_mode": "local-only"
     }
   },
@@ -16,11 +16,11 @@
     {
       "id": "lead",
       "type": "external",
-      "label": "Lead or automation",
-      "sublabel": "request · track · collect",
+      "label": "Agent / manual CLI",
+      "sublabel": "ordinary commands omit --root",
       "pos": [
         40,
-        40
+        260
       ],
       "size": [
         210,
@@ -39,10 +39,10 @@
       "id": "control",
       "type": "backend",
       "label": "CLI + task lifecycle",
-      "sublabel": "dispatch · observe · manage",
+      "sublabel": "CLI default · any project cwd",
       "pos": [
         440,
-        40
+        260
       ],
       "size": [
         260,
@@ -56,16 +56,16 @@
           "label": "Resolve Team before fresh admission"
         },
         {
-          "path": "internal/tasklifecycle/team_dispatch.go",
-          "line": 17,
-          "end_line": 60,
-          "label": "Current defaults or recorded context"
+          "path": "internal/config/config.go",
+          "line": 64,
+          "end_line": 70,
+          "label": "CLI owns the OS-default root"
         },
         {
-          "path": "internal/tasklifecycle/creation.go",
-          "line": 20,
-          "end_line": 60,
-          "label": "Create records before submission"
+          "path": "internal/app/schedule_create.go",
+          "line": 15,
+          "end_line": 59,
+          "label": "Create initializes storage and saves definition"
         }
       ]
     },
@@ -76,7 +76,7 @@
       "sublabel": "Pueue starts queued workers",
       "pos": [
         860,
-        40
+        260
       ],
       "size": [
         260,
@@ -105,7 +105,7 @@
       "sublabel": "guardian + delegate-run",
       "pos": [
         1300,
-        40
+        260
       ],
       "size": [
         240,
@@ -140,7 +140,7 @@
       "sublabel": "native settings + session",
       "pos": [
         1300,
-        370
+        520
       ],
       "size": [
         240,
@@ -168,7 +168,7 @@
       "sublabel": "saved Team context + outcome.json",
       "pos": [
         860,
-        370
+        520
       ],
       "size": [
         260,
@@ -202,8 +202,8 @@
       "label": "Selected workspace",
       "sublabel": "caller directory or Git checkout",
       "pos": [
-        1300,
-        710
+        440,
+        40
       ],
       "size": [
         240,
@@ -235,11 +235,11 @@
       "id": "user-start",
       "type": "external",
       "label": "User terminal / tmux",
-      "sublabel": "start once for this state root",
+      "sublabel": "same OS-default state root",
       "tag": "foreground: scheduler serve",
       "pos": [
         440,
-        710
+        780
       ],
       "size": [
         260,
@@ -248,7 +248,7 @@
       "sources": [
         {
           "path": "internal/app/scheduler_host.go",
-          "line": 39,
+          "line": 38,
           "end_line": 86,
           "label": "Independent foreground host startup"
         }
@@ -259,10 +259,10 @@
       "type": "backend",
       "label": "Scheduler host + runtime",
       "sublabel": "Host supervises resident child",
-      "tag": "Runtime: calendar · GoCron wake hints",
+      "tag": "ready with zero definitions",
       "pos": [
         440,
-        350
+        500
       ],
       "size": [
         260,
@@ -270,10 +270,10 @@
       ],
       "sources": [
         {
-          "path": "internal/app/scheduler_run.go",
-          "line": 66,
-          "end_line": 142,
-          "label": "Resident runtime and pulse composition"
+          "path": "internal/app/scheduler_host.go",
+          "line": 38,
+          "end_line": 86,
+          "label": "Serve initializes before starting the host"
         },
         {
           "path": "internal/scheduler/runtime/admission.go",
@@ -297,7 +297,7 @@
       "tag": "one active occurrence per schedule",
       "pos": [
         40,
-        370
+        520
       ],
       "size": [
         230,
@@ -305,10 +305,10 @@
       ],
       "sources": [
         {
-          "path": "internal/app/schedule_create.go",
-          "line": 15,
-          "end_line": 58,
-          "label": "Schedule creation initializes storage"
+          "path": "internal/app/schedule_store.go",
+          "line": 13,
+          "end_line": 36,
+          "label": "Create/serve initialize under owner lease"
         },
         {
           "path": "internal/scheduler/internal/sqlitestore/schema.go",
@@ -332,7 +332,7 @@
       "tag": "Team management owns catalog writes",
       "pos": [
         860,
-        710
+        780
       ],
       "size": [
         260,
@@ -440,13 +440,15 @@
       "id": "calendar-execution",
       "from": "recurring",
       "to": "calendar",
-      "label": "claim / observe / skip"
+      "label": "init / claim / skip"
     },
     {
       "id": "save-schedule",
       "from": "control",
       "to": "calendar",
-      "label": "save definition"
+      "label": "save / initialize",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
       "id": "team-management-resolution",
@@ -461,9 +463,9 @@
       "dot": "cyan",
       "title": "Saved is not running",
       "items": [
-        "Save the first schedule, then start scheduler serve once in an independent user terminal or tmux pane with the same root. Saving never starts the host (internal/app/schedule_host_result.go:5–37).",
+        "Start plain delegate scheduler serve in an independent user terminal or tmux pane, even before the first definition. Agent and manual commands omit --root and share that OS-default store from any project cwd; each schedule retains its workspace. Saving never starts a host.",
         "The host supervises/restarts its resident child. The child runs the calendar loop; GoCron only offers wake hints, with no definition or claim authority (internal/scheduler/pulse/source.go:18–54).",
-        "Boxes show responsibilities, not one OS process per box. If the installed CLI only supports scheduler run, start that foreground runtime yourself; it has no host restart loop (internal/app/scheduler_run.go:52–88)."
+        "Explicit serve and schedule create share the absent-storage initializer. An empty calendar can be ready; passive reads and compatibility scheduler run never initialize storage. Existing custom roots remain available with their exact --root."
       ]
     },
     {

@@ -115,13 +115,17 @@ repository tools, colocated binaries and supervisor prerequisites.
 
 ## Recurring-task setup
 
-Follow the [scheduler walkthrough](getting-started.md#recurring-tasks) to save
-the first definition, start the supported foreground command yourself in an
-independent user terminal or tmux pane, and inspect a real result. Use the same
-explicit absolute state root throughout. `schedule create` initializes absent
-schedule storage; `scheduler serve` requires it to exist. Existing compatible
-definitions and ordinary task state are retained; incompatible or unsafe
-storage is refused. See [storage rules](architecture.md#scheduler-storage).
+Follow the [scheduler walkthrough](getting-started.md#recurring-tasks) to start
+`delegate scheduler serve` yourself in an independent user terminal or tmux
+pane, save a definition and inspect a real result. Ordinary agent and manual
+commands omit `--root` and share the CLI's OS-default store across project
+directories. Explicit user-started `serve` initializes absent base and scheduler
+storage and can become ready before the first definition; `schedule create`
+can also initialize absent storage. Compatibility `scheduler run` requires
+existing storage. For intentional custom or historical roots, preserve the
+[exact explicit root](cli-reference.md#advanced-explicit-and-historical-roots).
+Existing compatible definitions and ordinary task state are retained;
+incompatible or unsafe storage is refused. See [storage rules](architecture.md#scheduler-storage).
 
 Check installed help: prefer `scheduler serve` when available, or use the
 walkthrough's foreground `scheduler run` path for older builds. Use colocated

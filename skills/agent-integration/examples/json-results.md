@@ -1,8 +1,11 @@
 # JSON decision sketch
 
+Use the created task's exact ID as `TASK_ID` and follow the main skill's
+[root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
+
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status "$TASK_ID" --json
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect "$TASK_ID" --watch 5s --json
+delegate status TASK_ID --json
+delegate collect TASK_ID --watch 5s --json
 ```
 
 Apply [result handling](../references/result-handling.md) to each response and

@@ -62,7 +62,7 @@ question. A printed question alone is not a pending reply request.
    together with the exact answers. Submit the reply:
 
    ```sh
-   delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" reply "$task_id" \
+   delegate reply "$task_id" \
      --request "$request_id" --answers "$answers_file" \
      --id "$message_id" --json
    ```
@@ -70,9 +70,10 @@ question. A printed question alone is not a pending reply request.
 6. Keep collecting. A receipt is not task completion. Only the task's
    authoritative `outcome` establishes the final result.
 
-Use the same root expression for dispatch, collection, reply, and steering.
-If the user explicitly chose another root, use that exact path for all of
-them. The other variables stand for actual values saved from this task;
+Follow the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief)
+for dispatch, collection, reply, and steering. The examples use the CLI default;
+preserve an explicit custom or recorded historical root for all of them.
+The variables stand for actual values saved from this task;
 reassign them in each shell invocation if your tool does not preserve variables.
 A pending response without questions means keep collecting, not inspect OS
 processes or dispatch a replacement task.
@@ -86,7 +87,7 @@ reply IDs and earlier steering IDs. Submit it; for a lost response, follow the
 [delivery rules](#interpret-delivery-precisely) with the same ID and content:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" steer "$task_id" \
+delegate steer "$task_id" \
   --brief "$guidance_file" --id "$steering_message_id" --json
 ```
 

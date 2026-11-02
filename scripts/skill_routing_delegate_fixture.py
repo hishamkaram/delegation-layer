@@ -104,7 +104,7 @@ def command_name(argv):
 
 
 def requested_root(argv):
-    value = option_value(argv, "--root")
+    value = option_value(argv, "--root") or option_value(argv, "-root")
     if not value:
         return None
     path = Path(value)
@@ -180,7 +180,7 @@ def parsed_response(result, command):
 def trusted_delegate(runtime):
     candidate = Path(runtime.get("delegate", ""))
     expected = runtime.get("delegate_sha256")
-    if not candidate.is_file() or not os.access(candidate, os.X_OK):
+    if not candidate.is_absolute() or not candidate.is_file() or not os.access(candidate, os.X_OK):
         return False
     if expected is not None and digest(candidate) != expected:
         return False
@@ -379,8 +379,8 @@ def synthetic_response(root, runtime, argv, command, normal):
     scenario = runtime.get("scenario")
     if scenario not in SCENARIOS or not trusted_delegate(runtime):
         return None
-    delegate_root = os.environ.get("DELEGATE_ROOT")
-    if not delegate_root:
+    delegate_root = runtime.get("state_root")
+    if not isinstance(delegate_root, str) or not Path(delegate_root).is_absolute():
         return None
     expected_root = Path(delegate_root).resolve()
     if not expected_root.is_absolute() or not valid_synthetic_request(argv, command, expected_root):
@@ -458,8 +458,8 @@ def diagnosis_response(root, runtime, argv):
         return None
     # Only a public read command following the explicit global root is eligible.
     # Do not mistake a later argument of dispatch/continue for a read command.
-    tail = argv[2:] if len(argv) >= 2 and argv[0] == "--root" else (
-        argv[1:] if argv and argv[0].startswith("--root=") else [])
+    tail = argv[2:] if len(argv) >= 2 and argv[0] in ("--root", "-root") else (
+        argv[1:] if argv and argv[0].startswith(("--root=", "-root=")) else [])
     static_tail = tail or argv
     help_query = (static_tail in (["--help"], ["-h"], ["help"])
                   or len(static_tail) == 2 and static_tail[0] in ("logs", "status", "collect", "preflight")
@@ -482,7 +482,7 @@ def diagnosis_response(root, runtime, argv):
                         and option_value(argv, "--provider") in PROVIDERS
                         and bool(option_value(argv, "--cwd"))
                         and Path(option_value(argv, "--cwd")).is_absolute())
-        allowed_flags = {"--root", "--json"}
+        allowed_flags = {"--root", "-root", "--json"}
         if command == "collect":
             allowed_flags.add("--watch")
         if command == "preflight":

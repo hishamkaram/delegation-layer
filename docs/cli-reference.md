@@ -27,11 +27,42 @@ Use `delegate help` for the installed build's command surface.
 | `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
-Global paths must be absolute. The CLI's default root is the user's
-configuration directory joined with `delegation-layer`; integration examples
-pass an explicit root so each invocation uses the same one.
+Global paths must be absolute. Ordinary commands omit `--root`; the CLI owns
+the default state location. Agents and manual commands under the same native
+user/configuration context share it from any project directory:
+
+| Host | Default state root |
+| --- | --- |
+| macOS | `~/Library/Application Support/delegation-layer` |
+| Linux | `$XDG_CONFIG_HOME/delegation-layer`, or `~/.config/delegation-layer` when unset |
+
+`--cwd` selects a task's project workspace, not its state root. Changing the
+native user/configuration context can change the default.
 `--pueue-config ABS` or `DELEGATE_PUEUE_CONFIG` selects an external compatible
 supervisor for advanced integrations.
+
+### Advanced: explicit and historical roots
+
+Use `--root ABS` only for an intentional separate store or an existing task's
+recorded nondefault root. Keep that exact root for its schedules, task controls,
+collection and continuation. A custom root must stay outside provider-writable
+workspaces. Existing roots and RootIDs remain in place; Delegate does not search
+for, adopt or move historical state.
+
+**Upgrading old integrations:** update the installed skill/plugin through the
+[normal installation path](installation.md) and check the active
+[routing guidance](agent-routing.md#activation-and-status), including any older
+personal skill that takes precedence. Corrected ordinary skill commands omit
+`--root`; exporting `DELEGATE_ROOT` no longer changes those commands. The CLI
+does not use that variable to select its default. If you intentionally used a
+nondefault root, supply its old absolute path explicitly for every operation on
+that work. For example, replace `OLD_ROOT` with that recorded path:
+
+```text
+delegate --root "OLD_ROOT" schedule history SCHEDULE_ID --json
+delegate --root "OLD_ROOT" collect TASK_ID --watch 0s --json
+delegate --root "OLD_ROOT" scheduler serve
+```
 
 ## Scheduler hosting
 
@@ -48,8 +79,17 @@ The user starts one foreground host per execution root in an independent
 terminal or tmux pane and leaves it running:
 
 ```text
-delegate --root ROOT scheduler serve
+delegate scheduler serve
 ```
+
+Explicit user-started `serve` initializes an absent base store and scheduler
+database, preserving any existing root identity. It can become ready with zero
+definitions, before the first `schedule create`. A later create from another
+project directory uses that same default store without restarting the host;
+each definition keeps its own `--cwd`. An intentional explicit `--root` has the
+same startup behavior. Invalid, unreadable, corrupt or incompatible existing
+storage fails explicitly rather than being replaced. If another initializer
+holds the scheduler owner lease, startup reports busy; rerun after it finishes.
 
 That host manages every schedule in the root and restarts its scheduler child
 after unexpected exits using bounded backoff. If the host or pane ends, or the
@@ -76,7 +116,10 @@ observation guidance and no top-level `error`. An owner-reported
 exit `1` while retaining `schedule.saved: true` and the ID. A diagnostic string
 or degraded state alone does not establish that fault.
 
-`scheduler status` is passive. `scheduler stop` fences stopped intent and joins
+`scheduler status`, `schedule list`, `schedule history` and `schedule execution`
+are passive: they do not initialize missing storage or start a host. Missing
+schedule storage lists as empty; history/execution report not-found.
+`scheduler stop` fences stopped intent and joins
 the child and accepted control work before completing. The host keeps responding
 to status/stop while it waits for its child and any prior execution owner. It
 records a closure witness after execution ownership is free and before releasing
@@ -86,8 +129,9 @@ Authenticated `stop_accepted: true` remains true if later readback fails; report
 the accompanying fault too. Already admitted tasks retain their own supervisors
 and budgets.
 
-`scheduler run` remains the compatibility foreground runtime without automatic
-child restart. Its current generation appears as `scheduler.state: foreground`,
+`scheduler run` requires existing base and scheduler storage and does not
+initialize either. It remains the compatibility foreground runtime without
+automatic child restart. Its current generation appears as `scheduler.state: foreground`,
 even after an older managed host stopped. `scheduler stop` does not terminate
 that invocation: it reports `stop_accepted: false` and
 `next_action: stop_foreground_runtime`. The user ends it in its original pane
@@ -136,20 +180,21 @@ Use stop-update-restart for **every CLI upgrade**, including foreground legacy
 `run` to `serve`, before any package manager or installer replaces the binaries:
 
 1. Keep the exact execution root and saved IDs. For a managed `serve` host,
-   request `delegate --root ROOT scheduler stop --json` and wait for confirmed
+   request `delegate scheduler stop --json` and wait for confirmed
    completed host/child shutdown and the foreground command to exit. Acceptance
    alone or exit `3` is pending. For a foreground `scheduler run`, press Ctrl-C
    in its original terminal/tmux pane and wait for exit; older run-only builds
    have no host stop command. For optional legacy OS hosting, stop `run` through
    that host and wait for its previous scheduler owner to exit. Preserve
-   independently admitted tasks and their supervisors/budgets.
+   independently admitted tasks and their supervisors/budgets. For an
+   intentional nondefault root, pass its exact `--root ABS` throughout.
 2. Only then update the CLI and colocated `delegate-run` to the same new build,
    including the executable/command used by any legacy service host. This order
    applies to `brew upgrade hishamkaram/tap/delegation-layer` and every other
    installer. Replacing a live managed host's executable can make its next
    child restart fail permanently with `incompatible_build`.
 3. Check the upgraded build's `delegate help`. Have the user start
-   `delegate --root ROOT scheduler serve` independently when available, or
+   `delegate scheduler serve` independently when available, or
    foreground `scheduler run` if that remains the supported surface, with the
    same root and intended native user context. An operator retaining legacy OS
    hosting restarts that service instead. Use the
@@ -244,8 +289,8 @@ The explicit commands are for inspecting or repairing a real logical/configurati
 migration:
 
 ```sh
-delegate --root "$HOME/delegation-state" supervisor status --json
-delegate --root "$HOME/delegation-state" supervisor migrate --json
+delegate supervisor status --json
+delegate supervisor migrate --json
 ```
 
 `supervisor_migration_blocked` or `wait_for_legacy_work` means migration must

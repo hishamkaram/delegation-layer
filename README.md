@@ -57,8 +57,10 @@ For a manual CLI task, use the packaged
 [read-only example](skills/agent-integration/examples/read-only-task.md).
 
 For recurring work, follow the [scheduler walkthrough](docs/getting-started.md#recurring-tasks)
-to save a definition, start the scheduler in your own terminal or tmux pane,
-inspect its first result and stop or restart it.
+to start `delegate scheduler serve` in your own terminal or tmux pane, even
+before saving a definition. Agents and manual commands share the CLI's default
+state across projects. The walkthrough covers saving a schedule, inspecting its
+first result and stopping or restarting the host.
 
 ## Help and contributing
 

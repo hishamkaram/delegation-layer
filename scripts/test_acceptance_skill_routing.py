@@ -22,11 +22,15 @@ class RoutingTests(unittest.TestCase):
         home.start()
         self.addCleanup(home.stop)
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
+        self.candidate = self.root / "delegate-candidate"
+        self.candidate.write_text("test candidate executable")
+        self.candidate.chmod(0o700)
 
     def test_failed_workspace_preparation_rolls_back_owned_directories(self):
         with patch.object(gate, "prepare_workspace", side_effect=RuntimeError("fixture setup failed")):
             with self.assertRaisesRegex(RuntimeError, "fixture setup failed"):
-                gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+                gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                              delegate_bin=self.candidate)
         self.assertFalse((self.root / "review-1" / "workspace").exists())
 
     def receipt(self, case=None, mode="live", fixture_scenario=None):
@@ -98,7 +102,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_missing_executable_produces_blocked_receipt(self):
         with patch.object(gate.shutil, "which", return_value=None):
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
         self.assertEqual(receipt["reason"], "required_executable_missing")
@@ -125,7 +130,8 @@ class RoutingTests(unittest.TestCase):
             owner.config = self.root / "queue.yml"
             owner.processes.environment = {}
             owner.capture.side_effect = ValueError("stop after setup")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
 
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
@@ -142,7 +148,8 @@ class RoutingTests(unittest.TestCase):
         (personal / "SKILL.md").write_text("old installed skill")
         with patch.dict(gate.os.environ, {"CLAUDE_CONFIG_DIR": str(profile)}), \
                 patch.object(gate, "AttemptSupervisor") as owner:
-            gate.run_case(output=self.root, harness="claude", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="claude", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         owner.assert_not_called()
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["reason"], "claude_candidate_shadowed_by_personal_skill")
@@ -221,7 +228,8 @@ class RoutingTests(unittest.TestCase):
             owner.return_value.execute.side_effect = TimeoutError()
             owner.return_value.capture.return_value = self.root / "stdout"
             (self.root / "stdout").write_text("codex version")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["reason"], "supervised_deadline_exceeded")
         self.judgment(self.root / "review-1")
@@ -236,7 +244,8 @@ class RoutingTests(unittest.TestCase):
             instance.config = self.root / "private-queue.json"
             instance.processes.environment = {}
             instance.capture.side_effect = ValueError("stop after setup")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         self.assertNotIn("DELEGATE_PUEUE_CONFIG", owner.call_args.args[1])
         self.assertEqual(instance.processes.environment["DELEGATE_PUEUE_CONFIG"], str(instance.config))
         instance.close.assert_called_once()
@@ -296,6 +305,17 @@ class RoutingTests(unittest.TestCase):
             self.assertNotIn("--append-system-prompt", argv)
             self.assertTrue(stdin == self.case["prompt"] or self.case["prompt"] in argv)
 
+    def test_explicit_routing_prompt_teaches_leading_root_without_changing_default_prompt(self):
+        state = self.root / "owned ' quoted state"
+        case = dict(self.case, root_mode="explicit", prompt="Use @ROOT@ for the task.")
+        prompt = gate.routing_prompt(case, state)
+        self.assertIn(str(state), prompt)
+        self.assertNotIn("@ROOT@", prompt)
+        prefix = prompt.split("`", 2)[1]
+        self.assertEqual(gate.shlex.split(prefix), ["delegate", "--root", str(state)])
+        self.assertIn("before the command", prompt)
+        self.assertEqual(gate.routing_prompt(self.case, state), self.case["prompt"])
+
 
     def test_copied_receipt_is_not_an_independent_repetition(self):
         run = self.receipt()
@@ -340,11 +360,11 @@ class RoutingTests(unittest.TestCase):
         (fixture / "runtime.json").write_text(json.dumps({
             "delegate": str(delegate), "path": "/private/path",
             "delegate_sha256": delegate_sha256, "scenario": scenario,
-            "provider": "codex:exec",
+            "provider": "codex:exec", "state_root": str(state),
         }))
         stdout, stderr = io.StringIO(), io.StringIO()
         environment = {"DELEGATE_ROUTING_FIXTURE": str(fixture),
-                       "DELEGATE_ROOT": str(state)}
+                       "DELEGATE_ROOT": str(self.root / "unrelated-ambient-root")}
         with patch.dict(gate.os.environ, environment), \
                 patch.object(gate.sys, "argv", ["delegate", *argv]), \
                 patch("subprocess.run", return_value=result) as run, \
@@ -735,6 +755,108 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn(("shutdown",), [call.args for call in owner.control.call_args_list])
         self.assertTrue(state.exists())
         self.assertTrue((owner.run / "nested-lifetime-closure.json").is_file())
+
+    def closure_owner(self, name="guard", *, initialized=True):
+        owner = object.__new__(gate.AttemptSupervisor)
+        owner.run = self.root / name
+        owner.run.mkdir()
+        state = self.root / (name + "-state")
+        state.mkdir()
+        if initialized:
+            gate.write_json(state / "root.json", {
+                "schema_version": 1, "root_id": "a" * 32, "created_at": "2026-10-13T00:00:00Z"})
+        owner.delegate_state_roots = {state}
+        owner.nested_lifetime_closure = None
+        owner.processes = Mock(entries=[])
+        owner.daemon = Mock()
+        owner.control = Mock()
+        return owner, state
+
+    def test_queue_labels_accept_only_canonical_validated_owned_root_ids(self):
+        owner, state = self.closure_owner()
+        labels = [None, "harness", "delegate:" + "a" * 32 + ":" + "b" * 32,
+                  "delegation-inspection-" + "a" * 32 + "-" + "c" * 32]
+        snapshot = Mock()
+        snapshot.json.return_value = {
+            "tasks": {str(index): {"label": label, "status": {"Done": {}}} for index, label in enumerate(labels)}}
+        owner.control.side_effect = [Mock(), snapshot, Mock()]
+        owner.close()
+        result = owner.nested_lifetime_closure
+        self.assertEqual(result["roots"], [{"path": str(state), "root_id": "a" * 32,
+                                          "task_count": 0, "inspection_count": 0}])
+        self.assertEqual([call.args for call in owner.control.call_args_list],
+                         [("pause", "--all", "--wait"), ("status", "--json"), ("shutdown",)])
+        owner.daemon.wait.assert_called_once_with(30, expected=0)
+
+    def test_queue_guard_uses_validator_result_instead_of_unvalidated_record(self):
+        owner, _ = self.closure_owner()
+        validated = {"root_id": "b" * 32, "tasks": {}, "inspections": {}}
+        with patch.object(gate, "validate_managed_lifetime_closure", return_value=validated) as validate:
+            result = owner.authorize_nested_lifetime_closure(snapshot={
+                "tasks": {"7": {"label": "delegate:" + "b" * 32 + ":" + "c" * 32}}})
+        validate.assert_called_once()
+        self.assertEqual(result["roots"][0]["root_id"], validated["root_id"])
+
+    def test_queue_guard_rejects_foreign_roots_including_empty_owned_root(self):
+        for index, (initialized, inspection) in enumerate(((False, False), (False, True), (True, False), (True, True))):
+            with self.subTest(initialized=initialized, inspection=inspection):
+                owner, state = self.closure_owner(str(index), initialized=initialized)
+                label = ("delegation-inspection-" + "b" * 32 + "-" + "c" * 32 if inspection else
+                         "delegate:" + "b" * 32 + ":" + "c" * 32)
+                with self.assertRaisesRegex(ValueError, "unowned Delegate label"):
+                    owner.authorize_nested_lifetime_closure(snapshot={"tasks": {"7": {"label": label}}})
+                self.assertEqual(gate.read_json(owner.run / "nested-lifetime-closure.json")["status"], "failed")
+                self.assertIsNone(owner.nested_lifetime_closure)
+                self.assertTrue(state.exists())
+
+    def test_queue_guard_records_malformed_snapshot_failures(self):
+        snapshots = [None, [], {}, {"tasks": []}, {"tasks": {"7": None}}, {"tasks": {"7": {}}},
+                     {"tasks": {"7": {"label": False}}}, {"tasks": {"7": {"label": "delegate:bad"}}},
+                     {"tasks": {"7": {"label": "delegation-inspection-" + "a" * 32 + ":" + "c" * 32}}}]
+        for index, snapshot in enumerate(snapshots):
+            with self.subTest(snapshot=snapshot):
+                owner, _ = self.closure_owner(str(index))
+                with self.assertRaisesRegex(ValueError, "private queue"):
+                    owner.authorize_nested_lifetime_closure(snapshot=snapshot)
+                self.assertEqual(gate.read_json(owner.run / "nested-lifetime-closure.json")["status"], "failed")
+                self.assertIsNone(owner.nested_lifetime_closure)
+
+    def test_queue_guard_does_not_replace_canonical_root_validation(self):
+        owner, state = self.closure_owner()
+        record = state / "root.json"
+        record.write_text('{"root_id":"' + "a" * 32 + '"}')
+        with self.assertRaises(RuntimeError):
+            owner.authorize_nested_lifetime_closure(snapshot={"tasks": {}})
+        self.assertEqual(gate.read_json(owner.run / "nested-lifetime-closure.json")["status"], "failed")
+        self.assertIsNone(owner.nested_lifetime_closure)
+
+    def test_queue_guard_skips_snapshot_when_daemon_never_started(self):
+        owner, _ = self.closure_owner(initialized=False)
+        owner.daemon = None
+        owner.close()
+        self.assertEqual(owner.nested_lifetime_closure, {"status": "closed", "roots": []})
+        owner.control.assert_not_called()
+
+    def test_absolute_candidate_queue_bypass_retains_fixture_and_blocks_shutdown(self):
+        owner, state = self.closure_owner(initialized=False)
+        ownership = DirectoryPinOwner(self)
+        ownership.adopt_created("Delegate state", state, self.root)
+        fixture = ownership.create("routing fixture", owner.run / "fixture", owner.run).directory
+        snapshot = Mock()
+        snapshot.json.return_value = {"tasks": {"7": {
+            "label": "delegate:" + "b" * 32 + ":" + "c" * 32, "status": {"Done": {}},
+            "original_command": str(self.candidate) + " dispatch --auto"}}}
+        owner.control.side_effect = [Mock(), snapshot]
+        receipt = {"status": "unreviewed"}
+        gate._finalize_routing_attempt(owner.run, owner, ownership, receipt)
+        self.assertEqual(receipt["reason"], "supervisor_cleanup_unproven")
+        self.assertEqual(gate.read_json(owner.run / "nested-lifetime-closure.json")["status"], "failed")
+        self.assertEqual(gate.read_json(owner.run / "cleanup.json")["status"], "retained")
+        self.assertTrue(state.exists() and fixture.exists())
+        self.assertEqual([call.args for call in owner.control.call_args_list],
+                         [("pause", "--all", "--wait"), ("status", "--json")])
+        owner.daemon.wait.assert_not_called()
+        self.assertFalse((owner.run / "supervisor-closed.json").exists())
 
     def test_uncertain_daemon_start_keeps_attempt_unclosed_and_state_retained(self):
         tool = self.root / "bin" / "tool"

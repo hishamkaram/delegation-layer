@@ -180,5 +180,17 @@
     "imports": [
       "py:ast"
     ]
+  },
+  {
+    "name": "py:skill_routing_root_shim",
+    "owner": "py:acceptance_skill_routing",
+    "layer": "tool",
+    "imports": [
+      "py:dataclasses",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys"
+    ]
   }
 ]

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
-	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/host"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -49,19 +48,6 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStoreContext(ctx, root, deps.storeDependencies(), false)
-	if err != nil {
-		return failed(response, schedulerStorageError(err), 1)
-	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
-	response.RootID = store.RootID
-	schedules, err := scheduler.Open(ctx, store)
-	if err != nil {
-		return failed(response, schedulerStorageError(err), 1)
-	}
-	if err = schedules.Close(); err != nil {
-		return failed(response, err, 1)
-	}
 	if a.Runner != "" {
 		return failed(response, errors.New("scheduler serve requires the colocated managed delegate-run; omit --runner"), 2)
 	}
@@ -70,6 +56,19 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	}
 	self, err := schedulerExecutable()
 	if err != nil {
+		return failed(response, err, 1)
+	}
+	store, err := openStoreContext(ctx, root, deps.storeDependencies(), true)
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	defer func() { mergeCommandClose(&result, store.Close) }()
+	response.RootID = store.RootID
+	schedules, err := openOrInitializeSchedules(ctx, store)
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	if err = schedules.Close(); err != nil {
 		return failed(response, err, 1)
 	}
 	args := []string{"--root", root, "scheduler", "run"}

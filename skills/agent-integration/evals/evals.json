@@ -10,7 +10,7 @@
     {
       "name": "normal-dispatch",
       "prompt": "Run one bounded task through the available agent provider.",
-      "expected": ["dispatch --auto", "--json", "save task_id", "status", "collect"]
+      "expected": ["dispatch --auto", "omit --root on ordinary commands", "--json", "save task_id", "status", "collect"]
     },
     {
       "name": "model-discovery-when-needed",
@@ -68,9 +68,29 @@
       "expected": ["use status with returned task_id", "read saved dispatch response if needed", "do not dispatch again to print an exit code", "exactly one admitted task for the assignment"]
     },
     {
-      "name": "supplied-root-across-shell-calls",
+      "name": "ambient-root-ignored-across-shell-calls",
       "prompt": "DELEGATE_ROOT is already set. Consult a separate external agent and answer its questions; each shell tool call starts a new shell.",
-      "expected": ["use supplied DELEGATE_ROOT on dispatch, status, collect, reply, steer, and continue", "resolve the same root in each shell call", "no invented task-specific root"]
+      "expected": ["omit --root on dispatch, status, collect, reply, steer, and continue", "ambient DELEGATE_ROOT has no root-selection authority", "CLI resolves its default in the same user/configuration context", "no assembled default, shell fallback, sample path, or per-task root"]
+    },
+    {
+      "name": "ordinary-root-from-another-project",
+      "prompt": "DELEGATE_ROOT is unset. An admitted task was dispatched without --root in project A. Observe and continue it from project B in the same user/configuration context.",
+      "expected": ["omit --root on status, collect, and continue", "use the recorded task ID", "CLI default is independent of project cwd", "no path guessed from project A or B", "no search across roots"]
+    },
+    {
+      "name": "explicit-root-across-shell-calls",
+      "prompt": "For this isolated test, I explicitly choose the state root /state/custom with spaces. Consult a separate external agent and answer its questions; each shell tool call starts a new shell.",
+      "expected": ["pass --root with the exact single argument /state/custom with spaces on dispatch, status, collect, reply, steer, and continue", "quote the root in shell commands", "save and reassign absolute brief and response paths in each needed shell invocation", "no ambient variable or fallback overrides the explicit choice"]
+    },
+    {
+      "name": "historical-root-continuation",
+      "prompt": "An eligible predecessor task has recorded historical root /state/legacy with spaces. Continue that exact task and collect its successor. The current CLI default is different.",
+      "expected": ["pass the exact recorded --root argument /state/legacy with spaces on continue, status, and collect", "use the exact predecessor and returned successor IDs", "no fresh dispatch", "do not move or search for the task in the default root"]
+    },
+    {
+      "name": "ordinary-schedule-root",
+      "prompt": "Create a recurring task in this project, then inspect its definition, history, and execution from another project in the same user/configuration context. No custom state root was requested.",
+      "expected": ["omit --root on schedule create, list, show, history, and execution", "keep the definition's own project --cwd", "no per-project root", "do not start a persistent scheduler inside the agent task", "forward any returned scheduler.serve_command argv intact"]
     },
     {
       "name": "pending-without-questions",

@@ -2,6 +2,9 @@
 
 Read response fields independently. A successful control command is not a
 successful provider result.
+Examples use the CLI default under the main skill's
+[root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief); preserve an
+explicit custom or recorded historical root on related commands.
 
 ## Task control response
 
@@ -49,7 +52,7 @@ this table to each dispatch or continuation attempt separately, in order:
 | Response | Next action |
 |---|---|
 | Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
-| `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
+| `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate supervisor migrate --json` once in the same user/configuration context for ordinary default-root work. If the failed command used an explicit custom or recorded historical root, run `delegate --root "<the exact absolute root used by the failed command>" supervisor migrate --json` instead. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
 | `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
 | `task_record: not_created`, `failure.code: workspace_provision_pending` or `workspace_busy`, and `failure.next_action: watch_workspace` | Follow [managed workspace recovery](#managed-workspace-results) using the same root and workspace. Once ready, retry the exact admission command and inputs. A failed `continue` remains that same `continue`, never a new dispatch. |
 | `task_record: not_created`, `failure.code: resource_pressure`, `failure.next_action: retry_later`, and `failure.retry_after_seconds: 30` | Delegate checked the host and confirmed resource pressure, so no ordinary task record was created and no provider task is running for this attempt. Do not poll or observe a task. Choose one: report the refusal and stop, or wait at least 30 seconds in the foreground and retry the exact original admission argv once. A `continue` stays that same `continue`. If the retry is refused again, report and stop. Never loop, retry in the background, schedule a retry, or run Pueue or process commands. The 30 seconds is advice, not a guarantee that the retry will pass. |
@@ -192,7 +195,7 @@ keep `schedule.id` even if the command exits nonzero. The separate top-level
 For `start_required`, both `schedule.next_action` and `scheduler.next_action`
 carry that guidance. `scheduler.serve_command` is JSON argv, including the
 resolved executable and exact root. Human output also prints JSON argv after
-`run independently (argv):`, for example:
+`run independently (argv):`. For example, a returned root containing spaces:
 
 ```text
 run independently (argv): ["/installation with spaces/delegate","--root","/state with spaces","scheduler","serve"]
@@ -280,7 +283,7 @@ For an older released occurrence whose publication is unfinished, use the
 existing collection command with the same root and task ID:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 0s --json
+delegate collect TASK_ID --watch 0s --json
 ```
 
 Follow its own response and exit using [observation guidance](#observe-and-collect).
@@ -390,7 +393,7 @@ When Delegate returns `failure.next_action: "recheck"`, use the same root and
 exact task ID:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" recheck TASK_ID --json
+delegate recheck TASK_ID --json
 ```
 
 This command checks the already sealed evidence with an explicitly compatible
