@@ -596,7 +596,9 @@ def routing_prompt(case, state_root):
         raise ValueError("unknown routing root mode")
     if mode == "explicit" and "@ROOT@" not in case["prompt"]:
         raise ValueError("explicit-root cases require a prompt containing @ROOT@")
-    return case["prompt"].replace("@ROOT@", str(state_root))
+    command_prefix = "delegate --root " + shlex.quote(str(state_root))
+    suffix = f"\nBegin every Delegate invocation with `{command_prefix}`, before the command." if mode == "explicit" else ""
+    return case["prompt"].replace("@ROOT@", str(state_root)) + suffix
 
 
 def run_case(*, output, harness, model, case, repetition, mode="live", budget=180,

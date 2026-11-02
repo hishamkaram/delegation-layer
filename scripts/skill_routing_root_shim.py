@@ -54,8 +54,8 @@ def routed_argv(argv: list[str], *, state_root: str, explicit_root: bool) -> lis
         if roots:
             raise ValueError("ordinary routing must omit every --root flag")
         return ["--root", state_root, *argv]
-    if len(roots) != 1:
-        raise ValueError("explicit routing requires exactly one --root flag")
+    if len(roots) != 1 or roots[0] != 0:
+        raise ValueError("explicit routing requires exactly one --root flag at argv start, before the command")
     index = roots[0]
     if prefix[index] in ("--root", "-root"):
         value = prefix[index + 1] if index + 1 < len(prefix) else None

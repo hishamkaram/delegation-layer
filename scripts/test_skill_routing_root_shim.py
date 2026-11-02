@@ -148,6 +148,19 @@ class RoutingRootShimTests(RoutingFixture):
                 self.assertFalse(self.backend_calls.exists())
                 self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
 
+    def test_explicit_root_looking_model_value_is_refused_without_leading_root(self):
+        self.install(explicit=True)
+        for value in ("--root=" + str(self.state), "-root=" + str(self.state)):
+            with self.subTest(value=value):
+                argv = ["schedule", "create", "--model", value, "--cwd", str(self.workspace),
+                        "--brief", str(self.brief), "--auto", "--cron", "0 9 * * *", "--budget", "1m", "--json"]
+                result = self.invoke(argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(self.backend_calls.exists())
+                record = self.records(self.run / "fixture/agent-calls.jsonl")[-1]
+                self.assertEqual(record["argv"], argv)
+                self.assertIsNotNone(record["error"])
+
     def test_explicit_cli_root_preserves_literal_helper_root(self):
         self.install(explicit=True)
         argv = ["--root", str(self.state), "workspace", "exec", "a" * 32, "--budget", "1m",
@@ -177,12 +190,13 @@ class RoutingRootShimTests(RoutingFixture):
     def test_explicit_checks_root_after_separator_used_as_flag_value(self):
         self.install(explicit=True)
         reply = ["reply", "a" * 32, "--request", "--"]
-        argv = [*reply, "--root", str(self.state)]
+        argv = ["--root", str(self.state), *reply]
         result = self.invoke(argv)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.records(self.backend_calls)[-1]["argv"], argv)
         before = self.backend_calls.read_bytes()
-        for argv in ([*reply, "--root", str(self.root / "unowned")],
+        for argv in ([*reply, "--root", str(self.state)],
+                     [*reply, "--root", str(self.root / "unowned")],
                      ["--root", str(self.state), *reply, "--root", str(self.root / "unowned")]):
             with self.subTest(argv=argv):
                 result = self.invoke(argv)
@@ -389,6 +403,9 @@ class RoutingRunIsolationTests(RoutingFixture):
         case = dict(self.case, root_mode="explicit", prompt="Use the exact custom root @ROOT@ to ask Codex.")
         def actor(run, state, owner, stdin):
             self.assertIn(str(state), stdin)
+            self.assertIn("before the command", stdin)
+            prefix = stdin.split("`", 2)[1]
+            self.assertEqual(gate.shlex.split(prefix), ["delegate", "--root", str(state)])
             self.assertEqual((run / "prompt.txt").read_text(), stdin)
             argv = ["--root", str(state), "providers", "--json"]
             result = self.invoke(argv, environment=owner.processes.environment)

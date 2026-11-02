@@ -305,6 +305,17 @@ class RoutingTests(unittest.TestCase):
             self.assertNotIn("--append-system-prompt", argv)
             self.assertTrue(stdin == self.case["prompt"] or self.case["prompt"] in argv)
 
+    def test_explicit_routing_prompt_teaches_leading_root_without_changing_default_prompt(self):
+        state = self.root / "owned ' quoted state"
+        case = dict(self.case, root_mode="explicit", prompt="Use @ROOT@ for the task.")
+        prompt = gate.routing_prompt(case, state)
+        self.assertIn(str(state), prompt)
+        self.assertNotIn("@ROOT@", prompt)
+        prefix = prompt.split("`", 2)[1]
+        self.assertEqual(gate.shlex.split(prefix), ["delegate", "--root", str(state)])
+        self.assertIn("before the command", prompt)
+        self.assertEqual(gate.routing_prompt(self.case, state), self.case["prompt"])
+
 
     def test_copied_receipt_is_not_an_independent_repetition(self):
         run = self.receipt()
