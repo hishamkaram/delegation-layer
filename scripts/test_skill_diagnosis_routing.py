@@ -78,7 +78,7 @@ class DiagnosisRoutingTests(unittest.TestCase):
         gate.write_json(fixture / "runtime.json", {
             "scenario": case["fixture_scenario"], "case": case["name"],
             "provider": case["provider"], "delegate": "/not-called",
-            "path": "/private/path",
+            "path": "/private/path", "state_root": str(state),
         })
         gate.materialize_diagnosis(fixture, workspace, state, case)
         return fixture, workspace, state, case
@@ -86,7 +86,7 @@ class DiagnosisRoutingTests(unittest.TestCase):
     def call_diagnosis(self, fixture, state, argv):
         stdout = io.StringIO()
         with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(fixture),
-                                         "DELEGATE_ROOT": str(state)}), \
+                                         "DELEGATE_ROOT": str(self.root / "unrelated-ambient-root")}), \
                 patch.object(gate.sys, "argv", ["delegate", *argv]), \
                 patch("subprocess.run") as run, contextlib.redirect_stdout(stdout):
             with self.assertRaises(SystemExit) as stopped:
@@ -162,7 +162,7 @@ class DiagnosisRoutingTests(unittest.TestCase):
                                                (["logs", "--help"], 2, "", "Usage error: delegate\n")):
             stdout, stderr = io.StringIO(), io.StringIO()
             with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(fixture),
-                                             "DELEGATE_ROOT": str(state)}), \
+                                             "DELEGATE_ROOT": str(self.root / "unrelated-ambient-root")}), \
                     patch.object(gate.sys, "argv", ["delegate", *argv]), \
                     patch("subprocess.run", return_value=Mock(returncode=code, stdout=answer, stderr=diagnostic)) as run, \
                     contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \

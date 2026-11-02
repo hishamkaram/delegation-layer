@@ -87,11 +87,16 @@ Use a supplied brief or write the worker's bounded assignment and acceptance
 criteria to a regular file. Do not copy the orchestration request or ask workers
 to recruit others unless recursive delegation was requested.
 
-Keep the state root outside provider-writable workspaces, provider runtime
-directories, and temporary trees they may write. For every task command pass
-`--root "${DELEGATE_ROOT:-$HOME/delegation-state}"` directly in that shell
-invocation. If the user explicitly requests another root, use that exact path
-consistently. Task IDs separate tasks; do not invent per-task roots.
+For ordinary task, schedule, observation, interaction, and continuation commands,
+omit `--root`; the CLI owns default-root resolution for the user's configuration
+context, independently of the project cwd. Do not assemble a default path, use a
+sample path or shell fallback, or treat ambient `DELEGATE_ROOT` as authority.
+Only pass `--root` when the user explicitly supplies a root or existing work has
+an already recorded custom or historical root; preserve that exact path for
+every command concerning that work. Never search other roots for an old task.
+Task IDs separate tasks; do not invent per-task or per-project roots. The state
+root must remain outside provider-writable workspaces, provider runtime
+directories, and temporary trees they may write.
 
 Prepare paths and dispatch in one tool invocation; shell variables may not
 persist between calls. Use saved absolute paths in later calls. Do not use
@@ -125,12 +130,15 @@ original command and intent.
 ### 5. Observe and collect
 
 Follow [observation decisions](references/result-handling.md#observe-and-collect)
-with the same root and created task ID:
+with the created task ID, using the CLI default for ordinary work:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
+delegate status TASK_ID --json
+delegate collect TASK_ID --watch 5s --json
 ```
+
+For work bound to an explicit custom or historical root, add its exact
+`--root` to both commands under the [root rule](#3-prepare-separate-paths-and-a-finite-brief).
 
 Apply the owning decision order before waiting: terminal outcomes and concrete
 errors, cancellation/timeout/interruption, interaction, then pending

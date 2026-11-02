@@ -22,7 +22,7 @@ When `status` or `collect` reports a timed-out turn with:
 run:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" continue \
+delegate continue \
   --task PREDECESSOR_TASK_ID \
   --brief FOLLOW_UP_BRIEF \
   --budget 30m \
@@ -35,8 +35,11 @@ indefinitely for a publication that the interrupted turn cannot complete.
 
 The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
 validated predecessor brief. A successful continuation returns a new task ID
-and links it to the predecessor. Observe and collect the new ID separately. Always retain the original state
-root, even if a returned command hint omits it. Permission is inherited; do not
+and links it to the predecessor. Observe and collect the new ID separately.
+Follow the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief):
+ordinary continuation omits `--root` in the same user/configuration context;
+an explicit custom or recorded historical root must be retained exactly, even
+if a returned command hint omits it. Permission is inherited; do not
 add `--permission` to `continue`. Apply
 [task creation](result-handling.md#task-creation) before retrying or observing.
 Any authorized admission retry remains the argv-equivalent `continue`;
@@ -85,7 +88,7 @@ observe that successor instead; if its creation is uncertain, follow the
    `workspace.id` from the task response; never guess an ID or path:
 
    ```sh
-   delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" workspace status \
+   delegate workspace status \
      WORKSPACE_ID --watch 30s --json
    ```
 

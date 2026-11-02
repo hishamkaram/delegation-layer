@@ -1,4 +1,8 @@
-"""Scheduler acceptance composition; existing fixture owners retain cleanup authority."""
+"""Scheduler acceptance composition; existing fixture owners retain cleanup authority.
+
+Managed-host ``all`` includes successive, overlap-stop and fresh-default.
+Service ``all`` retains successive and overlap-stop only.
+"""
 
 import argparse
 from dataclasses import dataclass, replace
@@ -19,6 +23,9 @@ from scripts.delegate_acceptance.private_cli.scheduler_cases import (
 )
 from scripts.delegate_acceptance.private_cli.scheduler_sequence import require_overlap_history, run_successive
 from scripts.delegate_acceptance.private_cli.scheduler_host import SchedulerHost
+from scripts.delegate_acceptance.private_cli.scheduler_default import (
+    bind_default_fixture, delete_default_schedule, run_fresh_default,
+)
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 
@@ -46,9 +53,14 @@ def parse_arguments(argv: list[str] | None = None) -> SchedulerArguments:
     parser.add_argument("--pueue", type=Path, default=REPOSITORY / "bin" / "test-supervisor" / "pueue")
     parser.add_argument("--pueued", type=Path, default=REPOSITORY / "bin" / "test-supervisor" / "pueued")
     parser.add_argument("--output", type=Path, help="fresh private output directory; default: a new directory under HOME")
-    parser.add_argument("--scenario", choices=("all", "successive", "overlap-stop"), default="all")
+    parser.add_argument(
+        "--scenario", choices=("all", "successive", "overlap-stop", "fresh-default"), default="all",
+        help="all runs successive, overlap-stop and fresh-default with managed-host; service all runs the first two only",
+    )
     parser.add_argument("--hosting", choices=("managed-host", "service"), default="managed-host")
     args = parser.parse_args(argv)
+    if args.scenario == "fresh-default" and args.hosting != "managed-host":
+        parser.error("fresh-default requires --hosting managed-host")
     return SchedulerArguments(args.delegate, args.runner, args.pueue, args.pueued, args.output,
                               scenario=args.scenario, hosting=args.hosting)
 
@@ -111,6 +123,14 @@ def stop_case_hosts(case: SchedulerCase) -> None:
 
 def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetime: FixtureLifetime,
                 receipt: AcceptanceReceipt, failure: BaseException | None) -> None:
+    if case is not None and case.default_root:
+        case.deadline = time.monotonic() + 45
+        try:
+            delete_default_schedule(case)
+        except BaseException as cleanup_error:
+            failure = cleanup_error if failure is None else BaseExceptionGroup(
+                "scheduler case and definition cleanup failed", [failure, cleanup_error]
+            )
     try:
         if case is not None:
             stop_case_hosts(case)
@@ -138,6 +158,8 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
 
 
 def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
+    if name == "fresh-default" and args.hosting != "managed-host":
+        raise AcceptanceBlocked("fresh-default-requires-managed-host")
     selected = replace(args, output=output / (name + ".json"), scenario=name)
     receipt = AcceptanceReceipt(selected.output, 3 if name == "successive" else 1, 1,
                                 {"delegate": args.delegate, "delegate-run": args.runner,
@@ -149,16 +171,23 @@ def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
     try:
         responses = output / (name + ".responses")
         fixture = prepare_fixture(selected, uuid.uuid4().hex, False, lifetime, responses, receipt)
+        if name == "fresh-default":
+            fixture = bind_default_fixture(fixture, lifetime)
         if lifetime.old_install is None:
             raise RuntimeError("scheduler fixture lost its installed executable")
         deadline = time.monotonic() + (SUCCESSIVE_SECONDS if name == "successive" else CASE_SECONDS)
         hosting_type = SchedulerHost if args.hosting == "managed-host" else SchedulerService
-        service = hosting_type(lifetime, fixture.state, lifetime.old_install / "delegate", deadline)
-        case = SchedulerCase(fixture, lifetime, responses, receipt, service, deadline)
+        if name == "fresh-default":
+            service = SchedulerHost(lifetime, fixture.state, lifetime.old_install / "delegate", deadline, default_root=True)
+        else:
+            service = hosting_type(lifetime, fixture.state, lifetime.old_install / "delegate", deadline)
+        case = SchedulerCase(fixture, lifetime, responses, receipt, service, deadline, default_root=name == "fresh-default")
         if isinstance(service, SchedulerService):
             receipt.add_details(service={"host": service.system, "unit": service.unit, "target": service.target,
                                          "files": str(service.directory)})
-        if name == "successive":
+        if name == "fresh-default":
+            run_fresh_default(case)
+        elif name == "successive":
             run_successive(case)
         else:
             run_overlap_stop(case)
@@ -179,7 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     output = output_directory(args.output, owner)
     print("Scheduler acceptance output: " + str(output), flush=True)
     try:
-        for name in (("successive", "overlap-stop") if args.scenario == "all" else (args.scenario,)):
+        scenarios = ("successive", "overlap-stop")
+        if args.scenario != "all":
+            scenarios = (args.scenario,)
+        elif args.hosting == "managed-host":
+            scenarios += ("fresh-default",)
+        for name in scenarios:
             run_case(args, output, name)
     except AcceptanceBlocked as error:
         print("BLOCKED scheduler acceptance: " + error.code, flush=True)

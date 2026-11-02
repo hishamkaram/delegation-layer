@@ -1,4 +1,4 @@
-"""Two bounded, real-minute scheduler cases using the existing finite pi fixture."""
+"""Bounded real-minute scheduler cases using the existing finite pi fixture."""
 from dataclasses import dataclass, field
 from pathlib import Path
 import sqlite3
@@ -43,6 +43,7 @@ class SchedulerCase:
     first_due_ns: int = 0
     command_count: int = 0
     previous_services: list[SchedulerService | SchedulerHost] = field(default_factory=list)
+    default_root: bool = False
 
     @property
     def delegate(self) -> Path:
@@ -52,6 +53,19 @@ class SchedulerCase:
 
     def command(self, name: str, arguments: list[str], expected: tuple[int, ...] = (0,)) -> dict[str, object]:
         self.command_count += 1
+        if self.default_root:
+            require(isinstance(self.service, SchedulerHost), "default-root case requires the managed host")
+            require(self.remaining() > 0, "scheduler case command deadline expired")
+            # Reuse the host's process registry so this caller has an explicit,
+            # different cwd and every control child retains the same Wait owner.
+            command = self.service.processes.run(
+                f"case-{self.command_count}-{name}", [self.delegate, *arguments, "--json"],
+                self.fixture.workspace, expected=expected, timeout=self.remaining(),
+            )
+            response = json_object(command.json())
+            if self.root_id:
+                require(response.get("root_id") == self.root_id, "default-root command changed root identity")
+            return response
         result = run_json(
             self.delegate, self.lifetime.env, ["--root", str(self.fixture.state), *arguments, "--json"],
             expected=expected, timeout=None, deadline=self.deadline, capture_root=self.lifetime.capture_token,

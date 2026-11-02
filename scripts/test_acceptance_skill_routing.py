@@ -22,11 +22,15 @@ class RoutingTests(unittest.TestCase):
         home.start()
         self.addCleanup(home.stop)
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
+        self.candidate = self.root / "delegate-candidate"
+        self.candidate.write_text("test candidate executable")
+        self.candidate.chmod(0o700)
 
     def test_failed_workspace_preparation_rolls_back_owned_directories(self):
         with patch.object(gate, "prepare_workspace", side_effect=RuntimeError("fixture setup failed")):
             with self.assertRaisesRegex(RuntimeError, "fixture setup failed"):
-                gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+                gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                              delegate_bin=self.candidate)
         self.assertFalse((self.root / "review-1" / "workspace").exists())
 
     def receipt(self, case=None, mode="live", fixture_scenario=None):
@@ -98,7 +102,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_missing_executable_produces_blocked_receipt(self):
         with patch.object(gate.shutil, "which", return_value=None):
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
         self.assertEqual(receipt["reason"], "required_executable_missing")
@@ -125,7 +130,8 @@ class RoutingTests(unittest.TestCase):
             owner.config = self.root / "queue.yml"
             owner.processes.environment = {}
             owner.capture.side_effect = ValueError("stop after setup")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
 
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
@@ -142,7 +148,8 @@ class RoutingTests(unittest.TestCase):
         (personal / "SKILL.md").write_text("old installed skill")
         with patch.dict(gate.os.environ, {"CLAUDE_CONFIG_DIR": str(profile)}), \
                 patch.object(gate, "AttemptSupervisor") as owner:
-            gate.run_case(output=self.root, harness="claude", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="claude", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         owner.assert_not_called()
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["reason"], "claude_candidate_shadowed_by_personal_skill")
@@ -221,7 +228,8 @@ class RoutingTests(unittest.TestCase):
             owner.return_value.execute.side_effect = TimeoutError()
             owner.return_value.capture.return_value = self.root / "stdout"
             (self.root / "stdout").write_text("codex version")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["reason"], "supervised_deadline_exceeded")
         self.judgment(self.root / "review-1")
@@ -236,7 +244,8 @@ class RoutingTests(unittest.TestCase):
             instance.config = self.root / "private-queue.json"
             instance.processes.environment = {}
             instance.capture.side_effect = ValueError("stop after setup")
-            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1)
+            gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1,
+                          delegate_bin=self.candidate)
         self.assertNotIn("DELEGATE_PUEUE_CONFIG", owner.call_args.args[1])
         self.assertEqual(instance.processes.environment["DELEGATE_PUEUE_CONFIG"], str(instance.config))
         instance.close.assert_called_once()
@@ -340,11 +349,11 @@ class RoutingTests(unittest.TestCase):
         (fixture / "runtime.json").write_text(json.dumps({
             "delegate": str(delegate), "path": "/private/path",
             "delegate_sha256": delegate_sha256, "scenario": scenario,
-            "provider": "codex:exec",
+            "provider": "codex:exec", "state_root": str(state),
         }))
         stdout, stderr = io.StringIO(), io.StringIO()
         environment = {"DELEGATE_ROUTING_FIXTURE": str(fixture),
-                       "DELEGATE_ROOT": str(state)}
+                       "DELEGATE_ROOT": str(self.root / "unrelated-ambient-root")}
         with patch.dict(gate.os.environ, environment), \
                 patch.object(gate.sys, "argv", ["delegate", *argv]), \
                 patch("subprocess.run", return_value=result) as run, \

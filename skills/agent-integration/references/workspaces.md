@@ -7,6 +7,10 @@ or attaches to a managed workspace (`--isolation git-worktree` or
 `--workspace ID`), or creates or removes a [Git checkpoint](#git-checkpoints).
 
 This reference is self-contained guidance for using managed workspaces.
+Commands use the CLI default under the main skill's
+[root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief). For a workspace
+or checkpoint in an explicit custom or recorded historical root, pass that
+exact `--root` on every related command.
 
 Provider-native permissions still apply inside an isolated checkout. A provider
 may edit files but be unable to stage or commit because linked-worktree Git
@@ -41,7 +45,7 @@ row ending or a provider outcome alone is not closure evidence.
 Create a managed workspace from a committed source base:
 
 ```text
-delegate --root ROOT dispatch --isolation git-worktree --cwd ABS \
+delegate dispatch --isolation git-worktree --cwd ABS \
   [--base REV] [--workspace-budget DURATION] ... --json
 ```
 
@@ -55,7 +59,7 @@ removing that source does not block capture, release, or forget. A request that 
 workspace uses its recorded checkout and source identity:
 
 ```text
-delegate --root ROOT dispatch --workspace WORKSPACE_ID ... --json
+delegate dispatch --workspace WORKSPACE_ID ... --json
 ```
 
 Public `--workspace` cannot be combined with `--cwd`, `--base`, or
@@ -80,11 +84,11 @@ made no write outside the promised content scope.
 The CLI currently exposes these managed-workspace commands:
 
 ```text
-delegate --root ROOT workspace list [--after ID] [--limit 1..50] --json
-delegate --root ROOT workspace status ID [--operation OP] [--watch DURATION] --json
-delegate --root ROOT workspace exec ID --budget DURATION --json -- ARGV...
-delegate --root ROOT workspace release ID [--discard] [--budget DURATION] --json
-delegate --root ROOT workspace forget ID [--budget DURATION] --json
+delegate workspace list [--after ID] [--limit 1..50] --json
+delegate workspace status ID [--operation OP] [--watch DURATION] --json
+delegate workspace exec ID --budget DURATION --json -- ARGV...
+delegate workspace release ID [--discard] [--budget DURATION] --json
+delegate workspace forget ID [--budget DURATION] --json
 ```
 
 `workspace exec` passes `ARGV...` directly to the supervised helper; the
@@ -110,7 +114,7 @@ must not mutate the predecessor's immutable records. A retained workspace can be
 read-only review by attaching its ID, for example:
 
 ```text
-delegate --root ROOT dispatch --provider codex:review \
+delegate dispatch --provider codex:review \
   --workspace WORKSPACE_ID --review-target TARGET --brief ABS_BRIEF \
   --permission read-only --budget 1h --json
 ```
@@ -183,11 +187,11 @@ fixed Delegate values; trailers carry the checkpoint ID and request digest.
 This is unrelated to a provider continuation `mode: "checkpoint"`.
 
 ```text
-delegate --root ROOT checkpoint create --cwd ABS [--budget DURATION] --json
-delegate --root ROOT checkpoint create --workspace ID [--budget DURATION] --json
-delegate --root ROOT checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
-delegate --root ROOT checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
-delegate --root ROOT checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
+delegate checkpoint create --cwd ABS [--budget DURATION] --json
+delegate checkpoint create --workspace ID [--budget DURATION] --json
+delegate checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
+delegate checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
+delegate checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
 ```
 
 - `create` names exactly one target: `--cwd` for an absolute ordinary Git
@@ -232,7 +236,7 @@ Save every response and exit code once; follow
    the same repository as `--cwd`, normally the source the Lead already uses:
 
    ```text
-   delegate --root ROOT dispatch --auto --brief ABS_BRIEF --cwd ABS_SOURCE \
+   delegate dispatch --auto --brief ABS_BRIEF --cwd ABS_SOURCE \
      --isolation git-worktree --base COMMIT_OID \
      --permission workspace-write --budget 30m --json
    ```

@@ -24,13 +24,15 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
 | `scheduler serve/status/stop` (when supported), `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
 
-Prefix every task command with `delegate --root ROOT`, using the same
-explicit root across invocations.
+The commands below use the CLI default and omit `--root`. The advanced override
+syntax is `delegate --root ABS COMMAND ...`; use it only for an explicitly
+supplied or already recorded custom or historical root, preserved exactly under
+the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
 
 ## Dispatch
 
 ```text
-delegate --root ROOT dispatch [--auto | --provider ID] --brief FILE \
+delegate dispatch [--auto | --provider ID] --brief FILE \
   --cwd ABS [--id TASK_ID] [--permission MODE] [--budget DURATION] \
   [--model MODEL] [--effort EFFORT] [--native-timeout DURATION] \
   [--interactive] [--review-target TARGET] [--resume-task TASK_ID] \
@@ -170,8 +172,8 @@ setup, even when there is no matching Team or project default.
 After a task record is created, inspect the same ID and root:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
+delegate status TASK_ID --json
+delegate collect TASK_ID --watch 5s --json
 ```
 
 Dispatch/status/collect optionally expose top-level `team`, the admitted
@@ -198,18 +200,18 @@ another create to obtain a running scheduler.
 See [definition and host results](result-handling.md#schedule-definition-and-host-results).
 
 ```text
-delegate --root ROOT schedule create --brief FILE --cwd ABS \
+delegate schedule create --brief FILE --cwd ABS \
   [--auto | --provider ID] --cron 'MIN HOUR DOM MONTH DOW' \
   [--timezone ZONE] [--id SCHEDULE_ID] [--model MODEL] [--effort EFFORT] \
   [--permission MODE] [--budget DURATION] [--native-timeout DURATION] \
   [--review-target TARGET] \
   [--team-scope user|project --team TEAM_ID --member MEMBER_ID] \
   [--project-root ABS] --json
-delegate --root ROOT schedule list [--after SCHEDULE_ID] [--limit N] --json
-delegate --root ROOT schedule show SCHEDULE_ID --json
-delegate --root ROOT schedule pause SCHEDULE_ID --json
-delegate --root ROOT schedule resume SCHEDULE_ID --json
-delegate --root ROOT schedule delete SCHEDULE_ID --json
+delegate schedule list [--after SCHEDULE_ID] [--limit N] --json
+delegate schedule show SCHEDULE_ID --json
+delegate schedule pause SCHEDULE_ID --json
+delegate schedule resume SCHEDULE_ID --json
+delegate schedule delete SCHEDULE_ID --json
 ```
 
 - Requested provider options remain as supplied, including omissions. Creation
@@ -245,9 +247,10 @@ delegate --root ROOT schedule delete SCHEDULE_ID --json
   history. Pause/delete do not cancel an active occurrence or require a live
   host. Create/resume preserve the saved definition even when the host is
   absent, starting, in backoff or otherwise not confirmed ready.
-- Only create initializes absent schedule storage. An absent store lists as
-  empty; show/state commands report not found. List defaults to 50 rows, at most
-  100, including paused/deleted definitions. Use the returned cursor to page.
+- Among schedule management commands, only create initializes absent storage.
+  An absent store lists as empty; show/state commands report not found. List
+  defaults to 50 rows, at most 100, including paused/deleted definitions. Use the
+  returned cursor to page.
 - Create/state responses are compact. Show returns saved requested choices and
   brief metadata, not brief contents, with a 2 MiB response limit. Keep the ID
   when output or storage reports uncertainty; inspect it with show rather than
@@ -265,8 +268,8 @@ timestamp range has a distinct range error, not a claim of permanent invalidity.
 ### Schedule history and execution
 
 ```text
-delegate --root ROOT schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit N] --json
-delegate --root ROOT schedule execution TASK_ID --json
+delegate schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit N] --json
+delegate schedule execution TASK_ID --json
 ```
 
 `history` returns occurrence summaries and compact skipped intervals together,
@@ -296,18 +299,19 @@ for freshness, no-result states, response bounds, exit codes and recovery.
 
 Check `delegate help` for the installed build's command surface. Use `serve`,
 `status` and `stop` only when that help advertises them; prefer `serve` for managed
-recovery. The signatures below describe the current command surface. Keep the
-same explicit absolute `ROOT` used by the schedule commands.
+recovery. The signatures below describe the current command surface. They use
+the same CLI default as ordinary schedule commands; preserve an explicit custom
+or historical root when the schedule is bound to one.
 
 ```text
-delegate --root ROOT scheduler serve
-delegate --root ROOT scheduler status
-delegate --root ROOT scheduler stop
-delegate --root ROOT scheduler run [--pueue-config ABS] [--json]
+delegate scheduler serve
+delegate scheduler status
+delegate scheduler stop
+delegate scheduler run [--pueue-config ABS] [--json]
 ```
 
 If installed help offers only `scheduler run`, the user runs
-`delegate --root ROOT scheduler run` in an independent terminal or tmux pane and
+`delegate scheduler run` in an independent terminal or tmux pane and
 leaves it in the foreground. Ctrl-C in its original pane stops it; it has no
 automatic child restart. Keep the saved schedule ID and inspect
 [history and execution](#schedule-history-and-execution) for actual occurrences.
@@ -332,9 +336,13 @@ When present, `scheduler.serve_command` preserves spaces and shell metacharacter
 as separate arguments. Human output also prints JSON argv, not an unquoted shell string.
 Preserve those boundaries; see the [scheduler response fields](result-handling.md#schedule-definition-and-host-results).
 
-Serve requires existing schedule storage; create owns initialization. A second
-host or competing `run` cannot acquire the same root's ownership. The host uses
-its retained launch context and the saved requested provider choices. For
+Explicit `serve` may initialize absent scheduler storage through the same
+scheduler owner lease used by `schedule create`. It can become ready with no
+definitions; later creates reach that running host without a restart. Existing
+root identity and data stay in place; invalid existing storage fails explicitly.
+Passive reads and low-level `run` do not initialize absent storage. A second host
+or competing `run` cannot acquire the same root's ownership. The host uses its
+retained launch context and the saved requested provider choices. For
 Team-targeted schedules, new occurrences read the pinned catalog's latest Member
 defaults through normal admission; existing task IDs retain saved settings. Use
 the intended user configuration context, or a different catalog instance fails
@@ -452,8 +460,8 @@ A checkpoint is Git-content evidence, not a provider outcome.
 ## Providers and capabilities
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" providers --json
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" capabilities --provider PROVIDER_ID --json
+delegate providers --json
+delegate capabilities --provider PROVIDER_ID --json
 ```
 
 `providers` returns `schema_version: 1` and a sorted `providers` array.
@@ -490,7 +498,7 @@ them. Keep defaults when no explicit choice is needed. Resolve a natural-languag
 name through native discovery:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" models \
+delegate models \
   --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
@@ -533,7 +541,7 @@ reason codes and return no model facts.
 Use static preflight when readiness was requested, not before every task:
 
 ```sh
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" preflight \
+delegate preflight \
   --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
   --permission REQUESTED_MODE --json
 ```

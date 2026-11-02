@@ -2,6 +2,8 @@
 
 Run from the intended workspace, outside Delegate's private state root.
 Use a catalog provider ID in place of `--auto` when a destination was named.
+This example uses the CLI default under the main skill's
+[root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
 Prepare paths and dispatch in this same shell invocation:
 
 ```sh
@@ -13,7 +15,7 @@ Inspect the workspace and summarize the current test failures. Do not edit files
 You are the assigned worker; perform this task without delegating it.
 EOF
 printf 'Saved response: %s\n' "$RESPONSE"
-if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
+if delegate dispatch --auto \
   --brief "$BRIEF" --cwd "$WORKSPACE" \
   --permission read-only --budget 30m --json >"$RESPONSE"; then
   dispatch_exit=0
