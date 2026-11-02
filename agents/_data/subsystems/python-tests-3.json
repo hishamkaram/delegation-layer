@@ -367,6 +367,30 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.private_cli.test_private_resource_retry",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:collections",
+      "py:contextlib",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity_dispatch",
+      "py:delegate_acceptance.private_cli.capacity_inputs",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:tempfile",
+      "py:threading",
+      "py:typing",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.private_cli.test_task_status_receipt",
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",

@@ -1,8 +1,34 @@
 """Private CLI admission boundary."""
 
+from dataclasses import dataclass
 from scripts.delegate_acceptance.private_cli.commands import run_json
+from scripts.delegate_acceptance.private_cli.configuration import RESOURCE_PRESSURE_RETRY_SECONDS
 from scripts.delegate_acceptance.private_cli.stop_policy import is_documented_user_interruption
 import time
+
+
+@dataclass(frozen=True)
+class PressureRefusal:
+    retry_after_seconds: int
+    reason_code: str
+
+
+def confirmed_resource_refusal(response: object) -> PressureRefusal | None:
+    """Recognize only the documented, safe-to-repeat pre-creation refusal."""
+    if not isinstance(response, dict) or response.get("task_record") != "not_created":
+        return None
+    failure = response.get("failure")
+    resource = response.get("resource_admission")
+    if not isinstance(failure, dict) or not isinstance(resource, dict):
+        return None
+    delay = failure.get("retry_after_seconds")
+    reason = failure.get("reason_code")
+    if (failure.get("code") != "resource_pressure" or failure.get("next_action") != "retry_later"
+            or resource.get("status") != "pressure" or type(delay) is not int
+            or delay != RESOURCE_PRESSURE_RETRY_SECONDS
+            or not isinstance(reason, str) or not reason or len(reason) > 128):
+        return None
+    return PressureRefusal(retry_after_seconds=delay, reason_code=reason)
 
 
 def observe_created_admission(
@@ -16,6 +42,7 @@ def observe_created_admission(
     *,
     capture_root,
     command_prefix=(),
+    deadline=None,
 ):
     """Confirm one created task after uncertain dispatch; never retry it."""
     failure = response.get("failure", {})
@@ -29,17 +56,19 @@ def observe_created_admission(
     if not needs_observation:
         return response
     task_id = response["task_id"]
-    deadline = time.monotonic() + timeout
+    deadline = min(time.monotonic() + timeout, deadline) if deadline is not None else time.monotonic() + timeout
     attempt = 0
     while True:
-        remaining = deadline - time.monotonic()
+        observed_at = time.monotonic()
+        remaining = deadline - observed_at
         if remaining <= 0:
             raise TimeoutError("created fixture task admission remained uncertain: " + task_id)
         observed = run_json(
             delegate,
             env,
             [*command_prefix, "--root", str(state), "status", task_id, "--json"],
-            timeout=min(45, remaining),
+            timeout=None,
+            deadline=min(deadline, observed_at + 45),
             receipt=receipt.with_name("observation-" + receipt.stem + "-%03d.json" % attempt),
             phase=phase,
             capture_root=capture_root,
