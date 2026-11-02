@@ -112,7 +112,17 @@ func (f sourceFixture) step(t *testing.T) {
 		t.Fatalf("next pulse delay=%s, want one second", timer.duration)
 	}
 	f.monotonic.Advance(time.Second)
+	f.awaitCompleted(t)
+}
+
+func (f sourceFixture) awaitCompleted(t *testing.T) {
+	t.Helper()
 	await(t, f.monitor.completed)
+	// The callback can finish while GoCron's accepted completion handler still
+	// prunes schedules. Cross its owner loop before advancing the fake clock.
+	if jobs := f.scheduler.Jobs(); len(jobs) != 1 {
+		t.Fatalf("producer has %d jobs after completion, want one interval job", len(jobs))
+	}
 }
 
 func await[T any](t *testing.T, channel <-chan T) T {
