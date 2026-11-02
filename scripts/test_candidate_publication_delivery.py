@@ -14,7 +14,9 @@ from scripts.delegate_acceptance.release_verification import candidate_publicati
 from scripts.delegate_acceptance.release_verification.candidate_manifest import MANIFEST_PATH
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_ports import default_ports
-from scripts.test_candidate_artifact_support import ARTIFACT_ID, COMMIT, ENDPOINTS, REPOSITORY, TREE, CandidateArtifactCase
+from scripts.test_candidate_artifact_support import (
+    ARTIFACT_ID, COMMIT, DOWNLOAD, ENDPOINTS, REPOSITORY, RUN_ID, TREE, CandidateArtifactCase,
+)
 from scripts import test_candidate_publication_preflight as ci_fixture
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 from scripts.test_release_github_transport import ObservedGitHubClient
@@ -65,6 +67,33 @@ class PublicationTests(CandidateArtifactCase):
         for name, data in {**self.served.files, MANIFEST_PATH: self.served.manifest}.items():
             self.assertEqual((artifact.payload / name).read_bytes(), data)
         self.assertEqual(artifact.container.path.read_bytes(), self.served.container.read_bytes())
+
+    @contextlib.contextmanager
+    def scripted_run_replies(self, states):
+        """Vary synthetic metadata after real transport reads, never hosted GitHub state."""
+        real = ObservedGitHubClient.json
+        seen = []
+
+        def observed(client, endpoint, *args, **kwargs):
+            record = real(client, endpoint, *args, **kwargs)
+            if endpoint == ENDPOINTS["attempt"]:
+                self.assertIsInstance(record, dict)
+                self.assertLess(len(seen), len(states), "unexpected extra CI run observation")
+                record.update(states[len(seen)])
+                seen.append(record.copy())
+            return record
+
+        with patch.object(ObservedGitHubClient, "json", observed):
+            yield seen
+
+    def assert_only_publication_reads(self):
+        allowed = {*ENDPOINTS.values(), DOWNLOAD, ci_fixture.jobs_endpoint(),
+                   f"repos/{REPOSITORY}/commits/{COMMIT}", f"repos/{REPOSITORY}/branches/main"}
+        calls = [json.loads(line) for line in self.log_path.read_text().splitlines()]
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertEqual(call["argv"][:3], ["api", "--method", "GET"])
+            self.assertIn(call["endpoint"], allowed)
 
     def publish(self, *, fail=None, resume=False, name="output"):
         request = self.request(resume=resume, name=name)
@@ -132,6 +161,55 @@ class PublicationTests(CandidateArtifactCase):
         self.assertFalse(receipt["publication"]["first_mutation_started"])
         self.assertEqual(receipt["failure"]["code"], "distribution_ci_not_successful")
         self.assertTrue((request.output_dir / delivery.WORKSPACE_NAME).is_dir())
+
+    def test_changing_run_titles_preserve_exact_artifact_delivery(self):
+        titles = ("Initial CI title", "Renamed CI title", "Latest CI title")
+        states = tuple({"display_title": title} for title in titles)
+        with self.scripted_run_replies(states) as seen:
+            code, receipt, request = self.publish()
+        self.assertEqual([row["display_title"] for row in seen], list(titles))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.events, ["prepare", "github", "npm", "tap"])
+        self.assertEqual((receipt["verdict"], receipt["publication"]["status"]), ("pass", "delivered"))
+        artifact = receipt["publication"]["artifact"]
+        self.assertEqual((artifact["artifact"]["id"], artifact["attempt"]["run_id"], artifact["source_commit"]),
+                         (ARTIFACT_ID, RUN_ID, COMMIT))
+        self.assertFalse((request.output_dir / delivery.WORKSPACE_NAME).exists())
+        self.assert_only_publication_reads()
+
+    def test_changing_titles_cannot_hide_ci_failure_or_source_mismatch(self):
+        cases = (
+            ("failed", {"conclusion": "failure"}, "distribution_ci_not_successful"),
+            ("running", {"status": "in_progress", "conclusion": None}, "distribution_ci_not_successful"),
+            ("unknown-status", {"status": "unknown"}, "distribution_ci_not_successful"),
+            ("malformed-status", {"status": []}, "distribution_ci_not_successful"),
+            ("missing-run", {"id": None}, "distribution_source_untrusted"),
+            ("foreign-run", {"id": RUN_ID + 1}, "distribution_source_untrusted"),
+            ("source", {"head_sha": "f" * 40}, "distribution_source_untrusted"),
+            ("workflow", {"workflow_id": 7}, "distribution_source_untrusted"),
+            ("branch", {"head_branch": "task"}, "distribution_source_untrusted"),
+            ("event", {"event": "pull_request"}, "distribution_source_untrusted"),
+            ("path", {"path": ".github/workflows/release.yml"}, "distribution_source_untrusted"),
+            ("repository", {"repository": {"id": 7}}, "distribution_source_untrusted"),
+            ("head-repository", {"head_repository": {"id": 7}}, "distribution_source_untrusted"),
+        )
+        for read in (2, 3):
+            for name, changes, expected in cases:
+                with self.subTest(read=read, case=name):
+                    self.events.clear()
+                    self.log_path.unlink(missing_ok=True)
+                    states = tuple({"display_title": f"CI title {index}",
+                                    **(changes if index == read else {})} for index in (1, 2, 3))
+                    with self.scripted_run_replies(states) as seen:
+                        code, receipt, request = self.publish(name=f"refused-{read}-{name}")
+                    self.assertEqual(len(seen), read)
+                    self.assertNotEqual(seen[0]["display_title"], seen[-1]["display_title"])
+                    self.assertEqual((code, self.events), (1, []))
+                    self.assertEqual(receipt["failure"]["code"], expected)
+                    self.assertFalse(receipt["publication"]["first_mutation_started"])
+                    payload = request.output_dir / delivery.WORKSPACE_NAME / "payload"
+                    self.assertEqual((payload / MANIFEST_PATH).read_bytes(), self.served.manifest)
+                    self.assert_only_publication_reads()
 
     def test_each_conflict_stops_later_destinations_and_retains_workspace(self):
         for fail, expected in (("prepare", ["prepare"]), ("github", ["prepare", "github"]),
