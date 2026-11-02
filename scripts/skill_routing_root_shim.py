@@ -38,7 +38,16 @@ def read_configuration(path: Path) -> Configuration:
 
 def routed_argv(argv: list[str], *, state_root: str, explicit_root: bool) -> list[str]:
     """Validate original agent intent before adding the harness-owned root."""
-    prefix = argv[:argv.index("--")] if "--" in argv else argv
+    prefix = argv
+    command_start = 0
+    if argv and argv[0] in ("--root", "-root"):
+        command_start = 2
+    elif argv and argv[0].startswith(("--root=", "-root=")):
+        command_start = 1
+    # Grant a helper tail only to literal workspace exec, optionally after
+    # one root option. Other forms scan all argv instead of guessing arities.
+    if argv[command_start:command_start + 2] == ["workspace", "exec"] and "--" in argv:
+        prefix = argv[:argv.index("--")]
     roots = [index for index, value in enumerate(prefix)
              if value in ("--root", "-root") or value.startswith(("--root=", "-root="))]
     if not explicit_root:

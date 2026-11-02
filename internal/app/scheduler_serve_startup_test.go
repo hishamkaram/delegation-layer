@@ -106,19 +106,19 @@ func awaitSchedulerInitialization(t *testing.T, ctx context.Context, store *task
 	for {
 		opened, err := scheduler.Open(ctx, store)
 		if err == nil {
-			if err := opened.Close(); err != nil {
-				t.Fatal(err)
+			if closeErr := opened.Close(); closeErr != nil {
+				t.Fatal(closeErr)
 			}
-			lease, err := scheduler.AcquireOwnerLease(ctx, store)
-			if err == nil {
+			lease, leaseErr := scheduler.AcquireOwnerLease(ctx, store)
+			if leaseErr == nil {
 				t.Cleanup(func() {
-					if err := lease.Close(); err != nil {
-						t.Error(err)
+					if releaseErr := lease.Close(); releaseErr != nil {
+						t.Error(releaseErr)
 					}
 				})
 				return lease
 			}
-			last = err
+			last = leaseErr
 		} else {
 			last = err
 		}
@@ -154,40 +154,43 @@ func TestSchedulerServeInvalidRunnerDoesNotInitialize(t *testing.T) {
 
 func TestSchedulerInitializersRefuseBusyOwnerWithoutDatabaseOrHost(t *testing.T) {
 	for _, action := range []string{"serve", "create"} {
-		t.Run(action, func(t *testing.T) {
-			store := schedulerServeStore(t)
-			lease, err := scheduler.AcquireOwnerLease(t.Context(), store)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := lease.Close(); err != nil {
-					t.Error(err)
-				}
-			})
-			var response Response
-			var code int
-			if action == "serve" {
-				response, code = schedulerServeJSON(t, schedulerStartupContext(t), store.Root, schedulerServeDependencies(t))
-			} else {
-				args := scheduleCreateArgs(t)
-				args.Root = store.Root
-				deps := Dependencies{}
-				result := createScheduleCommand(args, deps.storeDependencies())
-				response, code = result.response, result.code
-				if response.Schedule == nil || response.Schedule.State == contract.StateEnabled || response.Schedule.Saved {
-					t.Fatalf("busy initialization reported a saved definition: %+v", response)
-				}
-			}
-			if code != 1 || !strings.Contains(response.Error, task.ErrLockBusy.Error()) {
-				t.Fatalf("busy initializer did not fail explicitly: code=%d response=%+v", code, response)
-			}
-			for _, name := range []string{filepath.Join(".scheduler", "schedules.sqlite"), ".scheduler-host.lock"} {
-				if _, err := os.Lstat(filepath.Join(store.Root, name)); !errors.Is(err, fs.ErrNotExist) {
-					t.Fatalf("busy initializer created %s: %v", name, err)
-				}
-			}
-		})
+		t.Run(action, func(t *testing.T) { assertSchedulerInitializerRefusesBusyOwner(t, action) })
+	}
+}
+
+func assertSchedulerInitializerRefusesBusyOwner(t *testing.T, action string) {
+	t.Helper()
+	store := schedulerServeStore(t)
+	lease, err := scheduler.AcquireOwnerLease(t.Context(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lease.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var response Response
+	var code int
+	if action == "serve" {
+		response, code = schedulerServeJSON(t, schedulerStartupContext(t), store.Root, schedulerServeDependencies(t))
+	} else {
+		args := scheduleCreateArgs(t)
+		args.Root = store.Root
+		deps := Dependencies{}
+		result := createScheduleCommand(args, deps.storeDependencies())
+		response, code = result.response, result.code
+		if response.Schedule == nil || response.Schedule.State == contract.StateEnabled || response.Schedule.Saved {
+			t.Fatalf("busy initialization reported a saved definition: %+v", response)
+		}
+	}
+	if code != 1 || !strings.Contains(response.Error, task.ErrLockBusy.Error()) {
+		t.Fatalf("busy initializer did not fail explicitly: code=%d response=%+v", code, response)
+	}
+	for _, name := range []string{filepath.Join(".scheduler", "schedules.sqlite"), ".scheduler-host.lock"} {
+		if _, err := os.Lstat(filepath.Join(store.Root, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("busy initializer created %s: %v", name, err)
+		}
 	}
 }
 

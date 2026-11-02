@@ -166,6 +166,54 @@ class RoutingRootShimTests(RoutingFixture):
         self.assertEqual(self.records(self.backend_calls)[-1]["argv"], ["--root", str(self.state), *argv])
         self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
 
+    def test_default_rejects_root_after_separator_used_as_flag_value(self):
+        self.install()
+        argv = ["reply", "a" * 32, "--request", "--", "--root", str(self.root / "unowned")]
+        result = self.invoke(argv)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.backend_calls.exists())
+        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
+
+    def test_explicit_checks_root_after_separator_used_as_flag_value(self):
+        self.install(explicit=True)
+        reply = ["reply", "a" * 32, "--request", "--"]
+        argv = [*reply, "--root", str(self.state)]
+        result = self.invoke(argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(self.backend_calls)[-1]["argv"], argv)
+        before = self.backend_calls.read_bytes()
+        for argv in ([*reply, "--root", str(self.root / "unowned")],
+                     ["--root", str(self.state), *reply, "--root", str(self.root / "unowned")]):
+            with self.subTest(argv=argv):
+                result = self.invoke(argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(self.backend_calls.read_bytes(), before)
+
+    def test_default_cannot_forge_workspace_exec_from_flag_values_before_separator(self):
+        self.install()
+        cases = (["--runner", "workspace", "exec", "--request", "--"],
+                 ["--runner", "workspace", "--pueue-config", "exec", "reply", "a" * 32, "--request", "--"],
+                 ["workspace", "--runner", "exec", "status", "a" * 32, "--watch", "--"],
+                 ["reply", "a" * 32, "--request", "workspace", "exec", "--id", "--"])
+        for prefix in cases:
+            with self.subTest(prefix=prefix):
+                argv = [*prefix, "--root", str(self.root / "unowned")]
+                result = self.invoke(argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(self.backend_calls.exists())
+
+    def test_explicit_cannot_forge_workspace_exec_from_flag_values_before_separator(self):
+        self.install(explicit=True)
+        cases = (["--runner", "workspace", "exec", "--request", "--"],
+                 ["workspace", "--runner", "exec", "status", "a" * 32, "--watch", "--"],
+                 ["reply", "a" * 32, "--request", "workspace", "exec", "--id", "--"])
+        for prefix in cases:
+            with self.subTest(prefix=prefix):
+                argv = ["--root", str(self.state), *prefix, "--root", str(self.root / "unowned")]
+                result = self.invoke(argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(self.backend_calls.exists())
+
     def test_implicit_candidate_resolved_before_path_change_and_fixture_keeps_shim_first(self):
         original_path = self.environment["PATH"]
         with patch.object(gate.shutil, "which", wraps=shutil.which) as lookup:
