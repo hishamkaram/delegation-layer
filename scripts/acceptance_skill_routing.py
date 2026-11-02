@@ -262,6 +262,22 @@ def materialize_diagnosis(fixture, workspace, state_root, case):
     routing_fixture.initialize_diagnosis(fixture, workspace, state_root, case["fixture_scenario"])
 
 
+def validate_nested_queue_roots(snapshot, root_ids):
+    """Compare queue identities only with roots closed by the canonical validator."""
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("tasks"), dict):
+        raise ValueError("private queue snapshot has invalid tasks")
+    for row in snapshot["tasks"].values():
+        if not isinstance(row, dict) or "label" not in row or not (row["label"] is None or isinstance(row["label"], str)):
+            raise ValueError("private queue task label is invalid")
+        label = row["label"]
+        if label is None or not label.startswith(("delegate:", "delegation-inspection-")):
+            continue
+        match = re.fullmatch(
+            r"delegate:([0-9a-f]{32}):[0-9a-f]{32}|delegation-inspection-([0-9a-f]{32})-[0-9a-f]{32}", label)
+        if match is None or (match.group(1) or match.group(2)) not in root_ids:
+            raise ValueError("private queue contains an unowned Delegate label")
+
+
 class AttemptSupervisor:
     """Own only this attempt's private daemon; stopping always goes through Pueue."""
 
@@ -342,7 +358,7 @@ class AttemptSupervisor:
             raise RuntimeError(f"supervised {name} prerequisite failed")
         return self.run / name / "stdout.txt"
 
-    def authorize_nested_lifetime_closure(self):
+    def authorize_nested_lifetime_closure(self, *, snapshot=None):
         """Close every nested Delegate root before stopping this fixture queue."""
         roots = set(getattr(self, "delegate_state_roots", ()))
         for process in getattr(self.processes, "entries", ()):
@@ -364,10 +380,12 @@ class AttemptSupervisor:
                     raise RuntimeError("nested Delegate state root has no root record: " + str(root))
                 result = validate_managed_lifetime_closure(root)
                 closure["roots"].append({
-                    "path": str(root),
+                    "path": str(root), "root_id": result["root_id"],
                     "task_count": len(result["tasks"]),
                     "inspection_count": len(result["inspections"]),
                 })
+            if self.daemon is not None:
+                validate_nested_queue_roots(snapshot, {entry["root_id"] for entry in closure["roots"]})
         except BaseException as error:
             failure = {
                 "status": "failed",
@@ -413,7 +431,7 @@ class AttemptSupervisor:
             raise RuntimeError("private supervisor stop not observed; ownership retained")
         # The outer fixture queue is independently complete at this point.
         # Nested Delegate records still require the shared lifetime authority.
-        self.authorize_nested_lifetime_closure()
+        self.authorize_nested_lifetime_closure(snapshot=snapshot)
         self.control("shutdown")
         self.daemon.wait(30, expected=0)
         write_json(self.run / "supervisor-closed.json", {"termination_observed": True})
@@ -634,8 +652,8 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
             raise FileNotFoundError("initiating harness missing")
         argv[0] = executable
         owner = AttemptSupervisor(run, env, ownership, state_root=state)
-        # Nested Delegate tasks share only this attempt's queue. This both avoids
-        # caller-owned queues and makes outer cleanup observe paid child work.
+        # This ambient hint does not bind private provider admission. The
+        # guard covers only Delegate labels observed in this attempt's queue.
         owner.processes.environment["DELEGATE_PUEUE_CONFIG"] = str(owner.config)
         owner.start()
         git = shutil.which("git")

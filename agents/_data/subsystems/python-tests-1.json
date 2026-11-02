@@ -691,6 +691,7 @@
       "py:os",
       "py:pathlib",
       "py:subprocess",
+      "py:sys",
       "py:tempfile",
       "py:unittest"
     ]

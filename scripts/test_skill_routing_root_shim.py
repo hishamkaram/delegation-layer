@@ -136,6 +136,36 @@ class RoutingRootShimTests(RoutingFixture):
                 self.assertEqual(result.returncode, 2)
                 self.assertEqual(self.backend_calls.read_bytes(), before)
 
+    def test_explicit_root_only_in_helper_tail_is_refused_before_backend(self):
+        self.install(explicit=True)
+        for flags in (["--root", str(self.state)], ["--root=" + str(self.state)],
+                      ["-root", str(self.state)], ["-root=" + str(self.state)]):
+            with self.subTest(flags=flags):
+                argv = ["workspace", "exec", "a" * 32, "--budget", "1m", "--", "/bin/echo", *flags]
+                result = self.invoke(argv)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("exactly one --root", result.stderr)
+                self.assertFalse(self.backend_calls.exists())
+                self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
+
+    def test_explicit_cli_root_preserves_literal_helper_root(self):
+        self.install(explicit=True)
+        argv = ["--root", str(self.state), "workspace", "exec", "a" * 32, "--budget", "1m",
+                "--", "/bin/echo", "--root", str(self.root / "helper-only"), "--", "-root=literal"]
+        result = self.invoke(argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(self.backend_calls)[-1]["argv"], argv)
+        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
+
+    def test_default_cli_root_is_injected_without_interpreting_helper_root(self):
+        self.install()
+        argv = ["workspace", "exec", "a" * 32, "--budget", "1m", "--", "/bin/echo",
+                "--root", str(self.root / "helper-only"), "-root=literal"]
+        result = self.invoke(argv)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.records(self.backend_calls)[-1]["argv"], ["--root", str(self.state), *argv])
+        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
+
     def test_implicit_candidate_resolved_before_path_change_and_fixture_keeps_shim_first(self):
         original_path = self.environment["PATH"]
         with patch.object(gate.shutil, "which", wraps=shutil.which) as lookup:

@@ -532,5 +532,52 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:test_scheduler_default",
+    "owner": "py:test_scheduler_default",
+    "layer": "test",
+    "imports": [
+      "py:contextlib",
+      "py:dataclasses",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.packaged_defaults",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.scheduler_acceptance",
+      "py:delegate_acceptance.private_cli.scheduler_cases",
+      "py:delegate_acceptance.private_cli.scheduler_default",
+      "py:delegate_acceptance.private_cli.scheduler_host",
+      "py:delegate_acceptance.private_cli.scheduler_occurrences",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:tempfile",
+      "py:time",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:test_skill_routing_root_shim",
+    "owner": "py:test_skill_routing_root_shim",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_skill_routing",
+      "py:contextlib",
+      "py:io",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:shutil",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
   }
 ]

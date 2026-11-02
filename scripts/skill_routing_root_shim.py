@@ -38,7 +38,8 @@ def read_configuration(path: Path) -> Configuration:
 
 def routed_argv(argv: list[str], *, state_root: str, explicit_root: bool) -> list[str]:
     """Validate original agent intent before adding the harness-owned root."""
-    roots = [index for index, value in enumerate(argv)
+    prefix = argv[:argv.index("--")] if "--" in argv else argv
+    roots = [index for index, value in enumerate(prefix)
              if value in ("--root", "-root") or value.startswith(("--root=", "-root="))]
     if not explicit_root:
         if roots:
@@ -47,10 +48,10 @@ def routed_argv(argv: list[str], *, state_root: str, explicit_root: bool) -> lis
     if len(roots) != 1:
         raise ValueError("explicit routing requires exactly one --root flag")
     index = roots[0]
-    if argv[index] in ("--root", "-root"):
-        value = argv[index + 1] if index + 1 < len(argv) else None
+    if prefix[index] in ("--root", "-root"):
+        value = prefix[index + 1] if index + 1 < len(prefix) else None
     else:
-        value = argv[index].partition("=")[2]
+        value = prefix[index].partition("=")[2]
     if value != state_root:
         raise ValueError("explicit routing must preserve the exact supplied root")
     return list(argv)
