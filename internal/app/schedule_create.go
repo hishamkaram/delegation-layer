@@ -45,7 +45,7 @@ func createScheduleCommand(a Arguments, deps storeDependencies) (result commandR
 	}
 	defer func() { mergeScheduleClose(&result, root.Close) }()
 	response.RootID = root.RootID
-	store, err := openScheduleForCreate(ctx, root)
+	store, err := openOrInitializeSchedules(ctx, root)
 	if err != nil {
 		response.Schedule.State = ""
 		return failed(response, err, 1)

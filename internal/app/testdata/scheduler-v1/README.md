@@ -6,7 +6,7 @@ The unchanged version-1 SQLite database and task records were copied after the
 old database connection closed. Do not regenerate with current writers.
 
 The one-off producer used that checkout's `newAppTestTask`,
-`newAppTaskInStore`, `recordCustodyLifetime`, `openScheduleForCreate` and the
+`newAppTaskInStore`, `recordCustodyLifetime`, `openOrInitializeSchedules` and the
 production claim/observation/release APIs. Both tasks contain the fixture
 answer `answer\n`. Schedule ID is 32 `a` characters. Task IDs are 32 `c`
 characters (sealed, released, publication pending) and 32 `d` characters

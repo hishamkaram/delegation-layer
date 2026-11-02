@@ -32,7 +32,7 @@ func scheduleFixture(t *testing.T) (string, contract.Store, contract.Definition)
 			t.Error(closeErr)
 		}
 	})
-	store, err := openScheduleForCreate(t.Context(), state)
+	store, err := openOrInitializeSchedules(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestScheduleCreateOpenRefusesCorruptStore(t *testing.T) {
 	if writeErr := os.WriteFile(path, contents, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	opened, err := openScheduleForCreate(t.Context(), state)
+	opened, err := openOrInitializeSchedules(t.Context(), state)
 	if opened != nil || !errors.Is(err, task.ErrUnsupportedSchema) {
 		t.Fatalf("opened=%v err=%v", opened, err)
 	}

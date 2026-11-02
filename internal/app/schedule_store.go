@@ -10,10 +10,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// openScheduleForCreate only migrates after confirmed absence, with a second
-// observation under the scheduler owner's lease. Existing databases are never
-// migrated for ordinary CRUD.
-func openScheduleForCreate(ctx context.Context, root *taskdir.Store) (contract.Store, error) {
+// openOrInitializeSchedules creates storage only after confirmed absence, with
+// a second observation under the scheduler owner's lease. Explicit create and
+// serve reuse this boundary; existing databases are never migrated here.
+func openOrInitializeSchedules(ctx context.Context, root *taskdir.Store) (contract.Store, error) {
 	opened, err := scheduler.Open(ctx, root)
 	if err == nil || !onlyNotExist(err) {
 		return opened, err
