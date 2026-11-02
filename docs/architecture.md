@@ -58,6 +58,17 @@ A normal task passes through these boundaries:
 The plugin's SessionStart bootstrap precedes this lifecycle. It makes the
 control CLI available; it does not own task admission or execution.
 
+### Shared default state
+
+`internal/config.ResolveDefaultRoot` owns the OS-default execution location;
+`internal/tasklifecycle.ResolveRoot` selects it when `--root` is omitted and
+canonicalizes the path. Ordinary agent and manual CLI commands use that same
+resolver under the same native user/configuration context, independent of cwd.
+Each schedule's project is its saved `--cwd`, not another state-root selector.
+An explicit nondefault root remains separate; existing task identities and
+evidence stay at their recorded locations. See the
+[operator root guidance](cli-reference.md#advanced-explicit-and-historical-roots).
+
 ### Optional Team selection
 
 The [Teams guide](teams.md) owns public configuration and selection rules.
@@ -323,11 +334,15 @@ The foreground host implements the ownership below. Implementation presence
 does not establish native or real-provider acceptance for a particular build
 or platform; those require the explicit checks described below.
 
-The user starts `delegate --root ROOT scheduler serve` in an independent
-terminal or tmux pane. The foreground host owns one exclusive host lease H per
+The user starts `delegate scheduler serve` in an independent terminal or tmux
+pane. Explicit startup initializes absent storage before normal host ownership;
+an empty calendar can become ready and accept later definitions from other
+projects without a restart. The foreground host owns one exclusive host lease H per
 canonical root, its desired-state writes, generation/attempt identity, child
 channel, Start/Wait and restart timing. The scheduler child owns execution lease
-E throughout joined runtime shutdown. Acquire H before E; compatibility
+E throughout joined runtime shutdown. During host/runtime arbitration acquire H
+before E; the temporary initialization E lease closes before acquiring H.
+Compatibility
 `scheduler run` uses the same arbitration and runs without automatic restart.
 
 It announces its own foreground generation under H before acquiring E. Passive
@@ -412,7 +427,17 @@ for inspection and same-task recovery decisions.
 
 The scheduler owner lease alone may initialize or migrate
 `<root>/.scheduler/schedules.sqlite`. Opening does not initialize or migrate it.
-Schedule create owns initialization; serve requires existing schedule storage.
+Application composition gives `schedule create` and explicit user-started
+`scheduler serve` the same absent-storage initializer. It rechecks confirmed
+absence under the scheduler owner lease and uses that owner's migration API.
+The temporary scheduler handle and initialization lease close before normal
+host startup; the base store remains open throughout `host.Serve`.
+An initializer that loses the nonblocking lease reports busy without starting a
+host/child or persisting a definition; the base root and lock file may already
+exist. A caller can rerun after the competing initializer finishes.
+Existing root metadata is preserved. Passive reads only open existing storage;
+list can report absent storage as empty. Compatibility `scheduler run` requires
+existing storage. Neither path initializes it.
 The database and directory must be private, user-owned and not symlinks.
 Task files and artifacts are preserved; there is no task-history backfill.
 

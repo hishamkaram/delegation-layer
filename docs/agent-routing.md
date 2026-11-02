@@ -34,6 +34,19 @@ never grants trust or overrides a host-disabled hook. Its `configured` status
 means matching entries exist, not that they ran or that the model followed them.
 Check actual native hook events and tool calls for activation evidence.
 
+Ordinary routed commands omit `--root`, allowing the CLI to resolve the same
+OS-default store used by a user-started `delegate scheduler serve` from any
+project directory. A workspace selects where the task runs. An explicitly
+supplied or already recorded nondefault root is preserved for that work.
+See [state-root selection and upgrade guidance](cli-reference.md#advanced-explicit-and-historical-roots).
+
+After updating the integration through its normal installation path, verify the
+skill and routing content the harness actually loads, including plugin caches
+and any older personal skill that takes precedence. Repository changes alone
+do not update an installed copy. Old `DELEGATE_ROOT` exports no longer select a
+root in corrected skill commands; use the exact explicit old root to access
+historical work.
+
 Existing noninteractive installer commands and the standard `skills add` path
 remain skill-only. `--routing skill-only` does not remove previously configured
 hooks. The installer never installs the CLI as part of skill setup; the plugin's

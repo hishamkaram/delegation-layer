@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "aaed68f2f2086c070539503d347efead89c20f87",
+      "revision": "8a0ca355b9961c0129a67ed8066e195e86d99a4f",
       "link_mode": "local-only"
     }
   },
@@ -16,8 +16,8 @@
     {
       "id": "lead",
       "type": "external",
-      "label": "Lead",
-      "sublabel": "caller or automation",
+      "label": "Agent / user CLI",
+      "sublabel": "ordinary: omit --root",
       "sources": [
         {
           "path": "cmd/delegate/main.go",
@@ -43,13 +43,13 @@
       "id": "control",
       "type": "backend",
       "label": "CLI / lifecycle",
-      "sublabel": "same task path",
+      "sublabel": "default · any cwd",
       "sources": [
         {
-          "path": "internal/tasklifecycle/dispatch.go",
-          "line": 12,
-          "end_line": 98,
-          "label": "Team resolution before resource gate"
+          "path": "internal/tasklifecycle/dispatch_inputs.go",
+          "line": 16,
+          "end_line": 25,
+          "label": "Omitted root uses the shared CLI default"
         },
         {
           "path": "internal/tasklifecycle/cancel.go",
@@ -212,9 +212,9 @@
       "from": "lead",
       "to": "control",
       "y": 170,
-      "label": "dispatch request",
+      "label": "dispatch (no --root)",
       "variant": "emphasis",
-      "note": "Scheduled entry: only after a definitely new committed claim; call lifecycle in process."
+      "note": "CLI resolves the same OS-default store as user-started scheduler serve."
     },
     {
       "id": "read-recorded-context",
@@ -480,7 +480,7 @@
       "dot": "violet",
       "title": "Two entries; one task lifecycle",
       "items": [
-        "The lead requests one bounded task. A scheduled occurrence enters the same lifecycle in process only after a definitely new committed claim; it does not launch another delegate CLI. Host startup, GoCron wakes and calendar ownership are shown in the component map.",
+        "Agent and manual commands omit --root and share one OS-default store across project directories. Plain user-started scheduler serve can be ready before the first definition. Its host and calendar are shown in the component map; a scheduled entry calls this lifecycle in process only after a new committed claim.",
         "Optional Team selection reads current Member defaults before fresh admission. Every new scheduled occurrence resolves them anew; explicit caller choices stay authoritative and Roles grant no permissions (internal/app/teams_schedule_create.go:25–51).",
         "Same-ID replay uses saved Team selection. Continuation inherits the recorded Team context, provider session and config under existing explicit caller override rules (internal/tasklifecycle/continuation_request.go:9–26)."
       ]
@@ -490,7 +490,8 @@
       "title": "How to read the alternatives",
       "items": [
         "A and B form the normal request/completion path only when fresh admission succeeds. Confirmed resource pressure exits A without a task record.",
-        "C is a separate active-task cancellation path, not a step after B has published a terminal outcome. D is an explicit new request after the predecessor ends."
+        "C is a separate active-task cancellation path, not a step after B has published a terminal outcome. D is an explicit new request after the predecessor ends.",
+        "For an intentional custom or historical root, preserve its exact --root for dispatch, reads, controls and continuation. Nothing moves existing task records."
       ]
     },
     {

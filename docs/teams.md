@@ -42,7 +42,7 @@ delegate teams register --scope project --cwd "$PROJECT_CWD" \
 }
 JSON
 delegate teams show --scope project --cwd "$PROJECT_CWD" --team review-team --json
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch \
+delegate dispatch \
   --cwd "$PROJECT_CWD" --brief "$BRIEF" \
   --team-scope project --team review-team --member primary \
   --permission read-only --budget 30m --json
@@ -51,6 +51,10 @@ delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch \
 Capture the dispatch response and exit status separately and apply
 [task creation decisions](../skills/agent-integration/references/result-handling.md#task-creation)
 before observing or retrying it. Saving a Team does not launch a provider.
+Ordinary execution omits `--root` and shares the CLI's default state across
+projects. `--cwd` selects the workspace and Local Team context. Preserve an
+intentional or recorded nondefault root explicitly; see
+[state-root selection](cli-reference.md#advanced-explicit-and-historical-roots).
 
 Definitions use schema version 1 and strict decoding. IDs contain 1–64 lowercase
 ASCII letters/digits with internal single hyphens. Team, Role and Member IDs

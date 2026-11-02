@@ -24,14 +24,18 @@ The guide owns [scope and linked-worktree rules](teams.md#global-and-local-scope
 
 ## Recurring tasks
 
-Save the definition first, then start one scheduler for its state root yourself.
-Saving, host readiness and a successful provider result are separate facts.
+Start `delegate scheduler serve` yourself in an independent terminal or tmux
+pane. It can become ready before you save the first definition. Agents and
+manual commands share the CLI's OS-default store under the same native
+user/configuration context, from any project directory. Each definition keeps
+its own project `--cwd`. Saving, host readiness and a successful provider result
+are separate facts.
 
-The examples use `/home/alex/delegation-state` as the state root and
-`/home/alex/projects/repo` as the workspace. Replace them with your actual
-absolute paths, including the **exact root already used by your agent**. Keep
-the state root outside provider-writable workspaces. Every command that reads
-or changes state must use that same explicit `--root`.
+Ordinary commands below omit `--root`. For intentional custom stores and
+historical tasks, use the
+[explicit-root and upgrade guidance](cli-reference.md#advanced-explicit-and-historical-roots).
+The example workspace `/home/alex/projects/repo` must be replaced with your
+actual absolute project path.
 
 ### Check your installed commands
 
@@ -46,40 +50,6 @@ child restart. These docs describe main, and
 and actual response fields, not a release number. For features missing from a
 published build, use a release containing them or the existing
 [source-build setup](contributing.md#development-setup).
-
-### Save the first definition
-
-Ask your agent, substituting your paths and the choices you want:
-
-> Review this repository's open pull requests every weekday at 09:00 in
-> Europe/Berlin, using workspace /home/alex/projects/repo and state root
-> /home/alex/delegation-state. Use our selected provider, model and effort,
-> native read-only permissions and a 30-minute budget per run. Keep findings
-> local. Save the schedule, return its ID, exact root, exit status and JSON
-> response, and give me the scheduler command if returned. I will start it
-> myself in an independent terminal.
-
-The agent uses [`schedule create`](../skills/agent-integration/references/command-reference.md#schedules),
-which initializes absent schedule storage without launching a provider.
-`serve` requires that storage to exist. Replace `SCHEDULE_ID` below with the
-returned `schedule.id`; retain it for every later read or state change.
-
-On builds with host controls, **`schedule.saved: true` retains that ID on any
-exit code**. Exit `3` can request `start_required` or `inspect_scheduler`;
-exit `1` can report a permanent host fault after saving. Follow the actual
-fields and error without creating the definition again. For `start_required`,
-give the returned `scheduler.serve_command` JSON argv array intact to the user;
-preserve every argument boundary, including spaces, when entering it in a shell.
-Do not join the array into an unquoted command. Older builds may omit these
-host fields entirely. In either path, confirm the saved definition:
-
-```sh
-delegate --root "/home/alex/delegation-state" schedule show SCHEDULE_ID --json
-```
-
-If persistence is uncertain, keep the ID and inspect the reported error before
-proceeding. The canonical [definition and host results](../skills/agent-integration/references/result-handling.md#schedule-definition-and-host-results)
-own the response decisions.
 
 ### Start in an independent terminal or tmux pane
 
@@ -100,25 +70,33 @@ Inside that terminal or tmux pane, run the command supported by your build.
 For a build with host controls:
 
 ```sh
-delegate --root "/home/alex/delegation-state" scheduler serve
+delegate scheduler serve
 ```
 
-Use the exact executable and root from returned `scheduler.serve_command` when
-present. Leave this command running: **do not wait for it to return before
+This explicit start initializes absent base and scheduler storage while
+preserving existing root metadata. It becomes ready with zero definitions.
+If initialization reports busy, rerun after the other initializer finishes;
+existing invalid or incompatible storage is an error, not replaced. When a
+saved definition returns `scheduler.serve_command`, preserve its exact
+executable and root, including any intentional custom root.
+Leave this command running: **do not wait for it to return before
 checking readiness in a second terminal**. One host manages every saved
 schedule in that root. The user starts it independently; do not launch it from
 an agent's bounded task, append shell `&`, or install an OS service as part of
 this walkthrough.
 
-**Older build with only `run`:** instead run this foreground command in the
-same independent terminal or tmux pane:
+**Compatibility: `run` or an older build without fresh-store `serve`:**
+save the first definition using [the section below](#save-the-first-definition)
+before starting the runtime.
+`scheduler run` opens existing storage only. If installed help offers only
+`run`, use this foreground command in the same independent terminal or tmux pane:
 
 ```sh
-delegate --root "/home/alex/delegation-state" scheduler run
+delegate scheduler run
 ```
 
-Keep it running and open a second terminal for history inspection below. Do not
-issue `scheduler status` or `scheduler stop` on that build, or expect `start_required`,
+Keep it running and open a second terminal for history inspection below. On a
+run-only build, do not issue `scheduler status` or `scheduler stop`, or expect `start_required`,
 `serve_command` or other saved-host fields. This compatibility runtime has no
 supervised-child automatic restart.
 
@@ -127,7 +105,7 @@ supervised-child automatic restart.
 **For builds with host controls only**, open another terminal and run:
 
 ```sh
-delegate --root "/home/alex/delegation-state" scheduler status --json
+delegate scheduler status --json
 ```
 
 Confirm both `scheduler.state: "ready"` and `scheduler.ready: true`. Exit `0`
@@ -137,13 +115,60 @@ Report `scheduler.fault: true` and its available diagnostic as a permanent
 owner-reported fault; degraded state or `last_error` alone is insufficient.
 See [host result decisions](../skills/agent-integration/references/result-handling.md#schedule-definition-and-host-results).
 
+### Save the first definition
+
+Ask your agent, substituting your paths and the choices you want:
+
+> Review this repository's open pull requests every weekday at 09:00 in
+> Europe/Berlin, using workspace /home/alex/projects/repo. Use our selected
+> provider, model and effort, native read-only permissions and a 30-minute
+> budget per run. Keep findings
+> local. Save the schedule, return its ID, exact root, exit status and JSON
+> response, and give me the scheduler command if returned. I manage the host
+> myself in an independent terminal.
+
+The agent uses [`schedule create`](../skills/agent-integration/references/command-reference.md#schedules),
+which initializes absent schedule storage without launching a provider.
+On the current build, this may happen before or after `serve`; saving never
+starts the host. For direct CLI use, replace `ABSOLUTE_PROJECT`,
+`ABSOLUTE_BRIEF` and `PROVIDER_ID` with your actual project, regular brief file
+and selected provider. Preserve any selected `--model` and `--effort` too:
+
+```sh
+delegate schedule create --cwd "ABSOLUTE_PROJECT" --brief "ABSOLUTE_BRIEF" \
+  --provider PROVIDER_ID --permission read-only --budget 30m \
+  --cron '0 9 * * MON-FRI' --timezone Europe/Berlin --json
+```
+
+Run this from another project/session under the same native configuration
+context: it reaches the same store as plain `scheduler serve`. Replace
+`SCHEDULE_ID` below with the returned `schedule.id`; retain it for every later
+read or state change.
+
+On builds with host controls, **`schedule.saved: true` retains that ID on any
+exit code**. Exit `3` can request `start_required` or `inspect_scheduler`;
+exit `1` can report a permanent host fault after saving. Follow the actual
+fields and error without creating the definition again. For `start_required`,
+give the returned `scheduler.serve_command` JSON argv array intact to the user;
+preserve every argument boundary, including spaces, when entering it in a shell.
+Do not join the array into an unquoted command. Older builds may omit these
+host fields entirely. In either path, confirm the saved definition:
+
+```sh
+delegate schedule show SCHEDULE_ID --json
+```
+
+If persistence is uncertain, keep the ID and inspect the reported error before
+proceeding. The canonical [definition and host results](../skills/agent-integration/references/result-handling.md#schedule-definition-and-host-results)
+own the response decisions.
+
 ### Inspect the first occurrence and collect its result
 
 For either build, leave the machine awake and the scheduler running through
 the next due appointment. In the second terminal:
 
 ```sh
-delegate --root "/home/alex/delegation-state" schedule history SCHEDULE_ID --limit 10 --json
+delegate schedule history SCHEDULE_ID --limit 10 --json
 ```
 
 In `schedule_history.entries`, find `kind: "occurrence"` and copy its
@@ -152,7 +177,7 @@ interval without an admitted task. An empty history before the next due time
 is expected. Host readiness alone does not prove a provider ran.
 
 ```sh
-delegate --root "/home/alex/delegation-state" schedule execution TASK_ID --json
+delegate schedule execution TASK_ID --json
 ```
 
 This passively reads validated local task evidence alongside the last cached
@@ -162,7 +187,7 @@ for missing, pending or rejected evidence. For an existing task with a result
 to collect, use the same task ID and root:
 
 ```sh
-delegate --root "/home/alex/delegation-state" collect TASK_ID --watch 0s --json
+delegate collect TASK_ID --watch 0s --json
 ```
 
 Apply [normal result decisions](../skills/agent-integration/references/result-handling.md#observe-and-collect)
@@ -171,6 +196,39 @@ descriptor. Collection does not repeat provider work. A released reservation
 does not prove successful publication, and history can retain an older cached
 observation after collection. Results remain inspectable after the agent
 session or scheduler ends.
+
+### Clean up a test schedule
+
+For a one-off experiment, retain its exact schedule ID and every admitted task
+ID, including independently admitted workers. Follow the project
+[cleanup rule](../AGENTS.md#test-and-experiment-cleanup) and
+[live-test operating steps](../skills/live-e2e/SKILL.md). For those exact owned
+IDs, first prevent additional launches:
+
+```sh
+delegate schedule delete SCHEDULE_ID --json
+delegate schedule show SCHEDULE_ID --json
+delegate schedule history SCHEDULE_ID --limit 100 --json
+```
+
+Confirm the definition is deleted. Page history if it returns a continuation
+cursor, and account for each admitted occurrence: deletion does not cancel it.
+For each owned active task, request cancellation and observe its closure:
+
+```sh
+delegate cancel TASK_ID --json
+delegate schedule execution TASK_ID --json
+delegate collect TASK_ID --watch 0s --json
+```
+
+Apply the linked result-handling rules; a cancellation acknowledgement,
+committed answer or released reservation alone does not prove complete closure.
+Stop the host using the next section only if this experiment started and owns
+it. After closure, release any owned managed workspace through
+[`workspace release`](../skills/agent-integration/references/workspaces.md#public-commands)
+and remove owned scratch files/binaries. Retain shared/default storage and
+historical rows. If closure is unresolved, keep the evidence and report the
+exact resource. A test that fails during setup still follows these steps.
 
 ### Detach and reattach tmux
 
@@ -190,7 +248,7 @@ server alive.
 **With host controls**, request stop from the second terminal:
 
 ```sh
-delegate --root "/home/alex/delegation-state" scheduler stop --json
+delegate scheduler stop --json
 ```
 
 Completed stop reports exit `0` and `scheduler.state: "stopped"`; wait for the

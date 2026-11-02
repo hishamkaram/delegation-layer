@@ -116,6 +116,31 @@ systemd user manager or launchd. Choose `--hosting service` explicitly for the
 optional legacy service cases. Keep results from those modes separate; the flag's
 presence and finite-fixture coverage do not establish real-provider or recovery
 verification.
+
+Use `--scenario fresh-default --hosting managed-host` for the fixture-only
+native default-root check. It starts plain `scheduler serve` on absent storage
+in an owned, isolated native configuration context, checks readiness with zero
+definitions, then uses ordinary no-root commands from different working
+directories and observes one finite fixture occurrence. It makes no AI calls
+and requires `managed-host`. Select it explicitly: `--scenario all` continues
+to run the existing `successive` and `overlap-stop` cases.
+
+With the candidate binaries and fixture supervisors built, run from the
+repository root using an absent output directory (change the example output
+name for later runs):
+
+```sh
+python3 scripts/acceptance_scheduler.py \
+  --scenario fresh-default --hosting managed-host \
+  --delegate "$PWD/bin/delegate" --runner "$PWD/bin/delegate-run" \
+  --pueue "$PWD/bin/test-supervisor/pueue" \
+  --pueued "$PWD/bin/test-supervisor/pueued" \
+  --output "$PWD/.local/archive/scheduler-fresh-default-results"
+```
+
+Use `python3 scripts/acceptance_scheduler.py --help` for the current driver's
+scenario and binary-path options.
+
 For the new path, run the actual candidate CLI/runner on Linux and macOS with a
 user-started `scheduler serve` in an independent terminal or tmux pane. Verify
 child failure followed by owned Wait, backoff, restart and a later scheduled
