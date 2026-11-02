@@ -58,6 +58,17 @@ users and providers own their CLI installations, settings and accounts.
 - Independent reviewers did not implement the reviewed change. A stopped or
   inconclusive check is reported honestly, not converted into approval.
 
+## Test and experiment cleanup
+
+The creator owns cleanup of test-only files, binaries, schedules, admitted
+tasks, processes and managed workspaces. Arrange cleanup before creating a
+resource and cover success, failure and interruption. Prevent further launches,
+close active work through its supported lifecycle owner, and verify closure
+before removing owned paths. Preserve user data, shared state and intended
+deliverables; retained history in a shared store is not active work and is not
+purged. If cleanup or closure is unresolved, retain necessary evidence, report
+the exact remaining resource and do not claim cleanup or test completion.
+
 ## Code discovery
 
 Prefer codebase-memory MCP search, trace and snippets. Confirm project/index
