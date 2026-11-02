@@ -257,6 +257,11 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
             roots.append(capture_root)
             pid_fallback(capture_root)
 
+        def shutdown_pending(_pending, _ledger, *, capture_root, disposal, reader, deadline):
+            self.assertIs(reader, self.lifetime.closure_reader)
+            self.assertIsNone(deadline)
+            shutdown(capture_root=capture_root)
+
         target = Mock(spec=supervisor.PredecessorShutdownTarget, state=self.root / "predecessor",
                       backup_handle=SimpleNamespace(close=lambda: None))
         pending: SupervisorCleanup = {"config": config, "client": fixture.provider_bin, "env": {},
@@ -265,8 +270,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
                                           "predecessor": target}
         self.lifetime.supervisor_cleanups[:] = [pending, predecessor]
         with patch.object(finalization, "shutdown_pending_private_supervisor",
-                          side_effect=lambda pending, _ledger, *, capture_root, disposal: shutdown(
-                              capture_root=capture_root)), \
+                          side_effect=shutdown_pending), \
                 patch.object(finalization, "shutdown_predecessor_supervisor",
                              side_effect=lambda *_a, capture_root, **_k: (
                                  shutdown(capture_root=capture_root), finalization.PREDECESSOR_SHUT_DOWN)[1]), \

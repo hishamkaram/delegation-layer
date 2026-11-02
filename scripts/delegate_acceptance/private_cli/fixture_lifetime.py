@@ -58,3 +58,9 @@ class FixtureLifetime:
     # are known created records for the primary root; None keeps passive cleanup.
     # It takes a task ID and the absolute monotonic cleanup deadline.
     primary_observer: Callable[[str, float], str] | None = None
+    # Scenario-owned preparation runs before primary readiness, under the same
+    # absolute deadline. It must close child roots before parent disposal.
+    prepare_cleanup: Callable[[float], None] | None = None
+    # The canonical reader remains the default. A scenario may bind its
+    # explicit canonical Go never-launched proof port; no result is cached.
+    closure_reader: Callable[[Path, tuple[str, ...]], dict[str, object]] | None = None

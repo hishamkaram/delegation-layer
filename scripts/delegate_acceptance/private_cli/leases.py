@@ -52,6 +52,25 @@ class LockedReleaseGate:
             os.close(descriptor)
 
 
+def ordinary_lifetime_owner_live(path):
+    """Probe an ordinary guardian lease without assuming ownership or signaling."""
+    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        visible = os.stat(path, follow_symlinks=False)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_uid == os.getuid()
+                and (opened.st_dev, opened.st_ino) == (visible.st_dev, visible.st_ino),
+                "ordinary lifetime owner lock is unsafe or replaced")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
+
+
 TRANSITION_LOCK_TIMEOUT_SECONDS = 30
 
 

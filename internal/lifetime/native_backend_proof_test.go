@@ -370,24 +370,13 @@ func writeNativeBackendProofReceipt(path string, receipt nativeBackendProofRecei
 	if len(data) > nativeProofReceiptLimit {
 		return fmt.Errorf("receipt exceeds %d-byte limit", nativeProofReceiptLimit)
 	}
-	temporary := path + ".tmp"
-	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	written, writeErr := file.Write(data)
-	if writeErr == nil && written != len(data) {
-		writeErr = io.ErrShortWrite
-	}
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err = errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return errors.Join(err, os.Remove(temporary))
-	}
-	if err = os.Rename(temporary, path); err != nil {
-		return errors.Join(err, os.Remove(temporary))
-	}
-	return nil
+	return publishNativeFixtureRecord(path, true, func(writer io.Writer) error {
+		written, writeErr := writer.Write(data)
+		if writeErr == nil && written != len(data) {
+			writeErr = io.ErrShortWrite
+		}
+		return writeErr
+	})
 }
 
 func nativeProofDigest(value string) string {

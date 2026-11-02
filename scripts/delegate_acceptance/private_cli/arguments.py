@@ -37,10 +37,14 @@ def parse_arguments():
             EXTERNAL_NOEXEC_STATE_SCENARIO,
             SUPERVISOR_UPGRADE_RECOVERY_SCENARIO,
             MODERN_CONTENTION_SCENARIO,
+            "nested-survival",
         ),
         default="capacity",
     )
     parser.add_argument("--parallel-tasks", type=int, default=CAPACITY_TARGET_TASKS)
+    parser.add_argument("--nested-topology", choices=("shared-warm", "other-warm", "other-cold"))
+    parser.add_argument("--expected-backend", choices=("cgroup-v2", "process-group"))
+    parser.add_argument("--native-fixture", type=Path, help="native lifetime test binary for nested survival")
     parser.add_argument(
         "--dispatch-workers",
         type=int,
@@ -53,11 +57,27 @@ def parse_arguments():
         "--noexec-state-parent", type=Path, help="caller-owned noexec directory that holds the scenario state root"
     )
     args = parser.parse_args()
+    _validate_scenario_arguments(args, parser)
+    if args.dispatch_workers is not None and args.dispatch_workers <= 0:
+        parser.error("--dispatch-workers must be positive")
+    dispatch_workers = min(args.parallel_tasks, args.dispatch_workers or DEFAULT_DISPATCH_WORKERS)
+    return args, dispatch_workers, parser
+
+
+def _validate_scenario_arguments(args, parser):
     if (args.noexec_state_parent is not None) != (args.scenario == EXTERNAL_NOEXEC_STATE_SCENARIO):
         parser.error(
             "--noexec-state-parent is required by, and only valid for, --scenario %s" % EXTERNAL_NOEXEC_STATE_SCENARIO
         )
-    if args.scenario == MODERN_CONTENTION_SCENARIO:
+    nested_options = (args.nested_topology, args.expected_backend, args.native_fixture)
+    if args.scenario == "nested-survival":
+        if (not all(nested_options) or args.parallel_tasks != 3 or args.dispatch_workers != 1
+                or not args.runtime_only or args.upgraded_delegate or args.upgraded_runner):
+            parser.error("nested-survival requires topology/backend/native-fixture, three tasks, one dispatch worker, "
+                         "runtime-only and the current installation")
+    elif any(option is not None for option in nested_options):
+        parser.error("nested topology/backend/native fixture options require nested-survival")
+    elif args.scenario == MODERN_CONTENTION_SCENARIO:
         if (args.parallel_tasks != MODERN_CONTENTION_TASK_COUNT
                 or args.upgraded_delegate is None or args.upgraded_runner is None):
             parser.error("modern-two-binary-contention requires two tasks and both candidate binaries")
@@ -93,10 +113,6 @@ def parse_arguments():
             parser.error("supervisor-upgrade-recovery requires two tasks and the current packaged installation")
     elif args.parallel_tasks != CAPACITY_TARGET_TASKS:
         parser.error("--parallel-tasks must be exactly %d for the capacity proof" % CAPACITY_TARGET_TASKS)
-    if args.dispatch_workers is not None and args.dispatch_workers <= 0:
-        parser.error("--dispatch-workers must be positive")
-    dispatch_workers = min(args.parallel_tasks, args.dispatch_workers or DEFAULT_DISPATCH_WORKERS)
-    return args, dispatch_workers, parser
 
 
 def _validate_noexec_state_arguments(args, parser):
@@ -145,6 +161,8 @@ def prepare_receipt(args, dispatch_workers, parser):
         binary_sources["upgraded-delegate"] = args.upgraded_delegate
     if args.upgraded_runner is not None:
         binary_sources["upgraded-delegate-run"] = args.upgraded_runner
+    if args.native_fixture is not None:
+        binary_sources["native-fixture"] = args.native_fixture
     run_receipt = AcceptanceReceipt(output, args.parallel_tasks, dispatch_workers, binary_sources)
     run_receipt.add_details(scenario=args.scenario)
     return (legacy_mode, queued_runner_check, inspection_runner_check, response_directory, run_receipt)

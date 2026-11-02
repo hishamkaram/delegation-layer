@@ -125,6 +125,24 @@ behavior use the relevant existing live scenario with a disposable workspace
 and existing credentials, not a full paid matrix for an unchanged runtime.
 Do not modify global provider settings or credentials for a pass.
 
+## Independent startup component proof
+
+`DELEGATE_INDEPENDENT_EXPECTED_BACKEND=cgroup-v2 make acceptance-independent-startup`
+runs the infrastructure component probes on an exact Linux host. Use
+`process-group` only on a native cooperative host; the probe asserts the backend
+selected by production `Prepare` and does not force fallback. It checks native
+lease inheritance, descriptor exclusion, adoption, scope termination with an
+ordinary orphan control, peer identity and component custody staging.
+
+For native Ubuntu/macOS component evidence before runtime integration, manually
+dispatch CI on the feature branch with `native_startup_component_only=true` and
+`build_candidate=false`. This mode runs the named component jobs and is labelled
+as component proof only. It does not establish full CI, product acceptance,
+production image provenance or PR readiness. Normal full CI remains required
+before opening the PR. An abrupt owned fixture exit models owner loss; it is not
+an external signal-handling test. Different-UID native rejection remains
+unverified without a second user.
+
 ## Native and CLI scenarios
 
 The [native-check guidance](../agents/_data/maintainability-contract.md#native-platform-checks)
@@ -140,11 +158,29 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery. |
 | `make acceptance-workspaces` | Managed workspace lifecycle, lineage and checkpoint fixtures. |
 | `make acceptance-native-lifetime` | Selected native lifetime backend behavior. |
+| `make acceptance-nested-survival` | Running and queued worker survival across leader budget expiry, with shared-warm, separate-warm and separate-cold private supervisors. |
 
 Choose affected scenarios; CI's actual configured checks are visible in its
 workflow. The private capacity scenario proves concurrent live owner leases and
 scopes, not merely queue depth. Its four dispatch callers are a load-generator
 setting, not a product limit or a 200-call burst guarantee.
+
+The nested-survival fixture runs each topology in a fresh owned root and stops
+on the first non-passing case. It uses three-minute leaders and ten-minute
+workers; queued admission does not start the worker's execution deadline.
+`DELEGATE_NESTED_EXPECTED_BACKEND=process-group` is the default expectation.
+Use `DELEGATE_NESTED_EXPECTED_BACKEND=cgroup-v2` on a native exact-capable Linux
+host. This asserts the observed backend; it never forces a fallback or changes
+host setup. Run the driver outside every managed Delegate task. CI checks
+native Linux and macOS cooperative cases separately; neither proves exact
+cgroup behavior. Missing native coverage remains unverified.
+
+The fixture records cold-start provenance, daemon continuity before recovery,
+a fresh reply from the same running worker after leader termination, queued
+launch and independent deadline, ordinary descendant containment, and native
+closure before shutdown. Failed setup, survival or cleanup remains non-passing;
+retained roots and captures are diagnostic evidence. Until the cold arrangement
+is verified on the relevant backend, prestart its supervisor outside the leader.
 
 Verify the user-started scheduler host natively on Linux and macOS.
 `scripts/acceptance_scheduler.py` accepts

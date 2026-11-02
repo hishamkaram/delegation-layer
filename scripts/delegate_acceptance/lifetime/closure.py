@@ -8,6 +8,7 @@ from scripts.delegate_acceptance.evidence.records import _read_control_record, _
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp
 from scripts.delegate_acceptance.evidence.validation import (
     AcceptanceFailure,
+    _hex_digest,
     _task_identity,
     require,
 )
@@ -21,7 +22,44 @@ from scripts.delegate_acceptance.lifetime.evidence import _validate_managed_ordi
 from scripts.delegate_acceptance.workspaces.admission_evidence import _inspection_request_identity
 from scripts.delegate_acceptance.workspaces.closure import _scan_managed_workspace_lifetime_closure
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
+
+
+# The caller excludes unsettled creators/queue work; this port must re-run the
+# canonical store's locked proof. It is never a cached success or a launcher.
+UnlaunchedProof = Callable[[Path, str, str], dict[str, object]]
+
+
+def _validate_unlaunched_reference(directory: Path, root: str, task: str, proof: dict[str, object]) -> None:
+    require(proof.get("root_id") == root and proof.get("task_id") == task
+            and proof.get("never_started") is True and _hex_digest(proof.get("refusal_sha256")),
+            f"canonical never-launched proof is invalid for {task}")
+    require(all(not (directory / name).exists() and not (directory / name).is_symlink()
+                for name in ("provider.start", "provider.started.json", "provider.exit", "provider.ref.json")),
+            f"never-launched proof contradicts provider execution for {task}")
+    outcome = directory / "outcome.json"
+    if outcome.exists() or outcome.is_symlink():
+        record = _read_control_record(outcome, f"never-launched terminal outcome for {task}")
+        require(record.get("root_id") == root and record.get("task_id") == task
+                and record.get("verdict") in {"committed", "rejected"}
+                and digest(outcome) == proof["refusal_sha256"], f"never-launched terminal reference changed for {task}")
+        return
+    stops = directory / "stop"
+    require(stops.is_dir() and not stops.is_symlink(), f"never-launched permanent refusal is missing for {task}")
+    for index, path in enumerate(stops.iterdir()):
+        require(index < 192, f"never-launched stop inspection exceeds its bound for {task}")
+        if not path.name.endswith(".request.json"):
+            continue
+        record = _read_control_record(path, f"never-launched permanent refusal for {task}")
+        if digest(path) != proof["refusal_sha256"]:
+            continue
+        require(record.get("schema_version") == 1 and record.get("root_id") == root and record.get("task_id") == task
+                and record.get("cause") in {"user", "automatic-abandonment"}
+                and record.get("request_id") == path.name.removesuffix(".request.json")
+                and record.get("spec_sha256") == digest(directory / "task.json"),
+                f"never-launched refusal reference changed for {task}")
+        return
+    require(False, f"never-launched refusal digest is absent for {task}")
 
 
 def _ordinary_lifetime_control_started(directory: Path) -> bool:
@@ -66,7 +104,8 @@ def _ordinary_supervisor_handoff_started(directory: Path) -> bool:
 
 
 def _scan_managed_ordinary_lifetime_closure(
-        state: Path, root: str, task_ids: Iterable[str] = ()) -> dict[str, dict[str, object]]:
+        state: Path, root: str, task_ids: Iterable[str] = (), *,
+        prove_unlaunched: UnlaunchedProof | None = None) -> dict[str, dict[str, object]]:
     """Scan ordinary state and reuse the canonical task lifetime validator."""
     requested = set(task_ids)
     if not (all(isinstance(task, str) and _task_identity(task) for task in requested)):
@@ -108,6 +147,13 @@ def _scan_managed_ordinary_lifetime_closure(
             # either that receipt or a lifetime journal, no worker was owned.
             continue
         if ownership != "managed" and not lifetime_started:
+            continue
+
+        if ownership == "managed" and handoff_started and not lifetime_started and prove_unlaunched is not None:
+            proof = prove_unlaunched(state, root, task)
+            _validate_unlaunched_reference(directory, root, task, proof)
+            closures[task] = {"disposition": "never-launched", "registration": None,
+                              "refusal_sha256": proof["refusal_sha256"]}
             continue
 
         task_path = directory / "task.json"
@@ -187,7 +233,8 @@ def _scan_managed_inspection_lifetime_closure(
 
 
 def validate_managed_lifetime_closure(
-        state: Path, task_ids: Iterable[str] = ()) -> dict[str, object]:
+        state: Path, task_ids: Iterable[str] = (), *,
+        prove_unlaunched: UnlaunchedProof | None = None) -> dict[str, object]:
     """Authorize cleanup from every managed lifetime under one state root.
 
     The state root is authoritative: task and inspection directories are
@@ -202,7 +249,7 @@ def validate_managed_lifetime_closure(
     workspace = _scan_managed_workspace_lifetime_closure(state, root)
     closure: dict[str, object] = {
         "root_id": root,
-        "tasks": _scan_managed_ordinary_lifetime_closure(state, root, task_ids),
+        "tasks": _scan_managed_ordinary_lifetime_closure(state, root, task_ids, prove_unlaunched=prove_unlaunched),
         "inspections": _scan_managed_inspection_lifetime_closure(state, root),
     }
     # Preserve the historical empty-root shape for ordinary/inspection callers;

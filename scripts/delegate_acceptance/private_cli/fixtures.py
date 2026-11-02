@@ -2,6 +2,7 @@
 
 import shlex
 import sys
+from pathlib import Path
 
 
 PI_FIXTURE = r"""#!/bin/sh
@@ -36,6 +37,9 @@ fi
 
 prompt=$(/bin/cat)
 case "$prompt" in
+  *DELEGATE_NESTED_SURVIVAL*)
+    exec __PYTHON_EXECUTABLE__ -c __NESTED_PROGRAM__ "$prompt"
+    ;;
   *DELEGATE_SCHEDULER_CONTROLLED_FAILURE*)
     if [ -f "$gate_path.scheduler-fail" ]; then
       printf '%s\n' 'controlled scheduler fixture failure' >&2
@@ -114,5 +118,9 @@ def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce):
     script = script.replace("__LEASE_NONCE_JSON__", shlex.quote(lease_nonce))
     script = script.replace("__PYTHON_EXECUTABLE__", shlex.quote(sys.executable))
     script = script.replace("__PI_WAIT_PROGRAM__", shlex.quote(PI_WAIT_PROGRAM))
+    repository = str(Path(__file__).resolve().parents[3])
+    nested_program = ("import sys; sys.path.insert(0, " + repr(repository)
+                      + "); from scripts.delegate_acceptance.private_cli.nested_fixture import main; main(sys.argv[1])")
+    script = script.replace("__NESTED_PROGRAM__", shlex.quote(nested_program))
     pi.write_text(script)
     pi.chmod(0o700)

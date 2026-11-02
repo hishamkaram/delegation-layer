@@ -39,6 +39,11 @@ def main():
     fixture = None
     try:
         fixture = prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory, run_receipt)
+        if args.scenario == "nested-survival":
+            from scripts.delegate_acceptance.private_cli.nested import run_nested_survival
+            run_nested_survival(args, lifetime, fixture, response_directory, run_receipt)
+            success = True
+            return
         if args.scenario == MODERN_CONTENTION_SCENARIO:
             run_prepared_modern_contention(lifetime, fixture, response_directory, run_receipt)
             success = True

@@ -38,7 +38,8 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
     # Its teardown fault is a cleanup error: the one terminal receipt below still records it.
     disposal = DisposalLeases()
     try:
-        handed_off_roots = shutdown_supplemental_supervisors(cleanup_errors, lifetime, disposal=disposal)
+        handed_off_roots = shutdown_supplemental_supervisors(cleanup_errors, lifetime, disposal=disposal,
+                                                            deadline=primary_deadline)
         shutdown_primary_supervisor(
             args,
             cleanup_errors,
@@ -116,6 +117,12 @@ def release_disposal_leases(disposal, cleanup_errors):
 def release_fixture_workers(args, cleanup_errors, lifetime, success):
     primary_deadline = time.monotonic() + PRIMARY_FINALIZATION_SECONDS
     primary_closure_ready = True
+    if lifetime.prepare_cleanup is not None:
+        try:
+            lifetime.prepare_cleanup(primary_deadline)
+        except BaseException as cleanup_error:
+            primary_closure_ready = False
+            cleanup_errors.append(RuntimeError("scenario cleanup preparation failed: " + str(cleanup_error)))
     if lifetime.release_gate is not None:
         try:
             lifetime.release_gate.release()
@@ -145,12 +152,14 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
         closure_observer = lifetime.primary_observer
     if (
         not success
+        and primary_closure_ready
         and closure_config is not None
         and closure_config.is_file()
         and (current_handoff_binding is not None or lifetime.managed_state_roots)
     ):
         try:
-            await_primary_readiness(closure_state, closure_task_ids, closure_env, primary_deadline, closure_observer)
+            await_primary_readiness(closure_state, closure_task_ids, closure_env, primary_deadline, closure_observer,
+                                    reader=lifetime.closure_reader)
         except BaseException as cleanup_error:
             primary_closure_ready = False
             cleanup_errors.append(
@@ -165,15 +174,15 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
     return current_handoff_binding, primary_closure_ready, primary_deadline
 
 
-def await_primary_readiness(state, task_ids, env, deadline, observe):
+def await_primary_readiness(state, task_ids, env, deadline, observe, *, reader=None):
     """Before primary daemon shutdown, await closure; a bound observer also recovers and awaits custody release."""
     if observe is None:
-        await_managed_lifetime_closure_until(state, task_ids, deadline=deadline)
+        await_managed_lifetime_closure_until(state, task_ids, deadline=deadline, reader=reader)
     else:
-        await_observed_disposal_readiness(state, task_ids, shutdown_custody_roots(state, env), deadline, observe)
+        await_observed_disposal_readiness(state, task_ids, shutdown_custody_roots(state, env), deadline, observe, reader=reader)
 
 
-def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None):
+def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None, deadline=None):
     """Return roots whose every captured predecessor was cleanly proven closed before cleanup."""
     clean_handoffs = {}
     for pending in tuple(lifetime.supervisor_cleanups):
@@ -184,7 +193,9 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None
         else:
             try:
                 shutdown_pending_private_supervisor(
-                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.capture_token, disposal=disposal
+                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.capture_token, disposal=disposal,
+                    reader=lifetime.closure_reader,
+                    deadline=deadline,
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -293,6 +304,7 @@ def shutdown_primary_supervisor(
                     task_ids=cleanup_task_ids,
                     capture_root=lifetime.capture_token,
                     disposal=disposal,
+                    reader=lifetime.closure_reader,
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -320,6 +332,7 @@ def finish_root_cleanup(cleanup_errors, failure, lifetime, success, *, disposal=
                 managed_state_roots=tuple(lifetime.managed_state_roots),
                 disposal=disposal,
                 deadline=deadline,
+                reader=lifetime.closure_reader,
             )
             root_cleanup = {"status": "removed", "verified": True}
         except BaseException as cleanup_error:

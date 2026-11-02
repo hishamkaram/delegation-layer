@@ -47,7 +47,7 @@ class CandidateWorkflowTests(unittest.TestCase):
         for job in ("skill-package-macos", "gate-macos"):
             header = job_text(self.source, job).split("    steps:", 1)[0]
             self.assertIn("needs: changes", header)
-            self.assertIn("if: ${{ needs.changes.outputs.full == 'true' }}", header)
+            self.assertIn("if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}", header)
         self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, "gate-linux"))
         self.assertIn("runs-on: macos-15", job_text(self.source, "gate-macos"))
 

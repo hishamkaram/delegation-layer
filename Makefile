@@ -213,6 +213,27 @@ acceptance-private-cli-default-stop: build
 		--runtime-only \
 		--output "$$receipt_dir/receipt.json"
 
+.PHONY: nested-survival-fixture acceptance-nested-survival
+nested-survival-fixture: tool-versions
+	go test -c -o "$(BIN_DIR)/nested-lifetime-fixture" ./internal/lifetime
+
+# The expectation is an assertion, never a backend selector. Exact Linux proof
+# is requested explicitly; normal CI hosts assert their cooperative backend.
+acceptance-nested-survival: build nested-survival-fixture
+	@for topology in shared-warm other-warm other-cold; do \
+		receipt_dir=$$(mktemp -d "$(BIN_DIR)/nested-survival.XXXXXX") || exit $$?; \
+		echo "Nested survival $$topology evidence: $$receipt_dir/receipt.json"; \
+		python3 scripts/acceptance_private_cli.py \
+			--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+			--scenario nested-survival --nested-topology "$$topology" \
+			--expected-backend "$${DELEGATE_NESTED_EXPECTED_BACKEND:-process-group}" \
+			--native-fixture "$(BIN_DIR)/nested-lifetime-fixture" \
+			--parallel-tasks 3 --dispatch-workers 1 --runtime-only \
+			--output "$$receipt_dir/receipt.json" || exit $$?; \
+	done
+
 acceptance-supervisor-handoff: build
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Supervisor handoff acceptance evidence: $$receipt_dir/receipt.json"; \
@@ -290,6 +311,16 @@ acceptance-opencode: build test-native-harness
 # neutral while still failing on a real acceptance failure (exit 1).
 acceptance-native: build test-native-harness
 	./scripts/acceptance_native_all.sh
+
+.PHONY: acceptance-independent-startup
+acceptance-independent-startup: tool-versions
+	./scripts/install-test-supervisor.sh
+	DELEGATE_INDEPENDENT_EXPECTED_BACKEND="$${DELEGATE_INDEPENDENT_EXPECTED_BACKEND:?set the expected native backend}" \
+	DELEGATE_TEST_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
+	DELEGATE_TEST_PUEUED="$(BIN_DIR)/test-supervisor/pueued" \
+	go test -race -count=1 -timeout=4m -v \
+		-run '^TestIndependentStartup(NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof)$$' \
+		./internal/lifetime ./internal/scheduler/host ./internal/supervisor
 
 acceptance-native-lifetime: tool-versions
 	python3 -m unittest discover -s scripts -p 'test_native_lifetime_proof.py' -v
