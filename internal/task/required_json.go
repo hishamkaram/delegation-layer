@@ -21,7 +21,8 @@ func validateRequiredFields(data []byte, target any) error {
 }
 
 func validateJSONType(data []byte, typ reflect.Type) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return errors.New("null protocol field rejected")
 	}
 	if typ.Kind() == reflect.Pointer {
@@ -29,6 +30,13 @@ func validateJSONType(data []byte, typ reflect.Type) error {
 	}
 	if typ.Kind() == reflect.Struct {
 		return validateJSONObject(data, typ)
+	}
+	// encoding/json represents []byte as a base64 string. Validate that
+	// representation through its typed decoder; ordinary slice/array shape and
+	// the historical numeric byte-array alternative retain their checks below.
+	if typ == reflect.TypeFor[[]byte]() && len(trimmed) > 0 && trimmed[0] == '"' {
+		var decoded []byte
+		return json.Unmarshal(trimmed, &decoded)
 	}
 	if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
 		var entries []json.RawMessage
