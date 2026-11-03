@@ -129,6 +129,15 @@ func InstallStateSupervisorPairPaths(ctx context.Context, root, clientExecutable
 }
 
 func installStateSupervisorPairContentAddressed(ctx context.Context, base, clientExecutable, daemonExecutable string, record stateSupervisorPairRecord) error {
+	if err := stageStateSupervisorPairContentAddressed(ctx, base, clientExecutable, daemonExecutable, record); err != nil {
+		return err
+	}
+	return publishStateSupervisorPairRecord(base, record)
+}
+
+// Staging adds immutable members without selecting them. The target's existing
+// preparation or migration transaction alone publishes its inventory pointer.
+func stageStateSupervisorPairContentAddressed(ctx context.Context, base, clientExecutable, daemonExecutable string, record stateSupervisorPairRecord) error {
 	pairDirectory := filepath.Join(base, stateSupervisorPairDirectoryPrefix+record.PairSHA256)
 	if err := ensureStateSupervisorPairDirectory(base, pairDirectory); err != nil {
 		return err
@@ -156,7 +165,7 @@ func installStateSupervisorPairContentAddressed(ctx context.Context, base, clien
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return publishStateSupervisorPairRecord(base, record)
+	return nil
 }
 
 func stateSupervisorPairIdentity(ctx context.Context, clientExecutable, daemonExecutable string) (stateSupervisorPairRecord, error) {

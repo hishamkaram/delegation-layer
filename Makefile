@@ -321,6 +321,9 @@ acceptance-independent-startup: tool-versions
 	go test -race -count=1 -timeout=4m -v \
 		-run '^TestIndependentStartup(NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof)$$' \
 		./internal/lifetime ./internal/scheduler/host ./internal/supervisor
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(Infrastructure|ValidateInfrastructure|StatePairContentStaging|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|IntentJournal)' \
+		./internal/supervisor ./internal/supervisor/infrastructure ./internal/taskdir
 
 acceptance-native-lifetime: tool-versions
 	python3 -m unittest discover -s scripts -p 'test_native_lifetime_proof.py' -v

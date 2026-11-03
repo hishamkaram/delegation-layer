@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -61,6 +62,62 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.assertIn("NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof", target)
         for package in ("./internal/lifetime", "./internal/scheduler/host", "./internal/supervisor"):
             self.assertIn(package, target)
+        for package, cases in (
+            ("internal/lifetime", ("TestIndependentStartupNativeProof",)),
+            ("internal/scheduler/host", ("TestIndependentStartupPeerProof",)),
+            ("internal/supervisor", ("TestIndependentStartupCustodyNativeProof",
+                                     "TestIndependentStartupOwnStatePairProof")),
+        ):
+            self.assert_native_cases_exist(package, cases)
+
+    def test_native_target_exercises_production_foundations(self):
+        source = (WORKFLOW.parents[2] / "Makefile").read_text().replace("\\\n", " ")
+        target = source.split("acceptance-independent-startup: tool-versions\n", 1)[1]
+        target = target.split("\n\n", 1)[0]
+        commands = [shlex.split(line) for line in target.splitlines()
+                    if line.strip().startswith("go test ")]
+        foundation = next(command for command in commands
+                          if "./internal/supervisor/infrastructure" in command)
+        for option in ("-race", "-count=1", "-timeout=4m"):
+            self.assertIn(option, foundation)
+        for package in ("./internal/supervisor", "./internal/taskdir"):
+            self.assertIn(package, foundation)
+        pattern = foundation[foundation.index("-run") + 1].replace("$$", "$")
+        required = {
+            "internal/supervisor": (
+                "TestInfrastructureRuntimeSourceFreezesManagedBytes",
+                "TestInfrastructurePairSourceUsesPublishedBinding",
+                "TestValidateInfrastructureArtifactsChecksTargetCustody",
+                "TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScopes",
+                "TestStatePairContentStagingPreservesSelection"),
+            "internal/supervisor/infrastructure": (
+                "TestLeaseInheritedReferenceRetainsExclusion",
+                "TestAdoptionDoesNotAcquireFreeFlock",
+                "TestCloseSerializesWithBorrower",
+                "TestOriginValidateRootIsObservationalAndIdentityBound",
+                "TestReadOriginRefusesMalformedRouting",
+                "TestStartupIntentObservationNeverRenewsDeadline",
+                "TestOwnerPublicationBindsOriginalAssumption",
+                "TestOwnerJournalCreatesAssumptionAndPublicationOnce",
+                "TestOwnerJournalAssumptionChecksOriginalDeadlineInTransaction",
+                "TestInfrastructureContextStagingDoesNotRequireResidentLease",
+                "TestIntentJournalCanonicalPublication"),
+            "internal/taskdir": ("TestInfrastructurePassiveMissingJournal",
+                                 "TestRootPinRejectsReplacementWithIdenticalMetadata"),
+        }
+        for package, cases in required.items():
+            self.assert_native_cases_exist(package, cases)
+            for case in cases:
+                with self.subTest(case=case):
+                    self.assertRegex(case, pattern)
+
+    def assert_native_cases_exist(self, package, cases):
+        directory = WORKFLOW.parents[2] / package
+        source = "\n".join(path.read_text() for path in directory.glob("*_test.go"))
+        declared = re.findall(r"^func (Test\w+)\(", source, re.M)
+        for case in cases:
+            with self.subTest(package=package, case=case):
+                self.assertIn(case, declared, "native target must name an existing test")
 
 
 if __name__ == "__main__":
