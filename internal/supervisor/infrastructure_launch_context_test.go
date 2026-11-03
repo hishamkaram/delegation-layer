@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
 
 func TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScopes(t *testing.T) {
@@ -19,8 +20,8 @@ func TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScope
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(record.ControlEnvironment, []string{"HOME=/provider", "PATH=/caller/bin", "CALLBACK_CONTEXT=preserved"}) ||
-		!slices.Equal(record.MaintenanceEnvironment, []string{"HOME=/caller", "PATH=/caller/bin"}) {
+	if !slices.Equal(record.ControlEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), []string{"HOME=/provider", "PATH=/caller/bin", "CALLBACK_CONTEXT=preserved"})) ||
+		!slices.Equal(record.MaintenanceEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), []string{"HOME=/caller", "PATH=/caller/bin"})) {
 		t.Fatal("capture changed the effective callback or maintenance scope")
 	}
 	options.Environment[0] = "HOME=/changed"
@@ -44,8 +45,48 @@ func TestInfrastructureLaunchContextDistinguishesDefaultAndExplicitEmpty(t *test
 		t.Fatalf("capture did not reuse the existing default policy: %v", err)
 	}
 	explicit, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: []string{}, PrivateMaintenanceEnvironment: []string{}})
-	if err != nil || explicit.ControlEnvironment == nil || len(explicit.ControlEnvironment) != 0 ||
-		explicit.MaintenanceEnvironment == nil || len(explicit.MaintenanceEnvironment) != 0 {
+	if err != nil || !slices.Equal(explicit.ControlEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), nil)) ||
+		!slices.Equal(explicit.MaintenanceEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), nil)) {
 		t.Fatalf("capture replaced explicit empty environments: %v", err)
 	}
+}
+
+func TestInfrastructureLaunchContextRebasesReservedOverlay(t *testing.T) {
+	store := newGenerationStore(t)
+	pin, err := store.PinRootContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := []string{"PROVIDER=" + string([]byte{0xff}), "DELEGATION_LAYER_PROCESS_SCOPE=old", "DELEGATION_LAYER_PROCESS_SCOPE=duplicate", "DELEGATION_LAYER_PROCESS_SCOPE_NEAR=keep", infrastructure.OriginEnvironment + "=old-A", infrastructure.OriginEnvironment + "=duplicate-A"}
+	before := slices.Clone(selected)
+	record, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: selected, PrivateMaintenanceEnvironment: selected})
+	if err != nil {
+		t.Fatalf("reserved overlay was not rebased: %v", err)
+	}
+	for _, environment := range [][]string{record.ControlEnvironment, record.MaintenanceEnvironment} {
+		if len(environment) != 3 || environment[0] != before[0] || environment[1] != before[3] {
+			t.Fatal("overlay changed provider bytes or retained finite scope")
+		}
+		origin, found, readErr := infrastructure.ReadOrigin(environment)
+		if readErr != nil || !found || origin.Root() != pin.Root() || origin.RootID() != pin.RootID() {
+			t.Fatalf("overlay did not select B origin: %v", readErr)
+		}
+	}
+	record.ControlEnvironment[0] = "changed"
+	if !slices.Equal(selected, before) || record.MaintenanceEnvironment[0] != before[0] {
+		t.Fatal("overlay aliases caller or other role")
+	}
+}
+
+func expectedInfrastructureEnvironment(t *testing.T, root, rootID string, environment []string) []string {
+	t.Helper()
+	origin, err := infrastructure.NewOrigin(root, rootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := infrastructure.WithOrigin(environment, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

@@ -3,7 +3,6 @@ package infrastructure
 import (
 	"fmt"
 	"slices"
-	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -36,24 +35,26 @@ func (c LaunchContext) Validate() error {
 		return err
 	}
 	for _, environment := range [][]string{c.ControlEnvironment, c.MaintenanceEnvironment} {
-		// Nil would let a later process silently substitute its ambient scope.
-		if environment == nil || task.ValidateEnvironment(environment) != nil {
+		if environment == nil {
 			return fmt.Errorf("%w: invalid explicit infrastructure environment", ErrIdentity)
 		}
-		for _, entry := range environment {
-			if !utf8.ValidString(entry) {
-				return fmt.Errorf("%w: infrastructure environment is not UTF-8", ErrIdentity)
-			}
+		if _, err := environmentBytes(environment); err != nil {
+			return err
+		}
+		if err := task.ValidateEnvironment(environment); err != nil {
+			return fmt.Errorf("%w: %w", ErrIdentity, redactedContextReadError{cause: err})
 		}
 	}
+
 	return nil
 }
 
 func (c LaunchContext) Digest() (string, error) {
-	if err := c.Validate(); err != nil {
+	manifest, _, err := encodeLaunchContext(c)
+	if err != nil {
 		return "", err
 	}
-	return digestStartupRecord(c)
+	return digestStartupRecord(manifest)
 }
 
 // LaunchContextReference uses the content digest as its sole identity. Storage

@@ -193,7 +193,7 @@ func (i StartupIntent) Digest() (string, error) {
 	return digestStartupRecord(i)
 }
 
-func digestStartupRecord[T StartupInputs | StartupIntent | StartupAssumption | OwnerPublication | LaunchContext](record T) (string, error) {
+func digestStartupRecord[T StartupInputs | StartupIntent | StartupAssumption | OwnerPublication | contextManifest | contextChunk](record T) (string, error) {
 	data, err := task.MarshalCanonical(record)
 	if err != nil {
 		return "", err

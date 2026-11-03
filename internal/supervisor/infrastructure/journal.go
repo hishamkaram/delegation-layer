@@ -129,6 +129,14 @@ func (j *intentJournal) putIntent(ctx context.Context, lease *Lease, intent Star
 		if err := validateIntentAppend(ctx, controlIntentReader{j.control}, j.pin, intent); err != nil {
 			return err
 		}
+		if intent.Inputs.Kind == StartupRootOwner {
+			if _, err := readContextRecords(ctx, transactionContextReader{tx}, intent.Inputs.Context, j.pin); err != nil {
+				return err
+			}
+			if err := j.checkRoot(ctx); err != nil {
+				return err
+			}
+		}
 		var err error
 		created, err = tx.Put(intentName(intent.Sequence), intent)
 		return err

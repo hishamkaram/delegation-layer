@@ -2,8 +2,8 @@ package supervisor
 
 import (
 	"runtime"
-	"slices"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -22,11 +22,25 @@ func captureInfrastructureLaunchContext(pin taskdir.RootPin, options pueue.Optio
 	if maintenance == nil {
 		maintenance = pueue.DefaultEnvironment()
 	}
+	// Incoming evidence must be extracted by composition before this overlay;
+	// removal and rebasing do not authorize an outside owner.
+	origin, err := infrastructure.NewOrigin(pin.Root(), pin.RootID())
+	if err != nil {
+		return infrastructure.LaunchContext{}, err
+	}
+	control, err = infrastructure.WithOrigin(lifetime.WithoutProcessScopeMarker(control), origin)
+	if err != nil {
+		return infrastructure.LaunchContext{}, err
+	}
+	maintenance, err = infrastructure.WithOrigin(lifetime.WithoutProcessScopeMarker(maintenance), origin)
+	if err != nil {
+		return infrastructure.LaunchContext{}, err
+	}
 	record := infrastructure.LaunchContext{
 		Protocol: infrastructure.ProtocolVersion, Root: pin.Root(), RootID: pin.RootID(), OS: runtime.GOOS,
-		ControlEnvironment: slices.Clone(control), MaintenanceEnvironment: slices.Clone(maintenance),
+		ControlEnvironment: control, MaintenanceEnvironment: maintenance,
 	}
-	if _, err := record.Digest(); err != nil {
+	if _, err = record.Digest(); err != nil {
 		return infrastructure.LaunchContext{}, err
 	}
 	return record, nil

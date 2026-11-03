@@ -40,12 +40,24 @@ func TestInfrastructureLaunchContextBindsExactExplicitSnapshots(t *testing.T) {
 	if err = reference.ValidateContext(record, record.Root, strings.Repeat("e", 32)); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("foreign context namespace accepted: %v", err)
 	}
-	encoded, err := task.MarshalCanonical(record)
+	manifest, chunks, err := encodeLaunchContext(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var restored LaunchContext
-	if err = task.DecodeStrict(encoded, &restored); err != nil {
+	encoded, err := task.MarshalCanonical(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restoredManifest contextManifest
+	if err = task.DecodeStrict(encoded, &restoredManifest); err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	for _, chunk := range chunks {
+		payload = append(payload, chunk.Data...)
+	}
+	restored, err := decodeContextPayload(restoredManifest, payload)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err = reference.ValidateContext(restored, record.Root, record.RootID); err != nil || restored.MaintenanceEnvironment == nil {
@@ -54,17 +66,12 @@ func TestInfrastructureLaunchContextBindsExactExplicitSnapshots(t *testing.T) {
 }
 
 func TestInfrastructureLaunchContextRefusesInvalidEnvironmentWithoutValues(t *testing.T) {
-	for _, environment := range [][]string{nil, {"KEY=private", "KEY=other"}, {"KEY=private\x00"}, {"KEY=private\xff"}} {
+	for _, environment := range [][]string{nil, {"KEY=private", "KEY=other"}, {"KEY=private\x00"}} {
 		record := launchContextFixture(t)
 		record.ControlEnvironment = environment
 		_, err := record.Digest()
 		if !errors.Is(err, ErrIdentity) || strings.Contains(err.Error(), "private") {
 			t.Fatalf("invalid context or values exposed: %v", err)
 		}
-	}
-	record := launchContextFixture(t)
-	record.ControlEnvironment = []string{"KEY=" + strings.Repeat("x", task.MaxControlRecordSize)}
-	if _, err := record.Digest(); !errors.Is(err, task.ErrControlRecordTooBig) {
-		t.Fatalf("oversized context accepted: %v", err)
 	}
 }

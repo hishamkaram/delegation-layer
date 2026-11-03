@@ -57,6 +57,12 @@ func journalIntent(t *testing.T, journal *intentJournal, sequence uint64) Startu
 	t.Helper()
 	intent := startupIntentFixture(t)
 	intent.Sequence = sequence
+	record := contextForJournal(t, journal)
+	reference, _, err := journal.stageContext(t.Context(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent.Inputs.Context = reference
 	intent.Inputs.BootID = journal.bootID
 	intent.Inputs.Root, intent.Inputs.RootID = journal.pin.Root(), journal.pin.RootID()
 	intent.Inputs.RootDevice, intent.Inputs.RootInode = journal.pin.Device(), journal.pin.Inode()

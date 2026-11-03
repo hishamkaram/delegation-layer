@@ -80,7 +80,7 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
                           if "./internal/supervisor/infrastructure" in command)
         for option in ("-race", "-count=1", "-timeout=4m"):
             self.assertIn(option, foundation)
-        for package in ("./internal/supervisor", "./internal/taskdir"):
+        for package in ("./internal/supervisor", "./internal/taskdir", "./internal/task", "./internal/lifetime"):
             self.assertIn(package, foundation)
         pattern = foundation[foundation.index("-run") + 1].replace("$$", "$")
         required = {
@@ -89,6 +89,8 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
                 "TestInfrastructurePairSourceUsesPublishedBinding",
                 "TestValidateInfrastructureArtifactsChecksTargetCustody",
                 "TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScopes",
+                "TestInfrastructureLaunchContextPreservesNativeSizedEnvironments",
+                "TestInfrastructureLaunchContextRebasesReservedOverlay",
                 "TestStatePairContentStagingPreservesSelection"),
             "internal/supervisor/infrastructure": (
                 "TestLeaseInheritedReferenceRetainsExclusion",
@@ -101,7 +103,21 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
                 "TestOwnerJournalCreatesAssumptionAndPublicationOnce",
                 "TestOwnerJournalAssumptionChecksOriginalDeadlineInTransaction",
                 "TestInfrastructureContextStagingDoesNotRequireResidentLease",
+                "TestInfrastructureContextCancellationBetweenChunksIsNotEvidenceFault",
+                "TestContextChunksRoundTripEscapedAndNonUTF8Payload",
+                "TestContextChunksStorageAboveFormerRoleCap",
+                "TestContextManifestInvalidCountsRefuseBeforeChunkIO",
+                "TestIntentRequiresCompleteBoundContext",
+                "TestEndpointBindsInitialPrivateRootSocket",
+                "TestEndpointClosePreservesReplacementAndCanRetry",
+                "TestEndpointFailedBirthRetainsCleanupOwnership",
+                "TestEndpointCleanupUsesIdentityAfterSocketModeChange",
                 "TestIntentJournalCanonicalPublication"),
+            "internal/task": ("TestDecodeStrictByteSliceCanonicalRoundTrip",
+                              "TestDecodeStrictByteSlicePreservesStructuralChecks"),
+            "internal/lifetime": ("TestWithoutProcessScopeMarkerOwnsExactKeyRemoval",
+                                  "TestConfigureProcessScopeEnvironmentReplacesReservedMarker",
+                                  "TestConfigureProcessScopeEnvironmentPreservesInheritanceAndRefusal"),
             "internal/taskdir": ("TestInfrastructurePassiveMissingJournal",
                                  "TestRootPinRejectsReplacementWithIdenticalMetadata"),
         }

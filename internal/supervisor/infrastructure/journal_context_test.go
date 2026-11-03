@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -82,9 +83,9 @@ func TestInfrastructureContextRefusesForeignOrChangedContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := bytes.Replace(before, []byte("preserved"), []byte("different"), 1)
+	changed := bytes.Replace(before, []byte("linux"), []byte("darwin"), 1)
 	if bytes.Equal(before, changed) {
-		t.Fatal("fixture did not change environment bytes")
+		t.Fatal("fixture did not change manifest metadata")
 	}
 	if err = os.WriteFile(path, changed, 0o600); err != nil {
 		t.Fatal(err)
@@ -126,5 +127,51 @@ func TestInfrastructureContextMalformedReadRedactsValues(t *testing.T) {
 	})
 	if _, err = readLaunchContext(t.Context(), reader, reference); !errors.Is(err, task.ErrEvidenceFault) || strings.Contains(err.Error(), "private-value-must-not-leak") {
 		t.Fatalf("malformed passive context lost fault or leaked values: %v", err)
+	}
+}
+
+// Cancellation occurs after a real first chunk read, not before the reader starts.
+type cancellingContextReader struct {
+	reader contextRecordReader
+	cancel context.CancelFunc
+	chunks int
+}
+
+func (r *cancellingContextReader) manifest(ctx context.Context, name string) (contextManifest, error) {
+	return r.reader.manifest(ctx, name)
+}
+
+func (r *cancellingContextReader) chunk(ctx context.Context, name string) (contextChunk, error) {
+	r.chunks++
+	record, err := r.reader.chunk(ctx, name)
+	if r.chunks == 1 && err == nil {
+		r.cancel()
+	}
+	return record, err
+}
+
+func TestInfrastructureContextCancellationBetweenChunksIsNotEvidenceFault(t *testing.T) {
+	journal, _ := journalFixture(t)
+	record := contextForJournal(t, journal)
+	record.ControlEnvironment = []string{"PAYLOAD=" + strings.Repeat("x", contextChunkBytes)}
+	reference, _, err := journal.stageContext(t.Context(), record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader := &cancellingContextReader{reader: controlContextReader{journal.control}, cancel: cancel}
+	got, err := readContextRecords(ctx, reader, reference, journal.pin)
+	if reader.chunks != 1 {
+		t.Fatalf("cancellation did not stop before next chunk I/O: %d", reader.chunks)
+	}
+	if !errors.Is(err, context.Canceled) || errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("reader cancellation classified as evidence fault: %v", err)
+	}
+	if got.ControlEnvironment != nil || got.MaintenanceEnvironment != nil {
+		t.Fatal("canceled read returned partial context")
+	}
+	if strings.Contains(err.Error(), "PAYLOAD") || strings.Contains(err.Error(), "xxxx") {
+		t.Fatal("canceled read rendered payload")
 	}
 }
