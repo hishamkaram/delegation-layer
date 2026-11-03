@@ -122,7 +122,7 @@ func (p *independentStartupProbe) verifyAdoptionAndScope(ctx context.Context) er
 	if err = p.awaitCommand(ctx, 0); err != nil {
 		return err
 	}
-	if err = p.adopted("resident", "origin"); err != nil {
+	if err = p.adopted(ctx, "resident", "origin"); err != nil {
 		return err
 	}
 	if err = p.checkLease(false); err != nil {
@@ -163,10 +163,13 @@ func (p *independentStartupProbe) verifyOwnerLoss(ctx context.Context) error {
 	if err = WaitProcessAbsent(ctx, p.records["resident"]); err != nil {
 		return err
 	}
-	if err = p.checkLease(true); err != nil {
+	// Darwin can stop exposing the exiting process before closing its file
+	// table. Native child adoption occurs after that teardown. Await adoption,
+	// then make the free-lease assertion once; never retry a retained holder.
+	if err = p.adopted(ctx, "daemon", "resident"); err != nil {
 		return err
 	}
-	if err = p.adopted("daemon", "resident"); err != nil {
+	if err = p.checkLease(true); err != nil {
 		return err
 	}
 	if err = p.challenge(ctx, "daemon", 3); err != nil {
@@ -415,15 +418,14 @@ func (p *independentStartupProbe) native(role string) (nestedNativeObservation, 
 	return observation, nil
 }
 
-func (p *independentStartupProbe) adopted(role, priorParent string) error {
-	current, err := p.native(role)
-	if err != nil {
-		return err
-	}
-	if current.ParentPID == p.records[priorParent].PID() {
-		return errors.New("resident fixture retained absent parent")
-	}
-	return nil
+func (p *independentStartupProbe) adopted(ctx context.Context, role, priorParent string) error {
+	return waitForEmpty(ctx, 10*time.Millisecond, func() (bool, error) {
+		current, err := p.native(role)
+		if err != nil {
+			return false, err
+		}
+		return current.ParentPID != p.records[priorParent].PID(), nil
+	}, sleepContext)
 }
 
 func (p *independentStartupProbe) verifyPlacement() error {
