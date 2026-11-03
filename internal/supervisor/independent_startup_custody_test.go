@@ -5,6 +5,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,14 @@ func TestIndependentStartupCustodyChild(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted, err := filepath.EvalSymlinks(os.Getenv("DELEGATE_INDEPENDENT_CUSTODY_IMAGE"))
+	if err != nil || executable != wanted {
+		t.Fatalf("executed different custody path: %v", err)
 	}
 	digest, err := protectedStateExecutableDigest(executable)
 	if err != nil || digest != os.Getenv("DELEGATE_INDEPENDENT_CUSTODY_DIGEST") {
@@ -47,11 +56,16 @@ func TestIndependentStartupCustodyNativeProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	image, err = filepath.EvalSymlinks(image)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expected, err := stateExecutableSourceDigest(image)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owned, err := InstallStateRunner(origin, image)
+	installed := independentMutableInstallation(t, image)
+	owned, err := InstallStateRunner(origin, installed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +73,7 @@ func TestIndependentStartupCustodyNativeProof(t *testing.T) {
 	if err != nil || originDigest != expected {
 		t.Fatalf("origin custody changed image: %s %v", originDigest, err)
 	}
+	replaceIndependentInstallation(t, installed, expected)
 	staged, err := InstallStateRunner(target, owned)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +85,7 @@ func TestIndependentStartupCustodyNativeProof(t *testing.T) {
 	output := filepath.Join(target, "executed-copy")
 	command := exec.Command(staged, "-test.run=^TestIndependentStartupCustodyChild$", "-test.timeout=30s")
 	command.Dir = target
-	command.Env = append(os.Environ(), "DELEGATE_INDEPENDENT_CUSTODY_OUTPUT="+output, "DELEGATE_INDEPENDENT_CUSTODY_DIGEST="+expected)
+	command.Env = append(os.Environ(), "DELEGATE_INDEPENDENT_CUSTODY_OUTPUT="+output, "DELEGATE_INDEPENDENT_CUSTODY_DIGEST="+expected, "DELEGATE_INDEPENDENT_CUSTODY_IMAGE="+staged)
 	// The copied fixture does no spawning. Run owns its one Start and exact Wait
 	// before the fixture roots can be removed, including a failing child result.
 	if data, runErr := command.CombinedOutput(); runErr != nil {
@@ -80,7 +95,7 @@ func TestIndependentStartupCustodyNativeProof(t *testing.T) {
 	if err != nil || string(data) != expected+"\n" {
 		t.Fatalf("copied image execution evidence: %q %v", data, err)
 	}
-	t.Log("native component custody A->B copied and executed the actual test image; production CLI running-image authenticity remains unverified")
+	t.Log("native component A->B executes the exact established custody image after replacing the installation fixture; production resident authority remains unverified")
 }
 
 func TestIndependentStartupOwnStatePairProof(t *testing.T) {
@@ -124,5 +139,38 @@ func requireIndependentTargetPair(t *testing.T, target, stagedClient, stagedDaem
 	clientAgain, daemonAgain, found, err := ResolveStateSupervisorPair(filepath.Join(target, ".supervisor"))
 	if err != nil || !found || clientAgain != stagedClient || daemonAgain != stagedDaemon {
 		t.Fatalf("target own state pair: found=%t err=%v", found, err)
+	}
+}
+
+func independentMutableInstallation(t *testing.T, image string) string {
+	t.Helper()
+	installed := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
+	source, err := os.Open(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := os.OpenFile(installed, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		t.Fatal(errors.Join(err, source.Close()))
+	}
+	_, copyErr := io.Copy(destination, source)
+	if err = errors.Join(copyErr, destination.Close(), source.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return installed
+}
+
+func replaceIndependentInstallation(t *testing.T, installed, priorDigest string) {
+	t.Helper()
+	replacement := installed + ".next"
+	if err := os.WriteFile(replacement, []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, installed); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := stateExecutableSourceDigest(installed)
+	if err != nil || digest == priorDigest {
+		t.Fatalf("installation replacement counterfactual did not change bytes: %v", err)
 	}
 }

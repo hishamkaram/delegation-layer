@@ -33,7 +33,9 @@ func TestIndependentStartupNativeProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, abrupt := range []bool{false, true} {
-		t.Run(fmt.Sprintf("abrupt=%t", abrupt), func(t *testing.T) { exerciseIndependentStartup(t, abrupt) })
+		if !t.Run(fmt.Sprintf("abrupt=%t", abrupt), func(t *testing.T) { exerciseIndependentStartup(t, abrupt) }) {
+			return
+		}
 	}
 }
 
@@ -66,6 +68,9 @@ func exerciseIndependentStartup(t *testing.T, abrupt bool) {
 	if err = p.verifyOwnerLoss(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err = p.closeIndependentB(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Log("native component: inherited lease absent from descendant, parent adoption, task scope/orphan termination, independent resident/B scope/worker survival, owner loss releases lease while adopted child remains responsive")
 }
@@ -81,7 +86,7 @@ func (p *independentStartupProbe) prepare(ctx context.Context, abrupt bool) erro
 	if err = p.start("scope-owner", abrupt); err != nil {
 		return err
 	}
-	for _, role := range []string{"scope", "requester", "resident", "daemon", "b-scope", "b-worker"} {
+	for _, role := range []string{"scope", "requester", "resident", "daemon", "b-scope", "b-worker", "a-provider", "b-provider"} {
 		if _, err = p.record(ctx, role); err != nil {
 			return err
 		}
@@ -126,6 +131,9 @@ func (p *independentStartupProbe) verifyAdoptionAndScope(ctx context.Context) er
 	if err = p.challenge(ctx, "daemon", 1); err != nil {
 		return err
 	}
+	if err = p.alive("a-provider"); err != nil {
+		return err
+	}
 	if err = p.alive("ordinary"); err != nil {
 		return err
 	}
@@ -144,13 +152,7 @@ func (p *independentStartupProbe) verifyAdoptionAndScope(ctx context.Context) er
 	if err = p.alive("resident"); err != nil {
 		return err
 	}
-	if err = p.alive("b-scope"); err != nil {
-		return err
-	}
-	if err = p.challenge(ctx, "b-worker", 1); err != nil {
-		return err
-	}
-	return nil
+	return p.challengeB(ctx, 1)
 }
 
 func (p *independentStartupProbe) verifyOwnerLoss(ctx context.Context) error {
@@ -170,13 +172,7 @@ func (p *independentStartupProbe) verifyOwnerLoss(ctx context.Context) error {
 	if err = p.challenge(ctx, "daemon", 3); err != nil {
 		return err
 	}
-	if err = p.alive("b-scope"); err != nil {
-		return err
-	}
-	if err = p.challenge(ctx, "b-worker", 2); err != nil {
-		return err
-	}
-	return nil
+	return p.challengeB(ctx, 2)
 }
 
 func (p *independentStartupProbe) start(mode string, abrupt bool) error {
@@ -357,7 +353,7 @@ func (p *independentStartupProbe) cleanup(t *testing.T) {
 
 func (p *independentStartupProbe) stopFixtures() (resultErr error) {
 	resultErr = p.directory.write("fixture.abort", []byte("stop-new-launches\n"))
-	for _, role := range []string{"ordinary", "b-scope", "daemon", "resident", "origin", "scope", "requester"} {
+	for _, role := range []string{"ordinary", "a-provider", "b-provider", "b-scope", "daemon", "resident", "origin", "scope", "requester", "b-worker"} {
 		resultErr = errors.Join(resultErr, p.release(role))
 	}
 	return resultErr
@@ -380,7 +376,7 @@ func (p *independentStartupProbe) joinCreators(ctx context.Context) (resultErr e
 }
 
 func (p *independentStartupProbe) recoverIdentities(ctx context.Context) (resultErr error) {
-	for _, role := range []string{"resident", "daemon", "requester", "b-scope", "b-worker"} {
+	for _, role := range []string{"resident", "daemon", "requester", "b-scope", "b-worker", "a-provider", "b-provider"} {
 		if _, ok := p.records[role]; !ok {
 			_, err := p.readRecord(ctx, role)
 			resultErr = errors.Join(resultErr, err)
@@ -431,11 +427,11 @@ func (p *independentStartupProbe) adopted(role, priorParent string) error {
 }
 
 func (p *independentStartupProbe) verifyPlacement() error {
-	requester, err := p.native("requester")
+	requester, err := p.native("a-provider")
 	if err != nil {
 		return err
 	}
-	for _, role := range []string{"resident", "daemon", "b-scope", "b-worker"} {
+	for _, role := range []string{"resident", "daemon", "b-scope", "b-worker", "b-provider"} {
 		current, err := p.native(role)
 		if err != nil {
 			return err
@@ -450,7 +446,7 @@ func (p *independentStartupProbe) verifyPlacement() error {
 }
 
 func (p *independentStartupProbe) verifyDescendantDescriptors(ctx context.Context) error {
-	for _, role := range []string{"daemon", "b-scope", "b-worker"} {
+	for _, role := range []string{"daemon", "b-scope", "b-worker", "b-provider"} {
 		actor, err := p.record(ctx, role)
 		if err != nil {
 			return err
@@ -460,4 +456,32 @@ func (p *independentStartupProbe) verifyDescendantDescriptors(ctx context.Contex
 		}
 	}
 	return nil
+}
+
+func (p *independentStartupProbe) closeIndependentB(ctx context.Context) error {
+	if err := p.alive("b-provider"); err != nil {
+		return err
+	}
+	if err := p.release("b-scope"); err != nil {
+		return err
+	}
+	if err := p.waitFile(ctx, "b-scope.closed"); err != nil {
+		return err
+	}
+	for _, role := range []string{"b-scope", "b-worker", "b-provider"} {
+		if err := WaitProcessAbsent(ctx, p.records[role]); err != nil {
+			return err
+		}
+	}
+	return p.challenge(ctx, "daemon", 4)
+}
+
+func (p *independentStartupProbe) challengeB(ctx context.Context, sequence int) error {
+	if err := p.alive("b-scope"); err != nil {
+		return err
+	}
+	if err := p.challenge(ctx, "b-worker", sequence); err != nil {
+		return err
+	}
+	return p.challenge(ctx, "b-provider", sequence)
 }

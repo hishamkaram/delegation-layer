@@ -6,13 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"time"
 )
+
+type independentScopeDescriptor struct {
+	Kind      Kind      `json:"kind"`
+	Assurance Assurance `json:"assurance"`
+	Plan      string    `json:"plan"`
+	Scope     string    `json:"scope"`
+}
 
 func runIndependentScopeOwner(ctx context.Context, scopeRole, workerRole string) (resultErr error) {
 	plan, err := Prepare("independent-component", scopeRole, strconv.Itoa(os.Getpid()))
@@ -20,40 +24,101 @@ func runIndependentScopeOwner(ctx context.Context, scopeRole, workerRole string)
 		return err
 	}
 	if string(plan.Kind()) != os.Getenv("DELEGATE_INDEPENDENT_EXPECTED_BACKEND") {
-		return fmt.Errorf("native backend mismatch: observed %s/%s", plan.Kind(), plan.Assurance())
+		return errors.New("native backend does not match the declared proof context")
 	}
 	scope, err := CreatePreparedContext(ctx, plan)
 	if err != nil {
 		return err
 	}
-	var command *exec.Cmd
+	var workerWait <-chan error
 	var launches []LaunchRef
 	defer func() {
-		resultErr = errors.Join(resultErr, closeIndependentScope(ctx, scope, command, launches, scopeRole))
+		resultErr = errors.Join(resultErr, closeIndependentScope(ctx, scope, workerWait, launches, scopeRole, workerRole))
 	}()
 	if err = scope.BindOwnerProcess(); err != nil {
 		return err
 	}
-	command, err = independentFixtureCommand(workerRole)
+	if err = publishIndependentScopeDescriptor(scopeRole, scope, plan); err != nil {
+		return err
+	}
+	workerWait, err = startIndependentManagedWorker(scope, scopeRole, workerRole)
 	if err != nil {
 		return err
 	}
-	if err = scope.Configure(command); err != nil {
+	if err = independentFixtureWait(ctx, scopeRole+".provider-launch.json"); err != nil {
 		return err
 	}
-	if err = command.Start(); err != nil {
-		return err
-	}
-	launch, err := scope.ObserveStarted(command.Process.Pid)
+	launch, err := observeIndependentProvider(scope, scopeRole)
 	if err != nil {
 		return err
 	}
 	launches = []LaunchRef{launch}
+	if err = independentFixturePublish(scopeRole+".go", []byte("launch-observed\n")); err != nil {
+		return err
+	}
+	if err = publishIndependentScopeIdentity(scopeRole, plan); err != nil {
+		return err
+	}
+	return independentFixtureWait(ctx, scopeRole+".release")
+}
+
+func publishIndependentScopeDescriptor(role string, scope *Scope, plan Plan) error {
+	descriptor := independentScopeDescriptor{Kind: plan.Kind(), Assurance: plan.Assurance(), Plan: plan.Identifier(), Scope: scope.Reference().Identifier()}
+	data, err := json.Marshal(descriptor)
+	if err != nil {
+		return err
+	}
+	return independentFixturePublish(role+".prepared.json", data)
+}
+
+func startIndependentManagedWorker(scope *Scope, scopeRole, workerRole string) (<-chan error, error) {
+	command, err := independentFixtureCommand(workerRole)
+	if err != nil {
+		return nil, err
+	}
+	// As in guardian.startAndRecordWorker, the managed worker is infrastructure
+	// outside the provider scope. It owns provider Start/Wait through a borrowed
+	// registered scope; only this helper owns native termination and disposal.
+	if err = command.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	ref, err := ObserveStartedProcess(command.Process.Pid)
+	if err != nil {
+		return done, err
+	}
+	if err = scope.TrackOwnerProcess(ref); err != nil {
+		return done, err
+	}
+	return done, independentFixturePublish(scopeRole+".worker-go", []byte("worker-tracked\n"))
+}
+
+func observeIndependentProvider(scope *Scope, role string) (LaunchRef, error) {
+	data, err := os.ReadFile(independentFixturePath(role + ".provider-launch.json"))
+	if err != nil {
+		return LaunchRef{}, err
+	}
+	var record independentFixtureRecord
+	if err = json.Unmarshal(data, &record); err != nil {
+		return LaunchRef{}, err
+	}
+	launch, err := scope.ObserveStarted(record.PID)
+	if err != nil {
+		return launch, err
+	}
+	if !nestedFixtureTokensMatch(launch.startToken, record.Token) {
+		return LaunchRef{}, errors.New("provider fixture launch identity changed")
+	}
+	return launch, nil
+}
+
+func publishIndependentScopeIdentity(role string, plan Plan) error {
 	ref, err := ObserveProcess(os.Getpid())
 	if err != nil {
 		return err
 	}
-	leasePresent, err := independentScopeLease(scopeRole)
+	leasePresent, err := independentScopeLease(role)
 	if err != nil {
 		return err
 	}
@@ -61,24 +126,21 @@ func runIndependentScopeOwner(ctx context.Context, scopeRole, workerRole string)
 	if err != nil {
 		return err
 	}
-	if err = independentFixturePublish(scopeRole+".json", data); err != nil {
-		return err
-	}
-	return independentFixtureWait(ctx, scopeRole+".release")
+	return independentFixturePublish(role+".json", data)
 }
 
-func closeIndependentScope(parent context.Context, scope *Scope, command *exec.Cmd, launches []LaunchRef, scopeRole string) error {
+func closeIndependentScope(parent context.Context, scope *Scope, workerWait <-chan error, launches []LaunchRef, scopeRole, workerRole string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 	defer cancel()
-	var waitErr error
-	if command != nil && command.Process != nil {
-		if err := scope.Terminate(ctx, launches); err != nil {
+	terminateErr := scope.Terminate(ctx, launches)
+	releaseErr := releaseIndependentWorker(scopeRole, workerRole)
+	waitErr := awaitIndependentWorker(ctx, workerWait)
+	if err := errors.Join(terminateErr, releaseErr, waitErr); err != nil {
+		return err
+	}
+	if len(launches) > 0 {
+		if err := verifyIndependentProviderWait(scopeRole, launches[0]); err != nil {
 			return err
-		}
-		waitErr = command.Wait()
-		var exited *exec.ExitError
-		if waitErr != nil && !errors.As(waitErr, &exited) {
-			return waitErr
 		}
 	}
 	empty, err := scope.EmptyContext(ctx, launches)
@@ -91,41 +153,55 @@ func closeIndependentScope(parent context.Context, scope *Scope, command *exec.C
 	if err = scope.Release(); err != nil {
 		return err
 	}
-	return independentFixturePublish(scopeRole+".closed", []byte("empty-and-released\n"))
+	return independentFixturePublish(scopeRole+".closed", []byte("worker-wait-empty-released\n"))
 }
 
-func independentRequesterOrphan() error {
-	executable, err := os.Executable()
-	if err != nil {
-		return err
+func releaseIndependentWorker(scopeRole, workerRole string) error {
+	// Before setup acknowledgement a fixed fixture may still be waiting for its
+	// gate. Its own release is cleanup I/O, not scope-termination evidence.
+	providerRole := "a-provider"
+	if scopeRole == "b-scope" {
+		providerRole = "b-provider"
 	}
-	command := exec.Command(executable, "-test.run=^TestNestedSurvivalFixture$")
-	command.Dir = os.Getenv("DELEGATE_INDEPENDENT_FIXTURE_DIRECTORY")
-	command.Env = append(os.Environ(),
-		"DELEGATE_NESTED_FIXTURE_MODE=orphan-parent",
-		"DELEGATE_NESTED_FIXTURE_OUTPUT="+independentFixturePath("ordinary.json"),
-		"DELEGATE_NESTED_FIXTURE_RELEASE="+independentFixturePath("ordinary.release"),
-		"DELEGATE_NESTED_FIXTURE_DEADLINE_NS="+strconv.FormatInt(independentFixtureDeadline().UnixNano(), 10))
-	command.Stdout, command.Stderr = os.Stdout, os.Stderr
-	if err = command.Start(); err != nil {
-		return err
-	}
-	return command.Wait()
+	return errors.Join(publishIndependentRelease(providerRole), publishIndependentRelease(workerRole))
 }
 
-func independentFixtureAbort() error {
-	_, err := os.Stat(filepath.Join(os.Getenv("DELEGATE_INDEPENDENT_FIXTURE_DIRECTORY"), "fixture.abort"))
-	if err == nil {
-		return context.Canceled
+func awaitIndependentWorker(ctx context.Context, done <-chan error) error {
+	if done == nil {
+		return nil
 	}
-	if errors.Is(err, os.ErrNotExist) {
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func publishIndependentRelease(role string) error {
+	err := independentFixturePublish(role+".release", []byte("release\n"))
+	if errors.Is(err, os.ErrExist) {
 		return nil
 	}
 	return err
 }
 
-// The daemon-like fixture retains the exact Wait of its B scope owner even
-// when the resident above it exits. Its own release settles this child first.
+func verifyIndependentProviderWait(role string, launch LaunchRef) error {
+	data, err := os.ReadFile(independentFixturePath(role + ".provider-wait.json"))
+	if err != nil {
+		return err
+	}
+	var record independentFixtureRecord
+	if err = json.Unmarshal(data, &record); err != nil {
+		return err
+	}
+	if !record.Waited || record.PID != launch.pid || !nestedFixtureTokensMatch(record.Token, launch.startToken) {
+		return errors.New("provider fixture exact Wait not established")
+	}
+	return nil
+}
+
+// The adopted daemon retains its B scope helper's exact child Wait.
 func runIndependentDaemon(ctx context.Context) (resultErr error) {
 	command, err := independentFixtureCommand("b-scope-owner")
 	if err != nil {
@@ -152,26 +228,16 @@ func runIndependentDaemon(ctx context.Context) (resultErr error) {
 }
 
 func closeIndependentDaemonScope(parent context.Context, done <-chan error) error {
-	path := independentFixturePath("b-scope.release")
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err = independentFixturePublish("b-scope.release", []byte("release\n")); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
-		}
-	} else if err != nil {
+	if err := publishIndependentRelease("b-scope"); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 	defer cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			return err
-		}
-		_, err = os.Stat(independentFixturePath("b-scope.closed"))
+	if err := awaitIndependentWorker(ctx, done); err != nil {
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
 	}
+	_, err := os.Stat(independentFixturePath("b-scope.closed"))
+	return err
 }
 
 func independentScopeLease(role string) (bool, error) {

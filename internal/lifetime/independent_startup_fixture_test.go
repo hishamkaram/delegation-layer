@@ -21,6 +21,7 @@ import (
 const independentFixtureMode = "DELEGATE_INDEPENDENT_FIXTURE_MODE"
 
 type independentFixtureRecord struct {
+	Waited       bool      `json:"waited,omitempty"`
 	PID          int       `json:"pid"`
 	Token        string    `json:"token"`
 	Parent       int       `json:"parent"`
@@ -65,17 +66,15 @@ func runIndependentStartupFixture(ctx context.Context, mode string) error {
 	case "daemon":
 		return runIndependentDaemon(ctx)
 	case "b-worker":
-		return runIndependentIdle(ctx, "b-worker")
+		return runIndependentManagedWorker(ctx, "b-scope", "b-worker", "b-provider")
+	case "b-provider":
+		return runIndependentProvider(ctx, "b-scope", "b-provider")
+	case "a-provider":
+		return runIndependentProvider(ctx, "scope", "a-provider")
 	case "b-scope-owner":
 		return runIndependentScopeOwner(ctx, "b-scope", "b-worker")
 	case "requester":
-		if err := independentRequesterOrphan(); err != nil {
-			return err
-		}
-		if err := independentFixturePublish("start", []byte("start\n")); err != nil {
-			return err
-		}
-		return runIndependentIdle(ctx, "requester")
+		return runIndependentManagedWorker(ctx, "scope", "requester", "a-provider")
 	case "scope-owner":
 		return runIndependentScopeOwner(ctx, "scope", "requester")
 	default:
@@ -249,8 +248,8 @@ func runIndependentResident(ctx context.Context) (resultErr error) {
 }
 
 func independentFixtureHasLease() (bool, error) {
-	info, err := os.Stat(independentFixturePath("instance.lock"))
-	if err != nil {
+	var named unix.Stat_t
+	if err := unix.Stat(independentFixturePath("instance.lock"), &named); err != nil {
 		return false, err
 	}
 	names, err := os.ReadDir(independentFixtureFDDirectory())
@@ -258,17 +257,19 @@ func independentFixtureHasLease() (bool, error) {
 		return false, err
 	}
 	for _, name := range names {
-		if _, err = strconv.Atoi(name.Name()); err != nil {
+		fd, parseErr := strconv.Atoi(name.Name())
+		if parseErr != nil {
 			continue
 		}
-		current, statErr := os.Stat(filepath.Join(independentFixtureFDDirectory(), name.Name()))
-		if errors.Is(statErr, os.ErrNotExist) || errors.Is(statErr, unix.EBADF) {
+		var current unix.Stat_t
+		statErr := unix.Fstat(fd, &current)
+		if errors.Is(statErr, unix.EBADF) {
 			continue
 		}
 		if statErr != nil {
 			return false, statErr
 		}
-		if os.SameFile(info, current) {
+		if current.Dev == named.Dev && current.Ino == named.Ino && current.Mode&unix.S_IFMT == unix.S_IFREG {
 			return true, nil
 		}
 	}
@@ -277,7 +278,7 @@ func independentFixtureHasLease() (bool, error) {
 
 func runIndependentIdle(ctx context.Context, role string) error {
 	present := false
-	if role == "daemon" || role == "b-worker" {
+	if role == "daemon" || role == "b-worker" || role == "b-provider" {
 		var err error
 		present, err = independentFixtureHasLease()
 		if err != nil {
