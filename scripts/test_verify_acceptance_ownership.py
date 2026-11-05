@@ -74,6 +74,251 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
             "raw_process_captures_token=raw_process_captures_token)\n")
         self.assertEqual(violations, ())
 
+    def test_schema_only_typed_dict_fields_do_not_claim_capture_authority(self):
+        for declaration, base in (
+                ("from typing import TypedDict", "TypedDict"),
+                ("from typing import TypedDict as Schema", "Schema"),
+                ("import typing", "typing.TypedDict"),
+                ("import typing as types", "types.TypedDict"),
+                ("from typing import NamedTuple as Schema, TypedDict as Schema", "Schema"),
+                ("import collections as typing, typing", "typing.TypedDict")):
+            for keyword in ("", ", total=False"):
+                with self.subTest(declaration=declaration, keyword=keyword):
+                    violations = self.violations(
+                        f"{declaration}\nclass CleanupReceipt({base}{keyword}):\n"
+                        "    raw_process_captures: str\n")
+                    self.assertEqual(violations, ())
+
+    def test_typed_dict_field_exemption_does_not_cover_runtime_authority(self):
+        schema = ("from typing import TypedDict\nclass Receipt(TypedDict):\n"
+                  "    raw_process_captures: str\n")
+        for runtime in (
+                "raw_process_captures = path\n",
+                "capture = raw_process_captures\n",
+                "capture = receipt.raw_process_captures\n",
+                "receipt.raw_process_captures = path\n",
+                "finalize_acceptance_artifacts(raw_process_captures=False)\n"):
+            with self.subTest(runtime=runtime):
+                violations = self.violations(schema + runtime)
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+                self.assertEqual(violations[0].line, 4)
+
+    def test_typed_dict_runtime_field_defaults_are_rejected(self):
+        violations = self.violations(
+            "from typing import TypedDict\nclass Receipt(TypedDict):\n"
+            "    raw_process_captures: str = path\n")
+        self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_non_schema_annotations_cannot_claim_the_typed_dict_exemption(self):
+        for declaration, base in (
+                ("class TypedDict: pass", "TypedDict"),
+                ("from typing import TypedDict\nTypedDict = object", "TypedDict"),
+                ("import typing\ntyping = object()", "typing.TypedDict"),
+                ("import typing\ntyping.TypedDict = object", "typing.TypedDict"),
+                ("from typing import TypedDict\nif condition:\n    TypedDict = object", "TypedDict")):
+            with self.subTest(declaration=declaration):
+                violations = self.violations(
+                    f"{declaration}\nclass Receipt({base}):\n"
+                    "    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_schema_imports_obey_each_alias_binding_in_source_order(self):
+        for declaration, base in (
+                ("from typing import TypedDict as Schema, NamedTuple as Schema", "Schema"),
+                ("from typing import TypedDict, NamedTuple as TypedDict", "TypedDict"),
+                ("import typing, collections as typing", "typing.TypedDict")):
+            with self.subTest(declaration=declaration):
+                violations = self.violations(
+                    f"{declaration}\nclass Receipt({base}):\n"
+                    "    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_module_evaluated_bindings_invalidate_schema_imports(self):
+        changes = (
+            "def f(value=(Schema := object)): pass\n",
+            "def f(*, value=(Schema := object)): pass\n",
+            "def f(value: (Schema := object)): pass\n",
+            "def f() -> (Schema := object): pass\n",
+            "async def f(value=(Schema := object)): pass\n",
+            "@decorate((Schema := object))\ndef f(): pass\n",
+            "class Prior((Schema := object)): pass\n",
+            "class Prior(object, option=(Schema := object)): pass\n",
+            "@decorate((Schema := object))\nclass Prior: pass\n",
+            "try: pass\nexcept Exception as Schema: pass\n",
+            "match value:\n    case Schema: pass\n",
+            "match value:\n    case [*Schema]: pass\n",
+            "match value:\n    case {'x': x, **Schema}: pass\n",
+            "(Schema := other).x = 1\n",
+            "del (Schema := other).x\n",
+            "from other import *\n",
+            "if condition:\n    from other import *\n",
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                violations = self.violations(
+                    "from typing import TypedDict as Schema\n" + change +
+                    "class Receipt(Schema):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_wildcard_imports_cannot_reestablish_schema_trust(self):
+        for module in ("typing", "other"):
+            with self.subTest(module=module):
+                violations = self.violations(
+                    f"from {module} import *\n"
+                    "TypedDict.x = replacement\n"
+                    "from typing import TypedDict as Schema\n"
+                    "class Receipt(Schema):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_global_rebinding_anywhere_keeps_schema_fields_governed(self):
+        for position in ("before", "after"):
+            with self.subTest(position=position):
+                schema = "class Receipt(Schema):\n    raw_process_captures: str\n"
+                rebind = "def change():\n    global Schema\n    Schema = object\n"
+                body = rebind + schema if position == "before" else schema + rebind
+                violations = self.violations("from typing import TypedDict as Schema\n" + body)
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_attribute_mutation_anywhere_invalidates_schema_module_imports(self):
+        changes = (
+            "class Mutator:\n    types.TypedDict = object\n",
+            "def mutate():\n    types.TypedDict = object\n",
+            "class Mutator:\n    del types.TypedDict\n",
+            "def mutate():\n    del types.TypedDict\n",
+        )
+        schema = "class Receipt(types.TypedDict):\n    raw_process_captures: str\n"
+        for change in changes:
+            for position in ("before", "after"):
+                with self.subTest(change=change, position=position):
+                    body = change + schema if position == "before" else schema + change
+                    violations = self.violations("import typing as types\n" + body)
+                    self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_module_object_escape_keeps_schema_fields_governed(self):
+        escapes = (
+            "alias = types\nalias.TypedDict = replacement\n",
+            "inspect_module(types)\n",
+            "def get_module(): return types\n",
+            "stored = [types]\n",
+            "def inspect_default(module=types): pass\n",
+            "types.__dict__['TypedDict'] = replacement\n",
+            "inspect_type(types.TypedDict)\n",
+            "other = types.TypedDict\n",
+        )
+        schema = "class Receipt(types.TypedDict):\n    raw_process_captures: str\n"
+        for escape in escapes:
+            for position in ("before", "after"):
+                with self.subTest(escape=escape, position=position):
+                    body = escape + schema if position == "before" else schema + escape
+                    violations = self.violations("import typing as types\n" + body)
+                    self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_imported_factory_escape_keeps_schema_fields_governed(self):
+        escapes = (
+            "alias = Schema\nalias.__mro_entries__ = replacement\n",
+            "inspect_type(Schema)\n",
+            "def get_factory(): return Schema\n",
+            "stored = {'factory': Schema}\n",
+            "Schema.__dict__['__mro_entries__'] = replacement\n",
+            "Schema.__globals__['TypedDict'] = replacement\n",
+        )
+        schema = "class Receipt(Schema):\n    raw_process_captures: str\n"
+        for escape in escapes:
+            for position in ("before", "after"):
+                with self.subTest(escape=escape, position=position):
+                    body = escape + schema if position == "before" else schema + escape
+                    violations = self.violations("from typing import TypedDict as Schema\n" + body)
+                    self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_module_aliases_share_one_canonical_typing_trust_group(self):
+        cases = (
+            ("import typing as t\nimport typing as u\n", "u.TypedDict = object\n", "t.TypedDict"),
+            ("import typing as u\nimport typing as t\n", "u.TypedDict = object\n", "t.TypedDict"),
+            ("import typing as t, typing as u\n", "u.TypedDict = object\n", "t.TypedDict"),
+            ("import typing as t\n", "t.TypedDict = object\nfrom typing import TypedDict as Schema\n", "Schema"),
+            ("from typing import TypedDict as Schema\nimport typing as t\n", "t.TypedDict = object\n", "Schema"),
+            ("import typing as t\n", "def mutate():\n    import typing as u\n    u.TypedDict = object\n", "t.TypedDict"),
+        )
+        for imports, escape, base in cases:
+            with self.subTest(imports=imports, escape=escape):
+                violations = self.violations(imports + escape +
+                                             f"class Receipt({base}):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_factory_aliases_share_the_canonical_typing_trust_group(self):
+        cases = (
+            ("from typing import TypedDict as First\nfrom typing import TypedDict as Second\n", "First"),
+            ("from typing import TypedDict as Second\nfrom typing import TypedDict as First\n", "First"),
+            ("from typing import TypedDict as First, TypedDict as Second\n", "First"),
+        )
+        for imports, escaped in cases:
+            with self.subTest(imports=imports):
+                violations = self.violations(imports + f"{escaped}.__mro_entries__ = replacement\n"
+                                             "class Receipt(Second):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+        for imports, escape, base in (
+                ("import typing as t\nfrom typing import TypedDict as Schema\n",
+                 "Schema.__mro_entries__ = replacement\n", "t.TypedDict"),
+                ("from typing import TypedDict as Schema\n",
+                 "def mutate():\n    from typing import TypedDict as Other\n    inspect_type(Other)\n", "Schema")):
+            with self.subTest(imports=imports, escape=escape):
+                violations = self.violations(imports + escape +
+                                             f"class Receipt({base}):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_shadowed_or_global_import_names_revoke_the_canonical_group(self):
+        cases = (
+            ("import typing as t\nimport typing as u\n", "u = object()\ninspect_module(u)\n", "t.TypedDict"),
+            ("from typing import TypedDict as First, TypedDict as Second\n",
+             "First = object()\ninspect_type(First)\n", "Second"),
+            ("import typing as t\nimport typing as u\n",
+             "def change():\n    global u\n    u = object()\n", "t.TypedDict"),
+            ("from typing import TypedDict as First, TypedDict as Second\n",
+             "def change():\n    global First\n    First = object()\n", "Second"),
+        )
+        for imports, escape, base in cases:
+            with self.subTest(imports=imports, escape=escape):
+                violations = self.violations(imports + escape +
+                                             f"class Receipt({base}):\n    raw_process_captures: str\n")
+                self.assertEqual([item.kind for item in violations], ["raw-capture-authority"])
+
+    def test_canonical_import_can_be_reestablished_after_plain_rebinding(self):
+        for declaration, base, rebound in (
+                ("import typing as t\n", "t.TypedDict", "t"),
+                ("from typing import TypedDict as Schema\n", "Schema", "Schema")):
+            with self.subTest(declaration=declaration):
+                violations = self.violations(declaration + f"{rebound} = object\n" + declaration +
+                                             f"class Receipt({base}):\n    raw_process_captures: str\n")
+                self.assertEqual(violations, ())
+
+    def test_only_direct_undecorated_canonical_schema_bases_are_exempted(self):
+        field = "    raw_process_captures: str\n"
+        cases = (
+            "from typing import TypedDict\n@decorate\nclass Receipt(TypedDict):\n" + field,
+            "from typing import TypedDict\nclass Parent(TypedDict): pass\nclass Receipt(Parent):\n" + field,
+            "from typing import TypedDict\n@decorate\nclass Parent(TypedDict): pass\nclass Receipt(Parent):\n" + field,
+            "from other import TypedDict\nclass Receipt(TypedDict):\n" + field,
+            "import typing\nclass Receipt(typing.NamedTuple):\n" + field,
+            "from .typing import TypedDict\nclass Receipt(TypedDict):\n" + field,
+            "from typing import TypedDict\nclass Receipt(TypedDict, Other):\n" + field,
+            "class Receipt(TypedDict):\n" + field + "from typing import TypedDict\n",
+            "from typing import TypedDict\nclass Receipt(TypedDict, metaclass=Factory):\n" + field,
+            "from typing import TypedDict\nclass Receipt(TypedDict, closed=True):\n" + field,
+            "from typing import TypedDict\nclass Receipt(TypedDict, **options):\n" + field,
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertEqual([item.kind for item in self.violations(source)], ["raw-capture-authority"])
+
+    def test_schema_fields_do_not_authorize_identityless_cleanup(self):
+        schema = ("from typing import TypedDict\nclass Receipt(TypedDict):\n"
+                  "    raw_process_captures: str\n")
+        for cleanup, expected in (
+                ("remove_owned_directory(directory=path, parent=parent)\n", "path-only-removal"),
+                ("Processes(path)\n", "process-capture-owner")):
+            with self.subTest(cleanup=cleanup):
+                self.assertEqual([item.kind for item in self.violations(schema + cleanup)], [expected])
+
     def test_process_capture_requires_one_caller_owner(self):
         violations = self.violations(
             "processes = Processes(output / 'processes')\n"
