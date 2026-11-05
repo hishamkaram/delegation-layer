@@ -1,6 +1,7 @@
 """Private CLI stop policy boundary."""
 
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp, _timestamp_before, _timestamp_unix_ns
+from scripts.delegate_acceptance.evidence.validation import _task_identity
 
 
 def _exact_stop_row(status, request_id):
@@ -67,15 +68,47 @@ def is_documented_user_interruption(status, task_id, root_id, request_id):
     )
 
 
-def default_stop_dispatch_evidence(response):
-    failure = response.get("failure") or {}
-    return {
-        "task_id": response.get("task_id"),
-        "root_id": response.get("root_id"),
-        "task_record": response.get("task_record"),
-        "admission": response.get("admission"),
-        "failure": {key: failure.get(key) for key in ("code", "stage", "next_action") if failure.get(key) is not None},
+def _public_dispatch_code(value: object) -> str | None:
+    """Keep bounded public identifiers, never arbitrary diagnostic text or objects."""
+    if (not isinstance(value, str) or not 0 < len(value) <= 128 or
+            value[0] not in "abcdefghijklmnopqrstuvwxyz" or
+            any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for character in value)):
+        return None
+    return value
+
+
+def default_stop_dispatch_evidence(response: object, *, expected_task_id: str | None = None) -> dict[str, object]:
+    """Project only public dispatch facts; malformed values never enter the receipt."""
+    data = response if isinstance(response, dict) else {}
+    task_id, root_id = data.get("task_id"), data.get("root_id")
+    record, admission = data.get("task_record"), data.get("admission")
+    failure: dict[str, object] = {}
+    raw_failure = data.get("failure")
+    if isinstance(raw_failure, dict):
+        for key in ("code", "stage", "next_action", "reason_code"):
+            value = _public_dispatch_code(raw_failure.get(key))
+            if value is not None:
+                failure[key] = value
+        retry = raw_failure.get("retry_after_seconds")
+        # Public retry advice is a positive Go int on the supported 64-bit hosts.
+        if type(retry) is int and 0 < retry < 2**63:
+            failure["retry_after_seconds"] = retry
+    evidence: dict[str, object] = {
+        "task_id": task_id if _task_identity(task_id) else None,
+        "root_id": root_id if _task_identity(root_id) else None,
+        "task_record": record if isinstance(record, str) and record in {"created", "not_created", "unknown"} else None,
+        "admission": admission if isinstance(admission, str) and admission in {"admitted", "not-admitted", "unknown"} else None,
+        "failure": failure,
     }
+    resource = data.get("resource_admission")
+    if isinstance(resource, dict):
+        status = resource.get("status")
+        if isinstance(status, str) and status in {"clear", "pressure", "unknown"}:
+            evidence["resource_admission"] = {"status": status}
+    if expected_task_id is not None:
+        evidence["expected_task_id_match"] = (
+            _task_identity(expected_task_id) and _task_identity(task_id) and task_id == expected_task_id)
+    return evidence
 
 
 def default_stop_lease_evidence(specification, lease_observation):

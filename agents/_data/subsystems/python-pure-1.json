@@ -363,7 +363,8 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "pure",
     "imports": [
-      "py:delegate_acceptance.evidence.timestamps"
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation"
     ]
   },
   {

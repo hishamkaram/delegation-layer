@@ -176,6 +176,10 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
             phase="default-stop-dispatch",
             capture_root=capture_root,
         )
+        run_receipt.add_details(default_stop_dispatch={
+            "phase": run_receipt.current_phase, "receipt": (receipts / receipt_name).name,
+            **default_stop_dispatch_evidence(response, expected_task_id=task_id),
+        })
         if response.get("task_id") != task_id or response.get("task_record") != "created":
             raise RuntimeError("default-stop dispatch did not create the requested task")
         if not response.get("root_id") or response.get("admission") != "admitted":
