@@ -21,6 +21,8 @@ if not __package__:
 import scripts.acceptance_private_cli as _private_cli
 from scripts.acceptance_supervisor_common import (
     DirectoryOwner as DirectoryOwner,
+    OwnedDirectory as OwnedDirectory,
+    Processes as Processes,
 )
 from scripts.delegate_acceptance.workspaces.scenarios.model import (
     AcceptanceBlocked as AcceptanceBlocked,

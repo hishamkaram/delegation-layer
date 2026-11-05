@@ -41,7 +41,9 @@ def require_banner(command: list[str], expected: str) -> None:
     result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True,
                             check=True, timeout=30)
     if expected not in result.stdout.splitlines():
-        raise ValueError(f"unexpected version from {command[0]}; run the matching tools target")
+        observed = ((result.stdout or "") + (result.stderr or "")).strip()[:200]
+        raise ValueError(f"unexpected version from {command[0]}: expected {expected!r}, "
+                         f"received {observed!r}; run the matching tools target")
 
 
 def python_tools(group: str, *, install: bool) -> None:

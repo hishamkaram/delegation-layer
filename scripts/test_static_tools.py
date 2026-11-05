@@ -131,11 +131,22 @@ class StaticToolTests(unittest.TestCase):
 
     def test_banner_mismatch_and_tool_failure_are_rejected(self):
         with mock.patch.object(tools.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ruff 0.15.200\n")):
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "received 'ruff 0.15.200'"):
                 tools.require_banner(["ruff", "--version"], "ruff 0.15.20")
         with mock.patch.object(tools.subprocess, "run", side_effect=subprocess.CalledProcessError(2, "ruff")):
             with self.assertRaises(subprocess.CalledProcessError):
                 tools.require_banner(["ruff", "--version"], "ruff 0.15.20")
+
+    def test_version_mismatch_diagnostic_is_bounded_and_escaped(self):
+        for stdout, stderr in (("x" * 500, ""), ("", "wrong\x1b[31m\nbanner")):
+            with self.subTest(stdout=bool(stdout)), mock.patch.object(
+                    tools.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout, stderr)):
+                with self.assertRaises(ValueError) as raised:
+                    tools.require_banner(["ruff", "--version"], "ruff 0.15.20")
+                observed = (stdout + stderr).strip()[:200]
+                self.assertIn(f"received {observed!r}", str(raised.exception))
+                self.assertNotIn("x" * 201, str(raised.exception))
+                self.assertNotIn("\x1b", str(raised.exception))
 
     def test_download_script_does_not_mask_command_substitution_failure(self):
         with tempfile.TemporaryDirectory() as directory:
