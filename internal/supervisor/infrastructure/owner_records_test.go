@@ -28,7 +28,7 @@ func ownerRecordFixture(t *testing.T) (StartupIntent, StartupAssumption, OwnerPu
 		Protocol: ProtocolVersion, Startup: ref, AssumptionSHA256: digest,
 		RuntimeSHA256: intent.Inputs.Artifacts.RunnerSHA256,
 		Endpoint: EndpointIdentity{
-			Path:         filepath.Join(intent.Inputs.Root, ".i"),
+			Path:         ownerEndpointPath(intent.Inputs.Root, intent.Sequence),
 			DirectoryDev: intent.Inputs.RootDevice, DirectoryInode: intent.Inputs.RootInode, SocketInode: 24,
 		},
 	}
@@ -69,7 +69,14 @@ func TestOwnerPublicationRefusesInvalidReferences(t *testing.T) {
 		{"assumption", func(p *OwnerPublication) { p.AssumptionSHA256 = strings.Repeat("e", 64) }},
 		{"runtime", func(p *OwnerPublication) { p.RuntimeSHA256 = strings.Repeat("e", 64) }},
 		{"endpoint", func(p *OwnerPublication) { p.Endpoint.Path = "relative" }},
-		{"foreign-root-endpoint", func(p *OwnerPublication) { p.Endpoint.Path = filepath.Join(t.TempDir(), ".i") }},
+		{"legacy-fixed-endpoint", func(p *OwnerPublication) { p.Endpoint.Path = filepath.Join(filepath.Dir(p.Endpoint.Path), ".i") }},
+		{"other-sequence-endpoint", func(p *OwnerPublication) {
+			p.Endpoint.Path = filepath.Join(filepath.Dir(p.Endpoint.Path), "0000000000002")
+		}},
+		{"noncanonical-short-sequence", func(p *OwnerPublication) {
+			p.Endpoint.Path = filepath.Join(filepath.Dir(p.Endpoint.Path), "000000000001")
+		}},
+		{"foreign-root-endpoint", func(p *OwnerPublication) { p.Endpoint.Path = ownerEndpointPath(t.TempDir(), 1) }},
 		{"endpoint-directory-device", func(p *OwnerPublication) { p.Endpoint.DirectoryDev++ }},
 		{"endpoint-directory-inode", func(p *OwnerPublication) { p.Endpoint.DirectoryInode++ }},
 		{"endpoint-inode", func(p *OwnerPublication) { p.Endpoint.SocketInode = 0 }},
@@ -117,5 +124,48 @@ func TestStartupReferenceRetainsBootAndDeadline(t *testing.T) {
 		if err = ref.validateIntent(changed); !errors.Is(err, ErrIdentity) {
 			t.Fatalf("changed original attempt accepted: %v", err)
 		}
+	}
+}
+
+func TestOwnerPublicationEndpointBindsFullIntentSequence(t *testing.T) {
+	intent, assumption, publication := ownerRecordFixture(t)
+	intent.Sequence = 2
+	reference, err := ReferenceStartup(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assumption.Startup, publication.Startup = reference, reference
+	publication.AssumptionSHA256, err = assumption.Digest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = publication.Validate(intent, assumption); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("prior sequence endpoint accepted: %v", err)
+	}
+	publication.Endpoint.Path = filepath.Join(intent.Inputs.Root, "0000000000002")
+	if err = publication.Validate(intent, assumption); err != nil {
+		t.Fatalf("exact second sequence endpoint refused: %v", err)
+	}
+}
+
+func TestOwnerPublicationRefusesCaseAlias(t *testing.T) {
+	intent, assumption, publication := ownerRecordFixture(t)
+	intent.Sequence = 10
+	reference, err := ReferenceStartup(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assumption.Startup, publication.Startup = reference, reference
+	publication.AssumptionSHA256, err = assumption.Digest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication.Endpoint.Path = filepath.Join(intent.Inputs.Root, "000000000000a")
+	if err = publication.Validate(intent, assumption); err != nil {
+		t.Fatal(err)
+	}
+	publication.Endpoint.Path = filepath.Join(intent.Inputs.Root, "000000000000A")
+	if err = publication.Validate(intent, assumption); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("uppercase endpoint alias accepted: %v", err)
 	}
 }

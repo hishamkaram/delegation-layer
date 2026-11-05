@@ -8,6 +8,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -19,7 +20,7 @@ import (
 type OperationRuntime interface {
 	ManagedRunner() (string, error)
 	PrepareManaged(context.Context, *taskdir.Store, string) (string, *pueue.Client, error)
-	OpenSaved(context.Context, string, task.SupervisorRef) (*pueue.Client, error)
+	OpenSaved(context.Context, *taskdir.Store, task.SupervisorRef, infrastructure.SavedBindingSource) (*pueue.Client, error)
 }
 
 // InspectionRecovery applies admission's recovery policy to the inspection
@@ -34,6 +35,9 @@ type InspectionRecovery func(context.Context, *inspection.Operation) error
 // checks validate it and a verification job receives it; nil is a missing
 // capture and fails instead of reading the process environment.
 type OperationOptions struct {
+	// RootAdmission is the caller-owned outer SH resource, borrowed by nested
+	// scheduling and recovery. The caller releases it after resource finalization.
+	RootAdmission      *taskdir.RootAdmissionLease
 	Runtime            OperationRuntime
 	ObservationTimeout time.Duration
 	RecoverInspection  InspectionRecovery

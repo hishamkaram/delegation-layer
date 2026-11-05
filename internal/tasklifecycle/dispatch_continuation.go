@@ -1,10 +1,13 @@
 package tasklifecycle
 
 import (
+	"context"
 	"errors"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -29,6 +32,10 @@ func resolveDispatchProvider(request DispatchRequest, options DispatchOptions, s
 }
 
 func prepareDispatchContinuation(store *taskdir.Store, options DispatchOptions, request *task.TaskRecord, predecessorID string) (DispatchOptions, *task.MetaRecord, error) {
+	return prepareDispatchContinuationContext(context.Background(), store, options, request, predecessorID)
+}
+
+func prepareDispatchContinuationContext(ctx context.Context, store *taskdir.Store, options DispatchOptions, request *task.TaskRecord, predecessorID string) (DispatchOptions, *task.MetaRecord, error) {
 	if predecessorID == "" {
 		return options, nil, nil
 	}
@@ -39,7 +46,7 @@ func prepareDispatchContinuation(store *taskdir.Store, options DispatchOptions, 
 	if err = ValidateContinuationEnvironment(meta); err != nil {
 		return options, nil, err
 	}
-	prior, err := ResolvePredecessor(store, PredecessorOptions{Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
+	prior, err := ResolvePredecessorContext(ctx, store, PredecessorOptions{RootAdmission: options.Creation.RootAdmission, Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
 	if err != nil {
 		return options, nil, err
 	}
@@ -89,4 +96,19 @@ func newSuccessorCreation(options CreationOptions, selection supervisorcore.Admi
 	options.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Admission.Supervisor, scope, scope)
 	selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(root, *meta, scope)
 	return options, selection
+}
+
+// The immutable predecessor metadata owns this locator. Mark only a new saved
+// private continuation; actual preparation stays after the final candidate
+// merge and before successor metadata is created.
+func continuationAdmissionSelection(selection supervisorcore.AdmissionSelection, root string, meta *task.MetaRecord) (supervisorcore.AdmissionSelection, error) {
+	if meta == nil || selection.SavedSupervisor == nil || !pueue.IsPrivateConfig(root, selection.SavedSupervisor.ConfigPath) {
+		return selection, nil
+	}
+	source, err := supervisorcore.NewSavedBindingSource(meta.RootID, infrastructure.SavedBindingTaskMetadata, meta.TaskID, "", meta.SupervisorConfig)
+	if err != nil {
+		return selection, err
+	}
+	selection.ContinuationSource = source
+	return selection, nil
 }

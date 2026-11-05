@@ -18,6 +18,10 @@ import (
 // and, when present, the inspection request. A managed successor is accepted
 // only after that exact request durably authorized its worker migration.
 func ValidateSubmissionRunner(openStore SubmissionStoreOpener, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) (resultErr error) {
+	return ValidateSubmissionRunnerContext(context.Background(), openStore, td, req, meta, runner)
+}
+
+func ValidateSubmissionRunnerContext(ctx context.Context, openStore SubmissionStoreOpener, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) (resultErr error) {
 	if td == nil || req == nil {
 		return task.ErrEvidenceFault
 	}
@@ -30,7 +34,7 @@ func ValidateSubmissionRunner(openStore SubmissionStoreOpener, td *taskdir.TaskD
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	operation, err := LoadInspectionOperationContext(context.Background(), store, *req)
+	operation, err := LoadInspectionOperationContext(ctx, store, *req)
 	if task.RecordAbsent(err) {
 		return nil
 	}
@@ -38,24 +42,32 @@ func ValidateSubmissionRunner(openStore SubmissionStoreOpener, td *taskdir.TaskD
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	return ValidateInspectionSubmissionRunner(operation, store, td, req, meta, runner)
+	return ValidateInspectionSubmissionRunnerContext(ctx, operation, store, td, req, meta, runner)
 }
 
 func ValidateManagedRetrySubmissionRunner(openStore SubmissionStoreOpener, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) error {
+	return ValidateManagedRetrySubmissionRunnerContext(context.Background(), openStore, td, req, meta, runner)
+}
+
+func ValidateManagedRetrySubmissionRunnerContext(ctx context.Context, openStore SubmissionStoreOpener, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) error {
 	if meta == nil {
 		return task.ErrEvidenceFault
 	}
-	if err := supervisorcore.ValidateManagedRetryRunner(td, meta, runner); err != nil {
+	if err := supervisorcore.ValidateManagedRetryRunnerContext(ctx, td, meta, runner); err != nil {
 		return err
 	}
 	retryMeta := *meta
 	// Validate the selected executable against inspection evidence while
 	// retaining the task's recorded ownership classification.
 	retryMeta.RunnerExecutable = runner
-	return ValidateSubmissionRunner(openStore, td, req, &retryMeta, runner)
+	return ValidateSubmissionRunnerContext(ctx, openStore, td, req, &retryMeta, runner)
 }
 
 func ValidateInspectionSubmissionRunner(operation *inspection.Operation, store *taskdir.Store, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) error {
+	return ValidateInspectionSubmissionRunnerContext(context.Background(), operation, store, td, req, meta, runner)
+}
+
+func ValidateInspectionSubmissionRunnerContext(ctx context.Context, operation *inspection.Operation, store *taskdir.Store, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, runner string) error {
 	request := operation.Request()
 	requestBytes, err := task.MarshalCanonical(*req)
 	if err != nil || request.RootID != store.RootID || request.TaskID != req.TaskID || request.TaskSHA256 != task.ComputeSHA256(requestBytes) {
@@ -76,23 +88,23 @@ func ValidateInspectionSubmissionRunner(operation *inspection.Operation, store *
 		}
 		return nil
 	}
-	return validateManagedInspectionSuccessor(operation, td, meta, runner, false)
+	return validateManagedInspectionSuccessor(ctx, operation, td, meta, runner, false)
 }
 
-func validateManagedInspectionSuccessor(operation *inspection.Operation, td *taskdir.TaskDir, meta *task.MetaRecord, runner string, sameWorker bool) error {
+func validateManagedInspectionSuccessor(ctx context.Context, operation *inspection.Operation, td *taskdir.TaskDir, meta *task.MetaRecord, runner string, sameWorker bool) error {
 	binding := operation.Request().Binding
 	if meta == nil || meta.RunnerOwnership != task.RunnerOwnershipManaged || binding.RunnerOwnership != task.RunnerOwnershipManaged {
 		return inspectionWorkerMismatch(sameWorker)
 	}
-	if err := supervisorcore.ValidateManagedRetryRunner(td, meta, runner); err != nil {
+	if err := supervisorcore.ValidateManagedRetryRunnerContext(ctx, td, meta, runner); err != nil {
 		return err
 	}
-	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(context.Background())
+	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(ctx)
 	if err != nil {
 		return err
 	}
 	if !authorized {
-		if _, proofErr := operation.ReadProofContext(context.Background()); proofErr != nil {
+		if _, proofErr := operation.ReadProofContext(ctx); proofErr != nil {
 			if !errors.Is(proofErr, os.ErrNotExist) {
 				return proofErr
 			}

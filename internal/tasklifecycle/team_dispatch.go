@@ -15,6 +15,10 @@ import (
 )
 
 func resolveDispatchTeam(request DispatchRequest, options DispatchOptions, store *taskdir.Store, id, cwd string) (DispatchRequest, error) {
+	return resolveDispatchTeamContext(context.Background(), request, options, store, id, cwd)
+}
+
+func resolveDispatchTeamContext(ctx context.Context, request DispatchRequest, options DispatchOptions, store *taskdir.Store, id, cwd string) (DispatchRequest, error) {
 	if request.TeamTarget == nil {
 		return request, task.ValidateTeamContext(request.TeamContext)
 	}
@@ -36,7 +40,7 @@ func resolveDispatchTeam(request DispatchRequest, options DispatchOptions, store
 	if options.Members == nil {
 		return request, fmt.Errorf("%w: Member resolver unavailable", task.ErrInvalidTeamSelection)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+	ctx, cancel := context.WithTimeout(ctx, workspace.DefaultBudget)
 	defer cancel()
 	source, err := teamSourceCwd(ctx, store, request, cwd)
 	if err != nil {
@@ -174,13 +178,17 @@ func rebaseTeamRequest(candidate *task.TaskRecord, old *task.TaskRecord) error {
 }
 
 func validatePreparedTeamProject(request DispatchRequest, options DispatchOptions, cwd string) error {
+	return validatePreparedTeamProjectContext(context.Background(), request, options, cwd)
+}
+
+func validatePreparedTeamProjectContext(ctx context.Context, request DispatchRequest, options DispatchOptions, cwd string) error {
 	if request.TeamTarget == nil || request.TeamContext == nil || request.TeamContext.Target.Team.Scope != "project" {
 		return nil
 	}
 	if options.CheckTeamProject == nil {
 		return fmt.Errorf("%w: project validator unavailable", task.ErrInvalidTeamSelection)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+	ctx, cancel := context.WithTimeout(ctx, workspace.DefaultBudget)
 	defer cancel()
 	return options.CheckTeamProject(ctx, request.TeamContext.Target.Team, cwd, request.ProjectRoot)
 }

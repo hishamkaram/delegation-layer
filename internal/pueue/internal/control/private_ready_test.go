@@ -112,7 +112,7 @@ func TestWaitUnavailableDoesNotTreatRefusedSocketAsAbsent(t *testing.T) {
 
 func TestWaitUnavailableRemovesStateRootedStaleSocketAfterDaemonExit(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestWaitUnavailableRemovesStateRootedStaleSocketAfterDaemonExit(t *testing.
 
 func TestWaitUnavailableWaitsForPrivateDaemonProcessExit(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 5 * time.Second})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestBindPrivateFailsClosedWhenIncompatibleEndpointIsLive(t *testing.T) {
 			t.Error(removeErr)
 		}
 	})
-	if _, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout}); !errors.Is(err, ErrBinding) {
+	if _, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("private bootstrap accepted an incompatible live endpoint: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
@@ -248,6 +248,8 @@ func TestBindPrivateHandlesLargeActiveQueueWithoutCleanup(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	// This proves row capacity, not a wall-clock SLA under race instrumentation.
 	client, err := BindPrivate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{
+		PrivateGenerationGuard:      allowPrivateGenerationForTest{},
+		DaemonStartGuard:            allowDaemonStartForTest{},
 		ObservationTimeout:          30 * time.Second,
 		SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest,
 	})
@@ -300,7 +302,7 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 
 func TestPrivateCleanupFailsClosedWithoutApplicationAuthorizer(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	client := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: DefaultObservationTimeout})
+	client := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout})
 	if err := client.cleanSuccessfulTasks(context.Background(), false); !errors.Is(err, ErrCleanupAuthorization) {
 		t.Fatalf("cleanup without authorizer: %v", err)
 	}

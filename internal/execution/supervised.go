@@ -15,14 +15,22 @@ import (
 // Started native commands and their captures remain owned until they end.
 // The scope expires when its synchronous callback returns and cannot be reused.
 type PreflightScope struct {
-	ctx       context.Context
-	authorize func() error
-	start     func(func() error) error
-	lifetime  Lifetime
+	ctx                context.Context
+	authorize          func() error
+	start              func(func() error) error
+	lifetime           Lifetime
+	prepareEnvironment func(context.Context, []string) ([]string, error)
 }
 
 // Context carries the existing owner's absolute deadline, without another timer.
 func (s PreflightScope) Context() context.Context { return s.ctx }
+
+// PrepareEnvironment applies the caller's overlay to the already-selected
+// command environment. The scope supplies its actual current lifetime context;
+// the effect description and its digest remain unchanged.
+func (s PreflightScope) PrepareEnvironment(selected []string) ([]string, error) {
+	return prepareLaunchEnvironment(s.ctx, selected, s.prepareEnvironment)
+}
 
 // Authorize checks the same deadline/start arbitration as the eventual provider
 // start. It is only a timing gate, not a submission or process-start permit.
@@ -98,10 +106,11 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 	ctx, cancel := context.WithCancel(b.workContext)
 	defer cancel()
 	scope := PreflightScope{
-		ctx:       ctx,
-		authorize: func() error { return b.authorize(opts, "preflight-authorized") },
-		start:     func(start func() error) error { return b.authorizeAndStart(opts, start) },
-		lifetime:  opts.Lifetime,
+		ctx:                ctx,
+		authorize:          func() error { return b.authorize(opts, "preflight-authorized") },
+		start:              func(start func() error) error { return b.authorizeAndStart(opts, start) },
+		lifetime:           opts.Lifetime,
+		prepareEnvironment: opts.PrepareEnvironment,
 	}
 	if err := scope.Authorize(); err != nil {
 		return Plan{}, err
@@ -112,9 +121,10 @@ func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(Preflight
 // SupervisedOptions supplies the same clock and durable stop boundary used by
 // ordinary execution. There is no process, provider, or publication capability.
 type SupervisedOptions struct {
-	Clock    Clock
-	Stopper  Stopper
-	Lifetime Lifetime
+	PrepareEnvironment func(context.Context, []string) ([]string, error)
+	Clock              Clock
+	Stopper            Stopper
+	Lifetime           Lifetime
 }
 
 // RunSupervised runs finite inspection work inside an existing supervisor job.
@@ -136,7 +146,7 @@ func RunSupervisedContext(ctx context.Context, deadline time.Time, opts Supervis
 	if deadline.IsZero() || work == nil || opts.Stopper == nil {
 		return errors.New("invalid supervised inspection lifetime"), nil
 	}
-	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime}
+	executionOptions := Options{Clock: opts.Clock, Stopper: opts.Stopper, Lifetime: opts.Lifetime, PrepareEnvironment: opts.PrepareEnvironment}
 	budget := armBudgetUntilContext(ctx, executionOptions.clock(), deadline, executionOptions)
 	workErr = budget.runScoped(executionOptions, work)
 	if workErr == nil {

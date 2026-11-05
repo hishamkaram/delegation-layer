@@ -31,21 +31,25 @@ func stopLocal(t *testing.T, query Query, done <-chan error) {
 }
 
 func TestHostPermanentChildFaultDoesNotRelaunchAndKeepsControls(t *testing.T) {
-	for _, mode := range []string{"permanent", "runtime_permanent"} {
+	for _, mode := range []string{"permanent", "runtime_permanent", "runtime_cleanup", "runtime_cleanup_incompatible"} {
+		expected := "incompatible_definition"
+		if strings.HasPrefix(mode, "runtime_cleanup") {
+			expected = "cleanup_unresolved"
+		}
 		t.Run(mode, func(t *testing.T) {
 			config := testConfig(t, mode)
 			clock := clockwork.NewFakeClock()
 			done := runLocalHost(t, config, clock)
 			query := queryFor(t, config)
 			status := eventuallyStatus(t, query, func(status Status) bool {
-				return status.State == "degraded" && status.LastError == "incompatible_definition" && status.Child == nil
+				return status.State == "degraded" && status.Child == nil
 			})
-			if status.Attempt != 1 || status.Ready || status.NextRetryAt != nil {
+			if status.Attempt != 1 || status.Ready || !status.Fault || status.LastError != expected || status.NextRetryAt != nil {
 				t.Fatalf("permanent fault scheduled another child: %+v", status)
 			}
 			clock.Advance(24 * time.Hour)
 			status, err := Observe(t.Context(), query)
-			if err != nil || status.Attempt != 1 || status.LastError != "incompatible_definition" {
+			if err != nil || status.Attempt != 1 || status.LastError != expected {
 				t.Fatalf("permanent fault lost after elapsed jump: %+v %v", status, err)
 			}
 			stopLocal(t, query, done)

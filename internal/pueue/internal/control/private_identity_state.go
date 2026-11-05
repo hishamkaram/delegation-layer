@@ -100,10 +100,10 @@ func ReadPrivateSupervisorBinding(stateRoot string) (task.SupervisorRef, bool, e
 // later generation may replace the logical binding only through the
 // readiness-gated identity publication transaction.
 func publishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.SupervisorRef) error {
-	return publishPrivateSupervisorBindingIfAbsentContext(context.Background(), stateRoot, binding)
+	return publishPrivateSupervisorBindingIfAbsentContext(context.Background(), stateRoot, binding, nil)
 }
 
-func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef, guard PrivateGenerationGuard) error {
 	if ctx == nil {
 		return context.Canceled
 	}
@@ -133,7 +133,9 @@ func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRo
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	return publishPrivateRecord(filepath.Join(stateRoot, privateSupervisorDirectory), privateSupervisorBindingPath(stateRoot), data)
+	return guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		return publishPrivateRecord(filepath.Join(stateRoot, privateSupervisorDirectory), privateSupervisorBindingPath(stateRoot), data)
+	})
 }
 
 // PublishPrivateSupervisorBindingIfAbsent records a validated logical owner
@@ -146,7 +148,7 @@ func PublishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.Supe
 // PublishPrivateSupervisorBindingIfAbsentContext preserves caller cancellation
 // before the canonical create-once publisher starts staging the binding.
 func PublishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding, nil)
 }
 
 // EnsurePrivateSupervisorBindingWithLock adopts a live private daemon whose
@@ -189,7 +191,7 @@ func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, st
 	if found && !privateFullGenerationMatches(published, c.binding) {
 		return fmt.Errorf("%w: private supervisor is not the published generation", ErrPrivateSupervisorMigrationRequired)
 	}
-	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding); err != nil {
+	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding, c.options.PrivateGenerationGuard); err != nil {
 		return privatePublishedRecoveryError(err)
 	}
 	// Binding publication has already run. Preserve the migration postcondition
@@ -239,7 +241,7 @@ func (c *Client) authorizePrivateMutationWithLock(stateRoot string) error {
 	return nil
 }
 
-func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot string, binding task.SupervisorRef, guard PrivateGenerationGuard) error {
 	if existing, found, err := loadPrivateSupervisorBinding(stateRoot); err != nil {
 		return err
 	} else if found {
@@ -256,7 +258,7 @@ func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot str
 	// A saved task or inspection record is the validated logical owner of this
 	// state-rooted config. Recreate only that missing logical record; daemon
 	// provenance remains separate and is reconciled by the normal bootstrap.
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding, guard)
 }
 
 func loadPrivateSupervisorBindingRaw(stateRoot string) (binding task.SupervisorRef, found bool, resultErr error) {
@@ -368,4 +370,10 @@ func verifyPrivateSupervisorBinding(stateRoot string, binding task.SupervisorRef
 		}
 	}
 	return nil
+}
+
+// PublishPrivateSupervisorBindingIfAbsentWithOptionsContext grants only the
+// absent-record publication; an equivalent durable winner remains a read.
+func PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(ctx context.Context, stateRoot string, binding task.SupervisorRef, options Options) error {
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding, options.PrivateGenerationGuard)
 }

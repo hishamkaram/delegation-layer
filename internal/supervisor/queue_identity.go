@@ -34,7 +34,7 @@ func ValidateInspectionRunner(operation *inspection.Operation, runner string) er
 	return nil
 }
 
-func prepareQueuedRunnerCommand(store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
+func prepareQueuedRunnerCommandContext(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return pueue.RunnerCommandReplacement{}, false, task.ErrIdentityMismatch
 	}
@@ -43,7 +43,7 @@ func prepareQueuedRunnerCommand(store *taskdir.Store, supervisor *pueue.Client, 
 		return pueue.RunnerCommandReplacement{}, false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	return queuedRunnerCommandReplacement(store, supervisor, job, taskID, td)
+	return queuedRunnerCommandReplacementContext(ctx, store, supervisor, job, taskID, td)
 }
 
 func PrepareQueuedInspectionRunnerCommand(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
@@ -149,7 +149,7 @@ func authorizeInspectionManagedWorker(ctx context.Context, root string, operatio
 	return operation.AuthorizeManagedWorkerUpgradeContext(ctx)
 }
 
-func queuedRunnerCommandReplacement(store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string, td *taskdir.TaskDir) (pueue.RunnerCommandReplacement, bool, error) {
+func queuedRunnerCommandReplacementContext(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string, td *taskdir.TaskDir) (pueue.RunnerCommandReplacement, bool, error) {
 	req, meta, err := td.PreparedRecords()
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
@@ -168,7 +168,7 @@ func queuedRunnerCommandReplacement(store *taskdir.Store, supervisor *pueue.Clie
 	if meta.RunnerExecutable == "" {
 		return pueue.RunnerCommandReplacement{}, false, task.ErrEvidenceFault
 	}
-	ownership, err := RunnerOwnershipForTask(store.Root, td, meta)
+	ownership, err := RunnerOwnershipForTaskContext(ctx, store.Root, td, meta)
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
 	}

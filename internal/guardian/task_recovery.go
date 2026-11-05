@@ -38,13 +38,16 @@ func RecoverTaskLifetime(parent context.Context, td *taskdir.TaskDir) (resultErr
 		return nil
 	}
 	owner, err := td.TryAcquireLifetimeOwnerContext(parent)
-	if errors.Is(err, task.ErrLockBusy) {
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
+	var cleanup *taskdir.LifetimeOwnerCleanupError
+	if !errors.As(err, &cleanup) && errors.Is(err, task.ErrLockBusy) {
 		return ErrRecoveryPending
 	}
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	ctx, cancel := context.WithTimeout(parent, lifetimeRecoveryTimeout)
 	defer cancel()
 	return ReconcileTaskLifetimeOwned(ctx, td)

@@ -12,6 +12,10 @@ import (
 )
 
 func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) error {
+	return PredecessorTerminatedContext(context.Background(), root, td, req, options)
+}
+
+func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) error {
 	inspection, err := td.Inspect()
 	if err != nil {
 		return err
@@ -20,21 +24,21 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 		if err = requireRunnerLeaseRelease(td); err != nil {
 			return err
 		}
-		return releaseTerminalPredecessor(td, req, inspection)
+		return releaseTerminalPredecessor(ctx, td, req, inspection)
 	}
-	if handedOff, handoffErr := releaseHandedOffPredecessor(td, req); handoffErr != nil {
+	if handedOff, handoffErr := releaseHandedOffPredecessor(ctx, td, req); handoffErr != nil {
 		return handoffErr
 	} else if handedOff {
 		return nil
 	}
-	inspection, err = reconcilePredecessor(root, td, req, options)
+	inspection, err = reconcilePredecessor(ctx, root, td, req, options)
 	if err != nil {
 		return err
 	}
 	if supervisorcore.TaskTerminal(inspection) && inspection.Outcome != nil {
-		return releaseTerminalPredecessor(td, req, inspection)
+		return releaseTerminalPredecessor(ctx, td, req, inspection)
 	}
-	if handedOff, handoffErr := releaseHandedOffPredecessor(td, req); handoffErr != nil {
+	if handedOff, handoffErr := releaseHandedOffPredecessor(ctx, td, req); handoffErr != nil {
 		return handoffErr
 	} else if handedOff {
 		return nil
@@ -42,24 +46,24 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 	return errPredecessorOutcomeUnavailable
 }
 
-func releaseTerminalPredecessor(td *taskdir.TaskDir, req *task.TaskRecord, inspection *taskdir.TaskInspection) error {
+func releaseTerminalPredecessor(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, inspection *taskdir.TaskInspection) error {
 	if inspection == nil || !supervisorcore.TaskTerminal(inspection) || inspection.Outcome == nil {
 		return errPredecessorOutcomeUnavailable
 	}
-	return ReleaseContinuationSession(td, req, inspection.Outcome)
+	return ReleaseContinuationSessionContext(ctx, td, req, inspection.Outcome)
 }
 
-func reconcilePredecessor(root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) (*taskdir.TaskInspection, error) {
+func reconcilePredecessor(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, options SupervisorOptions) (*taskdir.TaskInspection, error) {
 	_, meta, spec, metaHash, err := td.PreparedIdentity()
 	if err != nil {
 		return nil, err
 	}
 	var response Observation
-	observation, err := ReconcileStatus(context.Background(), root, td, req, meta, spec, metaHash, options, &response)
+	observation, err := ReconcileStatus(ctx, root, td, req, meta, spec, metaHash, options, &response)
 	if err != nil {
 		return nil, err
 	}
-	if err = UpdateStatusStops(context.Background(), td, &response, observation); err != nil {
+	if err = UpdateStatusStops(ctx, td, &response, observation); err != nil {
 		return nil, err
 	}
 	if observation.State != pueue.StateEnded {
@@ -72,14 +76,14 @@ func reconcilePredecessor(root string, td *taskdir.TaskDir, req *task.TaskRecord
 // without an authoritative outcome. Only a terminated budget stop or a
 // closure-proven interruption is handoff proof, and the runner lease must be
 // released. A first-turn predecessor owns no session claim to release.
-func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (bool, error) {
+func releaseHandedOffPredecessor(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord) (bool, error) {
 	records, err := td.ReadStopRecords()
 	if err != nil {
 		return false, err
 	}
 	budget := HasTerminatedBudgetStop(records)
 	if !budget {
-		_, interrupted, interruptionErr := closureInterruption(td)
+		_, interrupted, interruptionErr := closureInterruption(ctx, td)
 		if interruptionErr != nil || !interrupted {
 			return false, interruptionErr
 		}
@@ -91,9 +95,9 @@ func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (boo
 		return true, nil
 	}
 	if budget {
-		return true, td.ReleaseSessionAfterTimeout(req.Provider, req.PriorSession.ConversationID)
+		return true, td.ReleaseSessionAfterTimeoutContext(ctx, req.Provider, req.PriorSession.ConversationID)
 	}
-	return true, td.ReleaseSessionAfterLifetimeClosure(req.Provider, req.PriorSession.ConversationID)
+	return true, td.ReleaseSessionAfterLifetimeClosureContext(ctx, req.Provider, req.PriorSession.ConversationID)
 }
 
 // closureInterruption is the single eligibility rule for a closure-proven
@@ -103,7 +107,7 @@ func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (boo
 // deadlines, and stop-readiness shortcuts are never closure proof. An
 // eligible closure returns its validated proof so callers can read the
 // recorded termination cause. Callers keep their own runner-lease checks.
-func closureInterruption(td *taskdir.TaskDir) (guardian.ClosureProof, bool, error) {
+func closureInterruption(ctx context.Context, td *taskdir.TaskDir) (guardian.ClosureProof, bool, error) {
 	inspection, err := td.Inspect()
 	if err != nil {
 		return guardian.ClosureProof{}, false, err
@@ -111,7 +115,7 @@ func closureInterruption(td *taskdir.TaskDir) (guardian.ClosureProof, bool, erro
 	if inspection.Publication != task.PublicationUnknown || inspection.SealExists || inspection.OutcomeExists {
 		return guardian.ClosureProof{}, false, nil
 	}
-	proof, err := guardian.ReadClosureProof(context.Background(), td)
+	proof, err := guardian.ReadClosureProof(ctx, td)
 	if errors.Is(err, guardian.ErrProofPending) {
 		return guardian.ClosureProof{}, false, nil
 	}

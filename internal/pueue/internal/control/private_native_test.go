@@ -50,7 +50,7 @@ func newNativePrivateSupervisorFixture(t *testing.T) nativePrivateSupervisorFixt
 // a test may remove the PID record before cleanup runs.
 func (fixture nativePrivateSupervisorFixture) bind(t *testing.T) (*Client, error) {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: nativePrivateObservationTimeout})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: nativePrivateObservationTimeout})
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func TestPrivateSupervisorNativeEndpointObservations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := NewClient(direct.Binding(), Options{ObservationTimeout: nativePrivateObservationTimeout, ControlOwnerExecutable: os.Args[0]})
+	owner, err := NewClient(direct.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: nativePrivateObservationTimeout, ControlOwnerExecutable: os.Args[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,9 +311,11 @@ func (fixture nativePrivateSupervisorFixture) labelQueryClient(t *testing.T, pat
 		t.Fatal(err)
 	}
 	options := Options{
-		ObservationTimeout: nativePrivateObservationTimeout,
-		Environment:        []string{"PATH=/usr/bin:/bin", "LANG=C"},
-		Observer:           recorder.observe,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     nativePrivateObservationTimeout,
+		Environment:            []string{"PATH=/usr/bin:/bin", "LANG=C"},
+		Observer:               recorder.observe,
 	}
 	if path == "owner" {
 		options.ControlOwnerExecutable = os.Args[0]
@@ -343,8 +345,9 @@ func (fixture nativePrivateSupervisorFixture) labelQueryClient(t *testing.T, pat
 	return client
 }
 
-// addNativeStashedRow adds one stashed row through the canonical staged add
-// under the supervisor and queue identity leases. The row is never enqueued.
+// addNativeStashedRow sets up foreign, never-enqueued rows for label queries.
+// It preserves the selected command owner and CLI I/O without claiming
+// Delegate admission or minting a RootAdmission role.
 func addNativeStashedRow(ctx context.Context, t *testing.T, client *Client, label string) int64 {
 	t.Helper()
 	var id int64
@@ -354,7 +357,7 @@ func addNativeStashedRow(ctx context.Context, t *testing.T, client *Client, labe
 		}
 		return client.withPrivateQueueIdentityLease(leased, func(identityContext context.Context) error {
 			var addErr error
-			id, _, addErr = client.stagedAdd(identityContext, nil, "add", "--escape", "--stashed", "--label", label, "--print-task-id", "--", nativeStashedRowCommand)
+			id, _, addErr = client.stagedAddCommand(identityContext, nil, "add", "--escape", "--stashed", "--label", label, "--print-task-id", "--", nativeStashedRowCommand)
 			return addErr
 		})
 	})

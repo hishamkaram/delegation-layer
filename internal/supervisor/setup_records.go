@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -15,6 +16,10 @@ type AdmissionSelection struct {
 	ConfigPath            string
 	EnvironmentConfigPath string
 	SavedSupervisor       *task.SupervisorRef
+	SavedSource           infrastructure.SavedBindingSource
+	// ContinuationSource names the original predecessor metadata. A derived
+	// saved binding never changes this locator or grants recovery authority.
+	ContinuationSource infrastructure.SavedBindingSource
 }
 
 // AdmissionOptions is the executable/control configuration for supervisor setup.
@@ -26,6 +31,7 @@ type AdmissionOptions struct {
 	Environment       []string
 	Control           pueue.Options
 	OpenStore         StoreOpener
+	Routing           OwnerRouting
 }
 
 // Lookup returns the supervisor executable lookup this configuration selects.

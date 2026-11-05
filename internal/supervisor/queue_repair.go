@@ -140,7 +140,7 @@ func RecordManagedRunnerMigration(ctx context.Context, root string, td *taskdir.
 	if meta == nil || meta.RunnerOwnership != "" || meta.RunnerExecutable == "" {
 		return nil
 	}
-	migrated, err := td.HasManagedRunnerMigration()
+	migrated, err := td.HasManagedRunnerMigrationContext(ctx)
 	if err != nil || migrated {
 		return err
 	}
@@ -177,7 +177,7 @@ func prepareQueuedRunnerCommandForJob(ctx context.Context, store *taskdir.Store,
 	if inspectionWorker {
 		return PrepareQueuedInspectionRunnerCommand(ctx, store, supervisor, job, taskID)
 	}
-	return prepareQueuedRunnerCommand(store, supervisor, job, taskID)
+	return prepareQueuedRunnerCommandContext(ctx, store, supervisor, job, taskID)
 }
 
 func managedStateRunnerPaths(root string) ([]string, error) {
@@ -326,7 +326,10 @@ func runnerRepairReceiptCurrent(ctx context.Context, store *taskdir.Store, name 
 	if err := validateRunnerRepairReceiptShape(store.Root, want); err != nil {
 		return false, err
 	}
-	directory, err := store.OpenRunnerRepairContext(ctx, true)
+	directory, err := store.OpenRunnerRepairContext(ctx, false)
+	if task.RecordAbsent(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

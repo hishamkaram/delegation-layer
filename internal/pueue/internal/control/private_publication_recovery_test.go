@@ -25,7 +25,7 @@ func TestPublishedPreparationReplayDoesNotAdvertisePremutationRefusal(t *testing
 		t.Fatal(err)
 	}
 	err = WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		client, prepared, prepareErr := PreparePublishedPrivateWithLock(ctx, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+		client, prepared, prepareErr := PreparePublishedPrivateWithLock(ctx, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 		if client != nil {
 			t.Cleanup(func() {
 				if closeErr := client.CloseAfterPending(prepareErr); closeErr != nil {

@@ -321,9 +321,41 @@ acceptance-independent-startup: tool-versions
 	go test -race -count=1 -timeout=4m -v \
 		-run '^TestIndependentStartup(NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof)$$' \
 		./internal/lifetime ./internal/scheduler/host ./internal/supervisor
+	# Check native identity and shutdown leases before resident fixtures.
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(Infrastructure|ValidateInfrastructure|StatePairContentStaging|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|IntentJournal|Context|IntentRequires|Endpoint|DecodeStrictByteSlice|WithoutProcessScopeMarker|ConfigureProcessScopeEnvironment)' \
-		./internal/supervisor ./internal/supervisor/infrastructure ./internal/taskdir ./internal/task ./internal/lifetime
+		-run '^Test(SameProcess|NewProcessRefRejectsMalformedRecognizedDarwinTokens|DarwinProcessPresent|NestedNativeObservationPreservesCallerContext)' ./internal/lifetime
+	DELEGATE_SHUTDOWN_LEASE_PROOF=1 \
+	DELEGATE_SHUTDOWN_LEASE_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
+	go test -race -count=1 -timeout=4m -v -run '^TestShutdownLease' ./internal/lifetime
+	go build -buildvcs=false -o "$(BIN_DIR)/test-supervisor/delegate-run" ./cmd/delegate-run
+	go test -c -race -o "$(BIN_DIR)/test-supervisor/private-control-fixture.test" ./internal/pueue/internal/control
+	DELEGATE_SHUTDOWN_LEASE_PROOF=1 \
+	DELEGATE_SHUTDOWN_LEASE_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
+	DELEGATE_SHUTDOWN_LEASE_CONTROL_FIXTURE="$(BIN_DIR)/test-supervisor/private-control-fixture.test" \
+	DELEGATE_SHUTDOWN_LEASE_CONTROL_OWNER="$(BIN_DIR)/test-supervisor/delegate-run" \
+	go test -race -count=1 -timeout=4m -v -run '^TestManagedShutdownLease' ./internal/lifetime
+	DELEGATE_ADMISSION_LEASE_PROOF=1 \
+	DELEGATE_SHUTDOWN_LEASE_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
+	DELEGATE_SHUTDOWN_LEASE_CONTROL_FIXTURE="$(BIN_DIR)/test-supervisor/private-control-fixture.test" \
+	DELEGATE_SHUTDOWN_LEASE_CONTROL_OWNER="$(BIN_DIR)/test-supervisor/delegate-run" \
+	go test -race -count=1 -timeout=4m -v \
+		-run '^(TestManagedAdmissionLeaseNativeProof|TestAdmissionNativeCBORRejectsMalformedFrames)$$' ./internal/lifetime
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(Infrastructure|ValidateInfrastructure|OutsideRuntimeObservation|StatePairContentStaging|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|RootAdmission|IntentJournal|Context|IntentRequires|Endpoint|DecodeStrictByteSlice|WithoutProcessScopeMarker|ConfigureProcessScopeEnvironment)' \
+		./internal/supervisor ./internal/taskdir ./internal/task ./internal/lifetime
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(ContinuationPair|ContinuationAbsentInventory|ControlContinuation|ControlRuntimeSaved|RecoveryCandidate|PrepareAdmissionSupervisorRefusesDifferentDaemonBeforeScheduling|PrepareTaskSupervisorDefersCompatibleRuntimeMaintenance|ReadTaskMetadataSupervisor|RoutedCleanup)' \
+		./internal/supervisor ./internal/tasklifecycle
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(InfrastructureRouting|ModelDiscoveryPrivatePreparationUsesCapturedRoutingFault|ModelDiscoveryCleanupRetainsRoutingStore|SchedulerObservationCleanupRetainsRoutingStore|SchedulerCleanup|SchedulerObserveRetains|SchedulerDispatchRetains|RoutedManualMigration|ManualMigrationReport)' ./internal/app
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(Scheduler(CleanupUnresolved|TaskCleanupMarker|SelectedResult|RunJoinsRemainingWorker)|Host(PermanentChildFault|CleanupFrame|UnverifiedCleanup|ReportsOneCleanup))' \
+		./internal/scheduler/runtime ./internal/scheduler/host
+	go test -race -count=1 -timeout=4m -v \
+		-run '^Test(ObservePrivateRestore|PrivateRestore|ProbeSavedPrivateCompatible|ExactPrivatePairComparisonReadFaultStaysHard|PrivateAdmissionRuntime|CheckPrivateAdmissionRuntime|PrivateBootstrap|ManagedShutdown|LegacyUnscopedShutdown|StopRecoveredWithinBootstrap|BootstrapCleanup|FinishPrivateBootstrap|RetainBootstrapLock)' ./internal/pueue/internal/control
+	go test -race -count=1 -timeout=4m -v ./internal/supervisor/infrastructure
+	python3 scripts/native_init_census.py --output "$(BIN_DIR)/independent-startup-proof/init-census"
+	python3 scripts/repair_editor_counterfactuals.py --output "$(BIN_DIR)/independent-startup-proof/editor-survivors" --pueue "$(BIN_DIR)/test-supervisor/pueue"
 
 acceptance-native-lifetime: tool-versions
 	python3 -m unittest discover -s scripts -p 'test_native_lifetime_proof.py' -v

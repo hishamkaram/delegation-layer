@@ -196,7 +196,7 @@ func TestRetirePrivateRecoveryBindingRemovesStaleAliasAfterSuccessorReady(t *tes
 	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
-		return RetirePrivateRecoveryBinding(fixture.stateRoot, successor)
+		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	}); err != nil {
 		t.Fatalf("stale recovery alias was not retired: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestRetirePrivateRecoveryBindingContextRejectsCanceledContextWithoutMutatio
 	before := snapshotPrivateTestFiles(t, paths)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, legacy.Binding()); !errors.Is(err, context.Canceled) {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled alias retirement error = %v, want context cancellation", err)
 	}
 	after := snapshotPrivateTestFiles(t, paths)
@@ -239,7 +239,7 @@ func TestRetirePrivateRecoveryBindingRemovesAliasForSameSuccessor(t *testing.T) 
 	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
-		return RetirePrivateRecoveryBinding(fixture.stateRoot, successor)
+		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	}); err != nil {
 		t.Fatalf("same-identity recovery alias was not retired: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestRetirePrivateRecoveryBindingRejectsUnrelatedSuccessor(t *testing.T) {
 	unrelated.DaemonExecutable = canonicalPrivateTestExecutable(t, otherDaemon)
 	unrelated.DaemonSHA256 = hashPrivateTestExecutable(t, otherDaemon)
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
-		return RetirePrivateRecoveryBinding(fixture.stateRoot, unrelated)
+		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, unrelated, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	}); err == nil {
 		t.Fatal("unrelated successor was allowed to retire the active recovery alias")
 	}
@@ -310,7 +310,7 @@ func TestRetirePrivateRecoveryBindingRejectsMismatchedSuccessorHistory(t *testin
 	writePrivateSuccessorTestRecord(t, historyPath, history)
 	recordBefore := readPrivateSupervisorFile(t, privateRecoveryRecordPath(fixture.stateRoot))
 	configBefore := readPrivateSupervisorFile(t, privateRecoveryConfigPath(fixture.stateRoot))
-	if err := RetirePrivateRecoveryBinding(fixture.stateRoot, successor); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("mismatched successor history was accepted: %v", err)
 	}
 	if got := readPrivateSupervisorFile(t, privateRecoveryRecordPath(fixture.stateRoot)); !bytes.Equal(got, recordBefore) {
@@ -352,7 +352,7 @@ func TestRetirePrivateRecoveryBindingRejectsIncompletePredecessorShutdown(t *tes
 		privateRecoveryPendingRecordPath(fixture.stateRoot),
 	}
 	before := snapshotPrivateTestFiles(t, paths)
-	if err := RetirePrivateRecoveryBinding(fixture.stateRoot, successor); !errors.Is(err, ErrBinding) {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("incomplete predecessor shutdown history was accepted: %v", err)
 	}
 	after := snapshotPrivateTestFiles(t, paths)
@@ -399,7 +399,7 @@ func TestRetirePrivateRecoveryBindingRetriesOrphanedConfig(t *testing.T) {
 	if err := os.Remove(privateRecoveryRecordPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
 	}
-	if err := RetirePrivateRecoveryBinding(fixture.stateRoot, successor); err != nil {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); err != nil {
 		t.Fatalf("orphaned recovery config was not retired: %v", err)
 	}
 	if _, err := os.Stat(privateRecoveryConfigPath(fixture.stateRoot)); !errors.Is(err, os.ErrNotExist) {
@@ -417,7 +417,7 @@ func TestRetirePrivateRecoveryBindingRejectsAmbiguousOrphanedConfig(t *testing.T
 		t.Fatal(err)
 	}
 	configBefore := readPrivateSupervisorFile(t, privateRecoveryConfigPath(fixture.stateRoot))
-	if err := RetirePrivateRecoveryBinding(fixture.stateRoot, legacy.Binding()); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("ambiguous orphaned recovery config was retired: %v", err)
 	}
 	if got := readPrivateSupervisorFile(t, privateRecoveryConfigPath(fixture.stateRoot)); !bytes.Equal(got, configBefore) {
@@ -440,7 +440,7 @@ func TestRetirePrivateRecoveryBindingCleansPartiallyRemovedRecord(t *testing.T) 
 	if err := os.Remove(privateRecoveryConfigPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
 	}
-	if err := RetirePrivateRecoveryBinding(fixture.stateRoot, successor); err != nil {
+	if err := RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); err != nil {
 		t.Fatalf("partially removed recovery record was not retired: %v", err)
 	}
 	for _, path := range []string{privateRecoveryRecordPath(fixture.stateRoot), privateRecoveryConfigPath(fixture.stateRoot)} {

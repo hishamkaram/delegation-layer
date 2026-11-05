@@ -28,7 +28,7 @@ func TestBindPrivateRejectsMalformedSupervisorBindingBeforeStart(t *testing.T) {
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	options := Options{ObservationTimeout: 5 * time.Second}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 5 * time.Second}
 	if _, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options); !errors.Is(err, ErrBinding) {
 		t.Fatalf("bootstrap accepted malformed supervisor binding: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestStartDaemonRevalidatesIdentityBeforeStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := startDaemon(daemonPath, originalDigest, configPath, base, Options{}); !errors.Is(err, ErrBinding) {
+	if err := startDaemon(context.Background(), base, daemonPath, originalDigest, configPath, base, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("changed daemon identity was started: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(base, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
@@ -131,7 +131,7 @@ func TestRecoverPrivateRejectsDeletedConfigBeforeRestart(t *testing.T) {
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 
-	options := Options{ObservationTimeout: 5 * time.Second}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 5 * time.Second}
 	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestBindPrivateSerializesConcurrentBootstrap(t *testing.T) {
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	clients := make(chan *Client, 2)
 	errorsFound := make(chan error, 2)
 	var group sync.WaitGroup

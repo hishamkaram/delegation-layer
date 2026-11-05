@@ -25,7 +25,7 @@ func TestHostPlacementCgroupMembership(t *testing.T) {
 		{fault: true},
 	} {
 		err := checkHostCgroupMembership([]byte(tc.data))
-		if errors.Is(err, ErrHostContained) != tc.contained || (err != nil) != (tc.contained || tc.fault) {
+		if errors.Is(err, ErrTaskContained) != tc.contained || (err != nil) != (tc.contained || tc.fault) {
 			t.Fatalf("membership %q: %v", tc.data, err)
 		}
 	}

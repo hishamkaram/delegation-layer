@@ -21,7 +21,7 @@ func TestWorkspaceWatchDeadlineRemainsPending(t *testing.T) {
 	store, resource := testsupport.NewResource(t)
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
-	err := watchManagedWorkspace(ctx, store, resource, Dependencies{}, Arguments{Watch: time.Second})
+	err := watchManagedWorkspace(ctx, store, resource, workspaceRuntimeOptions(Dependencies{}), Arguments{Watch: time.Second})
 	if !errors.Is(err, workspace.ErrPending) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("observer deadline became an operation failure: %v", err)
 	}

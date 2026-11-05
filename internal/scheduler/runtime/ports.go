@@ -15,6 +15,10 @@ import (
 // task. Continuing against a different root would violate the held lease.
 var ErrRootIdentity = errors.New("scheduler state root identity changed")
 
+// ErrTaskCleanupUnresolved marks a task invocation whose real cleanup owners
+// remain in its error graph. The runtime must stop admission and join workers.
+var ErrTaskCleanupUnresolved = errors.New("scheduler task cleanup unresolved")
+
 const (
 	// AdmissionLimit bounds unfinished admissions, including retained control work.
 	AdmissionLimit = 4

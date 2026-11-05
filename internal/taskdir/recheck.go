@@ -59,10 +59,17 @@ func (td *TaskDir) Recheck(interpreter predicate.RecoveryInterpreter) (result *R
 // not already produced a validated derived report. It performs no evaluation
 // and is used only to decorate collect's actionable failure envelope.
 func (td *TaskDir) RecheckAvailable(interpreter predicate.RecoveryInterpreter) (available bool, resultErr error) {
+	return td.RecheckAvailableContext(context.Background(), interpreter)
+}
+
+func (td *TaskDir) RecheckAvailableContext(ctx context.Context, interpreter predicate.RecoveryInterpreter) (available bool, resultErr error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return false, err
+	}
 	if interpreter == nil {
 		return false, predicate.ErrRecoveryUnsupported
 	}
-	resultErr = td.withRecheckLock(func() error {
+	resultErr = td.withRecheckLockContext(ctx, func() error {
 		source, err := td.loadRecheckSource(interpreter)
 		if err != nil {
 			return err
@@ -86,7 +93,11 @@ func (td *TaskDir) RecheckAvailable(interpreter predicate.RecoveryInterpreter) (
 }
 
 func (td *TaskDir) withRecheckLock(fn func() error) (resultErr error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return td.withRecheckLockContext(context.Background(), fn)
+}
+
+func (td *TaskDir) withRecheckLockContext(parent context.Context, fn func() error) (resultErr error) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	if err := td.store.maintLock.LockSH(ctx); err != nil {
 		return err

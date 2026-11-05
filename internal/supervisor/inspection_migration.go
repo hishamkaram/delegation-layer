@@ -71,7 +71,7 @@ func prepareInspectionGroupSupervisor(ctx context.Context, store *taskdir.Store,
 		if readErr != nil {
 			return readErr
 		}
-		if err := pueue.PublishVerifiedPrivatePredecessorWithLock(ctx, store.Root, head.Supervisor); err != nil {
+		if err := supervisor.PublishVerifiedPrivatePredecessorWithLock(ctx, store.Root, head.Supervisor); err != nil {
 			return err
 		}
 		// A completed logical migration is the durable proof that the
@@ -116,7 +116,7 @@ func MigrateInspectionGroup(ctx context.Context, store *taskdir.Store, superviso
 	if !pueue.IsPrivateConfig(store.Root, legacy.Supervisor.ConfigPath) || !pueue.IsPrivateConfig(store.Root, successor.Supervisor.ConfigPath) {
 		return fmt.Errorf("%w: only Delegate private supervisors can be migrated", inspection.ErrGroupMigrationUnsupported)
 	}
-	if err = ReconcileStaleInspectionRecovery(ctx, store, legacy); err != nil {
+	if err = ReconcileStaleInspectionRecovery(ctx, store, supervisor, legacy); err != nil {
 		return err
 	}
 	if err = inspection.PrepareGroupMigration(ctx, store, legacy, successor); err != nil {
@@ -144,7 +144,7 @@ func ensureInspectionPrivateMigration(ctx context.Context, stateRoot string, sup
 		return fmt.Errorf("%w: verify published private supervisor migration: %w", inspection.ErrGroupMigrationRequired, err)
 	}
 	if !published {
-		if err = pueue.PublishVerifiedPrivatePredecessorWithLock(ctx, stateRoot, predecessor); err != nil {
+		if err = supervisor.PublishVerifiedPrivatePredecessorWithLock(ctx, stateRoot, predecessor); err != nil {
 			return fmt.Errorf("%w: preserve legacy supervisor binding: %w", inspection.ErrGroupMigrationRequired, err)
 		}
 	}
@@ -161,9 +161,9 @@ func ensureInspectionPrivateMigration(ctx context.Context, stateRoot string, sup
 	return nil
 }
 
-func ReconcileStaleInspectionRecovery(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord) error {
-	if store == nil {
-		return fmt.Errorf("%w: inspection state store is unavailable", inspection.ErrGroupMigrationRequired)
+func ReconcileStaleInspectionRecovery(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, legacy inspection.GroupRequestRecord) error {
+	if store == nil || supervisor == nil {
+		return fmt.Errorf("%w: inspection state store or supervisor is unavailable", inspection.ErrGroupMigrationRequired)
 	}
 	saved, found, err := pueue.ReadPrivateRecoveryBinding(store.Root)
 	if err != nil || !found {
@@ -179,7 +179,7 @@ func ReconcileStaleInspectionRecovery(ctx context.Context, store *taskdir.Store,
 	if err = historical.Close(); err != nil {
 		return fmt.Errorf("%w: close stale private supervisor history: %w", inspection.ErrGroupMigrationRequired, err)
 	}
-	if err = pueue.ClearPrivateRecoveryBinding(store.Root, saved); err != nil {
+	if err = supervisor.ClearPrivateRecoveryBindingWithLock(ctx, store.Root, saved); err != nil {
 		return fmt.Errorf("%w: retire stale private supervisor recovery: %w", inspection.ErrGroupMigrationRequired, err)
 	}
 	return nil

@@ -12,6 +12,7 @@ import (
 )
 
 type privateRecoverySettlementFixture struct {
+	stateRoot        string
 	record           privateRecoveryBindingRecord
 	clientExecutable string
 	daemonExecutable string
@@ -37,9 +38,9 @@ func newPrivateRecoverySettlementFixture(t *testing.T) privateRecoverySettlement
 	writeExecutable(t, daemonExecutable, privateDaemonFixture)
 	gateName := "private-recovery-version"
 	return privateRecoverySettlementFixture{
-		record: record, clientExecutable: clientExecutable, daemonExecutable: daemonExecutable,
+		stateRoot: stateRoot, record: record, clientExecutable: clientExecutable, daemonExecutable: daemonExecutable,
 		gate:    newStopIdentityLeaseTestGate(t, base, gateName),
-		options: Options{Environment: append(os.Environ(), "BINDING_PROBE_GATE="+filepath.Join(base, gateName)), ObservationTimeout: 10 * time.Second},
+		options: Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: append(os.Environ(), "BINDING_PROBE_GATE="+filepath.Join(base, gateName)), ObservationTimeout: 10 * time.Second},
 	}
 }
 
@@ -71,7 +72,7 @@ func TestPrivateRecoveryResidentBindFailureJoinsVersionProbe(t *testing.T) {
 		}
 	})
 	go func() {
-		call.client, _, _, call.err = bindPrivateRecoveryClient(probeContext, fixture.record, fixture.record.Supervisor, fixture.clientExecutable, fixture.daemonExecutable, fixture.options)
+		call.client, _, _, call.err = bindPrivateRecoveryClient(probeContext, fixture.stateRoot, fixture.record, fixture.record.Supervisor, fixture.clientExecutable, fixture.daemonExecutable, fixture.options)
 		completedBeforeReturn = completed.Load()
 		close(call.done)
 	}()
@@ -107,7 +108,7 @@ func TestPrivateRecoveryResidentBindFailureJoinsVersionProbe(t *testing.T) {
 func TestPrivateRecoveryDefaultBindFailureKeepsFiniteObservation(t *testing.T) {
 	fixture := newPrivateRecoverySettlementFixture(t)
 	client, probeErr := detachBindingProbePendingTest(t, fixture.gate, func(ctx context.Context) (*Client, error) {
-		owner, _, _, err := bindPrivateRecoveryClient(ctx, fixture.record, fixture.record.Supervisor, fixture.clientExecutable, fixture.daemonExecutable, fixture.options)
+		owner, _, _, err := bindPrivateRecoveryClient(ctx, fixture.stateRoot, fixture.record, fixture.record.Supervisor, fixture.clientExecutable, fixture.daemonExecutable, fixture.options)
 		return owner, err
 	})
 	if client != nil {

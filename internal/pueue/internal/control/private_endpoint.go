@@ -18,11 +18,10 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// ShutdownDispatched reports whether the shutdown command was handed to the
-// process observer. A false result means verification or command construction
-// failed before the command could be dispatched, so a recovery owner may still
-// perform its bounded cleanup. A true result transfers command ownership to
-// the observer even when the command later fails or remains in flight.
+// ShutdownDispatched reports observed Start or retained command ownership.
+// False is not proof that nothing ran: owner.Start may succeed while its
+// started frame is lost. Callers must retain the error/command ownership and
+// must not infer permission to retry from this boolean alone.
 func (c *Client) ShutdownDispatched(ctx context.Context) (dispatched bool, resultErr error) {
 	if c == nil {
 		return false, ErrConfiguration
@@ -30,7 +29,11 @@ func (c *Client) ShutdownDispatched(ctx context.Context) (dispatched bool, resul
 	if err := c.verify(ctx); err != nil {
 		return false, err
 	}
-	result, err := c.command(ctx, nil, "shutdown")
+	shutdownContext, scopeErr := c.privateShutdownContext(ctx)
+	if scopeErr != nil {
+		return false, scopeErr
+	}
+	result, err := c.command(shutdownContext, privateShutdownConsume(shutdownContext, nil), "shutdown")
 	if pending := pendingFrom(err); pending != nil {
 		dispatched = true
 		result, err = awaitPending(ctx, pending)
@@ -336,5 +339,5 @@ func (c *Client) RestartPrivate(ctx context.Context, stateRoot string) error {
 	if err := c.WaitUnavailable(ctx); err != nil {
 		return err
 	}
-	return c.startPrivate(ctx)
+	return c.startPrivate(ctx, stateRoot)
 }

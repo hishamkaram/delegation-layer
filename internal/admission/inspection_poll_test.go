@@ -285,7 +285,7 @@ func TestAwaitCompletedInspectionObservationPublishesTimelyExitProof(t *testing.
 	)
 	client := newInspectionPollTestClient(t, bound, logPath, nil)
 
-	facts, err := awaitCompletedInspectionObservation(operation, client, inspection.ErrAdmissionExpired)
+	facts, err := awaitCompletedInspectionObservation(t.Context(), operation, client, inspection.ErrAdmissionExpired)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("timely completion was not published during observation grace: facts=%s err=%v", facts, err)
 	}
@@ -308,7 +308,7 @@ func TestAwaitCompletedInspectionObservationStartsIndependentControlWindow(t *te
 	)
 	client := newInspectionPollTestClient(t, bound, logPath, nil)
 
-	facts, err := awaitCompletedInspectionObservation(operation, client, inspection.ErrAdmissionExpired)
+	facts, err := awaitCompletedInspectionObservation(t.Context(), operation, client, inspection.ErrAdmissionExpired)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("expired admission clock shortened independent control observation: facts=%s err=%v", facts, err)
 	}
@@ -437,7 +437,7 @@ func TestAwaitCompletedInspectionObservationConsumesPendingStatusResult(t *testi
 		t.Fatalf("exact observation did not expose its retained result: observation=%+v err=%v", fixture.observation, fixture.observeErr)
 	}
 	gate.release()
-	facts, err := awaitCompletedInspectionObservation(
+	facts, err := awaitCompletedInspectionObservation(t.Context(),
 		fixture.operation, fixture.client, errors.Join(inspection.ErrAdmissionExpired, fixture.observeErr),
 	)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {

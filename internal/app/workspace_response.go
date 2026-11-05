@@ -27,6 +27,9 @@ func fillRecordedTaskContext(store *taskdir.Store, td *taskdir.TaskDir, environm
 	wakeContext, finishWake := context.WithTimeout(context.Background(), time.Second)
 	wakeErr := wakeManagedTaskWorkspace(wakeContext, store, td, environment)
 	finishWake()
+	if cleanupRetainsStore(wakeErr, store) {
+		mergeCommandClose(result, func() error { return wakeErr })
+	}
 	if wakeErr != nil && !workspaces.PendingError(wakeErr) && !workspaceViewRetryable(wakeErr) {
 		result.response.Workspace.ReasonCode = workspaceObservationReason("wake", wakeErr)
 		return

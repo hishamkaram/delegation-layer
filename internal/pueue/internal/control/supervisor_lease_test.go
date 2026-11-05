@@ -123,7 +123,7 @@ func TestRecoverPrivateHealthyGenerationSharesSupervisorLease(t *testing.T) {
 	lease := supervisorLeaseTestHold(t, fixture.stateRoot, WithSupervisorLease)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: 10 * time.Second})
+	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, recovered, err)
 	if err != nil {
 		t.Fatalf("healthy saved generation required exclusive recovery: %v", err)
@@ -144,7 +144,7 @@ func TestRecoverPrivateRestartWaitsForSupervisorLease(t *testing.T) {
 	removePrivateTestPID(t, fixture.stateRoot)
 
 	faultContext, cancelFault := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	recovered, err := RecoverPrivate(faultContext, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: 10 * time.Second})
+	recovered, err := RecoverPrivate(faultContext, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	cancelFault()
 	supervisorLeaseTestSettleClient(t, recovered, err)
 	if recovered != nil || !errors.Is(err, context.DeadlineExceeded) {
@@ -157,7 +157,7 @@ func TestRecoverPrivateRestartWaitsForSupervisorLease(t *testing.T) {
 	lease.finish(t)
 	recoveryContext, cancelRecovery := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelRecovery()
-	recovered, err = RecoverPrivate(recoveryContext, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: 10 * time.Second})
+	recovered, err = RecoverPrivate(recoveryContext, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, recovered, err)
 	if err != nil {
 		t.Fatalf("stopped generation did not recover after lease release: %v", err)
@@ -173,7 +173,7 @@ func supervisorLeaseTestBind(t *testing.T) (privateSupervisorTestFixture, *Clien
 	fixture := newPrivateSupervisorTestFixture(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	client, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	client, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, client, err)
 	if err != nil {
 		t.Fatalf("bind supervisor fixture before lease fault: %v", err)

@@ -13,16 +13,16 @@ import (
 const runnerReceiptPollInterval = tasklifecycle.RunnerReceiptPollInterval
 
 func runTerminalEvent(parsed runnerArguments, deps Dependencies) error {
-	return supervisorcore.RunTerminalEvent(parsed.Root, parsed.PueueID, parsed.ExitCode, deps.SupervisorOptions, deps.supervisorLookup())
+	return supervisorcore.RunTerminalEventWithRuntime(parsed.Root, parsed.PueueID, parsed.ExitCode, supervisorAdmissionOptions(deps, deps.SupervisorOptions))
 }
 
 func runQueueMaintenance(parsed runnerArguments, deps Dependencies) error {
-	return supervisorcore.RunQueueMaintenance(parsed.Root, deps.SupervisorOptions, deps.supervisorLookup())
+	return supervisorcore.RunQueueMaintenanceWithRuntime(parsed.Root, supervisorAdmissionOptions(deps, deps.SupervisorOptions))
 }
 
-func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options tasklifecycle.SupervisorOptions) (*pueue.Client, pueue.Observation, error) {
 	observed := tasklifecycle.Observation{}
-	client, observation, err := tasklifecycle.ReconcileRunner(ctx, root, &observed, td, req, meta, observationSupervisorOptions(supervisorOptions, lookup))
+	client, observation, err := tasklifecycle.ReconcileRunner(ctx, root, &observed, td, req, meta, options)
 	applyTaskObservation(response, observed, root)
 	return client, observation, err
 }

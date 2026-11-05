@@ -14,6 +14,10 @@ import (
 
 const ProtocolVersion = 1
 
+// Only startup intents with a non-Own initial operation use this protocol.
+// Context, lifecycle, settlement and publication protocols remain unchanged.
+const startupInitialOperationProtocolVersion = 2
+
 // These comparable record values contain no shared mutable collections. The
 // target journal owns their immutable publication. Validation establishes shape
 // and consistency, never executable provenance, root pins or native authority.
@@ -52,6 +56,7 @@ func (a Artifacts) validate() error {
 // its startup attempt makes no independent artifact or resolution selection.
 type StartupInputs struct {
 	Kind          StartupKind            `json:"kind"`
+	Initial       InitialOperation       `json:"initial_operation,omitzero"`
 	Root          string                 `json:"root"`
 	RootID        string                 `json:"root_id"`
 	BootID        string                 `json:"boot_id"`
@@ -75,10 +80,10 @@ func (i StartupInputs) Validate() error {
 		if i.UpgradeID != "" || i.UpgradeSHA256 != "" {
 			return ErrIdentity
 		}
-		return errors.Join(i.Artifacts.validate(), i.Context.Validate())
+		return errors.Join(i.Artifacts.validate(), i.Context.Validate(), i.Initial.Validate(i.RootID))
 	case StartupUpgrade:
 		if task.ValidateTaskID(i.UpgradeID) != nil || task.ValidateSHA256(i.UpgradeSHA256) != nil ||
-			i.Artifacts != (Artifacts{}) || i.Context != (LaunchContextReference{}) {
+			i.Artifacts != (Artifacts{}) || i.Context != (LaunchContextReference{}) || i.Initial != (InitialOperation{}) {
 			return fmt.Errorf("%w: owner upgrade must derive its artifacts from the lifecycle intent", ErrIdentity)
 		}
 		return nil
@@ -157,7 +162,19 @@ type StartupIntent struct {
 }
 
 func (i StartupIntent) Validate() error {
-	if i.Protocol != ProtocolVersion || i.Sequence == 0 || task.ValidateTaskID(i.Epoch) != nil {
+	if i.Sequence == 0 || task.ValidateTaskID(i.Epoch) != nil {
+		return ErrIdentity
+	}
+	switch i.Protocol {
+	case ProtocolVersion:
+		if i.Inputs.Initial != (InitialOperation{}) {
+			return ErrIdentity
+		}
+	case startupInitialOperationProtocolVersion:
+		if i.Inputs.Initial == (InitialOperation{}) || i.Inputs.Initial.Kind == InitialEnsureOwn {
+			return ErrIdentity
+		}
+	default:
 		return ErrIdentity
 	}
 	digest, err := i.Inputs.Digest()
@@ -193,7 +210,7 @@ func (i StartupIntent) Digest() (string, error) {
 	return digestStartupRecord(i)
 }
 
-func digestStartupRecord[T StartupInputs | StartupIntent | StartupAssumption | OwnerPublication | contextManifest | contextChunk](record T) (string, error) {
+func digestStartupRecord[T StartupInputs | StartupIntent | StartupAssumption | OwnerPublication | contextManifest | contextChunk | epochLifecycleIntent](record T) (string, error) {
 	data, err := task.MarshalCanonical(record)
 	if err != nil {
 		return "", err

@@ -569,13 +569,15 @@ func (td *TaskDir) RecordStopObservation(id string, facts task.StopObservationFa
 		return task.ErrIdentityMismatch
 	}
 	owner, err := td.TryAcquireLifetimeOwner()
-	if errors.Is(err, task.ErrLockBusy) {
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
+	if !lifetimeOwnerCleanupFault(err) && errors.Is(err, task.ErrLockBusy) {
 		return task.ErrSessionBusy
 	}
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	return td.recordStopObservationOwned(context.Background(), id, facts)
 }
 
@@ -590,10 +592,12 @@ func (td *TaskDir) RecordStopObservationContext(ctx context.Context, id string, 
 		return err
 	}
 	owner, err := td.AcquireLifetimeOwner(ctx)
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	return td.recordStopObservationOwned(ctx, id, facts)
 }
 

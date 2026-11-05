@@ -49,7 +49,7 @@ func exerciseIndependentStartup(t *testing.T, abrupt bool) {
 	}
 	ctx, cancel := context.WithDeadline(t.Context(), p.deadline)
 	defer cancel()
-	driver, err := nestedObserveNative(os.Getpid(), "")
+	driver, err := nestedObserveNativeContext(ctx, os.Getpid(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func (p *independentStartupProbe) prepare(ctx context.Context, abrupt bool) erro
 	if err = p.checkLease(false); err != nil {
 		return err
 	}
-	if err = p.verifyPlacement(); err != nil {
+	if err = p.verifyPlacement(ctx); err != nil {
 		return err
 	}
 	_, err = p.ordinary(ctx)
@@ -406,9 +406,9 @@ func (p *independentStartupProbe) verifyClosed(ctx context.Context) (resultErr e
 	return resultErr
 }
 
-func (p *independentStartupProbe) native(role string) (nestedNativeObservation, error) {
+func (p *independentStartupProbe) native(ctx context.Context, role string) (nestedNativeObservation, error) {
 	ref := p.records[role]
-	observation, err := nestedObserveNative(ref.PID(), "")
+	observation, err := nestedObserveNativeContext(ctx, ref.PID(), "")
 	if err != nil {
 		return observation, err
 	}
@@ -420,7 +420,7 @@ func (p *independentStartupProbe) native(role string) (nestedNativeObservation, 
 
 func (p *independentStartupProbe) adopted(ctx context.Context, role, priorParent string) error {
 	return waitForEmpty(ctx, 10*time.Millisecond, func() (bool, error) {
-		current, err := p.native(role)
+		current, err := p.native(ctx, role)
 		if err != nil {
 			return false, err
 		}
@@ -428,13 +428,13 @@ func (p *independentStartupProbe) adopted(ctx context.Context, role, priorParent
 	}, sleepContext)
 }
 
-func (p *independentStartupProbe) verifyPlacement() error {
-	requester, err := p.native("a-provider")
+func (p *independentStartupProbe) verifyPlacement(ctx context.Context) error {
+	requester, err := p.native(ctx, "a-provider")
 	if err != nil {
 		return err
 	}
 	for _, role := range []string{"resident", "daemon", "b-scope", "b-worker", "b-provider"} {
-		current, err := p.native(role)
+		current, err := p.native(ctx, role)
 		if err != nil {
 			return err
 		}
@@ -486,4 +486,23 @@ func (p *independentStartupProbe) challengeB(ctx context.Context, sequence int) 
 		return err
 	}
 	return p.challenge(ctx, "b-provider", sequence)
+}
+
+func TestNestedNativeObservationPreservesCallerContext(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expired=%t", expired), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			want := context.Canceled
+			if expired {
+				ctx, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+				defer cancel()
+				want = context.DeadlineExceeded
+			}
+			observed, err := nestedObserveNativeContext(ctx, os.Getpid(), "")
+			if !errors.Is(err, want) || observed.Present {
+				t.Fatalf("native observation discarded caller context: present=%t err=%v want=%v", observed.Present, err, want)
+			}
+		})
+	}
 }

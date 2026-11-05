@@ -413,14 +413,8 @@ func withPrivateLock(ctx context.Context, stateRoot, name string, mode int, prov
 }
 
 func withPrivateLockContext(ctx context.Context, stateRoot, name string, mode int, provision bool, callback func(context.Context) error) (resultErr error) {
-	if ctx == nil {
-		return context.Canceled
-	}
-	if callback == nil || name == "" || filepath.Base(name) != name {
-		return ErrConfiguration
-	}
-	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
-		return fmt.Errorf("%w: private supervisor root must be canonical and absolute", ErrConfiguration)
+	if err := validatePrivateLockRequest(ctx, stateRoot, name, callback); err != nil {
+		return err
 	}
 	base := filepath.Join(stateRoot, privateSupervisorDirectory)
 	if provision {
@@ -446,7 +440,26 @@ func withPrivateLockContext(ctx context.Context, stateRoot, name string, mode in
 		return err
 	}
 	defer finishPrivateBootstrap(&lock, &resultErr)
-	return callback(withControlLockLease(ctx, lock))
+	lockedContext, tagErr := withAcquiredPrivateBootstrapEX(ctx, stateRoot, name, mode, lock)
+	if tagErr != nil {
+		return tagErr
+	}
+	// Callback authority ends before pending cleanup may retain the native FD.
+	defer revokeAcquiredPrivateBootstrapEX(lockedContext, lock)
+	return callback(withControlLockLease(lockedContext, lock))
+}
+
+func validatePrivateLockRequest(ctx context.Context, stateRoot, name string, callback func(context.Context) error) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if callback == nil || name == "" || filepath.Base(name) != name {
+		return ErrConfiguration
+	}
+	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
+		return fmt.Errorf("%w: private supervisor root must be canonical and absolute", ErrConfiguration)
+	}
+	return nil
 }
 
 func privateBootstrapLockPresent(stateRoot string) (bool, error) {

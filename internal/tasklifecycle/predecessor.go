@@ -13,7 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func preparePredecessorResolution(store *taskdir.Store, td *taskdir.TaskDir, predecessorReq *task.TaskRecord, predecessorMeta *task.MetaRecord, options supervisorcore.AdmissionOptions) (handedOff, submitted bool, resultErr error) {
+func preparePredecessorResolution(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, predecessorReq *task.TaskRecord, predecessorMeta *task.MetaRecord, options supervisorcore.AdmissionOptions) (handedOff, submitted bool, resultErr error) {
 	inspection, err := td.Inspect()
 	if err != nil {
 		return false, false, err
@@ -21,12 +21,12 @@ func preparePredecessorResolution(store *taskdir.Store, td *taskdir.TaskDir, pre
 	if supervisorcore.TaskTerminal(inspection) {
 		return false, true, nil
 	}
-	handedOff, err = releaseHandedOffPredecessor(td, predecessorReq)
+	handedOff, err = releaseHandedOffPredecessor(ctx, td, predecessorReq)
 	if err != nil || handedOff {
 		return handedOff, false, err
 	}
-	if _, submitErr := td.ReadSubmission(); submitErr == nil {
-		if repairErr := supervisorcore.RepairQueueForTask(context.Background(), store, predecessorMeta.SupervisorConfig, predecessorMeta, options); repairErr != nil {
+	if submission, submitErr := td.ReadSubmission(); submitErr == nil {
+		if repairErr := supervisorcore.RepairQueueForSubmittedTask(ctx, store, submission, predecessorMeta, options); repairErr != nil {
 			return false, false, repairErr
 		}
 		return false, true, nil
@@ -37,7 +37,19 @@ func preparePredecessorResolution(store *taskdir.Store, td *taskdir.TaskDir, pre
 }
 
 func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, request task.TaskRecord, id string) (prior *task.PriorSession, resultErr error) {
-	if err := task.ValidateTaskID(id); err != nil {
+	return ResolvePredecessorContext(context.Background(), store, options, request, id)
+}
+
+func ResolvePredecessorContext(ctx context.Context, store *taskdir.Store, options PredecessorOptions, request task.TaskRecord, id string) (prior *task.PriorSession, resultErr error) {
+	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.RootAdmission, options.Supervisor.Control)
+	if lease != nil && options.RootAdmission == nil {
+		defer func() { resultErr = supervisorcore.ReleaseOwnedRootAdmission(lease, resultErr) }()
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if err = task.ValidateTaskID(id); err != nil {
 		return nil, err
 	}
 	td, err := store.OpenTask(id)
@@ -56,7 +68,7 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 	if _, admissionErr := admissioncore.ValidateContinuation(options.Admission, store.Root, *predecessorReq, *predecessorMeta, prior, request); admissionErr != nil {
 		return nil, admissionErr
 	}
-	handedOff, submitted, err := preparePredecessorResolution(store, td, predecessorReq, predecessorMeta, options.Supervisor)
+	handedOff, submitted, err := preparePredecessorResolution(ctx, store, td, predecessorReq, predecessorMeta, options.Supervisor)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +78,7 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 	if !submitted {
 		return nil, task.ErrRequestConflict
 	}
-	if err = PredecessorTerminated(store.Root, td, predecessorReq, SupervisorOptions{Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore}); err != nil {
+	if err = PredecessorTerminatedContext(ctx, store.Root, td, predecessorReq, SupervisorOptions{AdmissionStore: store, RootAdmission: lease, Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore, Routing: options.Supervisor.Routing}); err != nil {
 		return nil, err
 	}
 	return prior, nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -11,7 +12,33 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+// RecoverStagedSubmissionWithAdmissionContext acquires or borrows the outer
+// actual root hold before any repair/enqueue. The caller supplies its original
+// Store; neither canonical policy nor root identity is reconstructed from paths.
+func RecoverStagedSubmissionWithAdmissionContext(ctx context.Context, store *taskdir.Store, borrowed *taskdir.RootAdmissionLease, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (result pueue.Observation, resultErr error) {
+	if client == nil || store == nil || td == nil {
+		return observation, task.ErrInvalidPermit
+	}
+	if td.Dir != filepath.Join(store.Root, "tasks", td.TaskID) {
+		return observation, task.ErrIdentityMismatch
+	}
+	lease, err := supervisorcore.AcquireOrBorrowRootAdmissionContext(ctx, store, borrowed, client.ControlTimeout())
+	if err == nil && client.UsesControlOwner() {
+		ctx = pueue.WithControlLease(ctx, lease)
+	}
+	if lease != nil && borrowed == nil {
+		defer func() { resultErr = supervisorcore.ReleaseOwnedRootAdmission(lease, resultErr) }()
+	}
+	if err != nil {
+		return observation, err
+	}
+	return RecoverStagedSubmission(ctx, store.Root, td, client, observation)
+}
+
 func RecoverStagedSubmission(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (pueue.Observation, error) {
+	if err := td.RequireTaskLaunchPermissionContext(ctx); err != nil {
+		return observation, err
+	}
 	if pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
 		controlContext, cancel := context.WithTimeout(ctx, pueue.PrivateStatusObservationTimeout)
 		repairErr := supervisorcore.EnsureAdmissionSchedulingContext(controlContext, root, client)
@@ -26,6 +53,9 @@ func RecoverStagedSubmission(ctx context.Context, root string, td *taskdir.TaskD
 			return err
 		}
 		return td.RecordSupervisorReceiptContext(ctx, *receipt)
+	}
+	if err := td.RequireTaskLaunchPermissionContext(ctx); err != nil {
+		return observation, err
 	}
 	recovered, err := client.RecoverStagedWithGate(ctx, observation.Identity, observation.NumericTaskID, supervisorcore.SubmissionGate(root), commit)
 	if err == nil || !errors.Is(err, pueue.ErrUnknown) {

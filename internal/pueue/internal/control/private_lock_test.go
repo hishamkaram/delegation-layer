@@ -61,7 +61,23 @@ func TestFinishPrivateBootstrapRetainsLockForEveryPendingCommand(t *testing.T) {
 }
 
 func TestRetainBootstrapLockReportsDeferredReleaseFailure(t *testing.T) {
-	file, err := os.CreateTemp(t.TempDir(), "closed-bootstrap-lock-")
+	base, err := os.MkdirTemp("", "closed-bootstrap-lock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file *os.File
+	t.Cleanup(func() {
+		if file != nil {
+			if _, statErr := file.Stat(); !errors.Is(statErr, os.ErrClosed) {
+				t.Errorf("retained bootstrap fixture at %s: %v", base, statErr)
+				return
+			}
+		}
+		if removeErr := os.RemoveAll(base); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	file, err = os.CreateTemp(base, "bootstrap-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +87,15 @@ func TestRetainBootstrapLockReportsDeferredReleaseFailure(t *testing.T) {
 	lock := &bootstrapLock{file: file}
 	reported := make(chan error, 1)
 
-	retainBootstrapLock(&lock, []*Pending{transport.NewCompletedPending(nil, CommandResult{})}, func(releaseErr error) {
+	owner := retainBootstrapLock(&lock, []*Pending{transport.NewCompletedPending(nil, CommandResult{})}, func(releaseErr error) {
 		reported <- releaseErr
 	})
-	if lock != nil {
+	if owner == nil || lock != nil {
 		t.Fatal("retained bootstrap lock ownership was not transferred")
+	}
+	awaitBootstrapCleanup(t, owner)
+	if !errors.Is(owner.Err(), os.ErrClosed) || !owner.CleanupPending() || !errors.Is(owner.Close(), os.ErrClosed) {
+		t.Fatalf("failed native close lost its cleanup custody/error: %v", owner.Err())
 	}
 	select {
 	case releaseErr := <-reported:
@@ -105,8 +125,8 @@ func TestRecoverSavedCleansStagedConfigAfterProbeFailure(t *testing.T) {
 	if writeErr := os.WriteFile(configPath, []byte(changed), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	options := Options{Environment: append(os.Environ(), "PRIVATE_INVALID_STATUS=1")}
-	if _, _, recoverErr := RecoverSaved(context.Background(), saved, options); recoverErr == nil {
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: append(os.Environ(), "PRIVATE_INVALID_STATUS=1")}
+	if _, _, recoverErr := RecoverSaved(context.Background(), fixture.stateRoot, saved, options); recoverErr == nil {
 		t.Fatal("recover unexpectedly accepted an invalid legacy status")
 	}
 	staged, err := filepath.Glob(filepath.Join(filepath.Dir(configPath), ".migration-pueue-*"))
@@ -137,7 +157,9 @@ func TestRecoverSavedRetainsStagedConfigUntilProbeCompletes(t *testing.T) {
 		t.Fatal(writeErr)
 	}
 	options := Options{
-		ObservationTimeout: time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     time.Second,
 		Environment: append(
 			os.Environ(),
 			"PRIVATE_VERSION_RELEASE="+filepath.Join(filepath.Dir(configPath), "version-release"),
@@ -151,7 +173,7 @@ func TestRecoverSavedRetainsStagedConfigUntilProbeCompletes(t *testing.T) {
 			t.Error(writeErr)
 		}
 	})
-	_, _, recoverErr := RecoverSaved(context.Background(), saved, options)
+	_, _, recoverErr := RecoverSaved(context.Background(), fixture.stateRoot, saved, options)
 	if recoverErr == nil {
 		t.Fatal("recover unexpectedly completed during the in-flight version probe")
 	}
@@ -285,8 +307,10 @@ func TestWaitReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
 	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	fake.environment = append(fake.environment, "FAKE_VERSION_DELAY=0.08")
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
-		ObservationTimeout: DefaultObservationTimeout,
-		Environment:        fake.environment,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     DefaultObservationTimeout,
+		Environment:            fake.environment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -304,8 +328,10 @@ func TestPrivateClientReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
 	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	fake.environment = append(fake.environment, "FAKE_VERSION_DELAY=0.08")
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
-		ObservationTimeout: DefaultObservationTimeout,
-		Environment:        fake.environment,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     DefaultObservationTimeout,
+		Environment:            fake.environment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -330,8 +356,10 @@ func TestWaitReadyRejectsParentCancellationAndRetainsPendingOwner(t *testing.T) 
 		}
 	})
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
-		ObservationTimeout: DefaultObservationTimeout,
-		Environment:        fake.environment,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     DefaultObservationTimeout,
+		Environment:            fake.environment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -374,8 +402,10 @@ func TestStopRecoveredWaitsForPriorPendingProbeBeforeShutdown(t *testing.T) {
 		"FAKE_SHUTDOWN_MARKER="+shutdownMarker,
 	)
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
-		ObservationTimeout: DefaultObservationTimeout,
-		Environment:        fake.environment,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     DefaultObservationTimeout,
+		Environment:            fake.environment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -428,6 +458,8 @@ func TestWaitReadyRetriesReapedUnavailableStatus(t *testing.T) {
 	readyPath := fake.statusPath + ".ready"
 	fake.environment = append(fake.environment, "FAKE_READY="+readyPath)
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
 		// Keep the initial version probe independent from the short status
 		// observation window. Shell startup can exceed 20ms under -race.
 		ObservationTimeout: DefaultObservationTimeout,

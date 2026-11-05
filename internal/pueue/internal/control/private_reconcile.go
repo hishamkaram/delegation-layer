@@ -205,7 +205,7 @@ func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, publ
 	if !coherent {
 		// The launch witness already names this exact pair. Only the erroneous
 		// binding changes; daemon provenance and task records remain untouched.
-		return reconciledOutcome(replaceReconciledPrivateBinding(stateRoot, published, candidate))
+		return reconciledOutcome(replaceReconciledPrivateBindingContext(ctx, stateRoot, published, candidate, options.PrivateGenerationGuard))
 	}
 	observation, err := client.availableForTransition(ctx, false)
 	if err != nil {
@@ -223,7 +223,7 @@ func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, publ
 		return 0, privateRecoveryFailure("observation_failed", err)
 	}
 	intent := privatePairRestartIntent{Predecessor: published, Target: candidate}
-	if err = publishPrivatePairRestartIntent(stateRoot, intent); err != nil {
+	if err = publishPrivatePairRestartIntentContext(ctx, stateRoot, intent, options.PrivateGenerationGuard); err != nil {
 		return 0, err
 	}
 	return reconciledOutcome(finishPrivatePairRestart(ctx, stateRoot, client))
@@ -321,12 +321,12 @@ func finishPrivatePairRestart(ctx context.Context, root string, client *Client) 
 		if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 			return err
 		}
-		return client.startPrivate(ctx)
+		return client.startPrivate(ctx, root)
 	}
-	if err = publishPrivateDaemonIdentity(filepath.Join(root, privateSupervisorDirectory), client.Binding()); err != nil {
+	if err = publishPrivateDaemonIdentityContext(ctx, filepath.Join(root, privateSupervisorDirectory), client.Binding(), client.options.PrivateGenerationGuard); err != nil {
 		return err
 	}
-	return clearPrivateBootstrapPending(root)
+	return nil
 }
 
 // PrivateSupervisorPairMissing is the canonical missing-pair fact: a recorded
@@ -423,10 +423,16 @@ func replaceReconciledPrivateBinding(root string, before, candidate task.Supervi
 // predecessor only when its daemon provenance agrees. It never substitutes a
 // prepared successor. Missing provenance retains the original bootstrap path.
 func PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string, predecessor task.SupervisorRef) error {
+	return PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx, root, predecessor, Options{})
+}
+
+// PublishVerifiedPrivatePredecessorWithOptionsAndLock uses resident publication
+// authority only if adoption must create a missing logical binding.
+func PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx context.Context, root string, predecessor task.SupervisorRef, options Options) error {
 	if _, found, err := loadPrivateSupervisorBinding(root); err != nil {
 		return err
 	} else if found {
-		return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor)
+		return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor, options.PrivateGenerationGuard)
 	}
 	identity, found, err := loadPrivateDaemonIdentity(filepath.Join(root, privateSupervisorDirectory))
 	if err != nil {
@@ -438,5 +444,14 @@ func PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string,
 	if !privateDaemonIdentityMatchesBinding(identity, predecessor) {
 		return privateRecoveryFailure("identity_conflict", fmt.Errorf("%w: inspection predecessor does not match daemon provenance", ErrBinding))
 	}
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor, options.PrivateGenerationGuard)
+}
+
+// PublishVerifiedPrivatePredecessorWithLock uses the authority that constructed
+// this client. Existing equivalent predecessors remain observational reads.
+func (c *Client) PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string, predecessor task.SupervisorRef) error {
+	if c == nil {
+		return ErrConfiguration
+	}
+	return PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx, root, predecessor, c.options)
 }

@@ -1,16 +1,22 @@
 package infrastructure
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"golang.org/x/sys/unix"
@@ -124,7 +130,7 @@ func TestEndpointBindsInitialPrivateRootSocket(t *testing.T) {
 	fixture := endpointJournalAt(t, shortEndpointRoot(t), "")
 	endpoint := createEndpoint(t, fixture)
 	identity := endpoint.Identity()
-	if identity.Path != filepath.Join(fixture.journal.pin.Root(), ".i") || identity.DirectoryDev != fixture.journal.pin.Device() || identity.DirectoryInode != fixture.journal.pin.Inode() {
+	if identity.Path != ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence) || identity.DirectoryDev != fixture.journal.pin.Device() || identity.DirectoryInode != fixture.journal.pin.Inode() {
 		t.Fatal("endpoint did not retain actual root identity")
 	}
 	socket, err := observeEndpointSocket(identity.Path)
@@ -186,7 +192,7 @@ func TestEndpointRefusesOccupiedLiveAndDeadSockets(t *testing.T) {
 func checkOccupiedEndpointSocket(t *testing.T, live bool) {
 	t.Helper()
 	fixture := endpointJournalAt(t, shortEndpointRoot(t), "")
-	path := filepath.Join(fixture.journal.pin.Root(), ".i")
+	path := ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence)
 	existing, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +289,7 @@ func TestEndpointClosePreservesReplacementRootAndCanRetry(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(root, "root.json"), metadata, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	replacement := filepath.Join(root, ".i")
+	replacement := ownerEndpointPath(root, fixture.intent.Sequence)
 	if err = os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +310,7 @@ func TestEndpointDoesNotDependOnOriginTemporaryDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint := createEndpoint(t, fixture)
-	if endpoint.Identity().Path != filepath.Join(fixture.journal.pin.Root(), ".i") {
+	if endpoint.Identity().Path != ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence) {
 		t.Fatal("endpoint depended on origin temporary path")
 	}
 }
@@ -322,7 +328,7 @@ func TestEndpointNativeLengthErrorDoesNotRenderPath(t *testing.T) {
 		t.Fatal("overlong native endpoint was accepted")
 	}
 	var refusal *endpointError
-	if !errors.As(err, &refusal) || refusal.PathBytes() != len(filepath.Join(root, ".i")) {
+	if !errors.As(err, &refusal) || refusal.PathBytes() != len(ownerEndpointPath(root, fixture.intent.Sequence)) {
 		t.Fatalf("typed endpoint length lost: %v", err)
 	}
 	var native *net.OpError
@@ -351,7 +357,7 @@ func TestEndpointRequiresStoredSelfAssumption(t *testing.T) {
 	if endpoint != nil || !errors.Is(listenErr, ErrIdentity) {
 		t.Fatalf("non-self stored assumption accepted: %v", listenErr)
 	}
-	if _, err = os.Lstat(filepath.Join(fixture.journal.pin.Root(), ".i")); !errors.Is(err, os.ErrNotExist) {
+	if _, err = os.Lstat(ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("non-self refusal created socket: %v", err)
 	}
 }
@@ -365,7 +371,7 @@ func TestEndpointRefusesOccupiedNonSocketPaths(t *testing.T) {
 func checkOccupiedEndpointPath(t *testing.T, kind string) {
 	t.Helper()
 	fixture := endpointJournalAt(t, shortEndpointRoot(t), "")
-	path := filepath.Join(fixture.journal.pin.Root(), ".i")
+	path := ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence)
 	switch kind {
 	case "file":
 		if err := os.WriteFile(path, []byte("occupied"), 0o600); err != nil {
@@ -418,6 +424,7 @@ func TestEndpointCancelledCleanupClosesListenerAndRetainsRetry(t *testing.T) {
 
 type rootSwapEndpointObserver struct {
 	store          *taskdir.Store
+	sequence       uint64
 	moved          bool
 	triggered      bool
 	originalSocket unix.Stat_t
@@ -426,7 +433,7 @@ type rootSwapEndpointObserver struct {
 func (o *rootSwapEndpointObserver) PinRootContext(ctx context.Context) (taskdir.RootPin, error) {
 	if !o.triggered {
 		o.triggered = true
-		socket, err := observeEndpointSocket(filepath.Join(o.store.Root, ".i"))
+		socket, err := observeEndpointSocket(ownerEndpointPath(o.store.Root, o.sequence))
 		if err != nil {
 			return taskdir.RootPin{}, err
 		}
@@ -445,7 +452,7 @@ func (o *rootSwapEndpointObserver) PinRootContext(ctx context.Context) (taskdir.
 		if err = os.WriteFile(filepath.Join(o.store.Root, "root.json"), metadata, 0o600); err != nil {
 			return taskdir.RootPin{}, err
 		}
-		if err = os.WriteFile(filepath.Join(o.store.Root, ".i"), []byte("replacement"), 0o600); err != nil {
+		if err = os.WriteFile(ownerEndpointPath(o.store.Root, o.sequence), []byte("replacement"), 0o600); err != nil {
 			return taskdir.RootPin{}, err
 		}
 	}
@@ -472,7 +479,7 @@ func restoreEndpointRoot(t *testing.T, observer *rootSwapEndpointObserver) {
 
 func TestEndpointFailedBirthRetainsCleanupOwnership(t *testing.T) {
 	fixture := endpointJournalAt(t, shortEndpointRoot(t), "")
-	observer := &rootSwapEndpointObserver{store: fixture.journal.store}
+	observer := &rootSwapEndpointObserver{store: fixture.journal.store, sequence: fixture.intent.Sequence}
 	endpoint, err := fixture.journal.listenEndpointWithObserver(t.Context(), fixture.lease, fixture.assumption.Startup, observer)
 	// Own every returned resource before interpreting the error. Restore runs
 	// before cleanup retry, and both precede borrowed journal/store/root teardown.
@@ -486,7 +493,7 @@ func TestEndpointFailedBirthRetainsCleanupOwnership(t *testing.T) {
 	if identity.SocketInode == 0 || identity.SocketInode != uint64(observer.originalSocket.Ino) || identity.SocketDev != uint64(observer.originalSocket.Dev) {
 		t.Fatal("failed birth lost original native socket identity")
 	}
-	data, readErr := os.ReadFile(filepath.Join(fixture.journal.pin.Root(), ".i"))
+	data, readErr := os.ReadFile(ownerEndpointPath(fixture.journal.pin.Root(), fixture.intent.Sequence))
 	if readErr != nil || string(data) != "replacement" {
 		t.Fatalf("failed birth cleanup changed replacement: %v", readErr)
 	}
@@ -516,5 +523,405 @@ func TestEndpointCleanupUsesIdentityAfterSocketModeChange(t *testing.T) {
 	requireEndpointListenerClosed(t, endpoint)
 	if _, err = os.Lstat(identity.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cleanup left owned socket: %v", err)
+	}
+}
+
+func TestOwnerEndpointCanonicalSequencePaths(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "state")
+	for _, tc := range []struct {
+		sequence uint64
+		leaf     string
+	}{
+		{1, "0000000000001"}, {2, "0000000000002"}, {10, "000000000000a"}, {417, "00000000000bl"}, {0x0102030405060708, "00jv30clup820"}, {^uint64(0), "3w5e11264sgsf"},
+	} {
+		want := filepath.Join(root, tc.leaf)
+		if got := ownerEndpointPath(root, tc.sequence); got != want {
+			t.Fatalf("sequence %d path = %q, want %q", tc.sequence, got, want)
+		}
+		if len(tc.leaf) != 13 || OwnerEndpointPathBytes(root) != len(want) {
+			t.Fatal("endpoint width changed")
+		}
+	}
+	unicodeRoot := filepath.Join(root, "家", "δοκιμή")
+	want := filepath.Join(unicodeRoot, "0000000000001")
+	if ownerEndpointPath(unicodeRoot, 1) != want || OwnerEndpointPathBytes(unicodeRoot) != len(want) || len(want) != len(unicodeRoot)+14 {
+		t.Fatal("multibyte root byte budget changed")
+	}
+	if OwnerEndpointPathBytes(root) != len(ownerEndpointPath(root, ^uint64(0))) || OwnerEndpointPathBytes(unicodeRoot) != len(ownerEndpointPath(unicodeRoot, ^uint64(0))) {
+		t.Fatal("preflight byte budget does not cover maximum sequence")
+	}
+}
+
+// These probes exercise real inherited leases, native socket birth and process
+// exit using the Go-test-only host stub. They prove neither managed CLI image
+// eligibility nor the future coordinator's complete successor predicate.
+func TestSequenceEndpointCrashChild(t *testing.T) {
+	mode, invocation, selected := componentChildInvocation(t)
+	if !selected {
+		return
+	}
+	if mode == "before-publication" {
+		bindSequenceCrashBeforePublication(t, invocation)
+		os.Exit(0) // Deliberately bypass cleanup to leave the bound socket residue.
+	}
+	entry, err := consumeOwnerInvocation(t.Context(), invocation, &componentEntryHost{})
+	ownComponentEntry(t, entry)
+	if err != nil || entry == nil || entry.grant == nil {
+		t.Fatalf("second native birth failed: %v", err)
+	}
+	if mode == "after-publication" {
+		os.Exit(0)
+	} // Kernel closes actor FDs; path remains.
+	if mode != "successor" {
+		t.Fatal("unknown sequence component mode")
+	}
+	ready := os.NewFile(4, "sequence-component-ready")
+	if _, err = ready.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err = ready.Close(); err != nil {
+		t.Fatal(err)
+	}
+	serveSequenceEndpointContact(t, entry, invocation.startup)
+}
+
+func bindSequenceCrashBeforePublication(t *testing.T, invocation ownerInvocation) {
+	t.Helper()
+	entry := &ownedResidentEntry{}
+	ownComponentEntry(t, entry)
+	if err := matchOwnerInheritedDescriptor(invocation.root); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	entry.lease, err = AdoptInheritedLease(os.NewFile(3, "sequence-component-lease"), filepath.Join(invocation.root, instanceLeaseName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = entry.prepareRoot(t.Context(), invocation, &componentEntryHost{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = entry.assumeAndBind(t.Context(), invocation.startup); err != nil {
+		t.Fatal(err)
+	}
+	if entry.grant != nil {
+		t.Fatal("pre-publication birth minted a grant")
+	}
+}
+
+func serveSequenceEndpointContact(t *testing.T, entry *ownedResidentEntry, reference StartupReference) {
+	t.Helper()
+	if err := entry.endpoint.listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := entry.endpoint.listener.AcceptUnix()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if err = connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	request, err := readOwnerFrame[ownerRequest](bufio.NewReader(connection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assumption, err := entry.journal.readAssumption(t.Context(), reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := entry.journal.readPublication(t.Context(), reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = authenticateOwnerRequest(t.Context(), connection, entry.operation.Intent(), assumption, publication, request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Action != ownerStatus {
+		t.Fatal("component only serves status")
+	}
+	reply := ownerReply{Protocol: ownerProtocolVersion, RootID: request.RootID, OwnerRef: reference, PublicationSHA256: request.PublicationSHA256, Action: ownerStatus, Code: ownerOK}
+	if err = writeOwnerFrame(connection, reply); err != nil {
+		t.Fatal(err)
+	}
+	// Retain the native endpoint until the client completes its final recheck.
+	if err = awaitOwnerContactEOF(connection); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type sequenceEndpointChild struct {
+	fixture *componentEntryFixture
+	command *exec.Cmd
+	output  bytes.Buffer
+	ready   *os.File
+	done    chan error
+	joined  bool
+	result  error
+}
+
+func launchSequenceEndpointChild(t *testing.T, fixture *componentEntryFixture, mode string) *sequenceEndpointChild {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err = filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := &sequenceEndpointChild{fixture: fixture, ready: read}
+	t.Cleanup(func() { child.close(t) })
+	defer func() {
+		if closeErr := write.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	args := []string{"-test.run=^TestSequenceEndpointCrashChild$", "-test.timeout=15s", "--", "--owner-entry-component-test", mode}
+	args = append(args, componentArguments(t, fixture)...)
+	child.command = exec.Command(binary, args...)
+	child.command.Stdout, child.command.Stderr = &child.output, &child.output
+	err = fixture.lease.WithHeldFile(t.Context(), func(file *os.File) error {
+		child.command.ExtraFiles = []*os.File{file, write}
+		return child.command.Start()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child.done = make(chan error, 1)
+	go func() { child.done <- child.command.Wait() }()
+	// Closing this descriptor never LOCK_UNs the child's inherited flock.
+	if err = fixture.lease.Close(); err != nil {
+		fixture.retain = true
+		t.Fatal(err)
+	}
+	fixture.lease = nil
+	return child
+}
+
+func (c *sequenceEndpointChild) join(t *testing.T) {
+	t.Helper()
+	if c.done == nil || c.joined {
+		return
+	}
+	select {
+	case c.result = <-c.done:
+		c.joined = true
+	case <-time.After(20 * time.Second):
+		c.fixture.retain = true
+		t.Fatalf("retain component PID %d: exact child Wait unresolved", c.command.Process.Pid)
+	}
+	if c.result != nil {
+		t.Fatalf("sequence component failed: %v\n%s", c.result, c.output.String())
+	}
+}
+
+func (c *sequenceEndpointChild) close(t *testing.T) {
+	t.Helper()
+	if c.ready != nil {
+		if err := c.ready.Close(); err != nil {
+			c.fixture.retain = true
+			t.Error(err)
+		}
+		c.ready = nil
+	}
+	c.join(t)
+}
+
+func (c *sequenceEndpointChild) awaitPublication(t *testing.T) {
+	t.Helper()
+	if err := c.ready.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var ready [1]byte
+	if _, err := io.ReadFull(c.ready, ready[:]); err != nil {
+		t.Fatalf("second native birth publication missing: %v", err)
+	}
+	if ready[0] != 1 {
+		t.Fatal("invalid component publication marker")
+	}
+}
+
+func TestSequenceEndpointSurvivesCrashResidue(t *testing.T) {
+	for _, phase := range []string{"before-publication", "after-publication"} {
+		t.Run(phase, func(t *testing.T) { exerciseSequenceEndpointCrash(t, phase) })
+	}
+}
+
+func exerciseSequenceEndpointCrash(t *testing.T, phase string) {
+	t.Helper()
+	fixture := newComponentEntryFixture(t, "valid")
+	crashed := launchSequenceEndpointChild(t, fixture, phase)
+	crashed.join(t) // Exact parent cmd.Wait before interpreting PID or lease absence.
+	oldPath := ownerEndpointPath(fixture.root, fixture.intent.Sequence)
+	oldSocket, err := observeEndpointSocket(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireSequenceCrashClosed(t, fixture, crashed.command.Process.Pid, phase)
+	appendSequenceSuccessor(t, fixture)
+	successor := launchSequenceEndpointChild(t, fixture, "successor")
+	successor.awaitPublication(t)
+	contactSequenceSuccessor(t, fixture)
+	successor.join(t)
+	current, err := observeEndpointSocket(oldPath)
+	if err != nil || current.Dev != oldSocket.Dev || current.Ino != oldSocket.Ino || current.Mode != oldSocket.Mode || current.Uid != oldSocket.Uid {
+		t.Fatalf("old socket identity changed: %v", err)
+	}
+	if _, err = os.Lstat(ownerEndpointPath(fixture.root, fixture.intent.Sequence)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("closed successor left endpoint residue: %v", err)
+	}
+	requireSequenceInstanceFree(t, fixture)
+}
+
+func requireSequenceCrashClosed(t *testing.T, fixture *componentEntryFixture, pid int, phase string) {
+	t.Helper()
+	assumption, err := fixture.journal.readAssumption(t.Context(), fixture.reference)
+	if err != nil || assumption.Process.PID != pid {
+		t.Fatalf("crashed child assumption: %v", err)
+	}
+	reference, err := assumption.Process.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	present, err := lifetime.ProcessPresent(reference)
+	if err != nil || present {
+		fixture.retain = true
+		t.Fatalf("crashed native child remains present: %v", err)
+	}
+	_, err = fixture.journal.readPublication(t.Context(), fixture.reference)
+	if phase == "before-publication" {
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("pre-publication crash produced publication or unreadable evidence: %v", err)
+		}
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	requireSequenceInstanceFree(t, fixture)
+}
+
+func requireSequenceInstanceFree(t *testing.T, fixture *componentEntryFixture) {
+	t.Helper()
+	lease, acquired, err := fixture.journal.tryAcquire(t.Context())
+	if err != nil || !acquired {
+		fixture.retain = true
+		t.Fatalf("native instance lease remains held: %v", err)
+	}
+	fixture.lease = lease
+}
+
+// Dense intent-only rows represent canonical historical fixture data. They are
+// not settlement evidence or a claim that the future coordinator may skip its
+// complete successor predicate. The actual old child was already joined/absent.
+func appendSequenceSuccessor(t *testing.T, fixture *componentEntryFixture) {
+	t.Helper()
+	// Durable dense fixture setup has an explicit finite caller budget instead
+	// of taskdir's short fallback for callers with no deadline. No latency claim.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	err := fixture.journal.withLeaseTransaction(ctx, fixture.lease, func(tx *taskdir.ControlTransaction) error {
+		for sequence := uint64(2); sequence < 417; sequence++ {
+			historical := fixture.intent
+			historical.Sequence, historical.Epoch = sequence, fmt.Sprintf("%032x", sequence)
+			if _, err := historical.Digest(); err != nil {
+				return err
+			}
+			created, err := tx.Put(intentName(sequence), historical)
+			if err != nil {
+				return err
+			}
+			if !created {
+				return errors.New("historical fixture row already exists")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := fixture.intent
+	next.Sequence = 417
+	next.Epoch = strings.Repeat("b", 32)
+	next.AcceptedAt = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	next.Deadline = time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
+	refreshIntentDigest(t, &next)
+	created, err := fixture.journal.putIntent(ctx, fixture.lease, next)
+	if err != nil || !created {
+		t.Fatalf("append fixture successor: created=%t err=%v", created, err)
+	}
+	fixture.intent = next
+	fixture.reference, err = ReferenceStartup(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func contactSequenceSuccessor(t *testing.T, fixture *componentEntryFixture) {
+	t.Helper()
+	publication, err := fixture.journal.readPublication(t.Context(), fixture.reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publication.Endpoint.Path != filepath.Join(fixture.root, "00000000000bl") {
+		t.Fatal("second sequence publication path differs")
+	}
+	digest, err := publication.Digest(fixture.intent, mustReadSequenceAssumption(t, fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err := lifetime.ObserveProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ownerRequest{Protocol: ownerProtocolVersion, RootID: fixture.store.RootID, Owner: fixture.reference, PublicationSHA256: digest, Client: ProcessIdentity{PID: self.PID(), StartToken: self.StartToken()}, Action: ownerStatus, Deadline: time.Now().UTC().Add(5 * time.Second).Format(time.RFC3339Nano)}
+	reply, err := contactOwner(t.Context(), contextPassiveReader(t, fixture.journal), fixture.journal.pin, request)
+	if err != nil || reply.Code != ownerOK {
+		t.Fatalf("new native endpoint authentication failed: %v", err)
+	}
+}
+
+func mustReadSequenceAssumption(t *testing.T, fixture *componentEntryFixture) StartupAssumption {
+	t.Helper()
+	assumption, err := fixture.journal.readAssumption(t.Context(), fixture.reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return assumption
+}
+
+func TestOwnerEndpointCaseFoldInjectivity(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "state")
+	seen := make(map[string]uint64)
+	for _, sequence := range []uint64{1, 417, ^uint64(0)} {
+		name := filepath.Base(ownerEndpointPath(root, sequence))
+		folded := strings.ToLower(name)
+		if len(name) != 13 || name != folded || strings.Trim(name, "0123456789abcdefghijklmnopqrstuvwxyz") != "" {
+			t.Fatalf("noncanonical reserved leaf %q", name)
+		}
+		if previous, exists := seen[folded]; exists {
+			t.Fatalf("casefold aliases sequences %d and %d", previous, sequence)
+		}
+		seen[folded] = sequence
+	}
+}
+
+func TestOwnerEndpointNamespaceExcludesFixedRootNames(t *testing.T) {
+	// Fixed/lazy root entries from taskdir store/control/workspace/infrastructure,
+	// scheduler host, and the private-supervisor layout. This is a namespace
+	// collision assertion, never an inventory or permission to delete by shape.
+	for _, name := range []string{
+		"root.json", ".probe", ".maintenance.lock", ".root-admission.lock", instanceLeaseName, ".scheduler-host.lock", ".supervisor",
+		"tasks", "inspections", "inspection-group", "runner-repair", "workspaces", "workspace-registry", "workspace-operations", "infrastructure", "scheduler-host",
+	} {
+		if len(name) == 13 && strings.Trim(name, "0123456789abcdefghijklmnopqrstuvwxyz") == "" {
+			t.Fatalf("fixed root name enters reserved endpoint namespace: %s", name)
+		}
 	}
 }

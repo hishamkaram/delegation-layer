@@ -11,7 +11,7 @@ func existingFailure(result ExistingTaskResult, stage ExistingStage, err error) 
 
 func existingSupervisorOptions(options ExistingTaskOptions, control pueue.Options) SupervisorOptions {
 	runtime := options.Creation.Admission.Supervisor
-	return SupervisorOptions{Options: control, Lookup: runtime.Lookup(), OpenStore: runtime.OpenStore}
+	return SupervisorOptions{RootAdmission: options.Creation.RootAdmission, Options: control, Lookup: runtime.Lookup(), OpenStore: runtime.OpenStore, Routing: runtime.Routing}
 }
 
 func existingSubmissionOptions(options ExistingTaskOptions, control pueue.Options) SubmissionOptions {

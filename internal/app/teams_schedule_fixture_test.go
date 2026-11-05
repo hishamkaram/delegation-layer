@@ -156,9 +156,10 @@ func (f *teamsScheduleFixture) reopen(t *testing.T) {
 }
 
 func (f *teamsScheduleFixture) tasks() schedulerTasks {
+	deps := f.deps.normalized()
 	return schedulerTasks{
 		root: f.state.Root, rootID: f.state.RootID,
-		arguments: Arguments{Runner: f.deps.RunnerExecutable, PueueConfig: f.pueueConfig}, dependencies: f.deps.normalized(),
+		arguments: Arguments{Runner: f.deps.RunnerExecutable, PueueConfig: f.pueueConfig}, dependencies: deps, routing: deps.infrastructureRouting(),
 	}
 }
 

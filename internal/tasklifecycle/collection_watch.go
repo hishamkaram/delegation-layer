@@ -28,14 +28,9 @@ func reconcileCollectionTimeout(ctx context.Context, root string, td *taskdir.Ta
 		options.ReportMaintenanceDeferral(response.MaintenanceError)
 	}
 	if reconcileErr != nil {
-		if IsPureSupervisorUncertaintyError(reconcileErr) {
-			return reapSupervisorObservation(ctx, reconcileErr)
-		}
-		if errors.Is(reconcileErr, context.Canceled) || errors.Is(reconcileErr, context.DeadlineExceeded) {
-			return nil
-		}
-		return reconcileErr
+		return collectionSupervisorError(ctx, reconcileErr)
 	}
+
 	if err := UpdateStatusStops(ctx, td, response, observation); err != nil {
 		// A bounded watch may expire while the durable stop annotation is being
 		// written. The next collection pass can retry that annotation; the
@@ -48,13 +43,28 @@ func reconcileCollectionTimeout(ctx context.Context, root string, td *taskdir.Ta
 	return nil
 }
 
-func reconcileCollectionTimeoutIfActive(deadline, nextAttempt time.Time, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options CollectionOptions, response *Observation) (time.Time, error) {
+func reconcileCollectionTimeoutIfActive(ctx context.Context, deadline, nextAttempt time.Time, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options CollectionOptions, response *Observation) (time.Time, error) {
 	now := time.Now()
 	if options.Watch <= 0 || !now.Before(deadline) || now.Before(nextAttempt) {
 		return nextAttempt, nil
 	}
-	watchContext, cancel := context.WithDeadline(context.Background(), deadline)
+	watchContext, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	err := reconcileCollectionTimeout(watchContext, root, td, req, meta, options, response)
 	return time.Now().Add(collectionSupervisorReconcileBackoff), err
+}
+
+// A retained native owner is a concrete cleanup fault even when its underlying
+// cause is also a timeout or a normally pending supervisor observation.
+func collectionSupervisorError(ctx context.Context, err error) error {
+	if admissionCleanupFault(err) {
+		return err
+	}
+	if IsPureSupervisorUncertaintyError(err) {
+		return reapSupervisorObservation(ctx, err)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }

@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"context"
 	"debug/buildinfo"
 	"errors"
 	"os"
@@ -55,10 +56,14 @@ func PersistedRunnerOwnership(root string, meta *task.MetaRecord) string {
 }
 
 func RunnerOwnershipForTask(root string, td *taskdir.TaskDir, meta *task.MetaRecord) (string, error) {
+	return RunnerOwnershipForTaskContext(context.Background(), root, td, meta)
+}
+
+func RunnerOwnershipForTaskContext(ctx context.Context, root string, td *taskdir.TaskDir, meta *task.MetaRecord) (string, error) {
 	if meta == nil || meta.RunnerOwnership != "" || td == nil {
 		return PersistedRunnerOwnership(root, meta), nil
 	}
-	migrated, err := td.HasManagedRunnerMigration()
+	migrated, err := td.HasManagedRunnerMigrationContext(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -86,13 +91,17 @@ func CurrentManagedRunnerExecutable(root, path string) bool {
 }
 
 func LegacyInspectionRetryRunner(store *taskdir.Store, td *taskdir.TaskDir, meta *task.MetaRecord) (string, bool, error) {
+	return LegacyInspectionRetryRunnerContext(context.Background(), store, td, meta)
+}
+
+func LegacyInspectionRetryRunnerContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, meta *task.MetaRecord) (string, bool, error) {
 	if meta == nil || meta.RunnerOwnership != "" {
 		return "", false, nil
 	}
 	if store == nil || td == nil {
 		return "", false, task.ErrInvalidPermit
 	}
-	inspected, err := taskHasInspectionOperation(store, meta.TaskID)
+	inspected, err := taskHasInspectionOperationContext(ctx, store, meta.TaskID)
 	if err != nil || !inspected {
 		return "", false, err
 	}
@@ -102,11 +111,11 @@ func LegacyInspectionRetryRunner(store *taskdir.Store, td *taskdir.TaskDir, meta
 	return meta.RunnerExecutable, true, nil
 }
 
-func taskHasInspectionOperation(store *taskdir.Store, taskID string) (bool, error) {
+func taskHasInspectionOperationContext(ctx context.Context, store *taskdir.Store, taskID string) (bool, error) {
 	if store == nil {
 		return false, task.ErrInvalidPermit
 	}
-	operation, err := inspection.LoadOperation(store, taskID)
+	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}

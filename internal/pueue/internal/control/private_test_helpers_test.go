@@ -80,7 +80,7 @@ func makePrivateTestDirectory(t *testing.T, path string) {
 
 func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest})
+	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,9 @@ func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) 
 // observation deadlines exercised by fault tests.
 func bindPrivateSetupForTest(t *testing.T, stateRoot, clientPath, daemonPath string, options Options) *Client {
 	t.Helper()
+	if options.PrivateGenerationGuard == nil {
+		options.PrivateGenerationGuard = allowPrivateGenerationForTest{}
+	}
 	if options.processObserver == nil {
 		options.processObserver = privateTestProcessObserver(stateRoot)
 	}
@@ -128,6 +131,8 @@ func privateTestProcessObserver(stateRoot string) func(int) (privateProcessObser
 
 func privateMigrationTestOptions(stateRoot string, timeout time.Duration) Options {
 	return Options{
+		PrivateGenerationGuard:     allowPrivateGenerationForTest{},
+		DaemonStartGuard:           allowDaemonStartForTest{},
 		ObservationTimeout:         timeout,
 		PrivateMigrationAuthorizer: allowPrivateMigrationForTest,
 		processObserver:            privateTestProcessObserver(stateRoot),
@@ -162,7 +167,7 @@ func removePrivateTestDaemonState(t *testing.T, stateRoot string) {
 
 func recoverPrivateForTest(t *testing.T, stateRoot string, saved task.SupervisorRef, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{ObservationTimeout: DefaultObservationTimeout})
+	client, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout})
 	if err != nil {
 		t.Fatalf("private supervisor recovery failed: %v", err)
 	}
@@ -314,4 +319,12 @@ func hashPrivateTestExecutable(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return digest
+}
+
+// allowPrivateGenerationForTest supplies explicit resident publication authority
+// to fixture setup. Production options never receive a default grant.
+type allowPrivateGenerationForTest struct{}
+
+func (allowPrivateGenerationForTest) GuardPrivateGenerationCommit(_ context.Context, _ string, commit func() error) error {
+	return commit()
 }

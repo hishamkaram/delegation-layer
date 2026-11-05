@@ -13,6 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -43,12 +44,12 @@ func (r checkpointTestRuntime) PrepareManaged(ctx context.Context, store *taskdi
 	if hook := r.hooks.prepare; hook != nil {
 		hook()
 	}
-	client, err := r.saved.OpenSaved(ctx, store.Root, r.binding)
+	client, err := r.saved.OpenSaved(ctx, store, r.binding, infrastructure.SavedBindingSource{})
 	return runner, client, err
 }
 
-func (r checkpointTestRuntime) OpenSaved(ctx context.Context, root string, saved task.SupervisorRef) (*pueue.Client, error) {
-	return r.saved.OpenSaved(ctx, root, saved)
+func (r checkpointTestRuntime) OpenSaved(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, source infrastructure.SavedBindingSource) (*pueue.Client, error) {
+	return r.saved.OpenSaved(ctx, store, saved, source)
 }
 
 type checkpointRuntimeFixture struct {

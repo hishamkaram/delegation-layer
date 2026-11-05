@@ -46,7 +46,13 @@ func acquireAdmissionUse(t *testing.T, fixture *workspacefixture.RecoveryFixture
 	}
 	owner, err := resource.AcquireUseOwner(t.Context())
 	if err != nil {
-		t.Fatal(errors.Join(err, resource.Close()))
+		held := &Admission{resource: resource, owner: owner}
+		t.Cleanup(func() {
+			if cleanupErr := held.Close(); cleanupErr != nil {
+				t.Error(cleanupErr)
+			}
+		})
+		t.Fatal(errors.Join(err, held.closeAfter(fixture.Store, err)))
 	}
 	return resource, owner
 }
@@ -56,6 +62,11 @@ func acquireAdmissionUse(t *testing.T, fixture *workspacefixture.RecoveryFixture
 func persistAdmissionReservation(t *testing.T, fixture *workspacefixture.RecoveryFixture) workspace.Reservation {
 	t.Helper()
 	owner, err := fixture.Resource.AcquireUseOwner(t.Context())
+	t.Cleanup(func() {
+		if cleanupErr := owner.Release(); cleanupErr != nil {
+			t.Error(cleanupErr)
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +154,7 @@ func TestAdmissionFinishAbortKeepsFaultJoinedWithPending(t *testing.T) {
 	finished := admission.admission.Finish(fixture.Store, errDispatchRejected, false, nil)
 	requirePendingJoinedFault(t, "abort recovery", finished.AbortError, fault)
 	admission.requireNotAborted(t)
-	admission.requireFinalClose(t, finished)
+	admission.requireRetainedFinishThenExplicitClose(t, finished, fault)
 }
 
 func TestAdmissionFinishAbortControls(t *testing.T) {
@@ -193,7 +204,7 @@ func TestAdmissionFinishDescriptionKeepsFaultJoinedWithPending(t *testing.T) {
 		t.Fatalf("finished admission = %+v", finished)
 	}
 	requirePendingJoinedFault(t, "description error", finished.DescriptionError, fault)
-	admission.requireFinalClose(t, finished)
+	admission.requireRetainedFinishThenExplicitClose(t, finished, fault)
 }
 
 func TestAdmissionFinishDescriptionPendingOnly(t *testing.T) {
@@ -208,4 +219,34 @@ func TestAdmissionFinishDescriptionPendingOnly(t *testing.T) {
 		t.Fatalf("pending description = %+v, %v", finished.Description, finished.DescriptionError)
 	}
 	admission.requireFinalClose(t, finished)
+}
+
+func (f finishedAdmission) requireRetainedFinishThenExplicitClose(t *testing.T, finished AdmissionFinish, fault *ownerUnlockFault) {
+	t.Helper()
+	var retained *AdmissionCleanupError
+	if !errors.As(finished.CloseError, &retained) || retained.Admission() != f.admission || !errors.Is(finished.CloseError, errOwnerUnlock) {
+		t.Fatalf("Finish lost the failed child/admission cleanup owner: %v", finished.CloseError)
+	}
+	if !f.admission.CleanupPending() || fault.unlocks != 1 {
+		t.Fatalf("failed child was not retained without retry: pending=%t unlocks=%d", f.admission.CleanupPending(), fault.unlocks)
+	}
+	owner, err := f.fixture.Resource.TryAcquireUseOwner(t.Context())
+	if owner != nil {
+		t.Cleanup(func() {
+			if releaseErr := owner.Release(); releaseErr != nil {
+				t.Error(releaseErr)
+			}
+		})
+	}
+	if owner != nil || !useOwnerContended(err) {
+		t.Fatalf("parent use owner released before failed child: %v", err)
+	}
+	// Explicit test cleanup follows the failure observation; Finish itself
+	// must neither retry this fault nor close the parent behind the child.
+	f.fixture.Store.SetFaultInjector(nil)
+	closeErr := retained.Admission().Close()
+	f.requireFinalClose(t, AdmissionFinish{CloseError: closeErr})
+	if retained.Admission().CleanupPending() {
+		t.Fatal("explicit child-first cleanup left admission ownership")
+	}
 }

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Protocol fields without omitempty are mandatory, including zero-valued
+// Protocol fields without an omission option are mandatory, including zero-valued
 // observations. Check the wire shape before encoding/json can turn absence or
 // null into a zero value. Canonical names also eliminate struct-field aliases.
 func validateRequiredFields(data []byte, target any) error {
@@ -83,8 +83,10 @@ func validateJSONField(fields map[string]json.RawMessage, field reflect.StructFi
 	}
 	value, present := fields[name]
 	if !present {
-		if field.Tag.Get("json") == name+",omitempty" {
-			return nil
+		for _, option := range tag[1:] {
+			if option == "omitempty" || option == "omitzero" {
+				return nil
+			}
 		}
 		return fmt.Errorf("missing required JSON field %q", name)
 	}

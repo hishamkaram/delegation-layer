@@ -19,8 +19,10 @@ func TestBindingVersionProbePendingIsNotBindingDrift(t *testing.T) {
 	base := filepath.Dir(fake.configPath)
 	gate := newStopIdentityLeaseTestGate(t, base, "binding-version")
 	options := Options{
-		Environment:        append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "binding-version")),
-		ObservationTimeout: 10 * time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		Environment:            append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "binding-version")),
+		ObservationTimeout:     10 * time.Second,
 	}
 	assertBindingProbePendingTest(t, gate, "pueue "+FixtureVersion+"\n", func(ctx context.Context) (*Client, error) {
 		return Bind(ctx, fake.executable, fake.configPath, options)
@@ -44,8 +46,10 @@ func TestSavedPrivateVersionProbePendingIsNotBindingDrift(t *testing.T) {
 	writeExecutable(t, daemon, privateDaemonFixture)
 	gate := newStopIdentityLeaseTestGate(t, base, "binding-version")
 	options := Options{
-		Environment:        append(os.Environ(), "BINDING_PROBE_GATE="+filepath.Join(base, "binding-version")),
-		ObservationTimeout: 10 * time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		Environment:            append(os.Environ(), "BINDING_PROBE_GATE="+filepath.Join(base, "binding-version")),
+		ObservationTimeout:     10 * time.Second,
 	}
 	assertBindingProbePendingTest(t, gate, "pueue 99.7.3\n", func(ctx context.Context) (*Client, error) {
 		return RecoverPrivate(ctx, stateRoot, bindings["B"], replacement, daemon, options)
@@ -56,7 +60,7 @@ func TestBindSavedReturnsOwnerForPendingVersionProbe(t *testing.T) {
 	fake := newFakeSupervisorPaths(t, "normal", "pueue "+FixtureVersion)
 	writeExecutable(t, fake.executable, bindingProbePendingTestScript+fakeSupervisorScript)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	client, err := Bind(ctx, fake.executable, fake.configPath, Options{Environment: fake.environment, ObservationTimeout: 10 * time.Second})
+	client, err := Bind(ctx, fake.executable, fake.configPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment, ObservationTimeout: 10 * time.Second})
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +73,10 @@ func TestBindSavedReturnsOwnerForPendingVersionProbe(t *testing.T) {
 	base := filepath.Dir(fake.configPath)
 	gate := newStopIdentityLeaseTestGate(t, base, "saved-binding-version")
 	options := Options{
-		Environment:        append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "saved-binding-version")),
-		ObservationTimeout: 10 * time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		Environment:            append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "saved-binding-version")),
+		ObservationTimeout:     10 * time.Second,
 	}
 	owner, probeErr := detachBindingProbePendingTest(t, gate, func(ctx context.Context) (*Client, error) {
 		return BindSaved(ctx, saved, options)
@@ -86,7 +92,7 @@ func TestBindSavedForMigrationWithClientReturnsOwnerForPendingVersionProbe(t *te
 	fake := newFakeSupervisorPaths(t, "normal", "pueue "+FixtureVersion)
 	writeExecutable(t, fake.executable, bindingProbePendingTestScript+fakeSupervisorScript)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	client, err := Bind(ctx, fake.executable, fake.configPath, Options{Environment: fake.environment, ObservationTimeout: 10 * time.Second})
+	client, err := Bind(ctx, fake.executable, fake.configPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment, ObservationTimeout: 10 * time.Second})
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +105,10 @@ func TestBindSavedForMigrationWithClientReturnsOwnerForPendingVersionProbe(t *te
 	base := filepath.Dir(fake.configPath)
 	gate := newStopIdentityLeaseTestGate(t, base, "saved-migration-binding-version")
 	options := Options{
-		Environment:        append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "saved-migration-binding-version")),
-		ObservationTimeout: 10 * time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		Environment:            append(fake.environment, "BINDING_PROBE_GATE="+filepath.Join(base, "saved-migration-binding-version")),
+		ObservationTimeout:     10 * time.Second,
 	}
 	owner, probeErr := detachBindingProbePendingTest(t, gate, func(ctx context.Context) (*Client, error) {
 		return BindSavedForMigrationWithClient(ctx, saved, saved.ClientExecutable, options)
@@ -132,7 +140,7 @@ func TestBindingVersionProbeCompletedFailureRemainsBinding(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			client, bindErr := Bind(ctx, fake.executable, fake.configPath, Options{Environment: environment, ObservationTimeout: 10 * time.Second})
+			client, bindErr := Bind(ctx, fake.executable, fake.configPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: environment, ObservationTimeout: 10 * time.Second})
 			supervisorLeaseTestSettleClient(t, client, bindErr)
 			if !errors.Is(bindErr, ErrBinding) || errors.Is(bindErr, ErrInFlight) || pendingFrom(bindErr) != nil {
 				t.Fatalf("completed incompatible version lost binding failure: %v", bindErr)
@@ -225,7 +233,7 @@ func newBindingReadyProbeTestClient(t *testing.T) *fakeSupervisor {
 	writeExecutable(t, fake.executable, bindingProbePendingTestScript+fakeSupervisorScript)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	client, bindErr := Bind(ctx, fake.executable, fake.configPath, Options{Environment: fake.environment, ObservationTimeout: 10 * time.Second})
+	client, bindErr := Bind(ctx, fake.executable, fake.configPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, client, bindErr)
 	if bindErr != nil {
 		t.Fatal(bindErr)

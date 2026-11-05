@@ -36,7 +36,7 @@ func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runn
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
-	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
+	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runn
 		RunnerSHA256:     runnerSHA256,
 	}
 	return td.recordSameContext(ctx, managedRunnerMigrationRecordName, record, func() (bool, error) {
-		old, readErr := td.readManagedRunnerMigration()
+		old, readErr := td.readManagedRunnerMigrationContext(ctx)
 		return readErr == nil && reflect.DeepEqual(old, &record), readErr
 	})
 }
@@ -61,23 +61,27 @@ func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runn
 // HasManagedRunnerMigration validates the migration receipt against the
 // immutable task records before exposing its ownership decision.
 func (td *TaskDir) HasManagedRunnerMigration() (bool, error) {
-	_, err := td.readManagedRunnerMigration()
+	return td.HasManagedRunnerMigrationContext(context.Background())
+}
+
+func (td *TaskDir) HasManagedRunnerMigrationContext(ctx context.Context) (bool, error) {
+	_, err := td.readManagedRunnerMigrationContext(ctx)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	return err == nil, err
 }
 
-func (td *TaskDir) readManagedRunnerMigration() (*managedRunnerMigrationRecord, error) {
+func (td *TaskDir) readManagedRunnerMigrationContext(ctx context.Context) (*managedRunnerMigrationRecord, error) {
 	if td == nil || td.store == nil {
 		return nil, task.ErrInvalidPermit
 	}
-	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSet()
+	_, meta, specSHA256, metaSHA256, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var record managedRunnerMigrationRecord
-	if err = td.store.readRecord(filepath.Join(td.Dir, managedRunnerMigrationRecordName), &record); err != nil {
+	if err = td.store.readRecordContext(ctx, filepath.Join(td.Dir, managedRunnerMigrationRecordName), &record); err != nil {
 		return nil, err
 	}
 	if err = validateManagedRunnerMigrationRecord(record); err != nil {

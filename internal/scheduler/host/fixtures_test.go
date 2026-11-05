@@ -150,6 +150,10 @@ func fixtureRuntime(ctx context.Context) error {
 		}
 	}
 	switch os.Getenv("DL_HOST_MODE") {
+	case "runtime_cleanup":
+		return errors.Join(ErrCleanupUnresolved, errors.New("fixture retained cleanup owner"))
+	case "runtime_cleanup_incompatible":
+		return errors.Join(ErrCleanupUnresolved, fmt.Errorf("fixture joined invariant: %w", ErrIncompatible))
 	case "runtime_permanent":
 		return fmt.Errorf("fixture runtime invariant: %w", ErrIncompatible)
 	case "crash":
@@ -282,8 +286,8 @@ func runLocalHost(t *testing.T, config Config, clock clockwork.Clock) <-chan err
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	joined := make(chan struct{})
-	go func() { defer close(joined); done <- serve(ctx, config, clock) }()
 	t.Cleanup(func() { cancel(); receive(t, joined) })
+	go func() { defer close(joined); done <- serve(ctx, config, clock) }()
 	return done
 }
 

@@ -3,6 +3,13 @@ package app
 import "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
 func continuationCommandResult(observed tasklifecycle.ContinuationResult) commandResult {
+	result := continuationPrimaryCommandResult(observed)
+	mergeCommandClose(&result, func() error { return observed.StoreCloseError })
+	retainTaskAdmissionCleanup(&result, observed.RootAdmissionCleanup, observed.StoreCleanup, observed.RootAdmissionReleaseError)
+	return result
+}
+
+func continuationPrimaryCommandResult(observed tasklifecycle.ContinuationResult) commandResult {
 	if observed.Dispatch != nil {
 		result := dispatchCommandResult(*observed.Dispatch)
 		result = decorateContinuationResult(result, observed.Root, observed.PredecessorID, observed.Mode, observed.Runner, observed.Supervisor)

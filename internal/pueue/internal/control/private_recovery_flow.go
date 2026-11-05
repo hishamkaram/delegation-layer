@@ -55,32 +55,20 @@ func RecoverPrivate(ctx context.Context, stateRoot string, saved task.Supervisor
 // generation actually used for control. Every operational fault is returned
 // as the error, never as PairUnavailable.
 func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (PrivateRecovery, error) {
-	if !IsPrivateConfig(stateRoot, saved.ConfigPath) {
-		return PrivateRecovery{}, fmt.Errorf("%w: supervisor config is not private to the state root", ErrConfiguration)
-	}
-	if err := validatePrivateSupervisorRef(saved); err != nil {
-		return PrivateRecovery{}, fmt.Errorf("%w: %w", ErrBinding, err)
-	}
-	bootstrapContext, cancel, options, err := privateBootstrapOptions(ctx, options)
+	bootstrapContext, cancel, probe, err := prepareSavedPrivateProbe(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
 	if err != nil {
 		return PrivateRecovery{}, err
 	}
 	defer cancel()
-	options, err = optionsForSavedBinding(saved, options)
-	if err != nil {
-		return PrivateRecovery{}, err
+	if probe.client != nil {
+		return PrivateRecovery{client: probe.client}, nil
 	}
-	// Validate the exact saved config before any endpoint or client probe. In
-	// particular, an absent saved config must remain ErrBinding rather than
-	// becoming Bind's ErrConfiguration after a probe has already run.
-	if err = validateSavedPrivateConfig(stateRoot, saved, options); err != nil {
-		return PrivateRecovery{}, err
-	}
-	if probed, probeErr := probeSavedPrivate(bootstrapContext, stateRoot, saved, clientExecutable, daemonExecutable, options); probeErr != nil || probed != nil {
-		return PrivateRecovery{client: probed}, probeErr
-	}
+	options = probe.options
 	var recovery PrivateRecovery
 	if err = WithBootstrapLockContext(bootstrapContext, stateRoot, func(lockedContext context.Context) error {
+		if validationErr := validateSavedPrivateConfig(lockedContext, stateRoot, saved, options); validationErr != nil {
+			return validationErr
+		}
 		// A pending explicit repair may have preserved the old config under a
 		// root-owned alias. Reopen that exact endpoint first so its queued work
 		// remains recoverable; this is the only recovery exception to the
@@ -98,12 +86,12 @@ func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.Su
 	return recovery, nil
 }
 
-func validateSavedPrivateConfig(stateRoot string, saved task.SupervisorRef, options Options) error {
+func validateSavedPrivateConfig(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options) error {
 	resolution, err := privateResolution(options)
 	if err != nil {
 		return err
 	}
-	_, _, err = privateBindingConfig(stateRoot, filepath.Join(stateRoot, privateSupervisorDirectory), resolution, &saved)
+	_, _, err = privateBindingConfig(ctx, stateRoot, filepath.Join(stateRoot, privateSupervisorDirectory), resolution, &saved, options.PrivateGenerationGuard)
 	return err
 }
 
@@ -115,6 +103,10 @@ func probeSavedPrivate(ctx context.Context, stateRoot string, saved task.Supervi
 		}
 		return found && privateFullGenerationMatches(client.Binding(), current), nil
 	})
+	return finishSavedPrivateProbe(saved, probed, ready, err)
+}
+
+func finishSavedPrivateProbe(saved task.SupervisorRef, probed *Client, ready bool, err error) (*Client, error) {
 	if err != nil {
 		return nil, bindingProbeError(err)
 	}
@@ -251,7 +243,7 @@ func recoverLegacyPrivateGeneration(ctx context.Context, stateRoot string, saved
 	}
 	if !observation.ready() {
 		if err = client.closeRefusedPrivateEndpoint(ctx, observation); err == nil {
-			err = client.startPrivate(ctx)
+			err = client.startPrivate(ctx, stateRoot)
 		}
 		if err != nil {
 			return nil, errors.Join(
@@ -284,8 +276,8 @@ func privateRecoveryTransitionPending(stateRoot string) (bool, error) {
 // starts the exact recorded daemon pair long enough to inspect and migrate its
 // queue. The returned bool is true only when this call started that daemon;
 // callers may shut down only that recovery-owned endpoint.
-func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, bool, error) {
-	return RecoverSavedWithPair(ctx, saved, "", "", options)
+func RecoverSaved(ctx context.Context, operationRoot string, saved task.SupervisorRef, options Options) (*Client, bool, error) {
+	return RecoverSavedWithPair(ctx, operationRoot, saved, "", "", options)
 }
 
 // RecoverSavedWithPair is the migration form of RecoverSaved. It uses the
@@ -293,11 +285,15 @@ func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options
 // falls back to a caller-supplied verified pair when an upgrade removed them.
 // The durable binding remains the saved supervisor; the pair only supplies the
 // executable implementation used to inspect or restart that same endpoint.
-func RecoverSavedWithPair(ctx context.Context, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, error) {
+func RecoverSavedWithPair(ctx context.Context, operationRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, error) {
 	if err := validateSavedSupervisorRef(saved); err != nil {
 		return nil, false, fmt.Errorf("%w: %w", ErrBinding, err)
 	}
-	stateRoot, private := privateStateRoot(saved.ConfigPath)
+	_, private := privateStateRoot(saved.ConfigPath)
+	stateRoot := operationRoot
+	if private && !IsPrivateConfig(operationRoot, saved.ConfigPath) {
+		return nil, false, ErrConfiguration
+	}
 	if private {
 		resolvedClient, resolveErr := selectRecoveryExecutable(saved.ClientExecutable, clientExecutable)
 		if resolveErr != nil {
@@ -364,7 +360,7 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return nil, false, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if err = startDaemon(daemon, digest, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
+	if err = startDaemon(ctx, stateRoot, daemon, digest, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
 		return nil, false, errors.Join(err, client.Close())
 	}
 	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
@@ -373,7 +369,7 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 		// leave a durable private recovery alias for the next bootstrap.
 		combinedErr := err
 		if private {
-			aliasErr := client.PersistPrivateRecoveryBinding(stateRoot)
+			aliasErr := client.PersistPrivateRecoveryBindingContext(ctx, stateRoot)
 			combinedErr = errors.Join(combinedErr, aliasErr)
 		}
 		return nil, true, errors.Join(combinedErr, client.CloseAfterPending(combinedErr))
@@ -530,6 +526,9 @@ func bindSavedEndpointMigration(ctx context.Context, saved task.SupervisorRef, c
 	}
 	migration.binding = saved
 	migration.cleanup = cleanup
+	if constructionErr := recordPrivateClientConstruction(migration, stateRoot); constructionErr != nil {
+		return nil, errors.Join(constructionErr, migration.CloseAfterPending(constructionErr))
+	}
 	return migration, nil
 }
 

@@ -56,7 +56,7 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 			return receiptErrorObserver{}, nil
 		},
 	}
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), store, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedReceipt) {

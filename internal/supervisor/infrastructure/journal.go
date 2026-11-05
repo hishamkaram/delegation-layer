@@ -126,16 +126,22 @@ func (j *intentJournal) putIntent(ctx context.Context, lease *Lease, intent Star
 		if err := validateCurrentIntent(intent, j.pin, j.bootID); err != nil {
 			return err
 		}
+		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
+		if err := requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
+			return err
+		}
 		if err := validateIntentAppend(ctx, controlIntentReader{j.control}, j.pin, intent); err != nil {
 			return err
 		}
-		if intent.Inputs.Kind == StartupRootOwner {
-			if _, err := readContextRecords(ctx, transactionContextReader{tx}, intent.Inputs.Context, j.pin); err != nil {
-				return err
-			}
-			if err := j.checkRoot(ctx); err != nil {
-				return err
-			}
+		_, selected, selectionErr := lifecycleStartupSelection(ctx, reader, j.pin, intent)
+		if selectionErr != nil {
+			return selectionErr
+		}
+		if _, err := readContextRecords(ctx, transactionContextReader{tx}, selected, j.pin); err != nil {
+			return err
+		}
+		if err := j.checkRoot(ctx); err != nil {
+			return err
 		}
 		var err error
 		created, err = tx.Put(intentName(intent.Sequence), intent)

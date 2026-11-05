@@ -35,7 +35,7 @@ func TestRecoverPrivateEntersExclusiveClosureForRefusedEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 
-	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
+	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatalf("saved recovery did not enter exclusive refused-endpoint closure: %v", err)
 	}

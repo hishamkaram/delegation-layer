@@ -294,6 +294,12 @@ func (c *Client) replaceQueuedRunnerCommand(ctx context.Context, numericID int64
 	if err := c.verify(ctx); err != nil {
 		return err
 	}
+	if c.options.ControlOwnerExecutable != "" {
+		return c.replaceManagedRunnerCommand(ctx, numericID, expected, replacement)
+	}
+	if err := c.requireRootAdmissionOwner(ctx); err != nil {
+		return err
+	}
 	configPath, err := privateEditConfig(filepath.Dir(c.runtimeBinding.ConfigPath), c.runtimeBinding.ConfigPath, c.runtimeBinding.ConfigDigest)
 	if err != nil {
 		return err
@@ -306,6 +312,41 @@ func (c *Client) replaceQueuedRunnerCommand(ctx context.Context, numericID int64
 		"/bin/sh -c "+quoteShell(editorScript),
 	)
 	if _, err = editClient.command(ctx, nil, "edit", strconv.FormatInt(numericID, 10)); err != nil {
+		return fmt.Errorf("%w: edit queued runner command: %w", ErrBinding, err)
+	}
+	return nil
+}
+
+// Only the actual bounded repair path mints this role. Generic or interactive
+// edit commands never acquire forwarding authority by matching their argv.
+func (c *Client) replaceManagedRunnerCommand(ctx context.Context, numericID int64, expected, replacement string) error {
+	lease, count := rootAdmissionCandidate(ctx)
+	if count != 1 {
+		return ErrRootAdmissionRequired
+	}
+	pin, err := lease.PinRootContext(ctx)
+	if err != nil {
+		return err
+	}
+	parent, err := canonicalRepairParent(pin.Root())
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(c.runtimeBinding.ConfigPath) != parent.Path {
+		return fmt.Errorf("%w: repair config differs from the admitted root", ErrRootAdmissionRequired)
+	}
+	configPath, err := privateRepairConfig(filepath.Dir(c.runtimeBinding.ConfigPath), c.runtimeBinding.ConfigPath, c.runtimeBinding.ConfigDigest, c.options.ControlOwnerExecutable)
+	if err != nil {
+		return err
+	}
+	editClient := *c
+	editClient.runtimeBinding.ConfigPath = configPath
+	editClient.options = c.options
+	editClient.options.Environment = runnerEditEnvironment(c.options.Environment, strconv.FormatInt(numericID, 10), expected, replacement, repairEditorToken)
+	editClient.options.Environment = setEnvironment(editClient.options.Environment, repairRootEnv, pin.Root())
+	editClient.options.Environment = setEnvironment(editClient.options.Environment, repairRootIDEnv, pin.RootID())
+	scoped := context.WithValue(ctx, controlAdmissionKey{}, &controlAdmissionScope{lease: lease, pin: pin, role: controlAdmissionRepair, configPath: configPath, repairParent: &parent})
+	if _, err = editClient.command(scoped, nil, "edit", strconv.FormatInt(numericID, 10)); err != nil {
 		return fmt.Errorf("%w: edit queued runner command: %w", ErrBinding, err)
 	}
 	return nil

@@ -1,6 +1,7 @@
 package admission
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"time"
@@ -87,7 +88,11 @@ func finalizeMatchedProfile(candidate commonprovider.ProfileCandidate, facts jso
 // before any fresh submission and again after supervisor reconciliation, so a
 // policy or placement change cannot cross the next authority boundary.
 func (profiles Profiles) Match(root string, req task.TaskRecord, meta task.MetaRecord) (commonprovider.PreparedProfile, error) {
-	candidate, facts, err := profiles.Existing(root, req, meta)
+	return profiles.MatchContext(context.Background(), root, req, meta)
+}
+
+func (profiles Profiles) MatchContext(ctx context.Context, root string, req task.TaskRecord, meta task.MetaRecord) (commonprovider.PreparedProfile, error) {
+	candidate, facts, err := profiles.ExistingContext(ctx, root, req, meta)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}

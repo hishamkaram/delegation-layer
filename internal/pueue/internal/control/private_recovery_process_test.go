@@ -22,7 +22,7 @@ func TestRecoverPrivateRestoresMissingLogicalBindingForStoppedSupervisor(t *test
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ touch "$(dirname "$config")/legacy-ready"
 	saved := fake.client.Binding()
 	saved.DaemonExecutable = daemonPath
 	saved.DaemonSHA256 = digest
-	client, started, err := RecoverSaved(context.Background(), saved, Options{ObservationTimeout: privateTestObservationTimeout, Environment: fake.environment})
+	client, started, err := RecoverSaved(context.Background(), filepath.Dir(fake.configPath), saved, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout, Environment: fake.environment})
 	if err != nil {
 		t.Fatalf("legacy recovery failed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestRecoverSavedRejectsPartialDaemonIdentity(t *testing.T) {
 	fake := newFakeSupervisor(t, "normal")
 	saved := fake.client.Binding()
 	saved.DaemonExecutable = fake.executable
-	if _, _, err := RecoverSaved(context.Background(), saved, Options{Environment: fake.environment}); !errors.Is(err, ErrBinding) {
+	if _, _, err := RecoverSaved(context.Background(), filepath.Dir(fake.configPath), saved, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("partial daemon identity was accepted: %v", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestRecoverSavedStopsAlreadyReachableLegacySupervisor(t *testing.T) {
 	shutdownPath := filepath.Join(filepath.Dir(fake.configPath), "legacy-shutdown")
 	fake.environment = append(fake.environment, "FAKE_SHUTDOWN_MARKER="+shutdownPath)
 	saved := fake.client.Binding()
-	client, started, err := RecoverSaved(context.Background(), saved, Options{ObservationTimeout: privateTestObservationTimeout, Environment: fake.environment})
+	client, started, err := RecoverSaved(context.Background(), filepath.Dir(fake.configPath), saved, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout, Environment: fake.environment})
 	if err != nil {
 		t.Fatalf("reachable legacy recovery failed: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestRecoverPrivateUsesCurrentPairAfterSavedInstallRemoved(t *testing.T) {
 	}
 
 	removePrivateTestPath(t, filepath.Join(stateRoot, privateSupervisorDirectory, "ready"))
-	if _, err := RecoverPrivate(context.Background(), stateRoot, first.Binding(), currentClientPath, currentDaemonPath, Options{ObservationTimeout: DefaultObservationTimeout}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if _, err := RecoverPrivate(context.Background(), stateRoot, first.Binding(), currentClientPath, currentDaemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("stopped active generation accepted a replacement pair: %v", err)
 	}
 	if identityAfterRefusal := readPrivateSupervisorFile(t, daemonIdentityPath); !bytes.Equal(identityAfterRefusal, oldDaemonIdentity) {
@@ -186,7 +186,7 @@ func TestRecoveredPrivateClientCanStopTaskWithOriginalSupervisorReference(t *tes
 	// This test verifies recovery preserves the durable stop authority; it does
 	// not exercise a short observation timeout. Use the production default so
 	// a full -race run cannot turn scheduler contention into a false failure.
-	options := Options{ObservationTimeout: DefaultObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout}
 	first, err := BindPrivate(context.Background(), oldClientPath, oldDaemonPath, stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,6 +252,8 @@ func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
 	startedMarker := filepath.Join(base, "status-started")
 	releaseMarker := filepath.Join(base, "status-release")
 	options := Options{
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
 		// Leave enough time for RecoverPrivate's version preflight to finish
 		// before the deliberately blocked status command consumes the budget.
 		ObservationTimeout: time.Second,
@@ -311,7 +313,7 @@ func TestRecoverPrivateRestartsStoppedSupervisorAfterExecutableDrift(t *testing.
 	wantSupervisorIdentity := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 	removePrivateTestPath(t, filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "ready"))
 	appendPrivateSupervisorFile(t, fixture.daemonPath, "\n")
-	if _, err := RecoverPrivate(context.Background(), fixture.stateRoot, first.Binding(), fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: DefaultObservationTimeout}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if _, err := RecoverPrivate(context.Background(), fixture.stateRoot, first.Binding(), fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("stopped active generation accepted executable drift: %v", err)
 	}
 
@@ -333,11 +335,11 @@ func TestRestartPrivateRepinsIdentityAfterGracefulShutdown(t *testing.T) {
 	writeExecutable(t, oldDaemonPath, privateDaemonFixture)
 	writeExecutable(t, currentDaemonPath, privateDaemonFixture+"\n# current bundle\n")
 
-	if _, err := BindPrivate(context.Background(), clientPath, oldDaemonPath, stateRoot, Options{ObservationTimeout: 10 * time.Second}); err != nil {
+	if _, err := BindPrivate(context.Background(), clientPath, oldDaemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second}); err != nil {
 		t.Fatal(err)
 	}
 	legacyIdentity := readPrivateDaemonIdentity(t, stateRoot)
-	current, err := BindPrivate(context.Background(), clientPath, currentDaemonPath, stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	current, err := BindPrivate(context.Background(), clientPath, currentDaemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +418,7 @@ func TestPrivateSupervisorLogicalDriftIsDetected(t *testing.T) {
 
 func TestRefreshPrivateSupervisorBindingUsesPublishedIdentity(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	saved, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	saved, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +476,7 @@ func TestPreparePrivateForMigrationDoesNotProbeChangedEndpoint(t *testing.T) {
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	bindPrivateSetupForTest(t, stateRoot, clientPath, daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
+	bindPrivateSetupForTest(t, stateRoot, clientPath, daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	statusStarted := filepath.Join(base, "status-started")
 	releaseStatus := filepath.Join(base, "release-status")
 	environment := append(
@@ -486,8 +488,10 @@ func TestPreparePrivateForMigrationDoesNotProbeChangedEndpoint(t *testing.T) {
 	defer cancel()
 	if err := WithBootstrapLock(ctx, stateRoot, func() error {
 		current, err := PreparePrivateForMigrationWithLock(ctx, clientPath, daemonPath, stateRoot, Options{
-			ObservationTimeout: privateTestObservationTimeout,
-			Environment:        environment,
+			PrivateGenerationGuard: allowPrivateGenerationForTest{},
+			DaemonStartGuard:       allowDaemonStartForTest{},
+			ObservationTimeout:     privateTestObservationTimeout,
+			Environment:            environment,
 		})
 		if err != nil {
 			return err

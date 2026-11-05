@@ -1,6 +1,8 @@
 package tasklifecycle
 
 import (
+	"errors"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -11,8 +13,8 @@ func creationFailure(result CreationResult, stage CreationStage, err error) Crea
 
 func (result CreationResult) Err() error {
 	if result.Submission == nil {
-		return result.Failure
+		return errors.Join(result.Failure, result.RootAdmissionReleaseError)
 	}
 	err := annotateMissingDispatchStage("submitting ordinary task", result.Submission.Err())
-	return SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted)
+	return errors.Join(result.Failure, result.RootAdmissionReleaseError, SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted))
 }

@@ -41,7 +41,7 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 			if err != nil {
 				return err
 			}
-			if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding); err != nil {
+			if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding, c.options.PrivateGenerationGuard); err != nil {
 				return fmt.Errorf("%w: persist recovered private supervisor binding: %w", ErrPrivateSupervisorMigrationRequired, err)
 			}
 			bindingFound = true
@@ -56,7 +56,7 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 		if err != nil {
 			return err
 		}
-		if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding); err != nil {
+		if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding, c.options.PrivateGenerationGuard); err != nil {
 			return fmt.Errorf("%w: persist recovered private supervisor binding: %w", ErrPrivateSupervisorMigrationRequired, err)
 		}
 	}
@@ -127,7 +127,7 @@ func (c *Client) reconcilePrivateSupervisor(ctx context.Context, stateRoot strin
 		}
 		if clearErr := retirePrivateRecoveryBinding(ctx, stateRoot, c.Binding(), func(authorizeContext context.Context) error {
 			return c.authorizePrivateMigrationQueue(authorizeContext, stateRoot, c)
-		}); clearErr != nil {
+		}, c.options.PrivateGenerationGuard); clearErr != nil {
 			return fmt.Errorf("%w: clear completed private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, clearErr)
 		}
 		return nil
@@ -155,38 +155,45 @@ func privateMigrationState(base string) (identity privateDaemonIdentity, found b
 }
 
 func (c *Client) resumePrivateMigration(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
-	if pending.LegacyStopped {
-		if privateMigrationIdentityMatchesCurrent(pending.Successor, current, currentBinding) {
-			return c.completePendingPrivateMigration(ctx, stateRoot, base, pending)
-		}
-		// Once shutdown is durable, finish the recorded generation before
-		// considering another installation. Never rewrite a launched successor.
-		return c.finishRecordedPrivateSuccessor(ctx, stateRoot, base, legacyBinding, bindingFound, pending)
+	if !pending.LegacyStopped && !pending.LegacyShutdownDispatched && !pending.LegacyShutdownRequested {
+		return c.resumePreparedPrivateMigration(ctx, stateRoot, base, legacyBinding, bindingFound, identity, found, current, currentBinding, pending)
 	}
-	if pending.LegacyShutdownDispatched {
-		return c.resumeDispatchedPrivateMigrationIfMatching(ctx, stateRoot, base, legacyBinding, bindingFound, identity, found, current, currentBinding, pending)
+	stopped, err := c.provePrivateMigrationShutdown(ctx, base, legacyBinding, identity, found, pending)
+	if err != nil {
+		return err
 	}
-	if pending.LegacyShutdownRequested {
-		return c.resumeRequestedPrivateMigrationIfMatching(ctx, stateRoot, base, legacyBinding, bindingFound, identity, found, current, currentBinding, pending)
+	if privateMigrationIdentityMatchesCurrent(stopped.Successor, current, currentBinding) {
+		return c.completePendingPrivateMigration(ctx, stateRoot, base, stopped)
 	}
-	return c.resumePreparedPrivateMigration(ctx, stateRoot, base, legacyBinding, bindingFound, identity, found, current, currentBinding, pending)
+	// Ordinary migration completes the durable target before selecting another
+	// installation. Referenced execution has a separate finalization edge.
+	return c.finishRecordedPrivateSuccessor(ctx, stateRoot, base, legacyBinding, bindingFound, stopped)
 }
 
 func (c *Client) resumePreparedPrivateMigration(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
 	if found && bindingFound && privatePreparedMigrationSelectsLegacy(pending, legacyBinding, c.binding, identity) {
-		// The explicit migration writer selected the still-published Legacy.
-		// Withdraw only pre-stop intent; readers and post-stop recovery never
-		// erase or retarget the fixed successor, and no edge was completed.
-		if err := clearPrivateMigrationRecord(base, pending); err != nil {
+		// Selection and withdrawal share the resident commit boundary.
+		if err := guardPrivateGeneration(ctx, stateRoot, c.options.PrivateGenerationGuard, func() error {
+			if !privatePreparedMigrationSelectsLegacy(pending, legacyBinding, c.binding, identity) {
+				return ErrPrivateSupervisorMigrationRequired
+			}
+			return clearPrivateMigrationRecord(base, pending)
+		}); err != nil {
 			return fmt.Errorf("%w: withdraw prepared private migration journal: %w", ErrPrivateSupervisorMigrationRequired, err)
 		}
 		return c.reconcilePrivateSupervisor(ctx, stateRoot, legacyBinding, identity, current, currentBinding)
 	}
-	retargeted, err := retargetPrivateMigrationIfNeeded(base, legacyBinding, identity, found, current, currentBinding, pending)
+	retargeted, err := retargetPrivateMigrationIfNeeded(ctx, base, legacyBinding, identity, found, current, currentBinding, pending, c.options.PrivateGenerationGuard)
 	if err != nil {
 		return err
 	}
 	pending = retargeted
+	return c.resumeValidatedPreparedPrivateMigration(ctx, stateRoot, base, legacyBinding, bindingFound, identity, found, current, currentBinding, pending)
+}
+
+// resumeValidatedPreparedPrivateMigration preserves the recorded target after
+// selection. Referenced execution enters here without withdrawal or retargeting.
+func (c *Client) resumeValidatedPreparedPrivateMigration(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
 	if err := validatePendingPrivateMigration(pending, legacyBinding, bindingFound, c.binding, current, currentBinding); err != nil {
 		return err
 	}
@@ -206,7 +213,7 @@ func privatePreparedMigrationSelectsLegacy(pending privateMigrationRecord, persi
 		task.SameSupervisorIdentity(persisted, selected)
 }
 
-func retargetPrivateMigrationIfNeeded(base string, legacyBinding task.SupervisorRef, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) (privateMigrationRecord, error) {
+func retargetPrivateMigrationIfNeeded(ctx context.Context, base string, legacyBinding task.SupervisorRef, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord, guard PrivateGenerationGuard) (privateMigrationRecord, error) {
 	if !found || !privateDaemonIdentityMatchesBinding(identity, legacyBinding) || privateMigrationIdentityMatchesCurrent(pending.Successor, current, currentBinding) {
 		return pending, nil
 	}
@@ -220,43 +227,33 @@ func retargetPrivateMigrationIfNeeded(base string, legacyBinding task.Supervisor
 	// strict for every unrelated record.
 	retargeted := pending
 	retargeted.Successor = currentBinding
-	if err := replacePrivateMigrationRecord(base, pending, retargeted); err != nil {
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, retargeted, guard); err != nil {
 		return pending, fmt.Errorf("%w: retarget private migration journal: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return retargeted, nil
 }
 
-func (c *Client) resumeDispatchedPrivateMigrationIfMatching(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
-	if !found || !privateDaemonIdentityMatchesBinding(identity, privateSupervisorBindingForIdentity(legacyBinding, pending.Legacy)) {
-		return fmt.Errorf("%w: dispatched private migration journal does not match the persisted daemon identity", ErrPrivateSupervisorMigrationRequired)
+// provePrivateMigrationShutdown owns the canonical requested/dispatched/stopped
+// phase proof. It never selects a successor or finalizes a migration.
+func (c *Client) provePrivateMigrationShutdown(ctx context.Context, base string, legacyBinding task.SupervisorRef, identity privateDaemonIdentity, found bool, pending privateMigrationRecord) (privateMigrationRecord, error) {
+	if pending.LegacyStopped {
+		return pending, nil
 	}
-	return c.resumeDispatchedPrivateMigration(ctx, stateRoot, base, legacyBinding, bindingFound, current, currentBinding, pending)
-}
-
-func (c *Client) resumeRequestedPrivateMigrationIfMatching(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, identity privateDaemonIdentity, found bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
 	if !found || !privateDaemonIdentityMatchesBinding(identity, privateSupervisorBindingForIdentity(legacyBinding, pending.Legacy)) {
-		return fmt.Errorf("%w: requested private migration journal does not match the persisted daemon identity", ErrPrivateSupervisorMigrationRequired)
+		return pending, fmt.Errorf("%w: shutdown journal does not match the persisted daemon identity", ErrPrivateSupervisorMigrationRequired)
 	}
-	legacy := privateMigrationPIDObserver(legacyBinding, pending.Legacy, c.options)
+	if pending.LegacyShutdownDispatched {
+		return observeDispatchedPrivateMigrationShutdown(ctx, base, legacyBinding, pending, c.options)
+	}
+	if !pending.LegacyShutdownRequested {
+		return pending, fmt.Errorf("%w: predecessor shutdown has not been requested", ErrPrivateSupervisorMigrationRequired)
+	}
+	legacy, constructionErr := newPrivateMigrationShutdownClient(filepath.Dir(base), legacyBinding, pending.Legacy, c.options)
+	if constructionErr != nil {
+		return pending, constructionErr
+	}
 	updated, _, err := dispatchPrivateMigrationShutdown(ctx, base, legacy, pending)
-	if err != nil {
-		return err
-	}
-	if privateMigrationIdentityMatchesCurrent(updated.Successor, current, currentBinding) {
-		return c.completePendingPrivateMigration(ctx, stateRoot, base, updated)
-	}
-	return c.finishRecordedPrivateSuccessor(ctx, stateRoot, base, legacyBinding, bindingFound, updated)
-}
-
-func (c *Client) resumeDispatchedPrivateMigration(ctx context.Context, stateRoot, base string, legacyBinding task.SupervisorRef, bindingFound bool, current privateDaemonIdentity, currentBinding privateDaemonIdentity, pending privateMigrationRecord) error {
-	stopped, err := observeDispatchedPrivateMigrationShutdown(ctx, base, legacyBinding, pending, c.options)
-	if err != nil {
-		return err
-	}
-	if privateMigrationIdentityMatchesCurrent(stopped.Successor, current, currentBinding) {
-		return c.completePendingPrivateMigration(ctx, stateRoot, base, stopped)
-	}
-	return c.finishRecordedPrivateSuccessor(ctx, stateRoot, base, legacyBinding, bindingFound, stopped)
+	return updated, err
 }
 
 func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string, legacyBinding task.SupervisorRef, pending privateMigrationRecord, options Options) (privateMigrationRecord, error) {
@@ -284,15 +281,19 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 			return pending, fmt.Errorf("%w: inspect dispatched predecessor endpoint: %w", ErrPrivateSupervisorMigrationRequired, reachErr)
 		}
 		if reachable {
+			retryClient, constructionErr := newPrivateMigrationShutdownClient(filepath.Dir(base), legacyBinding, pending.Legacy, options)
+			if constructionErr != nil {
+				return pending, constructionErr
+			}
 			// Bootstrap serialization outlives every pending command owner. A
 			// reachable exact predecessor here proves the prior shutdown command
 			// completed without stopping it, so retry the idempotent request.
 			retryable := pending
 			retryable.LegacyShutdownDispatched = false
-			if err := replacePrivateMigrationRecord(base, pending, retryable); err != nil {
+			if err := replacePrivateMigrationRecordContext(ctx, base, pending, retryable, options.PrivateGenerationGuard); err != nil {
 				return pending, fmt.Errorf("%w: restore retryable predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 			}
-			stopped, _, retryErr := dispatchPrivateMigrationShutdown(ctx, base, observer, retryable)
+			stopped, _, retryErr := dispatchPrivateMigrationShutdown(ctx, base, retryClient, retryable)
 			return stopped, retryErr
 		}
 	}
@@ -301,7 +302,7 @@ func observeDispatchedPrivateMigrationShutdown(ctx context.Context, base string,
 	}
 	stopped := pending
 	stopped.LegacyStopped = true
-	if err := replacePrivateMigrationRecord(base, pending, stopped); err != nil {
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, stopped, options.PrivateGenerationGuard); err != nil {
 		return pending, fmt.Errorf("%w: record dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return stopped, nil
@@ -358,22 +359,16 @@ func (c *Client) completePendingPrivateMigration(ctx context.Context, stateRoot,
 		// exact client may close a refused endpoint and start.
 		startErr := c.closeRefusedPrivateEndpoint(ctx, observation)
 		if startErr == nil {
-			startErr = c.startPrivate(ctx)
+			startErr = c.startPrivate(ctx, stateRoot)
 		}
 		if startErr != nil {
 			return fmt.Errorf("%w: restart successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, startErr)
 		}
 	}
-	if err := publishPrivateDaemonIdentity(base, c.Binding()); err != nil {
-		return fmt.Errorf("%w: publish successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, err)
+	if err := c.commitPrivateMigrationCompletion(ctx, stateRoot, base, pending); err != nil {
+		return err
 	}
-	if err := appendPrivateMigrationHistory(base, pending); err != nil {
-		return fmt.Errorf("%w: record completed private supervisor migration: %w", ErrPrivateSupervisorMigrationRequired, err)
-	}
-	if clearErr := clearPrivateMigrationRecord(base, pending); clearErr != nil {
-		return fmt.Errorf("%w: clear completed private migration journal: %w", ErrPrivateSupervisorMigrationRequired, clearErr)
-	}
-	if clearErr := retirePrivateRecoveryBinding(ctx, stateRoot, c.Binding(), nil); clearErr != nil {
+	if clearErr := retirePrivateRecoveryBinding(ctx, stateRoot, c.Binding(), nil, c.options.PrivateGenerationGuard); clearErr != nil {
 		return fmt.Errorf("%w: clear completed private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, clearErr)
 	}
 	return nil
@@ -384,10 +379,10 @@ func (c *Client) migratePrivateSupervisor(ctx context.Context, stateRoot string,
 	// Prepared intent selects the durable target; it grants no shutdown
 	// authority. Queue authorization still precedes PID capture and every
 	// shutdown flag, while readers may observe the exact live Legacy.
-	if err := publishPrivateMigrationState(base, migration); err != nil {
+	if err := publishPrivateMigrationStateContext(ctx, base, migration, c.options.PrivateGenerationGuard); err != nil {
 		return fmt.Errorf("%w: prepare private migration journal: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
-	oldSupervisor, recoveryOwned, err := RecoverSavedWithPair(ctx, legacy, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+	oldSupervisor, recoveryOwned, err := RecoverSavedWithPair(ctx, stateRoot, legacy, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
 	if err != nil {
 		return fmt.Errorf("%w: recover previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
@@ -397,7 +392,7 @@ func (c *Client) migratePrivateSupervisor(ctx context.Context, stateRoot string,
 	queueSafe := false
 	defer func() {
 		if preserveLegacy {
-			resultErr = errors.Join(resultErr, oldSupervisor.PersistPrivateRecoveryBinding(stateRoot))
+			resultErr = errors.Join(resultErr, oldSupervisor.PersistPrivateRecoveryBindingContext(ctx, stateRoot))
 		}
 		if recoveryOwned && queueSafe && !shutdownComplete && !shutdownOwned && !errors.Is(resultErr, ErrPrivateSupervisorMigrationBusy) {
 			resultErr = errors.Join(resultErr, oldSupervisor.StopRecovered(ctx, c.options.ObservationTimeout, resultErr))
@@ -420,7 +415,7 @@ func (c *Client) runPrivateMigration(ctx context.Context, stateRoot, base string
 		return false, false, false, err
 	}
 	queueSafe = true
-	if err := oldSupervisor.PersistPrivateRecoveryBinding(stateRoot); err != nil {
+	if err := oldSupervisor.PersistPrivateRecoveryBindingContext(ctx, stateRoot); err != nil {
 		return false, false, queueSafe, fmt.Errorf("%w: prepare private supervisor migration: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	oldProcess, processPresent, err := oldSupervisor.privateDaemonProcessIdentity()
@@ -434,7 +429,7 @@ func (c *Client) runPrivateMigration(ctx context.Context, stateRoot, base string
 	initial.LegacyPID = oldProcess.PID
 	initial.LegacyProcessStart = oldProcess.StartToken
 	initial.LegacyShutdownRequested = true
-	if err = replacePrivateMigrationRecord(base, *migration, initial); err != nil {
+	if err = replacePrivateMigrationRecordContext(ctx, base, *migration, initial, c.options.PrivateGenerationGuard); err != nil {
 		return false, false, queueSafe, fmt.Errorf("%w: record previous private supervisor shutdown request: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	*migration = initial
@@ -478,7 +473,7 @@ func dispatchPrivateMigrationShutdown(ctx context.Context, base string, legacy *
 	}
 	stopped := pending
 	stopped.LegacyStopped = true
-	if err := replacePrivateMigrationRecord(base, pending, stopped); err != nil {
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, stopped, legacy.options.PrivateGenerationGuard); err != nil {
 		return pending, pending.LegacyShutdownDispatched, fmt.Errorf("%w: record previous private supervisor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return stopped, stopped.LegacyShutdownDispatched, nil
@@ -487,14 +482,14 @@ func dispatchPrivateMigrationShutdown(ctx context.Context, base string, legacy *
 func requestPrivateMigrationShutdown(ctx context.Context, base string, legacy *Client, pending privateMigrationRecord) (privateMigrationRecord, bool, error) {
 	dispatched, shutdownErr := legacy.ShutdownDispatched(ctx)
 	if dispatched {
-		updated, err := recordPrivateMigrationShutdownDispatched(base, pending)
+		updated, err := recordPrivateMigrationShutdownDispatched(ctx, base, pending, legacy.options.PrivateGenerationGuard)
 		if err != nil {
 			return pending, true, err
 		}
 		pending = updated
 	}
 	if shutdownErr != nil {
-		return restoreRetryablePrivateMigrationShutdown(base, pending, dispatched, shutdownErr)
+		return restoreRetryablePrivateMigrationShutdown(ctx, base, pending, dispatched, shutdownErr, legacy.options.PrivateGenerationGuard)
 	}
 	if !dispatched {
 		return pending, false, fmt.Errorf("%w: previous private supervisor shutdown was not dispatched", ErrPrivateSupervisorMigrationRequired)
@@ -502,22 +497,22 @@ func requestPrivateMigrationShutdown(ctx context.Context, base string, legacy *C
 	return pending, true, nil
 }
 
-func recordPrivateMigrationShutdownDispatched(base string, pending privateMigrationRecord) (privateMigrationRecord, error) {
+func recordPrivateMigrationShutdownDispatched(ctx context.Context, base string, pending privateMigrationRecord, guard PrivateGenerationGuard) (privateMigrationRecord, error) {
 	updated := pending
 	updated.LegacyShutdownDispatched = true
-	if err := replacePrivateMigrationRecord(base, pending, updated); err != nil {
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, updated, guard); err != nil {
 		return pending, fmt.Errorf("%w: record dispatched predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return updated, nil
 }
 
-func restoreRetryablePrivateMigrationShutdown(base string, pending privateMigrationRecord, dispatched bool, shutdownErr error) (privateMigrationRecord, bool, error) {
+func restoreRetryablePrivateMigrationShutdown(ctx context.Context, base string, pending privateMigrationRecord, dispatched bool, shutdownErr error, guard PrivateGenerationGuard) (privateMigrationRecord, bool, error) {
 	if !dispatched || pendingFrom(shutdownErr) != nil {
 		return pending, dispatched, fmt.Errorf("%w: stop previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, shutdownErr)
 	}
 	retryable := pending
 	retryable.LegacyShutdownDispatched = false
-	if err := replacePrivateMigrationRecord(base, pending, retryable); err != nil {
+	if err := replacePrivateMigrationRecordContext(ctx, base, pending, retryable, guard); err != nil {
 		return pending, true, errors.Join(
 			fmt.Errorf("%w: restore retryable predecessor shutdown: %w", ErrPrivateSupervisorMigrationRequired, err),
 			shutdownErr,
@@ -546,7 +541,7 @@ func (c *Client) authorizePrivateMigrationQueue(ctx context.Context, stateRoot s
 	}
 	if err = c.options.PrivateMigrationAuthorizer(ctx, stateRoot, oldSupervisor.Binding(), append([]Job(nil), snapshot.Jobs...)); err != nil {
 		if errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
-			if preserveErr := oldSupervisor.PersistPrivateRecoveryBinding(stateRoot); preserveErr != nil {
+			if preserveErr := oldSupervisor.PersistPrivateRecoveryBindingContext(ctx, stateRoot); preserveErr != nil {
 				return errors.Join(ErrPrivateSupervisorMigrationBusy,
 					fmt.Errorf("%w: preserve previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, preserveErr))
 			}
@@ -554,4 +549,28 @@ func (c *Client) authorizePrivateMigrationQueue(ctx context.Context, stateRoot s
 		return err
 	}
 	return nil
+}
+
+func (c *Client) commitPrivateMigrationCompletion(ctx context.Context, root, base string, pending privateMigrationRecord) error {
+	completed, err := privateMigrationCompletionRecorded(root, base, c.Binding(), pending)
+	if err != nil {
+		return err
+	}
+	if completed {
+		// Completed history plus the exact published successor already owns
+		// this fact. Only compare-and-remove cleanup remains after a crash.
+		return clearPrivateMigrationRecord(base, pending)
+	}
+	return guardPrivateGeneration(ctx, root, c.options.PrivateGenerationGuard, func() error {
+		if err := commitPrivateDaemonIdentity(base, c.Binding()); err != nil {
+			return fmt.Errorf("%w: publish successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, err)
+		}
+		if err := appendPrivateMigrationHistory(base, pending); err != nil {
+			return fmt.Errorf("%w: record completed private supervisor migration: %w", ErrPrivateSupervisorMigrationRequired, err)
+		}
+		if err := clearPrivateMigrationRecord(base, pending); err != nil {
+			return fmt.Errorf("%w: clear completed private migration journal: %w", ErrPrivateSupervisorMigrationRequired, err)
+		}
+		return nil
+	})
 }

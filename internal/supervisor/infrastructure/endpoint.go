@@ -7,12 +7,27 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"golang.org/x/sys/unix"
 )
+
+// ownerEndpointPath has one canonical encoder. The reserved root-level
+// namespace is thirteen lowercase base36 characters, without a prefix. Names
+// are never decoded; publication validation re-encodes the exact intent sequence.
+// A fresh leaf is not permission to overlap owners or bypass successor checks.
+func ownerEndpointPath(root string, sequence uint64) string {
+	value := strconv.FormatUint(sequence, 36)
+	return filepath.Join(root, strings.Repeat("0", 13-len(value))+value)
+}
+
+// OwnerEndpointPathBytes derives the fixed native byte budget using sequence
+// one as representative. It observes no socket and asserts no platform support.
+func OwnerEndpointPathBytes(root string) int { return len(ownerEndpointPath(root, 1)) }
 
 // endpointError keeps native classification available without rendering a
 // caller-selected pathname, including the address embedded in net.OpError.
@@ -52,8 +67,9 @@ type endpointRootObserver interface {
 
 func (e *ownedEndpoint) Identity() EndpointIdentity { return e.identity }
 
-// listenEndpoint binds only an initially absent target endpoint. Residue of any
-// kind is refused; proving safe recovery belongs to the future coordinator.
+// listenEndpoint binds only an initially absent sequence endpoint. Any residue
+// for that sequence is refused. Prior sequence paths are inert and preserved;
+// proving a valid successor belongs to the future coordinator.
 // Any nonnil result transfers cleanup ownership, even when err is nonnil.
 func (j *intentJournal) listenEndpoint(ctx context.Context, lease *Lease, reference StartupReference) (*ownedEndpoint, error) {
 	if j == nil {
@@ -69,18 +85,18 @@ func (j *intentJournal) listenEndpointWithObserver(ctx context.Context, lease *L
 			return ErrIdentity
 		}
 		return lease.WithHeld(ctx, func() error {
-			if err := j.validateEndpointAssumption(ctx, reference); err != nil {
+			intent, err := j.validateEndpointAssumption(ctx, reference)
+			if err != nil {
 				return err
 			}
-			var err error
-			endpoint, err = bindInitialEndpoint(ctx, observer, j.pin)
+			endpoint, err = bindInitialEndpoint(ctx, observer, j.pin, intent)
 			return err
 		})
 	})
 	if resultErr != nil {
 		size := 0
 		if j != nil {
-			size = len(filepath.Join(j.pin.Root(), ".i"))
+			size = len(ownerEndpointPath(j.pin.Root(), reference.Sequence))
 		}
 		return endpoint, &endpointError{operation: "listen", pathBytes: size, cause: resultErr}
 	}
@@ -89,30 +105,33 @@ func (j *intentJournal) listenEndpointWithObserver(ctx context.Context, lease *L
 
 // Called within the caller's one journal/lease guard; this validates evidence,
 // and creates no authority token or recursive resource borrow.
-func (j *intentJournal) validateEndpointAssumption(ctx context.Context, reference StartupReference) error {
+func (j *intentJournal) validateEndpointAssumption(ctx context.Context, reference StartupReference) (StartupIntent, error) {
 	if err := j.checkRoot(ctx); err != nil {
-		return err
+		return StartupIntent{}, err
 	}
 	reader := controlOwnerReader{controlIntentReader{j.control}}
 	intent, err := readReferencedIntent(ctx, reader, j.pin, reference)
 	if err != nil {
-		return err
+		return StartupIntent{}, err
 	}
 	if err = validateCurrentIntent(intent, j.pin, j.bootID); err != nil {
-		return err
+		return StartupIntent{}, err
 	}
 	assumption, err := readAssumptionRecord(ctx, reader, j.pin, reference)
 	if err != nil {
-		return err
+		return StartupIntent{}, err
 	}
-	return validateSelfAssumption(assumption)
+	if err = validateSelfAssumption(assumption); err != nil {
+		return StartupIntent{}, err
+	}
+	return intent, nil
 }
 
 // This budget bounds resource cleanup, never renews a startup/task deadline.
 const endpointCleanupTimeout = 5 * time.Second
 
-func bindInitialEndpoint(ctx context.Context, store endpointRootObserver, pin taskdir.RootPin) (*ownedEndpoint, error) {
-	path := filepath.Join(pin.Root(), ".i")
+func bindInitialEndpoint(ctx context.Context, store endpointRootObserver, pin taskdir.RootPin, intent StartupIntent) (*ownedEndpoint, error) {
+	path := ownerEndpointPath(pin.Root(), intent.Sequence)
 	var existing unix.Stat_t
 	if err := unix.Lstat(path, &existing); err == nil {
 		return nil, fmt.Errorf("%w: initial endpoint is occupied", os.ErrExist)

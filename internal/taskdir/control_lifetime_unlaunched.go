@@ -47,10 +47,12 @@ func (l *ControlLifetime) sealLifetimeUnlaunchedContextWithNow(ctx context.Conte
 		return nil, task.ErrInvalidPermit
 	}
 	owner, err := l.control.TryAcquireLifetimeOwnerContext(ctx)
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 
 	err = withControlLifetimeTransactionContext(ctx, l.control, func(tx *ControlTransaction) error {
 		var transactionErr error

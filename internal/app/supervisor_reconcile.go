@@ -12,36 +12,36 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *taskdir.Store, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
+func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *taskdir.Store, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
 	pending, err := pueue.PrivateSupervisorMigrationPending(store.Root)
 	if err != nil {
 		return nil, err
 	}
 	if !pending {
-		return prepareCurrentPrivateSupervisor(ctx, store.Root, deps, options)
+		return prepareCurrentPrivateSupervisor(ctx, store.Root, lookup, options)
 	}
 	proposals, err := inspection.PreparedGroupMigrationSuccessors(ctx, store)
 	if err != nil {
 		return nil, err
 	}
 	if len(proposals) == 0 {
-		return prepareCurrentPrivateSupervisor(ctx, store.Root, deps, options)
+		return prepareCurrentPrivateSupervisor(ctx, store.Root, lookup, options)
 	}
 	recorded, err := selectPreparedPrivateMigrationTarget(store.Root, proposals)
 	if err != nil {
 		return nil, err
 	}
 	if err = supervisorcore.ValidateSavedStateSupervisorPair(store.Root, recorded); err != nil {
-		return retargetUnavailableInspectionSuccessor(ctx, store, deps, options, err)
+		return retargetUnavailableInspectionSuccessor(ctx, store, lookup, options, err)
 	}
 	client, err := pueue.PrepareRecordedPrivateMigrationWithLock(ctx, store.Root, recorded, options)
 	if err != nil {
-		return retargetUnavailableInspectionSuccessor(ctx, store, deps, options, err)
+		return retargetUnavailableInspectionSuccessor(ctx, store, lookup, options, err)
 	}
 	return client, nil
 }
 
-func retargetUnavailableInspectionSuccessor(ctx context.Context, store *taskdir.Store, deps Dependencies, options pueue.Options, cause error) (*pueue.Client, error) {
+func retargetUnavailableInspectionSuccessor(ctx context.Context, store *taskdir.Store, lookup supervisorcore.ExecutableLookup, options pueue.Options, cause error) (*pueue.Client, error) {
 	if errors.Is(cause, pueue.ErrInFlight) || ctx.Err() != nil {
 		return nil, cause
 	}
@@ -49,7 +49,7 @@ func retargetUnavailableInspectionSuccessor(ctx context.Context, store *taskdir.
 	if err != nil || !allowed {
 		return nil, &pueue.PrivateRecoveryError{ReasonCode: "transition_pending", Err: errors.Join(cause, err, pueue.ErrPrivateSupervisorMigrationRequired)}
 	}
-	current, err := prepareCurrentPrivateSupervisor(ctx, store.Root, deps, options)
+	current, err := prepareCurrentPrivateSupervisor(ctx, store.Root, lookup, options)
 	if err != nil {
 		return nil, errors.Join(cause, err)
 	}

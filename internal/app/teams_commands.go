@@ -62,7 +62,7 @@ func teamsCommand(ctx context.Context, a Arguments, deps Dependencies) (TeamsRes
 	if a.TeamAction == "register" || a.TeamAction == "update" {
 		return saveTeamsCommand(ctx, a, deps, response)
 	}
-	catalog, err := catalogForTeams(deps)
+	catalog, err := catalogForTeams(ctx, deps)
 	if err != nil {
 		return response, err
 	}
@@ -111,7 +111,7 @@ func saveTeamsCommand(ctx context.Context, a Arguments, deps Dependencies, respo
 	if err != nil {
 		return response, err
 	}
-	catalog, err := catalogForTeams(deps)
+	catalog, err := catalogForTeams(ctx, deps)
 	if err != nil {
 		return response, err
 	}

@@ -4,6 +4,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
@@ -49,6 +50,12 @@ const (
 // DispatchResult preserves primary observations and later closure faults in
 // execution order. It is not a second task state or an authorization cache.
 type DispatchResult struct {
+	// RootAdmissionCleanup owns only a newly acquired lease retained behind dependent cleanup or failed Release.
+	// The caller closes dependent cleanup, then retries Release before closing Store.
+	RootAdmissionCleanup *taskdir.RootAdmissionLease
+	// StoreCleanup owns the Store retained behind a failed lease release or Close.
+	StoreCleanup *taskdir.Store
+
 	Root, RootID, TaskID, Provider string
 	Team                           *task.TeamContext
 	Record                         TaskRecordPresence
@@ -58,6 +65,7 @@ type DispatchResult struct {
 	Failure                        error
 	Workspace                      *workspaces.AdmissionFinish
 	StoreCloseError                error
+	RootAdmissionReleaseError      error
 	// Resources is the latest invocation-local resource assessment of a fresh
 	// admission. It is nil when the task ID was not definitely absent.
 	Resources *resourceadmission.Assessment

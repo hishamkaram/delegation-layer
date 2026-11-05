@@ -26,11 +26,7 @@ func infrastructureSourceFixture(t *testing.T) (string, task.SupervisorRef) {
 	pair := savedSupervisorPairRef(t, client, daemon)
 	binding.ClientExecutable, binding.ClientSHA256 = pair.ClientExecutable, pair.ClientSHA256
 	binding.DaemonExecutable, binding.DaemonSHA256 = pair.DaemonExecutable, pair.DaemonSHA256
-	if err := pueue.WithBootstrapLockContext(t.Context(), root, func(ctx context.Context) error {
-		return pueue.PublishPrivateSupervisorBindingIfAbsentContext(ctx, root, binding)
-	}); err != nil {
-		t.Fatal(err)
-	}
+	writeHistoricalSupervisorBinding(t, root, binding)
 	return root, binding
 }
 
@@ -174,9 +170,7 @@ func changeInfrastructureBindingFixture(t *testing.T, root string, binding task.
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
-		if err := pueue.PublishPrivateSupervisorBindingIfAbsentContext(t.Context(), root, binding); err != nil {
-			t.Fatal(err)
-		}
+		writeHistoricalSupervisorBinding(t, root, binding)
 	case "tampered":
 		if err := os.WriteFile(binding.ClientExecutable, []byte("changed"), 0o700); err != nil {
 			t.Fatal(err)

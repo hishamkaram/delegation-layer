@@ -79,6 +79,10 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 	if ctx == nil || ctx.Err() != nil || scope.Authorize() != nil {
 		return capabilityOutput{}, runtimeProbeError("inspection-scope-expired")
 	}
+	environment, err := scope.PrepareEnvironment(definition.Environment)
+	if err != nil {
+		return capabilityOutput{}, runtimeProbeError("launch-environment-unavailable")
+	}
 	stdout, err := newNativeStream(outputLimit, true)
 	if err != nil {
 		return capabilityOutput{}, runtimeProbeError("stdout-capture-unavailable")
@@ -88,7 +92,7 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 		stdout.discard()
 		return capabilityOutput{}, runtimeProbeError("stderr-capture-unavailable")
 	}
-	cmd := newProviderCommand(definition.Executable, definition.Directory, definition.Environment, args...)
+	cmd := newProviderCommand(definition.Executable, definition.Directory, environment, args...)
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	go stdout.drain()
 	go stderr.drain()

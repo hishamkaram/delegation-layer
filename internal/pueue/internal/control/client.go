@@ -18,12 +18,16 @@ import (
 type Client struct {
 	// binding is the durable supervisor reference used by task records and
 	// permits. runtimeBinding is the executable pair currently used to reach it.
-	binding        task.SupervisorRef
-	runtimeBinding task.SupervisorRef
-	options        Options
-	cleanup        func() error
-	workOwner      *clientWorkOwner
-	ownsWorkOwner  bool
+	binding             task.SupervisorRef
+	runtimeBinding      task.SupervisorRef
+	options             Options
+	cleanup             func() error
+	workOwner           *clientWorkOwner
+	ownsWorkOwner       bool
+	privateConstruction *privateClientConstruction
+	// Bind owns this immutable optional-qualification cause. Observations do
+	// not change it; managed shutdown surfaces it instead of gaining a fact.
+	privateConstructionErr error
 }
 
 type clientWorkOwner struct {
@@ -77,6 +81,11 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	current.ObservedVersion = version
 	c.binding = current
 	c.runtimeBinding = current
+	if root, private := privateStateRoot(configPath); private {
+		// Binding any resolvable configuration remains read-only-compatible.
+		// Optional shutdown qualification is retained for its actual consumer.
+		c.privateConstructionErr = recordPrivateClientConstruction(c, root)
+	}
 	return c, nil
 }
 
@@ -205,6 +214,20 @@ func normalizeOptions(options Options) (Options, error) {
 
 func (c *Client) Binding() task.SupervisorRef { return c.binding }
 
+// ControlTimeout projects the canonical finite control budget of this client.
+func (c *Client) ControlTimeout() time.Duration {
+	if c == nil {
+		return 0
+	}
+	return PrivateControlTimeout(c.options)
+}
+
+// UsesControlOwner reports the selected process ownership mode without exposing
+// options, environments or callbacks.
+func (c *Client) UsesControlOwner() bool {
+	return c != nil && c.options.ControlOwnerExecutable != ""
+}
+
 // RuntimeBinding returns the verified executable/configuration generation
 // currently used for control commands. It can differ from Binding during a
 // saved-task recovery, where the durable task reference remains unchanged.
@@ -295,7 +318,9 @@ func (c *Client) withCommandOptions(options Options) (*Client, error) {
 	}
 	return &Client{
 		binding: c.binding, runtimeBinding: c.runtimeBinding, options: options,
-		workOwner: c.workOwner,
+		workOwner:              c.workOwner,
+		privateConstruction:    c.privateConstruction,
+		privateConstructionErr: c.privateConstructionErr,
 	}, nil
 }
 

@@ -59,6 +59,16 @@ func (td *TaskDir) permanentLaunchRefusalContext(ctx context.Context) (string, s
 	return "", "", nil
 }
 
+// RequireTaskLaunchPermissionContext applies the current canonical ordinary
+// launch refusal, rather than interpreting historical submission receipts.
+// Callers retain their actual admission lease across this check and mutation.
+func (td *TaskDir) RequireTaskLaunchPermissionContext(ctx context.Context) error {
+	if td == nil {
+		return task.ErrInvalidPermit
+	}
+	return td.requireTaskLaunchPermissionContext(ctx)
+}
+
 func (td *TaskDir) requireTaskLaunchPermissionContext(ctx context.Context) error {
 	refused, err := td.TaskLaunchRefusedContext(ctx)
 	if err != nil {
@@ -105,6 +115,18 @@ func (td *TaskDir) ProveUnlaunchedTaskContext(ctx context.Context) (proven bool,
 // canonical digest under the same lifetime/run ownership as the existing proof.
 // Unlike fencing, this also accepts submitted tasks and never writes a refusal.
 func (td *TaskDir) ProveUnlaunchedTaskReferenceContext(ctx context.Context) (proven bool, referenceSHA256 string, resultErr error) {
+	return td.unlaunchedTaskReferenceContext(ctx, true)
+}
+
+// ReadUnlaunchedTaskReferenceContext applies the same refusal and absence proof
+// using only existing owner/run locks. A missing or busy lifetime-owner lock is
+// unproven; it creates no lock, directory, refusal or lifetime evidence. Explicit
+// task settlement retains ProveUnlaunchedTaskReferenceContext's creating path.
+func (td *TaskDir) ReadUnlaunchedTaskReferenceContext(ctx context.Context) (proven bool, referenceSHA256 string, resultErr error) {
+	return td.unlaunchedTaskReferenceContext(ctx, false)
+}
+
+func (td *TaskDir) unlaunchedTaskReferenceContext(ctx context.Context, createOwner bool) (proven bool, referenceSHA256 string, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			proven, referenceSHA256 = false, ""
@@ -113,14 +135,16 @@ func (td *TaskDir) ProveUnlaunchedTaskReferenceContext(ctx context.Context) (pro
 	if td == nil {
 		return false, "", task.ErrInvalidPermit
 	}
-	owner, err := td.TryAcquireLifetimeOwnerContext(ctx)
-	if unlaunchedTaskLockBusy(err) {
+	owner, err := td.tryAcquireLifetimeOwner(ctx, createOwner)
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
+	if !lifetimeOwnerCleanupFault(err) && (unlaunchedTaskLockBusy(err) || (!createOwner && directoryAbsent(err))) {
 		return false, "", nil
 	}
 	if err != nil {
 		return false, "", err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	return td.withUnlaunchedTaskRunLockContext(ctx, false)
 }
 
@@ -159,13 +183,15 @@ func (td *TaskDir) FenceUnlaunchedTaskContext(ctx context.Context) (proven bool,
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.admissionLock.Unlock()) }()
 	owner, err := td.TryAcquireLifetimeOwnerContext(ctx)
-	if unlaunchedTaskLockBusy(err) {
+	if owner != nil {
+		defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
+	}
+	if !lifetimeOwnerCleanupFault(err) && unlaunchedTaskLockBusy(err) {
 		return false, "", nil
 	}
 	if err != nil {
 		return false, "", err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	return td.withUnlaunchedTaskRunLockContext(ctx, true)
 }
 

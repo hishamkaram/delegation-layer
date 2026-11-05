@@ -12,7 +12,14 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
-func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte) (managed *Admission, effectiveCwd string, resultErr error) {
+func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte) (*Admission, string, error) {
+	return PrepareDispatchContext(context.Background(), a, deps, store, id, cwd, brief)
+}
+
+// PrepareDispatchContext holds root admission before opening a resource. A
+// returned Admission owns any new lease, including on a later preparation
+// error, and keeps it until FinishContext or Close completes.
+func PrepareDispatchContext(parent context.Context, a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte) (managed *Admission, effectiveCwd string, resultErr error) {
 	if a.Isolation == "" && a.WorkspaceID == "" {
 		return nil, cwd, RejectUnmanagedPath(cwd)
 	}
@@ -22,7 +29,7 @@ func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.St
 	if err := deps.ValidateGitEnvironment(); err != nil {
 		return nil, "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+	ctx, cancel := context.WithTimeout(parent, workspace.DefaultBudget)
 	defer cancel()
 	budget, err := ParseBudget(a.WorkspaceBudget)
 	if err != nil {
@@ -32,32 +39,49 @@ func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.St
 	if err != nil {
 		return nil, "", err
 	}
+	lease, err := acquireWorkspaceRootAdmission(ctx, store, deps)
+	if lease != nil && lease != deps.RootAdmission {
+		managed = &Admission{rootAdmission: lease}
+	}
+	if err != nil {
+		return managed, "", err
+	}
+	deps.RootAdmission = lease
 	resource, err := openDispatchResource(ctx, store, a, id, cwd, requestDigest, budget)
 	if err != nil {
-		return nil, "", err
-	}
-	managed = &Admission{resource: resource}
-	if a.WorkspaceID != "" && a.WorkspaceBudget == "" {
-		budget = time.Duration(resource.Request().BudgetNanos)
-	}
-	requestDigest, err = DispatchDigest(a, id, cwd, brief, budget, resource)
-	if err != nil {
 		return managed, "", err
 	}
-	owner, err := resource.AcquireUseOwner(ctx)
-	if err != nil {
-		return managed, "", err
+	if managed == nil {
+		managed = &Admission{}
 	}
-	managed.owner = owner
-	if err = resource.BindAdmission(ctx, id, requestDigest); err != nil {
-		return managed, "", err
-	}
-	if binding, existingCwd, exists, lookupErr := existingDispatch(ctx, store, resource, id, requestDigest); lookupErr != nil || exists {
-		managed.binding, managed.existing = binding, exists
-		return managed, existingCwd, lookupErr
-	}
-	effectiveCwd, resultErr = reserveDispatch(ctx, a, deps, store, id, requestDigest, budget, managed)
+	managed.resource = resource
+	effectiveCwd, resultErr = prepareDispatchUse(ctx, a, deps, store, id, cwd, brief, budget, managed)
 	return managed, effectiveCwd, resultErr
+}
+
+// prepareDispatchUse owns use-owner acquisition, immutable binding and
+// reservation preparation under the already held outer root admission.
+func prepareDispatchUse(ctx context.Context, a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte, budget time.Duration, managed *Admission) (string, error) {
+	if a.WorkspaceID != "" && a.WorkspaceBudget == "" {
+		budget = time.Duration(managed.resource.Request().BudgetNanos)
+	}
+	requestDigest, err := DispatchDigest(a, id, cwd, brief, budget, managed.resource)
+	if err != nil {
+		return "", err
+	}
+	owner, err := managed.resource.AcquireUseOwner(ctx)
+	managed.owner = owner
+	if err != nil {
+		return "", err
+	}
+	if err = managed.resource.BindAdmission(ctx, id, requestDigest); err != nil {
+		return "", err
+	}
+	if binding, existingCwd, exists, lookupErr := existingDispatch(ctx, store, managed.resource, id, requestDigest); lookupErr != nil || exists {
+		managed.binding, managed.existing = binding, exists
+		return existingCwd, lookupErr
+	}
+	return reserveDispatch(ctx, a, deps, store, id, requestDigest, budget, managed)
 }
 
 func reserveDispatch(ctx context.Context, a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, requestDigest string, budget time.Duration, managed *Admission) (string, error) {
@@ -118,15 +142,45 @@ func existingDispatch(ctx context.Context, store *taskdir.Store, resource *works
 	return request.Workspace, request.CanonicalCwd, true, ctx.Err()
 }
 
-func (m *Admission) Close() error {
+func (m *Admission) Close() (resultErr error) {
 	if m == nil {
 		return nil
 	}
-	var ownerErr error
-	if m.owner != nil {
-		ownerErr = m.owner.Release()
+	defer func() {
+		if resultErr != nil {
+			resultErr = &AdmissionCleanupError{admission: m, cause: resultErr}
+		}
+	}()
+	if m.storeCleanupPending() {
+		return m.storeCleanup
 	}
-	return errors.Join(ownerErr, m.resource.Close())
+	m.storeCleanup = nil
+	for len(m.childOwners) != 0 {
+		if err := m.childOwners[0].ReleaseWithError(nil); err != nil {
+			return err
+		}
+		m.childOwners[0] = nil
+		m.childOwners = m.childOwners[1:]
+	}
+	if m.owner != nil {
+		if err := m.owner.ReleaseWithError(nil); err != nil {
+			return err
+		}
+		m.owner = nil
+	}
+	if m.resource != nil {
+		if err := m.resource.Close(); err != nil {
+			return err
+		}
+		m.resource = nil
+	}
+	if m.rootAdmission != nil {
+		if err := m.rootAdmission.Release(); err != nil {
+			return err
+		}
+		m.rootAdmission = nil
+	}
+	return nil
 }
 
 // Binding returns a detached admission record, never the owner's mutable field.

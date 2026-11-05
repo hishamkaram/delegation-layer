@@ -39,7 +39,7 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 				return nil, errNativeInspection
 			}
 		}
-		native, nativeErr := runNative(scope, definition, nativeHooks{})
+		native, nativeErr := runNative(scope, definition, nativeHooks{prepareEnvironment: scope.PrepareEnvironment})
 		if nativeErr != nil {
 			return nil, nativeErr
 		}

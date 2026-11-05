@@ -14,6 +14,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -111,7 +112,7 @@ func watchStatus(t *testing.T, fixture *workspacefixture.RecoveryFixture, operat
 
 func workspaceWatch(ctx context.Context, fixture *workspacefixture.RecoveryFixture, operationID string) watchOutcome {
 	a := Arguments{WorkspaceAction: "status", Watch: watchDuration, WorkspaceOperationID: operationID}
-	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}, time.Minute)
+	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources}), time.Minute)
 	return watchOutcome{actionErr: err, result: workspaceCommandActionResponse(ctx, fixture.Store, fixture.Resource, a.WorkspaceAction, false, ack, newResponse("workspace"), err)}
 }
 
@@ -224,7 +225,7 @@ func assertCanceledWatch(t *testing.T, selector string, observed watchOutcome) {
 // verification helper and reads that helper's unlaunched fence.
 func observeExpiredVerification(t *testing.T, fixture *workspacefixture.RecoveryFixture) (observeErr, fenceErr error) {
 	t.Helper()
-	observeErr = observeManagedWorkspace(t.Context(), fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}, expiredVerificationID)
+	observeErr = observeManagedWorkspace(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources}), expiredVerificationID)
 	selected, err := workspace.LoadOperation(t.Context(), fixture.Store, expiredVerificationID)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +288,7 @@ type refusingSubmissionRuntime struct {
 	fault *armedOwnerUnlockFault
 }
 
-func (r refusingSubmissionRuntime) OpenSaved(context.Context, string, task.SupervisorRef) (*pueue.Client, error) {
+func (r refusingSubmissionRuntime) OpenSaved(context.Context, *taskdir.Store, task.SupervisorRef, infrastructure.SavedBindingSource) (*pueue.Client, error) {
 	r.fault.armed = true
 	return nil, errFixtureSubmissionRefused
 }
@@ -338,7 +339,7 @@ func dispatchRefusedProvision(t *testing.T, fixture checkpointRuntimeFixture, fa
 
 type pendingProvisionRuntime struct{ checkpointTestRuntime }
 
-func (pendingProvisionRuntime) OpenSaved(context.Context, string, task.SupervisorRef) (*pueue.Client, error) {
+func (pendingProvisionRuntime) OpenSaved(context.Context, *taskdir.Store, task.SupervisorRef, infrastructure.SavedBindingSource) (*pueue.Client, error) {
 	return nil, pueue.ErrInFlight
 }
 

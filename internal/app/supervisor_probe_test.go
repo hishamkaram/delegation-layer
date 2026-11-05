@@ -394,17 +394,14 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 
 func newSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, *pueue.Client) {
 	t.Helper()
-	root := filepath.Join(testsupport.CanonicalTempDir(t), "state")
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	root := owner.root
 	store, err := taskdir.InitStore(root)
+	owner.ownStore(t, store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	bundle := testsupport.CanonicalTempDir(t)
+	bundle := filepath.Join(owner.base, "bundle")
 	clientPath := filepath.Join(bundle, "pueue")
 	daemonPath := filepath.Join(bundle, "pueued")
 	writeRunnerFixture(t, clientPath, `#!/bin/sh
@@ -457,12 +454,11 @@ printf '%s\n' "$$" > "$base/run/pueue.pid"
 	options := pueue.Options{ObservationTimeout: 10 * time.Second}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	client, err := pueue.BindPrivate(ctx, clientPath, daemonPath, store.Root, options)
-	settleSupervisorProbeTestClient(t, client, err)
+	client, err := owner.bindPrivate(ctx, clientPath, daemonPath, options)
 	if err != nil {
 		t.Fatalf("bind healthy private supervisor fixture: %v", err)
 	}
-	listenSupervisorProbeTestEndpoint(t, client.Binding().Endpoint)
+	owner.listen(t, client.Binding().Endpoint)
 	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: options}, client
 }
 

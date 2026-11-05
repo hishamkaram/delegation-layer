@@ -32,7 +32,9 @@ func TestBindPrivateBoundsTimedOutVersionProbeBeforeReturning(t *testing.T) {
 		}
 	})
 	options := Options{
-		ObservationTimeout: 10 * time.Second,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     10 * time.Second,
 		Environment: append(
 			os.Environ(),
 			"PRIVATE_VERSION_MARKER="+marker,
@@ -101,6 +103,8 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
 	options := Options{
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
 		// macOS validates a temporary shell-script executable before launch;
 		// keep that fixture startup outside the short readiness observation
 		// window while retaining a status command that must be reaped after it
@@ -122,7 +126,7 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 
 func TestPreparePrivateDefersDaemonStartUntilBootstrapLock(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	client, err := PreparePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	client, err := PreparePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +403,7 @@ func TestRestorePrivateSupervisorBindingHonorsCanceledContext(t *testing.T) {
 	identityBefore := readPrivateSupervisorFile(t, identityPath)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := restoreExpectedPrivateSupervisorBinding(ctx, fixture.stateRoot, &binding); !errors.Is(err, context.Canceled) {
+	if err := restoreExpectedPrivateSupervisorBinding(ctx, fixture.stateRoot, &binding, nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("restoration lost cancellation before publication: %v", err)
 	}
 	assertPrivateTestFileUnchanged(t, bindingPath, nil, false)
@@ -426,6 +430,8 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 	releaseMarker := filepath.Join(base, "status-release")
 	defer releasePrivateStatusOnCleanup(t, releaseMarker)
 	options := Options{
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
 		// The blocked status command is the fault under test. Give the preceding
 		// executable probe a normal process-start window so scheduler load cannot
 		// turn this into a version-probe test.
@@ -493,8 +499,10 @@ func TestBindPrivateDoesNotRestartOnMalformedReadyResponse(t *testing.T) {
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
 	options := Options{
-		ObservationTimeout: privateTestObservationTimeout,
-		Environment:        append(os.Environ(), "PRIVATE_INVALID_STATUS=1"),
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     privateTestObservationTimeout,
+		Environment:            append(os.Environ(), "PRIVATE_INVALID_STATUS=1"),
 	}
 	if _, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options); !errors.Is(err, ErrBinding) {
 		t.Fatalf("malformed ready response was treated as daemon absence: %v", err)
@@ -539,7 +547,7 @@ func TestBindPrivateAdoptsReadyDaemonAfterExecutableDrift(t *testing.T) {
 	if err = file.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: privateTestObservationTimeout}); err != nil {
+	if _, err = BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}); err != nil {
 		t.Fatalf("compatible ready daemon was rejected after executable drift: %v", err)
 	}
 	if _, err = os.Stat(filepath.Join(privateBase, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
@@ -556,7 +564,7 @@ func TestBindPrivateAdoptsReadyDaemonAfterExecutableDrift(t *testing.T) {
 
 func TestBindPrivateRejectsLogicalConfigDriftBeforeStartingSuccessor(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	first := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	configPath := PrivateConfigPath(fixture.stateRoot)
 	data, err := os.ReadFile(configPath)

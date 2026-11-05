@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
-func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (configPath, base string, resultErr error) {
+func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (string, string, error) {
+	return ensurePrivateConfigContext(context.Background(), stateRoot, resolution, nil)
+}
+
+func ensurePrivateConfigContext(ctx context.Context, stateRoot string, resolution ResolutionContext, guard PrivateGenerationGuard) (configPath, base string, resultErr error) {
 	base = filepath.Join(stateRoot, privateSupervisorDirectory)
 	if err := ensurePrivateBase(base); err != nil {
 		return "", "", err
@@ -26,7 +31,7 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 		return "", "", err
 	}
 	if _, err := os.Stat(configPath); err == nil {
-		if err = validateExistingPrivateConfig(stateRoot, configPath, base, resolution); err != nil {
+		if err = validateExistingPrivateConfig(ctx, stateRoot, configPath, base, resolution, guard); err != nil {
 			return "", "", err
 		}
 		return configPath, base, nil
@@ -41,10 +46,12 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 	// Record bootstrap intent before exposing the config. If the process dies
 	// after this point, the next private bind can distinguish its own partial
 	// bootstrap from an unowned config-only state root.
-	if err := markPrivateBootstrapPending(stateRoot); err != nil {
-		return "", "", err
-	}
-	if err := createPrivateConfig(configPath, base, configSource); err != nil {
+	if err := guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		if err := markPrivateBootstrapPending(stateRoot); err != nil {
+			return err
+		}
+		return createPrivateConfig(configPath, base, configSource)
+	}); err != nil {
 		return "", "", err
 	}
 	if err := validatePrivateConfig(configPath, base, resolution); err != nil {
@@ -53,9 +60,9 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 	return configPath, base, nil
 }
 
-func validateExistingPrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext) error {
+func validateExistingPrivateConfig(ctx context.Context, stateRoot, configPath, base string, resolution ResolutionContext, guard PrivateGenerationGuard) error {
 	if validateErr := validatePrivateConfig(configPath, base, resolution); validateErr != nil {
-		repaired, repairErr := repairIncompletePrivateConfig(stateRoot, configPath, base, resolution, validateErr)
+		repaired, repairErr := repairIncompletePrivateConfig(ctx, stateRoot, configPath, base, resolution, validateErr, guard)
 		if repairErr != nil {
 			return repairErr
 		}
@@ -75,7 +82,7 @@ func validateExistingPrivateConfig(stateRoot, configPath, base string, resolutio
 	return syncPrivateDirectory(base)
 }
 
-func repairIncompletePrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext, validationErr error) (bool, error) {
+func repairIncompletePrivateConfig(ctx context.Context, stateRoot, configPath, base string, resolution ResolutionContext, validationErr error, guard PrivateGenerationGuard) (bool, error) {
 	if !errors.Is(validationErr, errUnixSocketPathTooLong) {
 		return false, nil
 	}
@@ -90,28 +97,26 @@ func repairIncompletePrivateConfig(stateRoot, configPath, base string, resolutio
 	if !bytes.Equal(current, []byte(privateConfigYAML(base))) {
 		return false, nil
 	}
-	authorized, err := incompletePrivateConfigRepairAuthorized(stateRoot, base)
-	if err != nil || !authorized {
-		return false, err
-	}
-	replacement, err := privateConfigYAMLForResolution(base, resolution)
-	if err != nil {
-		return false, err
-	}
-	if bytes.Equal(current, []byte(replacement)) {
-		return false, nil
-	}
-	if err = replacePrivateRecordAtomic(
-		base,
-		configPath,
-		".private-config-",
-		"incomplete private supervisor config",
-		[]byte(replacement),
-		true,
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+	repaired := false
+	err = guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		authorized, authorizationErr := incompletePrivateConfigRepairAuthorized(stateRoot, base)
+		if authorizationErr != nil || !authorized {
+			return authorizationErr
+		}
+		replacement, replacementErr := privateConfigYAMLForResolution(base, resolution)
+		if replacementErr != nil {
+			return replacementErr
+		}
+		if bytes.Equal(current, []byte(replacement)) {
+			return nil
+		}
+		if replaceErr := replacePrivateRecordAtomic(base, configPath, ".private-config-", "incomplete private supervisor config", []byte(replacement), true); replaceErr != nil {
+			return replaceErr
+		}
+		repaired = true
+		return nil
+	})
+	return repaired, err
 }
 
 func incompletePrivateConfigRepairAuthorized(stateRoot, base string) (bool, error) {

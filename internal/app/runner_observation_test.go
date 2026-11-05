@@ -307,7 +307,7 @@ func startRunnerObservationTestCall(t *testing.T, ctx context.Context, fixture *
 		Observer: call.observe,
 	}
 	go func() {
-		call.client, call.observation, call.err = reconcileRunner(ctx, fixture.store.Root, &call.response, fixture.td, fixture.req, meta, options, supervisorcore.ExecutableLookup{})
+		call.client, call.observation, call.err = reconcileRunner(ctx, fixture.store.Root, &call.response, fixture.td, fixture.req, meta, observationSupervisorOptions(options, supervisorcore.ExecutableLookup{}, nil))
 		close(call.done)
 	}()
 	registerRunnerObservationTestCleanup(t, ctx, call)

@@ -12,11 +12,13 @@ import (
 
 var errNativeInspection = errors.New("native inspection unavailable")
 
-// nativeHooks replaces owned operations in deterministic tests. Production
-// callers supply no hooks. Neither callbacks nor diagnostics reach the journal.
+// nativeHooks supplies final environment preparation and replaces owned
+// operations in deterministic tests. Neither callbacks nor diagnostics reach
+// the journal. Production keeps the native Start and Wait defaults.
 type nativeHooks struct {
-	start func(*exec.Cmd) error
-	wait  func(*exec.Cmd) error
+	prepareEnvironment func([]string) ([]string, error)
+	start              func(*exec.Cmd) error
+	wait               func(*exec.Cmd) error
 }
 
 // nativeScope is the private runNative boundary: the execution package owns
@@ -46,6 +48,13 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	// A nil Stdin makes the child receive finite EOF. A native helper is bound
 	// to its admitted bytes before the final Start gate; the installed provider
 	// CLI runs directly at its resolved path.
+	if hooks.prepareEnvironment != nil {
+		environment, prepareErr := hooks.prepareEnvironment(definition.Environment)
+		if prepareErr != nil {
+			return nil, errNativeInspection
+		}
+		definition.Environment = environment
+	}
 	cmd, verified, err := nativeCommand(scope, definition)
 	if err != nil {
 		return nil, errNativeInspection

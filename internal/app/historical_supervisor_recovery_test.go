@@ -21,13 +21,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 type historicalSupervisorFixture struct {
+	component         *componentSupervisorFixture
 	root              string
 	store             *taskdir.Store
 	td                *taskdir.TaskDir
@@ -440,9 +440,11 @@ func newHistoricalSupervisorFixture(t *testing.T, stopped bool) *historicalSuper
 
 func newHistoricalSupervisorFixturePaths(t *testing.T) *historicalSupervisorFixture {
 	t.Helper()
-	base := testsupport.CanonicalTempDir(t)
+	owner := newComponentSupervisorFixture(t, componentPersistentDaemon)
+	base := owner.base
 	return &historicalSupervisorFixture{
-		root:           filepath.Join(base, "state"),
+		component:      owner,
+		root:           owner.root,
 		statusPath:     filepath.Join(base, "status.json"),
 		commandLog:     filepath.Join(base, "commands.log"),
 		daemonStartLog: filepath.Join(base, "daemon-starts.log"),
@@ -505,18 +507,16 @@ func newHistoricalSupervisorOptions() pueue.Options {
 func prepareHistoricalSupervisorTask(t *testing.T, fixture *historicalSupervisorFixture, workspace string) {
 	t.Helper()
 	store, err := taskdir.InitStore(fixture.root)
+	fixture.component.ownStore(t, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.store = store
-	t.Cleanup(func() { fixture.close(t) })
-
-	legacy, err := pueue.BindPrivate(t.Context(), fixture.clientA, fixture.daemonA, fixture.root, fixture.options)
+	legacy, err := fixture.component.bindPrivate(t.Context(), fixture.clientA, fixture.daemonA, fixture.options)
+	fixture.current, fixture.predecessorClient = legacy, legacy
 	if err != nil {
 		t.Fatalf("bind predecessor supervisor: %v", err)
 	}
-	fixture.current = legacy
-	fixture.predecessorClient = legacy
 	fixture.predecessor = legacy.Binding()
 
 	brief := []byte("historical supervisor recovery")
@@ -524,6 +524,7 @@ func prepareHistoricalSupervisorTask(t *testing.T, fixture *historicalSupervisor
 	profile := appTestExecutionProfile(&request, fixture.provider, nil)
 	meta := tasklifecycle.NewMeta(request, profile, fixture.predecessor, fixture.runner, task.RunnerOwnershipCustom, "historical-supervisor-test")
 	fixture.td, err = store.CreateTask(request.TaskID, &request, brief, &meta)
+	fixture.component.ownTask(fixture.td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,16 +590,24 @@ func recordHistoricalSupervisorAdmission(t *testing.T, fixture *historicalSuperv
 
 func completeHistoricalSupervisorFixtureMigration(t *testing.T, fixture *historicalSupervisorFixture, legacyDir string, stopped bool) {
 	t.Helper()
-	successor, err := pueue.BindPrivate(t.Context(), fixture.clientB, fixture.daemonB, fixture.root, fixture.options)
+	previous := fixture.component.daemonWaits()
+	successor, err := fixture.component.bindPrivate(t.Context(), fixture.clientB, fixture.daemonB, fixture.options)
+	fixture.current = successor
 	if err != nil {
 		t.Fatalf("bind successor supervisor: %v", err)
 	}
-	fixture.current = successor
 	fixture.successor = successor.Binding()
-	if err = pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
+	err = pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
 		return successor.MigratePrivateSupervisorWithLock(t.Context(), fixture.root)
-	}); err != nil {
+	})
+	fixture.component.ownDaemonClients(successor, len(previous))
+	if err != nil {
 		t.Fatalf("complete explicit predecessor-to-successor migration: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), pueue.PrivateControlTimeout(fixture.options))
+	defer cancel()
+	if err = awaitComponentDaemons(ctx, previous); err != nil {
+		t.Fatal(err)
 	}
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, 7)
 	if err = os.RemoveAll(legacyDir); err != nil {
@@ -656,35 +665,11 @@ func (f *historicalSupervisorFixture) dependencies() Dependencies {
 
 func (f *historicalSupervisorFixture) close(t *testing.T) {
 	t.Helper()
-	if f.current != nil {
-		if _, err := os.Stat(f.readyPath); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(f.options))
-			if shutdownErr := f.current.Shutdown(ctx); shutdownErr != nil {
-				t.Error(shutdownErr)
-			} else if waitErr := f.current.WaitUnavailable(ctx); waitErr != nil {
-				t.Error(waitErr)
-			}
-			cancel()
-		}
-		if err := f.current.Close(); err != nil {
-			t.Error(err)
-		}
-	}
-	if f.predecessorClient != nil {
-		if err := f.predecessorClient.Close(); err != nil {
-			t.Error(err)
-		}
-	}
-	if f.td != nil {
-		if err := f.td.Close(); err != nil {
-			t.Error(err)
-		}
-	}
-	if f.store != nil {
-		if err := f.store.Close(); err != nil {
-			t.Error(err)
-		}
-	}
+	f.component.ownStore(t, f.store)
+	f.component.ownClient(f.predecessorClient, nil)
+	f.component.ownClient(f.current, nil)
+	f.component.ownTask(f.td)
+	f.component.cleanup(t)
 }
 
 func assertHistoricalSupervisorControl(t *testing.T, fixture *historicalSupervisorFixture, wantAction string, stopped bool) {
@@ -919,6 +904,7 @@ cleanup() {
   rm -f '%s' '%s'
   if [ -n "$child" ]; then
     kill "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
   fi
   exit 0
 }

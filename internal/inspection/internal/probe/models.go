@@ -73,6 +73,10 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	if ctx == nil || scope.Authorize() != nil {
 		return modelCommandResult{}, errNativeInspection
 	}
+	environment, err := scope.PrepareEnvironment(definition.Environment)
+	if err != nil {
+		return modelCommandResult{}, errNativeInspection
+	}
 	stdout, err := newNativeStream(definition.OutputLimit, true)
 	if err != nil {
 		return modelCommandResult{}, err
@@ -82,7 +86,7 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 		stdout.discard()
 		return modelCommandResult{}, err
 	}
-	cmd := newProviderCommand(definition.Executable, definition.Directory, definition.Environment, args...)
+	cmd := newProviderCommand(definition.Executable, definition.Directory, environment, args...)
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	input, err := startModelCapture(stdout, stderr, exchange)
 	if err != nil {

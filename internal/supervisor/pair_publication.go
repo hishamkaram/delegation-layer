@@ -21,8 +21,19 @@ func PrepareStateSupervisorPair(ctx context.Context, root, clientExecutable, dae
 	if err != nil {
 		return err
 	}
+	return prepareStateSupervisorPair(ctx, root, clientExecutable, daemonExecutable, &expected)
+}
+
+// Continuation preserves any valid existing inventory, including a pair
+// published after selection. Only genuine absence permits staging the saved
+// or bundled candidate. Both probes share the canonical publication loop.
+func prepareContinuationStateSupervisorPair(ctx context.Context, root, clientExecutable, daemonExecutable string) error {
+	return prepareStateSupervisorPair(ctx, root, clientExecutable, daemonExecutable, nil)
+}
+
+func prepareStateSupervisorPair(ctx context.Context, root, clientExecutable, daemonExecutable string, expected *stateSupervisorPairRecord) error {
 	for {
-		ready, probeErr := probeStateSupervisorPairWithLease(ctx, root, &expected)
+		ready, probeErr := probeStateSupervisorPairWithLease(ctx, root, expected)
 		if probeErr != nil || ready {
 			return probeErr
 		}
@@ -31,8 +42,8 @@ func PrepareStateSupervisorPair(ctx context.Context, root, clientExecutable, dae
 				// A competing owner may have published the exact pair between the
 				// shared probe and this transition. Recheck while exclusive before
 				// copying or replacing any state-root executable.
-				current, currentErr := probeStateSupervisorPair(lockedContext, root, &expected)
-				if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
+				current, currentErr := probeStateSupervisorPair(lockedContext, root, expected)
+				if currentErr != nil && (expected == nil || !errors.Is(currentErr, os.ErrNotExist)) {
 					return currentErr
 				}
 				if current {
@@ -59,7 +70,7 @@ func probeStateSupervisorPairWithLease(ctx context.Context, root string, expecte
 	resultErr = pueue.WithSupervisorLeaseContext(ctx, root, func(lockedContext context.Context) error {
 		var probeErr error
 		ready, probeErr = probeStateSupervisorPair(lockedContext, root, expected)
-		if errors.Is(probeErr, os.ErrNotExist) {
+		if expected != nil && errors.Is(probeErr, os.ErrNotExist) {
 			return nil
 		}
 		return probeErr

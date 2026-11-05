@@ -154,7 +154,7 @@ func TestRecoverPrivateRestartsStoppedSupervisor(t *testing.T) {
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -472,7 +472,7 @@ func newCompletedPrivateSuccessorTestFixture(t *testing.T, live bool) completedP
 	base, stateRoot := newPrivateSupervisorTestRoots(t)
 	oldClient, oldDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "predecessor"))
 	currentClient, currentDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "completed"))
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	legacy := bindPrivateSetupForTest(t, stateRoot, oldClient, oldDaemon, options)
 	saved := legacy.Binding()
 	if err := legacy.Shutdown(context.Background()); err != nil {
@@ -543,7 +543,7 @@ func newCompletedPrivateLegacyTestFixture(t *testing.T) completedPrivateLegacyTe
 	t.Helper()
 	base, stateRoot := newPrivateSupervisorTestRoots(t)
 	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(base, "legacy"))
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	client := bindPrivateSetupForTest(t, stateRoot, clientPath, daemonPath, options)
 	if err := client.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)

@@ -155,8 +155,13 @@ type Options struct {
 	// entry. An explicit Plan.Environment, including a non-nil empty one,
 	// always wins. Run clones this slice and never mutates it.
 	InheritedEnvironment []string
-	Identity             IdentityObserver
-	Hooks                Hooks
+	// PrepareEnvironment overlays the final selected launch snapshot, after
+	// preflight and explicit-versus-inherited selection. It grants no Start
+	// authority. The callback receives an owned copy; a configured callback
+	// must return a non-nil explicit environment. Nil preserves legacy selection.
+	PrepareEnvironment func(context.Context, []string) ([]string, error)
+	Identity           IdentityObserver
+	Hooks              Hooks
 }
 
 type Result struct {
@@ -215,4 +220,34 @@ func (o Options) wait(cmd *exec.Cmd) error {
 		return o.Hooks.Wait(cmd)
 	}
 	return cmd.Wait()
+}
+
+// prepareLaunchEnvironment preserves raw non-reserved entries, including native
+// duplicate-variable semantics. This port adds no environment validation policy.
+// A configured transformer requires an explicit selection: nil still means
+// unresolved native inheritance, whereas a nonnil empty slice selects no entries.
+func prepareLaunchEnvironment(ctx context.Context, selected []string, prepare func(context.Context, []string) ([]string, error)) ([]string, error) {
+	if prepare == nil {
+		return selected, nil
+	}
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if selected == nil {
+		return nil, errors.New("launch environment preparation requires resolved inheritance")
+	}
+	prepared, err := prepare(ctx, slices.Clone(selected))
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if prepared == nil {
+		return nil, errors.New("launch environment preparation returned no explicit environment")
+	}
+	return slices.Clone(prepared), nil
 }

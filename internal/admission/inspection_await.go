@@ -13,16 +13,23 @@ import (
 )
 
 func RunInspection(operation *inspection.Operation, supervisor *pueue.Client, runner, root string) (json.RawMessage, time.Time, error) {
+	return RunInspectionContext(context.Background(), operation, supervisor, runner, root)
+}
+
+func RunInspectionContext(parent context.Context, operation *inspection.Operation, supervisor *pueue.Client, runner, root string) (json.RawMessage, time.Time, error) {
+	if parent == nil {
+		return nil, time.Time{}, context.Canceled
+	}
 	deadline := operation.Deadline()
 	var ctx context.Context
 	var cancel context.CancelFunc
 	if time.Now().Before(deadline) {
-		ctx, cancel = context.WithDeadline(context.Background(), deadline)
+		ctx, cancel = context.WithDeadline(parent, deadline)
 	} else {
 		// A completed operation remains replayable after its immutable deadline.
 		// Give that local proof read one bounded recovery window without renewing
 		// the operation or permitting new external work.
-		ctx, cancel = context.WithTimeout(context.Background(), inspectionStatusWatchdog)
+		ctx, cancel = context.WithTimeout(parent, inspectionStatusWatchdog)
 	}
 	defer cancel()
 	recordedFacts, _, terminal, recordedErr := RecordedInspectionFacts(ctx, operation)
@@ -48,7 +55,7 @@ func RunInspection(operation *inspection.Operation, supervisor *pueue.Client, ru
 	}
 	facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, submission)
 	if err != nil {
-		facts, err = awaitCompletedInspectionObservation(operation, supervisor, err)
+		facts, err = awaitCompletedInspectionObservation(parent, operation, supervisor, err)
 		if err != nil {
 			return nil, deadline, AnnotateMissingInspectionStage("awaiting inspection", err)
 		}

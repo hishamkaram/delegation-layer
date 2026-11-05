@@ -61,11 +61,7 @@ func RunChild(ctx context.Context, config ChildConfig, run func(context.Context)
 		}
 		watchDone <- readErr
 	}()
-	resultErr = run(runCtx)
-	if errors.Is(resultErr, ErrIncompatible) {
-		hello.Kind = "incompatible"
-		resultErr = errors.Join(resultErr, writeFrame(control.writer, hello))
-	}
+	resultErr = reportChildFailure(control, hello, run(runCtx))
 	cancel()
 	return errors.Join(resultErr, <-watchDone)
 }
@@ -134,12 +130,7 @@ func beforeReady(ctx context.Context, config ChildConfig, control *channel, hell
 	if config.BeforeReady == nil {
 		return nil
 	}
-	err := config.BeforeReady(ctx)
-	if errors.Is(err, ErrIncompatible) {
-		hello.Kind = "incompatible"
-		err = errors.Join(err, writeFrame(control.writer, hello))
-	}
-	return err
+	return reportChildFailure(control, hello, config.BeforeReady(ctx))
 }
 
 func identity(ref lifetime.ProcessRef) Identity {
@@ -152,4 +143,18 @@ func identityPresent(value Identity) (bool, error) {
 		return false, err
 	}
 	return lifetime.ProcessPresent(ref)
+}
+
+// Cleanup ownership takes precedence over every other cause in the graph.
+// The exact validated binding authenticates this finite terminal message.
+func reportChildFailure(control *channel, binding childFrame, err error) error {
+	switch {
+	case errors.Is(err, ErrCleanupUnresolved):
+		binding.Kind = "cleanup_unresolved"
+	case errors.Is(err, ErrIncompatible):
+		binding.Kind = "incompatible"
+	default:
+		return err
+	}
+	return errors.Join(err, writeFrame(control.writer, binding))
 }

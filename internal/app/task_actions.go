@@ -21,14 +21,14 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	defer func() { closeObservationStore(&result, store) }()
 	td, err := store.OpenTask(a.TaskID)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Cancel(root, td, deps.supervisorControlScope(), deps.supervisorLookup(), newSupervisorControlClient)
+	observed, err := tasklifecycle.Cancel(root, td, deps.supervisorControlScope(), deps.supervisorLookup(), deps.supervisorControlClientOpener())
 	fillInspection(&response, observed.Inspection)
 	if observed.Stop != nil {
 		stop := stopOutcomeResponse(*observed.Stop)

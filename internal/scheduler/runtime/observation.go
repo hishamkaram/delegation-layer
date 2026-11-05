@@ -61,7 +61,7 @@ func (l *loop) reportTaskError(result taskResult) error {
 		phase = "dispatch"
 	}
 	l.event(result.occurrence, phase, "task_error")
-	if errors.Is(result.err, ErrRootIdentity) {
+	if errors.Is(result.err, ErrRootIdentity) || errors.Is(result.err, ErrTaskCleanupUnresolved) {
 		return storeError(phase, result.occurrence, result.err)
 	}
 	return nil

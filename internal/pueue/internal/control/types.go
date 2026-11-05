@@ -22,9 +22,10 @@ const (
 )
 
 var (
-	ErrSubmissionUncertain = errors.New("pueue task submission outcome is unknown")
-	ErrEnqueueUncertain    = errors.New("pueue staged task enqueue outcome is unknown")
-	ErrStagedCapability    = errors.New("pueue staged launch capability is unavailable")
+	ErrInfrastructureOwnerRequired = errors.New("pueue daemon infrastructure owner is required")
+	ErrSubmissionUncertain         = errors.New("pueue task submission outcome is unknown")
+	ErrEnqueueUncertain            = errors.New("pueue staged task enqueue outcome is unknown")
+	ErrStagedCapability            = errors.New("pueue staged launch capability is unavailable")
 	// ErrCleanupDeferred means the exact task row is still running while its
 	// Delegate outcome is already terminal. A later maintenance pass owns
 	// removal after Pueue reports the row as ended.
@@ -33,11 +34,40 @@ var (
 	ErrMigrationAuthorization = errors.New("private supervisor migration authorization is unavailable")
 )
 
+// DaemonStartGuard owns placement authorization for one synchronous start.
+// Implementations must invoke start synchronously, at most once, and return its error.
+// Pueue retains executable selection, identity verification, readiness and Wait.
+type DaemonStartGuard interface {
+	GuardDaemonStart(ctx context.Context, operationRoot string, start func() error) error
+}
+
+// PrivateGenerationGuard owns current resident authority for one publication.
+// Implementations invoke commit synchronously, at most once, and return its
+// error. The callback contains only canonical publication writes, never daemon
+// start, orchestration, or another generation guard.
+type PrivateGenerationGuard interface {
+	GuardPrivateGenerationCommit(ctx context.Context, operationRoot string, commit func() error) error
+}
+
+// DaemonWaitOwner observes completion of the exact child owned by Pueue.
+// The PID is diagnostic identity, not scheduling or process-mutation authority.
+// Registering a handle never transfers Wait ownership or joins Client.Close.
+type DaemonWaitOwner interface {
+	RegisterDaemonWait(root string, pid int, done <-chan struct{}) error
+}
+
 // Options controls caller observation and an optional explicit process context.
 // Nil Resolution and Environment use current process control values at each
 // fresh call; the default child environment is bounded to pueue's control
 // variables. A nonnil Environment is passed through as supplied by the caller.
 type Options struct {
+	// PrivateGenerationGuard is required for new private generation decisions.
+	// Warm reads and exact durable publication replay require no grant.
+	PrivateGenerationGuard PrivateGenerationGuard
+	// DaemonStartGuard is required whenever an operation starts a daemon.
+	DaemonStartGuard DaemonStartGuard
+	// DaemonWaitOwner optionally retains completion handles for resident shutdown.
+	DaemonWaitOwner    DaemonWaitOwner
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext
 	Environment        []string

@@ -51,6 +51,6 @@ func dispatch(a Arguments, deps Dependencies) commandResult {
 
 func continueTask(a Arguments, deps Dependencies) commandResult {
 	deps = deps.withCapturedEnvironment()
-	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptions(deps, true), Supervisor: continuationSupervisorOptions(deps.normalized())}
+	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptions(deps, true)}
 	return continuationCommandResult(tasklifecycle.Continue(dispatchRequest(a, deps), options))
 }

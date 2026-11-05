@@ -21,9 +21,10 @@ const (
 )
 
 var (
-	ErrPending      = errors.New("scheduler host operation pending")
-	ErrIncompatible = errors.New("scheduler host build or protocol incompatible")
-	ErrIdentity     = errors.New("scheduler host identity changed")
+	ErrCleanupUnresolved = errors.New("scheduler child cleanup unresolved")
+	ErrPending           = errors.New("scheduler host operation pending")
+	ErrIncompatible      = errors.New("scheduler host build or protocol incompatible")
+	ErrIdentity          = errors.New("scheduler host identity changed")
 )
 
 // Config is an explicit, retained launch context. Environment must be nonnil;

@@ -19,6 +19,9 @@ func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Op
 	if err != nil {
 		return inspectionSubmissionState{}, err
 	}
+	if err = operation.CheckLaunchPermission(ctx); err != nil {
+		return inspectionSubmissionState{}, err
+	}
 	record := operation.Request()
 	// The worker executable is part of the immutable inspection binding. It was
 	// fingerprinted before the durable claim, so revalidate the exact path and
@@ -32,7 +35,10 @@ func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Op
 	var observation pueue.InspectionObservation
 	var submitErr error
 	commit := func(observation pueue.InspectionObservation) error {
-		return operation.RecordReceiptContext(ctx, observation.Job.ID)
+		if err := operation.RecordReceiptContext(ctx, observation.Job.ID); err != nil {
+			return err
+		}
+		return operation.CheckLaunchPermission(ctx)
 	}
 	if ConcurrentInspection(root, record.Binding) && record.Group == "default" {
 		observation, submitErr = supervisor.SubmitConcurrentInspectionStagedWithGate(ctx, permit, identity, launch, supervisorcore.SubmissionGate(root), commit)

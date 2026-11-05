@@ -381,6 +381,10 @@ func probeExactPublishedPrivateClient(ctx context.Context, published task.Superv
 	if client.binding.DaemonSHA256 != published.DaemonSHA256 {
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, nil
 	}
+	return probeVerifiedPrivateClient(ctx, client, scope)
+}
+
+func probeVerifiedPrivateClient(ctx context.Context, client *Client, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	switch scope {
 	case privateProbeEndpoint:
 		// The socket-only probe proves readiness alone; it never supplies an
@@ -402,7 +406,7 @@ func probeExactPublishedPrivateClient(ctx context.Context, published task.Superv
 }
 
 func preparePrivateClient(ctx context.Context, stateRoot string, options Options, resolution ResolutionContext, clientPath, daemonPath, base string, migrationOnly, cleanupSuccessful bool) (*Client, error) {
-	configPath, _, err := privateBindingConfig(stateRoot, base, resolution, nil)
+	configPath, _, err := privateBindingConfig(ctx, stateRoot, base, resolution, nil, options.PrivateGenerationGuard)
 	if err != nil {
 		return nil, err
 	}

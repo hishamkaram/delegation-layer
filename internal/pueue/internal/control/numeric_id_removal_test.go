@@ -76,7 +76,7 @@ func newNumericIDRemovalTestFixture(t *testing.T) numericIDRemovalTestFixture {
 	writeExecutable(t, private.clientPath, numericIDRemovalTestScript+privateClientFixture)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, client, err)
 	if err != nil {
 		t.Fatal(err)

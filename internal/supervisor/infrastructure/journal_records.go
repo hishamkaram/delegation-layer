@@ -28,6 +28,13 @@ func (j *intentJournal) putAssumptionWithClock(ctx context.Context, lease *Lease
 		if err != nil {
 			return err
 		}
+		if err = requireUnsettledStartup(tx, intent); err != nil {
+			return err
+		}
+		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
+		if err = requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
+			return err
+		}
 		if _, err = assumption.Digest(intent); err != nil {
 			return err
 		}
@@ -74,6 +81,13 @@ func (j *intentJournal) putPublication(ctx context.Context, lease *Lease, public
 		if err != nil {
 			return err
 		}
+		if err = requireUnsettledStartup(tx, intent); err != nil {
+			return err
+		}
+		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
+		if err = requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
+			return err
+		}
 		var assumption StartupAssumption
 		if err = tx.Read(assumptionName(intent.Sequence), &assumption); err != nil {
 			return err
@@ -81,10 +95,31 @@ func (j *intentJournal) putPublication(ctx context.Context, lease *Lease, public
 		if _, err = publication.Digest(intent, assumption); err != nil {
 			return err
 		}
+		if err = validateLifecycleRuntime(ctx, reader, j.pin, intent, publication.RuntimeSHA256); err != nil {
+			return err
+		}
 		created, err = tx.Put(publicationName(intent.Sequence), publication)
 		return err
 	})
 	return created, resultErr
+}
+
+// Settlement is a permanent fence, including after wall-clock rollback. Both
+// child-owned writes check it in their existing serialized lease transaction.
+// A malformed fence faults; it never becomes permission to assume or publish.
+func requireUnsettledStartup(tx *taskdir.ControlTransaction, intent StartupIntent) error {
+	var record startupSettlement
+	err := tx.Read(settlementName(intent.Sequence), &record)
+	if task.RecordAbsent(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err = record.Validate(intent); err != nil {
+		return fmt.Errorf("%w: invalid startup settlement: %w", task.ErrEvidenceFault, err)
+	}
+	return fmt.Errorf("%w: startup attempt is permanently settled", ErrIdentity)
 }
 
 func (j *intentJournal) currentReferencedIntent(tx *taskdir.ControlTransaction, reference StartupReference) (StartupIntent, error) {

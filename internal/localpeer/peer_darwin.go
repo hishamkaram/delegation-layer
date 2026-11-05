@@ -1,6 +1,6 @@
 //go:build darwin
 
-package host
+package localpeer
 
 import (
 	"errors"
@@ -9,10 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func connectionPeer(conn *net.UnixConn) (int, int, error) {
+func read(conn *net.UnixConn) (Credentials, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return 0, 0, err
+		return Credentials{}, err
 	}
 	var credentials *unix.Xucred
 	var pid int
@@ -22,10 +22,10 @@ func connectionPeer(conn *net.UnixConn) (int, int, error) {
 		pid, pidErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
 	})
 	if err = errors.Join(err, credentialErr, pidErr); err != nil {
-		return 0, 0, err
+		return Credentials{}, err
 	}
 	if credentials == nil || pid <= 0 {
-		return 0, 0, ErrIdentity
+		return Credentials{}, ErrCredentials
 	}
-	return pid, int(credentials.Uid), nil
+	return nativeCredentials(pid, credentials.Uid)
 }

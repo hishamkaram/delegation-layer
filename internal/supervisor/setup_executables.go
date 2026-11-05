@@ -3,10 +3,21 @@ package supervisor
 import (
 	"context"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func PrepareAdmissionExecutables(selection AdmissionSelection, runtime AdmissionOptions, root string) (RunnerPreparation, error) {
+	return PrepareAdmissionExecutablesContext(context.Background(), selection, runtime, root)
+}
+
+func PrepareAdmissionExecutablesContext(ctx context.Context, selection AdmissionSelection, runtime AdmissionOptions, root string) (RunnerPreparation, error) {
+	if ctx == nil {
+		return RunnerPreparation{}, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return RunnerPreparation{}, err
+	}
 	runnerOwnership := RequestedRunnerOwnership(selection)
 	privateSupervisor, err := AdmissionUsesPrivateSupervisor(selection, root)
 	if err != nil {
@@ -19,7 +30,7 @@ func PrepareAdmissionExecutables(selection AdmissionSelection, runtime Admission
 	if !privateSupervisor {
 		return RunnerPreparation{Executable: runner}, nil
 	}
-	return PreparePrivateAdmissionExecutablesContext(context.Background(), selection, runtime, root, runner, runnerOwnership)
+	return PreparePrivateAdmissionExecutablesContext(ctx, selection, runtime, root, runner, runnerOwnership)
 }
 
 func PreparePrivateAdmissionExecutablesContext(ctx context.Context, selection AdmissionSelection, runtime AdmissionOptions, root, runner, runnerOwnership string) (RunnerPreparation, error) {
@@ -42,7 +53,12 @@ func PreparePrivateAdmissionExecutablesContext(ctx context.Context, selection Ad
 	if err != nil {
 		return RunnerPreparation{FailureStage: "prepare-supervisor-executables"}, err
 	}
-	if err = PrepareStateSupervisorPair(controlContext, root, clientExecutable, daemonExecutable); err != nil {
+	if selection.ContinuationSource != (infrastructure.SavedBindingSource{}) {
+		err = prepareContinuationStateSupervisorPair(controlContext, root, clientExecutable, daemonExecutable)
+	} else {
+		err = PrepareStateSupervisorPair(controlContext, root, clientExecutable, daemonExecutable)
+	}
+	if err != nil {
 		return RunnerPreparation{FailureStage: "prepare-supervisor-executables"}, err
 	}
 	return RunnerPreparation{Executable: runner}, nil

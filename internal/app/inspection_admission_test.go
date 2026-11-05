@@ -450,7 +450,7 @@ func TestMigrateInspectionGroupRetiresOlderRecoveryAlias(t *testing.T) {
 		if persistErr := legacySupervisor.PersistPrivateRecoveryBinding(store.Root); persistErr != nil {
 			return persistErr
 		}
-		return supervisorcore.ReconcileStaleInspectionRecovery(t.Context(), store, successor)
+		return supervisorcore.ReconcileStaleInspectionRecovery(t.Context(), store, legacySupervisor, successor)
 	}); err != nil {
 		t.Fatalf("stale published predecessor alias was not reconciled: %v", err)
 	}

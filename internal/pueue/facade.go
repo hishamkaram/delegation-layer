@@ -7,9 +7,43 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/control"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 type Client = control.Client
+
+type CompatiblePairSelector = control.CompatiblePairSelector
+
+var ErrCompatiblePairUnavailable = control.ErrCompatiblePairUnavailable
+
+func ProbeSavedPrivateCompatible(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options, selectPair CompatiblePairSelector) (*Client, error) {
+	return control.ProbeSavedPrivateCompatible(ctx, stateRoot, saved, options, selectPair)
+}
+
+func CheckPrivateAdmissionRuntime(ctx context.Context, root string, runtime task.SupervisorRef) error {
+	return control.CheckPrivateAdmissionRuntime(ctx, root, runtime)
+}
+
+type (
+	PrivateRestorePresence    = control.PrivateRestorePresence
+	PrivateRestoreSource      = control.PrivateRestoreSource
+	PrivateRestoreObservation = control.PrivateRestoreObservation
+)
+
+const (
+	PrivateRestoreMissing = control.PrivateRestoreMissing
+	PrivateRestorePresent = control.PrivateRestorePresent
+)
+
+var (
+	ErrPrivateRestorePartial = control.ErrPrivateRestorePartial
+	ErrPrivateRestoreLayout  = control.ErrPrivateRestoreLayout
+	ErrPrivateRestoreCorrupt = control.ErrPrivateRestoreCorrupt
+)
+
+func ObservePrivateRestore(ctx context.Context, root taskdir.RootPin, expectedGeneration task.SupervisorRef, resolution ResolutionContext) (PrivateRestoreObservation, error) {
+	return control.ObservePrivateRestore(ctx, root, expectedGeneration, resolution)
+}
 
 var (
 	ErrStatusOperational = control.ErrStatusOperational
@@ -61,6 +95,10 @@ func ResolveConfig(c *Config, r ResolutionContext) (ResolvedConfig, error) {
 	return control.ResolveConfig(c, r)
 }
 
+func ValidateUnixSocketPathBytes(goos string, pathBytes int) error {
+	return control.ValidateUnixSocketPathBytes(goos, pathBytes)
+}
+
 type (
 	Config       = control.Config
 	ClientConfig = control.ClientConfig
@@ -70,6 +108,10 @@ type (
 
 func RunControlOwnerMode(args []string) (int, bool) {
 	return control.RunControlOwnerMode(args)
+}
+
+func RunRepairEditorMode(args []string) (int, bool) {
+	return control.RunRepairEditorMode(args)
 }
 
 type ControlLease = control.ControlLease
@@ -231,12 +273,12 @@ func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.Su
 	return control.AttemptPrivateRecovery(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
 }
 
-func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, bool, error) {
-	return control.RecoverSaved(ctx, saved, options)
+func RecoverSaved(ctx context.Context, operationRoot string, saved task.SupervisorRef, options Options) (*Client, bool, error) {
+	return control.RecoverSaved(ctx, operationRoot, saved, options)
 }
 
-func RecoverSavedWithPair(ctx context.Context, saved task.SupervisorRef, clientExecutable string, daemonExecutable string, options Options) (*Client, bool, error) {
-	return control.RecoverSavedWithPair(ctx, saved, clientExecutable, daemonExecutable, options)
+func RecoverSavedWithPair(ctx context.Context, operationRoot string, saved task.SupervisorRef, clientExecutable string, daemonExecutable string, options Options) (*Client, bool, error) {
+	return control.RecoverSavedWithPair(ctx, operationRoot, saved, clientExecutable, daemonExecutable, options)
 }
 
 func PrivateDaemonIdentityDrift(stateRoot string, daemonExecutable string) (bool, error) {
@@ -382,6 +424,12 @@ func ReadPrivateRecoveryBinding(stateRoot string) (task.SupervisorRef, bool, err
 	return control.ReadPrivateRecoveryBinding(stateRoot)
 }
 
+// ProbeSavedPrivate observes a ready saved private generation without recovery.
+// The caller owns the returned client; nil, nil means only not ready.
+func ProbeSavedPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
+	return control.ProbeSavedPrivate(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
+}
+
 func ResolvePrivateSupervisorSuccessor(ctx context.Context, stateRoot string, saved task.SupervisorRef) (task.SupervisorRef, bool, error) {
 	return control.ResolvePrivateSupervisorSuccessor(ctx, stateRoot, saved)
 }
@@ -454,20 +502,26 @@ const (
 )
 
 var (
-	ErrConfiguration          = control.ErrConfiguration
-	ErrBinding                = control.ErrBinding
-	ErrUnknown                = control.ErrUnknown
-	ErrSubmissionUncertain    = control.ErrSubmissionUncertain
-	ErrEnqueueUncertain       = control.ErrEnqueueUncertain
-	ErrStagedCapability       = control.ErrStagedCapability
-	ErrInFlight               = control.ErrInFlight
-	ErrControlLimit           = control.ErrControlLimit
-	ErrCleanupDeferred        = control.ErrCleanupDeferred
-	ErrCleanupAuthorization   = control.ErrCleanupAuthorization
-	ErrMigrationAuthorization = control.ErrMigrationAuthorization
+	ErrConfiguration               = control.ErrConfiguration
+	ErrBinding                     = control.ErrBinding
+	ErrUnknown                     = control.ErrUnknown
+	ErrSubmissionUncertain         = control.ErrSubmissionUncertain
+	ErrEnqueueUncertain            = control.ErrEnqueueUncertain
+	ErrStagedCapability            = control.ErrStagedCapability
+	ErrRootAdmissionRequired       = control.ErrRootAdmissionRequired
+	ErrManagedAdmissionUnsupported = control.ErrManagedAdmissionUnsupported
+	ErrInFlight                    = control.ErrInFlight
+	ErrControlLimit                = control.ErrControlLimit
+	ErrCleanupDeferred             = control.ErrCleanupDeferred
+	ErrCleanupAuthorization        = control.ErrCleanupAuthorization
+	ErrMigrationAuthorization      = control.ErrMigrationAuthorization
+	ErrInfrastructureOwnerRequired = control.ErrInfrastructureOwnerRequired
 )
 
 type (
+	PrivateGenerationGuard      = control.PrivateGenerationGuard
+	DaemonStartGuard            = control.DaemonStartGuard
+	DaemonWaitOwner             = control.DaemonWaitOwner
 	Options                     = control.Options
 	PrivateQueueCleanupPlan     = control.PrivateQueueCleanupPlan
 	PrivateTerminalCustodyScope = control.PrivateTerminalCustodyScope
@@ -491,3 +545,41 @@ type (
 	CommandResult = control.CommandResult
 	Pending       = control.Pending
 )
+
+// Referenced migration ports retain policy and journal ownership in Pueue.
+type (
+	PrivateMigrationReference      = control.PrivateMigrationReference
+	PrivateMigrationIdentity       = control.PrivateMigrationIdentity
+	PrivateMigrationTargetResolver = control.PrivateMigrationTargetResolver
+	PrivateMigrationResult         = control.PrivateMigrationResult
+)
+
+const (
+	PrivateMigrationCompleted = control.PrivateMigrationCompleted
+	PrivateMigrationWarmReuse = control.PrivateMigrationWarmReuse
+)
+
+var (
+	ErrReferencedMigrationUnsupported    = control.ErrReferencedMigrationUnsupported
+	ErrReferencedMigrationTargetNotReady = control.ErrReferencedMigrationTargetNotReady
+)
+
+func ReadPrivateMigrationReferenceWithLock(root string) (PrivateMigrationReference, bool, error) {
+	return control.ReadPrivateMigrationReferenceWithLock(root)
+}
+
+func ExecuteReferencedPrivateMigrationWithLock(ctx context.Context, root string, ref PrivateMigrationReference, resolver PrivateMigrationTargetResolver, options Options) (PrivateMigrationResult, error) {
+	return control.ExecuteReferencedPrivateMigrationWithLock(ctx, root, ref, resolver, options)
+}
+
+func PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(ctx context.Context, stateRoot string, binding task.SupervisorRef, options Options) error {
+	return control.PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(ctx, stateRoot, binding, options)
+}
+
+func PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx context.Context, root string, predecessor task.SupervisorRef, options Options) error {
+	return control.PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx, root, predecessor, options)
+}
+
+func RetirePrivateRecoveryBindingWithOptionsContext(ctx context.Context, stateRoot string, successor task.SupervisorRef, options Options) error {
+	return control.RetirePrivateRecoveryBindingWithOptionsContext(ctx, stateRoot, successor, options)
+}

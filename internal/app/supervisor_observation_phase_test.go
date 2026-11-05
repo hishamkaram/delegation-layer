@@ -122,7 +122,9 @@ func TestPublicStatusRepairsCompleteCapabilitylessSchedulingReceipt(t *testing.T
 	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
 	deps := fixture.dependencies()
 	deps.InitialSupervisorExecutable = fixture.clientA
-	warm, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), fixture.store, fixture.options)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancelControl()
+	warm, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), fixture.store, fixture.options)
 	if err != nil || warm == nil {
 		t.Fatalf("prepare complete scheduling fixture: client=%v err=%v", warm, err)
 	}
@@ -273,7 +275,9 @@ func installObservationPhaseCompatiblePair(t *testing.T, fixture *historicalSupe
 
 func TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter(t *testing.T) {
 	store, deps, legacy := newSupervisorProbeTestFixture(t)
-	held, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, deps.SupervisorOptions)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
+	defer cancelControl()
+	held, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
 	if err != nil || held == nil {
 		t.Fatalf("prepare complete held client: client=%v err=%v", held, err)
 	}

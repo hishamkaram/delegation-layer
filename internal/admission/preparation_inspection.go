@@ -1,6 +1,8 @@
 package admission
 
 import (
+	"context"
+
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -8,13 +10,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func finalizeInspection(selection supervisorcore.AdmissionSelection, options PreparationOptions, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (commonprovider.PreparedProfile, commonprovider.ProfileCandidate, error) {
+func finalizeInspection(ctx context.Context, selection supervisorcore.AdmissionSelection, options PreparationOptions, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (commonprovider.PreparedProfile, commonprovider.ProfileCandidate, error) {
 	var err error
 	candidate, err = options.Profiles.Refresh(store.Root, req, candidate)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, commonprovider.ProfileCandidate{}, WithStage("finalize-provider", err)
 	}
-	facts, _, err := InspectProvider(InspectionOptions{Runner: selection.Runner, DefaultRunner: options.Supervisor.RunnerExecutable, RunnerOwnership: supervisorcore.RequestedRunnerOwnership(selection), PreserveGeneration: selection.SavedSupervisor != nil}, store, req, candidate, supervisor, false)
+	facts, _, err := InspectProviderContext(ctx, InspectionOptions{Runner: selection.Runner, DefaultRunner: options.Supervisor.RunnerExecutable, RunnerOwnership: supervisorcore.RequestedRunnerOwnership(selection), PreserveGeneration: selection.SavedSupervisor != nil}, store, req, candidate, supervisor, false)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, commonprovider.ProfileCandidate{}, WithStage("inspect-provider", err)
 	}

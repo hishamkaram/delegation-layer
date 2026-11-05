@@ -4,11 +4,16 @@ import (
 	"context"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func PrepareTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, lookup ExecutableLookup, runnerExecutable string) (*pueue.Client, error) {
+	return PrepareTaskSupervisorWithRouting(ctx, store, binding, meta, TaskSupervisorObservationOptions{Control: baseOptions, Lookup: lookup, RunnerExecutable: runnerExecutable})
+}
+
+func PrepareTaskSupervisorWithRouting(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, configuration TaskSupervisorObservationOptions) (*pueue.Client, error) {
 	if store == nil || meta == nil || !pueue.IsPrivateConfig(store.Root, binding.ConfigPath) {
 		return nil, nil
 	}
@@ -17,12 +22,28 @@ func PrepareTaskSupervisor(ctx context.Context, store *taskdir.Store, binding ta
 	}
 	ctx, cancel := context.WithTimeout(ctx, pueue.RunnerCommandUpgradeTimeout)
 	defer cancel()
-	options := OptionsWithEnvironment(baseOptions, meta.Environment)
-	client, err := PreparePrivateAdmissionSupervisorContext(ctx, lookup, store, options)
+	client, err := recoverObservedTaskClient(ctx, store, binding, meta, configuration)
 	if err != nil {
-		return nil, err
+		return nil, ClosePrivateAdmissionTransition(client, err)
 	}
-	return prepareTaskSupervisorRunner(ctx, store, client, binding, runnerExecutable)
+	complete, err := taskSupervisorMaintenanceComplete(ctx, store.Root, client.RuntimeBinding())
+	if err != nil || !complete {
+		return nil, ClosePrivateAdmissionTransition(client, err)
+	}
+	return prepareTaskSupervisorRunner(ctx, store, client, binding, configuration.RunnerExecutable)
+}
+
+func recoverObservedTaskClient(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, configuration TaskSupervisorObservationOptions) (*pueue.Client, error) {
+	source := configuration.Source
+	if source == (infrastructure.SavedBindingSource{}) {
+		var err error
+		source, err = NewSavedBindingSource(meta.RootID, infrastructure.SavedBindingTaskMetadata, meta.TaskID, "", meta.SupervisorConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	options := OptionsWithEnvironment(configuration.Control, meta.Environment)
+	return (ControlRuntime{Options: options, Lookup: configuration.Lookup, Routing: configuration.Routing}).RecoverSaved(ctx, store, binding, source)
 }
 
 func prepareTaskSupervisorRunner(ctx context.Context, store *taskdir.Store, client *pueue.Client, binding task.SupervisorRef, runnerExecutable string) (*pueue.Client, error) {

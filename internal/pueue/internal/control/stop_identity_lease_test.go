@@ -93,7 +93,7 @@ func newStopIdentityLeaseTestFixture(t *testing.T, testCase stopIdentityLeaseTes
 	writeExecutable(t, private.clientPath, stopIdentityLeaseTestScript+privateClientFixture)
 	ctx, cancel := context.WithTimeout(t.Context(), stopIdentityLeaseFixtureSetupTimeout)
 	defer cancel()
-	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{ObservationTimeout: stopIdentityLeaseFixtureSetupTimeout})
+	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: stopIdentityLeaseFixtureSetupTimeout})
 	supervisorLeaseTestSettleClient(t, client, err)
 	if err != nil {
 		t.Fatal(err)

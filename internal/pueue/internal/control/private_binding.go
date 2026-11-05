@@ -55,7 +55,7 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return nil, err
 	}
-	configPath, base, err := privateBindingConfig(stateRoot, base, resolution, expected)
+	configPath, base, err := privateBindingConfig(ctx, stateRoot, base, resolution, expected, options.PrivateGenerationGuard)
 	if err != nil {
 		return nil, err
 	}
@@ -84,16 +84,13 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return nil, err
 	}
-	if err = startDaemon(daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
+	if err = startDaemon(ctx, stateRoot, daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
 		return nil, err
 	}
 	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
 		return nil, fmt.Errorf("%w: private pueued did not become ready: %w", ErrBinding, err)
 	}
-	if err = publishPrivateDaemonIdentity(base, client.Binding()); err != nil {
-		return nil, err
-	}
-	if err = clearPrivateBootstrapPending(stateRoot); err != nil {
+	if err = publishPrivateDaemonIdentityContext(ctx, base, client.Binding(), options.PrivateGenerationGuard); err != nil {
 		return nil, err
 	}
 	return client, nil
@@ -105,17 +102,10 @@ func verifyBoundPrivateSupervisor(ctx context.Context, client *Client, stateRoot
 	if err := matchExpectedPrivateBinding(client, expected); err != nil {
 		return err
 	}
-	if err := restoreExpectedPrivateSupervisorBinding(ctx, stateRoot, expected); err != nil {
+	if err := restoreExpectedPrivateSupervisorBinding(ctx, stateRoot, expected, client.options.PrivateGenerationGuard); err != nil {
 		return err
 	}
 	return verifyPrivateSupervisorBinding(stateRoot, client.Binding(), ready)
-}
-
-func restoreExpectedPrivateSupervisorBinding(ctx context.Context, stateRoot string, expected *task.SupervisorRef) error {
-	if expected == nil {
-		return nil
-	}
-	return restorePrivateSupervisorBindingFromSaved(ctx, stateRoot, *expected)
 }
 
 // SetPrivateDefaultParallelTasksWithBootstrapLock applies one generic Pueue
@@ -310,9 +300,9 @@ func preparePrivateBootstrap(ctx context.Context, clientExecutable, daemonExecut
 	return normalized, resolution, clientPath, daemonPath, base, lock, nil
 }
 
-func privateBindingConfig(stateRoot, base string, resolution ResolutionContext, expected *task.SupervisorRef) (configPath, privateBase string, resultErr error) {
+func privateBindingConfig(ctx context.Context, stateRoot, base string, resolution ResolutionContext, expected *task.SupervisorRef, guard PrivateGenerationGuard) (configPath, privateBase string, resultErr error) {
 	if expected == nil {
-		return ensurePrivateConfig(stateRoot, resolution)
+		return ensurePrivateConfigContext(ctx, stateRoot, resolution, guard)
 	}
 	if !IsPrivateConfig(stateRoot, expected.ConfigPath) {
 		return "", "", fmt.Errorf("%w: saved supervisor config is not private to the state root", ErrConfiguration)
@@ -391,4 +381,11 @@ func probePrivateCompatiblePair(ctx context.Context, saved, expected task.Superv
 	// durable authority while the endpoint is live.
 	client.binding = saved
 	return client, true, nil
+}
+
+func restoreExpectedPrivateSupervisorBinding(ctx context.Context, root string, expected *task.SupervisorRef, guard PrivateGenerationGuard) error {
+	if expected == nil {
+		return nil
+	}
+	return restorePrivateSupervisorBindingFromSaved(ctx, root, *expected, guard)
 }

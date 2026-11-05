@@ -44,7 +44,7 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 		}
 	}
 	environment := replacePrivateDaemonHelperEnvironment(os.Environ(), privateDaemonHelperMode, childMode)
-	if err := startDaemon(executable, digest, config, base, Options{Environment: environment}); err != nil {
+	if err := startDaemon(t.Context(), base, executable, digest, config, base, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: environment}); err != nil {
 		t.Fatal(err)
 	}
 	waitForPrivateDaemonTestFile(t, os.Getenv(privateDaemonMarker), 3*time.Second)

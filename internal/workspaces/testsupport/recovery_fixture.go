@@ -34,14 +34,14 @@ func OpenSelectionOperation(t *testing.T, fixture *RecoveryFixture, request work
 func RecoveryUseOwner(t *testing.T, fixture *RecoveryFixture) {
 	t.Helper()
 	owner, err := fixture.Resource.TryAcquireUseOwner(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		if releaseErr := owner.Release(); releaseErr != nil {
 			t.Error(releaseErr)
 		}
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 type RecoveryFixture struct {

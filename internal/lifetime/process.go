@@ -25,6 +25,18 @@ func NewProcessRef(pid int, startToken string) (ProcessRef, error) {
 func (r ProcessRef) PID() int           { return r.pid }
 func (r ProcessRef) StartToken() string { return r.startToken }
 
+// SameProcess compares two recorded identities using native incarnation semantics.
+// It observes no process and therefore makes no liveness or ownership claim.
+func SameProcess(observed, persisted ProcessRef) (bool, error) {
+	if err := validateProcessRef(observed); err != nil {
+		return false, err
+	}
+	if err := validateProcessRef(persisted); err != nil {
+		return false, err
+	}
+	return observed.pid == persisted.pid && processIdentityTokensMatch(observed.startToken, persisted.startToken), nil
+}
+
 // ObserveProcess records the platform start identity for one live process.
 func ObserveProcess(pid int) (ProcessRef, error) {
 	present, token, err := observeProcessIdentity(pid)
@@ -60,7 +72,11 @@ func ProcessPresent(ref ProcessRef) (bool, error) {
 	if err != nil || !present {
 		return present, err
 	}
-	return token == ref.startToken, nil
+	observed, err := NewProcessRef(ref.pid, token)
+	if err != nil {
+		return false, err
+	}
+	return SameProcess(observed, ref)
 }
 
 // WaitProcessAbsent waits until the exact worker exits. It never signals the
@@ -81,6 +97,18 @@ func WaitProcessAbsent(ctx context.Context, ref ProcessRef) error {
 func validateProcessRef(ref ProcessRef) error {
 	if ref.pid <= 0 || ref.startToken == "" || strings.ContainsRune(ref.startToken, '\x00') {
 		return ErrInvalidLaunchRef
+	}
+	for _, format := range []struct {
+		prefix     string
+		components int
+	}{
+		{"darwin:", 2}, {"darwin-v2:", 3},
+	} {
+		if strings.HasPrefix(ref.startToken, format.prefix) {
+			if _, valid := parseDarwinIdentityToken(ref.startToken, format.prefix, format.components); !valid {
+				return ErrInvalidLaunchRef
+			}
+		}
 	}
 	return nil
 }

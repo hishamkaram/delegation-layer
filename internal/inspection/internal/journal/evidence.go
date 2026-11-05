@@ -19,6 +19,19 @@ const (
 	completionRecordName = "completion.json"
 )
 
+// CheckLaunchPermission reads current canonical execution permission. Exact
+// receipt replay remains historical evidence and cannot bypass this check.
+func (o *Operation) CheckLaunchPermission(ctx context.Context) error {
+	if o == nil || o.control == nil {
+		return task.ErrEvidenceFault
+	}
+	records, err := o.controlLifetime(true)
+	if err != nil {
+		return err
+	}
+	return records.WithLifetimeLaunchPermissionContext(ctx, func(*taskdir.ControlTransaction) error { return nil })
+}
+
 // RecordReceipt records an exact numeric target only after the caller has
 // reconciled this operation's immutable label, group and supervisor binding.
 func (o *Operation) RecordReceipt(id int64) error {

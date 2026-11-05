@@ -10,13 +10,20 @@ import (
 )
 
 func nestedObserveNative(pid int, scope string) (nestedNativeObservation, error) {
+	return nestedObserveNativeContext(context.Background(), pid, scope)
+}
+
+func nestedObserveNativeContext(ctx context.Context, pid int, scope string) (nestedNativeObservation, error) {
 	result := nestedNativeObservation{PID: pid}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	process, err := nativeDarwinProcessKinfoLookup(pid)
 	if err != nil || process == nil {
 		return result, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	snapshot, present, err := snapshotDarwinProcess(ctx, scope, *process, uint32(unix.Geteuid()), true)
 	if err != nil || !present {
 		return result, err

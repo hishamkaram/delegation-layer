@@ -70,7 +70,7 @@ func TestPrivateGenericRetirementKeepsSameGenerationHistoryGuard(t *testing.T) {
 	persistPreparedPrivateLegacyAlias(t, fixture)
 	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.legacy.Binding())
+		return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	})
 	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("generic retirement bypassed completed history: %v", err)

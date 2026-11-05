@@ -121,6 +121,8 @@ type privateGenerationFacts struct {
 	aliasPublicationErr error
 	settled             bool
 	transitionErr       error
+	// Raw read owner; transitionErr retains its existing derived priority.
+	identityPublicationReadErr error
 }
 
 func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error) {
@@ -135,6 +137,7 @@ func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error
 	facts.aliasPublishing, facts.aliasPublicationErr = privateRecoveryObservationConflict(stateRoot, facts.aliasPresent)
 	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
 	_, publishing, publicationErr := readPrivateIdentityPublication(stateRoot)
+	facts.identityPublicationReadErr = publicationErr
 	facts.settled = !bootstrapPending && !publishing
 	facts.transitionErr = bootstrapErr
 	if bootstrapErr == nil && !bootstrapPending {
@@ -214,16 +217,14 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 			return identityErr
 		}
 		if !daemonFound {
-			if publishErr := publishPrivateDaemonIdentity(filepath.Dir(c.binding.ConfigPath), c.Binding()); publishErr != nil {
-				return publishErr
-			}
+			return publishPrivateDaemonIdentityContext(ctx, filepath.Dir(c.binding.ConfigPath), c.Binding(), c.options.PrivateGenerationGuard)
 		}
 		return clearPrivateBootstrapPending(stateRoot)
 	}
 	if err := c.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return err
 	}
-	return c.startPrivate(ctx)
+	return c.startPrivate(ctx, stateRoot)
 }
 
 // PreparePrivateWithLock binds the current private supervisor without starting
@@ -527,14 +528,17 @@ func preparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecuta
 	return preparePrivateClient(bootstrapContext, stateRoot, options, resolution, clientPath, daemonPath, base, migrationOnly, true)
 }
 
-func (c *Client) startPrivate(ctx context.Context) error {
+func (c *Client) startPrivate(ctx context.Context, stateRoot string) error {
 	if err := c.verifyBinding(); err != nil {
 		return err
 	}
 	if c.runtimeBinding.DaemonExecutable == "" || c.runtimeBinding.DaemonSHA256 == "" {
 		return ErrBinding
 	}
-	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	private := IsPrivateConfig(stateRoot, c.binding.ConfigPath)
+	if !private && c.binding.ConfigPath != privateRecoveryConfigPath(stateRoot) {
+		return ErrConfiguration
+	}
 	base := filepath.Dir(c.binding.ConfigPath)
 	if private {
 		_, identityFound, err := loadPrivateDaemonIdentity(base)
@@ -542,7 +546,9 @@ func (c *Client) startPrivate(ctx context.Context) error {
 			return err
 		}
 		if !identityFound {
-			if err := markPrivateBootstrapPending(stateRoot); err != nil {
+			if err := guardPrivateGeneration(ctx, stateRoot, c.options.PrivateGenerationGuard, func() error {
+				return markPrivateBootstrapPending(stateRoot)
+			}); err != nil {
 				return err
 			}
 		}
@@ -550,17 +556,14 @@ func (c *Client) startPrivate(ctx context.Context) error {
 	if err := c.WaitUnavailable(ctx); err != nil {
 		return err
 	}
-	if err := startDaemon(c.runtimeBinding.DaemonExecutable, c.runtimeBinding.DaemonSHA256, c.binding.ConfigPath, base, c.options); err != nil {
+	if err := startDaemon(ctx, stateRoot, c.runtimeBinding.DaemonExecutable, c.runtimeBinding.DaemonSHA256, c.binding.ConfigPath, base, c.options); err != nil {
 		return err
 	}
 	if err := waitReady(ctx, c, c.options.ObservationTimeout); err != nil {
 		return fmt.Errorf("%w: private pueued did not become ready after migration: %w", ErrBinding, err)
 	}
-	if err := publishPrivateDaemonIdentity(base, c.Binding()); err != nil {
+	if err := publishPrivateDaemonIdentityContext(ctx, base, c.Binding(), c.options.PrivateGenerationGuard); err != nil {
 		return err
-	}
-	if private {
-		return clearPrivateBootstrapPending(stateRoot)
 	}
 	return nil
 }

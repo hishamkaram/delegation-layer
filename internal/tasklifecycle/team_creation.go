@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"context"
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -29,7 +30,7 @@ func rebaseExistingTeam(td *taskdir.TaskDir, candidate *task.TaskRecord) error {
 
 // The losing prepared supervisor/profile has closed before this function runs.
 // Only the existing saved-request owner may recover or submit the winner.
-func adoptCreatedTeamWinner(request DispatchRequest, options DispatchOptions, store *taskdir.Store, candidate task.TaskRecord, result DispatchResult) DispatchResult {
+func adoptCreatedTeamWinnerContext(ctx context.Context, request DispatchRequest, options DispatchOptions, store *taskdir.Store, candidate task.TaskRecord, result DispatchResult) DispatchResult {
 	td, err := store.OpenTask(candidate.TaskID)
 	if err != nil {
 		result.Creation.Failure = errors.Join(result.Creation.Failure, err)
@@ -43,7 +44,7 @@ func adoptCreatedTeamWinner(request DispatchRequest, options DispatchOptions, st
 		result.Creation.Failure = errors.Join(result.Creation.Failure, err, td.Close())
 		return result
 	}
-	existing := DispatchExisting(ExistingTaskOptions{Creation: options.Creation, Selection: request.Selection, RequestedBudget: request.Config.Budget, BriefPath: request.BriefPath}, store, td, candidate)
+	existing := DispatchExistingContext(ctx, ExistingTaskOptions{Creation: options.Creation, Selection: request.Selection, RequestedBudget: request.Config.Budget, BriefPath: request.BriefPath}, store, td, candidate)
 	result.Record, result.Provider = RecordCreated, candidate.Provider
 	result.Team = candidate.Team.Clone()
 	result.Creation, result.Resources, result.Existing = nil, nil, &existing

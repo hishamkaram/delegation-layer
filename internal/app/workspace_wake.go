@@ -27,18 +27,30 @@ func wakeManagedTaskWorkspace(ctx context.Context, store *taskdir.Store, td *tas
 	if environment == nil {
 		return fmt.Errorf("%w: workspace wake launch environment was not captured", task.ErrEvidenceFault)
 	}
-	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
+	deps := Dependencies{RunnerExecutable: meta.RunnerExecutable, Environment: environment}.normalized()
+	options := workspaceRuntimeOptions(deps)
+	resources := &workspaceCommandResources{store: store}
+	defer func() { resultErr = errors.Join(resultErr, resources.closeAfter(resultErr)) }()
+	ctx, lease, err := resources.acquire(ctx, options.RootAdmission, deps.SupervisorOptions)
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
+	options.RootAdmission = lease
+	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
+	resources.resource = resource
+	if err != nil {
+		return err
+	}
 	owner, err := resource.TryAcquireUseOwner(ctx)
-	if errors.Is(err, task.ErrLockBusy) {
+	resources.useOwner = owner
+	if owner != nil && err != nil {
+		return err
+	}
+	if errors.Is(err, task.ErrLockBusy) && workspaceViewRetryable(err) {
 		return workspace.ErrPending
 	}
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
-	return reconcileWorkspaceUse(ctx, store, resource, Dependencies{RunnerExecutable: meta.RunnerExecutable, Environment: environment}.normalized())
+	return reconcileWorkspaceUse(ctx, store, resource, options)
 }

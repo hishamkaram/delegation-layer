@@ -13,7 +13,7 @@ import (
 
 func TestVerifyPrivateMigrationEndpointFailsClosedWithoutLogicalPredecessor(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	if err := os.Remove(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "ready")); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestVerifyPrivateMigrationEndpointFailsClosedWithoutLogicalPredecessor(t *t
 
 func TestVerifyPrivateMigrationEndpointAllowsStoppedMatchingSupervisor(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	if err := os.Remove(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "ready")); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestVerifyPrivateMigrationEndpointAllowsStoppedMatchingSupervisor(t *testin
 
 func TestVerifyPrivateMigrationEndpointFailsClosedWithoutIdentity(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	if _, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestPendingPrivateMigrationCompletesAfterSuccessorLaunchBeforeIdentityPubli
 		t.Fatal(err)
 	}
 
-	if err = startDaemon(successor.runtimeBinding.DaemonExecutable, successor.runtimeBinding.DaemonSHA256, successor.runtimeBinding.ConfigPath, basePath, options); err != nil {
+	if err = startDaemon(context.Background(), stateRoot, successor.runtimeBinding.DaemonExecutable, successor.runtimeBinding.DaemonSHA256, successor.runtimeBinding.ConfigPath, basePath, options); err != nil {
 		t.Fatal(err)
 	}
 	if err = waitReady(context.Background(), successor, options.ObservationTimeout); err != nil {

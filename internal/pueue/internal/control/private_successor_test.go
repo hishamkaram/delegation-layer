@@ -111,7 +111,7 @@ func TestPrivateSupervisorMigrationEdgeCompleteRequiresExactStoppedSuccessor(t *
 			}
 			if testCase.wantGuardError {
 				if err = WithBootstrapLock(ctx, root, func() error {
-					return PublishPrivateSupervisorBindingIfAbsent(root, bindings["A"])
+					return PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(t.Context(), root, bindings["A"], Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 				}); !errors.Is(err, ErrBinding) {
 					t.Fatalf("unrelated successor relaxed the predecessor binding guard: %v", err)
 				}

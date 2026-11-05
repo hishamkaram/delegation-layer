@@ -8,11 +8,17 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions, runner string, catalog commonprovider.Catalog) (result StatusResult, resultErr error) {
+	return StatusContext(context.Background(), store, td, options, runner, catalog)
+}
+
+func StatusContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions, runner string, catalog commonprovider.Catalog) (result StatusResult, resultErr error) {
+	options.AdmissionStore = store
 	inspection, err := td.Inspect()
 	interaction, interactionErr := ReadInteraction(td)
 	result.Interaction, result.Inspection = interaction, inspection
@@ -23,7 +29,7 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 		return result, err
 	}
 	if supervisorcore.TaskTerminal(inspection) {
-		err = observeTerminalStatus(store.Root, td, options, catalog, &result.Observation)
+		err = observeTerminalStatus(ctx, store.Root, td, options, catalog, &result.Observation)
 		return result, err
 	}
 	req, meta, spec, metaHash, err := td.PreparedIdentity()
@@ -43,9 +49,11 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 		return result, err
 	}
 	result.ControlObservation = true
-	prepared, err := supervisorcore.ObserveTaskSupervisor(context.Background(), store, submission.Supervisor, meta, options.Options, options.Lookup, runner, options.OpenStore)
+	prepared, err := options.observeSubmittedSupervisor(ctx, store, submission, meta, runner)
 	if err != nil && !IsPureSupervisorUncertaintyError(err) {
-		return result, err
+		// A successful preparation may return its client beside a later owned
+		// RootSH release fault. Dispose the client before returning that owner error.
+		return result, supervisorcore.ClosePrivateAdmissionTransition(prepared.Client, err)
 	}
 	var observation pueue.Observation
 	var reconcileErr error
@@ -58,18 +66,18 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 		result.Pending = uncertaintyPending(err)
 	case client != nil:
 		defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
-		observation, reconcileErr = reconcileStatusAttempt(context.Background(), store.Root, td, req, meta, spec, metaHash, prepared, &result.Observation)
+		observation, reconcileErr = reconcileStatusAttempt(ctx, store.Root, td, req, meta, spec, metaHash, prepared, &result.Observation, store, options.RootAdmission)
 	default:
-		observation, reconcileErr = ReconcileStatus(context.Background(), store.Root, td, req, meta, spec, metaHash, options, &result.Observation)
+		observation, reconcileErr = ReconcileStatus(ctx, store.Root, td, req, meta, spec, metaHash, options, &result.Observation)
 	}
-	reconcileErr = errors.Join(reconcileErr, UpdateStatusStops(context.Background(), td, &result.Observation, observation))
+	reconcileErr = errors.Join(reconcileErr, UpdateStatusStops(ctx, td, &result.Observation, observation))
 	if reconcileErr != nil && !IsPureSupervisorUncertaintyError(reconcileErr) {
 		// A concrete fault is the authoritative result; the optional
 		// continuation offer must not advertise guidance beside it.
 		return result, reconcileErr
 	}
 	if records, recordsErr := ReadTimeoutRecords(td); recordsErr == nil {
-		offer, offerErr := ObserveTimeoutContinuationWithRecords(store.Root, td, req, meta, records, catalog)
+		offer, offerErr := ObserveTimeoutContinuationWithRecordsContext(ctx, store.Root, td, req, meta, records, catalog)
 		if offer != nil {
 			result.Continuation = offer
 		}
@@ -80,7 +88,7 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 	return result, reconcileErr
 }
 
-func observeTerminalStatus(root string, td *taskdir.TaskDir, options SupervisorOptions, catalog commonprovider.Catalog, observed *Observation) error {
+func observeTerminalStatus(ctx context.Context, root string, td *taskdir.TaskDir, options SupervisorOptions, catalog commonprovider.Catalog, observed *Observation) error {
 	req, meta, _, _, err := td.PreparedIdentity()
 	if err != nil {
 		return err
@@ -88,7 +96,7 @@ func observeTerminalStatus(root string, td *taskdir.TaskDir, options SupervisorO
 	if records, recordsErr := ReadTimeoutRecords(td); recordsErr == nil {
 		// The outcome stays authoritative when optional timeout metadata
 		// is malformed or stale.
-		offer, offerErr := ObserveTimeoutContinuationWithRecords(root, td, req, meta, records, catalog)
+		offer, offerErr := ObserveTimeoutContinuationWithRecordsContext(ctx, root, td, req, meta, records, catalog)
 		if offerErr == nil {
 			observed.Continuation = offer
 		}
@@ -107,10 +115,18 @@ func ReconcileStatus(ctx context.Context, root string, td *taskdir.TaskDir, req 
 	if err != nil {
 		return pueue.Observation{}, err
 	}
-	client, err := supervisorcore.NewClient(ctx, root, submit.Supervisor, clientOptions, true, options.Lookup, options.OpenStore)
+	source, err := supervisorcore.NewSavedBindingSource(req.RootID, infrastructure.SavedBindingTaskSubmission, td.TaskID, "", submit.Supervisor)
 	if err != nil {
 		return pueue.Observation{}, err
 	}
+	options.Options = clientOptions
+	client, err := options.savedClient(ctx, root, submit.Supervisor, source)
+	if err != nil {
+		return pueue.Observation{}, supervisorcore.ClosePrivateAdmissionTransition(client, err)
+	}
 	defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
+	if options.AdmissionStore != nil {
+		return ReconcileStatusWithClientAndAdmissionContext(ctx, options.AdmissionStore, options.RootAdmission, td, req, meta, spec, metaHash, client, observed)
+	}
 	return ReconcileStatusWithClient(ctx, root, td, req, meta, spec, metaHash, client, observed)
 }

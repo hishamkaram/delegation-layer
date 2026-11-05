@@ -65,7 +65,7 @@ func newLabelFilterCleanupFixture(t *testing.T, options Options) labelFilterClea
 	writeExecutable(t, private.clientPath, labelFilterCleanupScript+privateClientFixture)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	bound, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	bound, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, bound, err)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			typed := newLabelFilterCleanupFixture(t, Options{ObservationTimeout: 10 * time.Second})
+			typed := newLabelFilterCleanupFixture(t, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 			typed.install(t, testCase.rows(typed.identity.Label())...)
 			disposition, err := typed.client.AttemptCompletedTaskCleanup(t.Context(), typed.identity)
 			if disposition != testCase.want || (testCase.want == 0) != errors.Is(err, ErrUnknown) || (testCase.want != 0 && err != nil) {
@@ -197,7 +197,7 @@ func TestCompletedTaskCleanupUsesOnlyExactLabelFacts(t *testing.T) {
 			}
 			assertCleanupTestCommands(t, typed, testCase.queries, testCase.removed)
 
-			legacy := newLabelFilterCleanupFixture(t, Options{ObservationTimeout: 10 * time.Second})
+			legacy := newLabelFilterCleanupFixture(t, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 			legacy.install(t, testCase.rows(legacy.identity.Label())...)
 			// A disposition's marker is returned as the exact sentinel; an unknown
 			// selection keeps its identity through the lock wrapper.
@@ -240,7 +240,7 @@ func assertCleanupTestCommands(t *testing.T, fixture labelFilterCleanupFixture, 
 // release fault joined beside each disposition.
 func TestCompletedTaskCleanupMasksDispositionOnOperationalFault(t *testing.T) {
 	t.Run("status timeout", func(t *testing.T) {
-		fixture := newLabelFilterCleanupFixture(t, Options{ObservationTimeout: 100 * time.Millisecond})
+		fixture := newLabelFilterCleanupFixture(t, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 100 * time.Millisecond})
 		fixture.install(t, cleanupTestRow{id: 3, label: fixture.identity.Label(), state: StateEnded})
 		writePrivateTestFile(t, filepath.Join(fixture.base, "status-hold"), "")
 		disposition, err := fixture.client.AttemptCompletedTaskCleanup(t.Context(), fixture.identity)

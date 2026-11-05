@@ -55,7 +55,7 @@ func PrepareContinuationSuccessor(ctx context.Context, root string, successor ta
 			return closeErr
 		}
 		ready = currentClient.Binding()
-		return pueue.RetirePrivateRecoveryBindingContext(lockedContext, root, ready)
+		return pueue.RetirePrivateRecoveryBindingWithOptionsContext(lockedContext, root, ready, options.Options)
 	})
 	return ready, err
 }

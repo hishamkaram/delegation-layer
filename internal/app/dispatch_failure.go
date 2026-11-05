@@ -11,6 +11,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -111,7 +112,7 @@ func (e *fixedDetailPublicError) Unwrap() error { return e.cause }
 // supervisorFailureCode reports the failure codes whose reason codes come
 // from supervisorFailureReason and whose detail is supervisor-specific.
 func supervisorFailureCode(code string) bool {
-	return code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed"
+	return code == "supervisor_owner_incompatible" || code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed"
 }
 
 func inspectionFailureResponse(err error) *InspectionFailureResponse {
@@ -191,6 +192,8 @@ func dispatchCauseFailureCode(err error) string {
 		return code
 	}
 	switch {
+	case errors.Is(err, infrastructure.ErrOwnerIncompatible), errors.Is(err, infrastructure.ErrIncompatible):
+		return "supervisor_owner_incompatible"
 	case errors.Is(err, commonprovider.ErrUnsupportedOption):
 		return "unsupported_option"
 	case errors.Is(err, task.ErrRequestConflict):
@@ -257,6 +260,9 @@ func dispatchFailureStageCode(stage string) string {
 }
 
 func dispatchFailureNextAction(code, taskRecord string) string {
+	if code == "supervisor_owner_incompatible" {
+		return "stop_and_report"
+	}
 	if taskRecord == "not_created" && code == "resource_pressure" {
 		return "retry_later"
 	}
@@ -291,6 +297,7 @@ var dispatchFailureMessages = map[string]string{
 	"task_identity_mismatch":             "Delegate could not verify the saved task identity.",
 	"supervisor_migration_blocked":       "Delegate found active work on an older private supervisor and could not migrate it safely.",
 	"supervisor_migration_unsupported":   "Delegate found an external supervisor binding that it must not stop or migrate.",
+	"supervisor_owner_incompatible":      "Delegate's running infrastructure owner does not match the required installation; state was preserved.",
 	"supervisor_upgrade_required":        "Delegate found supervisor state that requires safe migration before dispatch.",
 	"supervisor_setup_failed":            "Delegate could not prepare its private task supervisor.",
 	"provider_preflight_failed":          "Delegate could not complete provider preflight.",

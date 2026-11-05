@@ -12,11 +12,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func PreparePrivateAdmissionSupervisor(lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
-	controlContext, cancel := ControlContext(options)
-	defer cancel()
-	return PreparePrivateAdmissionSupervisorContext(controlContext, lookup, store, options)
-}
+// ErrIndependentSupervisorSetupRequired preserves an interrupted root whose
+// inventory differs from a cross-root caller's accepted bootstrap input.
+// Trusted outside preparation must complete that inventory's binding before
+// canonical migration can select a different pair.
+var ErrIndependentSupervisorSetupRequired = errors.New("private supervisor requires independent setup before migration")
 
 func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	if ctx == nil {
@@ -120,6 +120,13 @@ func bootstrapPrivateAdmission(ctx context.Context, lookup ExecutableLookup, sto
 	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(store.Root, lookup)
 	if err != nil {
 		return nil, err
+	}
+	// Published generations were handled by the canonical branch above. An
+	// unbound cold operation may use only its accepted pair; conflicting saved
+	// inventory needs trusted independent preparation, never silent replacement.
+	if accepted := lookup.AcceptedBootstrapPair; accepted != (BootstrapPair{}) &&
+		accepted != (BootstrapPair{Client: clientExecutable, Daemon: daemonExecutable}) {
+		return nil, ErrIndependentSupervisorSetupRequired
 	}
 	supervisor, err := pueue.PreparePrivateWithLock(ctx, clientExecutable, daemonExecutable, store.Root, options)
 	if err != nil {

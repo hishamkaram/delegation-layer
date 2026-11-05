@@ -113,6 +113,10 @@ func taskEntryAbsent(store *taskdir.Store, id string) bool {
 // and reuses an assessment already taken by the continuation that owns this
 // dispatch instead of sampling again.
 func openResourceGate(request DispatchRequest, options DispatchOptions, store *taskdir.Store, id string) (*resourceGate, error) {
+	return openResourceGateContext(context.Background(), request, options, store, id)
+}
+
+func openResourceGateContext(ctx context.Context, request DispatchRequest, options DispatchOptions, store *taskdir.Store, id string) (*resourceGate, error) {
 	if !taskEntryAbsent(store, id) {
 		return nil, nil
 	}
@@ -122,14 +126,14 @@ func openResourceGate(request DispatchRequest, options DispatchOptions, store *t
 		return gate, gate.refusal()
 	}
 	resolver := executionTargetResolver{selection: request.Selection, root: store.Root, runtime: options.Creation.Admission.Supervisor}
-	if err := gate.check(resolver); err != nil {
+	if err := gate.checkContext(ctx, resolver); err != nil {
 		return gate, err
 	}
 	return gate, gate.refusal()
 }
 
-func (g *resourceGate) check(resolver resourceadmission.TargetResolver) error {
-	assessment, err := g.checker.Check(context.Background(), resolver)
+func (g *resourceGate) checkContext(ctx context.Context, resolver resourceadmission.TargetResolver) error {
+	assessment, err := g.checker.Check(ctx, resolver)
 	if err != nil {
 		return err
 	}
@@ -153,18 +157,22 @@ func (g *resourceGate) refusal() error {
 // belongs to existing-task recovery, so it takes no further resource reading
 // and keeps the create-once flow unchanged.
 func (g *resourceGate) refresh(binding task.SupervisorRef, runtime supervisorcore.AdmissionOptions) error {
+	return g.refreshContext(context.Background(), binding, runtime)
+}
+
+func (g *resourceGate) refreshContext(ctx context.Context, binding task.SupervisorRef, runtime supervisorcore.AdmissionOptions) error {
 	if g == nil || !taskEntryAbsent(g.store, g.taskID) {
 		return nil
 	}
 	resolver := executionTargetResolver{selection: supervisorcore.AdmissionSelection{SavedSupervisor: &binding}, root: g.store.Root, runtime: runtime}
-	scope, err := g.checker.Scope(context.Background(), resolver)
+	scope, err := g.checker.Scope(ctx, resolver)
 	if err != nil {
 		return err
 	}
 	if g.observed && g.assessment.Reusable(time.Now(), scope) {
 		return nil
 	}
-	if err = g.check(resolver); err != nil {
+	if err = g.checkContext(ctx, resolver); err != nil {
 		return err
 	}
 	return g.refusal()
@@ -183,9 +191,9 @@ func (g *resourceGate) current() *resourceadmission.Assessment {
 // continuation after its predecessor is loaded and before any successor
 // workspace, supervisor, or provider work. The successor ID is generated
 // later by this continuation, so no task entry can exist for it yet.
-func checkContinuationResources(request DispatchRequest, root string, options DispatchOptions) (*resourceadmission.Assessment, error) {
+func checkContinuationResources(ctx context.Context, request DispatchRequest, root string, options DispatchOptions) (*resourceadmission.Assessment, error) {
 	resolver := executionTargetResolver{selection: request.Selection, root: root, runtime: options.Creation.Admission.Supervisor}
-	assessment, err := options.resourceChecker().Check(context.Background(), resolver)
+	assessment, err := options.resourceChecker().Check(ctx, resolver)
 	if err != nil {
 		return nil, err
 	}

@@ -28,7 +28,7 @@ func observeManagedTurnBaseline(scope execution.PreflightScope, store *taskdir.S
 	if environment == nil {
 		return fmt.Errorf("%w: turn baseline launch environment was not captured", task.ErrEvidenceFault)
 	}
-	return recordManagedTurnBaseline(scope.Context(), store, request, workspace.Git{Runner: workspaceCommandRunner{scope: scope}, Environment: slices.Clone(environment)})
+	return recordManagedTurnBaseline(scope.Context(), store, request, workspace.Git{Runner: workspaceCommandRunner{scope: scope, environment: slices.Clone(environment)}, Environment: slices.Clone(environment)})
 }
 
 func recordManagedTurnBaseline(ctx context.Context, store *taskdir.Store, request task.TaskRecord, git workspace.Git) (resultErr error) {

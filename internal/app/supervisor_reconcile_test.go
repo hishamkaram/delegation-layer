@@ -28,7 +28,7 @@ func TestMigrationPreparesInstalledPair(t *testing.T) {
 	var prepared *pueue.Client
 	err := pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		prepared, prepareErr = prepareCurrentPrivateSupervisor(ctx, store.Root, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath}, pueue.Options{})
+		prepared, prepareErr = prepareCurrentPrivateSupervisor(ctx, store.Root, (Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath}).supervisorLookup(), pueue.Options{})
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, prepared, err)
@@ -232,7 +232,7 @@ func TestSupervisorMigrateReplacesRemovedPackagePair(t *testing.T) {
 	var successor *pueue.Client
 	err = pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
 		var prepareErr error
-		successor, prepareErr = prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies(), fixture.options)
+		successor, prepareErr = prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies().supervisorLookup(), fixture.options)
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -288,7 +288,7 @@ func TestExplicitMigrationResumesPrivateJournal(t *testing.T) {
 		return pueue.ErrPrivateSupervisorMigrationBusy
 	}
 	err = pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
-		current, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies(), blocked)
+		current, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies().supervisorLookup(), blocked)
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -320,7 +320,7 @@ func prepareInterruptedInspectionMigration(t *testing.T, scenario *historicalIns
 		if packagePaths {
 			current, prepareErr = pueue.PreparePrivateForMigrationWithLock(ctx, fixture.clientB, fixture.daemonB, fixture.root, blocked)
 		} else {
-			current, prepareErr = prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies(), blocked)
+			current, prepareErr = prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies().supervisorLookup(), blocked)
 		}
 		if prepareErr != nil {
 			return prepareErr
@@ -390,7 +390,7 @@ func TestExplicitMigrationRetargetsMissingPreShutdownSuccessor(t *testing.T) {
 	}
 	fixture.clientB, fixture.daemonB = filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
 	err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
-		current, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies(), fixture.options)
+		current, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies().supervisorLookup(), fixture.options)
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -447,7 +447,7 @@ func TestInspectionMigrationUsesActivePredecessorAfterPathRelocation(t *testing.
 		if prepareErr = os.WriteFile(scenario.configPath, scenario.changedConfig, 0o600); prepareErr != nil {
 			return prepareErr
 		}
-		successor, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies(), fixture.options)
+		successor, prepareErr := prepareCurrentPrivateSupervisor(ctx, fixture.root, fixture.dependencies().supervisorLookup(), fixture.options)
 		if prepareErr != nil {
 			return prepareErr
 		}

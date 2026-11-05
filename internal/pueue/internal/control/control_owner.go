@@ -29,12 +29,14 @@ const (
 )
 
 type controlOwnerRequest struct {
-	SchemaVersion int      `json:"schema_version"`
-	CommandID     string   `json:"command_id"`
-	Executable    string   `json:"executable"`
-	Arguments     []string `json:"arguments"`
-	Directory     string   `json:"directory"`
-	StatusVersion string   `json:"status_version,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	CommandID     string                 `json:"command_id"`
+	Executable    string                 `json:"executable"`
+	Arguments     []string               `json:"arguments"`
+	Directory     string                 `json:"directory"`
+	StatusVersion string                 `json:"status_version,omitempty"`
+	Shutdown      *controlOwnerShutdown  `json:"shutdown,omitempty"`
+	Admission     *controlOwnerAdmission `json:"admission,omitempty"`
 }
 
 type controlOwnerEvent struct {
@@ -151,10 +153,18 @@ func runControlOwner(socketFD, leaseCount int, expectedCommandID string) (result
 		resultErr = errors.Join(resultErr, closeControlLeaseFiles(leases))
 	}()
 
+	forwarded, forwardErr := controlOwnerForwardedFiles(request, leases)
+	if forwardErr != nil {
+		return reportFailure(forwardErr)
+	}
 	command := exec.Command(request.Executable, request.Arguments[1:]...)
 	command.Args = append([]string(nil), request.Arguments...)
 	command.Dir = request.Directory
-	command.Env = os.Environ()
+	command.Env, err = controlOwnerEnvironment(request.Admission, len(forwarded))
+	if err != nil {
+		return reportFailure(err)
+	}
+	command.ExtraFiles = forwarded
 	deliveryAvailable := true
 	result := runOwnedCommand(command, request.StatusVersion, func(started CommandResult) {
 		event := controlOwnerEvent{
@@ -214,6 +224,12 @@ func writeControlOwnerCompletion(connection net.Conn, result CommandResult) erro
 }
 
 func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string) *Pending {
+	return startControlOwnedCapturedWithConsume(ctx, ownerExecutable, cmd, commandID, observer, statusVersion, nil)
+}
+
+// The caller owns the permit policy. This boundary prepares actual inherited
+// resources before consuming it, then attempts the external owner's Start once.
+func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error) *Pending {
 	var commandArgs []string
 	if cmd != nil {
 		commandArgs = append([]string(nil), cmd.Args...)
@@ -231,9 +247,14 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 		return fail(ErrConfiguration)
 	}
 	transport.EmitCommand(observer, commandID, "entry", cmd, CommandResult{ExitCode: -1})
-	leases, err := duplicateControlLeaseFiles(ctx)
+	duplicates, err := duplicateControlLeaseFiles(ctx)
 	if err != nil {
 		return fail(err)
+	}
+	leases := duplicates.files
+	shutdown, shutdownErr := controlOwnerShutdownSelection(ctx, duplicates)
+	if shutdownErr != nil {
+		return fail(errors.Join(shutdownErr, closeControlLeaseFiles(leases)))
 	}
 	if len(leases) > 16 {
 		return fail(errors.Join(ErrConfiguration, closeControlLeaseFiles(leases)))
@@ -246,10 +267,6 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 	owner.Dir = cmd.Dir
 	owner.Env = slices.Clone(cmd.Env)
 	owner.ExtraFiles = append([]*os.File{child}, leases...)
-	if err = owner.Start(); err != nil {
-		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
-	}
-	closeErr := errors.Join(child.Close(), closeControlLeaseFiles(leases))
 	request := controlOwnerRequest{
 		SchemaVersion: task.SchemaVersion,
 		CommandID:     commandID,
@@ -257,7 +274,16 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 		Arguments:     append([]string(nil), cmd.Args...),
 		Directory:     cmd.Dir,
 		StatusVersion: statusVersion,
+		Shutdown:      shutdown,
+		Admission:     duplicates.admission,
 	}
+	if err = consumePreparedControlCommand(ctx, request, consume); err != nil {
+		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
+	}
+	if err = owner.Start(); err != nil {
+		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
+	}
+	closeErr := errors.Join(child.Close(), closeControlLeaseFiles(leases))
 	if err = parent.SetWriteDeadline(time.Now().Add(controlOwnerWriteTimeout)); err == nil {
 		err = writeControlFrame(parent, request, maxControlOwnerRequestBytes)
 	}
@@ -420,6 +446,9 @@ func inheritedControlLeaseFiles(firstFD, count int) ([]*os.File, error) {
 			return nil, errors.Join(errors.New("supervisor control owner inherited an invalid lease"), closeControlLeaseFiles(files))
 		}
 		files = append(files, file)
+		if err := markControlLeaseCloseOnExec(file); err != nil {
+			return nil, errors.Join(err, closeControlLeaseFiles(files))
+		}
 	}
 	return files, nil
 }
@@ -463,7 +492,7 @@ func validateControlOwnerRequest(request controlOwnerRequest) error {
 	if len(request.StatusVersion) > 1024 || strings.IndexByte(request.StatusVersion, 0) >= 0 {
 		return ErrConfiguration
 	}
-	return nil
+	return validateControlOwnerForwarding(request)
 }
 
 func writeControlOwnerEvent(connection net.Conn, event controlOwnerEvent) error {
@@ -670,6 +699,11 @@ func WithControlLease(ctx context.Context, lease ControlLease) context.Context {
 		return ctx
 	}
 	current := controlLeaseContextFrom(ctx)
+	for _, attached := range current.extra {
+		if sameRootAdmissionLease(attached, lease) {
+			return ctx
+		}
+	}
 	next := &controlLeaseContext{locks: append([]*bootstrapLock(nil), current.locks...), extra: append([]ControlLease(nil), current.extra...)}
 	next.extra = append(next.extra, lease)
 	return context.WithValue(ctx, controlLeaseContextKey{}, next)
@@ -704,24 +738,41 @@ func controlLeaseContextFrom(ctx context.Context) *controlLeaseContext {
 	return value
 }
 
-func duplicateControlLeaseFiles(ctx context.Context) ([]*os.File, error) {
+func duplicateControlLeaseFiles(ctx context.Context) (controlLeaseDuplicates, error) {
 	leases := controlLeaseContextFrom(ctx)
-	files := make([]*os.File, 0, len(leases.locks)+len(leases.extra)*2)
+	result := controlLeaseDuplicates{files: make([]*os.File, 0, len(leases.locks)+len(leases.extra)*2)}
+	fail := func(err error) (controlLeaseDuplicates, error) {
+		return controlLeaseDuplicates{}, errors.Join(err, closeControlLeaseFiles(result.files))
+	}
 	for _, lock := range leases.locks {
 		file, err := lock.duplicateForControlOwner()
 		if err != nil {
-			return nil, errors.Join(err, closeControlLeaseFiles(files))
+			return fail(err)
 		}
-		files = append(files, file)
+		result.files = append(result.files, file)
 	}
+	scope := admissionScopeFrom(ctx)
 	for _, lease := range leases.extra {
 		duplicates, err := lease.DuplicateControlLeaseFiles()
 		if err != nil {
-			return nil, errors.Join(err, closeControlLeaseFiles(files))
+			return fail(err)
 		}
-		files = append(files, duplicates...)
+		index := len(result.files)
+		result.files = append(result.files, duplicates...)
+		if isScopedRootAdmissionLease(lease, scope) {
+			if len(duplicates) != 1 || result.admission != nil {
+				return fail(ErrRootAdmissionRequired)
+			}
+			result.admission, err = admissionDuplicate(ctx, scope, duplicates[0], index)
+			if err != nil {
+				return fail(err)
+			}
+		}
 	}
-	return files, nil
+	if scope != nil && result.admission == nil {
+		return fail(ErrRootAdmissionRequired)
+	}
+	return result, nil
 }
 
 func duplicateCloseOnExec(file *os.File, name string) (*os.File, error) {

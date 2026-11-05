@@ -413,6 +413,10 @@ jobs:
           cache: false
       - name: Install pinned repository tools
         run: make tools
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
       - name: Prove native infrastructure components only
         shell: bash
         env:
@@ -425,7 +429,15 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: independent-startup-component-${{ matrix.os }}-${{ github.run_attempt }}
-          path: bin/independent-startup-proof/native.log
+          path: |
+            bin/independent-startup-proof/native.log
+            bin/independent-startup-proof/init-census/census.json
+            bin/independent-startup-proof/init-census/native-packages.json
+            bin/independent-startup-proof/init-census/startup.inittrace
+            bin/independent-startup-proof/init-census/startup.strace
+            bin/independent-startup-proof/editor-survivors/builds.json
+            bin/independent-startup-proof/editor-survivors/keep-native.log
+            bin/independent-startup-proof/editor-survivors/close-native.log
           retention-days: 7
           if-no-files-found: error
 

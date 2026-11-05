@@ -14,7 +14,7 @@ import (
 
 func TestProbePrivateDoesNotStartStoppedSupervisor(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestProbePrivateDoesNotStartStoppedSupervisor(t *testing.T) {
 	if err = client.WaitUnavailable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	probed, ready, err := ProbePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	probed, ready, err := ProbePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestProbePrivateDoesNotStartStoppedSupervisor(t *testing.T) {
 
 func TestProbePrivateEndpointUsesNoControlCommand(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	client, err := BindPrivate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestProbePrivateEndpointUsesNoControlCommand(t *testing.T) {
 
 func TestProbePrivateEndpointRejectsRefusedSocketWithoutControlCommand(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
-	options := Options{ObservationTimeout: privateTestObservationTimeout}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	client, err := BindPrivate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func listenPrivateTestEndpoint(t *testing.T, endpoint string) net.Listener {
 func TestReachableDoesNotMutateSuccessfulTasksWhenStatusOverflows(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	cleanMarker := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "clean-reachable-successful")
-	options := Options{ObservationTimeout: 5 * time.Second, Environment: append(os.Environ(), "PRIVATE_CLEAN_MARKER="+cleanMarker), SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 5 * time.Second, Environment: append(os.Environ(), "PRIVATE_CLEAN_MARKER="+cleanMarker), SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest}
 	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestReachableDoesNotMutateSuccessfulTasksWhenStatusOverflows(t *testing.T) 
 func TestStartPrivateObservesLargeActiveQueueWithoutReaping(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	cleanMarker := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "clean-start-successful")
-	options := Options{ObservationTimeout: 5 * time.Second, Environment: append(os.Environ(), "PRIVATE_CLEAN_MARKER="+cleanMarker), SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest}
+	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 5 * time.Second, Environment: append(os.Environ(), "PRIVATE_CLEAN_MARKER="+cleanMarker), SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest}
 	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
 	if err != nil {
 		t.Fatal(err)

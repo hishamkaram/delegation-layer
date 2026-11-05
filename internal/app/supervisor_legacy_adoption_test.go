@@ -18,7 +18,9 @@ func TestPrivateAdmissionAdoptsReadyLegacyOwnerBeforeScheduling(t *testing.T) {
 	identity := removeLegacyAdoptionTestBinding(t, store.Root, legacy.Binding())
 	base := filepath.Join(store.Root, ".supervisor")
 	starts := readSupervisorProbeTestFile(t, filepath.Join(base, "daemon-started"))
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, deps.SupervisorOptions)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
+	defer cancelControl()
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
 	if client != nil {
 		t.Cleanup(func() {
 			if closeErr := client.Close(); closeErr != nil {

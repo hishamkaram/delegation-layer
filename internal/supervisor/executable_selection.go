@@ -45,6 +45,17 @@ func DiscoverControlOwnerExecutable() string {
 type ExecutableLookup struct {
 	InitialExecutable string
 	Environment       []string
+	// Resident composition owns this immutable input from its accepted startup
+	// artifacts. Canonical bootstrap and explicit migration consume it under target locks;
+	// recorded generations and migration phases retain their existing owner.
+	// The zero value leaves standalone selection unchanged. This is not native
+	// launch authority.
+	AcceptedBootstrapPair BootstrapPair
+}
+
+type BootstrapPair struct {
+	Client string
+	Daemon string
 }
 
 func (lookup ExecutableLookup) lookPath(name string) (string, error) {
@@ -98,12 +109,13 @@ func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) 
 	if clientErr == nil {
 		return client, daemon, nil
 	}
+	clientErr = classifyUnavailableBundledPair(clientErr)
 	if lookup.InitialExecutable != "" || bundledSupervisorPairHasEntry(directory) {
 		return "", "", clientErr
 	}
 	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
 	if found {
-		return client, daemon, libexecErr
+		return client, daemon, classifyUnavailableBundledPair(libexecErr)
 	}
 	if !allowPath {
 		return "", "", clientErr
@@ -111,6 +123,9 @@ func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) 
 
 	pathClient, pathErr := lookup.lookPath("pueue")
 	if pathErr != nil {
+		if !errors.Is(pathErr, exec.ErrNotFound) && !errors.Is(pathErr, os.ErrNotExist) {
+			return "", "", errors.Join(clientErr, pathErr)
+		}
 		return "", "", clientErr
 	}
 	client, err = resolveSupervisorExecutable(pathClient, "pueue")

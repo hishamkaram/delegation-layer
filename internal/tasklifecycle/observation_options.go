@@ -3,6 +3,8 @@ package tasklifecycle
 import (
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -13,9 +15,12 @@ import (
 // StoreOpener is supplied by application composition for native recovery.
 // Lookup locates a supervisor pair that no binding records.
 type SupervisorOptions struct {
-	Options   pueue.Options
-	Lookup    supervisorcore.ExecutableLookup
-	OpenStore supervisorcore.StoreOpener
+	AdmissionStore *taskdir.Store              // Borrowed actual Store for mutation after passive observation.
+	RootAdmission  *taskdir.RootAdmissionLease // Borrowed outer SH, never released by observers.
+	Options        pueue.Options
+	Lookup         supervisorcore.ExecutableLookup
+	OpenStore      supervisorcore.StoreOpener
+	Routing        supervisorcore.OwnerRouting
 }
 
 type CollectionOptions struct {

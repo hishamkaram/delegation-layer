@@ -66,7 +66,9 @@ func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskd
 		t.Fatal(err)
 	}
 	ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), options)
+	defer cancelControl()
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
 	SettleSupervisorProbeTestClient(t, client, err)
 	if closeErr := bootstrap.Close(); closeErr != nil {
 		t.Fatal(closeErr)

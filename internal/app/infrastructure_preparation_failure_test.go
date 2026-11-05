@@ -1,0 +1,146 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	"github.com/hishamkaram/delegation-layer/internal/task"
+)
+
+func TestInfrastructurePreparationFailurePreservesExactDomainLeaves(t *testing.T) {
+	for _, fixture := range []struct {
+		err  error
+		want infrastructure.PreparationCauses
+	}{
+		{pueue.ErrPrivateSupervisorMigrationRequired, infrastructure.PreparationCausePrivateMigrationRequired},
+		{pueue.ErrPrivateSupervisorMigrationBusy, infrastructure.PreparationCausePrivateMigrationBusy},
+		{pueue.ErrReferencedMigrationUnsupported, infrastructure.PreparationCauseReferencedMigrationUnsupported},
+		{inspection.ErrGroupMigrationRequired, infrastructure.PreparationCauseInspectionMigrationRequired},
+		{inspection.ErrGroupMigrationBusy, infrastructure.PreparationCauseInspectionMigrationBusy},
+		{inspection.ErrGroupMigrationUnsupported, infrastructure.PreparationCauseInspectionMigrationUnsupported},
+		{pueue.ErrPrivateSupervisorTransitionIncomplete, infrastructure.PreparationCauseTransitionIncomplete},
+		{pueue.ErrPrivateSupervisorNotInitialized, infrastructure.PreparationCauseNotInitialized},
+		{pueue.ErrPrivateEndpointRefused, infrastructure.PreparationCauseEndpointRefused},
+		{pueue.ErrBinding, infrastructure.PreparationCauseBinding},
+		{pueue.ErrConfiguration, infrastructure.PreparationCauseConfiguration},
+		{pueue.ErrUnknown, infrastructure.PreparationCauseUnknown},
+		{pueue.ErrInFlight, infrastructure.PreparationCauseInFlight},
+		{pueue.ErrStatusOperational, infrastructure.PreparationCauseStatusOperational},
+		{pueue.ErrControlLimit, infrastructure.PreparationCauseControlLimit},
+		{task.ErrLockBusy, infrastructure.PreparationCauseLockBusy},
+		{context.DeadlineExceeded, infrastructure.PreparationCauseDeadline},
+		{context.Canceled, infrastructure.PreparationCauseCanceled},
+		{infrastructure.ErrIdentity, infrastructure.PreparationCauseInfrastructureIdentity},
+		{task.ErrIdentityMismatch, infrastructure.PreparationCauseTaskIdentity},
+		{task.ErrEvidenceFault, infrastructure.PreparationCauseEvidenceFault},
+	} {
+		t.Run(fixture.err.Error(), func(t *testing.T) {
+			failure := (infrastructureEntryHost{}).ClassifyPreparation(fixture.err)
+			if failure.Causes != fixture.want || failure.IndependentFault {
+				t.Fatalf("exact leaf classification changed: %+v", failure)
+			}
+			projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: failure})
+			if !errors.Is(projected, fixture.err) || errors.Is(projected, infrastructure.ErrOwnerRequest) {
+				t.Fatalf("known domain leaf gained a generic fault: %v", projected)
+			}
+		})
+	}
+}
+
+func TestInfrastructurePreparationFailurePreservesJoinedPolicies(t *testing.T) {
+	for _, fixture := range []struct {
+		name        string
+		err         error
+		want        infrastructure.PreparationCauses
+		independent bool
+		deferable   bool
+	}{
+		{"required binding", errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, pueue.ErrBinding), infrastructure.PreparationCausePrivateMigrationRequired | infrastructure.PreparationCauseBinding, false, false},
+		{"unknown inflight", errors.Join(pueue.ErrUnknown, pueue.ErrInFlight), infrastructure.PreparationCauseUnknown | infrastructure.PreparationCauseInFlight, false, false},
+		{"pure transition", pueue.ErrPrivateSupervisorTransitionIncomplete, infrastructure.PreparationCauseTransitionIncomplete, false, true},
+		{"transition required", errors.Join(pueue.ErrPrivateSupervisorTransitionIncomplete, pueue.ErrPrivateSupervisorMigrationRequired), infrastructure.PreparationCauseTransitionIncomplete | infrastructure.PreparationCausePrivateMigrationRequired, false, false},
+		{"transition IO", errors.Join(pueue.ErrPrivateSupervisorTransitionIncomplete, os.ErrPermission), infrastructure.PreparationCauseTransitionIncomplete, true, false},
+		{"transition retained", &retainedPreparationFixtureError{pueue.ErrPrivateSupervisorTransitionIncomplete}, infrastructure.PreparationCauseTransitionIncomplete, true, false},
+		{"busy retained", &retainedPreparationFixtureError{pueue.ErrPrivateSupervisorMigrationBusy}, infrastructure.PreparationCausePrivateMigrationBusy, true, false},
+		{"submission Is alias", pueue.ErrPrivateSupervisorSubmissionIncomplete, 0, true, false},
+		{"opaque non-comparable", opaquePreparationFixtureError{"private fixture content"}, 0, true, false},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			failure := (infrastructureEntryHost{}).ClassifyPreparation(fixture.err)
+			if failure.Causes != fixture.want || failure.IndependentFault != fixture.independent {
+				t.Fatalf("whole error classification lost a cause: %+v", failure)
+			}
+			projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: failure})
+			if supervisor.TaskMaintenanceCompletionRefused(projected) != fixture.deferable {
+				t.Fatalf("routing changed canonical deferral policy: %v", projected)
+			}
+			if errors.Is(projected, infrastructure.ErrOwnerRequest) != fixture.independent {
+				t.Fatalf("routing lost or invented an independent fault: %v", projected)
+			}
+		})
+	}
+}
+
+type retainedPreparationFixtureError struct{ cause error }
+
+func (*retainedPreparationFixtureError) Error() string           { return "fixture retained preparation" }
+func (e *retainedPreparationFixtureError) Unwrap() error         { return e.cause }
+func (*retainedPreparationFixtureError) RetainsResidentCleanup() {}
+
+func TestInfrastructurePreparationFailureReasonCannotHideOpaqueFault(t *testing.T) {
+	private := "/private/fixture/never-send-to-owner-wire"
+	original := &pueue.PrivateRecoveryError{ReasonCode: "state_unreadable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, errors.New(private))}
+	failure := (infrastructureEntryHost{}).ClassifyPreparation(original)
+	if failure.Reason != infrastructure.PreparationReasonStateUnreadable || failure.Causes != infrastructure.PreparationCausePrivateMigrationRequired || !failure.IndependentFault {
+		t.Fatalf("closed reason concealed IO fault: %+v", failure)
+	}
+	projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: failure})
+	if supervisorFailureReason(projected) != "state_unreadable" || !errors.Is(projected, pueue.ErrPrivateSupervisorMigrationRequired) || !errors.Is(projected, infrastructure.ErrOwnerRequest) {
+		t.Fatalf("reason or failure identities lost: %v", projected)
+	}
+	if strings.Contains(projected.Error(), private) {
+		t.Fatal("projection exposed opaque host diagnostic")
+	}
+}
+
+func TestInfrastructurePreparationOutcomeKeepsConditionSeparate(t *testing.T) {
+	for _, fixture := range []struct {
+		condition infrastructure.PreparationCondition
+		want      error
+	}{
+		{infrastructure.PreparationOK, nil},
+		{infrastructure.PreparationPending, infrastructure.ErrOwnerPending},
+		{infrastructure.PreparationBusy, infrastructure.ErrOwnerBusy},
+		{infrastructure.PreparationIncompatible, infrastructure.ErrOwnerIncompatible},
+		{infrastructure.PreparationRefused, infrastructure.ErrOwnerRequest},
+		{infrastructure.PreparationFault, infrastructure.ErrOwnerRequest},
+		{infrastructure.PreparationTimeout, context.DeadlineExceeded},
+	} {
+		projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: fixture.condition})
+		if !errors.Is(projected, fixture.want) {
+			t.Fatalf("condition %s: %v", fixture.condition, projected)
+		}
+	}
+	if projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{}); projected != nil {
+		t.Fatalf("no verified reply invented a domain error: %v", projected)
+	}
+	busy := infrastructure.PreparationOutcome{Condition: infrastructure.PreparationBusy, Failure: infrastructure.PreparationFailure{Causes: infrastructure.PreparationCauseLockBusy}}
+	if projected := infrastructurePreparationOutcomeError(busy); !errors.Is(projected, task.ErrLockBusy) || errors.Is(projected, infrastructure.ErrOwnerRequest) {
+		t.Fatalf("known busy became independent fault: %v", projected)
+	}
+	invalid := infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: infrastructure.PreparationFailure{Causes: 1 << 31}}
+	if projected := infrastructurePreparationOutcomeError(invalid); !errors.Is(projected, infrastructure.ErrIdentity) {
+		t.Fatalf("unknown causes were accepted: %v", projected)
+	}
+}
+
+type opaquePreparationFixtureError []string
+
+func (opaquePreparationFixtureError) Error() string { return "opaque fixture failure" }

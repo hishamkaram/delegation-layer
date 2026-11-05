@@ -10,17 +10,28 @@ import (
 )
 
 func ResolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, lookup ExecutableLookup) (client, daemon string, resultErr error) {
-	if PrivateSupervisorExecutablesAvailable(saved.ClientExecutable, saved.DaemonExecutable) {
-		if err := ValidateSavedStateSupervisorPair(root, saved); err != nil {
-			return "", "", fmt.Errorf("%w: saved private supervisor pair failed integrity validation: %w", pueue.ErrBinding, err)
-		}
-		return saved.ClientExecutable, saved.DaemonExecutable, nil
+	client, daemon, available, err := availableSavedPair(root, saved)
+	if err != nil || available {
+		return client, daemon, err
 	}
 	client, daemon, resolveErr := ResolvePrivateSupervisorExecutables(root, lookup)
 	if resolveErr == nil {
 		return client, daemon, nil
 	}
 	return "", "", fmt.Errorf("%w: resolve private supervisor executables: %w", pueue.ErrBinding, resolveErr)
+}
+
+// availableSavedPair preserves recovery's recorded-path preference. Actual
+// binding and handshake verification belongs to control; a managed pair must
+// first pass its existing integrity policy. Selection grants no native work.
+func availableSavedPair(root string, saved task.SupervisorRef) (client, daemon string, available bool, resultErr error) {
+	if !PrivateSupervisorExecutablesAvailable(saved.ClientExecutable, saved.DaemonExecutable) {
+		return "", "", false, nil
+	}
+	if err := ValidateSavedStateSupervisorPair(root, saved); err != nil {
+		return "", "", false, fmt.Errorf("%w: saved private supervisor pair failed integrity validation: %w", pueue.ErrBinding, err)
+	}
+	return saved.ClientExecutable, saved.DaemonExecutable, true, nil
 }
 
 func PrivateSupervisorExecutablesAvailable(clientExecutable, daemonExecutable string) bool {

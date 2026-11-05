@@ -73,6 +73,9 @@ func (c *Client) SubmitWithGate(ctx context.Context, permit *taskdir.SubmissionP
 	if c == nil {
 		return Observation{}, ErrConfiguration
 	}
+	if c.options.ControlOwnerExecutable != "" {
+		return Observation{}, ErrManagedAdmissionUnsupported
+	}
 	controlContext, cancel, err := c.privateControlContext(ctx)
 	if err != nil {
 		return Observation{}, err

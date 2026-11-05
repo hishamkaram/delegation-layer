@@ -3,7 +3,6 @@ package infrastructure
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -109,8 +108,9 @@ type EndpointIdentity struct {
 	SocketInode    uint64 `json:"socket_inode"`
 }
 
-func (e EndpointIdentity) validate(target StartupInputs) error {
-	if e.Path != filepath.Join(target.Root, ".i") ||
+func (e EndpointIdentity) validate(intent StartupIntent) error {
+	target := intent.Inputs
+	if e.Path != ownerEndpointPath(target.Root, intent.Sequence) ||
 		e.DirectoryDev != target.RootDevice || e.DirectoryInode != target.RootInode || e.SocketInode == 0 {
 		return fmt.Errorf("%w: invalid owner endpoint identity", ErrIdentity)
 	}
@@ -147,7 +147,7 @@ func (p OwnerPublication) Validate(intent StartupIntent, assumption StartupAssum
 	}
 	// Upgrade runtime identity is checked against its sole lifecycle artifact
 	// authority by the lifecycle owner, before fixed entry publishes anything.
-	return p.Endpoint.validate(intent.Inputs)
+	return p.Endpoint.validate(intent)
 }
 
 func (p OwnerPublication) Digest(intent StartupIntent, assumption StartupAssumption) (string, error) {

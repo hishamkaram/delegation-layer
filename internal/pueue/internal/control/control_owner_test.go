@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,18 @@ const controlOwnerCallerTestMode = "--test-control-owner-caller"
 const controlOwnerTestStartupTimeout = 10 * time.Second
 
 func TestMain(m *testing.M) {
+	if code, handled := RunRepairEditorMode(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	if len(os.Args) > 1 && os.Args[1] == qualifiedControlCallerMode {
+		if err := runQualifiedControlCaller(os.Args[2:]); err != nil {
+			if _, writeErr := fmt.Fprintln(os.Stderr, err); writeErr != nil {
+				os.Exit(2)
+			}
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && os.Args[1] == controlOwnerCallerTestMode {
 		os.Exit(runControlOwnerCallerTest(os.Args[2:]))
 	}

@@ -126,7 +126,7 @@ func TestSchedulerObservationRetainsCancelledTaskOnJoinedLocalFault(t *testing.T
 		t.Fatal(err)
 	}
 	writeAppTestFile(t, filepath.Join(td.Dir, "stop", "dddddddddddddddddddddddddddddddd.request.json"), []byte("{}"))
-	observed, statusErr := tasklifecycle.Status(store, td, observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup()), "", tasks.dependencies.Catalog)
+	observed, statusErr := tasklifecycle.Status(store, td, observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup(), tasks.dependencies.infrastructureRouting()), "", tasks.dependencies.Catalog)
 	if !observed.ControlObservation || !errors.Is(statusErr, pueue.ErrUnknown) || tasklifecycle.IsPureSupervisorUncertaintyError(statusErr) {
 		t.Fatalf("fixture did not join its local fault to queue uncertainty: %+v %v", observed, statusErr)
 	}

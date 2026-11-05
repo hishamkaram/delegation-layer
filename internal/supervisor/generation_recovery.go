@@ -103,5 +103,5 @@ func ClearCompletedInspectionRecovery(ctx context.Context, store *taskdir.Store,
 	if !migrated || !task.SameSupervisorIdentity(head.Supervisor, supervisor.Binding()) {
 		return nil
 	}
-	return pueue.RetirePrivateRecoveryBindingContext(ctx, store.Root, supervisor.Binding())
+	return supervisor.RetirePrivateRecoveryBindingContext(ctx, store.Root, supervisor.Binding())
 }

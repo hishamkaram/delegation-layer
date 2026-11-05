@@ -18,7 +18,9 @@ import (
 
 func TestDispatchDuringPreparedMigrationRefusesBeforeTaskCreation(t *testing.T) {
 	store, deps, legacy := newSupervisorProbeTestFixture(t)
-	warm, err := supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, deps.SupervisorOptions)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
+	defer cancelControl()
+	warm, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
 	if err != nil || warm == nil {
 		t.Fatalf("prepare complete admission fixture: client=%v err=%v", warm, err)
 	}

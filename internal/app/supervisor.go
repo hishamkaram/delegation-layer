@@ -117,14 +117,7 @@ func openPrivateMigrationStore(ctx context.Context, stateRoot string, store **ta
 }
 
 func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
-	response := newResponse("supervisor")
-	response.SupervisorControl = &SupervisorControlResponse{
-		Action:             a.SupervisorAction,
-		State:              "unknown",
-		LegacyReachability: "unknown",
-		ActiveWork:         "unknown",
-		NextAction:         "stop_and_report",
-	}
+	response := newSupervisorCommandResponse(a.SupervisorAction)
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root is unavailable", 1)
@@ -433,8 +426,8 @@ func currentPrivateSupervisor(ctx context.Context, root string, deps Dependencie
 	return pueue.Bind(ctx, clientExecutable, pueue.PrivateConfigPath(root), options)
 }
 
-func prepareCurrentPrivateSupervisor(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
-	clientExecutable, daemonExecutable, err := resolveCurrentPrivateSupervisorExecutables(root, deps)
+func prepareCurrentPrivateSupervisor(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := migrationSupervisorPair(root, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -464,16 +457,18 @@ func supervisorMigrate(root string, deps Dependencies, response Response) (resul
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root could not be opened", 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	defer func() { closeObservationStore(&result, store) }()
 	response.RootID = store.RootID
-	state, err := inspectSupervisorMigration(controlContext, root, deps, options, store)
-	if state.current != nil {
-		defer supervisorcore.CloseMaintenance(state.current, err)
+	initialized, err := supervisorMigrationInitialized(controlContext, store)
+	if err != nil {
+		return supervisorMigrationFailure(response, err)
 	}
-	if err == nil && state.notInitialized {
+	if !initialized {
 		return notInitializedSupervisor(response)
 	}
-	return finishSupervisorMigration(response, state, err)
+	runtime := supervisorcore.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
+	_, report, err := runtime.MigrateOwn(controlContext, store)
+	return finishRoutedSupervisorMigration(response, report, err)
 }
 
 func notInitializedSupervisor(response Response) commandResult {
@@ -484,30 +479,43 @@ func notInitializedSupervisor(response Response) commandResult {
 	return commandResult{response: response, code: 0}
 }
 
-func inspectSupervisorMigration(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
+func inspectSupervisorMigration(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
 	state.activeWork = "none"
-	present, err := privateSupervisorStatePresent(root)
+	initialized, err := supervisorMigrationInitialized(ctx, store)
 	if err != nil {
-		return state, fmt.Errorf("private supervisor state could not be inspected: %w", err)
+		return state, err
 	}
-	if !present {
-		_, _, groupErr := inspection.ReadGroupHead(ctx, store)
-		if task.RecordAbsent(groupErr) {
-			state.notInitialized = true
-			return state, nil
-		}
-		if groupErr != nil {
-			return state, fmt.Errorf("inspection supervisor journal could not be inspected: %w", groupErr)
-		}
+	if !initialized {
+		state.notInitialized = true
+		return state, nil
 	}
 	observationTimeout := options.ObservationTimeout
 	if observationTimeout <= 0 {
 		observationTimeout = pueue.DefaultObservationTimeout
 	}
 	resultErr = pueue.WithBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
-		return inspectSupervisorMigrationLocked(lockedContext, root, deps, options, store, observationTimeout, &state)
+		return inspectSupervisorMigrationLocked(lockedContext, root, lookup, options, store, observationTimeout, &state)
 	})
 	return state, resultErr
+}
+
+// The command and fixed host share this observational preflight. Root and
+// inspection journals remain authoritative; no lock or preparation crosses RPC.
+func supervisorMigrationInitialized(ctx context.Context, store *taskdir.Store) (bool, error) {
+	present, err := privateSupervisorStatePresent(store.Root)
+	if err != nil {
+		return false, fmt.Errorf("private supervisor state could not be inspected: %w", err)
+	}
+	if !present {
+		_, _, groupErr := inspection.ReadGroupHead(ctx, store)
+		if task.RecordAbsent(groupErr) {
+			return false, nil
+		}
+		if groupErr != nil {
+			return false, fmt.Errorf("inspection supervisor journal could not be inspected: %w", groupErr)
+		}
+	}
+	return true, nil
 }
 
 func privateSupervisorStatePresent(root string) (bool, error) {
@@ -524,13 +532,13 @@ func privateSupervisorStatePresent(root string) (bool, error) {
 	return err == nil, nil
 }
 
-func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
+func inspectSupervisorMigrationLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
 	if err := supervisorcore.ReconcilePublishedSupervisorWithLock(ctx, store, options, true); err != nil {
 		return err
 	}
 	legacy, _, journalErr := inspection.ReadGroupHead(ctx, store)
 	if errors.Is(journalErr, os.ErrNotExist) {
-		if err := inspectSupervisorWithoutGroup(ctx, root, deps, options, state); err != nil || state.notInitialized {
+		if err := inspectSupervisorWithoutGroup(ctx, root, lookup, options, state); err != nil || state.notInitialized {
 			return err
 		}
 		return verifyCommittedPrivateSupervisor(root, state.current)
@@ -542,9 +550,9 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 	var current *pueue.Client
 	var err error
 	if state.externalInspectionGroup {
-		current, err = prepareInspectionHandoffSupervisor(ctx, root, deps, options)
+		current, err = prepareInspectionHandoffSupervisor(ctx, root, lookup, options)
 	} else {
-		current, err = prepareInspectionMigrationSupervisorWithLock(ctx, store, deps, options)
+		current, err = prepareInspectionMigrationSupervisorWithLock(ctx, store, lookup, options)
 	}
 	state.current = current
 	if err != nil {
@@ -577,7 +585,7 @@ func verifyCommittedPrivateSupervisor(root string, current *pueue.Client) error 
 	return nil
 }
 
-func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Dependencies, options pueue.Options, state *supervisorMigrationState) error {
+func inspectSupervisorWithoutGroup(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, state *supervisorMigrationState) error {
 	state.noInspectionGroup = true
 	if _, err := os.Stat(pueue.PrivateConfigPath(root)); errors.Is(err, os.ErrNotExist) {
 		state.notInitialized = true
@@ -585,7 +593,7 @@ func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Depend
 	} else if err != nil {
 		return fmt.Errorf("private supervisor state could not be inspected: %w", err)
 	}
-	current, err := supervisorMigrateWithoutInspectionGroupLocked(ctx, root, deps, options)
+	current, err := supervisorMigrateWithoutInspectionGroupLocked(ctx, root, lookup, options)
 	if err != nil {
 		state.current = current
 		return err
@@ -632,8 +640,8 @@ func supervisorMigrationFailure(response Response, err error) commandResult {
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }
 
-func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
-	current, err := prepareCurrentPrivateSupervisor(ctx, root, deps, options)
+func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+	current, err := prepareCurrentPrivateSupervisor(ctx, root, lookup, options)
 	if err != nil {
 		return nil, err
 	}

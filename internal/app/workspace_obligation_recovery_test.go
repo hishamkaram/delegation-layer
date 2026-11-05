@@ -23,7 +23,7 @@ func TestWorkspaceVerificationRecoversObligationAfterReservationCrash(t *testing
 	}
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps); !errors.Is(err, workspace.ErrPending) {
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps)); !errors.Is(err, workspace.ErrPending) {
 		t.Fatalf("interrupted verification recovery = %v, want pending original operation", err)
 	}
 	obligation, err := fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence)
@@ -110,7 +110,7 @@ func verifyWorkspaceVerificationRecoveryBinding(t *testing.T, foreign bool) {
 	workspacefixture.RecoveryUseOwner(t, fixture)
 	var commands atomic.Int32
 	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
-	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps)
+	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps))
 	if (!errors.Is(err, task.ErrEvidenceFault) && !errors.Is(err, task.ErrIdentityMismatch)) || commands.Load() != 0 {
 		t.Fatalf("invalid verification binding reached scheduling: commands=%d err=%v", commands.Load(), err)
 	}
@@ -125,7 +125,7 @@ func TestWorkspaceObligationRecoveryRejectsUnknownAuthorization(t *testing.T) {
 	}
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources})); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unknown authorization = %v, want evidence fault", err)
 	}
 	if _, err = fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence); !workspace.OperationAbsent(err) {

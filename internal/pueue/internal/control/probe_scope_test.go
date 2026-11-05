@@ -32,7 +32,7 @@ func TestProbePrivateWithGateRetainsLeaseThroughGate(t *testing.T) {
 		supervisorLeaseTestSettleClient(t, client, probeErr)
 	})
 	go func() {
-		client, ready, probeErr = ProbePrivateWithGate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second}, func(gateContext context.Context, _ *Client, _ QueueSnapshot) (bool, error) {
+		client, ready, probeErr = ProbePrivateWithGate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second}, func(gateContext context.Context, _ *Client, _ QueueSnapshot) (bool, error) {
 			close(entered)
 			select {
 			case <-release:
@@ -76,7 +76,7 @@ func TestProbePrivateWithGateRetainsLeaseThroughGate(t *testing.T) {
 
 func TestProbePrivateGroupsLeavesFreshStateUntouched(t *testing.T) {
 	stateRoot := filepath.Join(canonicalTemp(t), "state")
-	client, ready, err := ProbePrivateGroupsWithGate(t.Context(), "/missing/pueue", "/missing/pueued", stateRoot, Options{ObservationTimeout: time.Second}, nil)
+	client, ready, err := ProbePrivateGroupsWithGate(t.Context(), "/missing/pueue", "/missing/pueued", stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: time.Second}, nil)
 	if err != nil || ready || client != nil {
 		t.Fatalf("fresh private probe = client=%v ready=%t err=%v, want nil false nil", client, ready, err)
 	}
@@ -93,7 +93,7 @@ func TestPrivateProbeOptionsPreservesCallerControlDeadline(t *testing.T) {
 		t.Fatal("caller control context has no deadline")
 	}
 
-	probe, cancelProbe, options, err := privateProbeOptions(caller, Options{ObservationTimeout: time.Second})
+	probe, cancelProbe, options, err := privateProbeOptions(caller, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("prepare bounded probe options: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestProbePrivateDefersIdentityPublicationToExclusivePrepare(t *testing.T) {
 	var prepared *Client
 	err := WithBootstrapLock(ctx, fixture.stateRoot, func() error {
 		var prepareErr error
-		prepared, prepareErr = PreparePrivateWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+		prepared, prepareErr = PreparePrivateWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 		return prepareErr
 	})
 	supervisorLeaseTestSettleClient(t, prepared, err)
@@ -175,7 +175,7 @@ func TestProbePrivateRejectsRegularDataPathWithIndependentCredentials(t *testing
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	original, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	original, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	supervisorLeaseTestSettleClient(t, original, err)
 	if err != nil {
 		t.Fatalf("bind healthy fixture with credentials outside data: %v", err)
@@ -211,7 +211,7 @@ func probeScopeTestNotReady(t *testing.T, fixture privateSupervisorTestFixture, 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	gateEntered := false
-	client, ready, err := ProbePrivateWithGate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second}, func(context.Context, *Client, QueueSnapshot) (bool, error) {
+	client, ready, err := ProbePrivateWithGate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second}, func(context.Context, *Client, QueueSnapshot) (bool, error) {
 		gateEntered = true
 		return true, nil
 	})
@@ -261,7 +261,7 @@ func TestProbePrivateGateRetainsLeaseForPendingStatus(t *testing.T) {
 	base := canonicalTemp(t)
 	started, release := filepath.Join(base, "started"), filepath.Join(base, "release")
 	defer releasePrivateStatusOnCleanup(t, release)
-	client, ready, err := ProbePrivateWithGate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second}, func(ctx context.Context, current *Client, _ QueueSnapshot) (bool, error) {
+	client, ready, err := ProbePrivateWithGate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second}, func(ctx context.Context, current *Client, _ QueueSnapshot) (bool, error) {
 		faultContext, cancel := context.WithCancel(ctx)
 		defer cancel()
 		current.options.Environment = append(os.Environ(), "PRIVATE_STATUS_STARTED="+started, "PRIVATE_STATUS_RELEASE="+release)

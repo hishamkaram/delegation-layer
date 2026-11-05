@@ -326,7 +326,7 @@ func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.
 	lifetime := lifetimeChild.Lifetime()
 	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity, lifetime: lifetime}
 	var facts json.RawMessage
-	options := execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime}
+	options := execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime, PrepareEnvironment: operationalEnvironmentPreparation(store)}
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), options, func(scope execution.PreflightScope) error {
 		return runInspectionCallback(scope, operation, deps, store, record, meta, &facts)
 	})

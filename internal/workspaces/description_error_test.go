@@ -31,16 +31,20 @@ var (
 // this process observe a busy owner, which is pure pending.
 type ownerUnlockFault struct {
 	taskdir.BaseFaultInjector
-	path  string
-	fired bool
+	path    string
+	fired   bool
+	unlocks int
 }
 
 func (f *ownerUnlockFault) OnLockFileBarrier(string) error      { return nil }
 func (f *ownerUnlockFault) OnLockParentDirBarrier(string) error { return nil }
 func (f *ownerUnlockFault) OnFlock(path string, operation int) error {
-	if path == f.path && operation == unix.LOCK_UN && !f.fired {
-		f.fired = true
-		return errOwnerUnlock
+	if path == f.path && operation == unix.LOCK_UN {
+		f.unlocks++
+		if !f.fired {
+			f.fired = true
+			return errOwnerUnlock
+		}
 	}
 	return nil
 }

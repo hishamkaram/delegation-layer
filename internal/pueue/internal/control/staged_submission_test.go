@@ -675,9 +675,16 @@ func TestSubmitStagedEnqueueTimeoutRetainsReceiptAndPending(t *testing.T) {
 func TestSubmitStagedExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
 	configureExternalPendingEnqueue(t, fake)
-	_, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
+	fixture := newTaskFixture(t, fake.client.Binding())
+	ctx := WithControlLease(t.Context(), admissionTestLease(t, fixture.store))
+	permit, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { releaseStagedSubmissionPermit(t, permit) })
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root, Supervised: true}
 	clearStagedInvocationLog(t, fake)
-	observation, err := fake.client.SubmitStaged(t.Context(), permit, launch, func(Observation) error { return nil })
+	observation, err := fake.client.SubmitStaged(ctx, permit, launch, func(Observation) error { return nil })
 	if !errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil {
 		t.Fatalf("external ordinary enqueue did not remain pending: observation=%+v err=%v", observation, err)
 	}
@@ -688,6 +695,7 @@ func TestSubmitStagedExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 func TestSubmitConcurrentInspectionExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
 	configureExternalPendingEnqueue(t, fake)
+	ctx := WithControlLease(t.Context(), admissionTestLease(t, store))
 	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
 	permit := &concurrentInspectionTestPermit{
 		inspectionTestPermit: &inspectionTestPermit{
@@ -699,7 +707,7 @@ func TestSubmitConcurrentInspectionExternalEnqueueRetainsEveryPrivateLease(t *te
 	}
 	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
 	clearStagedInvocationLog(t, fake)
-	observation, err := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(InspectionObservation) error { return nil })
+	observation, err := fake.client.SubmitConcurrentInspectionStaged(ctx, permit, identity, launch, func(InspectionObservation) error { return nil })
 	if !errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil {
 		t.Fatalf("external inspection enqueue did not remain pending: observation=%+v err=%v", observation, err)
 	}

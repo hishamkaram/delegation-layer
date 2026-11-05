@@ -28,7 +28,7 @@ func TestPreparePrivateMigrationPinsPublishedResolver(t *testing.T) {
 	var prepared *Client
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		var prepareErr error
-		prepared, prepareErr = PreparePrivateForMigrationWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+		prepared, prepareErr = PreparePrivateForMigrationWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 		return prepareErr
 	})
 	if prepared != nil {
@@ -153,10 +153,10 @@ func TestInspectionPreservesVerifiedPredecessor(t *testing.T) {
 	if err := os.Remove(privateSupervisorBindingPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
 	}
-	if err := PublishVerifiedPrivatePredecessorWithLock(t.Context(), fixture.stateRoot, candidate); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if err := PublishVerifiedPrivatePredecessorWithOptionsAndLock(t.Context(), fixture.stateRoot, candidate, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("unverified predecessor accepted: %v", err)
 	}
-	if err := PublishVerifiedPrivatePredecessorWithLock(t.Context(), fixture.stateRoot, original); err != nil {
+	if err := PublishVerifiedPrivatePredecessorWithOptionsAndLock(t.Context(), fixture.stateRoot, original, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := ReadPrivateSupervisorBinding(fixture.stateRoot)
@@ -254,7 +254,7 @@ func interruptPrivateRestartPublication(t *testing.T, faultMarker string) (priva
 func reconcilePrivateTestPair(t *testing.T, fixture privateSupervisorTestFixture, candidate task.SupervisorRef) error {
 	t.Helper()
 	return WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		return ReconcilePublishedPrivatePairWithLock(ctx, fixture.stateRoot, candidate.ClientExecutable, candidate.DaemonExecutable, Options{ObservationTimeout: privateTestObservationTimeout})
+		return ReconcilePublishedPrivatePairWithLock(ctx, fixture.stateRoot, candidate.ClientExecutable, candidate.DaemonExecutable, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	})
 }
 

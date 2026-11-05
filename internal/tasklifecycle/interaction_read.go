@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"context"
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -22,8 +23,8 @@ func ReadInteraction(td *taskdir.TaskDir) (*task.InteractionState, error) {
 	return &state, nil
 }
 
-func collectWithInteraction(td *taskdir.TaskDir, ref task.PredicateRef, observed *Observation) (*task.OutcomeRecord, error) {
-	outcome, collectErr := CollectAttempt(td, ref)
+func collectWithInteraction(ctx context.Context, td *taskdir.TaskDir, ref task.PredicateRef, observed *Observation) (*task.OutcomeRecord, error) {
+	outcome, collectErr := CollectAttemptContext(ctx, td, ref)
 	interaction, interactionErr := ReadInteraction(td)
 	if interaction != nil {
 		observed.Interaction = interaction

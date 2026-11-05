@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -21,9 +22,9 @@ type countingOperationRuntime struct {
 	opened *[]task.SupervisorRef
 }
 
-func (r countingOperationRuntime) OpenSaved(ctx context.Context, root string, ref task.SupervisorRef) (*pueue.Client, error) {
+func (r countingOperationRuntime) OpenSaved(ctx context.Context, store *taskdir.Store, ref task.SupervisorRef, source infrastructure.SavedBindingSource) (*pueue.Client, error) {
 	*r.opened = append(*r.opened, ref)
-	return r.unavailableOperationRuntime.OpenSaved(ctx, root, ref)
+	return r.unavailableOperationRuntime.OpenSaved(ctx, store, ref, source)
 }
 
 func (f managedCheckpointFixture) observe(t *testing.T, opened *[]task.SupervisorRef) (CheckpointDescription, error) {
@@ -35,14 +36,14 @@ func (f managedCheckpointFixture) observe(t *testing.T, opened *[]task.Superviso
 func (f managedCheckpointFixture) holdUseOwner(t *testing.T) *taskdir.LifetimeOwnerLease {
 	t.Helper()
 	owner, err := f.recovery.Resource.TryAcquireUseOwner(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		if releaseErr := owner.Release(); releaseErr != nil {
 			t.Error(releaseErr)
 		}
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return owner
 }
 

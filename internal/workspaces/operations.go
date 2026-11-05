@@ -10,6 +10,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -178,23 +179,18 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 	if awaiting, err := awaitingSubmission(ctx, operation); !awaiting {
 		return err
 	}
-	supervisorOwner, err := supervisorcore.AcquireClient(deps.Runtime.OpenSaved(ctx, store.Root, request.Supervisor))
+	source, err := supervisorcore.NewSavedBindingSource(request.RootID, infrastructure.SavedBindingWorkspaceRequest, request.OperationID, "", request.Supervisor)
+	if err != nil {
+		return err
+	}
+	supervisorOwner, err := supervisorcore.AcquireClient(deps.Runtime.OpenSaved(ctx, store, request.Supervisor, source))
 	defer func() { resultErr = errors.Join(resultErr, supervisorOwner.CloseAfterPending(resultErr)) }()
 	if err != nil {
 		return err
 	}
-	supervisor := supervisorOwner.Client()
-	if request.Kind == workspace.OperationVerify {
-		// Only the submitted verification job receives the caller environment.
-		// Binding and cold daemon startup retain bounded control options.
-		environment, scopeErr := deps.scopeEnvironment()
-		if scopeErr != nil {
-			return scopeErr
-		}
-		supervisor, err = supervisor.WithCommandEnvironment(environment)
-		if err != nil {
-			return err
-		}
+	ctx, supervisor, err := workspaceSubmissionClient(ctx, store, supervisorOwner.Client(), request.Kind, deps)
+	if err != nil {
+		return err
 	}
 	identity := pueue.InspectionIdentity{RootID: request.RootID, TaskID: request.OperationID, QueueGroup: "default"}
 	commit := func(observation pueue.InspectionObservation) error {
@@ -203,9 +199,12 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 		}
 		return LaunchPermissionError(operation.RecordReceipt(ctx, observation.Job.ID))
 	}
+	check := func(control context.Context) error {
+		return workspaceOperationLaunchPermission(control, store, operation, deps.RootAdmission)
+	}
 	permit, err := operation.SubmissionPermit(ctx)
 	if errors.Is(err, os.ErrExist) {
-		return recoverWorkspaceSubmission(ctx, store.Root, operation, supervisor, identity, commit)
+		return recoverWorkspaceSubmission(ctx, store.Root, operation, supervisor, identity, commit, check)
 	}
 	if err != nil {
 		return LaunchPermissionError(err)
@@ -215,7 +214,13 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 		return errors.Join(task.ErrIdentityMismatch, err)
 	}
 	launch := pueue.Launch{RunnerExecutable: request.WorkerExecutable, RootPath: store.Root, Supervised: true, WorkspaceOperation: true}
-	_, err = supervisor.SubmitConcurrentInspectionStagedWithGate(ctx, permit, identity, launch, supervisorcore.SubmissionGate(store.Root), commit)
+	checkedCommit := func(observation pueue.InspectionObservation) error {
+		if commitErr := commit(observation); commitErr != nil {
+			return commitErr
+		}
+		return check(ctx)
+	}
+	_, err = supervisor.SubmitConcurrentInspectionStagedWithGate(ctx, permit, identity, launch, supervisorcore.SubmissionGate(store.Root), checkedCommit)
 	return err
 }
 
@@ -241,7 +246,7 @@ func awaitingSubmission(ctx context.Context, operation *workspace.Operation) (bo
 	return true, nil
 }
 
-func recoverWorkspaceSubmission(ctx context.Context, root string, operation *workspace.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, commit pueue.InspectionObservationCommit) error {
+func recoverWorkspaceSubmission(ctx context.Context, root string, operation *workspace.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, commit pueue.InspectionObservationCommit, check func(context.Context) error) error {
 	receipt, err := operation.Receipt(ctx)
 	if err == nil {
 		identity.NumericTaskID = &receipt.NumericTaskID
@@ -257,7 +262,7 @@ func recoverWorkspaceSubmission(ctx context.Context, root string, operation *wor
 	}
 	if observation.Job.State == pueue.StateStashed {
 		matches := func(id int64) error { return workspaceSchedulingReceiptMatches(ctx, operation, id) }
-		_, err = supervisorcore.RecoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, commit, matches, nil)
+		_, err = supervisorcore.RecoverStagedAuxiliaryObservationChecked(ctx, supervisor, root, observation, commit, matches, nil, check)
 		return err
 	}
 	return workspaceSchedulingReceiptMatches(ctx, operation, observation.Job.ID)
@@ -283,6 +288,10 @@ func OperationClosed(ctx context.Context, operation *workspace.Operation) (guard
 	}
 	if !time.Now().Before(operation.Deadline()) {
 		_, fenceErr := operation.SealLifetimeUnlaunchedContext(ctx)
+		var cleanup *taskdir.LifetimeOwnerCleanupError
+		if errors.As(fenceErr, &cleanup) {
+			return proof, fenceErr
+		}
 		if fenceErr == nil {
 			return readOperationProof(ctx, operation)
 		}
@@ -295,13 +304,16 @@ func OperationClosed(ctx context.Context, operation *workspace.Operation) (guard
 
 func recoverWorkspaceNativeClosure(ctx context.Context, operation *workspace.Operation) (proof guardian.ClosureProof, resultErr error) {
 	owner, err := operation.TryAcquireLifetimeOwner(ctx)
-	if errors.Is(err, task.ErrLockBusy) {
+	if owner != nil && err != nil {
+		return proof, err
+	}
+	if useOwnerContended(err) {
 		return proof, workspace.ErrPending
 	}
 	if err != nil {
 		return proof, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
+	defer func() { resultErr = owner.ReleaseWithError(resultErr) }()
 	if _, err = operation.ReadLifetimeIntentContext(ctx); workspace.OperationAbsent(err) {
 		return proof, workspace.ErrPending
 	} else if err != nil {
@@ -325,6 +337,12 @@ func AcceptedOperation(ctx context.Context, store *taskdir.Store, operation *wor
 	if err != nil {
 		return workspace.OperationResult{}, proof, err
 	}
+	return acceptedClosedWorkspaceOperation(ctx, store, operation, proof)
+}
+
+// The caller authenticates the stored action request and supplies canonical
+// closure. Recovery and read-only observation share this result policy.
+func acceptedClosedWorkspaceOperation(ctx context.Context, store *taskdir.Store, operation *workspace.Operation, proof guardian.ClosureProof) (workspace.OperationResult, guardian.ClosureProof, error) {
 	if proof.UnlaunchedSHA256() != "" || proof.Kind() == task.LifetimeClosureUnregisteredRecovered {
 		return workspace.OperationResult{}, proof, task.ErrLifetimeUnlaunched
 	}

@@ -34,7 +34,7 @@ func TestWorkspaceCanceledWatchDoesNotBeginCaptureReplay(t *testing.T) {
 			cancel()
 			var commands atomic.Int32
 			deps.SupervisorOptions.Observer = func(pueue.CommandEvent) { commands.Add(1) }
-			err := watchManagedWorkspace(observer, fixture.Store, fixture.Resource, deps, Arguments{Watch: time.Second})
+			err := watchManagedWorkspace(observer, fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), Arguments{Watch: time.Second})
 			if !errors.Is(err, want) || (test.expired && !errors.Is(err, workspace.ErrPending)) {
 				t.Fatalf("already stopped observer began replay: %v", err)
 			}
@@ -116,7 +116,7 @@ func TestWorkspaceClosedVerificationCaptureSurvivesObserverCancellationDuringRep
 	t.Cleanup(func() { fixture.Store.SetFaultInjector(nil) })
 	var commands atomic.Int32
 	deps.SupervisorOptions.Observer = func(pueue.CommandEvent) { commands.Add(1) }
-	err := reconcileWorkspaceUse(observer, fixture.Store, fixture.Resource, deps)
+	err := reconcileWorkspaceUse(observer, fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps))
 	if !fault.fired || observer.Err() != context.Canceled || err != nil {
 		t.Fatalf("closed capture replay followed the observer cancellation: fired=%t observer=%v reconcile=%v", fault.fired, observer.Err(), err)
 	}

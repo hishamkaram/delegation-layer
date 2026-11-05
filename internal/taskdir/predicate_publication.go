@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -136,7 +137,7 @@ func (td *TaskDir) interpretationInput(seal *task.ProviderExitRecord) (predicate
 	return input, nil
 }
 
-func (td *TaskDir) evaluateAndPublish(interpreter predicate.Interpreter, seal *task.ProviderExitRecord, spec, meta string) (*task.OutcomeRecord, error, error) {
+func (td *TaskDir) evaluateAndPublishContext(ctx context.Context, interpreter predicate.Interpreter, seal *task.ProviderExitRecord, spec, meta string) (*task.OutcomeRecord, error, error) {
 	evidence, err := td.openValidatedEvidence(seal)
 	if err != nil {
 		return nil, nil, err
@@ -186,7 +187,7 @@ func (td *TaskDir) evaluateAndPublish(interpreter predicate.Interpreter, seal *t
 	if err != nil || cleanup != nil {
 		return nil, cleanup, err
 	}
-	outcome, outCleanup, err := td.commitOutcome(&candidate, data)
+	outcome, outCleanup, err := td.commitOutcomeContext(context.WithoutCancel(ctx), &candidate, data)
 	return outcome, errors.Join(cleanup, outCleanup), err
 }
 

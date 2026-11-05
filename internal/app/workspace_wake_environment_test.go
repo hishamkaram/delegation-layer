@@ -99,7 +99,9 @@ func bindPathRecordingSupervisor(t *testing.T, store *taskdir.Store) task.Superv
 		t.Fatal(err)
 	}
 	admissionfixture.ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), options)
+	defer cancelControl()
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
 	admissionfixture.SettleSupervisorProbeTestClient(t, client, err)
 	if err = errors.Join(err, bootstrap.Close()); err != nil {
 		t.Fatal(err)

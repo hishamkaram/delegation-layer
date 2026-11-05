@@ -155,6 +155,13 @@ func (c *Client) SubmitStagedWithGate(ctx context.Context, permit *taskdir.Submi
 	if commit == nil {
 		return unknown, ErrConfiguration
 	}
+	record, recordErr := permit.Record()
+	if recordErr != nil {
+		return unknown, recordErr
+	}
+	if resourceErr := c.checkAdmissionResource(ctx, record.RootID, launch.RootPath); resourceErr != nil {
+		return unknown, resourceErr
+	}
 	controlContext, cancel, controlErr := c.privateControlContext(ctx)
 	if controlErr != nil {
 		return unknown, controlErr
@@ -214,7 +221,7 @@ func (c *Client) submitStagedLocked(ctx context.Context, permit *taskdir.Submiss
 	var observation Observation
 	transitionErr := c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
 		var err error
-		id, pending, err = c.stagedAdd(lockedContext, permit.Consume, append(arguments, runnerArguments...)...)
+		id, pending, err = c.stagedAdd(lockedContext, record.RootID, launch.RootPath, permit.Consume, append(arguments, runnerArguments...)...)
 		if err != nil {
 			return err
 		}
@@ -226,7 +233,7 @@ func (c *Client) submitStagedLocked(ctx context.Context, permit *taskdir.Submiss
 		if err = commit(observation); err != nil {
 			return err
 		}
-		return c.enqueueStagedOrdinaryLocked(lockedContext, id)
+		return c.enqueueStagedOrdinaryLocked(lockedContext, identity.RootID, id)
 	})
 	if transitionErr != nil {
 		if !observation.Matched {
@@ -239,7 +246,17 @@ func (c *Client) submitStagedLocked(ctx context.Context, permit *taskdir.Submiss
 	return observation, nil
 }
 
-func (c *Client) stagedAdd(ctx context.Context, consume func() error, args ...string) (int64, *Pending, error) {
+func (c *Client) stagedAdd(ctx context.Context, rootID, launchRoot string, consume func() error, args ...string) (int64, *Pending, error) {
+	commandContext, scopeErr := c.admissionCommandContext(ctx, controlAdmissionAdd, rootID, launchRoot)
+	if scopeErr != nil {
+		return 0, nil, scopeErr
+	}
+	return c.stagedAddCommand(commandContext, consume, args...)
+}
+
+// stagedAddCommand owns only bounded CLI completion and ID parsing. Admission
+// callers must enter through stagedAdd's resource and role checks.
+func (c *Client) stagedAddCommand(ctx context.Context, consume func() error, args ...string) (int64, *Pending, error) {
 	result, err := c.command(ctx, consume, args...)
 	pending := pendingFrom(err)
 	if pending != nil {
@@ -298,11 +315,15 @@ func validateStagedOrdinaryObservation(observation Observation, binding task.Sup
 	return nil
 }
 
-func (c *Client) enqueueStaged(ctx context.Context, id int64) error {
+func (c *Client) enqueueStaged(ctx context.Context, rootID string, id int64) error {
 	if id < 0 {
 		return errors.Join(ErrEnqueueUncertain, ErrUnknown)
 	}
-	result, err := c.command(ctx, nil, "enqueue", strconv.FormatInt(id, 10))
+	commandContext, scopeErr := c.admissionCommandContext(ctx, controlAdmissionEnqueue, rootID, "")
+	if scopeErr != nil {
+		return errors.Join(ErrEnqueueUncertain, scopeErr)
+	}
+	result, err := c.command(commandContext, nil, "enqueue", strconv.FormatInt(id, 10))
 	if err != nil {
 		return errors.Join(ErrEnqueueUncertain, err)
 	}
@@ -315,11 +336,11 @@ func (c *Client) enqueueStaged(ctx context.Context, id int64) error {
 // enqueueStagedOrdinaryLocked publishes callback classification before the
 // exact Stashed row can run. The caller holds the queue identity lease, so a
 // prior inspection classification cannot race numeric-ID reuse.
-func (c *Client) enqueueStagedOrdinaryLocked(ctx context.Context, id int64) error {
+func (c *Client) enqueueStagedOrdinaryLocked(ctx context.Context, rootID string, id int64) error {
 	if err := c.RegisterPrivateOrdinaryTerminalEvent(ctx, id); err != nil {
 		return err
 	}
-	return c.enqueueStaged(ctx, id)
+	return c.enqueueStaged(ctx, rootID, id)
 }
 
 // CommitStaged revalidates one exact Stashed ordinary row while holding the
@@ -402,6 +423,9 @@ func (c *Client) commitStagedObservation(ctx context.Context, staged Observation
 	if validationErr != nil {
 		return staged, validationErr
 	}
+	if resourceErr := c.checkAdmissionResource(ctx, staged.Identity.RootID, ""); resourceErr != nil {
+		return staged, resourceErr
+	}
 	controlContext, cancel, controlErr := c.privateControlContext(ctx)
 	if controlErr != nil {
 		return staged, controlErr
@@ -447,7 +471,7 @@ func (c *Client) commitStagedObservationWithQueueIdentityMutation(ctx context.Co
 		if commitErr := commit(current); commitErr != nil {
 			return commitErr
 		}
-		if enqueueErr := c.enqueueStagedOrdinaryLocked(identityContext, current.NumericTaskID); enqueueErr != nil {
+		if enqueueErr := c.enqueueStagedOrdinaryLocked(identityContext, current.Identity.RootID, current.NumericTaskID); enqueueErr != nil {
 			result.Pending = pendingFrom(enqueueErr)
 			return enqueueErr
 		}

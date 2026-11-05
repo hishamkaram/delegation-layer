@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrLockOrderViolation = errors.New("lock order violation: lock acquisition must follow maintenance -> session -> admission OR run")
+	ErrLockOrderViolation = errors.New("lock order violation: lock acquisition must follow root admission -> maintenance -> session -> admission OR run")
 	ErrLockNotHeld        = errors.New("lock is not held")
 )
 
@@ -22,11 +22,13 @@ var (
 type LockLevel int
 
 const (
-	LockLevelNone        LockLevel = 0
-	LockLevelMaintenance LockLevel = 1
-	LockLevelSession     LockLevel = 2
-	LockLevelAdmission   LockLevel = 3
-	LockLevelRun         LockLevel = 4
+	// Root admission precedes maintenance; retain all established numeric values.
+	LockLevelRootAdmission LockLevel = -1
+	LockLevelNone          LockLevel = 0
+	LockLevelMaintenance   LockLevel = 1
+	LockLevelSession       LockLevel = 2
+	LockLevelAdmission     LockLevel = 3
+	LockLevelRun           LockLevel = 4
 )
 
 // LockFile represents a stable advisory flock lease on a file or directory inode.
@@ -210,6 +212,16 @@ func newLockFileHandle(f *os.File, path string, level LockLevel) (*LockFile, err
 // Close on the returned file releases only its reference; inherited children
 // retain theirs. The consumed LockFile can no longer issue LOCK_UN.
 func (l *LockFile) TakeExclusiveFile() (*os.File, error) {
+	return l.takeHeldFile(lockModeExclusive)
+}
+
+// takeSharedFile consumes a single privately owned SH hold. It does not mint
+// root-admission authority; that belongs only to RootAdmissionLease acquisition.
+func (l *LockFile) takeSharedFile() (*os.File, error) {
+	return l.takeHeldFile(lockModeShared)
+}
+
+func (l *LockFile) takeHeldFile(mode lockMode) (*os.File, error) {
 	if l == nil {
 		return nil, os.ErrInvalid
 	}
@@ -218,8 +230,17 @@ func (l *LockFile) TakeExclusiveFile() (*os.File, error) {
 	if l.closed {
 		return nil, os.ErrClosed
 	}
-	if !l.isEx || l.shCount != 0 {
-		return nil, ErrLockNotHeld
+	switch mode {
+	case lockModeExclusive:
+		if !l.isEx || l.shCount != 0 {
+			return nil, ErrLockNotHeld
+		}
+	case lockModeShared:
+		if l.isEx || l.shCount != 1 {
+			return nil, ErrLockNotHeld
+		}
+	default:
+		return nil, os.ErrInvalid
 	}
 	var visible unix.Stat_t
 	if err := unix.Lstat(l.path, &visible); err != nil {

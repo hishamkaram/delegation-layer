@@ -21,17 +21,21 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	defer func() { closeObservationStore(&result, store) }()
 	td, err := store.OpenTask(a.TaskID)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.
-	defer taskMaintenanceObserver{root: root, options: deps.supervisorControlScope()}.observe(td)
+	defer func() {
+		if !cleanupRetainsStore(result.err, store) {
+			taskMaintenanceObserver{root: root, options: deps.supervisorControlScope()}.observe(td)
+		}
+	}()
 	defer func() { fillRecordedTaskContext(store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
+	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
 	if observed.ControlObservation {
@@ -53,14 +57,18 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	defer func() { closeObservationStore(&result, store) }()
 	td, err := store.OpenTask(a.TaskID)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	// Runs before td.Close; it never changes the command result.
-	defer taskMaintenanceObserver{root: root, options: deps.supervisorOptions}.observe(td)
+	defer func() {
+		if !cleanupRetainsStore(result.err, store) {
+			taskMaintenanceObserver{root: root, options: deps.supervisorOptions}.observe(td)
+		}
+	}()
 	defer func() { fillRecordedTaskContext(store, td, deps.environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
@@ -96,7 +104,7 @@ func (deps storeDependencies) collectionOptions(watch time.Duration) tasklifecyc
 	var reported sync.Once
 	return tasklifecycle.CollectionOptions{
 		Watch: watch, ObserveSupervisor: deps.observeSupervisor,
-		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.supervisorLookup),
+		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.supervisorLookup, deps.infrastructureRouting()),
 		Catalog:    deps.providerCatalog(), Registry: deps.registry,
 		ReportMaintenanceDeferral: func(err error) {
 			if err != nil {

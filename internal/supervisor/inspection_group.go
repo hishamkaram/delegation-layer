@@ -21,13 +21,14 @@ func EnsureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeo
 // the exact inspection generation it recorded. A continuation must never
 // rewrite the root journal backwards to its predecessor supervisor.
 func EnsureInspectionGroupWithoutMigration(store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) (resultErr error) {
-	if store == nil || supervisor == nil {
-		return errors.New("missing inspection supervisor")
+	return EnsureInspectionGroupWithoutMigrationContext(context.Background(), store, supervisor, timeout)
+}
+
+func EnsureInspectionGroupWithoutMigrationContext(parent context.Context, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) error {
+	ctx, cancel, err := inspectionGroupContext(parent, store, supervisor, timeout)
+	if err != nil {
+		return err
 	}
-	if timeout <= 0 {
-		return pueue.ErrConfiguration
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if !pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
 		return ensureInspectionGroupHistorical(ctx, store, supervisor)

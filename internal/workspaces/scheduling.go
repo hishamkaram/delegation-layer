@@ -19,6 +19,9 @@ type workspaceControlDeadlineKey struct{}
 func ScheduleOperation(observer context.Context, store *taskdir.Store, resource *workspace.Resource, deps OperationOptions, spec OperationSpec, beforeSubmit workspaceBeforeSubmit) (*workspace.Operation, error) {
 	control, cancel := workspaceSchedulingControl(observer, deps)
 	defer cancel()
+	if err := checkWorkspaceRootAdmission(control, store, deps.RootAdmission); err != nil {
+		return nil, err
+	}
 	deadline, err := workspaceOperationDeadline(spec)
 	if err != nil {
 		return nil, err

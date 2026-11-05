@@ -1,6 +1,6 @@
 //go:build linux
 
-package host
+package localpeer
 
 import (
 	"errors"
@@ -9,10 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func connectionPeer(conn *net.UnixConn) (int, int, error) {
+func read(conn *net.UnixConn) (Credentials, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return 0, 0, err
+		return Credentials{}, err
 	}
 	var credentials *unix.Ucred
 	var credentialErr error
@@ -20,10 +20,10 @@ func connectionPeer(conn *net.UnixConn) (int, int, error) {
 		credentials, credentialErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 	})
 	if err = errors.Join(err, credentialErr); err != nil {
-		return 0, 0, err
+		return Credentials{}, err
 	}
 	if credentials == nil || credentials.Pid <= 0 {
-		return 0, 0, ErrIdentity
+		return Credentials{}, ErrCredentials
 	}
-	return int(credentials.Pid), int(credentials.Uid), nil
+	return nativeCredentials(int(credentials.Pid), credentials.Uid)
 }

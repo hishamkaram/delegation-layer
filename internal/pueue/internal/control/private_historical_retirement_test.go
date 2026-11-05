@@ -50,7 +50,7 @@ func TestPrivateHistoricalRetirementPreservesCorruptHistory(t *testing.T) {
 			}
 			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 				if consumer == "generic" {
-					return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.successor.Binding())
+					return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.successor.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 				}
 				return fixture.successor.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 			})
@@ -87,7 +87,7 @@ func assertHistoricalPrivateRetirementConsumer(t *testing.T, changedLogical, bus
 	}
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		if consumer == "generic" {
-			return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.successor.Binding())
+			return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.successor.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 		}
 		return fixture.successor.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 	})
@@ -327,7 +327,7 @@ func TestPrivateOrphanWithoutHistoryCannotUseQuiescentAuthorization(t *testing.T
 			}
 			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 				if consumer == "generic" {
-					return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.legacy.Binding())
+					return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 				}
 				return fixture.legacy.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 			})

@@ -15,6 +15,16 @@ import (
 )
 
 func InspectProvider(options InspectionOptions, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client, inspectionGroupReady bool) (facts json.RawMessage, deadline time.Time, resultErr error) {
+	return InspectProviderContext(context.Background(), options, store, req, candidate, supervisor, inspectionGroupReady)
+}
+
+func InspectProviderContext(parent context.Context, options InspectionOptions, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client, inspectionGroupReady bool) (facts json.RawMessage, deadline time.Time, resultErr error) {
+	if parent == nil {
+		return nil, time.Time{}, context.Canceled
+	}
+	if err := parent.Err(); err != nil {
+		return nil, time.Time{}, err
+	}
 	runner, inspectionSupervisor, binding, err := prepareInspectionBinding(options, candidate, supervisor)
 	if err != nil {
 		return nil, time.Time{}, err
@@ -22,14 +32,14 @@ func InspectProvider(options InspectionOptions, store *taskdir.Store, req task.T
 	inspectionTimeout := inspection.TimeoutForRevision(binding.DefinitionRevision)
 	concurrent := ConcurrentInspection(store.Root, binding)
 	if !concurrent && !inspectionGroupReady {
-		err = ensureInspectionGroup(options, store, inspectionSupervisor, inspectionTimeout)
+		err = ensureInspectionGroup(parent, options, store, inspectionSupervisor, inspectionTimeout)
 	}
 	if err != nil {
 		return nil, time.Time{}, AnnotateMissingInspectionStage("ensuring inspection group", err)
 	}
 
 	openedAt := time.Now()
-	setupContext, cancelSetup := context.WithDeadline(context.Background(), openedAt.Add(inspectionTimeout))
+	setupContext, cancelSetup := context.WithDeadline(parent, openedAt.Add(inspectionTimeout))
 	defer cancelSetup()
 	operation, err := OpenInspectionOperationContext(setupContext, store, req, binding, openedAt)
 	if err != nil {
@@ -39,12 +49,12 @@ func InspectProvider(options InspectionOptions, store *taskdir.Store, req task.T
 	// Replays retain their saved group, including legacy runtime probes. A
 	// current capability marker must never rewrite an existing request.
 	if concurrent && operation.Request().Group != "default" && !inspectionGroupReady {
-		err = ensureInspectionGroup(options, store, inspectionSupervisor, inspectionTimeout)
+		err = ensureInspectionGroup(parent, options, store, inspectionSupervisor, inspectionTimeout)
 	}
 	if err != nil {
 		return nil, operation.Deadline(), AnnotateMissingInspectionStage("ensuring saved inspection group", err)
 	}
-	facts, deadline, err = RunInspection(operation, inspectionSupervisor, runner, store.Root)
+	facts, deadline, err = RunInspectionContext(parent, operation, inspectionSupervisor, runner, store.Root)
 	if err != nil {
 		err = WithInspectionFailureContext(err, req.TaskID, deadline)
 	}
@@ -88,9 +98,9 @@ func prepareInspectionBinding(options InspectionOptions, candidate commonprovide
 	return runner, inspectionSupervisor, binding, nil
 }
 
-func ensureInspectionGroup(options InspectionOptions, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) error {
+func ensureInspectionGroup(ctx context.Context, options InspectionOptions, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) error {
 	if options.PreserveGeneration {
-		return supervisorcore.EnsureInspectionGroupWithoutMigration(store, supervisor, timeout)
+		return supervisorcore.EnsureInspectionGroupWithoutMigrationContext(ctx, store, supervisor, timeout)
 	}
-	return supervisorcore.EnsureInspectionGroup(store, supervisor, timeout)
+	return supervisorcore.EnsureInspectionGroupWithMigrationContext(ctx, store, supervisor, timeout, false)
 }

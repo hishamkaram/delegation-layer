@@ -42,7 +42,7 @@ func TestRecoverSavedRejectsExternalSavedDaemonDigestMismatch(t *testing.T) {
 	}
 	before := snapshotPrivateTestFiles(t, paths)
 
-	client, started, err := RecoverSaved(context.Background(), saved, Options{ObservationTimeout: privateTestObservationTimeout})
+	client, started, err := RecoverSaved(context.Background(), fixture.stateRoot, saved, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if !errors.Is(err, ErrBinding) || !strings.Contains(err.Error(), "saved supervisor daemon identity changed") {
 		t.Fatalf("external saved daemon digest mismatch error = %v, want saved-daemon binding rejection", err)
 	}

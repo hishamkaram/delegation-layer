@@ -60,7 +60,7 @@ func evidenceForIntent(t *testing.T, intent StartupIntent) (StartupAssumption, O
 		Protocol: ProtocolVersion, Startup: reference, AssumptionSHA256: digest,
 		RuntimeSHA256: intent.Inputs.Artifacts.RunnerSHA256,
 		Endpoint: EndpointIdentity{
-			Path:         filepath.Join(intent.Inputs.Root, ".i"),
+			Path:         ownerEndpointPath(intent.Inputs.Root, intent.Sequence),
 			DirectoryDev: intent.Inputs.RootDevice, DirectoryInode: intent.Inputs.RootInode, SocketInode: 24,
 		},
 	}
@@ -391,7 +391,7 @@ func checkOwnerJournalNonSelf(t *testing.T, changed string) {
 	case "uid":
 		assumption.UID++
 	case "token":
-		assumption.Process.StartToken += ":different"
+		assumption.Process = differentOwnerFixtureProcess(t, assumption.Process)
 	}
 	if err := assumption.Validate(fixture.intent); err != nil {
 		t.Fatalf("negative fixture is not valid record data: %v", err)
@@ -401,5 +401,36 @@ func checkOwnerJournalNonSelf(t *testing.T, changed string) {
 	}
 	if _, err := fixture.journal.readAssumption(t.Context(), assumption.Startup); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("non-self refusal wrote assumption: %v", err)
+	}
+}
+
+// Keep negative fixtures domain-valid: malformed recognized native tokens test
+// record shape, while these callers must reach the incarnation-refusal branch.
+func differentOwnerFixtureProcess(t *testing.T, original ProcessIdentity) ProcessIdentity {
+	t.Helper()
+	token := "fixture-different-incarnation"
+	if original.StartToken == token {
+		token += "-other"
+	}
+	reference, err := lifetime.NewProcessRef(original.PID, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := original.Reference()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, compareErr := lifetime.SameProcess(actual, reference); compareErr != nil || same {
+		t.Fatalf("negative fixture retained original incarnation: %v", compareErr)
+	}
+	return ProcessIdentity{PID: reference.PID(), StartToken: reference.StartToken()}
+}
+
+func TestOwnerJournalNegativeIncarnationFixtureRemainsValid(t *testing.T) {
+	for _, token := range []string{"darwin-v2:10:20:7", "darwin:10:20", "linux:123", "opaque-historical"} {
+		changed := differentOwnerFixtureProcess(t, ProcessIdentity{PID: 7, StartToken: token})
+		if _, err := changed.Reference(); err != nil {
+			t.Fatalf("negative incarnation fixture became malformed: %v", err)
+		}
 	}
 }

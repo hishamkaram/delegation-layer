@@ -55,11 +55,14 @@ func pollInspectionStatus(ctx context.Context, operation *inspection.Operation, 
 // extends provider work: both eligible completion and the guardian's
 // empty-scope termination must already prove they happened before the
 // immutable admission deadline.
-func awaitCompletedInspectionObservation(operation *inspection.Operation, supervisor *pueue.Client, awaitErr error) (json.RawMessage, error) {
+func awaitCompletedInspectionObservation(parent context.Context, operation *inspection.Operation, supervisor *pueue.Client, awaitErr error) (json.RawMessage, error) {
 	if !errors.Is(awaitErr, inspection.ErrAdmissionExpired) || operation == nil || supervisor == nil {
 		return nil, awaitErr
 	}
-	proofCtx, cancelProof := context.WithTimeout(context.Background(), pueue.PrivateStatusObservationTimeout)
+	// This existing independent proof window must retain the caller's resource
+	// values without reviving its expired observation or the provider deadline.
+	proofParent := context.WithoutCancel(parent)
+	proofCtx, cancelProof := context.WithTimeout(proofParent, pueue.PrivateStatusObservationTimeout)
 	facts, _, terminal, proofErr := RecordedInspectionFacts(proofCtx, operation)
 	cancelProof()
 	if terminal || proofErr != nil {
@@ -69,7 +72,7 @@ func awaitCompletedInspectionObservation(operation *inspection.Operation, superv
 	if !time.Now().Before(observationDeadline) {
 		return nil, awaitErr
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), observationDeadline)
+	ctx, cancel := context.WithDeadline(proofParent, observationDeadline)
 	defer cancel()
 	facts, err := observeCompletedInspection(ctx, operation, supervisor, supervisorcore.PendingInspectionCommand(awaitErr))
 	if err == nil {
