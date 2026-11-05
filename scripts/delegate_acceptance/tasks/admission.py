@@ -6,7 +6,7 @@ from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.limits import MAX_PROVIDER_BYTES
 from scripts.delegate_acceptance.evidence.records import _read_control_record
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp
-from scripts.delegate_acceptance.evidence.validation import _exact_keys, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _exact_keys, require
 from scripts.delegate_acceptance.lifetime.closure import _ordinary_lifetime_control_started
 from scripts.delegate_acceptance.lifetime.evidence import _validate_managed_ordinary_lifetime
 from scripts.delegate_acceptance.supervisor.binding import (
@@ -53,8 +53,13 @@ def durable_ordinary_admission(state: Path, known_root: Callable[[], str], manag
                 journal.get("task_id") == task and journal.get("root_id") == root,
                 f"inspection journal does not bind ordinary task {task}")
         request = journal["request"]
+        if not isinstance(request, dict):
+            raise AcceptanceFailure(f"inspection journal does not bind ordinary task {task}")
         if request.get("task") == task_record and request.get("task_sha256") == spec_digest:
-            journal_binding = request["binding"]["supervisor"]
+            request_binding = request["binding"]
+            if not isinstance(request_binding, dict):
+                raise AcceptanceFailure(f"inspection journal does not bind ordinary task {task}")
+            journal_binding = request_binding["supervisor"]
         else:
             _validate_historical_workspace_attempt(
                 state, journal.get("attempt"), task_record, root,
@@ -67,6 +72,8 @@ def durable_ordinary_admission(state: Path, known_root: Callable[[], str], manag
     _validate_ordinary_metadata(meta, root, spec_digest, task, task_record)
     binding = meta.get("supervisor_config")
     _validate_supervisor_binding(binding, f"ordinary task supervisor for {task}")
+    if not isinstance(binding, dict):
+        raise AcceptanceFailure(f"ordinary task supervisor for {task} is not an object")
     require(journal_binding is None or binding == journal_binding,
             f"ordinary task metadata supervisor changed for {task}")
 
@@ -100,12 +107,12 @@ def _read_ordinary_supervisor_receipt(
                          "meta_sha256", "label", "supervisor", "created_at"},
                 label=f"ordinary submit record for {task}")
     meta_digest = digest(meta_path)
-    require(type(submit.get("schema_version")) is int and submit["schema_version"] == 1 and
+    if not (type(submit.get("schema_version")) is int and submit["schema_version"] == 1 and
             submit.get("root_id") == root and submit.get("task_id") == task and
             submit.get("spec_sha256") == spec_digest and
             submit.get("meta_sha256") == meta_digest and
-            submit.get("label") == expected_label and submit.get("supervisor") == binding,
-            f"ordinary submit record is not bound to task {task}")
+            submit.get("label") == expected_label and submit.get("supervisor") == binding):
+        raise AcceptanceFailure(f"ordinary submit record is not bound to task {task}")
     _canonical_timestamp(submit.get("created_at"), f"ordinary submit created_at for {task}")
 
     supervisor = _read_control_record(
@@ -116,14 +123,14 @@ def _read_ordinary_supervisor_receipt(
     }, _SUPERVISOR_BINDING_OPTIONAL_KEYS,
                 label=f"ordinary supervisor receipt for {task}")
     numeric = supervisor.get("numeric_task_id")
-    require(type(supervisor.get("schema_version")) is int and
+    if not (type(supervisor.get("schema_version")) is int and
             supervisor["schema_version"] == 1 and
             supervisor.get("root_id") == root and supervisor.get("task_id") == task and
             supervisor.get("spec_sha256") == spec_digest and
             supervisor.get("meta_sha256") == meta_digest and
             supervisor.get("label") == expected_label and
-            type(numeric) is int and numeric >= 0,
-            f"ordinary supervisor receipt identity is invalid for {task}")
+            type(numeric) is int and numeric >= 0):
+        raise AcceptanceFailure(f"ordinary supervisor receipt identity is invalid for {task}")
     receipt_binding = {
         key: supervisor[key]
         for key in _SUPERVISOR_BINDING_KEYS | _SUPERVISOR_BINDING_OPTIONAL_KEYS

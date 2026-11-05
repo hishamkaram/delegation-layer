@@ -7,7 +7,7 @@ import json
 import stat
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import read_json, write_json
-from scripts.delegate_acceptance.evidence.validation import _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _task_identity, require
 from scripts.delegate_acceptance.native.diagnostics import (
     _diagnostic_inspection,
     _diagnostic_json_bytes,
@@ -74,9 +74,13 @@ def _failure_diagnostics(owner) -> dict[str, object]:
         if not values:
             return
         status["partial"] = True
-        status["omitted_count"] = int(status["omitted_count"]) + len(values)
+        count = status["omitted_count"]
+        if not isinstance(count, int):
+            raise AcceptanceFailure("failure diagnostic omission count is malformed")
+        status["omitted_count"] = count + len(values)
         current = status["omitted"]
-        require(isinstance(current, list), "failure diagnostic omission state is malformed")
+        if not (isinstance(current, list)):
+            raise AcceptanceFailure("failure diagnostic omission state is malformed")
         remaining = max(0, FAILURE_DIAGNOSTICS_MAX_OMISSIONS - len(current))
         current.extend(str(value)[:FAILURE_DIAGNOSTICS_TEXT_BYTES] for value in values[:remaining])
 
@@ -226,8 +230,8 @@ def _write_failure_diagnostics(owner) -> bool:
             require(len(data) <= FAILURE_DIAGNOSTICS_BYTES,
                     "existing failure diagnostic exceeds its bound")
             value = json.loads(data)
-            require(isinstance(value, dict) and value.get("schema_version") == 1,
-                    "existing failure diagnostic is malformed")
+            if not (isinstance(value, dict) and value.get("schema_version") == 1):
+                raise AcceptanceFailure("existing failure diagnostic is malformed")
             return True
         value = acceptance._failure_diagnostics()
         data = _diagnostic_json_bytes(value)

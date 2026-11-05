@@ -18,7 +18,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 class CreatedAdmissionTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def response(self):
         return {"task_id": "a" * 32, "task_record": "created", "admission": "unknown",

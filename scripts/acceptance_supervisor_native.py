@@ -17,7 +17,8 @@ from acceptance_supervisor_common import (
     DirectoryOwner, Processes, config_for, digest, inherited_environment,
     read_json, require, rollback_owned_directories, wait_until, write_json,
 )
-from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
+from acceptance_provider_common import AcceptanceFailure
+from scripts.acceptance_supervisor_native_cleanup import ProofGatedTaskOps, QueueCheck, no_shutdown_authority
 from acceptance_supervisor_yaml import YAMLChecks
 
 
@@ -392,10 +393,16 @@ class NativeSuite:
         self.take_provider_workspace_offline()
         saved = self.cli("collect-without-runtime-files", "collect").json()
         require(saved["outcome"] == read_json(self.task_dir / "outcome.json"), "runtime files required for historical winner")
-        require(self.daemon.poll() is None, "daemon exited before authorized shutdown")
+        daemon = self.daemon
+        if daemon is None:
+            raise RuntimeError("private daemon was not started")
+        require(daemon.poll() is None, "daemon exited before authorized shutdown")
         self.shutdown_gate = True
         self.client("private-shutdown", ["shutdown"])
-        self.daemon.wait(15, expected=0)
+        daemon.wait(15, expected=0)
+        daemon_result = daemon.result
+        if daemon_result is None:
+            raise RuntimeError("private daemon has no observed completion")
         require(not self.processes.drain(timeout=1), "owned process left unresolved")
         self.case_ids.append("I05")
         # Copy only task evidence/config paths, never generated secret/key data.
@@ -406,8 +413,8 @@ class NativeSuite:
         write_json(self.output / "success.json", {
             "cases": self.case_ids, "task_id": self.task_id, "root_id": self.root_id,
             "A": 1, "S": 1, "E": 1, "K": 0, "M": 0,
-            "native_shutdown": 1, "daemon_pid": self.daemon.pid,
-            "daemon_natural_exit": self.daemon.result["exit_code"],
+            "native_shutdown": 1, "daemon_pid": daemon.pid,
+            "daemon_natural_exit": daemon_result["exit_code"],
             "limitations": "native client YAML parity; no real signal enforcement, escaped-child containment, or hardware power-loss claim",
         })
 
@@ -463,7 +470,8 @@ class NativeSuite:
                 self.validate_owned_wrapper_receipt(entry, completion)
         require(len(execution_wrappers) == 1, "runner execution recorder count is not exactly one")
         runner_directory, _, runner_completion, runner_events = execution_wrappers[0]
-        require(self.native_job is not None, "queue runner has no saved native status evidence")
+        if self.native_job is None:
+            raise RuntimeError("queue runner has no saved native status evidence")
         require(self.native_job["status"].get("Done", {}).get("result") == "Success", "queue runner lacks positive Done.Success evidence")
         require(runner_completion["exit_code"] == 0 and runner_completion["failed"] is False, "runner wrapper did not complete successfully")
 
@@ -600,7 +608,8 @@ class NativeSuite:
         paths = []
         for path in directory.glob("event-*.json"):
             match = EVENT_FILE_RE.fullmatch(path.name)
-            require(match is not None, "malformed event filename: " + str(path))
+            if match is None:
+                raise RuntimeError("malformed event filename: " + str(path))
             paths.append((int(match.group(1)), path))
         paths.sort(key=lambda item: item[0])
         require([number for number, _ in paths] == list(range(1, len(paths) + 1)), "event file sequence is not contiguous")
@@ -661,25 +670,8 @@ class NativeSuite:
         config_path = getattr(self, "config_path", None)
         if self.daemon is None or config_path is None:
             return False
-        owner = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
-                              self.base, getattr(self, "root", self.base), self.output)
-        owner.bind_supervisor(config_path, self.daemon)
-        if self.admitted and hasattr(self, "root_id"):
-            owner.root_id = self.root_id
-            owner.tasks = {"native": self.task_id}
-            owner.labels = {"native": "delegate:" + self.root_id + ":" + self.task_id}
-            owner.numbers = {"native": self.supervisor_numeric_task_id()}
-            owner.dispatch_attempts = {self.task_id}
-        elif self.dispatch_attempted:
-            # A dispatch response that did not establish an exact admission
-            # identity is unknown. Keep the owner from treating an empty
-            # snapshot as evidence that no native task was admitted.
-            owner.dispatch_attempts = {self.task_id}
-
-        queue_finished = owner.failure_queue_finished
-
-        def guarded_queue_finished(status):
-            if not queue_finished(status):
+        def guarded_queue_finished(canonical: QueueCheck, status: dict[str, object]) -> bool:
+            if not canonical(status):
                 return False
             if not self.dispatch_attempted:
                 return True
@@ -696,9 +688,23 @@ class NativeSuite:
             self.native_job = matches[0]
             return self.failure_terminal_proof()
 
-        # This is an instance callback, so it intentionally accepts the one
-        # status argument supplied by NativeTaskOps.safe_failure_shutdown.
-        owner.failure_queue_finished = guarded_queue_finished
+        owner = ProofGatedTaskOps(
+            processes=self.processes, delegate=self.delegate, runner=self.runner, pueue=self.pueue,
+            state_parent=self.base, state=getattr(self, "root", self.base), output=self.output,
+            queue_proof=guarded_queue_finished)
+        owner.bind_supervisor(config_path, self.daemon)
+        if self.admitted and hasattr(self, "root_id"):
+            owner.root_id = self.root_id
+            owner.tasks = {"native": self.task_id}
+            owner.labels = {"native": "delegate:" + self.root_id + ":" + self.task_id}
+            owner.numbers = {"native": self.supervisor_numeric_task_id()}
+            owner.dispatch_attempts = {self.task_id}
+        elif self.dispatch_attempted:
+            # A dispatch response that did not establish an exact admission
+            # identity is unknown. Keep the owner from treating an empty
+            # snapshot as evidence that no native task was admitted.
+            owner.dispatch_attempts = {self.task_id}
+
         return owner.retain_failure_ownership()
 
     def retain_unknown_failure_ownership(self):
@@ -712,16 +718,13 @@ class NativeSuite:
         config_path = getattr(self, "config_path", None)
         if self.daemon is None or config_path is None:
             return False
-        owner = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
-                              self.base, getattr(self, "root", self.base), self.output)
+        owner = ProofGatedTaskOps(
+            processes=self.processes, delegate=self.delegate, runner=self.runner, pueue=self.pueue,
+            state_parent=self.base, state=getattr(self, "root", self.base), output=self.output,
+            queue_proof=no_shutdown_authority)
         owner.bind_supervisor(config_path, self.daemon)
         if self.dispatch_attempted:
             owner.dispatch_attempts = {self.task_id}
-
-        def no_shutdown_authority(_status):
-            return False
-
-        owner.failure_queue_finished = no_shutdown_authority
         return owner.retain_failure_ownership()
 
     def run(self):

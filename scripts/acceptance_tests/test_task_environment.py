@@ -5,15 +5,19 @@ Run natively with ``python3 -m unittest scripts.acceptance_tests.test_task_envir
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from typing import Never, NotRequired, TypedDict, Unpack
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
+from scripts.delegate_acceptance.tasks.contracts import TaskProcesses
+from scripts.acceptance_tests.invalid_calls import invoke_invalid
 
 PYTHON = str(Path(sys.executable).resolve())
 TASK = "b" * 32
@@ -27,9 +31,19 @@ class RecordingProcesses:
     def __init__(self) -> None:
         self.launches: list[dict[str, object]] = []
 
-    def run(self, name: str, argv: list[object], cwd: Path, **options: object) -> object:
-        self.launches.append(options)
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15, stdin: bytes | None = None,
+            *, environment: Mapping[str, str] | None = None) -> Never:
+        self.launches.append({"expected": expected, "timeout": timeout, "stdin": stdin,
+                              "environment": environment})
         raise RuntimeError("launch recorded")
+
+    def drain(self, timeout: float = 70, exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        raise AssertionError("recording fixture must not drain processes")
+
+
+class EnvironmentOptions(TypedDict):
+    environment: NotRequired[Mapping[str, str] | None]
 
 
 class TaskEnvironmentTests(unittest.TestCase):
@@ -40,13 +54,13 @@ class TaskEnvironmentTests(unittest.TestCase):
         for name in ("state", "state-parent", "output"):
             (self.base / name).mkdir()
 
-    def ops(self, processes: object) -> NativeTaskOps:
+    def ops(self, processes: TaskProcesses) -> NativeTaskOps:
         ops = NativeTaskOps(processes, self.base / "delegate", self.base / "runner", self.base / "pueue",
                             self.base / "state-parent", self.base / "state", self.base / "output")
         ops.root_id = "a" * 32
         return ops
 
-    def launch(self, ops: NativeTaskOps, command: str, **options: object) -> None:
+    def launch(self, ops: NativeTaskOps, command: str, **options: Unpack[EnvironmentOptions]) -> None:
         with self.assertRaisesRegex(RuntimeError, "launch recorded"):
             if command == "dispatch":
                 ops.dispatch("fresh", TASK, ["delegate"], **options)
@@ -55,10 +69,11 @@ class TaskEnvironmentTests(unittest.TestCase):
 
     def test_dispatch_and_continue_forward_the_selected_environment_unchanged(self) -> None:
         selection = {"PORT_SELECTED_MARKER": "selected"}
+        cases: tuple[tuple[str, EnvironmentOptions, Mapping[str, str] | None], ...] = (
+            ("unset", {}, None), ("none", {"environment": None}, None),
+            ("empty", {"environment": {}}, {}), ("mapping", {"environment": selection}, selection))
         for command in ("dispatch", "continue"):
-            for label, options, expected in (("unset", {}, None), ("none", {"environment": None}, None),
-                                             ("empty", {"environment": {}}, {}),
-                                             ("mapping", {"environment": selection}, selection)):
+            for label, options, expected in cases:
                 with self.subTest(command=command, selection=label):
                     processes = RecordingProcesses()
                     ops = self.ops(processes)
@@ -96,7 +111,8 @@ class TaskEnvironmentTests(unittest.TestCase):
         processes = Processes(self.base / "captures", {}, owner=owner)
         ops = self.ops(processes)
         with self.assertRaisesRegex(RuntimeError, "keys and values must be strings"):
-            ops.dispatch("fresh", TASK, [PYTHON, "-c", "pass"], environment={"PORT_SELECTED_MARKER": 1})
+            invoke_invalid(ops.dispatch, "fresh", TASK, [PYTHON, "-c", "pass"],
+                           environment={"PORT_SELECTED_MARKER": 1})
         self.assertEqual((processes.entries, processes.pending(), ops.tasks), ([], [], {}))
         self.assertEqual(list(processes.directory.iterdir()), [])
 

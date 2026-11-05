@@ -181,12 +181,12 @@ def wait_timed_out(owner, task_id: str, timeout: float = WATCH_SECONDS,
             sleep_fn(delay)
             continue
         continuation = response.get("continuation")
-        require(isinstance(continuation, dict) and continuation.get("resumable") is True and
+        if not (isinstance(continuation, dict) and continuation.get("resumable") is True and
                 continuation.get("mode") == "native" and
                 continuation.get("predecessor_task_id") == task_id and
                 isinstance(continuation.get("continue_command"), str) and
-                "continue --task " + task_id in continuation["continue_command"],
-                "timed-out task is not resumable through Delegate")
+                "continue --task " + task_id in continuation["continue_command"]):
+            raise AcceptanceFailure("timed-out task is not resumable through Delegate")
         return response
     raise AcceptanceFailure("timed-out task never published resumable continuation evidence")
 
@@ -204,10 +204,11 @@ def _interaction_events(owner, name: str, task_id: str, after: int,
     require(response.get("task_id") == task_id,
             f"{name} observed the wrong interactive task")
     state = response.get("interaction")
-    require(isinstance(state, dict), f"{name} returned no interaction state")
+    if not (isinstance(state, dict)):
+        raise AcceptanceFailure(f"{name} returned no interaction state")
     events = response.get("events", [])
-    require(isinstance(events, list) and all(isinstance(event, dict) for event in events),
-            f"{name} returned malformed interaction events")
+    if not (isinstance(events, list) and all(isinstance(event, dict) for event in events)):
+        raise AcceptanceFailure(f"{name} returned malformed interaction events")
     cursor = response.get("cursor")
     require(type(cursor) is int and cursor >= after,
             f"{name} returned an invalid interaction cursor")
@@ -229,15 +230,16 @@ def wait_for_interaction(owner, task_id: str, after: int = 0,
             observation_name, task_id, cursor, max(1, min(5, int(remaining))))
         state = response["interaction"]
         events = response.get("events", [])
-        require(isinstance(state, dict) and isinstance(events, list),
-                "interactive event response changed shape")
+        if not (isinstance(state, dict) and isinstance(events, list)):
+            raise AcceptanceFailure("interactive event response changed shape")
         observed.extend(event for event in events if isinstance(event, dict))
         next_cursor = response.get("cursor")
         require(type(next_cursor) is int and next_cursor >= cursor,
                 "interactive event cursor moved backwards")
         cursor = next_cursor
         requests = state.get("pending_requests")
-        require(isinstance(requests, list), "interactive pending request state is malformed")
+        if not (isinstance(requests, list)):
+            raise AcceptanceFailure("interactive pending request state is malformed")
         if pending and requests:
             return state, cursor, observed
         if not pending and state.get("closed") is True:
@@ -259,11 +261,11 @@ def reply_interaction(owner, task_id: str, request_id: str, turn_id: str) -> tup
     require(response.get("task_id") == task_id,
             "interactive reply targeted the wrong task")
     delivery = response.get("delivery")
-    require(isinstance(delivery, dict) and delivery.get("message_id") == message_id and
-            delivery.get("state") == "queued",
-            "interactive reply was not durably queued")
+    if not (isinstance(delivery, dict) and delivery.get("message_id") == message_id and
+            delivery.get("state") == "queued"):
+        raise AcceptanceFailure("interactive reply was not durably queued")
     state = response.get("interaction")
-    require(isinstance(state, dict) and state.get("turn_id") == turn_id,
-            "interactive reply changed the interaction turn")
+    if not (isinstance(state, dict) and state.get("turn_id") == turn_id):
+        raise AcceptanceFailure("interactive reply changed the interaction turn")
     write_json(acceptance.output / "interactive-reply.json", response)
     return message_id, delivery

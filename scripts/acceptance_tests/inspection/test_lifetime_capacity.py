@@ -27,13 +27,13 @@ REGISTRATION = "c" * 64
 GO_INTERNAL = Path(__file__).resolve().parents[3] / "internal"
 # Go encoding/json output for these records was produced independently with the
 # pinned go1.27.2 toolchain and matches the launch-set digest of commit d30054d.
-ESCAPED_LAUNCH = {
+ESCAPED_LAUNCH: dict[str, object] = {
     "schema_version": 1, "root_id": ROOT, "task_id": TASK,
     "registration_sha256": REGISTRATION, "sequence": 1, "pid": 101,
     "process_start": "start<a>&b\u2028c\u2029\u00e9\u6f22", "pgid": 0,
     "started_at": "2026-09-15T00:00:05Z",
 }
-GROUPED_LAUNCH = {
+GROUPED_LAUNCH: dict[str, object] = {
     "pgid": 77, "started_at": "2026-09-15T00:00:06.123456789Z", "schema_version": 1,
     "root_id": ROOT, "task_id": TASK, "registration_sha256": REGISTRATION,
     "sequence": 2, "pid": 102, "process_start": "plain",
@@ -100,7 +100,10 @@ def sized_launch(sequence: int, canonical_bytes: int) -> dict[str, object]:
     record = launch_record(sequence)
     # ASCII without <, >, or & needs no Go escaping; MarshalCanonical appends a newline.
     base = len(json.dumps(record, separators=(",", ":"))) + 1
-    record["process_start"] += "x" * (canonical_bytes - base)
+    start = record["process_start"]
+    if not isinstance(start, str):
+        raise AssertionError("launch fixture process start is not text")
+    record["process_start"] = start + "x" * (canonical_bytes - base)
     return record
 
 
@@ -115,12 +118,18 @@ class LifetimeLaunchCapacityTests(unittest.TestCase):
 
     def write_launches(self, owner_kind: str, records: list[dict[str, object]]) -> None:
         for record in records:
-            name = identity._lifetime_record_name(owner_kind, "launch", record["sequence"])
+            sequence = record["sequence"]
+            if type(sequence) is not int:
+                raise AssertionError("launch fixture sequence is not an integer")
+            name = identity._lifetime_record_name(owner_kind, "launch", sequence)
             # Indented, sorted files prove accounting uses Go's canonical record bytes.
             (self.directory / name).write_text(json.dumps(record, sort_keys=True, indent=2))
 
     def write_compact_launch(self, owner_kind: str, record: dict[str, object]) -> int:
-        name = identity._lifetime_record_name(owner_kind, "launch", record["sequence"])
+        sequence = record["sequence"]
+        if type(sequence) is not int:
+            raise AssertionError("launch fixture sequence is not an integer")
+        name = identity._lifetime_record_name(owner_kind, "launch", sequence)
         data = json.dumps(record, separators=(",", ":")).encode()
         (self.directory / name).write_bytes(data)
         return len(data)
@@ -278,7 +287,7 @@ class LifetimeLaunchCapacityTests(unittest.TestCase):
         self.assertNotEqual(decoded, GO_ESCAPED_LAUNCH_BYTES)
 
     def test_existing_launch_set_digest_is_unchanged(self):
-        termination = {
+        termination: dict[str, object] = {
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "registration_sha256": REGISTRATION, "launch_count": 2,
             "launch_set_sha256": GO_LAUNCH_SET_SHA256, "cause": "completed",

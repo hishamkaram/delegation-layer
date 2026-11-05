@@ -1,4 +1,7 @@
 """Hermetic oracles for a native acceptance behavior cohort."""
+
+from scripts.acceptance_tests.native.support import NoCommands, task_owner
+from argparse import Namespace
 import os
 from pathlib import Path
 import stat
@@ -6,12 +9,12 @@ import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from typing import Callable
 
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
-from scripts.acceptance_tests.native.support import adjacent_runner_bundle
+from scripts.acceptance_tests.native.support import adjacent_runner_bundle, invoke_with_invalid_arguments
 from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
@@ -23,7 +26,7 @@ from scripts.delegate_acceptance.native.timeouts import (
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
-    def _timeout_lease_operation(self, root: Path) -> object:
+    def _timeout_lease_operation(self, root: Path) -> gate.NativeAcceptance:
         output = root / "evidence"
         workspace = root / "workspace"
         briefs = root / "briefs"
@@ -40,14 +43,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.briefs = briefs_token.directory
         operation.owned_directories = owner.transfer()
         track_directory_pins(self, operation.owned_directories)
-        operation.processes = SimpleNamespace(capture_root=raw_token)
+        self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw_token), create=True))
         operation.timeout_state = timeout_state
         return operation
 
     @staticmethod
     def _timeout_owner(capture: Callable[[Path], bool]) -> TimeoutLeaseOwner:
         owner = TimeoutLeaseOwner(Path("/"), False, supervisor_common.DirectoryOwner())
-        owner.capture = capture
+        owner.capture = Mock(side_effect=capture)
         return owner
 
     @staticmethod
@@ -205,9 +208,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = self._timeout_lease_operation(root)
             base_owner = supervisor_common.DirectoryOwner()
             operation.base_parent = root / "private"
-            operation.base_parent_token = base_owner.create(
+            base_parent_token = base_owner.create(
                 "private parent", operation.base_parent, root)
-            track_directory_pins(self, (operation.base_parent_token,))
+            track_directory_pins(self, (base_parent_token,))
             base_token = base_owner.create(
                 "private base", operation.base_parent / "run", operation.base_parent)
             track_directory_pins(self, (base_token,))
@@ -216,7 +219,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 *base_owner.transfer(), *operation.owned_directories,
             )
             operation.closed = False
-            operation.safe_shutdown = lambda: False
+            operation.safe_shutdown = Mock(return_value=False)
             try:
                 self.assertFalse(operation.finalize(True))
                 self.assertTrue(operation.timeout_state.directory.is_dir())
@@ -374,7 +377,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             output.mkdir()
             home = root / "home"
             delegate, runner = adjacent_runner_bundle(root)
-            args = SimpleNamespace(
+            args = Namespace(
                 provider=provider, mode="workspace-write", scenario="timeout-resume",
                 discover_models=False, output=str(output), delegate=str(delegate),
                 runner=str(runner), pueue="/bin/sh", pueued="/bin/sh",
@@ -450,7 +453,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = "a" * 32
-        operation.ops = SimpleNamespace(root_id=None, status=status)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(root_id=None, status=status), create=True))
         operation.output = Path(tempfile.gettempdir())
         operation.timeout_state = self._timeout_owner(lambda _output: clock[0] >= 31.0)
 
@@ -477,7 +480,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = "a" * 32
-        operation.ops = SimpleNamespace(root_id=None, status=status)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(root_id=None, status=status), create=True))
         operation.output = Path(tempfile.gettempdir())
         operation.timeout_state = self._timeout_owner(lambda _output: False)
 
@@ -503,7 +506,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = "a" * 32
-        operation.ops = SimpleNamespace(root_id=None, status=status)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(root_id=None, status=status), create=True))
         operation.output = Path(tempfile.gettempdir())
         operation.timeout_state = self._timeout_owner(lambda _output: False)
 
@@ -535,7 +538,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = "a" * 32
-        operation.ops = SimpleNamespace(root_id=None, status=status)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(root_id=None, status=status), create=True))
         operation.output = Path(tempfile.gettempdir())
         operation.timeout_state = self._timeout_owner(lambda _output: False)
 
@@ -629,7 +632,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertAlmostEqual(sleeps[2], 0.05)
         self.assertAlmostEqual(clock[0], 0.25)
         with self.assertRaises(TypeError):
-            provider_common.wait_runner_terminal(*invalid_positional_arguments)
+            invoke_with_invalid_arguments(provider_common.wait_runner_terminal, invalid_positional_arguments, {})
         for interval in (0, -1, float("inf"), float("nan"), True):
             with self.subTest(interval=interval), \
                     self.assertRaisesRegex(gate.AcceptanceFailure, "poll interval"):
@@ -645,13 +648,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             raise RuntimeError("observer reached")
 
         legacy = provider_common.NativeTaskOps(
-            object(), Path("/delegate"), Path("/runner"), Path("/pueue"),
+            NoCommands(), Path("/delegate"), Path("/runner"), Path("/pueue"),
             Path("/base"), Path("/state"), Path("/evidence"))
         explicit = provider_common.NativeTaskOps(
-            object(), Path("/delegate"), Path("/runner"), Path("/pueue"),
+            NoCommands(), Path("/delegate"), Path("/runner"), Path("/pueue"),
             Path("/base"), Path("/state"), Path("/evidence"), runner_poll_seconds=5)
-        native = gate.NativeAcceptanceTaskOps(SimpleNamespace(
-            provider="codex:exec", processes=object(), delegate=Path("/delegate"), runner=Path("/runner"),
+        native = gate.NativeAcceptanceTaskOps(task_owner(self,
+            provider="codex:exec", processes=NoCommands(), delegate=Path("/delegate"), runner=Path("/runner"),
             pueue=Path("/pueue"), base=Path("/base"), state=Path("/state"),
             output=Path("/evidence")))
         with patch("scripts.delegate_acceptance.tasks.operations.wait_runner_terminal", observer):
@@ -695,7 +698,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             pueue = root / "pueue"
             pueue.write_text(f"#!/bin/sh\nexec cat '{root / 'status.json'}'\n")
             pueue.chmod(0o700)
-            owner = SimpleNamespace(
+            owner = task_owner(self,
                 provider="codex:exec",
                 processes=gate.Processes(root / "processes", {"PATH": "/usr/bin:/bin"}),
                 delegate=pueue, runner=pueue, pueue=pueue, base=root, state=root / "state",

@@ -16,7 +16,7 @@ from scripts.acceptance_tests.private_cli.fixtures import _release_live_director
 from scripts.acceptance_tests.private_cli.fixtures import canonical_pool_marker
 from scripts.acceptance_tests.private_cli.fixtures import create_private_pool_directory
 from scripts.acceptance_tests.private_cli.fixtures import reported_as_another_user
-from scripts.acceptance_tests.private_cli.fixtures import set_up_private_capture_root
+from scripts.acceptance_tests.private_cli.fixtures import exception_capture_paths, set_up_private_capture_root
 from scripts.acceptance_tests.private_cli.fixtures import write_pool_marker
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.files import digest
@@ -739,7 +739,7 @@ class ObserverCaptureDeadlineTests(unittest.TestCase):
     """The observer's absolute deadline reaches the existing private control capture owner unchanged."""
 
     def setUp(self):
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def capture_files(self):
         return sorted((path.name.rsplit(".", 1)[1], path.stat().st_size)
@@ -786,7 +786,7 @@ class ObserverCaptureDeadlineTests(unittest.TestCase):
                                              deadline=1.0)
         popen.assert_not_called()
         self.assertEqual(self.capture_files(), [("stderr", 0), ("stdout", 0)])
-        self.assertEqual(sorted(raised.exception.retained_capture_paths),
+        self.assertEqual(sorted(exception_capture_paths(raised.exception, "retained_capture_paths")),
                          sorted(str(path) for path in self.capture_root.directory.iterdir()))
 
     def launch_and_record_wait(self, *budget, **deadline):
@@ -821,7 +821,7 @@ class ObserverCaptureDeadlineTests(unittest.TestCase):
 
 class PublicStatusObserverTests(unittest.TestCase):
     def test_contended_capture_lock_past_the_orchestrator_deadline_launches_nothing(self):
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
         observe = disposal_observer.public_status_observer(
             Path("/install/delegate"), Path("/owned/state"), {}, capture_root=self.capture_root)
         with patch.object(capture.subprocess, "Popen", side_effect=AssertionError("launched")) as popen:

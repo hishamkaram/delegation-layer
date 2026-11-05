@@ -122,7 +122,8 @@
     "owner": "py:delegate_acceptance.native",
     "layer": "pure",
     "imports": [
-      "py:dataclasses"
+      "py:dataclasses",
+      "py:typing"
     ]
   }
 ]

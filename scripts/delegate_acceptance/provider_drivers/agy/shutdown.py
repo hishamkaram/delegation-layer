@@ -129,11 +129,14 @@ def _wait_failure_cleanup(run: ShutdownRun, deadline: float,
 
 def _handle_daemon_exit(run: ShutdownRun, daemon_result: dict[str, object],
                         queue_finished: bool, deadline: float) -> bool | None:
+    daemon = run.daemon
+    if daemon is None:
+        raise AcceptanceFailure("daemon exit has no owned process handle")
     if daemon_result.get("natural_wait") is not True:
         marker = run.output / "supervisor-exited-by-signal.json"
         if not marker.exists():
             write_json(marker, {
-                "supervisor_pid": run.daemon.pid,
+                "supervisor_pid": daemon.pid,
                 "natural_wait": False,
                 "queue_termination": "unknown",
                 "cleanup_complete": False,
@@ -147,7 +150,7 @@ def _handle_daemon_exit(run: ShutdownRun, daemon_result: dict[str, object],
     marker = run.output / "supervisor-exited-queue-unresolved.json"
     if not marker.exists():
         write_json(marker, {
-            "supervisor_pid": run.daemon.pid,
+            "supervisor_pid": daemon.pid,
             "queue_termination": "unknown",
             "dispatch_attempts": sorted(run.dispatch_attempts),
             "cleanup_complete": False,

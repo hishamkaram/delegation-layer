@@ -1,16 +1,18 @@
 """Model discovery accepts Delegate's typed operational failure without echoing it."""
 
+from argparse import Namespace
+
 import ast
 import inspect
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scripts import acceptance_native as entry
 from scripts.acceptance_tests.test_foundation_owners import failing_lstat
+from scripts.acceptance_tests.native.support import CapturedCommand, fixture_list, fixture_record, fixture_text
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     provider_policy,
@@ -121,8 +123,14 @@ class ModelDiscoveryFailureContractTests(unittest.TestCase):
         returns = [node.value for node in ast.walk(tree) if isinstance(node, ast.Return)]
         self.assertEqual(len(returns), 1)
         summary = returns[0]
-        self.assertIsInstance(summary, ast.Dict)
-        self.assertEqual({key.value for key in summary.keys},
+        if not isinstance(summary, ast.Dict):
+            self.fail("the discovery summary must be a dictionary literal")
+        keys: set[object] = set()
+        for key in summary.keys:
+            if not isinstance(key, ast.Constant):
+                self.fail("the discovery summary must use literal keys")
+            keys.add(key.value)
+        self.assertEqual(keys,
                          {"status", "reason_code", "complete", "source", "model_count", "effort_count"})
         constants = {node.value for node in ast.walk(summary) if isinstance(node, ast.Constant)}
         names = {node.id for node in ast.walk(summary) if isinstance(node, ast.Name)}
@@ -149,6 +157,14 @@ class ObservedExitPolicyTests(unittest.TestCase):
             allowed(response("failed", "discovery_failed", failure=failure()))
 
 
+class DiscoveryAcceptance(gate.NativeAcceptance):
+    """The native owner with explicit references to its injected command mocks."""
+
+    command: CapturedCommand
+    processes_mock: Mock
+    dispatch_mock: Mock
+
+
 class DiscoveryExitConsumerTests(unittest.TestCase):
     """The real discovery, scenario and failure-receipt owners; only the CLI is stubbed."""
 
@@ -159,7 +175,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         self.processes = 0
 
     def operation(self, value: dict[str, object], exit_code: object, *,
-                  discover_only: bool) -> gate.NativeAcceptance:
+                  discover_only: bool) -> DiscoveryAcceptance:
         self.processes += 1
         directory = self.root / f"process-{self.processes}"
         directory.mkdir()
@@ -167,27 +183,34 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         output, workspace = directory / "output", directory / "workspace"
         output.mkdir()
         workspace.mkdir()
-        operation = object.__new__(gate.NativeAcceptance)
+        operation = object.__new__(DiscoveryAcceptance)
         operation.provider, operation.mode, operation.scenario = PROVIDER, "read-only", "read-only"
-        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.args = Namespace(model=None, effort=None)
         operation.discover_models_only = discover_only
         operation.delegate, operation.config = Path("/delegate"), Path("/pueue.yml")
-        operation.ops = SimpleNamespace(managed_runner=True)
         operation.base, operation.output, operation.workspace = directory, output, workspace
         operation.models_state = directory / "models-state"
         # Discovery binds its owned root and helper before launch; the constructor provides both.
         operation.models_state.mkdir()
         operation.provider_executable = directory / "provider"
         operation.provider_executable.write_bytes(b"provider fixture\n")
-        operation.processes = SimpleNamespace(run=Mock(return_value=SimpleNamespace(
-            directory=directory, result={"exit_code": exit_code})))
+        operation.command = CapturedCommand(directory, {"exit_code": exit_code})
+        operation.processes_mock = Mock()
+        operation.processes_mock.run.return_value = operation.command
+        process_patch = patch.object(operation, "processes", operation.processes_mock, create=True)
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
+        operation.runner, operation.pueue, operation.state = (
+            directory / "runner", directory / "pueue", directory / "state")
+        operation.ops = gate.NativeAcceptanceTaskOps(operation)
         operation.setup = Mock()
         operation.closed, operation.lifetime_closure = False, None
-        operation.shutdown = lambda: setattr(operation, "closed", True)
-        operation.native_mode_receipt = lambda: None
+        operation.shutdown = Mock(side_effect=lambda: setattr(operation, "closed", True))
+        operation.native_mode_receipt = Mock(return_value=None)
         operation.success_candidate = None
         operation.brief = Mock(return_value=workspace / "brief")
-        operation.dispatch = Mock(side_effect=AssertionError("paid task must not start"))
+        operation.dispatch_mock = Mock(side_effect=AssertionError("paid task must not start"))
+        operation.dispatch = operation.dispatch_mock
         return operation
 
     def test_failed_status_owns_the_verdict_while_the_observed_exit_is_recorded(self):
@@ -203,7 +226,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 self.assertEqual(operation.run(), 1)
                 self.assertEqual(operation.model_discovery_exit_code, observed)
                 self.assertIsNone(operation.success_receipt)
-                operation.dispatch.assert_not_called()
+                operation.dispatch_mock.assert_not_called()
 
     def test_wrong_status_and_exit_pairs_are_refused(self):
         typed = {"failure": failure(), "error": ERROR_TEXT}
@@ -219,7 +242,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 with self.assertRaisesRegex(gate.AcceptanceFailure, "exit status does not match"):
                     operation.run()
                 self.assertIsNone(operation.model_discovery_exit_code)
-                operation.dispatch.assert_not_called()
+                operation.dispatch_mock.assert_not_called()
 
     def test_main_failure_receipt_keeps_the_observed_exit_and_status_verdict(self):
         typed = {"failure": failure(code="supervisor_upgrade_required", next_action="run_supervisor_migrate",
@@ -240,11 +263,11 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 data = (operation.output / "failure.json").read_text()
                 receipt = json.loads(data)
                 self.assertEqual((receipt["status"], receipt["discovery_exit_code"]), (verdict, observed))
-                self.assertEqual(set(receipt["model_discovery"]),
+                self.assertEqual(set(fixture_record(receipt["model_discovery"])),
                                  {"status", "reason_code", "complete", "model_count", "effort_count"})
                 for text in (ERROR_TEXT, RECOVERY):
                     self.assertNotIn(text, data)
-                operation.dispatch.assert_not_called()
+                operation.dispatch_mock.assert_not_called()
 
     def test_pi_typed_operational_failures_stop_before_dispatch(self):
         for status, reason, observed, expected in (
@@ -258,13 +281,13 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 self.assertNotIsInstance(raised.exception, gate.BlockedFailure)
                 self.assertNotIn(ERROR_TEXT, str(raised.exception))
                 self.assertEqual(operation.model_discovery_exit_code, observed)
-                operation.dispatch.assert_not_called()
+                operation.dispatch_mock.assert_not_called()
 
     def test_pi_advisory_unavailable_readiness_still_proceeds(self):
         operation = self.operation(response("unavailable", "interface_unavailable"), 2, discover_only=False)
         operation.require_default_model_prerequisite()
         self.assertEqual(operation.model_discovery_exit_code, 2)
-        operation.processes.run.assert_called_once()
+        operation.processes_mock.run.assert_called_once()
         # An operation that journaled nothing records no inspection identity.
         self.assertIsNone(operation.model_discovery_task_id)
 
@@ -282,20 +305,20 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         gate.write_json(journal / "result.json", {"schema_version": 1, "reason": "eligible"})
 
     def journaled(self, value: dict[str, object], exit_code: object, *, journal=None,
-                  raised: BaseException | None = None) -> tuple[gate.NativeAcceptance, Path]:
+                  raised: BaseException | None = None) -> tuple[DiscoveryAcceptance, Path]:
         """The models command calls ``journal`` with its root, then returns or raises ``raised``."""
         operation = self.operation(value, exit_code, discover_only=False)
-        process = operation.processes.run.return_value
+        process = operation.command
         write_journal = self.journal_one_inspection if journal is None else journal
 
-        def models_command(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        def models_command(*_args: object, **_kwargs: object) -> CapturedCommand:
             write_journal(operation.models_state)
             if raised is not None:
                 raise raised
             return process
 
-        operation.processes.run.side_effect = models_command
-        operation.processes.capture_root = None
+        operation.processes_mock.run.side_effect = models_command
+        operation.processes_mock.capture_root = None
         operation.state = self.root / "ordinary-state"
         operation.state.mkdir(exist_ok=True)
         operation.tasks, operation.numeric_ids = {}, {}
@@ -303,7 +326,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         operation.launch_environment = Mock(return_value={})
         return operation, operation.models_state / "inspections" / INSPECTION
 
-    def admit_failed_ordinary_task(self, operation: gate.NativeAcceptance) -> None:
+    def admit_failed_ordinary_task(self, operation: DiscoveryAcceptance) -> None:
         def admit(name: str, *_args: object, **_kwargs: object) -> None:
             task = operation.state / "tasks" / ORDINARY
             task.mkdir(parents=True)
@@ -313,42 +336,43 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
             operation.numeric_ids[ORDINARY] = 7
             raise gate.AcceptanceFailure("fresh provider task failed")
 
-        operation.dispatch = Mock(side_effect=admit)
+        operation.dispatch_mock = Mock(side_effect=admit)
+        operation.dispatch = operation.dispatch_mock
 
-    def failed_main(self, operation: gate.NativeAcceptance) -> dict[str, object]:
+    def failed_main(self, operation: DiscoveryAcceptance) -> dict[str, object]:
         """Run the entry's failure path; return the diagnostics persisted before shutdown."""
         frozen: dict[str, object] = {}
 
         def safe_shutdown() -> None:
             frozen.update(json.loads((operation.output / "failure-diagnostics.json").read_text()))
 
-        operation.safe_shutdown = safe_shutdown
+        operation.safe_shutdown = Mock(side_effect=safe_shutdown)
         with patch.object(entry, "choose_output", return_value=operation.output), \
                 patch.object(entry, "NativeAcceptance", return_value=operation):
             self.assertEqual(entry.main(["--provider", PROVIDER, "--permission", "read-only",
                                          "--output", str(operation.output)]), 1)
         self.assertTrue(frozen, "diagnostics were not persisted before shutdown")
-        self.assertIs(frozen["failure"]["discover_models"], False)
+        self.assertIs(fixture_record(frozen["failure"])["discover_models"], False)
         return frozen
 
     def process_failure(self) -> RuntimeError:
         # The acceptance's Processes registry keeps its default RuntimeError failure type.
         return RuntimeError(f"unexpected exit 3 for {self.root / 'processes' / 'model-discovery'}")
 
-    def assertProcessErrorReported(self, operation: gate.NativeAcceptance, diagnostics: dict[str, object],
+    def assertProcessErrorReported(self, operation: DiscoveryAcceptance, diagnostics: dict[str, object],
                                    primary: BaseException) -> dict[str, object]:
         receipt = json.loads((operation.output / "failure.json").read_text())
         self.assertEqual((receipt["status"], receipt["error"]), ("failed", str(primary)))
-        self.assertEqual(diagnostics["failure"]["error"]["bytes"], len(str(primary).encode()))
-        operation.dispatch.assert_not_called()
+        self.assertEqual(fixture_record(fixture_record(diagnostics["failure"])["error"])["bytes"], len(str(primary).encode()))
+        operation.dispatch_mock.assert_not_called()
         return receipt
 
     def assertInspectionBound(self, diagnostics: dict[str, object], journal: Path) -> None:
         self.assertIn("model_discovery_inspection", diagnostics)
-        inspection = diagnostics["model_discovery_inspection"]
+        inspection = fixture_record(diagnostics["model_discovery_inspection"])
         self.assertEqual((inspection["journal_task_id"], inspection["journal"]), (INSPECTION, "present"))
         for name in ("request.json", "result.json"):
-            self.assertEqual(inspection["files"][name]["sha256"], gate.digest(journal / name))
+            self.assertEqual(fixture_record(fixture_record(inspection["files"])[name])["sha256"], gate.digest(journal / name))
 
     def test_ordinary_failure_after_discovery_binds_the_recorded_inspection(self):
         operation, journal = self.journaled(response("available", "ok"), 0)
@@ -356,7 +380,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         diagnostics = self.failed_main(operation)
         self.assertInspectionBound(diagnostics, journal)
         self.assertEqual(diagnostics["task_ids"], [ORDINARY, INSPECTION])
-        self.assertEqual([task["task_id"] for task in diagnostics["tasks"]], [ORDINARY])
+        self.assertEqual([fixture_record(task)["task_id"] for task in fixture_list(diagnostics["tasks"])], [ORDINARY])
         self.assertEqual((operation.models_root_id, operation.model_discovery_task_id), (MODELS_ROOT, INSPECTION))
 
     def test_response_validation_failure_keeps_the_journaled_inspection_attributable(self):
@@ -365,7 +389,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         self.assertInspectionBound(diagnostics, journal)
         self.assertEqual(diagnostics["task_ids"], [INSPECTION])
         self.assertIsNone(operation.model_discovery_exit_code)
-        operation.dispatch.assert_not_called()
+        operation.dispatch_mock.assert_not_called()
 
 
     def test_process_failure_after_journaling_binds_the_inspection_and_keeps_its_error(self):
@@ -375,7 +399,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         self.assertInspectionBound(diagnostics, journal)
         self.assertEqual(diagnostics["task_ids"], [INSPECTION])
         receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
-        self.assertNotIn("direct cause", receipt["traceback"])
+        self.assertNotIn("direct cause", fixture_text(receipt["traceback"]))
 
     def test_process_failure_without_a_journal_records_no_inspection(self):
         primary = self.process_failure()
@@ -386,7 +410,7 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         self.assertEqual(diagnostics["task_ids"], [])
         self.assertEqual((operation.models_root_id, operation.model_discovery_task_id), (None, None))
         receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
-        self.assertNotIn("direct cause", receipt["traceback"])
+        self.assertNotIn("direct cause", fixture_text(receipt["traceback"]))
 
     def test_process_failure_with_an_invalid_journal_keeps_its_error_and_names_the_identity_cause(self):
         def two_inspections(models: Path) -> None:
@@ -438,8 +462,8 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 self.assertIsNone(operation.model_discovery_task_id)
                 receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
                 # The entry's traceback projects the identity fault as the process error's explicit cause.
-                self.assertIn("direct cause", receipt["traceback"])
-                self.assertIn(cause, receipt["traceback"])
+                self.assertIn("direct cause", fixture_text(receipt["traceback"]))
+                self.assertIn(cause, fixture_text(receipt["traceback"]))
 
 
     def test_process_failure_with_an_uninspectable_inventory_keeps_its_error_and_names_the_fault(self):
@@ -466,8 +490,8 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
                 self.assertNotIn("model_discovery_inspection", diagnostics)
                 self.assertEqual(diagnostics["task_ids"], [])
                 receipt = self.assertProcessErrorReported(operation, diagnostics, primary)
-                self.assertIn("direct cause", receipt["traceback"])
-                self.assertIn("injected permission denied", receipt["traceback"])
+                self.assertIn("direct cause", fixture_text(receipt["traceback"]))
+                self.assertIn("injected permission denied", fixture_text(receipt["traceback"]))
 
 
 class PiDiscoveryUnavailableTests(unittest.TestCase):
@@ -477,12 +501,13 @@ class PiDiscoveryUnavailableTests(unittest.TestCase):
             operation.provider = PROVIDER
             operation.mode = "read-only"
             operation.scenario = "read-only"
-            operation.args = SimpleNamespace(model=None)
+            operation.args = Namespace(model=None)
             operation.discover_models_only = False
             operation.setup = Mock()
             operation.workspace = Path(directory)
             operation.brief = Mock(return_value=Path(directory) / "brief")
-            operation.dispatch = Mock(side_effect=AssertionError("paid task must not start"))
+            dispatch = Mock(side_effect=AssertionError("paid task must not start"))
+            operation.dispatch = dispatch
             operation.discover_models = Mock()
             operation.model_discovery = response(
                 "unavailable", "discovery_unavailable", failure=failure(), error=ERROR_TEXT)
@@ -491,7 +516,7 @@ class PiDiscoveryUnavailableTests(unittest.TestCase):
             self.assertNotIsInstance(raised.exception, gate.BlockedFailure)
             self.assertNotIn(ERROR_TEXT, str(raised.exception))
             operation.discover_models.assert_called_once()
-            operation.dispatch.assert_not_called()
+            dispatch.assert_not_called()
 
 
 if __name__ == "__main__":

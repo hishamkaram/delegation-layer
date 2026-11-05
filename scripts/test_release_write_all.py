@@ -120,6 +120,7 @@ class WriteNewFileTests(unittest.TestCase):
 
     def assertMapped(self, error: BaseException) -> None:
         self.assertIs(type(error), VerificationError)
+        assert isinstance(error, VerificationError)
         self.assertEqual((error.code, error.stage), ("fixture_write_failed", "fixture-stage"))
         self.assertIsNone(error.__cause__)
         self.assertTrue(error.__suppress_context__)

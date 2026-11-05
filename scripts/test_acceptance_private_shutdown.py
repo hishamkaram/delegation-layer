@@ -249,6 +249,8 @@ class PrivateShutdownTests(unittest.TestCase):
         child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"], stdin=subprocess.PIPE)
         deadline = private_cli.time.monotonic() + 10
         try:
+            if child.stdin is None:
+                raise AssertionError("fixture child stdin pipe was not created")
             self.assertFalse(private_cli.private_daemon_process_gone(
                 child.pid, deadline, capture_root=self.capture_root,
             ))
@@ -264,7 +266,7 @@ class PrivateShutdownTests(unittest.TestCase):
                 child.pid, deadline, capture_root=self.capture_root,
             ))
         finally:
-            if not child.stdin.closed:
+            if child.stdin is not None and not child.stdin.closed:
                 child.stdin.close()
             child.wait(timeout=10)
         self.assertTrue(private_cli.private_daemon_process_gone(

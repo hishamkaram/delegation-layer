@@ -63,7 +63,8 @@ def choose_output(prepared: Prepared | None, explicit: str | None) -> Path:
         path = clean_absolute(value, "acceptance output")
         reject_tmp(path, "acceptance output")
         return path
-    require(prepared is not None, "prepared inputs are required to derive an output path")
+    if prepared is None:
+        raise AcceptanceFailure("prepared inputs are required to derive an output path")
     return DEFAULT_EVIDENCE_PARENT / prepared.state.parent.name
 
 

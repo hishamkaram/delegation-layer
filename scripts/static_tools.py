@@ -1,4 +1,4 @@
-"""Install and verify repository-local static-analysis tools, independently of pilots."""
+"""Install and verify the pinned repository-local static-analysis tools."""
 
 import argparse
 import hashlib
@@ -16,7 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SHELLCHECK_VERSION = "0.11.0"
-ACTIONLINT_VERSION = "1.7.12"
+JACTIONLINT_VERSION = "2.4.0"
 SHELLCHECK_DIGESTS = {
     ("Linux", "x86_64"): "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6",
     ("Linux", "aarch64"): "68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc",
@@ -150,12 +150,13 @@ def main() -> int:
             if install:
                 install_shellcheck()
                 environment = dict(os.environ, GOBIN=str(ROOT / "bin"), GOTOOLCHAIN="local")
-                checked(["go", "install", f"github.com/rhysd/actionlint/cmd/actionlint@v{ACTIONLINT_VERSION}"],
+                checked(["go", "install", f"github.com/jdx/jactionlint/v2/cmd/jactionlint@v{JACTIONLINT_VERSION}"],
                         environment=environment)
             python_tools("lint", install=install)
+            python_tools("diagnostics", install=install)
             node_tools(install=install)
             require_banner([str(ROOT / "bin/shellcheck"), "--version"], "version: " + SHELLCHECK_VERSION)
-            require_banner([str(ROOT / "bin/actionlint"), "-version"], "v" + ACTIONLINT_VERSION)
+            require_banner([str(ROOT / "bin/jactionlint"), "--version"], "v" + JACTIONLINT_VERSION)
     except (OSError, ValueError, subprocess.SubprocessError, tarfile.TarError) as error:
         print(f"Static analysis tools {args.action} failed: {error}", file=sys.stderr)
         return 1

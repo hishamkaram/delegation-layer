@@ -19,9 +19,10 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.resources import DirectoryPinOwner
+from scripts.acceptance_tests.private_cli.fixtures import exception_capture_paths, ready_path
 from scripts.delegate_acceptance.private_cli import capacity_entry
 from scripts.delegate_acceptance.private_cli import contention_controls
 from scripts.delegate_acceptance.private_cli import finalization
@@ -35,7 +36,7 @@ from scripts.delegate_acceptance.private_cli import upgrade
 from scripts.delegate_acceptance.private_cli.capture import run_captured_command
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPECTION_HANDOFF_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import SUPERVISOR_UPGRADE_RECOVERY_SCENARIO
-from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime, PredecessorCleanup, SupervisorCleanup
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_records
 
@@ -126,12 +127,18 @@ class CaptureLayoutCase(unittest.TestCase):
                 self.arguments(scenario), "n" * 32, False, self.lifetime, self.responses, self.receipt,
             )
 
+    def observe_primary(self, task_id: str, deadline: float) -> str:
+        observer = self.lifetime.primary_observer
+        if observer is None:
+            self.fail("the prepared capacity fixture must bind its primary observer")
+        return observer(task_id, deadline)
+
     def base_entries(self):
-        return frozenset(path.name for path in self.lifetime.base.iterdir())
+        return frozenset(path.name for path in ready_path(self.lifetime.base).iterdir())
 
     def assert_captures_outside_base(self, before, expected_count, designed=frozenset()):
         """Every new capture lives in one owned child of base; base gains only its designed entries."""
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         added = capture_files(base)
         self.assertEqual(self.base_entries() - before, designed)
         self.assertEqual([path for path in added if path.parent == base], [])
@@ -188,7 +195,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
         self.assert_captures_outside_base(before, 2)
 
         def upgrade(*, capture_root, **_options):
-            self.assertEqual(self.lifetime.primary_observer("1" * 32, time.monotonic() + 10), "r" * 32)
+            self.assertEqual(self.observe_primary("1" * 32, time.monotonic() + 10), "r" * 32)
             return [], 0
 
         with patch.object(capacity_entry, "LockedReleaseGate"), \
@@ -206,15 +213,15 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
             )
         directory, _ = self.assert_captures_outside_base(before, 8)
         with self.assertRaises(subprocess.TimeoutExpired) as raised:
-            self.lifetime.primary_observer(SLOW_TASK, time.monotonic() + 1)
+            self.observe_primary(SLOW_TASK, time.monotonic() + 1)
         directory, added = self.assert_captures_outside_base(before, 10)
-        self.assertEqual({Path(path) for path in raised.exception.capture_paths} - set(added), set())
-        self.assertEqual({Path(path).parent for path in raised.exception.capture_paths}, {directory})
+        self.assertEqual({Path(path) for path in exception_capture_paths(raised.exception)} - set(added), set())
+        self.assertEqual({Path(path).parent for path in exception_capture_paths(raised.exception)}, {directory})
         receipts = sorted(directory.glob("disposal-status-%s-*.json" % SLOW_TASK))
         self.assertEqual(len(receipts), 1)
         self.assertEqual(json.loads(receipts[0].read_text())["capture_paths"],
-                         list(raised.exception.capture_paths))
-        self.assertEqual(sorted(self.lifetime.base.glob("disposal-status-*")), [])
+                         list(exception_capture_paths(raised.exception)))
+        self.assertEqual(sorted(ready_path(self.lifetime.base).glob("disposal-status-*")), [])
 
     def test_stop_and_modern_shutdown_pid_fallback_capture_outside_base(self):
         fixture = self.prepare()
@@ -250,10 +257,13 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
             roots.append(capture_root)
             pid_fallback(capture_root)
 
-        target = SimpleNamespace(state=self.root / "predecessor", backup_handle=SimpleNamespace(close=lambda: None))
-        pending = {"config": config, "client": fixture.provider_bin, "env": {}, "state": fixture.state}
-        self.lifetime.supervisor_cleanups[:] = [pending, {"client": fixture.provider_bin, "env": {}, "task_ids": [],
-                                                          "predecessor": target}]
+        target = Mock(spec=supervisor.PredecessorShutdownTarget, state=self.root / "predecessor",
+                      backup_handle=SimpleNamespace(close=lambda: None))
+        pending: SupervisorCleanup = {"config": config, "client": fixture.provider_bin, "env": {},
+                                      "state": fixture.state, "task_ids": []}
+        predecessor: PredecessorCleanup = {"client": fixture.provider_bin, "env": {}, "task_ids": [],
+                                          "predecessor": target}
+        self.lifetime.supervisor_cleanups[:] = [pending, predecessor]
         with patch.object(finalization, "shutdown_pending_private_supervisor",
                           side_effect=lambda pending, _ledger, *, capture_root, disposal: shutdown(
                               capture_root=capture_root)), \
@@ -277,7 +287,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
         # This scenario registers no managed state root, so removal needs no fixture closure records.
         fixture = self.prepare(EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
         initial.dispatch_initial_task(self.arguments(), fixture, self.lifetime, self.responses, self.receipt)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         directory, _ = self.assert_captures_outside_base(self.base_entries(), 6)
         errors = []
         success, cleanup = finalization.finish_root_cleanup(errors, None, self.lifetime, True)
@@ -286,13 +296,16 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
         self.assertEqual(cleanup, {"status": "removed", "verified": True})
         self.assertFalse(base.exists())
         self.assertFalse(directory.exists())
-        self.assertTrue(self.lifetime.capture_token.consumed)
+        capture_token = self.lifetime.capture_token
+        if capture_token is None:
+            self.fail("the fixture must retain its consumed capture token")
+        self.assertTrue(capture_token.consumed)
 
 
 class RecoveryAndHandoffPathTests(CaptureLayoutCase):
     def test_recovery_package_and_retarget_markers_stay_at_the_fixture_base(self):
         fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         before = self.base_entries()
         pair = self.root / "pair"
         binding = {"client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
@@ -338,7 +351,7 @@ class RecoveryAndHandoffPathTests(CaptureLayoutCase):
 
     def test_handoff_reads_the_base_client_call_log_and_captures_outside_base(self):
         fixture = self.prepare(EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         call_log = base / "old-client-starts-calls"
         read = []
 
@@ -397,7 +410,7 @@ class EarlyCaptureChildFailureTests(CaptureLayoutCase):
                 self.prepare()
         base = created[0].resolve()
         self.assertIn("private-control-captures", str(raised.exception))
-        self.assertEqual(self.lifetime.base, base)
+        self.assertEqual(ready_path(self.lifetime.base), base)
         self.assertIsNone(self.lifetime.capture_token)
         self.assertIsNone(self.lifetime.private_config)
         self.assertEqual(self.lifetime.supervisor_cleanups, [])

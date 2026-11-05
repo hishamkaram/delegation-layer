@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFixture
+from scripts.acceptance_tests.private_cli.fixtures import ready_path
 from scripts.acceptance_tests.private_cli.modern_application_fixture import publish_pair
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
@@ -62,7 +63,7 @@ class ModernFacadePortTests(unittest.TestCase):
             self.assertEqual(tasks.processes.environment, self.lifetime.env)
             self.assertEqual(baseline.delegate, self.fixture.baseline.delegate)
             self.assertEqual(candidate.delegate, self.fixture.candidate.delegate)
-            self.assertEqual(fixture.controls.directory, self.lifetime.base / "modern-controls")
+            self.assertEqual(fixture.controls.directory, ready_path(self.lifetime.base) / "modern-controls")
             observed.append(tasks)
             for index, task_id in enumerate(("b" * 32, "c" * 32)):
                 tasks.dispatch_attempts.add(task_id)

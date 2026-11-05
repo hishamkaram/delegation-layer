@@ -13,7 +13,7 @@ from scripts.delegate_acceptance.evidence.timestamps import (
     _timestamp_at_or_after,
     _timestamp_before,
 )
-from scripts.delegate_acceptance.evidence.validation import _exact_keys, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _exact_keys, require
 from scripts.delegate_acceptance.inspections.authority import _inspection_exit_authority
 from scripts.delegate_acceptance.inspections.binding import (
     ADMISSION_INSPECTION_TIMEOUT_SECONDS,
@@ -23,7 +23,7 @@ from scripts.delegate_acceptance.inspections.binding import (
     _validate_claim_record,
     _validate_inspection_binding,
 )
-from scripts.delegate_acceptance.inspections.data import InspectionCompletion, InspectionRequest
+from scripts.delegate_acceptance.inspections.data import InspectionCompletion, InspectionEvidence, InspectionRequest
 from scripts.delegate_acceptance.inspections.result_policy import (
     _validate_inspection_result,
     _validate_inspection_verdict,
@@ -35,6 +35,7 @@ from scripts.delegate_acceptance.workspaces.admission_evidence import (
     _inspection_request_identity,
     _validate_historical_workspace_attempt,
 )
+from scripts.delegate_acceptance.workspaces.data import InspectionIdentity, WorkspaceAdmissionAttempt
 from pathlib import Path
 
 
@@ -43,7 +44,7 @@ def validate_inspection_evidence(
         runner: Path, pueue: Path, pueue_config: Path | None,
         inspection_bindings: dict[str, dict[str, object]], task: str,
         directory: Path, allow_failure: bool,
-        expected_binding_required: bool = True) -> dict[str, object]:
+        expected_binding_required: bool = True) -> InspectionEvidence:
     request = _read_inspection_request(
         directory=directory, expected_binding_required=expected_binding_required, inspection_bindings=inspection_bindings,
         pueue=pueue,
@@ -51,10 +52,10 @@ def validate_inspection_evidence(
     request_digest = digest(request.request_path)
     authority = _inspection_exit_authority(
         directory=directory, root=root, task=request.operation_id, binding=request.binding, request_digest=request_digest,
-        request_created=request.created, request_deadline=request.request["deadline"], deadline=request.deadline)
+        request_created=request.created, request_deadline=request.deadline_text, deadline=request.deadline)
     managed_lifetime = authority["managed_lifetime"]
-    require(isinstance(managed_lifetime, dict) or managed_lifetime is None,
-            f"inspection exit authority is invalid for {task}")
+    if not isinstance(managed_lifetime, dict) and managed_lifetime is not None:
+        raise AcceptanceFailure(f"inspection exit authority is invalid for {task}")
     historical_unlaunched = (
         request.historical_aborted and authority["mode"] == "guardian-unlaunched")
     completion = _read_inspection_completion(
@@ -92,13 +93,13 @@ def validate_inspection_evidence(
 
 def _ordinary_inspection_binding(
         embedded_task: dict[str, object],
-        identity: dict[str, object],
+        identity: InspectionIdentity,
         root: str,
         standalone: bool,
         state: Path,
         task: str,
         task_digest: str,
-) -> tuple[bool, bool, dict[str, object] | None, bool]:
+) -> tuple[bool, bool, WorkspaceAdmissionAttempt | None, bool]:
     ordinary_directory = state / "tasks" / task
     ordinary_present = ordinary_directory.exists() or ordinary_directory.is_symlink()
     ordinary_matches = False
@@ -152,7 +153,10 @@ def _validate_inspection_sources(
     require(binding.get("worker_sha256") == digest(runner),
             f"inspection request worker digest mismatch for {task}")
     supervisor = binding.get("supervisor")
-    require(pueue_config is not None, "inspection supervisor config is unavailable")
+    if pueue_config is None:
+        raise AcceptanceFailure("inspection supervisor config is unavailable")
+    if not isinstance(supervisor, dict):
+        raise AcceptanceFailure(f"inspection request supervisor binding mismatch for {task}")
     require(supervisor.get("client_executable") == str(pueue) and
             supervisor.get("client_sha256") == digest(pueue) and
             supervisor.get("config_path") == str(pueue_config) and
@@ -184,11 +188,11 @@ def _validate_inspection_completion(
         _exact_keys(completion, {
             "schema_version", "request_sha256", "result_sha256", "completed_at", "native_exit",
         }, label=f"inspection completion for {task}")
-        require(result is not None and type(completion.get("schema_version")) is int and
+        if not (result is not None and type(completion.get("schema_version")) is int and
                 completion["schema_version"] == 1 and
                 completion.get("request_sha256") == request_digest and
-                completion.get("result_sha256") == digest(result_path),
-                f"inspection completion binding mismatch for {task}")
+                completion.get("result_sha256") == digest(result_path)):
+            raise AcceptanceFailure(f"inspection completion binding mismatch for {task}")
         require((result.get("reason") == "eligible" and
                  completion.get("native_exit") == "successful-exit") or
                 (result.get("reason") != "eligible" and
@@ -256,6 +260,8 @@ def _read_inspection_completion(
         require(observation is None,
                 f"managed inspection has conflicting queue observation for {task}")
     if authority["mode"] == "guardian":
+        if managed_lifetime is None:
+            raise AcceptanceFailure(f"inspection exit authority is invalid for {task}")
         managed_wait = managed_lifetime["worker_wait"]
         # The shared lifetime validator owns valid missing-Wait recovery
         # variants. A validated absence is never projected as success.
@@ -311,16 +317,23 @@ def _read_inspection_request(
             f"inspection request task digest changed for {task}")
     created = _canonical_timestamp(request.get("created_at"),
                                    f"inspection request created_at for {task}")
-    deadline = _canonical_timestamp(request.get("deadline"),
+    deadline_text = request.get("deadline")
+    if not isinstance(deadline_text, str):
+        raise AcceptanceFailure(f"inspection request deadline for {task} is not a timestamp")
+    deadline = _canonical_timestamp(deadline_text,
                                     f"inspection request deadline for {task}")
     require(root_created_at is not None and
             _timestamp_at_or_after(created, root_created_at),
             f"inspection request precedes root creation for {task}")
     binding = request.get("binding")
+    if not isinstance(binding, dict):
+        raise AcceptanceFailure(f"inspection request binding for {task} is not an object")
     _validate_inspection_binding(binding, f"inspection request binding for {task}")
     group = request.get("group")
     group_parallelism = _inspection_group_parallelism(
         state, root, binding, group, f"inspection request for {task}")
+    if not isinstance(group, str):
+        raise AcceptanceFailure(f"inspection request for {task} group is not an eligible private default group")
     require(request.get("label") == label,
             f"inspection request label mismatch for {task}")
     standalone = binding.get("definition_revision") == "model-discovery-v1"
@@ -331,7 +344,7 @@ def _read_inspection_request(
             f"inspection request deadline is not exactly {timeout_seconds[0]} seconds for {task}")
 
     ordinary_present, ordinary_matches, attempt, historical_aborted = _ordinary_inspection_binding(
-        embedded_task, identity, root, standalone, state, task, task_digest,
+        embedded_task, identity, root, standalone, state, task, embedded_digest,
     )
     _validate_inspection_sources(
         binding, expected_binding_required, inspection_bindings, pueue, pueue_config, runner, task,
@@ -343,6 +356,7 @@ def _read_inspection_request(
         label=label,
         created=created,
         deadline=deadline,
+        deadline_text=deadline_text,
         binding=binding,
         group=group,
         group_parallelism=group_parallelism,
@@ -377,10 +391,10 @@ def _read_inspection_scheduling(
         _exact_keys(receipt, {"schema_version", "request_sha256", "numeric_task_id"},
                     label=f"inspection receipt for {task}")
         receipt_id = receipt.get("numeric_task_id")
-        require(type(receipt.get("schema_version")) is int and receipt["schema_version"] == 1 and
+        if not (type(receipt.get("schema_version")) is int and receipt["schema_version"] == 1 and
                 receipt.get("request_sha256") == request_digest and
                 isinstance(receipt_id, int) and not isinstance(
                     receipt_id, bool,
-                ) and receipt_id >= 0,
-                f"inspection receipt binding mismatch for {task}")
+                ) and receipt_id >= 0):
+            raise AcceptanceFailure(f"inspection receipt binding mismatch for {task}")
     return receipt, receipt_id, submission

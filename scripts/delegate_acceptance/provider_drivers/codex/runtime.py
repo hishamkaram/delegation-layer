@@ -37,7 +37,7 @@ def expected_codex_inspection_binding(
     """Build the expected runtime-only inspection binding from setup sources."""
     values = sorted(key + "=" + environment[key]
                     for key in CODEX_ENVIRONMENT_KEYS if key in environment)
-    definition = {
+    definition: dict[str, object] = {
         "revision": RUNTIME_INSPECTION_REVISION,
         "executable": str(provider),
         "executable_sha256": "",

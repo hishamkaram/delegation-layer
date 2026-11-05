@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFixture
+from scripts.acceptance_tests.record_fixtures import object_at
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_policy import (
     migration_expectation, require_control_response, require_migration_response,
@@ -90,9 +91,9 @@ class ModernMigrationExpectationTests(unittest.TestCase):
             tasks, self.fixture.candidate, self.fixture.controls,
             lambda: {"meta": (state / "tasks" / task_id / "meta.json").read_bytes()}, lambda: None,
         )
-        self.assertIsNotNone(result["migration_facts"]["migration"])
-        self.assertIsNotNone(result["migration_facts"]["alias"])
-        self.assertEqual(result["response"]["task_id"], task_id)
+        self.assertIsNotNone(object_at(result, "migration_facts")["migration"])
+        self.assertIsNotNone(object_at(result, "migration_facts")["alias"])
+        self.assertEqual(object_at(result, "response")["task_id"], task_id)
         self.assertEqual(result["immutable_content_before"], result["immutable_content_after"])
         self.assertTrue(self.fixture.processes.finished_naturally())
 
@@ -144,12 +145,12 @@ class ModernMigrationExpectationTests(unittest.TestCase):
             (str(self.fixture.candidate.delegate), str(self.fixture.baseline.delegate)),
             (str(self.fixture.baseline.delegate), str(self.fixture.candidate.delegate)),
         ])
-        self.assertEqual([r["migration_expectation"]["case"] for r in rounds],
+        self.assertEqual([object_at(r, "migration_expectation")["case"] for r in rounds],
                          ["healthy_same_generation", "active_provenance_change"])
         observation = rounds[1]["candidate_post_migration_observation"]
-        self.assertIsNotNone(observation["migration_facts"]["migration"])
-        self.assertIsNotNone(observation["migration_facts"]["alias"])
-        self.assertEqual(observation["response"]["task_id"], tasks.tasks["modern-candidate"])
+        self.assertIsNotNone(object_at(observation, "migration_facts")["migration"])
+        self.assertIsNotNone(object_at(observation, "migration_facts")["alias"])
+        self.assertEqual(object_at(observation, "response")["task_id"], tasks.tasks["modern-candidate"])
         self.assertEqual(cohort.assert_live.call_count, 8)
         self.assertTrue(self.fixture.processes.finished_naturally())
 
@@ -246,7 +247,7 @@ class ModernMigrationFactPolicyTests(unittest.TestCase):
         for field, value in (("state", "migrated"), ("action", "status"), ("active_work", "none"),
                              ("reason_code", "unknown"), ("next_action", "none"), ("migration_phase", "complete")):
             changed = deepcopy(response)
-            changed["supervisor_control"][field] = value
+            object_at(changed, "supervisor_control")[field] = value
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 require_migration_response(changed, self.fixture.root_id, expected)
         for field, value in (("error", "unknown error"), ("error", None), ("schema_version", True), ("command", "status")):

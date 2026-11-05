@@ -11,6 +11,7 @@ from unittest.mock import Mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from scripts.acceptance_tests.candidate_fixtures import manifest
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
@@ -83,7 +84,8 @@ class EntryLimitTests(unittest.TestCase):
                 self.assertEqual((error.code, error.stage), ("candidate_artifact_invalid", STAGE))
                 record = load_record(encode_manifest(sized(kind, limit)), max_bytes=MAX_MANIFEST_BYTES,
                                      stage=STAGE)
-                for artifact in record["artifacts"]:
+                for item in array_at(record, "artifacts"):
+                    artifact = object_at(item)
                     if artifact["kind"] == kind.value:
                         artifact["size"] = limit + 1
                 error = refused_code(self, parse_manifest, encode_record(record, STAGE))

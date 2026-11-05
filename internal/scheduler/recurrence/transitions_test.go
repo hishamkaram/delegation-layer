@@ -16,8 +16,9 @@ func TestNextFirstFoldIncludingQueriesBetweenRealizations(t *testing.T) {
 		{"half hour before first", "45 1 * * *", "Australia/Lord_Howe", "2026-04-04T14:44:59Z", "2026-04-04T14:45:00Z"},
 		{"half hour between", "45 1 * * *", "Australia/Lord_Howe", "2026-04-04T15:00:00Z", "2026-04-05T15:15:00Z"},
 		{"half hour every minute", "* * * * *", "Australia/Lord_Howe", "2026-04-04T14:59:00Z", "2026-04-04T15:30:00Z"},
-		{"midnight first", "30 0 * * *", "America/Havana", "2026-11-01T04:29:59Z", "2026-11-01T04:30:00Z"},
-		{"midnight between", "30 0 * * *", "America/Havana", "2026-11-01T05:00:00Z", "2026-11-02T05:30:00Z"},
+		// Historical Havana midnight fold; tzdb 2026f canceled the projected 2026 rollback.
+		{"midnight first", "30 0 * * *", "America/Havana", "2024-11-03T04:29:59Z", "2024-11-03T04:30:00Z"},
+		{"midnight between", "30 0 * * *", "America/Havana", "2024-11-03T05:00:00Z", "2024-11-04T05:30:00Z"},
 		{"repeated date", "0 12 * * *", "Pacific/Kwajalein", "1969-09-30T13:00:00Z", "1969-10-02T00:00:00Z"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -16,7 +16,15 @@ from scripts.delegate_acceptance.evidence.validation import (
 )
 from scripts.delegate_acceptance.supervisor.queue_policy import _validate_pueue_status
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
+
+
+class ProcessOutput(Protocol):
+    """Read the capture directory without sharing process lifecycle authority."""
+
+    @property
+    def directory(self) -> Path:
+        ...
 
 
 def _read_strict_json(path: Path, bound: int) -> object:
@@ -38,17 +46,18 @@ def _read_strict_json(path: Path, bound: int) -> object:
         raise AcceptanceFailure("invalid JSON evidence: " + str(path) + ": " + str(error)) from error
 
 
-def parse_json_output(process: object, label: str, bound: int = MAX_CONTROL_BYTES) -> dict[str, object]:
+def parse_json_output(process: ProcessOutput, label: str, bound: int = MAX_CONTROL_BYTES) -> dict[str, object]:
     """Read one bounded JSON object from an owned process's stdout."""
     try:
         value = _read_strict_json(process.directory / "stdout", bound)
     except (OSError, ValueError, TypeError, RecursionError) as error:
         raise AcceptanceFailure(f"{label} did not produce one JSON object: {error}") from error
-    require(isinstance(value, dict), f"{label} JSON response must be an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} JSON response must be an object")
     return value
 
 
-def status_jobs(process: object) -> dict[str, object]:
+def status_jobs(process: ProcessOutput) -> dict[str, object]:
     """Read one bounded pueue status object from an owned client."""
     result = getattr(process, "result", None)
     require(isinstance(result, dict) and result.get("natural_wait") is True and
@@ -93,7 +102,8 @@ def _state_root_identity(state: Path, label: str) -> tuple[str, tuple[datetime, 
             f"{label} schema mismatch")
     created_at = _canonical_timestamp(root.get("created_at"), f"{label} created_at")
     root_id = root.get("root_id")
-    require(_task_identity(root_id), f"{label} has no valid root identity")
+    if not _task_identity(root_id):
+        raise AcceptanceFailure(f"{label} has no valid root identity")
     return root_id, created_at
 
 
@@ -101,7 +111,8 @@ def _read_control_record(path: Path, label: str) -> dict[str, object]:
     require(path.is_file() and not path.is_symlink(), f"{label} is not a regular record")
     require(path.stat().st_size <= MAX_CONTROL_BYTES, f"{label} exceeds the control bound")
     value = _read_strict_json(path, MAX_CONTROL_BYTES)
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     return value
 
 

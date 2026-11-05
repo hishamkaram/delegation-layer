@@ -4,12 +4,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from scripts.delegate_acceptance.directories import journal, operations as directories
 from scripts.delegate_acceptance.evidence.files import path_present, read_json
 from scripts.delegate_acceptance.processes import operations as processes
 from scripts.delegate_acceptance.tasks import operations as tasks
+from scripts.delegate_acceptance.tasks.contracts import TaskProcesses
 
 
 class CompletedChild:
@@ -119,10 +120,11 @@ class CanonicalOwnerTests(unittest.TestCase):
         task = "a" * 32
         root_id = "b" * 32
         operation = tasks.NativeTaskOps(
-            None, self.root / "delegate", self.root / "runner", self.root / "pueue",
+            Mock(spec=TaskProcesses, run=Mock(side_effect=AssertionError("unexpected task launch")),
+                 drain=Mock(side_effect=AssertionError("unexpected process drain"))), self.root / "delegate", self.root / "runner", self.root / "pueue",
             self.root, self.root / "state", self.root)
         operation.dispatch_attempts.add(task)
-        response = {
+        response: dict[str, object] = {
             "admission": "admitted", "task_id": task, "root_id": root_id,
             "supervisor": {"matched": True, "numeric_task_id": 7},
         }

@@ -21,19 +21,19 @@ This document specifies the non-negotiable engineering floor for the repository.
 - **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
   `make tools-go` installs only the core Go tools needed by the platform gate.
 - **Static tools**: `scripts/static_tools.py` owns installation and version checks for
-  ShellCheck 0.11.0 and actionlint 1.7.12. Ruff's exact pin and wheel hashes live in
+  ShellCheck 0.11.0 and jactionlint 2.4.0. Ruff's exact pin and wheel hashes live in
   `tools/lint/requirements.txt`; ESLint and its dependencies use the separate
   locked `tools/lint/package.json`, never the published package's dependencies.
   `make lint-static` uses the maintainability inventory for Python, JavaScript,
   and shell paths. Root `ruff.toml` and `eslint.config.mjs` own their rules.
-- **Diagnostic tools**: `make diagnostic-tools` installs the separately pinned
-  ty and zizmor wheels from `tools/diagnostics/requirements.txt`. `make diagnostics`
-  reports actual failures and findings in the separate
-  [Static diagnostics workflow](../../.github/workflows/static-diagnostics.yml)
-  once on Linux. ty still analyzes all configured target platforms. Findings fail that workflow without changing the main CI
-  conclusion or its release eligibility; tool exit codes remain unmasked.
-  These tools are not prerequisites of mandatory tool installation or
-  `tool-versions`. They are not clean or promoted merely because blocking gates pass.
+- **Type and workflow security checks**: `make tools` also installs the pinned
+  ty and zizmor wheels from `tools/diagnostics/requirements.txt`. Their historical
+  installation directory is `bin/diagnostics/`; both are mandatory in
+  `make lint-static`, with exact versions checked by `static-tool-versions`.
+  `make verify-static-gates` proves their rejection and acceptance paths.
+  These shared checks run once on Linux in the main CI gate, and findings fail
+  that gate. `make diagnostics` remains a focused type/security subset;
+  `make diagnostic-tools` installs just that subset.
 
 ## 2. Static Analysis & Linter Policy
 - Configuration in `.golangci.yml` using schema `version: "2"`, `linters.default: none`, and explicit linters:
@@ -59,17 +59,18 @@ This document specifies the non-negotiable engineering floor for the repository.
   removed or explicitly re-exported. ty targets Python 3.12 and all platforms,
   with both repository and scripts import roots; explicit input paths and
   negative fixtures prove coverage. This is static analysis, not native-host proof.
-- **Workflows**: actionlint checks all repository workflows except `release.yml`
-  without suppressions. `release.yml` remains outside that gate because actionlint
-  1.7.12 rejects GitHub's supported `concurrency.queue` field. zizmor inspects all
-  workflows offline as a diagnostic, including release.
+- **Workflows**: jactionlint uses its correctness profile for the actionlint
+  checks plus current GitHub syntax. It checks every workflow, including release,
+  with no ignores, baselines or network access. zizmor checks workflow security
+  separately with its default regular profile, strict collection, no external
+  configuration, and no ignores.
 
 ## 3. Testing and Verification Discipline
 - **Sequential Gate:** The root [Makefile](../../Makefile) `check` target is
   authoritative: shared static checks run before its `check-platform` target.
   CI runs the complete gate on Linux and the platform gate on macOS. Go vet,
   lint, builds, race tests and Python/Node runtime tests remain required on both
-  hosts; Ruff, ESLint, ShellCheck, actionlint and their rejection fixtures run
+  hosts; Ruff, ty, ESLint, ShellCheck, jactionlint, zizmor and their rejection fixtures run
   once on Linux. Keep this contract aligned by referring to those recipes
   rather than copying their command sequence here.
 - **Race Detection**: The full Go unit and integration gate requires
@@ -86,9 +87,9 @@ This document specifies the non-negotiable engineering floor for the repository.
   recovery or a real consumer verdict.
 - **Gate Rejection Fixtures**: `scripts/verify-gates.sh` proves linter enforcement against isolated temporary modules for each forbidden pattern and verifies that corrected counterparts pass.
 - **Cross-language fixtures**: `make verify-static-gates` proves Ruff, ESLint,
-  ShellCheck, and actionlint rejection and acceptance using finite temporary
-  inputs. The diagnostic target also proves ty resolves both import forms and
-  rejects known type errors, including under hidden paths.
+  ShellCheck, jactionlint and zizmor rejection and acceptance using finite
+  temporary inputs. The same mandatory target proves ty resolves both import
+  forms and rejects known type errors, including under hidden paths.
 - **Goroutine leaks**: goleak v1.3.0 supplements `-race`. The shared test helper
   checks after suite cleanup, including failed suites, without replacing their
   failure code. Each adopted package proves the hook with a finite re-executed

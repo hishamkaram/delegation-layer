@@ -21,7 +21,7 @@ class RoutingTests(unittest.TestCase):
         home = patch.object(gate.Path, "home", return_value=self.root)
         home.start()
         self.addCleanup(home.stop)
-        self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
+        self.case: dict[str, object] = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
         self.candidate = self.root / "delegate-candidate"
         self.candidate.write_text("test candidate executable")
         self.candidate.chmod(0o700)
@@ -35,7 +35,10 @@ class RoutingTests(unittest.TestCase):
 
     def receipt(self, case=None, mode="live", fixture_scenario=None):
         case = self.case if case is None else case
-        run = self.root / (case["name"] + "-1")
+        name = case["name"]
+        if not isinstance(name, str):
+            raise AssertionError("routing fixture case name is not text")
+        run = self.root / (name + "-1")
         run.mkdir()
         (run / "stdout.txt").write_text('tool call evidence\n')
         gate.write_json(run / "receipt.json", {
@@ -708,7 +711,7 @@ class RoutingTests(unittest.TestCase):
         inspection = state / "inspections" / ("b" * 32)
         inspection.mkdir(parents=True)
 
-        task_record = {
+        task_record: dict[str, object] = {
             "schema_version": 1, "root_id": "a" * 32, "task_id": "b" * 32,
             "provider": "fixture:test", "mode": "read-only", "canonical_cwd": "/fixture",
             "requested_config": {}, "budget_nanos": 60_000_000_000,

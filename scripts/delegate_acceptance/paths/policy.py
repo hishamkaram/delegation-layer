@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import posixpath
 from pathlib import Path
+from typing import TypeGuard
 
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 
 
-def historical_clean_absolute_path(value: object) -> bool:
+def historical_clean_absolute_path(value: object) -> TypeGuard[str]:
     """Preserve Path equality used by historical records, not raw spelling.
 
     This deliberately accepts repeated separators, "." segments, and NULs.
@@ -19,14 +20,15 @@ def historical_clean_absolute_path(value: object) -> bool:
 
 
 def clean_absolute(value: object, label: str) -> Path:
-    require(isinstance(value, str) and bool(value), f"{label} must be a nonempty path")
+    if not isinstance(value, str) or not value:
+        raise AcceptanceFailure(f"{label} must be a nonempty path")
     path = Path(value)
     require(historical_clean_absolute_path(value),
             f"{label} must be absolute and clean")
     return path
 
 
-def _raw_clean_absolute_path(value: object) -> bool:
+def _raw_clean_absolute_path(value: object) -> TypeGuard[str]:
     """Match the Unix filepath.Clean identity used by the Go records."""
     return (isinstance(value, str) and Path(value).is_absolute() and
             not value.startswith("//") and value == posixpath.normpath(value))

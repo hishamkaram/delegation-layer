@@ -17,7 +17,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 class TaskStatusReceiptTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def test_status_response_is_retained_before_identity_validation(self):
         for returned_id in ("a" * 32, "b" * 32):

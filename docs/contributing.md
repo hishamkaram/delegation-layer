@@ -57,36 +57,36 @@ can reuse trustworthy unchanged results. Final independent review covers the
 integrated change; do not repeat it separately for every worker. Unrelated
 findings are reported separately, not automatically added to the ticket.
 
-### Static analysis and diagnostic pilots
+### Static analysis
 
-`make tools` also installs Ruff, ShellCheck, actionlint, and the separately
-locked JavaScript lint dependencies into `bin/`. `make lint-static` runs the
-mandatory language checks; `make verify-static-gates` proves rejection and
-acceptance with temporary fixtures. Both are included in `make check`.
+`make tools` installs Ruff, ty, ShellCheck, jactionlint, zizmor, and the separately
+locked JavaScript lint dependencies into `bin/`. `make lint-static` runs all six
+mandatory checks; `make verify-static-gates` proves rejection and acceptance
+with temporary fixtures. Both are included in `make check`, and any finding
+fails the gate.
+
 CI runs these shared source and workflow checks once on Linux; macOS installs
-`make tools-go` and runs `make check-platform`. The default `make check` runs
-the shared checks followed by the platform gate.
+`make tools-go` and runs `make check-platform`. Go vet, lint, builds, race tests,
+and Python/Node runtime tests still run on both native hosts. The default
+`make check` runs the shared checks followed by the platform gate.
 The source inventory is authoritative: `go run ./cmd/maintainability --sources
 python` (or `javascript`, `shell`, `go`) emits absolute NUL-separated paths,
 including maintained untracked additions and excluding ignored scratch.
 
-Workflow syntax checks cover all repository workflows except release. The release
-workflow remains outside actionlint 1.7.12 because it uses GitHub's supported
-`concurrency.queue` property, which that version rejects. No suppression hides
-that coverage gap.
+Workflow syntax checks use the pinned jactionlint correctness profile, which
+preserves actionlint checks and supports current GitHub syntax. All workflows,
+including release, are checked without ignores or baselines. Zizmor checks
+workflow security offline with its default `regular` profile, strict input
+parsing, and ignores/configuration loading disabled. ty targets Python 3.12 and all platforms; this is
+source analysis, not proof of execution on each host.
 
-Install exploratory tools separately with `make diagnostic-tools`, then run
-`make diagnostics`. This checks Python with pinned ty and all workflows with
-offline zizmor. The separate [Static diagnostics workflow](../.github/workflows/static-diagnostics.yml)
-runs once on Linux for main pushes, pull requests, and manual dispatch. ty still
-checks all target platforms; running it on macOS would repeat the same analysis.
-Findings intentionally fail that workflow and remain visible; tool exit codes
-are not masked. Its result does not change the main CI workflow conclusion or
-its release eligibility. Diagnostic failures are outstanding findings, not
-clean results. Review and fix real defects before promoting either tool. Do not
-hide findings in a baseline or add ignore rules
-to make a gate pass. Ruff automatic fixes are disabled; in particular, review
-facade consumers before changing an apparently unused import.
+For a focused type/security check, run `make diagnostics`; install just those
+tools with `make diagnostic-tools`. They keep their historical
+`bin/diagnostics/` installation directory but are also required by the main
+gate. Review findings against the code and fix real defects with regression
+coverage. Do not hide findings in a baseline or weaken checks to obtain a pass.
+Ruff automatic fixes are disabled; review facade consumers before changing an
+apparently unused import.
 
 Goleak supplements the existing race detector in adopted test packages. Its
 shared helper checks after test cleanup and preserves failing exit statuses.
@@ -242,7 +242,12 @@ task outcomes, real cleanup and diagnostics; no development-proof branch,
 registration or proof upload is needed. Keep raw private output off public CI.
 
 The CCR foreground fixture uses real Delegate/CCR/Claude binaries against a
-local HTTP fixture, without account credentials or paid requests:
+local HTTP fixture, without account credentials or paid requests. CI installs
+the reviewed Claude Code version from `tools/ccr-provider/package-lock.json` in
+a temporary directory and verifies its version before running the fixture.
+This CI pin does not control users’ provider installations.
+
+Run it locally with your installed provider:
 
 ```sh
 PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py

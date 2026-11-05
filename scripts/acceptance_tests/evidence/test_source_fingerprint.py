@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from scripts.delegate_acceptance.release_verification import source
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 
 
 class SourceFingerprintTests(unittest.TestCase):
@@ -39,7 +40,7 @@ class SourceFingerprintTests(unittest.TestCase):
         self.write(helper, "from .parser_values import fields\n")
         self.write(values, "fields = ('imports',)\n")
         original = source.fingerprint_sources(self.root, ("scripts/entry.py",))
-        self.assertEqual({row["path"] for row in original["files"]}, {
+        self.assertEqual({object_at(row)["path"] for row in array_at(original, "files")}, {
             "scripts/entry.py", parser, helper, values,
         })
         self.write(parser, parser_source + "# changed parser bytes\n")
@@ -58,7 +59,7 @@ class SourceFingerprintTests(unittest.TestCase):
         self.write("scripts/fixture/middle.py", "from .values import answer\n")
         self.write("scripts/fixture/values.py", "answer = 42\n")
         first = source.fingerprint_sources(self.root, ("scripts/entry.py",))
-        self.assertEqual({row["path"] for row in first["files"]}, {
+        self.assertEqual({object_at(row)["path"] for row in array_at(first, "files")}, {
             "scripts/entry.py", "scripts/fixture/__init__.py", "scripts/fixture/middle.py",
             "scripts/fixture/values.py", source.PARSER_SOURCE,
         })
@@ -77,14 +78,14 @@ class SourceFingerprintTests(unittest.TestCase):
         self.write("scripts/left.py", "import right\n")
         self.write("scripts/right.py", "import left\n")
         result = source.fingerprint_sources(self.root, ("scripts/left.py",))
-        self.assertEqual(len(result["files"]), 3)
+        self.assertEqual(len(array_at(result, "files")), 3)
 
     def test_module_and_package_candidates_are_both_bound_without_execution(self):
         self.write("scripts/entry.py", "import candidate\n")
         self.write("scripts/candidate.py", "raise RuntimeError('never execute module')\n")
         self.write("scripts/candidate/__init__.py", "raise RuntimeError('never execute package')\n")
         result = source.fingerprint_sources(self.root, ("scripts/entry.py",))
-        self.assertEqual(len(result["files"]), 4)
+        self.assertEqual(len(array_at(result, "files")), 4)
 
     def test_malformed_transitive_source_is_not_accepted(self):
         self.write("scripts/entry.py", "import broken\n")

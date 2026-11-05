@@ -22,7 +22,8 @@ from scripts.delegate_acceptance.processes.observation import wait_until
 
 def bind_default_fixture(fixture: FixtureInstallation, lifetime: FixtureLifetime) -> FixtureInstallation:
     """Retarget primary cleanup before launch; keep every existing directory token."""
-    require(lifetime.base is not None, "default-root fixture lost its owned profile")
+    if lifetime.base is None:
+        raise RuntimeError("default-root fixture lost its owned profile")
     home = Path(lifetime.env["HOME"]).resolve(strict=True)
     require(home == lifetime.base / "home", "default-root HOME is outside the owned fixture")
     # os.UserConfigDir honors XDG_CONFIG_HOME on Linux. Never inherit a user's

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import json
 from pathlib import Path
 
@@ -10,7 +12,7 @@ SESSION = "0199a213-81c0-7800-8aa1-bbab2a035a53"
 NONCE = b"0123456789abcdef0123456789abcdef0123456789abcdef"
 
 
-def event(value: dict[str, object]) -> bytes:
+def event(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode()
 
 
@@ -49,7 +51,7 @@ def permission_denial(tool_name: str) -> dict[str, object]:
             "tool_input": {}}
 
 
-def stream(values: list[dict[str, object]]) -> bytes:
+def stream(values: Sequence[Mapping[str, object]]) -> bytes:
     return b"\n".join(event(value) for value in values)
 
 

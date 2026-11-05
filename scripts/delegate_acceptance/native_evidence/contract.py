@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from collections.abc import Mapping
+from typing import TypeGuard
+from .summaries import TreeSummary, is_tree_summary
+from .summaries import _empty_summary as _empty_summary
+from .summaries import _summary_with_removed as _summary_with_removed
 from ..evidence.digests import sha as _digest_bytes
 from ..evidence.validation import AcceptanceFailure
 from ..tasks.runtime_metadata import _provider_runtime_identity
@@ -171,12 +176,7 @@ def canonical_json(value: object) -> bytes:
         raise EvidenceError("receipt_json_invalid") from error
 
 
-def _empty_summary() -> dict[str, int | bool]:
-    return {"root_count": 0, "file_count": 0, "byte_count": 0, "complete": True,
-            "count": 0, "bytes": 0}
-
-
-def _safe_source_status(value: object) -> bool:
+def _safe_source_status(value: object) -> TypeGuard[str]:
     return isinstance(value, str) and len(value) <= 64 and not any(ord(char) < 32 for char in value)
 
 
@@ -340,7 +340,7 @@ def _task_identifier_values(value: object, *, limit: int = 64) -> list[str]:
     return sorted(set(result))[:limit]
 
 
-def _expected_task_aliases(provider: str, scenario: str) -> tuple[str, ...]:
+def _expected_task_aliases(provider: object, scenario: object) -> tuple[str, ...]:
     """Return the authoritative task turns required by one passing case."""
     if scenario == "interactive":
         return ("interactive",)
@@ -372,26 +372,6 @@ def _case_cleanup_authorization(value: dict[str, object]) -> str:
     return _digest_bytes(canonical_json(payload))
 
 
-def _summary_with_removed(
-        after: dict[str, object], victims: list[dict[str, object]]) -> dict[str, object]:
-    summaries = [victim.get("before") for victim in victims]
-    if any(not isinstance(summary, dict) or summary.get("complete") is not True
-           for summary in summaries):
-        return {"root_count": 0, "file_count": 0, "byte_count": 0,
-                "complete": False, "count": 0, "bytes": 0}
-    root_count = int(after["root_count"]) + sum(int(summary["root_count"]) for summary in summaries)
-    file_count = int(after["file_count"]) + sum(int(summary["file_count"]) for summary in summaries)
-    byte_count = int(after["byte_count"]) + sum(int(summary["byte_count"]) for summary in summaries)
-    return {
-        "root_count": root_count,
-        "file_count": file_count,
-        "byte_count": byte_count,
-        "complete": after.get("complete") is True,
-        "count": root_count,
-        "bytes": byte_count,
-    }
-
-
 def _case_result_verdict(rows: tuple[MatrixRow, ...], unresolved: bool) -> str:
     if unresolved or any(row.status == "FAIL" for row in rows):
         return "FAIL"
@@ -408,16 +388,16 @@ def _aggregate_exit(status: str, result_verdict: str, require_pass: bool) -> int
     return 0
 
 
-def _validate_summary(value: object) -> None:
-    if not isinstance(value, dict):
+def _aggregate_exit_code(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= 255:
+        raise EvidenceError("aggregate_exit_mismatch")
+    return value
+
+
+def _validate_summary(value: object) -> TreeSummary:
+    if not is_tree_summary(value):
         raise EvidenceError("aggregate_summary_invalid")
-    if (type(value.get("root_count")) is not int or type(value.get("file_count")) is not int
-            or type(value.get("byte_count")) is not int or type(value.get("complete")) is not bool
-            or type(value.get("count")) is not int or type(value.get("bytes")) is not int
-            or min(value["root_count"], value["file_count"], value["byte_count"]) < 0
-            or min(value["count"], value["bytes"]) < 0
-            or value["bytes"] != value["byte_count"]):
-        raise EvidenceError("aggregate_summary_invalid")
+    return value
 
 
 def _parse_optional_revision(value: str | None) -> str | None:
@@ -526,7 +506,7 @@ def _proof_closure_error(proof: dict[str, object]) -> str | None:
                          if binding.get("alias") == "timeout_source"])
 
 
-def _validate_case_sessions(proof: dict[str, object]) -> tuple[list[dict[str, str]], list[str], list[str], dict[str, object]]:
+def _validate_case_sessions(proof: Mapping[str, object]) -> tuple[list[dict[str, str]], list[str], list[str], dict[str, object]]:
     bindings = proof.get("task_session_bindings")
     if (not isinstance(bindings, list) or len(bindings) > 64
             or any(not isinstance(binding, dict)
@@ -603,6 +583,7 @@ def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -
         raise EvidenceError("aggregate_case_binary_identity_incomplete")
     if binaries.get("state") == "complete" and (
             provider_binding is None
+            or binding_identity is None
             or sorted(normalized_runtimes) != binary_task_ids
             or not _runtime_identity_matches(
                 normalized_runtimes.get(provider_binding["task_id"], {}), binding_identity)
@@ -678,7 +659,7 @@ class _CaseObservation:
 
 
 def _source_proof_error(
-        row: MatrixRow, source: dict[str, object] | None, proof: dict[str, object],
+        row: MatrixRow, source: dict[str, object] | None, proof: Mapping[str, object],
         evidence_error: str | None) -> str | None:
     if source is None and evidence_error is None:
         evidence_error = "source_receipt_missing"
@@ -728,8 +709,14 @@ def _unresolved_source_proof(row: MatrixRow, source_digest: str | None) -> dict[
     }
 
 
+def _case_exit_code(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= 255:
+        raise EvidenceError("aggregate_case_exit_invalid")
+    return value
+
+
 def _validate_aggregate_result(
-        value: dict[str, object], cases: list[dict[str, object]]) -> int:
+        value: Mapping[str, object], cases: list[dict[str, object]]) -> int:
     statuses = [case["status"] for case in cases]
     if (value.get("case_count") != len(cases)
             or value.get("pass_count") != statuses.count("PASS")
@@ -750,7 +737,7 @@ def _validate_aggregate_result(
     computed = _case_result_verdict(tuple(
         MatrixRow(CaseDefinition(
             str(case["case_id"]), str(case["provider"]), str(case["permission"]),
-            str(case["scenario"]), ""), int(case["exit_code"]), str(case["status"]),
+            str(case["scenario"]), ""), _case_exit_code(case["exit_code"]), str(case["status"]),
         ) for case in cases
     ), evidence_unresolved)
     if value.get("case_results_verdict") != computed:

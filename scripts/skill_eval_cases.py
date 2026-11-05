@@ -43,7 +43,7 @@ def _text(value: object, where: str) -> list[str]:
 
 def _relative_path(value: object, where: str) -> list[str]:
     errors = _text(value, where)
-    if errors:
+    if errors or not isinstance(value, str):
         return errors
     parts = value.split("/")
     if "\\" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) or any(part in ("", ".", "..") for part in parts):

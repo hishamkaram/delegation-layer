@@ -15,13 +15,13 @@ if __package__ in {None, ""}:
 
 from scripts.delegate_acceptance.evidence.bounded_files import BoundedReadError
 from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
-from scripts.delegate_acceptance.native_evidence.supplemental import validate_supplemental
+from scripts.delegate_acceptance.native_evidence.supplemental import SupplementalSummary, validate_supplemental
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 
 
 def verify_native_continuation(*, supplemental_root: Path, canonical_aggregate: Path,
                                source_revision: str | None, candidate_delegate: Path, pi_control: Path,
-                               environment: Mapping[str, str], checkout: Path) -> dict[str, object]:
+                               environment: Mapping[str, str], checkout: Path) -> SupplementalSummary:
     """Observe existing product evidence; no ledger, launch, write or cleanup."""
     return validate_supplemental(
         supplemental_root=supplemental_root, canonical_aggregate=canonical_aggregate,

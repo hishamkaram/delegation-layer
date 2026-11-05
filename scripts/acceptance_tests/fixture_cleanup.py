@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 
 
 @contextmanager
-def closing_preserving_primary(close: Callable[[], object]) -> Iterator[None]:
+def closing_preserving_primary(close: Callable[[], object]) -> Generator[None]:
     """Run ``close`` exactly once when the scope exits.
 
     A cleanup fault alone propagates unchanged. After a scope failure, that failure stays the

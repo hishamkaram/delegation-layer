@@ -23,6 +23,21 @@ from scripts.delegate_acceptance.provider_drivers.agy import runner as agy_runne
 from scripts.delegate_acceptance.provider_drivers.agy import shutdown as agy_shutdown
 
 
+class ObservedDaemon(process_operations.Process):
+    """An already observed handle for failure-policy tests; starts no process."""
+
+    def __init__(self, result: dict[str, object] | None, pid: int = 0):
+        self.observation = result
+        self.identity = pid
+
+    @property
+    def pid(self) -> int:
+        return self.identity
+
+    def poll(self, deadline=None) -> dict[str, object] | None:
+        return self.observation
+
+
 class NativeHarnessTests(unittest.TestCase):
     def make_book(self, directory, environment=None):
         owner = common.DirectoryOwner()
@@ -90,7 +105,9 @@ class NativeHarnessTests(unittest.TestCase):
             parent.mkdir(mode=0o777)
             os.chmod(parent, 0o777)
             run = gate.NativeRun.__new__(gate.NativeRun)
-            run.prepared = SimpleNamespace(state=root, data={})
+            run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+            run.prepared.state = root
+            run.prepared.data = {}
             run.output = root / 'evidence'
             with patch.object(agy_runner, 'PUEUE_PARENT', parent), \
                     patch.object(path_operations, 'reject_tmp'), \
@@ -215,7 +232,7 @@ class NativeHarnessTests(unittest.TestCase):
             run = gate.NativeRun.__new__(gate.NativeRun)
             run.output = Path(directory)
             run.processes = SimpleNamespace(entries=[], pending=lambda **kwargs: [])
-            run.daemon = SimpleNamespace(pid=123, poll=lambda: {
+            run.daemon = ObservedDaemon(pid=123, result={
                 'exit_code': -15, 'natural_wait': False,
             })
             run.dispatch_attempts = {'a' * 32}
@@ -231,7 +248,7 @@ class NativeHarnessTests(unittest.TestCase):
             run.output = Path(directory)
             run.processes = SimpleNamespace(
                 entries=[], pending=lambda **_kwargs: [{'pid': 17}])
-            run.daemon = SimpleNamespace(poll=lambda: None)
+            run.daemon = ObservedDaemon(result=None)
             run.dispatch_attempts = {'a' * 32}
             run.final_queue = None
             with patch.object(agy_shutdown, 'failure_cleanup_deadline', return_value=10.0), \
@@ -331,28 +348,66 @@ class NativeHarnessTests(unittest.TestCase):
             outside = root / 'outside.txt'
             run = gate.NativeRun.__new__(gate.NativeRun)
             run.output = root
-            run.prepared = SimpleNamespace(workspace=workspace, nonce_file=nonce,
-                                           inside=inside, outside=outside, state=root / 'state',
-                                           ids={'L1': 'a' * 32})
+            run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+            run.prepared.workspace = workspace
+            run.prepared.nonce_file = nonce
+            run.prepared.inside = inside
+            run.prepared.outside = outside
+            run.prepared.state = root / 'state'
+            run.prepared.ids = {'L1': 'a' * 32}
             run.task_results = {}
-            run.copy_brief = lambda name: root / 'brief'
+            self.enterContext(patch.object(run, 'copy_brief', lambda name: root / 'brief'))
             def dispatch(*args):
                 inside.write_bytes(b'unit-nonce\n')
                 outside.write_bytes(b'OUTSIDE-WRITE-PROBE')
-            run.dispatch = dispatch
-            run.wait_task = lambda *args: None
-            run.collect = lambda *args: (None, {})
-            run.validate_evidence = lambda *args: {
-                'payload': b'unit-nonce; outside file successfully created', 'events': {}, 'provider_exit': {}}
-            run.immutable_snapshot = lambda *args: {'immutable': {'sha256': 'unit'}}
-            run.replay = lambda *args: None
-            run.read_record = lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
-                                                   {'provider': agy_constants.PROVIDER, 'conversation_id': 'unit-session'})
+            self.enterContext(patch.object(run, 'dispatch', dispatch))
+            self.enterContext(patch.object(run, 'wait_task', lambda *args: None))
+            self.enterContext(patch.object(run, 'collect', lambda *args: (None, {})))
+            self.enterContext(patch.object(run, 'validate_evidence', lambda *args: {
+                'payload': b'unit-nonce; outside file successfully created', 'events': {}, 'provider_exit': {}}))
+            self.enterContext(patch.object(run, 'immutable_snapshot', lambda *args: {'immutable': {'sha256': 'unit'}}))
+            self.enterContext(patch.object(run, 'replay', lambda *args: None))
+            self.enterContext(patch.object(run, 'read_record', lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
+                                                   {'provider': agy_constants.PROVIDER, 'conversation_id': 'unit-session'})))
             run.run_l1()
             self.assertEqual(list(workspace.iterdir()), [])
             self.assertTrue((root / 'L1-filesystem.json').is_file())
             self.assertEqual(outside.read_bytes(), b'OUTSIDE-WRITE-PROBE')
             self.assertEqual(run.l1_nonce, 'unit-nonce')
+
+    def test_malformed_l1_verdict_is_an_acceptance_failure(self) -> None:
+        for verdict in ([], {}, None):
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+                prepared.workspace = root
+                prepared.state = root / 'state'
+                prepared.nonce_file = root / 'nonce.txt'
+                prepared.nonce_file.write_bytes(b'unit-nonce\n')
+                prepared.ids = {'L1': 'a' * 32}
+                run = gate.NativeRun.__new__(gate.NativeRun)
+                run.prepared = prepared
+                with (
+                    patch.object(run, 'copy_brief', return_value=root / 'brief'),
+                    patch.object(run, 'dispatch', return_value={}),
+                    patch.object(run, 'wait_task', return_value={}),
+                    patch.object(run, 'collect', return_value=(None, {})),
+                    patch.object(run, 'read_record', return_value={'verdict': verdict}),
+                    self.assertRaisesRegex(gate.AcceptanceFailure, 'L1 has no terminal outcome'),
+                ):
+                    run.run_l1()
+
+    def test_readiness_requires_an_observed_process_result(self) -> None:
+        run = gate.NativeRun.__new__(gate.NativeRun)
+        run.pueue_config = Path('/fixture/config')
+        run.pueue = Path('/fixture/pueue')
+        run.processes = process_operations.Processes.__new__(process_operations.Processes)
+        run.processes.entries = []
+        process = process_operations.Process.__new__(process_operations.Process)
+        process.result = None
+        with patch.object(run, 'direct', return_value=process):
+            with self.assertRaisesRegex(gate.AcceptanceFailure, 'readiness has no observed exit code'):
+                run.wait_daemon_ready()
 
     def test_committed_l1_requires_positive_native_write(self):
         for case in ['valid', 'missing-inside', 'wrong-inside', 'missing-outside', 'wrong-outside']:
@@ -372,24 +427,29 @@ class NativeHarnessTests(unittest.TestCase):
                 (raw / 'stderr').write_bytes(b'')
                 run = gate.NativeRun.__new__(gate.NativeRun)
                 run.output = root
-                run.prepared = SimpleNamespace(workspace=workspace, nonce_file=nonce, inside=inside,
-                                               outside=outside, state=state, ids={'L1': task})
+                run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+                run.prepared.workspace = workspace
+                run.prepared.nonce_file = nonce
+                run.prepared.inside = inside
+                run.prepared.outside = outside
+                run.prepared.state = state
+                run.prepared.ids = {'L1': task}
                 run.task_results = {}
-                run.copy_brief = lambda name: root / 'brief'
+                self.enterContext(patch.object(run, 'copy_brief', lambda name: root / 'brief'))
                 def dispatch(*args):
                     if case != 'missing-inside':
                         inside.write_bytes(b'wrong' if case == 'wrong-inside' else b'unit-nonce\n')
                     if case != 'missing-outside':
                         outside.write_bytes(b'WRONG' if case == 'wrong-outside' else b'OUTSIDE-WRITE-PROBE')
-                run.dispatch = dispatch
-                run.wait_task = lambda *args: None
-                run.collect = lambda *args: (None, {})
-                run.validate_evidence = lambda *args: {'payload': b'unit-nonce; outside file successfully created', 'events': {},
-                    'provider_exit': {'exit_code': 0, 'error': ''}}
-                run.immutable_snapshot = lambda *args: {'immutable': {'sha256': 'unit'}}
-                run.replay = lambda *args: None
-                run.read_record = lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
-                    {'provider': agy_constants.PROVIDER, 'conversation_id': 'unit-session'})
+                self.enterContext(patch.object(run, 'dispatch', dispatch))
+                self.enterContext(patch.object(run, 'wait_task', lambda *args: None))
+                self.enterContext(patch.object(run, 'collect', lambda *args: (None, {})))
+                self.enterContext(patch.object(run, 'validate_evidence', lambda *args: {'payload': b'unit-nonce; outside file successfully created', 'events': {},
+                    'provider_exit': {'exit_code': 0, 'error': ''}}))
+                self.enterContext(patch.object(run, 'immutable_snapshot', lambda *args: {'immutable': {'sha256': 'unit'}}))
+                self.enterContext(patch.object(run, 'replay', lambda *args: None))
+                self.enterContext(patch.object(run, 'read_record', lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
+                    {'provider': agy_constants.PROVIDER, 'conversation_id': 'unit-session'})))
                 if case == 'valid':
                     run.run_l1()
                     self.assertEqual(json.loads((root / 'L1-control-outcome.json').read_text())['verdict'], 'committed')
@@ -433,7 +493,8 @@ class NativeHarnessTests(unittest.TestCase):
         run.dispatch_attempts = {task}
         run.root_id = 'b' * 32
         run.runner = Path('/controlled/delegate-run')
-        run.prepared = type('PreparedPaths', (), {'state': Path('/controlled/state')})()
+        run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+        run.prepared.state = Path('/controlled/state')
         command = f'{run.runner} --guardian --supervised --root {run.prepared.state} {task}'
         row = {'label': 'delegate:' + 'b' * 32 + ':' + task,
                'command': command, 'original_command': command, 'path': '/controlled',
@@ -562,7 +623,8 @@ class NativeHarnessTests(unittest.TestCase):
     def test_default_evidence_is_separate_from_disposable_state(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            prepared = SimpleNamespace(state=root / "states" / "agy-run" / "state")
+            prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+            prepared.state = root / "states" / "agy-run" / "state"
             with patch.object(gate, "DEFAULT_EVIDENCE_PARENT", root / "evidence"):
                 output = gate.choose_output(prepared, None)
             self.assertEqual(output, root / "evidence" / "agy-run")
@@ -575,7 +637,9 @@ class NativeHarnessTests(unittest.TestCase):
             parent.mkdir()
             base = parent / 'dl-agy-created'
             run = gate.NativeRun.__new__(gate.NativeRun)
-            run.prepared = SimpleNamespace(state=root, data={})
+            run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+            run.prepared.state = root
+            run.prepared.data = {}
             run.output = root / 'evidence'
             run.pueue_base = None
             run.pueue_owned_directories = ()
@@ -630,13 +694,13 @@ class NativeHarnessTests(unittest.TestCase):
             run.output = output
             run.daemon_done = True
             run.processes = SimpleNamespace(capture_root=raw_token)
-            run.prepared = SimpleNamespace(
-                state=state, scratch=scratch,
-                owned_directories=(
+            run.prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+            run.prepared.state = state
+            run.prepared.scratch = scratch
+            run.prepared.owned_directories = (
                     state_parent_token, state_run_token, state_token,
                     workspace_parent_token, scratch_token,
-                ),
-            )
+                )
             run.dispatch_attempts = set()
             run.pueue_base = pueue
             run.pueue_owned_directories = (pueue_token,)
@@ -655,10 +719,9 @@ class NativeHarnessTests(unittest.TestCase):
 
     def test_diagnostic_failure_does_not_skip_failure_cleanup(self):
         calls = []
-        run = SimpleNamespace(
-            failure_shutdown=lambda: calls.append("shutdown") or True,
-            finalize=lambda success: calls.append(("finalize", success)) or True,
-        )
+        run = gate.NativeRun.__new__(gate.NativeRun)
+        self.enterContext(patch.object(run, 'failure_shutdown', side_effect=lambda: calls.append("shutdown") or True))
+        self.enterContext(patch.object(run, 'finalize', side_effect=lambda success: calls.append(("finalize", success)) or True))
         with patch.object(agy_receipts, 'failure_receipt', side_effect=OSError('diagnostic disk full')):
             result = gate.handle_failure(None, RuntimeError('primary failure'), run, False)
 
@@ -666,10 +729,9 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertEqual(calls, ["shutdown", ("finalize", False)])
 
     def test_cleanup_failure_is_fatal_even_for_blocked_failure(self):
-        run = SimpleNamespace(
-            failure_shutdown=lambda: False,
-            finalize=lambda _success: True,
-        )
+        run = gate.NativeRun.__new__(gate.NativeRun)
+        self.enterContext(patch.object(run, 'failure_shutdown', return_value=False))
+        self.enterContext(patch.object(run, 'finalize', return_value=True))
         with patch.object(agy_receipts, 'failure_receipt'):
             result = gate.handle_failure(None, gate.BlockedFailure('missing provider'), run, True)
 
@@ -680,7 +742,8 @@ class NativeHarnessTests(unittest.TestCase):
             with self.subTest(failure=repr(failure)), \
                     tempfile.TemporaryDirectory(prefix="agy-finalize-unit-") as temporary:
                 output = Path(temporary) / "evidence"
-                prepared = SimpleNamespace(state=Path(temporary) / "state")
+                prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+                prepared.state = Path(temporary) / "state"
                 calls = []
 
                 def finalize(success):
@@ -733,11 +796,11 @@ class NativeHarnessTests(unittest.TestCase):
                     scratch = root / 'retained-scratch'
                     workspace.mkdir()
                     scratch.mkdir()
-                    prepared = SimpleNamespace(
-                        state=state_token.directory,
-                        workspace=workspace,
-                        scratch=scratch,
-                        owned_directories=ownership.transfer())
+                    prepared = agy_prepared.Prepared.__new__(agy_prepared.Prepared)
+                    prepared.state = state_token.directory
+                    prepared.workspace = workspace
+                    prepared.scratch = scratch
+                    prepared.owned_directories = ownership.transfer()
                     removed_resource = state_token.directory
                     expected_retained = {str(workspace), str(scratch)}
                     fresh = patch.object(gate, 'fresh_prepared', return_value=prepared)
@@ -755,6 +818,7 @@ class NativeHarnessTests(unittest.TestCase):
                 self.assertEqual(receipt['cleanup']['status'], 'completed')
                 if stage == 'setup':
                     self.assertIsNotNone(removed_resource)
+                    assert isinstance(removed_resource, Path)
                     self.assertFalse(removed_resource.exists())
                     retained = set(receipt['retained_resources'])
                     self.assertNotIn(str(removed_resource), retained)

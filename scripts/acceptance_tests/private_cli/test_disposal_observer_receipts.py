@@ -84,7 +84,7 @@ class StartedWorkers:
 
 class StartedWorkersTests(unittest.TestCase):
     def setUp(self):
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def test_cleanup_releases_and_joins_a_late_or_partial_start_before_capture_rollback(self):
         live_after_release = []
@@ -119,7 +119,7 @@ class StartedWorkersTests(unittest.TestCase):
 
 class DisposalObserverReceiptTests(unittest.TestCase):
     def setUp(self):
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
         temporary = tempfile.TemporaryDirectory(prefix="delegate-observer-cli-")
         self.addCleanup(temporary.cleanup)
         self.delegate = Path(temporary.name) / "delegate"

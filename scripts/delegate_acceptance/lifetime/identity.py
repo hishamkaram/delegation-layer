@@ -47,7 +47,8 @@ def _lifetime_record_name(owner_kind: str, record: str, sequence: int | None = N
             "termination": "lifetime-termination.json",
         }
         if record == "launch":
-            require(sequence is not None, "inspection lifetime launch sequence is absent")
+            if sequence is None:
+                raise AcceptanceFailure("inspection lifetime launch sequence is absent")
             return _lifetime_launch_name(owner_kind, sequence)
     else:
         require(owner_kind == "task", "lifetime owner kind is invalid")
@@ -59,7 +60,8 @@ def _lifetime_record_name(owner_kind: str, record: str, sequence: int | None = N
             "termination": "terminated.json",
         }
         if record == "launch":
-            require(sequence is not None, "ordinary task lifetime launch sequence is absent")
+            if sequence is None:
+                raise AcceptanceFailure("ordinary task lifetime launch sequence is absent")
             return _lifetime_launch_name(owner_kind, sequence)
     require(record in names, "lifetime record kind is invalid")
     return names[record]

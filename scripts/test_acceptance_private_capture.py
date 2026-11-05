@@ -17,6 +17,17 @@ from scripts.delegate_acceptance.private_cli import capture
 from acceptance_supervisor_common import DirectoryOwner
 
 
+def exception_capture_paths(error: BaseException, field: str) -> tuple[str, str]:
+    """Check the two exact paths attached to a private-control exception."""
+    paths: object = getattr(error, field, None)
+    if not isinstance(paths, tuple) or len(paths) != 2:
+        raise AssertionError(f"exception {field} must name both capture files")
+    stdout, stderr = paths
+    if not isinstance(stdout, str) or not isinstance(stderr, str):
+        raise AssertionError(f"exception {field} must contain path strings")
+    return stdout, stderr
+
+
 class PrivateCaptureTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-capture-test-")
@@ -139,12 +150,12 @@ class PrivateCaptureTests(unittest.TestCase):
         # The raised timeout names the direct child and the exact capture files of this call.
         self.assertEqual(getattr(error, "process_pid", None), children[0].pid)
         self.assertEqual([Path(path).read_bytes() for path in getattr(error, "capture_paths", ())], [stdout, stderr])
-        self.assertEqual(set(error.capture_paths), {str(path) for path in self.capture_root.directory.iterdir()})
+        self.assertEqual(set(exception_capture_paths(error, "capture_paths")), {str(path) for path in self.capture_root.directory.iterdir()})
         self.assertFalse(hasattr(error, "retained_capture_paths"))
         receipt = self.read_receipt()
         self.assertEqual(receipt["command"], [sys.executable, *args])
         self.assertEqual(receipt["direct_process"], {"pid": children[0].pid, "provenance": "subprocess.Popen.pid"})
-        self.assertEqual(receipt["capture_paths"], list(error.capture_paths))
+        self.assertEqual(receipt["capture_paths"], list(exception_capture_paths(error, "capture_paths")))
         self.assertNotIn("capture_failure", receipt)
 
     @staticmethod
@@ -343,7 +354,7 @@ class PrivateCaptureTests(unittest.TestCase):
             {str(path) for path in self.capture_root.directory.iterdir()},
         )
         self.assertEqual(getattr(error, "process_pid", None), process.pid)
-        self.assertEqual(getattr(error, "capture_paths", None), error.retained_capture_paths)
+        self.assertEqual(getattr(error, "capture_paths", None), exception_capture_paths(error, "retained_capture_paths"))
         self.assertEqual(evidence["direct_process"], {"pid": process.pid, "provenance": "subprocess.Popen.pid"})
         self.assertEqual(evidence["capture_paths"], capture_failure["retained_paths"])
         self.assertEqual(evidence["command"], [sys.executable, *args])

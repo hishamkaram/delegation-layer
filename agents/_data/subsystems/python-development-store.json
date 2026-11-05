@@ -13,6 +13,7 @@
       "py:io",
       "py:pathlib",
       "py:test_candidate_build_support",
+      "py:typing",
       "py:unittest"
     ]
   }

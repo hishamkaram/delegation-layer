@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import time
 import uuid
+from typing import Mapping
 
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
 import scripts.delegate_acceptance.private_cli.admission as private_cli_admission
@@ -17,7 +18,7 @@ from scripts.delegate_acceptance.evidence.files import write_json
 from .context import WorkspaceContext
 from .evidence import _compact
 from .model import (
-    ADMISSION_COMMAND_TIMEOUT_SECONDS, FIXTURE_SESSION, TASK_ID_RE, WAIT_SECONDS,
+    ADMISSION_COMMAND_TIMEOUT_SECONDS, FIXTURE_SESSION, TASK_ID_RE, WAIT_SECONDS, WorkspaceTask,
 )
 from .policy import (
     _FACT_TOKEN_RE, _fact, _validate_hex, classify_control_response,
@@ -51,13 +52,15 @@ def _control(
     except (OSError, ValueError) as error:
         raise RuntimeError("shared control helper did not retain command response") from error
     code = evidence.get("exit_code")
-    require(type(code) is int, "shared control helper omitted command exit")
+    if not (type(code) is int):
+        raise RuntimeError("shared control helper omitted command exit")
     return code, response
 
 
 def _workspace_from(response: dict[str, object]) -> dict[str, object]:
     workspace = response.get("workspace")
-    require(isinstance(workspace, dict), "response omitted additive workspace block")
+    if not (isinstance(workspace, dict)):
+        raise RuntimeError("response omitted additive workspace block")
     return workspace
 
 
@@ -205,11 +208,14 @@ def _dispatch(
     workspace_id: str | None = None,
     source: Path | str | None = None,
     base: str | None = None,
-) -> dict[str, object]:
+) -> WorkspaceTask:
+    reuse_arguments: list[str] = []
     if not fresh:
-        require(workspace_id is not None, "workspace reuse dispatch lacks ID")
+        if workspace_id is None:
+            raise RuntimeError("workspace reuse dispatch lacks ID")
         require(source is None and base is None,
                 "workspace reuse cannot override the source checkout or base")
+        reuse_arguments = ["--workspace", workspace_id]
     task_id = uuid.uuid4().hex
     with context.command_lock:
         context.attempted_task_ids.append(task_id)
@@ -227,7 +233,7 @@ def _dispatch(
             "--base", context.source_baseline["head"] if base is None else base,
         ])
     else:
-        args.extend(["--workspace", workspace_id])
+        args.extend(reuse_arguments)
     code, response = _control(
         context, args, label="dispatch", task_id=task_id, expected=(0, 1, 2, 3),
         timeout=ADMISSION_COMMAND_TIMEOUT_SECONDS, phase="workspace-dispatch",
@@ -236,7 +242,8 @@ def _dispatch(
     workspace_id = _workspace_id(response)
     context.add_workspace(workspace_id)
     root_id = response.get("root_id")
-    require(isinstance(root_id, str), "dispatch omitted state root identity")
+    if not (isinstance(root_id, str)):
+        raise RuntimeError("dispatch omitted state root identity")
     return {
         "task_id": task_id,
         "workspace_id": workspace_id,
@@ -248,11 +255,11 @@ def _dispatch(
 
 def _continue(
     context: WorkspaceContext,
-    predecessor: dict[str, object],
+    predecessor: Mapping[str, object],
     *,
     brief: Path,
     task_budget: str,
-) -> dict[str, object]:
+) -> WorkspaceTask:
     predecessor_id = _validate_hex(
         predecessor.get("task_id"), TASK_ID_RE, "continuation predecessor task ID",
     )
@@ -276,7 +283,8 @@ def _continue(
     workspace_id = _workspace_id(response)
     context.add_workspace(workspace_id)
     root_id = response.get("root_id")
-    require(isinstance(root_id, str), "continuation omitted state root identity")
+    if not (isinstance(root_id, str)):
+        raise RuntimeError("continuation omitted state root identity")
     require(root_id == predecessor_root_id, "continuation changed state root identity")
     return {
         "task_id": task_id,
@@ -288,15 +296,15 @@ def _continue(
     }
 
 
-def _await_task(context: WorkspaceContext, task: dict[str, object], timeout: float) -> dict[str, object]:
+def _await_task(context: WorkspaceContext, task: Mapping[str, object], timeout: float) -> dict[str, object]:
     # A completed queue row may already have been reclaimed. Wait for the
     # validated provider publication; workspace capture and the canonical
     # root-level lifetime validator separately prove native closure below.
     return _collect_task(context, task, timeout)
 
 
-def _collect_task(context: WorkspaceContext, task: dict[str, object], timeout: float) -> dict[str, object]:
-    task_id = task["task_id"]
+def _collect_task(context: WorkspaceContext, task: Mapping[str, object], timeout: float) -> dict[str, object]:
+    task_id = _validate_hex(task["task_id"], TASK_ID_RE, "task ID")
     _code, response = _control(
         context,
         ["--root", str(context.state), "collect", task_id, "--watch", str(timeout) + "s", "--json"],
@@ -304,7 +312,8 @@ def _collect_task(context: WorkspaceContext, task: dict[str, object], timeout: f
         timeout=timeout + 10, phase="task-collection",
     )
     outcome = response.get("outcome")
-    require(isinstance(outcome, dict), "collection omitted provider outcome")
+    if not (isinstance(outcome, dict)):
+        raise RuntimeError("collection omitted provider outcome")
     task_directory = context.state / "tasks" / task_id
     stored = read_json(task_directory / "outcome.json")
     require(stored == outcome, "collection is not bound to sole outcome authority")
@@ -316,7 +325,8 @@ def _prove_lifetimes_closed(context: WorkspaceContext, task_ids: list[str]) -> d
     proof = private_cli_supervisor.await_managed_lifetime_closure(
         context.state, tuple(task_ids), timeout=WAIT_SECONDS,
     )
-    require(isinstance(proof, dict), "managed lifetime closure proof is not an object")
+    if not (isinstance(proof, dict)):
+        raise RuntimeError("managed lifetime closure proof is not an object")
     return proof
 
 
@@ -326,7 +336,7 @@ def _capture_is_for(capture: dict[str, object], subject_id: str) -> bool:
 
 
 def _capture_operation(
-    context: WorkspaceContext, task: dict[str, object], *,
+    context: WorkspaceContext, task: Mapping[str, object], *,
     workspace: dict[str, object], operation_id: str,
 ) -> tuple[dict[str, object] | None, str]:
     """Return the public result of exactly one operation, or why it is unknown.
@@ -356,7 +366,7 @@ def _capture_operation(
 
 
 def _unavailable_capture_error(
-    context: WorkspaceContext, task: dict[str, object], *,
+    context: WorkspaceContext, task: Mapping[str, object], *,
     workspace: dict[str, object], capture: dict[str, object], subject_id: str,
 ) -> RuntimeError:
     """Keep the unavailable-capture failure and add the typed cause the public API holds."""
@@ -379,15 +389,16 @@ def _unavailable_capture_error(
 
 
 def _wait_capture(
-    context: WorkspaceContext, task: dict[str, object], *, subject_id: str | None = None,
+    context: WorkspaceContext, task: Mapping[str, object], *, subject_id: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Wait for the capture of one exact subject: the task itself unless an ID is selected.
 
     A previous turn's latest receipt, captured or unavailable, is ignored until the
     selected subject's own receipt arrives.
     """
-    workspace_id = task["workspace_id"]
-    subject_id = task["task_id"] if subject_id is None else subject_id
+    workspace_id = _validate_hex(task["workspace_id"], TASK_ID_RE, "workspace ID")
+    task_id = _validate_hex(task["task_id"], TASK_ID_RE, "task ID")
+    subject_id = task_id if subject_id is None else subject_id
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         remaining = deadline - time.monotonic()
@@ -395,7 +406,7 @@ def _wait_capture(
             raise TimeoutError("workspace capture observation expired: " + workspace_id
                                + " subject " + subject_id)
         response = _wait_workspace(
-            context, workspace_id, timeout=remaining, task_id=task["task_id"],
+            context, workspace_id, timeout=remaining, task_id=task_id,
         )
         workspace = _workspace_from(response)
         capture = workspace.get("capture")
@@ -499,8 +510,8 @@ def _assert_immutable_task_snapshot(
 
 def _validate_continuation_binding(
     context: WorkspaceContext,
-    predecessor: dict[str, object],
-    successor: dict[str, object],
+    predecessor: Mapping[str, object],
+    successor: Mapping[str, object],
     session: str,
 ) -> dict[str, object]:
     predecessor_id = _validate_hex(
@@ -512,8 +523,8 @@ def _validate_continuation_binding(
     expected_workspace_id = _validate_hex(
         predecessor.get("workspace_id"), TASK_ID_RE, "continuation workspace ID",
     )
-    require(isinstance(session, str) and session == FIXTURE_SESSION,
-            "continuation session identity is not the fixture session")
+    if not (isinstance(session, str) and session == FIXTURE_SESSION):
+        raise RuntimeError("continuation session identity is not the fixture session")
     predecessor_record = _task_record(context, predecessor_id)
     successor_record = _task_record(context, successor_id)
     root_id = _validate_hex(
@@ -529,14 +540,14 @@ def _validate_continuation_binding(
             "continuation changed provider identity")
     predecessor_cwd = predecessor_record.get("canonical_cwd")
     successor_cwd = successor_record.get("canonical_cwd")
-    require(isinstance(predecessor_cwd, str) and predecessor_cwd and
-            successor_cwd == predecessor_cwd,
-            "continuation changed canonical cwd")
+    if not (isinstance(predecessor_cwd, str) and predecessor_cwd and
+            successor_cwd == predecessor_cwd):
+        raise RuntimeError("continuation changed canonical cwd")
     predecessor_workspace = predecessor_record.get("workspace")
     successor_workspace = successor_record.get("workspace")
-    require(isinstance(predecessor_workspace, dict) and
-            isinstance(successor_workspace, dict),
-            "continuation omitted managed workspace binding")
+    if not (isinstance(predecessor_workspace, dict) and
+            isinstance(successor_workspace, dict)):
+        raise RuntimeError("continuation omitted managed workspace binding")
     require(predecessor_workspace.get("id") == expected_workspace_id and
             successor_workspace.get("id") == expected_workspace_id and
             successor.get("workspace_id") == expected_workspace_id,

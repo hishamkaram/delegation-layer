@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from unittest import mock
 
 import acceptance_workspaces as driver
@@ -30,6 +31,28 @@ HEAD_OID = "2" * 40
 TREE_OID = "3" * 40
 TERMINATION_SHA = "4" * 64
 WAIT_SHA = "5" * 64
+
+
+class RecordFixtureTraversalTests(unittest.TestCase):
+    def test_traversal_returns_original_containers_for_mutation(self):
+        record: dict[str, object] = {"value": 1}
+        items = [record]
+        root = {"items": items}
+        self.assertIs(array_at(root, "items"), items)
+        self.assertIs(object_at(root, "items", -1), record)
+        object_at(root, "items", 0)["value"] = "changed"
+        self.assertEqual(record["value"], "changed")
+
+    def test_malformed_fixture_paths_are_explicit_failures(self):
+        for root, path in (({}, ("missing",)), ({"items": []}, ("items", 0)),
+                           ({"items": [{}]}, ("items", True)), ([], ("field",)),
+                           ({1: {}}, ("field",)), ({"items": 1}, ("items", 0))):
+            with self.subTest(root=root, path=path), self.assertRaises(AssertionError):
+                object_at(root, *path)
+        with self.assertRaises(AssertionError):
+            array_at({"items": {}}, "items")
+        with self.assertRaises(AssertionError):
+            object_at({"items": []}, "items")
 
 
 class ManagedWorkspaceDriverTests(unittest.TestCase):
@@ -71,7 +94,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             base = Path(temporary)
             task = {"task_id": TASK_ID, "workspace_id": WORKSPACE_ID, "root_id": "e" * 32}
             preflight = {"task_id": TASK_ID, "pid": 101, "path": base / "preflight.fifo"}
-            provider = {"task_id": TASK_ID, "pid": 102, "path": base / "provider.fifo"}
+            provider_path = base / "provider.fifo"
+            provider = {"task_id": TASK_ID, "pid": 102, "path": provider_path}
             context = mock.Mock(spec=driver.WorkspaceContext)
             context.gate_path, context.state = base / "gate", base / "state"
             context.gates, context.cohorts = [], []
@@ -83,12 +107,12 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
 
             def publish_provider(_delay):
                 nonlocal published
-                os.mkfifo(provider["path"], 0o600)
+                os.mkfifo(provider_path, 0o600)
                 published = True
 
             def acquire(candidates, _nonce):
                 self.assertEqual(candidates, [provider])
-                self.assertTrue(provider["path"].exists())
+                self.assertTrue(provider_path.exists())
                 raise RuntimeError("expected provider cohort reached")
 
             with (
@@ -120,7 +144,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
 
         with mock.patch.object(scenario_operations, "_control", side_effect=delayed_control):
             response = driver._wait_workspace(context, WORKSPACE_ID, timeout=5)
-        self.assertEqual(response["workspace"]["state"], "retained")
+        self.assertEqual(object_at(response, "workspace")["state"], "retained")
 
     def test_capacity_failure_retains_completed_native_cohort_proof(self):
         context = mock.Mock(spec=driver.WorkspaceContext)
@@ -155,7 +179,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             context = mock.Mock(spec=driver.WorkspaceContext)
             context.base, context.source, context.state = base, base / "source", base / "state"
             context.owner = DirectoryOwner()
-            captures = [{"operation_id": operation, "snapshot_ref": "refs/delegate/" + operation,
+            captures: list[dict[str, object]] = [{"operation_id": operation, "snapshot_ref": "refs/delegate/" + operation,
                          "tree_oid": TREE_OID} for operation in ("a" * 32, "b" * 32)]
 
             def git_result(_context, arguments, _cwd, *, label):
@@ -171,8 +195,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 ):
                     for capture in captures:
                         self.assertEqual(driver._capture_roundtrip(context, capture), capture)
-                for capture in captures:
-                    self.assertTrue((base / ("capture-roundtrip-" + capture["operation_id"])).is_dir())
+                for operation in ("a" * 32, "b" * 32):
+                    self.assertTrue((base / ("capture-roundtrip-" + operation)).is_dir())
             finally:
                 context.owner.rollback()
 
@@ -475,7 +499,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             evidence = driver._validate_continuation_binding(
                 context, predecessor, successor, driver.FIXTURE_SESSION,
             )
-            self.assertEqual(evidence["prior_session"]["predecessor_task_id"], predecessor_id)
+            self.assertEqual(object_at(evidence, "prior_session")["predecessor_task_id"], predecessor_id)
             self.assertEqual(evidence["canonical_cwd"], workspace_path)
             self.assertEqual(evidence["workspace_id"], WORKSPACE_ID)
 
@@ -502,11 +526,11 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             self.assertEqual(result, 1)
             context.cleanup.assert_called_once_with("failed")
             receipt = json.loads(output.read_text())
-            self.assertEqual(receipt["cleanup"]["retained_owned_directories"], ["owned-fixture"])
+            self.assertEqual(object_at(receipt, "cleanup")["retained_owned_directories"], ["owned-fixture"])
 
     def test_success_verdict_requires_provider_outcome_and_capture(self):
         status = {"status": "done"}
-        committed = {"verdict": "committed"}
+        committed: dict[str, object] = {"verdict": "committed"}
         self.assertEqual(
             driver.classify_task_verdict(
                 status, committed, "success",
@@ -809,7 +833,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             patch_path.write_bytes(patch)
             name_status = b"A\x00managed\x00"
             (artifact_root / "name-status.z").write_bytes(name_status)
-            capture = {
+            capture: dict[str, object] = {
                 "status": "captured",
                 "workspace_id": WORKSPACE_ID,
                 "operation_id": OPERATION_ID,
@@ -837,9 +861,13 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             }
             evidence = driver.verify_capture_receipt(state, capture)
             self.assertEqual(evidence["operation_id"], OPERATION_ID)
-            self.assertEqual(evidence["artifacts"][0]["sha256"],
+            self.assertEqual(object_at(evidence, "artifacts", 0)["sha256"],
                              hashlib.sha256(patch).hexdigest())
-            capture["artifacts"][0]["length"] += 1
+            artifact = object_at(capture, "artifacts", 0)
+            length = artifact["length"]
+            if type(length) is not int:
+                self.fail("fixture artifact length is not an integer")
+            artifact["length"] = length + 1
             with self.assertRaisesRegex(RuntimeError, "artifact digest"):
                 driver.verify_capture_receipt(state, capture)
 
@@ -904,8 +932,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             )
             receipt = json.loads(output.read_text())
             self.assertEqual(receipt["verdict"], "failed")
-            self.assertEqual(receipt["cleanup"]["authorized"], False)
-            self.assertEqual(receipt["cleanup"]["decision"], "failure-evidence-retained")
+            self.assertEqual(object_at(receipt, "cleanup")["authorized"], False)
+            self.assertEqual(object_at(receipt, "cleanup")["decision"], "failure-evidence-retained")
             self.assertLess(output.stat().st_size, driver.MAX_RECEIPT_BYTES)
             self.assertEqual(finalizer.write_count, 1)
 

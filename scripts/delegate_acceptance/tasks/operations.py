@@ -22,6 +22,7 @@ from scripts.delegate_acceptance.evidence.validation import (
     require,
 )
 from scripts.delegate_acceptance.inspections.binding import _validate_inspection_binding
+from scripts.delegate_acceptance.inspections.data import InspectionEvidence
 from scripts.delegate_acceptance.inspections.journal import validate_inspection_evidence
 from scripts.delegate_acceptance.lifetime.closure import _ordinary_lifetime_control_started
 from scripts.delegate_acceptance.processes.observation import (
@@ -53,6 +54,7 @@ from scripts.delegate_acceptance.tasks.admission import (
     durable_ordinary_admission,
     static_refusal_state_is_clean,
 )
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand, TaskDaemon, TaskProcesses
 from scripts.delegate_acceptance.tasks.publication import snapshot, verify_collected_outcome
 from scripts.delegate_acceptance.tasks import request_intent as intents
 from scripts.delegate_acceptance.tasks.refusal_policy import (
@@ -76,7 +78,7 @@ class NativeTaskOps:
     provider process itself: the shipped delegate remains the only launcher.
     """
 
-    def __init__(self, processes: object, delegate: Path, runner: Path,
+    def __init__(self, processes: TaskProcesses, delegate: Path, runner: Path,
                  pueue: Path, state_parent: Path, state: Path, output: Path,
                  watch_seconds: float = 150,
                  expected_inspection_binding_required: bool = True,
@@ -102,7 +104,7 @@ class NativeTaskOps:
         self.managed_runner = managed_runner
         self.runner_placement: RunnerPlacement = runner_placement
         self.pueue_config: Path | None = None
-        self.daemon: object | None = None
+        self.daemon: TaskDaemon | None = None
         self.root_id: str | None = None
         self.root_created_at: tuple[datetime, int] | None = None
         self.tasks: dict[str, str] = {}
@@ -152,10 +154,10 @@ class NativeTaskOps:
             self.state / "tasks" / task / "meta.json",
             f"ordinary task metadata for {task}")
         executable = meta.get("runner_executable")
-        require(meta.get("runner_ownership") == "managed" and
+        if not (meta.get("runner_ownership") == "managed" and
                 isinstance(executable, str) and Path(executable).is_absolute() and
-                Path(executable) == Path(os.path.normpath(executable)),
-                f"ordinary task managed runner binding is invalid for {task}")
+                Path(executable) == Path(os.path.normpath(executable))):
+            raise AcceptanceFailure(f"ordinary task managed runner binding is invalid for {task}")
         runner = self._queued_runner(task)
         require(Path(executable) == runner,
                 f"ordinary task managed runner executable changed for {task}")
@@ -190,7 +192,7 @@ class NativeTaskOps:
                 isinstance(durable.get("managed_lifetime"), dict),
                 f"ordinary task lacks authoritative lifetime closure for {task}")
 
-    def bind_supervisor(self, config: Path, daemon: object | None = None) -> None:
+    def bind_supervisor(self, config: Path, daemon: TaskDaemon | None = None) -> None:
         self.pueue_config = Path(config)
         if daemon is not None:
             self.daemon = daemon
@@ -215,14 +217,15 @@ class NativeTaskOps:
         self.inspection_attempts.add(task_id)
 
     def direct(self, name: str, argv: list[object], expected: int | set[int] = 0,
-               timeout: float = 30) -> object:
+               timeout: float = 30) -> TaskCommand:
         require(not self.closed, "acceptance supervisor is closed")
         return self.processes.run(name, argv, self.state_parent,
                                   expected=expected, timeout=timeout)
 
     def client(self, name: str, operation: list[str], expected: int | set[int] = 0,
-               timeout: float = 30) -> object:
-        require(self.pueue_config is not None, "pueue is not configured")
+               timeout: float = 30) -> TaskCommand:
+        if self.pueue_config is None:
+            raise AcceptanceFailure("pueue is not configured")
         return self.direct(name, pueue_command(self.pueue, self.pueue_config, *operation),
                            expected, timeout)
 
@@ -283,16 +286,17 @@ class NativeTaskOps:
         require(response.get("admission") == "admitted", f"{name} was not admitted")
         require(response.get("task_id") == task, f"{name} task identity mismatch")
         root = response.get("root_id")
-        require(isinstance(root, str) and root, f"{name} omitted a root identity")
+        if not isinstance(root, str) or not root:
+            raise AcceptanceFailure(f"{name} omitted a root identity")
         if self.root_id is None:
             self.root_id = root
         require(self.root_id == root, f"{name} changed root identity")
         supervisor = response.get("supervisor")
-        require(isinstance(supervisor, dict) and supervisor.get("matched") is True,
-                f"{name} has no positive supervisor admission")
+        if not isinstance(supervisor, dict) or supervisor.get("matched") is not True:
+            raise AcceptanceFailure(f"{name} has no positive supervisor admission")
         numeric = supervisor.get("numeric_task_id")
-        require(isinstance(numeric, int) and not isinstance(numeric, bool) and numeric >= 0,
-                f"{name} has no numeric pueue identity")
+        if not (isinstance(numeric, int) and not isinstance(numeric, bool) and numeric >= 0):
+            raise AcceptanceFailure(f"{name} has no numeric pueue identity")
         require(name not in self.tasks and task not in self.tasks.values(),
                 f"{name} duplicated an admitted task")
         self.tasks[name] = task
@@ -325,8 +329,8 @@ class NativeTaskOps:
                                      expected=None, timeout=45, environment=environment)
         response = parse_json_output(process, name)
         task = response.get("task_id")
-        require(isinstance(task, str) and _task_identity(task),
-                f"{name} continuation has no valid successor task identity")
+        if not isinstance(task, str) or not _task_identity(task):
+            raise AcceptanceFailure(f"{name} continuation has no valid successor task identity")
         require(task not in self.dispatch_attempts,
                 "continuation reused an existing task identity")
         self.dispatch_attempts.add(task)
@@ -355,7 +359,8 @@ class NativeTaskOps:
 
     def wait_task(self, name: str, task: str,
                   expected_result: str | frozenset[str] | None = None) -> dict[str, object]:
-        require(self.root_id is not None, "root identity is unavailable")
+        if self.root_id is None:
+            raise AcceptanceFailure("root identity is unavailable")
         if expected_result is None:
             expected_result = self.expected_results.get(name, "Success")
         row = wait_runner_terminal(self.client, self.root_id, task, expected_result,
@@ -438,7 +443,7 @@ class NativeTaskOps:
 
     def validate_inspection_journal(self, task: str, directory: Path,
                                     allow_failure: bool = False,
-                                    expected_binding_required: bool = True) -> dict[str, object]:
+                                    expected_binding_required: bool = True) -> InspectionEvidence:
         """Validate one complete inspection journal for an acceptance gate.
 
         Provider-specific gates normally compare the journal binding with a
@@ -452,7 +457,7 @@ class NativeTaskOps:
 
     def _validate_inspection_journal(self, task: str, directory: Path,
                                      allow_failure: bool,
-                                     expected_binding_required: bool = True) -> dict[str, object]:
+                                     expected_binding_required: bool = True) -> InspectionEvidence:
         root = self._known_root_id()
         return validate_inspection_evidence(
             state=self.state, root=root, root_created_at=self.root_created_at,
@@ -462,17 +467,17 @@ class NativeTaskOps:
             allow_failure=allow_failure, expected_binding_required=expected_binding_required)
 
     def validate_inspection_journals(self, allow_failure: bool = False,
-                                     expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
+                                     expected_binding_required: bool | None = None) -> dict[str, InspectionEvidence]:
         """Validate every inspection journal and require exact expected coverage."""
         if expected_binding_required is None:
             expected_binding_required = self.expected_inspection_binding_required
         return self._inspection_journals(allow_failure, expected_binding_required)
 
     def _inspection_journals(self, allow_failure: bool,
-                             expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
+                             expected_binding_required: bool | None = None) -> dict[str, InspectionEvidence]:
         if expected_binding_required is None:
             expected_binding_required = self.expected_inspection_binding_required
-        journals: dict[str, dict[str, object]] = {}
+        journals: dict[str, InspectionEvidence] = {}
         for task, directories in self._inspection_journal_paths().items():
             candidates = [
                 self._validate_inspection_journal(
@@ -499,8 +504,8 @@ class NativeTaskOps:
                 selected = max(
                     candidates,
                     key=lambda candidate: (
-                        candidate["attempt"].get("sequence", 0)
-                        if isinstance(candidate.get("attempt"), dict) else 0,
+                        candidate["attempt"]["sequence"]
+                        if candidate["attempt"] is not None else 0,
                         candidate["operation_id"],
                     ),
                 )
@@ -520,7 +525,7 @@ class NativeTaskOps:
     def _validate_group_snapshot(groups: object, expected: set[str]) -> None:
         return validate_group_snapshot(groups, expected)
 
-    def _validate_inspection_queue_row(self, row: dict[str, object], journal: dict[str, object],
+    def _validate_inspection_queue_row(self, row: dict[str, object], journal: Mapping[str, object],
                                        allow_failure: bool,
                                        terminal_required: bool = True) -> None:
         task = journal.get("task_id")
@@ -538,7 +543,7 @@ class NativeTaskOps:
 
     def _validate_queue_membership(
             self, status: dict[str, object], allow_failure: bool
-            ) -> dict[str, dict[str, object]]:
+            ) -> dict[str, InspectionEvidence]:
         return validate_queue_membership(
             status=status, allow_failure=allow_failure, tasks_by_name=self.tasks, labels_by_name=self.labels,
             numbers_by_name=self.numbers,
@@ -605,9 +610,12 @@ class NativeTaskOps:
             return False
         if not self.inspection_attempts <= self.dispatch_attempts:
             return False
-        tasks = [observation.get("task_id") for observation in self.dispatch_observations]
-        if any(not _task_identity(task) for task in tasks):
-            return False
+        tasks: list[str] = []
+        for observation in self.dispatch_observations:
+            task = observation.get("task_id")
+            if not _task_identity(task):
+                return False
+            tasks.append(task)
         if len(set(tasks)) != len(tasks) or set(tasks) != self.dispatch_attempts:
             return False
         if not self._empty_private_queue(status):
@@ -621,7 +629,7 @@ class NativeTaskOps:
         return all(self._is_static_refusal_observation(observation, root, task)
                    for observation, task in zip(self.dispatch_observations, tasks))
 
-    def replay(self, records: dict[str, dict[str, object]],
+    def replay(self, records: Mapping[str, Mapping[str, object]],
                names: tuple[str, ...] = ("fresh", "resume"),
                expected: str = "committed") -> None:
         """Re-collect exact records and prove replay created no queue work."""
@@ -634,12 +642,13 @@ class NativeTaskOps:
             task = self.tasks[name]
             record = records[name]
             directory = record.get("directory")
-            require(isinstance(directory, Path), f"replay {name} record has no directory")
+            if not isinstance(directory, Path):
+                raise AcceptanceFailure(f"replay {name} record has no directory")
             before = snapshot(directory)
             outcome = record.get("outcome")
             payload = record.get("payload")
-            require(isinstance(outcome, dict) and isinstance(payload, dict),
-                    f"replay {name} record is incomplete")
+            if not isinstance(outcome, dict) or not isinstance(payload, dict):
+                raise AcceptanceFailure(f"replay {name} record is incomplete")
             original = {"outcome": deepcopy(outcome), "payload": deepcopy(payload),
                         "evidence_sha256": outcome.get("evidence_sha256")}
             collected = self.collect("replay-" + name, task)
@@ -682,7 +691,8 @@ class NativeTaskOps:
         pending = self.processes.drain(timeout=1, exclude=excluded)
         require(not pending, "owned acceptance process remains active")
         self.client("private-shutdown", ["shutdown"], timeout=20)
-        require(self.daemon is not None, "private daemon was not started")
+        if self.daemon is None:
+            raise AcceptanceFailure("private daemon was not started")
         self.daemon.wait(timeout=30, expected=0)
         self.closed = True
 

@@ -69,8 +69,8 @@ def _scan_managed_ordinary_lifetime_closure(
         state: Path, root: str, task_ids: Iterable[str] = ()) -> dict[str, dict[str, object]]:
     """Scan ordinary state and reuse the canonical task lifetime validator."""
     requested = set(task_ids)
-    require(all(isinstance(task, str) and _task_identity(task) for task in requested),
-            "ordinary task lifetime task identity is invalid")
+    if not (all(isinstance(task, str) and _task_identity(task) for task in requested)):
+        raise AcceptanceFailure("ordinary task lifetime task identity is invalid")
     tasks_parent = state / "tasks"
     try:
         entries = tuple(tasks_parent.iterdir())
@@ -154,11 +154,15 @@ def _scan_managed_inspection_lifetime_closure(
         task = identity["operation_id"]
         binding = request.get("binding")
         _validate_inspection_binding(binding, f"inspection request binding for {task}")
+        if not isinstance(binding, dict):
+            raise AcceptanceFailure(f"inspection request binding for {task} is not an object")
         created = _canonical_timestamp(
             request.get("created_at"), f"inspection request created_at for {task}")
         request_deadline = request.get("deadline")
         deadline = _canonical_timestamp(
             request_deadline, f"inspection request deadline for {task}")
+        if not isinstance(request_deadline, str):
+            raise AcceptanceFailure(f"inspection request deadline for {task} is not a timestamp")
 
         if not _inspection_managed_authority_started(directory):
             # A request and its task-local proof reference are intent-only. No
@@ -174,10 +178,11 @@ def _scan_managed_inspection_lifetime_closure(
             # Historical and custom inspections retain their queue-owned
             # observation contract until a durable managed lifetime marker exists.
             continue
-        require(authority["mode"] in {"guardian", "guardian-unlaunched"} and
-                isinstance(authority.get("managed_lifetime"), dict),
-                f"managed inspection lifetime evidence is absent for {task}")
-        closures[task] = authority["managed_lifetime"]
+        managed_lifetime = authority.get("managed_lifetime")
+        if not (authority["mode"] in {"guardian", "guardian-unlaunched"} and
+                isinstance(managed_lifetime, dict)):
+            raise AcceptanceFailure(f"managed inspection lifetime evidence is absent for {task}")
+        closures[task] = managed_lifetime
     return closures
 
 

@@ -259,6 +259,7 @@ class GateTests(ProofCase):
             code = self.call(app.prove_candidate_install, self.request())
         # The tree observed the original fault before the gate converted it into the receipt.
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         self.assertEqual(code, 1)
         receipt = self.receipt(output)
@@ -423,6 +424,7 @@ class FullFlowTests(CandidateArtifactCase):
                 mock.patch.object(github, "run_bounded_command", fault):
             code = self.prove()
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         self.assertEqual(code, 1)
         self.assertRetained("command_timeout")
@@ -454,6 +456,7 @@ class FullFlowTests(CandidateArtifactCase):
         settle_retained(self, self.tree, fault, (self.output / app.WORKSPACE_NAME, self.output / app.RECEIPT_NAME))
         self.assertEqual((hooks, mutated), ([], False))
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         self.assertEqual(code, 1)
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),

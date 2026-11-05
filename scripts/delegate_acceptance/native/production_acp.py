@@ -38,21 +38,21 @@ def _absent(path: Path, label: str) -> bool:
 def _admitted_acp_predicate(task_id: str, meta: dict[str, object]) -> dict[str, object]:
     effective = meta.get("effective_config")
     policy = effective.get("policy") if isinstance(effective, dict) else None
-    require(isinstance(policy, dict) and policy.get("profile_revision") == ACP_PROFILE_REVISION,
-            f"task {task_id} was not admitted with the production OpenCode ACP profile")
+    if not (isinstance(policy, dict) and policy.get("profile_revision") == ACP_PROFILE_REVISION):
+        raise AcceptanceFailure(f"task {task_id} was not admitted with the production OpenCode ACP profile")
     predicate = meta.get("predicate")
-    require(isinstance(predicate, dict) and predicate.get("adapter") == OPENCODE_PROVIDER and
+    if not (isinstance(predicate, dict) and predicate.get("adapter") == OPENCODE_PROVIDER and
             predicate.get("version") == ACP_PREDICATE_VERSION and
-            _hex_digest(predicate.get("sha256")),
-            f"task {task_id} does not bind the production ACP predicate")
+            _hex_digest(predicate.get("sha256"))):
+        raise AcceptanceFailure(f"task {task_id} does not bind the production ACP predicate")
     return predicate
 
 
 def _require_noninteractive(task_id: str, directory: Path,
                             record: dict[str, object], meta: dict[str, object]) -> None:
     for requested in (record.get("requested_config"), meta.get("requested_config")):
-        require(isinstance(requested, dict) and requested.get("interactive") in (None, False),
-                f"task {task_id} requested interactive execution")
+        if not (isinstance(requested, dict) and requested.get("interactive") in (None, False)):
+            raise AcceptanceFailure(f"task {task_id} requested interactive execution")
     for name in INTERACTION_JOURNAL_ENTRIES:
         require(_absent(directory / name, f"task {task_id} interaction entry {name}"),
                 f"task {task_id} has a user interaction journal entry: {name}")
@@ -62,19 +62,19 @@ def _session_binding(task_id: str, directory: Path, record: dict[str, object],
                      meta_digest: str, spec_digest: str) -> tuple[str, str | None]:
     reference = read_json(directory / "provider.ref.json")
     session = reference.get("conversation_id")
-    require(reference.get("task_id") == task_id and reference.get("provider") == OPENCODE_PROVIDER and
+    if not (reference.get("task_id") == task_id and reference.get("provider") == OPENCODE_PROVIDER and
             reference.get("spec_sha256") == spec_digest and
             reference.get("meta_sha256") == meta_digest and
-            isinstance(session, str) and bool(session),
-            f"task {task_id} has no exact ACP session binding")
+            isinstance(session, str) and bool(session)):
+        raise AcceptanceFailure(f"task {task_id} has no exact ACP session binding")
     prior = record.get("prior_session")
     if prior is None:
         return session, None
     predecessor = prior.get("predecessor_task_id") if isinstance(prior, dict) else None
-    require(isinstance(prior, dict) and prior.get("provider") == OPENCODE_PROVIDER and
+    if not (isinstance(prior, dict) and prior.get("provider") == OPENCODE_PROVIDER and
             isinstance(predecessor, str) and _task_identity(predecessor) and
-            prior.get("conversation_id") == session,
-            f"task {task_id} did not resume its exact predecessor ACP session")
+            prior.get("conversation_id") == session):
+        raise AcceptanceFailure(f"task {task_id} did not resume its exact predecessor ACP session")
     return session, predecessor
 
 
@@ -84,12 +84,12 @@ def _committed_seal(task_id: str, directory: Path,
     outcome = read_json(directory / "outcome.json")
     manifest = seal.get("raw_manifest")
     manifest_digest = seal.get("manifest_sha256")
-    require(seal.get("predicate") == predicate and outcome.get("predicate") == predicate and
+    if not (seal.get("predicate") == predicate and outcome.get("predicate") == predicate and
             outcome.get("verdict") == "committed" and isinstance(manifest, list) and
             all(isinstance(entry, dict) and isinstance(entry.get("path"), str) and
                 posixpath.basename(entry["path"]) != "interaction" for entry in manifest) and
-            _hex_digest(manifest_digest) and outcome.get("evidence_sha256") == manifest_digest,
-            f"task {task_id} lacks a committed production ACP core seal")
+            _hex_digest(manifest_digest) and outcome.get("evidence_sha256") == manifest_digest):
+        raise AcceptanceFailure(f"task {task_id} lacks a committed production ACP core seal")
     return {
         "manifest_sha256": manifest_digest,
         "seal_sha256": digest(directory / "provider.exit"),

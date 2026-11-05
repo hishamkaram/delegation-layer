@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import acceptance_supervisor_native as native
 from scripts.acceptance_tests.resources import track_directory_pins
+from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
 class NativeEventOracleTests(unittest.TestCase):
@@ -110,7 +111,7 @@ class FailureCleanupTests(unittest.TestCase):
 
     def suite(self):
         suite = native.NativeSuite.__new__(native.NativeSuite)
-        suite.processes = object()
+        suite.processes = Mock(spec=native.Processes)
         suite.delegate = Path("/tmp/delegate")
         suite.runner = Path("/tmp/delegate-run")
         suite.pueue = Path("/tmp/pueue")
@@ -128,115 +129,111 @@ class FailureCleanupTests(unittest.TestCase):
 
     def test_shared_cleanup_cannot_shutdown_without_terminal_capture_proof(self):
         suite = self.suite()
-        calls = []
+        calls, phases = [], []
+        status = {"tasks": {"1": {"label": "delegate:" + suite.root_id + ":" + suite.task_id}}}
 
-        class FakeOwner:
-            def __init__(self, *_args):
-                self.suite = suite
+        def canonical(_owner, _status):
+            phases.append("canonical")
+            return True
 
-            def bind_supervisor(self, *_args):
-                pass
+        def terminal():
+            phases.append("terminal")
+            return False
 
-            def safe_failure_shutdown(self):
-                if not self.failure_queue_finished(self.status()):
-                    return False
-                calls.append("shutdown")
-                return True
+        def retain(owner):
+            if not owner.failure_queue_finished(status):
+                return False
+            calls.append("shutdown")
+            return True
 
-            def failure_queue_finished(self, _status):
-                return True
-
-            def status(self):
-                return {"tasks": {"1": {
-                    "label": "delegate:" + self.suite.root_id + ":" + self.suite.task_id,
-                }}}
-
-            def retain_failure_ownership(self):
-                return self.safe_failure_shutdown()
-
-        with patch.object(native, "NativeTaskOps", FakeOwner), \
+        with patch.object(NativeTaskOps, "failure_queue_finished", autospec=True, side_effect=canonical), \
+                patch.object(native.ProofGatedTaskOps, "retain_failure_ownership", autospec=True, side_effect=retain), \
                 patch.object(suite, "supervisor_numeric_task_id", return_value=7), \
-                patch.object(suite, "failure_terminal_proof", return_value=False):
+                patch.object(suite, "failure_terminal_proof", side_effect=terminal):
             self.assertFalse(suite.retained_failure_cleanup())
         self.assertEqual(calls, [])
+        self.assertEqual(phases, ["canonical", "terminal"])
 
     def test_shared_cleanup_uses_shutdown_only_after_terminal_capture_proof(self):
         suite = self.suite()
-        calls = []
+        calls, phases = [], []
+        status = {"tasks": {"1": {"label": "delegate:" + suite.root_id + ":" + suite.task_id}}}
 
-        class FakeOwner:
-            def __init__(self, *_args):
-                self.suite = suite
-                self.dispatch_attempts = set()
+        def canonical(_owner, _status):
+            phases.append("canonical")
+            return True
 
-            def bind_supervisor(self, *_args):
-                pass
+        def terminal():
+            phases.append("terminal")
+            return True
 
-            def safe_failure_shutdown(self):
-                if not self.failure_queue_finished(self.status()):
-                    return False
-                calls.append("shutdown")
-                return True
+        def retain(owner):
+            if not owner.failure_queue_finished(status):
+                return False
+            calls.append("shutdown")
+            return True
 
-            def failure_queue_finished(self, _status):
-                return True
-
-            def status(self):
-                return {"tasks": {"1": {
-                    "label": "delegate:" + self.suite.root_id + ":" + self.suite.task_id,
-                }}}
-
-            def retain_failure_ownership(self):
-                return self.safe_failure_shutdown()
-
-        with patch.object(native, "NativeTaskOps", FakeOwner), \
+        with patch.object(NativeTaskOps, "failure_queue_finished", autospec=True, side_effect=canonical), \
+                patch.object(native.ProofGatedTaskOps, "retain_failure_ownership", autospec=True, side_effect=retain), \
                 patch.object(suite, "supervisor_numeric_task_id", return_value=7), \
-                patch.object(suite, "failure_terminal_proof", return_value=True):
+                patch.object(suite, "failure_terminal_proof", side_effect=terminal):
             self.assertTrue(suite.retained_failure_cleanup())
         self.assertEqual(calls, ["shutdown"])
+        self.assertEqual(phases, ["canonical", "terminal"])
+
+    def test_canonical_queue_refusal_does_not_consult_native_terminal_proof(self):
+        suite = self.suite()
+
+        def retain(owner):
+            return owner.failure_queue_finished({"tasks": {}})
+
+        with patch.object(NativeTaskOps, "failure_queue_finished", return_value=False), \
+                patch.object(native.ProofGatedTaskOps, "retain_failure_ownership", autospec=True, side_effect=retain), \
+                patch.object(suite, "supervisor_numeric_task_id", return_value=7), \
+                patch.object(suite, "failure_terminal_proof") as terminal:
+            self.assertFalse(suite.retained_failure_cleanup())
+        terminal.assert_not_called()
+
+    def test_unknown_ownership_never_uses_canonical_or_native_shutdown_proof(self):
+        suite = self.suite()
+
+        def retain(owner):
+            return owner.failure_queue_finished({"tasks": {}})
+
+        with patch.object(NativeTaskOps, "failure_queue_finished", return_value=True) as canonical, \
+                patch.object(native.ProofGatedTaskOps, "retain_failure_ownership", autospec=True, side_effect=retain), \
+                patch.object(suite, "failure_terminal_proof") as terminal:
+            self.assertFalse(suite.retain_unknown_failure_ownership())
+        canonical.assert_not_called()
+        terminal.assert_not_called()
 
     def test_early_finish_failure_refreshes_exact_done_row_before_proof(self):
         suite = self.suite()
         with tempfile.TemporaryDirectory() as directory:
             suite.task_dir = Path(directory)
             (suite.task_dir / "provider.exit").write_text("{}")
-            (suite.task_dir / "supervisor.ref.json").write_text(
-                '{"numeric_task_id":7}')
+            (suite.task_dir / "supervisor.ref.json").write_text('{"numeric_task_id":7}')
             calls = []
+            status = {"tasks": {"7": {
+                "id": 7, "label": "delegate:" + suite.root_id + ":" + suite.task_id,
+                "status": {"Done": {"result": "Success"}},
+            }}}
 
-            class FreshOwner:
-                def __init__(self, *_args):
-                    self.suite = suite
-                    self.numbers = {}
+            def canonical(owner, _status):
+                return owner.numbers.get("native") == 7
 
-                def bind_supervisor(self, *_args):
-                    pass
-
-                def status(self):
-                    return {"tasks": {"7": {
-                        "id": 7,
-                        "label": "delegate:" + self.suite.root_id + ":" + self.suite.task_id,
-                        "status": {"Done": {"result": "Success"}},
-                    }}}
-
-                def failure_queue_finished(self, _status):
-                    return self.numbers.get("native") == 7
-
-                def safe_failure_shutdown(self):
-                    if not self.failure_queue_finished(self.status()):
-                        return False
-                    calls.append("shutdown")
-                    return True
-
-                def retain_failure_ownership(self):
-                    return self.safe_failure_shutdown()
+            def retain(owner):
+                if not owner.failure_queue_finished(status):
+                    return False
+                calls.append("shutdown")
+                return True
 
             def terminal():
                 calls.append("terminal")
 
-            with patch.object(native, "NativeTaskOps", FreshOwner), \
-                    patch.object(suite, "validate_events",
-                                 side_effect=AssertionError("unrelated event oracle failure")), \
+            with patch.object(NativeTaskOps, "failure_queue_finished", autospec=True, side_effect=canonical), \
+                    patch.object(native.ProofGatedTaskOps, "retain_failure_ownership", autospec=True, side_effect=retain), \
+                    patch.object(suite, "validate_events", side_effect=AssertionError("unrelated event oracle failure")), \
                     patch.object(suite, "validate_terminal", side_effect=terminal):
                 suite.native_terminal_proven = False
                 self.assertTrue(suite.retained_failure_cleanup())
@@ -275,7 +272,7 @@ class FailureCleanupTests(unittest.TestCase):
                 poll=lambda: None,
                 wait=lambda *_args, **_kwargs: None,
             )
-            suite.processes = SimpleNamespace(drain=lambda **_kwargs: [])
+            self.enterContext(patch.object(suite, "processes", SimpleNamespace(drain=lambda **_kwargs: []), create=True))
             suite.case_ids = []
             suite.native_terminal_proven = False
             suite.shutdown_gate = False
@@ -300,10 +297,10 @@ class FailureCleanupTests(unittest.TestCase):
                     return JsonResult({})
                 raise AssertionError("unexpected client operation")
 
-            suite.client = client
-            suite.validate_events = lambda: None
-            suite.cli = lambda *_args: JsonResult({"outcome": {"verdict": "committed"}})
-            suite.take_provider_workspace_offline = lambda: None
+            suite.client = Mock(side_effect=client)
+            suite.validate_events = Mock(return_value=None)
+            suite.cli = Mock(side_effect=lambda *_args: JsonResult({"outcome": {"verdict": "committed"}}))
+            suite.take_provider_workspace_offline = Mock(return_value=None)
 
             with patch.object(native.shutil, "copytree"), \
                     patch.object(native, "rollback_owned_directories",

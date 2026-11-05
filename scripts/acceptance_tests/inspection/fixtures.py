@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Protocol
 import shlex
 import shutil
 import tempfile
@@ -13,11 +14,67 @@ from unittest.mock import Mock
 from scripts import acceptance_provider_common as provider_common
 from scripts.acceptance_provider_common import NativeTaskOps, _inspection_group
 from scripts.acceptance_supervisor_common import digest, read_json, write_json
+from scripts.delegate_acceptance.evidence.records import _read_strict_json
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
 from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER, managed_state_runner
 
 
 ROOT = "a" * 32
 TASK = "b" * 32
+
+
+class CapturedCommand:
+    """A completed command capture; this fixture never owns a running process."""
+
+    def __init__(self, directory: Path, result: Mapping[str, object] | None = None):
+        self.directory, self.result = directory, result
+
+    def json(self, bound: int = 8 * 1024 * 1024) -> object:
+        return _read_strict_json(self.directory / "stdout", bound)
+
+
+class RunCommand(Protocol):
+    def __call__(self, name: str, argv: list[object], cwd: Path,
+                 expected: int | set[int] | None = 0, timeout: float = 15,
+                 stdin: bytes | None = None, *,
+                 environment: Mapping[str, str] | None = None) -> TaskCommand: ...
+
+
+class DrainCommands(Protocol):
+    def __call__(self, timeout: float = 70,
+                 exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]: ...
+
+
+class FixtureProcesses:
+    """Inject only command I/O; ledger state remains owned by NativeTaskOps."""
+
+    def __init__(self, *, run: RunCommand | None = None, drain: DrainCommands | None = None):
+        self._run: RunCommand = run if run is not None else Mock(
+            side_effect=AssertionError("unexpected process launch"))
+        self._drain: DrainCommands = drain if drain is not None else Mock(return_value=[])
+
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15,
+            stdin: bytes | None = None, *, environment: Mapping[str, str] | None = None) -> TaskCommand:
+        return self._run(name, argv, cwd, expected=expected, timeout=timeout, stdin=stdin, environment=environment)
+
+    def drain(self, timeout: float = 70,
+              exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        return self._drain(timeout=timeout, exclude=exclude)
+
+
+class ObservedDaemon:
+    """A retained daemon observation with no launched OS resource."""
+
+    def __init__(self):
+        self.poll_observation = Mock(return_value=None)
+        self.wait_observation = Mock(return_value=None)
+
+    def poll(self, deadline: float | None = None) -> object | None:
+        return self.poll_observation(deadline=deadline)
+
+    def wait(self, timeout: float = 15, expected: int | set[int] | None = 0) -> object:
+        return self.wait_observation(timeout=timeout, expected=expected)
 
 
 class InspectionFixture:
@@ -42,7 +99,7 @@ class InspectionFixture:
         self.pueue.chmod(0o700)
         self.config.chmod(0o600)
 
-        self.ops = NativeTaskOps(SimpleNamespace(), self.base / "delegate", self.runner,
+        self.ops = NativeTaskOps(FixtureProcesses(), self.base / "delegate", self.runner,
                                  self.pueue, self.state_parent, self.state, self.output)
         self.ops.bind_supervisor(self.config)
         self.ops.root_id = ROOT
@@ -464,15 +521,15 @@ class InspectionFixture:
         # Mock only the OS/client boundary: retain_failure_ownership,
         # safe_failure_shutdown, status decoding, and queue/state checks are real.
         if ops is None:
-            ops = NativeTaskOps(SimpleNamespace(), self.base / "delegate", self.runner,
+            ops = NativeTaskOps(FixtureProcesses(), self.base / "delegate", self.runner,
                                 self.pueue, self.state_parent, self.state, self.output)
-        ops.bind_supervisor(self.config, SimpleNamespace(poll=Mock(return_value=None), wait=Mock()))
+        ops.bind_supervisor(self.config, ObservedDaemon())
         status_directory = Path(tempfile.mkdtemp(dir=self.base))
         write_json(status_directory / "stdout", status)
-        process = SimpleNamespace(directory=status_directory,
+        process = CapturedCommand(directory=status_directory,
                                   result={"exit_code": 0, "natural_wait": True})
         ops.client = Mock(return_value=process)
-        ops.processes = SimpleNamespace(drain=Mock(return_value=list(pending)))
+        ops.processes = FixtureProcesses(drain=Mock(return_value=list(pending)))
         return ops
 
     def unlaunched_inspection(self, operation_id: str | None = None) -> Path:

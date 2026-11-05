@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFixture
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_locks import probe_generation_lease
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
@@ -43,7 +44,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
             "test-nonce",
         )
         self.cohort = MagicMock(spec=LiveFIFOLeaseCohort)
-        self.closure = {
+        self.closure: dict[str, object] = {
             "root_id": self.fixture.root_id,
             "tasks": {},
             "workspace": {"operation": {"lifetime": {"registration": {"scope": {"lease_records": [1, 2, 3]}}}}},
@@ -67,7 +68,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
                 },
             }
             (directory / "outcome.json").write_text(json.dumps(outcome))
-            self.closure["tasks"][task_id] = {
+            object_at(self.closure, "tasks")[task_id] = {
                 "worker_wait": {"registration": {"nested": [task_id]}},
                 "termination": {"cause": "completed", "native_empty": True},
             }
@@ -89,21 +90,21 @@ class ModernContentionScenarioTests(unittest.TestCase):
         self.assertIs(self.tasks.tasks, ledger)
         self.assertEqual(set(ledger), {"modern-baseline", "modern-candidate"})
         self.assertEqual(len(self.tasks.dispatch_attempts), 2)
-        self.assertEqual(set(result["task_ids"]), set(ledger.values()))
+        self.assertEqual(set(array_at(result, "task_ids")), set(ledger.values()))
         self.assertIs(result["lifetime_closure"], self.closure)
         self.assertIs(result["live_owner_proof"], self.owner_proof)
         self.assertEqual(result["task_content_before_handoff"], result["task_content_after_handoff"])
-        self.assertEqual(len(result["contention_rounds"]), 2)
-        self.assertEqual(result["handoff"]["response"]["supervisor_control"]["state"], "migrated")
+        self.assertEqual(len(array_at(result, "contention_rounds")), 2)
+        self.assertEqual(object_at(result, "handoff", "response", "supervisor_control")["state"], "migrated")
         self.assertEqual(wait_task.call_count, 2)
         closure.assert_called_once()
         self.cohort.remove_closed_fifos.assert_called_once()
         self.cohort.close.assert_called_once()
         self.assertTrue(self.fixture.processes.finished_naturally())
-        self.assertEqual(len(result["source"]), 4)
+        self.assertEqual(len(object_at(result, "source")), 4)
         self.assertNotEqual(
-            result["installations"]["baseline"]["delegate"]["sha256"],
-            result["installations"]["candidate"]["delegate"]["sha256"],
+            object_at(result, "installations", "baseline", "delegate")["sha256"],
+            object_at(result, "installations", "candidate", "delegate")["sha256"],
         )
 
     def test_failed_dispatch_preserves_primary_error_and_reports_unproven_cleanup(self):

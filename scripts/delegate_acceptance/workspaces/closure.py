@@ -165,9 +165,9 @@ def _workspace_operation_native_closure(
         expected_deadline=deadline_text, window_deadline=deadline)
     wait = closure.get("worker_wait")
     termination = closure.get("termination")
-    require(isinstance(wait, dict) or (
-        isinstance(termination, dict) and termination.get("cause") == "previous-boot"),
-            f"workspace operation WorkerWait proof is missing: {operation}")
+    if not (isinstance(wait, dict) or (
+        isinstance(termination, dict) and termination.get("cause") == "previous-boot")):
+        raise AcceptanceFailure(f"workspace operation WorkerWait proof is missing: {operation}")
     return {
         "mode": "recovered" if isinstance(wait, dict) and wait.get("result") == "absent" else "terminated",
         "request_sha256": request_digest,
@@ -241,8 +241,11 @@ def _workspace_operation_closure(
     """Classify the generic lifetime closure shared by every operation kind."""
     _validate_workspace_operation_records(
         directory, root, operation, request, request_digest, names)
+    deadline_text = request["deadline"]
     deadline = _canonical_timestamp(
-        request["deadline"], f"workspace operation deadline for {operation}")
+        deadline_text, f"workspace operation deadline for {operation}")
+    if not isinstance(deadline_text, str):
+        raise AcceptanceFailure(f"workspace operation deadline for {operation} is not a timestamp")
     native_records = (_WORKSPACE_LIFETIME_RECORDS - {"lifetime-unlaunched.json"}) | {
         name for name in names if _lifetime_launch_sequence("workspace", name) is not None
     }
@@ -254,11 +257,11 @@ def _workspace_operation_closure(
         require(not has_native_authority,
                 f"workspace operation has contradictory unlaunched/native facts: {operation}")
         return _workspace_operation_unlaunched(
-            directory, root, operation, request_digest, request["deadline"], names)
+            directory, root, operation, request_digest, deadline_text, names)
     if has_native_authority or has_guard or has_artifacts:
         return _workspace_operation_native_closure(
             directory, root, operation, request_digest, deadline,
-            request["deadline"], names)
+            deadline_text, names)
     # Before the create-once guard there is no native launch authority. The
     # operation owner lock is the only live fact that can still retain the
     # journal; an absent live lease makes this an exact no-side-effect case.
@@ -284,6 +287,8 @@ def _operation_closure_proof(directory: Path, closure: dict[str, object]) -> Clo
     if mode == "unlaunched":
         return ClosureProof(kind="", unlaunched_sha256=str(closure["unlaunched_sha256"]))
     lifetime = closure["managed_lifetime"]
+    if not isinstance(lifetime, dict):
+        raise AcceptanceFailure(f"workspace operation has no managed lifetime: {directory.name}")
     termination = lifetime["termination"]
     wait = lifetime["worker_wait"]
     return ClosureProof(
@@ -376,7 +381,10 @@ def _checkpoint_removal_outcome(
                 "kind": "operation", "id": directory.name, "sha256": request_digest} and
             removal_digest == attempt["request_sha256"],
             f"checkpoint removal attempt does not bind its removal request: {removal}")
-    name = checkpoint_removal_name("receipt", int(attempt["sequence"]))
+    sequence = attempt["sequence"]
+    if type(sequence) is not int:
+        raise AcceptanceFailure("checkpoint removal attempt sequence is invalid")
+    name = checkpoint_removal_name("receipt", sequence)
     status = None
     if name in names:
         label = f"checkpoint removal receipt {attempt['sequence']} for {directory.name}"
@@ -405,6 +413,8 @@ def _checkpoint_removal_registration(
     """
     operation = directory.name
     subject = request["subject"]
+    if not isinstance(subject, dict):
+        raise AcceptanceFailure(f"checkpoint removal request subject is invalid: {operation}")
     checkpoint = str(subject["id"])
     creation = directory.parent / checkpoint
     submitted = bool(names & _WORKSPACE_OPERATION_GUARDS) or "managed_lifetime" in closure

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NotRequired, TypeGuard, TypedDict
 
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.validation import (
@@ -46,6 +47,24 @@ _REMOVAL_RECEIPT_OPTIONAL_KEYS = {"lifetime_closure", "reason_code", *_CLOSURE_K
 # Receipt closure kinds accepted by contract.ValidateClosureEvidence. Open and
 # registered kinds are never recorded; the default native closure is absent.
 _RECORDED_CLOSURE_KINDS = {"unregistered-recovered", "legacy-previous-boot"}
+
+
+class _SourceRecord(TypedDict):
+    Root: str
+    CommonDir: str
+    GitDir: str
+    RelativeCwd: str
+    BaseOID: str
+    ObjectFormat: str
+    Dirty: bool
+    CommonDirDevice: NotRequired[int]
+    CommonDirInode: NotRequired[int]
+
+
+class _TargetRecord(TypedDict):
+    source: _SourceRecord
+    checkout_root: str
+    admin_dir: str
 
 
 @dataclass(frozen=True)
@@ -100,25 +119,25 @@ def checkpoint_removal_name(family: str, sequence: int) -> str:
     return f"{_REMOVAL_PREFIXES[family]}{sequence:0{_REMOVAL_SEQUENCE_DIGITS}d}.json"
 
 
-def checkpoint_ref(root: str, checkpoint: str) -> str:
+def checkpoint_ref(root: object, checkpoint: object) -> str:
     """Return contract.CheckpointRef, the one owned ref of a checkpoint."""
     require(_task_identity(root) and _task_identity(checkpoint), "checkpoint ref identity is invalid")
     return f"refs/delegate/{root}/checkpoints/{checkpoint}"
 
 
-def _git_oid(value: object, object_format: str) -> bool:
+def _git_oid(value: object, object_format: str) -> TypeGuard[str]:
     """Match contract.ValidateOID, which accepts either hex letter case."""
     width = {"sha1": 40, "sha256": 64}.get(object_format)
     return (width is not None and isinstance(value, str) and len(value) == width and
             all(character in "0123456789abcdefABCDEF" for character in value))
 
 
-def _clean_absolute_path(value: object) -> bool:
+def _clean_absolute_path(value: object) -> TypeGuard[str]:
     """Match contract.ValidateAbsoluteCleanPath."""
     return _raw_clean_absolute_path(value) and "\x00" not in value
 
 
-def _clean_relative_cwd(value: object) -> bool:
+def _clean_relative_cwd(value: object) -> TypeGuard[str]:
     """Match contract.ValidateSourceRelativeCwd for Unix paths."""
     if not isinstance(value, str) or not value or "\x00" in value or value.startswith("/"):
         return False
@@ -128,16 +147,18 @@ def _clean_relative_cwd(value: object) -> bool:
     return value == "." or all(part not in {"", ".", ".."} for part in parts)
 
 
-def _uint64(value: object, *, positive: bool) -> bool:
+def _uint64(value: object, *, positive: bool) -> TypeGuard[int]:
     return type(value) is int and (1 if positive else 0) <= value <= _MAX_UINT64
 
 
-def _canonical_source(value: object, label: str) -> dict[str, object]:
+def _canonical_source(value: object, label: str) -> _SourceRecord:
     """Validate a pinned contract.Source and return its Go field order."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _SOURCE_KEYS, _SOURCE_OPTIONAL_KEYS, label)
     object_format = value.get("ObjectFormat")
-    require(object_format in {"sha1", "sha256"}, f"{label} object format is invalid")
+    if not isinstance(object_format, str) or object_format not in {"sha1", "sha256"}:
+        raise AcceptanceFailure(f"{label} object format is invalid")
     require(_git_oid(value.get("BaseOID"), object_format), f"{label} base OID is invalid")
     require(_clean_relative_cwd(value.get("RelativeCwd")), f"{label} relative cwd is invalid")
     for key in ("Root", "CommonDir", "GitDir"):
@@ -147,9 +168,14 @@ def _canonical_source(value: object, label: str) -> dict[str, object]:
         if key in value:
             require(_uint64(value[key], positive=True), f"{label} {key} is invalid")
     require("CommonDirInode" in value, f"{label} common directory is not pinned")
-    canonical = {key: value[key] for key in (
-        "Root", "CommonDir", "GitDir", "RelativeCwd", "BaseOID", "ObjectFormat", "Dirty")}
-    canonical.update({key: value[key] for key in ("CommonDirDevice", "CommonDirInode") if key in value})
+    canonical: _SourceRecord = {
+        "Root": value["Root"], "CommonDir": value["CommonDir"], "GitDir": value["GitDir"],
+        "RelativeCwd": value["RelativeCwd"], "BaseOID": value["BaseOID"],
+        "ObjectFormat": object_format, "Dirty": value["Dirty"],
+    }
+    if "CommonDirDevice" in value:
+        canonical["CommonDirDevice"] = value["CommonDirDevice"]
+    canonical["CommonDirInode"] = value["CommonDirInode"]
     return canonical
 
 
@@ -158,15 +184,16 @@ def _joined_cwd(root: str, relative: str) -> str:
     return root if relative == "." else root.rstrip("/") + "/" + relative
 
 
-def _canonical_target(value: object, selection: dict[str, object], label: str) -> dict[str, object]:
+def _canonical_target(value: object, selection: dict[str, object], label: str) -> _TargetRecord:
     """Validate contract.CheckpointTarget against the request's selection."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _TARGET_KEYS, label=label)
     source = _canonical_source(value.get("source"), f"{label} source")
     checkout_root = value.get("checkout_root")
     admin_dir = value.get("admin_dir")
-    require(_clean_absolute_path(checkout_root) and _clean_absolute_path(admin_dir),
-            f"{label} checkout coordinates are invalid")
+    if not _clean_absolute_path(checkout_root) or not _clean_absolute_path(admin_dir):
+        raise AcceptanceFailure(f"{label} checkout coordinates are invalid")
     if selection["kind"] == "ordinary":
         require(checkout_root == source["Root"] and admin_dir == source["GitDir"] and
                 _joined_cwd(source["Root"], source["RelativeCwd"]) == selection.get("cwd"),
@@ -178,22 +205,23 @@ def _canonical_target(value: object, selection: dict[str, object], label: str) -
     return {"source": source, "checkout_root": checkout_root, "admin_dir": admin_dir}
 
 
-def _validate_commit_payload(candidate: dict[str, object], label: str) -> None:
+def _validate_commit_payload(payload: object, *, tree_oid: str, observed_head: str,
+                             operation_id: str, request_sha256: str, label: str) -> None:
     """Match contract.validateCheckpointPayload without hashing the payload."""
-    payload = candidate.get("commit_payload")
-    require(isinstance(payload, str) and 0 < len(payload) <= _COMMIT_PAYLOAD_LIMIT and
-            all(character == "\n" or " " <= character <= "~" for character in payload) and
-            payload.endswith("\n"), f"{label} commit payload is invalid")
+    if (not isinstance(payload, str) or not 0 < len(payload) <= _COMMIT_PAYLOAD_LIMIT or
+            not all(character == "\n" or " " <= character <= "~" for character in payload) or
+            not payload.endswith("\n")):
+        raise AcceptanceFailure(f"{label} commit payload is invalid")
     header, separator, message = payload.partition("\n\n")
     lines = header.split("\n")
-    require(separator and len(lines) == 4 and lines[0] == "tree " + candidate["tree_oid"] and
-            lines[1] == "parent " + candidate["observed_head"] and
+    require(separator and len(lines) == 4 and lines[0] == "tree " + tree_oid and
+            lines[1] == "parent " + observed_head and
             _signature(lines[2], "author ") and _signature(lines[3], "committer "),
             f"{label} commit payload header is invalid")
     message_lines = message.removesuffix("\n").split("\n")
     require(len(message_lines) >= 2 and
-            message_lines[-2] == _CHECKPOINT_TRAILER + candidate["operation_id"] and
-            message_lines[-1] == _CHECKPOINT_REQUEST_TRAILER + candidate["request_sha256"] and
+            message_lines[-2] == _CHECKPOINT_TRAILER + operation_id and
+            message_lines[-1] == _CHECKPOINT_REQUEST_TRAILER + request_sha256 and
             not any(line.startswith(_CHECKPOINT_TRAILER.removesuffix(": "))
                     for line in message_lines[:-2]),
             f"{label} commit payload trailers are invalid")
@@ -207,11 +235,12 @@ def canonical_checkpoint_candidate(
         value: object, request: dict[str, object], request_digest: str, label: str,
         ) -> dict[str, object]:
     """Validate contract.CheckpointCandidate for its exact creation request."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _CANDIDATE_KEYS, label=label)
     selection = request.get("checkpoint")
-    require(request.get("kind") == "checkpoint" and isinstance(selection, dict),
-            f"{label} does not belong to a checkpoint creation")
+    if request.get("kind") != "checkpoint" or not isinstance(selection, dict):
+        raise AcceptanceFailure(f"{label} does not belong to a checkpoint creation")
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             value.get("operation_id") == request.get("operation_id") and
             value.get("request_sha256") == request_digest and _hex_digest(request_digest),
@@ -223,7 +252,9 @@ def canonical_checkpoint_candidate(
     object_format = target["source"]["ObjectFormat"]
     for key in ("observed_head", "tree_oid", "commit_oid"):
         require(_git_oid(value.get(key), object_format), f"{label} {key} is invalid")
-    _validate_commit_payload(value, label)
+    _validate_commit_payload(value["commit_payload"], tree_oid=value["tree_oid"],
+                             observed_head=value["observed_head"], operation_id=value["operation_id"],
+                             request_sha256=value["request_sha256"], label=label)
     return {
         "schema_version": value["schema_version"],
         "operation_id": value["operation_id"],
@@ -241,16 +272,20 @@ def canonical_checkpoint_candidate_bytes(
     return canonical_go_json(canonical_checkpoint_candidate(value, request, request_digest, label))
 
 
+def _closure_field(value: dict[str, object], key: str, label: str) -> str:
+    field = value.get(key, "")
+    if not isinstance(field, str) or (key in value and not field):
+        raise AcceptanceFailure(f"{label} {key} is invalid")
+    return field
+
+
 def _receipt_closure(value: dict[str, object], label: str) -> tuple[ClosureEvidence, bool]:
     """Match contract.ValidateClosureEvidence and report whether the worker may have run."""
-    for key in ("lifetime_closure", *_CLOSURE_KEYS):
-        if key in value:
-            require(isinstance(value[key], str) and value[key], f"{label} {key} is invalid")
     closure = ClosureEvidence(
-        kind=value.get("lifetime_closure", ""),
-        termination_sha256=value.get("termination_sha256", ""),
-        worker_wait_sha256=value.get("worker_wait_sha256", ""),
-        unlaunched_sha256=value.get("unlaunched_sha256", ""))
+        kind=_closure_field(value, "lifetime_closure", label),
+        termination_sha256=_closure_field(value, "termination_sha256", label),
+        worker_wait_sha256=_closure_field(value, "worker_wait_sha256", label),
+        unlaunched_sha256=_closure_field(value, "unlaunched_sha256", label))
     if closure.kind == "unregistered-recovered":
         require(not closure.termination_sha256 and not closure.unlaunched_sha256 and
                 _hex_digest(closure.worker_wait_sha256), f"{label} closure is invalid")
@@ -275,8 +310,10 @@ def _validate_disposition(
     """Apply the shared success-encoding and unavailable-reason rules."""
     status = value.get("status")
     reason = value.get("reason_code", "")
-    require(isinstance(reason, str) and ("reason_code" not in value or reason),
-            f"{label} reason_code is invalid")
+    if not isinstance(reason, str) or ("reason_code" in value and not reason):
+        raise AcceptanceFailure(f"{label} reason_code is invalid")
+    if not isinstance(status, str):
+        raise AcceptanceFailure(f"{label} status is invalid")
     if status in successes:
         require(not reason, f"{label} success has a reason code")
         require(closure.kind == "" and not closure.unlaunched_sha256 and
@@ -299,7 +336,8 @@ def canonical_checkpoint_receipt(
         value: object, request: dict[str, object], request_digest: str, label: str,
         ) -> dict[str, object]:
     """Validate contract.CheckpointReceipt for its exact creation request."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _RECEIPT_KEYS, _RECEIPT_OPTIONAL_KEYS, label)
     require(request.get("kind") == "checkpoint" and
             type(value.get("schema_version")) is int and value["schema_version"] == 1 and
@@ -333,9 +371,10 @@ def canonical_checkpoint_receipt_bytes(
 
 
 def canonical_checkpoint_removal_reference(
-        value: object, checkpoint: str, sequence: int, label: str) -> dict[str, object]:
+        value: object, checkpoint: object, sequence: object, label: str) -> dict[str, object]:
     """Validate one contract.CheckpointRemovalReference at its stored sequence."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _REFERENCE_KEYS, label=label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             _task_identity(checkpoint) and value.get("checkpoint_id") == checkpoint and
@@ -356,7 +395,8 @@ def canonical_checkpoint_removal_reference_bytes(
 def canonical_checkpoint_removal_receipt(
         value: object, attempt: dict[str, object], label: str) -> dict[str, object]:
     """Validate contract.CheckpointRemovalReceipt for its registered attempt."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _REMOVAL_RECEIPT_KEYS, _REMOVAL_RECEIPT_OPTIONAL_KEYS, label)
     stored = canonical_checkpoint_removal_reference(
         value.get("attempt"), attempt["checkpoint_id"], attempt["sequence"], f"{label} attempt")

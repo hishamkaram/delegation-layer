@@ -9,7 +9,7 @@ from scripts.delegate_acceptance.evidence.timestamps import (
     _timestamp_at_or_after,
     _timestamp_before,
 )
-from scripts.delegate_acceptance.evidence.validation import _exact_keys, _hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _exact_keys, _hex_digest, require
 from scripts.delegate_acceptance.paths.policy import historical_clean_absolute_path
 from scripts.delegate_acceptance.supervisor.binding import _validate_supervisor_binding
 from pathlib import Path
@@ -57,7 +57,8 @@ def _is_private_supervisor_config(state: Path, config_path: object) -> bool:
 def _uses_concurrent_inspection_group(state: Path, binding: dict[str, object]) -> bool:
     """Mirror concurrentAdmissionInspection's runtime/private capability gate."""
     supervisor = binding.get("supervisor")
-    require(isinstance(supervisor, dict), "inspection supervisor binding is invalid")
+    if not (isinstance(supervisor, dict)):
+        raise AcceptanceFailure("inspection supervisor binding is invalid")
     capability = binding.get("capability_sha256")
     return (binding.get("definition_revision") == _RUNTIME_INSPECTION_REVISION and
             isinstance(capability, str) and bool(capability) and
@@ -76,10 +77,12 @@ def _inspection_group_parallelism(
 
 
 def _validate_inspection_binding(value: object, label: str) -> None:
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not (isinstance(value, dict)):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _INSPECTION_BINDING_KEYS, _INSPECTION_BINDING_OPTIONAL_KEYS, label)
-    require(isinstance(value.get("definition_revision"), str) and
-            value["definition_revision"], f"{label} definition revision is invalid")
+    if not (isinstance(value.get("definition_revision"), str) and
+            value["definition_revision"]):
+        raise AcceptanceFailure(f"{label} definition revision is invalid")
     for key in ("definition_sha256", "worker_sha256"):
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
     helper_sha256 = value["helper_sha256"]
@@ -102,16 +105,17 @@ def _validate_inspection_binding(value: object, label: str) -> None:
                 f"{label} {key} is invalid")
     if "environment" in value:
         environment = value["environment"]
-        require(isinstance(environment, list) and
+        if not (isinstance(environment, list) and
                 all(isinstance(entry, str) and "=" in entry and
-                    entry.split("=", 1)[0] for entry in environment),
-                f"{label} environment is invalid")
+                    entry.split("=", 1)[0] for entry in environment)):
+            raise AcceptanceFailure(f"{label} environment is invalid")
     _validate_supervisor_binding(value.get("supervisor"), label + " supervisor")
 
 
 def _validate_claim_record(value: object, request_digest: str, label: str,
                            created: tuple[datetime, int], deadline: tuple[datetime, int]) -> tuple[datetime, int]:
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not (isinstance(value, dict)):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"schema_version", "request_sha256", "created_at"}, label=label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             value.get("request_sha256") == request_digest,

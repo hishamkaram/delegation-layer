@@ -20,11 +20,11 @@ class RoutingFixture(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="routing shim ' Unicode-é-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        self.run = self.root / "attempt"
-        self.run.mkdir()
+        self.attempt_dir = self.root / "attempt"
+        self.attempt_dir.mkdir()
         self.state = self.root / "state"
         self.state.mkdir()
-        self.workspace = self.run / "workspace"
+        self.workspace = self.attempt_dir / "workspace"
         self.workspace.mkdir()
         self.brief = self.workspace / "brief.md"
         self.brief.write_text("bounded fixture brief")
@@ -58,7 +58,7 @@ class RoutingFixture(unittest.TestCase):
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
 
     def install(self, *, explicit=False, candidate=None):
-        return gate._candidate_environment(self.run, self.ownership, self.environment, candidate,
+        return gate._candidate_environment(self.attempt_dir, self.ownership, self.environment, candidate,
                                           state_root=self.state, explicit_root=explicit)
 
     def invoke(self, argv, *, environment=None):
@@ -76,9 +76,9 @@ class RoutingFixture(unittest.TestCase):
     def prepare_fixture(self, case=None):
         owner = Mock(client=sys.executable, daemon_path=sys.executable)
         owner.processes.environment = self.environment
-        gate._prepare_routing_fixture(self.run, owner, self.case if case is None else case,
+        gate._prepare_routing_fixture(self.attempt_dir, owner, self.case if case is None else case,
                                       self.candidate, state_root=self.state, ownership=self.ownership)
-        return self.run / "fixture"
+        return self.attempt_dir / "fixture"
 
 
 class RoutingRootShimTests(RoutingFixture):
@@ -96,7 +96,7 @@ class RoutingRootShimTests(RoutingFixture):
                 self.assertEqual(recorded["environment"]["DELEGATE_ROOT"], ambient)
                 for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
                     self.assertEqual(recorded["environment"][key], original.get(key))
-                self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1],
+                self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1],
                                  {"argv": self.dispatch(), "error": None})
         self.assertTrue((self.state / "owned-mutation").exists())
         self.assertFalse((self.root / "unrelated ambient state").exists())
@@ -113,7 +113,7 @@ class RoutingRootShimTests(RoutingFixture):
                 result = self.invoke(argv)
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("must omit", result.stderr)
-                record = self.records(self.run / "fixture/agent-calls.jsonl")[-1]
+                record = self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1]
                 self.assertEqual(record["argv"], argv)
                 self.assertIsNotNone(record["error"])
         self.assertFalse(self.backend_calls.exists())
@@ -146,7 +146,7 @@ class RoutingRootShimTests(RoutingFixture):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn("exactly one --root", result.stderr)
                 self.assertFalse(self.backend_calls.exists())
-                self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
+                self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
 
     def test_explicit_root_looking_model_value_is_refused_without_leading_root(self):
         self.install(explicit=True)
@@ -157,7 +157,7 @@ class RoutingRootShimTests(RoutingFixture):
                 result = self.invoke(argv)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertFalse(self.backend_calls.exists())
-                record = self.records(self.run / "fixture/agent-calls.jsonl")[-1]
+                record = self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1]
                 self.assertEqual(record["argv"], argv)
                 self.assertIsNotNone(record["error"])
 
@@ -168,7 +168,7 @@ class RoutingRootShimTests(RoutingFixture):
         result = self.invoke(argv)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.records(self.backend_calls)[-1]["argv"], argv)
-        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
+        self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
 
     def test_default_cli_root_is_injected_without_interpreting_helper_root(self):
         self.install()
@@ -177,7 +177,7 @@ class RoutingRootShimTests(RoutingFixture):
         result = self.invoke(argv)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.records(self.backend_calls)[-1]["argv"], ["--root", str(self.state), *argv])
-        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
+        self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1], {"argv": argv, "error": None})
 
     def test_default_rejects_root_after_separator_used_as_flag_value(self):
         self.install()
@@ -185,7 +185,7 @@ class RoutingRootShimTests(RoutingFixture):
         result = self.invoke(argv)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertFalse(self.backend_calls.exists())
-        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
+        self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")[-1]["argv"], argv)
 
     def test_explicit_checks_root_after_separator_used_as_flag_value(self):
         self.install(explicit=True)
@@ -242,7 +242,9 @@ class RoutingRootShimTests(RoutingFixture):
         self.assertEqual(runtime["state_root"], str(self.state))
         self.assertEqual(self.environment["PATH"], path)
         self.assertEqual(self.environment["BASH_ENV"], bash_env)
-        self.assertEqual(Path(shutil.which("delegate", path=path)), self.run / "candidate-bin/delegate")
+        selected = shutil.which("delegate", path=path)
+        assert selected is not None
+        self.assertEqual(Path(selected), self.attempt_dir / "candidate-bin/delegate")
         result = self.invoke(self.dispatch())
         self.assertEqual(result.returncode, 0, result.stderr)
         injected = ["--root", str(self.state), *self.dispatch()]
@@ -251,7 +253,7 @@ class RoutingRootShimTests(RoutingFixture):
         self.assertEqual(len(backend), 1)
         self.assertEqual(backend[0]["argv"], injected)
         self.assertEqual(backend[0]["environment"]["PATH"], runtime["path"])
-        self.assertEqual(self.records(self.run / "fixture/agent-calls.jsonl"),
+        self.assertEqual(self.records(self.attempt_dir / "fixture/agent-calls.jsonl"),
                          [{"argv": self.dispatch(), "error": None}])
 
     def test_synthetic_recovery_composes_behind_root_shim(self):
@@ -266,7 +268,7 @@ class RoutingRootShimTests(RoutingFixture):
         saved = gate.read_json(fixture / "routing-state.json")
         self.assertEqual(saved["root"], str(self.state))
         self.assertEqual((saved["dispatch_count"], saved["recheck_count"]), (1, 1))
-        original = self.records(self.run / "fixture/agent-calls.jsonl")
+        original = self.records(self.attempt_dir / "fixture/agent-calls.jsonl")
         self.assertEqual(len(original), 4)
         self.assertTrue(all("--root" not in entry["argv"] for entry in original))
         self.assertTrue(all(entry[:2] == ["--root", str(self.state)]
@@ -278,7 +280,7 @@ class RoutingRootShimTests(RoutingFixture):
         fixture = self.prepare_fixture(case)
         arguments = gate.diagnosis_arguments(self.workspace, fixture)
         writable = [Path(arguments[index + 1]) for index, value in enumerate(arguments) if value == "--add-dir"]
-        log = self.run / "fixture/agent-calls.jsonl"
+        log = self.attempt_dir / "fixture/agent-calls.jsonl"
         self.assertTrue(any(log.is_relative_to(path) for path in writable))
         response = gate.read_json(self.workspace / "handoff.json")
         for command, code in (("status", 0), ("collect", 4), ("logs", 0), ("cancel", 2)):
@@ -288,7 +290,7 @@ class RoutingRootShimTests(RoutingFixture):
         saved = gate.read_json(fixture / "routing-state.json")
         self.assertEqual(saved["refused_commands"], 1)
         self.assertEqual(saved["root"], str(self.state))
-        self.assertEqual(len(self.records(self.run / "fixture/agent-calls.jsonl")), 4)
+        self.assertEqual(len(self.records(self.attempt_dir / "fixture/agent-calls.jsonl")), 4)
         self.assertTrue(all(entry[:2] == ["--root", str(self.state)]
                             for entry in self.records(fixture / "calls.jsonl")))
 
@@ -321,11 +323,11 @@ class RoutingRootShimTests(RoutingFixture):
 
     def test_runtime_identity_refuses_recursion_and_relative_candidates(self):
         self.install()
-        path = self.run / "candidate-bin/runtime.json"
+        path = self.attempt_dir / "candidate-bin/runtime.json"
         original = gate.read_json(path)
         for key, value in (("delegate", "delegate"), ("backend", "delegate"),
-                           ("delegate", str(self.run / "candidate-bin/delegate")),
-                           ("backend", str(self.run / "candidate-bin/delegate"))):
+                           ("delegate", str(self.attempt_dir / "candidate-bin/delegate")),
+                           ("backend", str(self.attempt_dir / "candidate-bin/delegate"))):
             with self.subTest(key=key, value=value):
                 path.write_text(json.dumps(dict(original, **{key: value})))
                 result = self.invoke(["providers", "--json"])
@@ -337,11 +339,11 @@ class RoutingRootShimTests(RoutingFixture):
         self.install()
         owner = Mock(client=sys.executable, daemon_path=sys.executable)
         owner.processes.environment = self.environment
-        for candidate in (Path("delegate"), self.run / "candidate-bin/delegate"):
+        for candidate in (Path("delegate"), self.attempt_dir / "candidate-bin/delegate"):
             with self.subTest(candidate=candidate), self.assertRaisesRegex(ValueError, "absolute real candidate"):
-                gate._prepare_routing_fixture(self.run, owner, self.case, candidate,
+                gate._prepare_routing_fixture(self.attempt_dir, owner, self.case, candidate,
                                               state_root=self.state, ownership=self.ownership)
-        self.assertFalse((self.run / "fixture/bin").exists())
+        self.assertFalse((self.attempt_dir / "fixture/bin").exists())
 
     def test_no_candidate_refuses_without_changing_path_or_installing_shim(self):
         self.environment["PATH"] = str(self.root / "empty")
@@ -349,7 +351,7 @@ class RoutingRootShimTests(RoutingFixture):
         with self.assertRaisesRegex(FileNotFoundError, "candidate Delegate binary unavailable"):
             self.install()
         self.assertEqual(self.environment, before)
-        self.assertFalse((self.run / "candidate-bin").exists())
+        self.assertFalse((self.attempt_dir / "candidate-bin").exists())
 
 
 class RoutingRunIsolationTests(RoutingFixture):

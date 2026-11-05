@@ -8,6 +8,7 @@ import unittest
 from scripts import native_acceptance_evidence as evidence
 from scripts.delegate_acceptance.native_evidence.contract import PRIVATE_INVENTORY_MAX_BYTES, PRIVATE_INVENTORY_MAX_ENTRIES
 from scripts.delegate_acceptance.native_evidence.filesystem import _tree_summary
+from scripts.delegate_acceptance.native_evidence.contract import _empty_summary, _summary_with_removed
 # Import the module, not the TestCase, so its tests are discovered only once.
 from scripts import test_native_acceptance_evidence as evidence_tests
 
@@ -55,6 +56,16 @@ def write_flat_tree(directory: Path, *, entries: int, total_bytes: int) -> Path:
 
 
 class PrivateInventoryTests(unittest.TestCase):
+    def test_invalid_retained_totals_cannot_be_reported_complete(self) -> None:
+        for count in ([], {}, None, True, "1"):
+            before: dict[str, object] = dict(_empty_summary())
+            before["file_count"] = count
+            with self.subTest(count=count):
+                result = _summary_with_removed(_empty_summary(), [{"before": before}])
+                self.assertIs(result["complete"], False)
+                self.assertEqual((result["root_count"], result["file_count"], result["byte_count"]),
+                                 (0, 0, 0))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="native-private-inventory-")
         self.addCleanup(temporary.cleanup)
@@ -106,8 +117,10 @@ class InventoryAggregateTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual((code, value["status"], value["unresolved_case_count"]), (1, "FAIL", 1))
-        self.assertEqual([case["status"] for case in value["cases"][:2]], ["FAIL", "PASS"])
-        self.assertEqual([case["evidence_status"] for case in value["cases"][:2]],
+        cases = value["cases"]
+        assert isinstance(cases, list)
+        self.assertEqual([case["status"] for case in cases[:2]], ["FAIL", "PASS"])
+        self.assertEqual([case["evidence_status"] for case in cases[:2]],
                          ["UNRESOLVED", "RESOLVED"])
         retained = _tree_summary(failed / "provider-captures")
         self.assertEqual((retained["complete"], retained["file_count"], retained["byte_count"]),

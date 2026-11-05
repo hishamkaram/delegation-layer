@@ -5,7 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
+from argparse import Namespace
 import unittest
 from unittest.mock import patch
 
@@ -16,7 +16,7 @@ from scripts.delegate_acceptance.native_evidence import cli
 from scripts.delegate_acceptance.native_evidence import validation
 from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
 from scripts.delegate_acceptance.release_verification import verification
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.delegate_acceptance.release_verification.contract import VerificationError, _ArchiveEvidence
 
 
 # Each equals the integer 1 in Python, so an equality-only guard would accept it.
@@ -143,12 +143,17 @@ class ConsumerTests(AggregateSchemaTests):
     def release_arguments(self, directory: Path):
         exit_file = directory / "exit-code"
         exit_file.write_text("0\n", encoding="ascii")
-        return SimpleNamespace(tag=None, source_revision=None, exit_code_file=str(exit_file),
+        return Namespace(tag=None, source_revision=None, exit_code_file=str(exit_file),
                                acceptance_outcome="success")
+
+    def archive_arguments(self, path: Path) -> _ArchiveEvidence:
+        return _ArchiveEvidence(
+            aggregate_path=path, extracted=self.root, platform={"os": "linux", "arch": "amd64"},
+            release_identity={}, artifact={}, observation={}, build={}, receipt_sha256="a" * 64)
 
     def test_release_verification_accepts_integer_one(self):
         path, _ = self.build("release-positive")
-        archive = SimpleNamespace(aggregate_path=path, platform="linux-amd64")
+        archive = self.archive_arguments(path)
         aggregate, digest, recorded = verification._read_native_aggregate(
             self.release_arguments(self.root), archive)
         self.assertEqual((aggregate["schema_version"], recorded), (1, 0))
@@ -158,7 +163,7 @@ class ConsumerTests(AggregateSchemaTests):
         for label, schema in EQUAL_TO_ONE:
             with self.subTest(schema=label):
                 path = self.malformed("release-" + label, schema)
-                archive = SimpleNamespace(aggregate_path=path, platform="linux-amd64")
+                archive = self.archive_arguments(path)
                 with self.assertRaises(VerificationError) as raised:
                     verification._read_native_aggregate(self.release_arguments(self.root), archive)
                 self.assertEqual((raised.exception.code, raised.exception.stage),
@@ -169,11 +174,12 @@ class ConsumerTests(AggregateSchemaTests):
         root = path.parent
         matrix = root / evidence.CASE_MATRIX_NAME
         replay = {"tag": "v1.2.3", "source_revision": "a" * 40}
-        replayed, code = evidence.build_aggregate(root, matrix, path, **replay)
+        replayed, code = evidence.build_aggregate(
+            root, matrix, path, tag=replay["tag"], source_revision=replay["source_revision"])
         self.assertEqual((code, replayed["schema_version"]), (0, 1))
         self.set_schema(path, True)
         with self.assertRaisesRegex(evidence.EvidenceError, "^aggregate_receipt_invalid$"):
-            evidence.build_aggregate(root, matrix, path, **replay)
+            evidence.build_aggregate(root, matrix, path, tag=replay["tag"], source_revision=replay["source_revision"])
         self.assertIs(json.loads(path.read_text(encoding="utf-8"))["schema_version"], True)
 
 

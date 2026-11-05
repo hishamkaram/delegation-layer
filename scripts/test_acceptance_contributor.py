@@ -10,6 +10,7 @@ import acceptance_contributor as gate_module
 from acceptance_contributor import ContributorAcceptance, verify_case_evidence
 from acceptance_provider_common import AcceptanceFailure
 from acceptance_supervisor_common import DirectoryOwner, sha
+from scripts.delegate_acceptance.processes.operations import Processes
 
 
 ROOT_ID = "a" * 32
@@ -17,7 +18,7 @@ TASK_ID = "b" * 32
 LABEL = "delegate:" + ROOT_ID + ":" + TASK_ID
 
 
-def gate_with_statuses(statuses):
+def gate_with_statuses(statuses, test: unittest.TestCase):
     gate = object.__new__(ContributorAcceptance)
 
     def client(_name, _operation, timeout):
@@ -26,7 +27,7 @@ def gate_with_statuses(statuses):
         status = statuses.pop(0)
         return SimpleNamespace(json=lambda: {"tasks": {"0": {"label": LABEL, "status": status}}})
 
-    gate.client = client
+    test.enterContext(patch.object(gate, "client", client))
     return gate
 
 
@@ -46,7 +47,8 @@ class ContributorHarnessTests(unittest.TestCase):
             gate.output = output
             gate.base = base
             gate.owned_directories = (base_token, raw_token)
-            gate.processes = type("Processes", (), {"capture_root": raw_token})()
+            gate.processes = object.__new__(Processes)
+            gate.processes.capture_root = raw_token
             gate.closed = True
 
             self.assertTrue(gate.finalize(True))
@@ -146,41 +148,55 @@ class ContributorHarnessTests(unittest.TestCase):
                 gate.tasks = {"present": TASK_ID}
                 gate.rows = {"present": {"verdict": "committed"}}
                 receipts = {kind + "/" + TASK_ID + ".json": "digest" for kind in ("launches", "completions")}
-                gate.receipt_snapshot = lambda: receipts.copy()
-                gate.snapshot = lambda _task_id: {"unchanged": "digest"}
+                self.enterContext(patch.object(gate, "receipt_snapshot", lambda: receipts.copy()))
+                self.enterContext(patch.object(gate, "snapshot", lambda _task_id: {"unchanged": "digest"}))
                 outcome = {"verdict": "committed", "payload": {"basename": "result.txt", "length": 6,
                                                                "sha256": sha(b"answer")}}
                 (directory / "outcome.json").write_text(json.dumps(outcome))
                 (directory / "result.txt").write_bytes(b"answer")
-                gate.collect = lambda _name, _task_id, _expected: {"outcome": outcome} if response == "original" else response
+                self.enterContext(patch.object(gate, "collect", lambda _name, _task_id, _expected: {"outcome": outcome} if response == "original" else response))
                 if response == "original":
                     gate.verify_replay()
                 else:
                     with self.assertRaisesRegex(RuntimeError, "sole outcome authority disagree"):
                         gate.verify_replay()
 
+    def test_runner_wait_forwards_remaining_timeout_through_real_client(self):
+        gate = object.__new__(ContributorAcceptance)
+        gate.pueue, gate.config, gate.base = Path("/pueue"), Path("/config"), Path("/base")
+        gate.processes = object.__new__(Processes)
+        with patch.object(Processes, "run") as run, \
+                patch("acceptance_contributor.time.monotonic", side_effect=(10.0, 10.25)):
+            run.return_value.json.return_value = {
+                "tasks": {"0": {"label": LABEL, "status": {"Done": {"result": "Success"}}}},
+            }
+            gate.wait_runner_done(ROOT_ID, TASK_ID)
+            run.assert_called_once_with(
+                "runner-status", [gate.pueue, "-c", gate.config, "status", "--json"],
+                gate.base, 0, timeout=149.75)
+
     def test_published_outcome_cannot_mask_failed_runner(self):
         for result in ({"Failed": 1}, "Killed", None):
             with self.subTest(result=result):
-                gate = gate_with_statuses([{"Done": {"result": result}}])
+                gate = gate_with_statuses([{"Done": {"result": result}}], self)
                 with self.assertRaisesRegex(AcceptanceFailure, "supervisor result"):
                     gate.wait_runner_done(ROOT_ID, TASK_ID)
 
     def test_waits_for_successful_runner_completion(self):
         statuses = ["Running", {"Done": {"result": "Success"}}]
-        gate = gate_with_statuses(statuses)
+        gate = gate_with_statuses(statuses, self)
         with patch("acceptance_contributor.time.sleep") as sleep:
             gate.wait_runner_done(ROOT_ID, TASK_ID)
         self.assertEqual(statuses, [])
         sleep.assert_called_once()
 
     def test_rejects_an_unrelated_supervisor_row(self):
-        gate = gate_with_statuses([{"Done": {"result": "Success"}}])
+        gate = gate_with_statuses([{"Done": {"result": "Success"}}], self)
         with self.assertRaisesRegex(RuntimeError, "no unique supervisor row"):
             gate.wait_runner_done("c" * 32, TASK_ID)
 
     def test_completion_wait_has_a_finite_deadline(self):
-        gate = gate_with_statuses([])
+        gate = gate_with_statuses([], self)
         with patch("acceptance_contributor.time.monotonic", side_effect=[0, 151]):
             with self.assertRaisesRegex(RuntimeError, "within acceptance deadline"):
                 gate.wait_runner_done(ROOT_ID, TASK_ID)
@@ -197,13 +213,14 @@ class ContributorHarnessTests(unittest.TestCase):
             gate.closed = False
             gate.tasks = {}
             gate.daemon = None
-            gate.processes = SimpleNamespace(drain=lambda **_options: [])
+            gate.processes = object.__new__(Processes)
+            self.enterContext(patch.object(gate.processes, "drain", return_value=[]))
 
             def fail_setup():
                 raise RuntimeError("primary failure")
 
-            gate.setup = fail_setup
-            gate.finalize = lambda success: calls.append(("finalize", success)) or True
+            self.enterContext(patch.object(gate, "setup", fail_setup))
+            self.enterContext(patch.object(gate, "finalize", lambda success: calls.append(("finalize", success)) or True))
             with patch("acceptance_contributor.write_json", side_effect=OSError("diagnostic disk full")):
                 with self.assertRaisesRegex(RuntimeError, "primary failure"):
                     gate.run()
@@ -221,13 +238,14 @@ class ContributorHarnessTests(unittest.TestCase):
             gate.closed = False
             gate.tasks = {}
             gate.daemon = None
-            gate.processes = SimpleNamespace(drain=lambda **_options: [])
+            gate.processes = object.__new__(Processes)
+            self.enterContext(patch.object(gate.processes, "drain", return_value=[]))
 
             def fail_setup():
                 raise RuntimeError("primary failure")
 
-            gate.setup = fail_setup
-            gate.finalize = lambda _success: False
+            self.enterContext(patch.object(gate, "setup", fail_setup))
+            self.enterContext(patch.object(gate, "finalize", lambda _success: False))
             with patch("acceptance_contributor.write_json"):
                 with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
                     gate.run()
@@ -248,12 +266,13 @@ class ContributorHarnessTests(unittest.TestCase):
                 owner.preflight = {}
                 owner.closed = True
                 owner.daemon = None
-                owner.processes = SimpleNamespace(drain=lambda **_options: [])
-                owner.setup = lambda: None
-                owner.snapshot = lambda task_id: {"task_id": task_id}
-                owner.verify_preflight_rejections = lambda: None
-                owner.verify_replay = lambda: None
-                owner.shutdown = lambda: None
+                owner.processes = object.__new__(Processes)
+                self.enterContext(patch.object(owner.processes, "drain", return_value=[]))
+                self.enterContext(patch.object(owner, "setup", lambda: None))
+                self.enterContext(patch.object(owner, "snapshot", lambda task_id: {"task_id": task_id}))
+                self.enterContext(patch.object(owner, "verify_preflight_rejections", lambda: None))
+                self.enterContext(patch.object(owner, "verify_replay", lambda: None))
+                self.enterContext(patch.object(owner, "shutdown", lambda: None))
                 sequence = iter(range(1, 32))
 
                 def run_case(name, verdict, *_args, **_kwargs):
@@ -262,7 +281,7 @@ class ContributorHarnessTests(unittest.TestCase):
                     owner.rows[name] = {"verdict": verdict}
                     return task_id
 
-                owner.run_case = run_case
+                self.enterContext(patch.object(owner, "run_case", run_case))
                 calls = []
 
                 def finalize(success):
@@ -271,7 +290,7 @@ class ContributorHarnessTests(unittest.TestCase):
                         raise failure
                     return not success or failure is not False
 
-                owner.finalize = finalize
+                self.enterContext(patch.object(owner, "finalize", finalize))
                 with patch("acceptance_contributor.read_json",
                            return_value={"conversation_id": "fixture-session"}):
                     with self.assertRaises((RuntimeError, OSError)):

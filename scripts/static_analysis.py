@@ -9,7 +9,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 LANGUAGES = {"python": ".py", "javascript": ".mjs", "shell": ".sh"}
-WORKFLOW_GAPS = {"release.yml": "unsupported concurrency.queue"}
 
 
 def source_paths(language: str, *, root: Path = ROOT) -> list[str]:
@@ -61,10 +60,7 @@ def workflow_paths() -> list[str]:
     for path in sorted((ROOT / ".github/workflows").iterdir()):
         if not path.is_file() or path.suffix not in (".yml", ".yaml"):
             continue
-        if path.name in WORKFLOW_GAPS:
-            print(f"actionlint: {path.name} remains unverified ({WORKFLOW_GAPS[path.name]})", flush=True)
-        else:
-            paths.append(str(path))
+        paths.append(str(path))
     if not paths:
         raise ValueError("no supported workflow files found")
     return paths
@@ -79,11 +75,14 @@ def commands(check: str) -> tuple[list[str], str | None]:
     if check == "shell":
         return [str(ROOT / "bin/shellcheck")], "shell"
     if check == "workflows":
-        return [str(ROOT / "bin/actionlint"), "-shellcheck", str(ROOT / "bin/shellcheck"), "-pyflakes", ""], None
+        return [str(ROOT / "bin/jactionlint"), "--profile", "correctness", "--no-online",
+                "--no-ignores", "--no-baseline", "--strict-exit",
+                "--shellcheck", str(ROOT / "bin/shellcheck"), "--pyflakes="], None
     if check == "ty":
         return [str(ROOT / "bin/diagnostics/bin/ty"), "check", "--config-file", str(ROOT / "ty.toml")], "python"
     if check == "zizmor":
-        return [str(ROOT / "bin/diagnostics/bin/zizmor"), "--offline"], None
+        return [str(ROOT / "bin/diagnostics/bin/zizmor"), "--offline", "--persona", "regular",
+                "--strict-collection", "--no-config", "--no-ignores"], None
     raise ValueError(f"unknown static check {check}")
 
 
@@ -106,7 +105,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("check", choices=("all", "diagnostics", "python", "javascript", "shell", "workflows", "ty", "zizmor"))
     args = parser.parse_args()
-    checks = {"all": ("python", "javascript", "shell", "workflows"),
+    checks = {"all": ("python", "javascript", "shell", "workflows", "ty", "zizmor"),
               "diagnostics": ("ty", "zizmor")}.get(args.check, (args.check,))
     code = 0
     try:

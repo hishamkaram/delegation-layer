@@ -54,7 +54,8 @@ def model_discovery_allowed_exit_codes(response: dict[str, object]) -> frozenset
 
 def validate_model_discovery_response(response: object, provider: str) -> dict[str, object]:
     """Validate the public model observation without turning it into a policy."""
-    require(isinstance(response, dict), "model discovery response is not an object")
+    if not isinstance(response, dict):
+        raise AcceptanceFailure("model discovery response is not an object")
     keys = set(response)
     require(MODEL_DISCOVERY_REQUIRED_KEYS <= keys <=
             MODEL_DISCOVERY_REQUIRED_KEYS | MODEL_DISCOVERY_OPTIONAL_KEYS,
@@ -64,15 +65,16 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
     require(response.get("command") == "models", "model discovery command is invalid")
     require(response.get("provider") == provider, "model discovery provider is invalid")
     observed_at = response.get("observed_at")
-    require(isinstance(observed_at, str) and observed_at, "model discovery timestamp is invalid")
+    if not isinstance(observed_at, str) or not observed_at:
+        raise AcceptanceFailure("model discovery timestamp is invalid")
     try:
         parsed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
     except ValueError as error:
         raise AcceptanceFailure("model discovery timestamp is invalid") from error
     require(parsed.tzinfo is not None, "model discovery timestamp has no timezone")
     status = response.get("status")
-    require(isinstance(status, str) and status in MODEL_DISCOVERY_EXIT_CODES,
-            "model discovery status is invalid")
+    if not isinstance(status, str) or status not in MODEL_DISCOVERY_EXIT_CODES:
+        raise AcceptanceFailure("model discovery status is invalid")
     reason_code = response.get("reason_code")
     require(isinstance(reason_code, str) and reason_code and
             not any(character.isspace() for character in reason_code),
@@ -82,9 +84,10 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
     source = response.get("source")
     require(isinstance(source, str), "model discovery source is invalid")
     efforts = response.get("efforts")
-    _validate_model_choices(efforts, "model discovery efforts")
+    efforts = _validate_model_choices(efforts, "model discovery efforts")
     models = response.get("models")
-    require(isinstance(models, list), "model discovery models is not an array")
+    if not isinstance(models, list):
+        raise AcceptanceFailure("model discovery models is not an array")
     if status == "available":
         require(response["complete"] is True and models,
                 "available model discovery must enumerate a complete nonempty list")
@@ -97,17 +100,30 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
     else:
         require(response["complete"] is False and not models,
                 "failed model discovery must not enumerate models")
+    _validate_model_infos(models)
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "complete": response["complete"],
+        "source": source,
+        "model_count": len(models),
+        "effort_count": None if efforts is None else len(efforts),
+    }
+
+
+def _validate_model_infos(models: list[object]) -> None:
     seen: set[str] = set()
     for index, model in enumerate(models):
-        require(isinstance(model, dict), f"model discovery model {index} is not an object")
+        if not isinstance(model, dict):
+            raise AcceptanceFailure(f"model discovery model {index} is not an object")
         model_keys = set(model)
         require(MODEL_INFO_REQUIRED_KEYS <= model_keys <=
                 MODEL_INFO_REQUIRED_KEYS | MODEL_INFO_OPTIONAL_KEYS,
                 f"model discovery model {index} has unknown or missing fields")
         model_id = model.get("id")
-        require(isinstance(model_id, str) and model_id and
-                not any(ord(character) < 32 for character in model_id),
-                f"model discovery model {index} id is invalid")
+        if (not isinstance(model_id, str) or not model_id or
+                any(ord(character) < 32 for character in model_id)):
+            raise AcceptanceFailure(f"model discovery model {index} id is invalid")
         require(model_id not in seen, f"model discovery has duplicate model id {model_id!r}")
         seen.add(model_id)
         for key in ("name", "default_effort"):
@@ -123,14 +139,6 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
         if default_effort is not None and model_efforts is not None:
             require(default_effort in model_efforts,
                     f"model discovery model {index} default effort is not listed")
-    return {
-        "status": status,
-        "reason_code": reason_code,
-        "complete": response["complete"],
-        "source": source,
-        "model_count": len(models),
-        "effort_count": None if efforts is None else len(efforts),
-    }
 
 
 def _validate_model_discovery_failure(response: dict[str, object], status: str) -> None:
@@ -143,14 +151,14 @@ def _validate_model_discovery_failure(response: dict[str, object], status: str) 
             "model discovery failure requires a failed, unavailable or blocked status")
     _require_text(response["error"], "model discovery error")
     failure = response["failure"]
-    _require_fields(failure, required=MODEL_DISCOVERY_FAILURE_REQUIRED_KEYS,
+    failure = _require_fields(failure, required=MODEL_DISCOVERY_FAILURE_REQUIRED_KEYS,
                     optional=MODEL_DISCOVERY_FAILURE_OPTIONAL_KEYS, label="model discovery failure")
     for key in sorted(set(failure) - {"inspection"}):
         _require_text(failure[key], f"model discovery failure {key}")
     if "inspection" not in failure:
         return
     inspection = failure["inspection"]
-    _require_fields(inspection, required=MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS,
+    inspection = _require_fields(inspection, required=MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS,
                     optional=MODEL_DISCOVERY_INSPECTION_OPTIONAL_KEYS,
                     label="model discovery failure inspection")
     for key in sorted(MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS):
@@ -161,23 +169,26 @@ def _validate_model_discovery_failure(response: dict[str, object], status: str) 
 
 
 def _require_fields(value: object, *, required: frozenset[str], optional: frozenset[str],
-                    label: str) -> None:
-    require(isinstance(value, dict) and required <= set(value) <= required | optional,
-            f"{label} is not an object with exactly its known fields")
+                    label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or not required <= set(value) <= required | optional:
+        raise AcceptanceFailure(f"{label} is not an object with exactly its known fields")
+    return value
 
 
 def _require_text(value: object, label: str) -> None:
     require(isinstance(value, str) and bool(value), f"{label} is invalid")
 
 
-def _validate_model_choices(value: object, label: str) -> None:
-    require(value is None or isinstance(value, list), f"{label} is not null or an array")
+def _validate_model_choices(value: object, label: str) -> list[str] | None:
+    if value is not None and not isinstance(value, list):
+        raise AcceptanceFailure(f"{label} is not null or an array")
     if value is None:
         return
     seen: set[str] = set()
     for choice in value:
-        require(isinstance(choice, str) and choice and
-                not any(ord(character) < 32 for character in choice),
-                f"{label} contains an invalid choice")
+        if (not isinstance(choice, str) or not choice or
+                any(ord(character) < 32 for character in choice)):
+            raise AcceptanceFailure(f"{label} contains an invalid choice")
         require(choice not in seen, f"{label} contains a duplicate choice")
         seen.add(choice)
+    return value

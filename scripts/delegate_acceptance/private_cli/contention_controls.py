@@ -12,13 +12,14 @@ from pathlib import Path
 import shlex
 import sys
 import time
-from typing import Callable
+from collections.abc import Mapping, Sequence
+from typing import Callable, Protocol, TypedDict, runtime_checkable
 import uuid
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
 from scripts.delegate_acceptance.evidence.files import digest, read_json, write_json
 from scripts.delegate_acceptance.evidence.records import parse_json_output
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.processes.operations import Process, Processes
 from scripts.delegate_acceptance.processes.observation import wait_until
 from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
@@ -52,7 +53,40 @@ from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_s
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 
 
-ContentReader = Callable[[], dict[str, object]]
+ContentReader = Callable[[], object]
+
+
+class BoundaryObservation(TypedDict):
+    boundary: dict[str, object]
+    lease: dict[str, object]
+
+
+@runtime_checkable
+class ControlProcesses(Protocol):
+    """Control commands use the existing registry's launch and closure authority."""
+
+    @property
+    def environment(self) -> Mapping[str, str]: ...
+
+    def start(self, name: str, argv: list[object], cwd: Path) -> Process: ...
+
+    def drain(self, timeout: float) -> Sequence[Mapping[str, object]]: ...
+
+    def finished_naturally(self) -> bool: ...
+
+
+def _control_processes(tasks: NativeTaskOps) -> ControlProcesses:
+    owner = tasks.processes
+    if not isinstance(owner, ControlProcesses):
+        raise RuntimeError("modern controls require the task owner's process launch and closure capabilities")
+    return owner
+
+
+def _root_identity(tasks: NativeTaskOps) -> str:
+    root = tasks.root_id
+    if root is None:
+        raise RuntimeError("modern controls require an admitted state root")
+    return root
 
 
 @dataclass(frozen=True)
@@ -107,7 +141,7 @@ def install_contention_client(destination: Path, executable: Path, controls: Own
 
 
 def start_control(
-    processes: Processes, binary: Path, arguments: tuple[str, ...], state: Path, label: str, gate: ControlGate
+    processes: ControlProcesses, binary: Path, arguments: tuple[str, ...], state: Path, label: str, gate: ControlGate
 ) -> Process:
     write_json(
         gate.directory / "request.json",
@@ -122,7 +156,7 @@ def start_control(
     return process
 
 
-def observe_boundary(process: Process, gate: ControlGate, lock_path: Path, mode: str) -> dict[str, object]:
+def observe_boundary(process: Process, gate: ControlGate, lock_path: Path, mode: str) -> BoundaryObservation:
     def entered():
         require(process.poll() is None, "modern control exited before reaching its client boundary")
         return gate.receipt.is_file()
@@ -141,7 +175,7 @@ def release_control(gate: ControlGate) -> int:
     return released
 
 
-def finish_controls(processes: Processes, gates: tuple[ControlGate, ...]) -> None:
+def finish_controls(processes: ControlProcesses, gates: tuple[ControlGate, ...]) -> None:
     for gate in gates:
         release_control(gate)
     pending = processes.drain(40)
@@ -177,13 +211,19 @@ def observe_migration(state: Path, writer: ModernInstallation) -> dict[str, obje
     """
     supervisor = state / ".supervisor"
     published = optional_control_record(supervisor / "supervisor.identity.json")
-    require(published is not None and isinstance(published.get("binding"), dict), "modern published binding is missing")
-    binding = published["binding"]
+    if published is None:
+        raise AcceptanceFailure("modern published binding is missing")
+    binding = published.get("binding")
+    if not isinstance(binding, dict):
+        raise AcceptanceFailure("modern published binding is missing")
     members = {name: digest(writer.libexec / name) for name in ("pueue", "pueued")}
     pair_digest = hashlib.sha256((members["pueue"] + "\n" + members["pueued"]).encode()).hexdigest()
     target = supervisor / ("pueue-pair-" + pair_digest)
     for role in ("client", "daemon"):
-        path = Path(binding[role + "_executable"])
+        executable = binding[role + "_executable"]
+        if not isinstance(executable, str):
+            raise AcceptanceFailure("modern published executable is invalid")
+        path = Path(executable)
         require(path.is_file() and not path.is_symlink(), "modern published executable is unsafe")
         require(digest(path) == binding[role + "_sha256"], "modern published executable bytes changed")
     alias_config = supervisor / "legacy-pueue.yml"
@@ -205,7 +245,7 @@ def observe_migration(state: Path, writer: ModernInstallation) -> dict[str, obje
 
 
 def prove_contention_round(
-    *, processes: Processes,
+    *, processes: ControlProcesses,
     reader: Path,
     writer: ModernInstallation,
     state: Path,
@@ -240,7 +280,10 @@ def prove_contention_round(
         exclusive_evidence = observe_boundary(exclusive, exclusive_gate, lock_path, "exclusive")
         assert_live()
         pair = assert_state_supervisor_pair(state, writer.libexec)
-        require(str(pair / "pueued") == facts["writer"]["executable"], "modern writer resolved another daemon")
+        writer_identity = facts["writer"]
+        if not isinstance(writer_identity, dict):
+            raise AcceptanceFailure("modern writer identity is missing")
+        require(str(pair / "pueued") == writer_identity["executable"], "modern writer resolved another daemon")
         require_content_identity(before, content(), "exclusive entry")
         exclusive_release = release_control(exclusive_gate)
         exclusive.wait(35, expected.exit_code)
@@ -283,12 +326,12 @@ def prove_exclusive_handoff(
 ) -> dict[str, object]:
     gate = control_gate(controls, "candidate-final-handoff")
     before = immutable_content()
-    root_id = tasks.root_id
+    root_id = _root_identity(tasks)
     facts = observe_migration(tasks.state, candidate)
     expected = migration_expectation(facts, active=False)
     try:
         process = start_control(
-            tasks.processes,
+            _control_processes(tasks),
             candidate.delegate,
             ("supervisor", "migrate", "--json"),
             tasks.state,
@@ -316,7 +359,7 @@ def prove_exclusive_handoff(
             "immutable_content_after": immutable_content(),
         }
     finally:
-        finish_controls(tasks.processes, (gate,))
+        finish_controls(_control_processes(tasks), (gate,))
 
 
 def prove_candidate_observation(
@@ -332,7 +375,7 @@ def prove_candidate_observation(
     migration_expectation(facts, active=True)
     task_id = tasks.tasks["modern-candidate"]
     try:
-        process = start_control(tasks.processes, candidate.delegate, ("status", task_id, "--json"),
+        process = start_control(_control_processes(tasks), candidate.delegate, ("status", task_id, "--json"),
                                 tasks.state, "candidate-after-active-migration", gate)
         boundary = observe_boundary(process, gate, lock_path, "shared")
         assert_live()
@@ -340,7 +383,7 @@ def prove_candidate_observation(
         released = release_control(gate)
         process.wait(35, 0)
         response = parse_json_output(process, "candidate observation after active migration")
-        require_control_response(response, tasks.root_id, task_id=task_id)
+        require_control_response(response, _root_identity(tasks), task_id=task_id)
         require_content_identity(facts, observe_migration(tasks.state, candidate), "read-only migration facts")
         require_content_identity(before, content(), "candidate observation completion")
         assert_live()
@@ -348,7 +391,7 @@ def prove_candidate_observation(
                 "migration_facts": facts, "final_lock": probe_generation_lease(lock_path, "unlocked"),
                 "immutable_content_before": before, "immutable_content_after": content()}
     finally:
-        finish_controls(tasks.processes, (gate,))
+        finish_controls(_control_processes(tasks), (gate,))
 
 
 def stable_task_content(tasks: NativeTaskOps) -> dict[str, object]:
@@ -468,7 +511,7 @@ def replay_after_handoff(tasks: NativeTaskOps, candidate: ModernInstallation) ->
                 timeout=35,
             )
             response = parse_json_output(process, "modern candidate " + command)
-            require_control_response(response, tasks.root_id, task_id=task_id)
+            require_control_response(response, _root_identity(tasks), task_id=task_id)
             verify_collected_outcome(response, tasks.state / "tasks" / task_id, "committed")
 
 
@@ -488,7 +531,7 @@ def run_modern_binary_contention(
     require(tasks.daemon is None, "modern contention requires the application-owned private daemon")
     require(baseline.delegate.resolve() != candidate.delegate.resolve(), "modern contention requires two CLI binaries")
     require(
-        "TMPDIR" not in tasks.processes.environment,
+        "TMPDIR" not in _control_processes(tasks).environment,
         "modern task admission environment must omit TMPDIR so status retains its current control port",
     )
     fixture.controls.assert_live()
@@ -565,11 +608,12 @@ def run_live_contention(
         tasks.state, responses, fixture.waiter_directory, fixture.lease_nonce
     )
     owner_proof = prove_lifetime_owner_cohort(specifications, cohort)
-    immutable = lambda: {"tasks": stable_task_content(tasks), "supervisor": active_supervisor_content(tasks.state)}
-    active_before = immutable()
+    def immutable() -> dict[str, object]:
+        return {"tasks": stable_task_content(tasks), "supervisor": active_supervisor_content(tasks.state)}
+    active_before: dict[str, object] = immutable()
     rounds = [
         prove_contention_round(
-            processes=tasks.processes,
+            processes=_control_processes(tasks),
             reader=reader.delegate,
             writer=writer,
             state=tasks.state,
@@ -631,15 +675,19 @@ def run_prepared_modern_contention(
         isinstance(lifetime, FixtureLifetime) and isinstance(installed, FixtureInstallation),
         "modern facade requires canonical prepared fixture inputs",
     )
+    base, old_install, old_libexec, upgraded_libexec, gate = (
+        lifetime.base, lifetime.old_install, lifetime.old_libexec, lifetime.upgraded_libexec, lifetime.gate)
+    if base is None or old_install is None or old_libexec is None or upgraded_libexec is None or gate is None:
+        raise RuntimeError("modern facade requires fully prepared fixture paths")
     run_receipt.phase("modern_two_binary_contention")
-    controls = lifetime.ownership.create("modern control ports", lifetime.base / "modern-controls", lifetime.base)
-    captures = lifetime.ownership.create("modern process captures", lifetime.base / "modern-processes", lifetime.base)
+    controls = lifetime.ownership.create("modern control ports", base / "modern-controls", base)
+    captures = lifetime.ownership.create("modern process captures", base / "modern-processes", base)
     processes = Processes(captures.directory, capture_root=captures, environment=lifetime.env)
     baseline = ModernInstallation(
-        lifetime.old_install / "delegate", lifetime.old_install / "delegate-run", lifetime.old_libexec
+        old_install / "delegate", old_install / "delegate-run", old_libexec
     )
     candidate = ModernInstallation(
-        installed.upgraded_install / "delegate", installed.upgraded_install / "delegate-run", lifetime.upgraded_libexec
+        installed.upgraded_install / "delegate", installed.upgraded_install / "delegate-run", upgraded_libexec
     )
     install_contention_client(baseline.libexec / "pueue", installed.pueue_binary, controls)
     install_contention_client(candidate.libexec / "pueue", installed.pueue_binary, controls)
@@ -648,14 +696,14 @@ def run_prepared_modern_contention(
         baseline.delegate,
         baseline.runner,
         baseline.libexec / "pueue",
-        lifetime.base,
+        base,
         installed.state,
         response_directory,
         managed_runner=True,
         runner_placement=STATE_INSTALLED_RUNNER,
     )
     fixture = ModernFixture(
-        controls, installed.brief, installed.workspace, lifetime.gate, installed.waiter_directory, installed.lease_nonce
+        controls, installed.brief, installed.workspace, gate, installed.waiter_directory, installed.lease_nonce
     )
     try:
         evidence = run_modern_binary_contention(tasks, baseline, candidate, fixture)

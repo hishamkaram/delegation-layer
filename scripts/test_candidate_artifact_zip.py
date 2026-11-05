@@ -240,6 +240,7 @@ class PartialPayloadTests(CandidateArtifactCase):
                     error = self.refused("candidate_payload_write_failed", served.locator)
                 self.assertEqual(error.stage, "load-candidate-artifact")
                 self.assertIs(type(error.__cause__), OSError)
+                assert isinstance(error.__cause__, OSError)
                 self.assertEqual(error.__cause__.errno, code)
                 self.assertEqual(self.payload_names(), [MANIFEST_PATH])
                 self.assertEqual((self.root / f"load-{self.loads}" / "payload" / MANIFEST_PATH).stat().st_size, 0)

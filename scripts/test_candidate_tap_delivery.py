@@ -113,7 +113,7 @@ class TapDeliveryTests(CandidateArtifactCase):
         client = ObservedGitHubClient(self.receipt, environment, self.tree)
         return tap.deliver_tap(self.artifact, client=client, work_directory=self.work.resolve(), **options)
 
-    def refused(self, code: str, routes: dict[str, list[dict]], **options) -> VerificationError:
+    def assert_delivery_refused(self, code: str, routes: dict[str, list[dict]], **options) -> VerificationError:
         with self.assertRaises(VerificationError) as caught:
             self.deliver(routes, **options)
         self.assertEqual(caught.exception.code, code)
@@ -158,19 +158,19 @@ class TapDeliveryTests(CandidateArtifactCase):
         self.assertEqual(self.keys(), [TREE, blob(FORMULA)])
 
     def test_raw_bytes_that_do_not_hash_to_the_listed_blob_refuse_before_any_put(self) -> None:
-        self.refused("candidate_tap_observation_invalid",
-                     {TREE: [listing(formula_row(OLD))], blob(OLD): [raw(OLD + b"#")]})
+        self.assert_delivery_refused("candidate_tap_observation_invalid",
+                                    {TREE: [listing(formula_row(OLD))], blob(OLD): [raw(OLD + b"#")]})
         self.assertNotIn(PUT, self.keys())
 
     def test_a_formula_not_matching_the_manifest_refuses_before_any_request(self) -> None:
         self.formula.write_bytes(FORMULA.replace(b"0.1.37", b"0.1.38"))
-        self.refused("candidate_tap_formula_mismatch", {})
+        self.assert_delivery_refused("candidate_tap_formula_mismatch", {})
         self.assertEqual(self.keys(), [])
 
     def test_a_formula_changed_after_observation_is_refused_before_the_put(self) -> None:
         changed = FORMULA.decode().replace("0.1.37", "0.1.99")
-        self.refused("candidate_tap_formula_mismatch",
-                     {TREE: [{**listing(README), "write": [str(self.formula), changed]}], PUT: [ack(FORMULA)]})
+        self.assert_delivery_refused("candidate_tap_formula_mismatch",
+                                    {TREE: [{**listing(README), "write": [str(self.formula), changed]}], PUT: [ack(FORMULA)]})
         self.assertEqual(self.keys(), [TREE])
 
     def test_only_a_complete_well_formed_listing_without_the_path_means_absence(self) -> None:
@@ -183,17 +183,18 @@ class TapDeliveryTests(CandidateArtifactCase):
         for code, replies in cases.items():
             with self.subTest(code=code):
                 self.tap_log.unlink(missing_ok=True)
-                self.refused(code, {TREE: replies, PUT: [ack(FORMULA)]})
+                self.assert_delivery_refused(code, {TREE: replies, PUT: [ack(FORMULA)]})
                 self.assertEqual(self.keys(), [TREE])
         for kind in ("tree", "commit"):
             with self.subTest(kind=kind):
                 self.tap_log.unlink(missing_ok=True)
-                self.refused("candidate_tap_formula_not_regular",
-                             {TREE: [listing(formula_row(OLD, kind=kind))], PUT: [ack(FORMULA)]})
+                self.assert_delivery_refused("candidate_tap_formula_not_regular",
+                                            {TREE: [listing(formula_row(OLD, kind=kind))], PUT: [ack(FORMULA)]})
 
     def test_a_refused_put_stops_without_retry_or_later_read(self) -> None:
-        self.refused("github_request_failed", {TREE: [listing(formula_row(OLD)), listing(formula_row(FORMULA))],
-                                               blob(OLD): [raw(OLD)], PUT: [{"exit": 1}, ack(FORMULA)]})
+        self.assert_delivery_refused(
+            "github_request_failed", {TREE: [listing(formula_row(OLD)), listing(formula_row(FORMULA))],
+                                      blob(OLD): [raw(OLD)], PUT: [{"exit": 1}, ack(FORMULA)]})
         self.assertEqual(self.keys(), [TREE, blob(OLD), PUT])
 
     def test_a_malformed_acknowledgement_stops_without_retry_or_later_read(self) -> None:
@@ -204,13 +205,13 @@ class TapDeliveryTests(CandidateArtifactCase):
                 # The caller owns each request body file; the next attempt needs a new one.
                 for stale in (self.tap_log, self.work / "tap-formula.json"):
                     stale.unlink(missing_ok=True)
-                self.refused("candidate_tap_ack_invalid",
-                             {TREE: [listing(README), listing(formula_row(FORMULA))], PUT: [reply, ack(FORMULA)]})
+                self.assert_delivery_refused("candidate_tap_ack_invalid",
+                                            {TREE: [listing(README), listing(formula_row(FORMULA))], PUT: [reply, ack(FORMULA)]})
                 self.assertEqual(self.keys(), [TREE, PUT])
 
     def test_a_known_acknowledgement_whose_branch_differs_on_readback_stops(self) -> None:
-        self.refused("candidate_tap_readback_mismatch",
-                     {TREE: [listing(README), listing(formula_row(OLD))], PUT: [ack(FORMULA)], blob(OLD): [raw(OLD)]})
+        self.assert_delivery_refused("candidate_tap_readback_mismatch",
+                                    {TREE: [listing(README), listing(formula_row(OLD))], PUT: [ack(FORMULA)], blob(OLD): [raw(OLD)]})
         self.assertEqual(self.keys(), [TREE, PUT, TREE, blob(OLD)])
 
     def test_an_invalid_target_refuses_before_any_request(self) -> None:
@@ -218,16 +219,17 @@ class TapDeliveryTests(CandidateArtifactCase):
                         {"branch": "refs/heads/main"}, {"branch": "main?recursive=1"}, {"branch": "a..b"},
                         {"branch": "-main"}):
             with self.subTest(options=options):
-                self.refused("candidate_tap_target_invalid", {}, **options)
+                self.assert_delivery_refused("candidate_tap_target_invalid", {}, **options)
         self.assertEqual(self.keys(), [])
 
     def test_an_unproven_put_wait_is_retained_and_never_followed(self) -> None:
         fault = ChildFault(lambda argv: "PUT" in argv)
         with patch.object(github, "run_bounded_command", fault):
-            self.refused("command_timeout", {TREE: [listing(README), listing(formula_row(FORMULA))],
-                                             PUT: [ack(FORMULA)]})
+            self.assert_delivery_refused("command_timeout", {TREE: [listing(README), listing(formula_row(FORMULA))],
+                                                             PUT: [ack(FORMULA)]})
         self.assertEqual(self.keys(), [TREE])
         self.assertIsInstance(self.tree.unresolved, VerificationError)
+        assert isinstance(self.tree.unresolved, VerificationError)
         self.assertEqual(self.tree.unresolved.code, "command_timeout")
         settle_retained(self, self.tree, fault, (self.work / "tap-formula.json",))
 

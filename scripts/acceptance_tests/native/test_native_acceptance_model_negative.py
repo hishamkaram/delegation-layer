@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.native.support import fixture_list, fixture_record, fixture_text
 from scripts.delegate_acceptance.native import acceptance as gate
 
 
@@ -190,8 +191,9 @@ class NegativeModelCatalogTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 value, _data = self.diagnostics()
                 self.assertEqual((value["tasks"], value["task_ids"]), ([], [JOURNAL]))
-                self.assertFalse([item for item in value["status"]["omitted"] if JOURNAL in item])
-                inspection = value["model_discovery_inspection"]
+                omitted = fixture_list(fixture_record(value["status"])["omitted"])
+                self.assertFalse([item for item in omitted if JOURNAL in fixture_text(item)])
+                inspection = fixture_record(value["model_discovery_inspection"])
                 self.assertEqual(inspection["journal_task_id"], JOURNAL)
                 self.assertEqual(inspection["context"], {"class": "inspection_failed",
                                                          "deadline_state": "unknown",
@@ -215,10 +217,11 @@ class NegativeModelCatalogTests(unittest.TestCase):
         code, _run = self.main(INSPECTION_FAILURE, cli_exit=1)
         self.assertEqual(code, 1)
         value, _data = self.diagnostics()
-        inspection = value["model_discovery_inspection"]
-        self.assertEqual(set(inspection["files"]), set(INSPECTION_RECORDS))
-        self.assertIn(f"model-inspection:{JOURNAL}:receipt.json:symlink", value["status"]["omitted"])
-        self.assertIn(f"model-inspection:{JOURNAL}:raw:special", value["status"]["omitted"])
+        inspection = fixture_record(value["model_discovery_inspection"])
+        self.assertEqual(set(fixture_record(inspection["files"])), set(INSPECTION_RECORDS))
+        omitted = fixture_list(fixture_record(value["status"])["omitted"])
+        self.assertIn(f"model-inspection:{JOURNAL}:receipt.json:symlink", omitted)
+        self.assertIn(f"model-inspection:{JOURNAL}:raw:special", omitted)
 
     def test_model_root_identity_uses_the_canonical_task_identity(self):
         for label, root in (("valid", ROOT), ("uppercase", ROOT.upper()), ("short", ROOT[:31]),

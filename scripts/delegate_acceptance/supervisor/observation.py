@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import time
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
-from typing import Callable
+from typing import Callable, Protocol
+
+
+class StatusResponse(Protocol):
+    def json(self) -> object:
+        ...
+
+
+class StatusClient(Protocol):
+    def __call__(self, name: str, arguments: list[str], /, *, timeout: float) -> StatusResponse:
+        ...
 
 
 # Hermetic consumers keep the established fast cadence; a consumer whose
@@ -14,7 +24,7 @@ RUNNER_POLL_SECONDS = 0.1
 
 
 def wait_runner_terminal(
-    client: Callable[..., object],
+    client: StatusClient,
     root_id: str,
     task_id: str,
     expected_result: str | frozenset[str],
@@ -40,9 +50,11 @@ def wait_runner_terminal(
             break
         result = client("runner-status", ["status", "--json"], timeout=remaining)
         value = result.json()
-        require(isinstance(value, dict), "supervisor status response is not an object")
+        if not isinstance(value, dict):
+            raise AcceptanceFailure("supervisor status response is not an object")
         rows = value.get("tasks", {})
-        require(isinstance(rows, dict), "supervisor status has no tasks object")
+        if not isinstance(rows, dict):
+            raise AcceptanceFailure("supervisor status has no tasks object")
         matching = [row for row in rows.values()
                     if isinstance(row, dict) and row.get("label") == label]
         require(len(matching) == 1, "submitted task has no unique supervisor row")
@@ -70,7 +82,7 @@ def wait_runner_terminal(
 
 
 def wait_runner_done(
-    client: Callable[[str, list[str]], object],
+    client: StatusClient,
     root_id: str,
     task_id: str,
     timeout: float = 150,

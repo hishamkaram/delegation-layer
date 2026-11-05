@@ -2,6 +2,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from scripts.acceptance_tests.record_fixtures import object_at
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -94,7 +95,7 @@ class NativeLifetimeProofTests(unittest.TestCase):
         for verdict in ([], {}):
             with self.subTest(verdict=verdict):
                 receipt = fixture_receipt("linux", "process-group", "cooperative")
-                receipt["primitive_receipt"]["verdict"] = verdict
+                object_at(receipt, "primitive_receipt")["verdict"] = verdict
                 errors = validate_receipt(receipt, "linux", "amd64", expected_source())
                 self.assertIn("primitive proof verdict is invalid", errors)
 
@@ -167,7 +168,7 @@ class NativeLifetimeProofTests(unittest.TestCase):
 
     def test_rejects_backend_that_disagrees_with_native_matrix(self) -> None:
         receipt = fixture_receipt("darwin", "process-group", "cooperative")
-        primitive = receipt["primitive_receipt"]
+        primitive = object_at(receipt, "primitive_receipt")
         self.assertIsInstance(primitive, dict)
         primitive["backend"] = "cgroup-v2"
         errors = validate_receipt(receipt, "darwin", "arm64", expected_source())
@@ -175,7 +176,7 @@ class NativeLifetimeProofTests(unittest.TestCase):
 
     def test_rejects_changed_primitive_without_assurance_rebinding(self) -> None:
         receipt = fixture_receipt("linux", "cgroup-v2", "exact")
-        primitive = receipt["primitive_receipt"]
+        primitive = object_at(receipt, "primitive_receipt")
         self.assertIsInstance(primitive, dict)
         primitive["observed"] = "different observation"
         errors = validate_receipt(receipt, "linux", "amd64", expected_source())
@@ -196,7 +197,7 @@ class NativeLifetimeProofTests(unittest.TestCase):
         for field, expected_error in field_errors.items():
             with self.subTest(field=field):
                 receipt = fixture_receipt("linux", "process-group", "cooperative")
-                source = receipt["primitive_receipt"]["source"]
+                source = object_at(receipt, "primitive_receipt", "source")
                 self.assertIsInstance(source, dict)
                 source[field] = "f" * (40 if field == "revision" else 64)
                 errors = validate_receipt(receipt, "linux", "amd64", expected_source())
@@ -214,10 +215,10 @@ class NativeLifetimeProofTests(unittest.TestCase):
     def test_failed_receipt_requires_structured_failure_shape(self) -> None:
         receipt = fixture_receipt("linux", "process-group", "cooperative")
         receipt["verdict"] = "failed"
-        primitive = receipt["primitive_receipt"]
+        primitive = object_at(receipt, "primitive_receipt")
         self.assertIsInstance(primitive, dict)
         primitive["verdict"] = "failed"
-        receipt["assurance_receipt"]["primitive_receipt_sha256"] = hashlib.sha256(
+        object_at(receipt, "assurance_receipt")["primitive_receipt_sha256"] = hashlib.sha256(
             json.dumps(primitive, separators=(",", ":"), ensure_ascii=True).encode("ascii")
         ).hexdigest()
         receipt["cleanup_status"] = "scope-retained"

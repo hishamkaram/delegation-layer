@@ -22,13 +22,13 @@ class ModernControlFixture:
         root = Path(tempfile.mkdtemp(prefix="modern-contention-", dir=parent)).resolve()
         self.root = self.owner.adopt_created("modern test root", root, parent)
         test.addCleanup(self.cleanup)
-        self.processes = None
+        self._processes: Processes | None = None
         self.state = self.owner.create("modern state", root / "state", root).directory
         self.supervisor = self.owner.create("modern supervisor", self.state / ".supervisor", self.state).directory
         self.owner.create("modern tasks", self.state / "tasks", self.state)
         self.controls = self.owner.create("modern control ports", root / "controls", root)
         captures = self.owner.create("modern process captures", root / "captures", root)
-        self.processes = Processes(
+        self._processes = Processes(
             captures.directory,
             capture_root=captures,
             environment={"HOME": str(root), "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
@@ -49,10 +49,16 @@ class ModernControlFixture:
         self.write_options()
         publish_pair(self.state, self.baseline.libexec)
 
+    @property
+    def processes(self) -> Processes:
+        if self._processes is None:
+            raise RuntimeError("modern fixture process owner is not initialized")
+        return self._processes
+
     def cleanup(self):
-        if self.processes is not None:
-            pending = self.processes.drain(40)
-            if pending or not self.processes.finished_naturally():
+        if self._processes is not None:
+            pending = self._processes.drain(40)
+            if pending or not self._processes.finished_naturally():
                 self.owner.release()
                 raise RuntimeError("finite test processes retained: " + str(self.root.directory))
         self.owner.rollback()

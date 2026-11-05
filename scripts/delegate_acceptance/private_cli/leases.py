@@ -200,7 +200,8 @@ class DisposalLeases:
 
     def require_held(self, state):
         held = self._held.get(Path(state))
-        require(held is not None, "private state root has no held disposal lease: " + str(state))
+        if held is None:
+            raise RuntimeError("private state root has no held disposal lease: " + str(state))
         held.require_current()
 
     def release(self, state):

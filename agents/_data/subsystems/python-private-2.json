@@ -108,7 +108,8 @@
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.private_cli.leases",
       "py:delegate_acceptance.private_cli.receipt",
-      "py:pathlib"
+      "py:pathlib",
+      "py:typing"
     ]
   },
   {
@@ -175,6 +176,7 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "application",
     "imports": [
+      "py:collections.abc",
       "py:dataclasses",
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.evidence.files",
@@ -693,14 +695,14 @@
       "py:delegate_acceptance.private_cli.noexec_state",
       "py:delegate_acceptance.private_cli.queue_policy",
       "py:errno",
-      "py:io",
       "py:json",
       "py:os",
       "py:pathlib",
       "py:socket",
       "py:stat",
       "py:threading",
-      "py:time"
+      "py:time",
+      "py:typing"
     ]
   },
   {

@@ -60,6 +60,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
 
       - name: Set up minimum Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -78,6 +80,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - name: Set up minimum Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -104,6 +108,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -245,7 +250,7 @@ jobs:
 
       - name: Archive supervisor failure evidence
         if: failure() && steps.supervisor.outcome == 'failure'
-        run: tar -czf "${{ runner.temp }}/supervisor-failure-evidence.tar.gz" bin/supervisor-acceptance
+        run: tar -czf "$RUNNER_TEMP/supervisor-failure-evidence.tar.gz" bin/supervisor-acceptance
 
       - name: Retain supervisor failure evidence
         if: failure() && steps.supervisor.outcome == 'failure'
@@ -267,6 +272,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -391,7 +397,7 @@ jobs:
 
       - name: Archive supervisor failure evidence
         if: failure() && steps.supervisor.outcome == 'failure'
-        run: tar -czf "${{ runner.temp }}/supervisor-failure-evidence.tar.gz" bin/supervisor-acceptance
+        run: tar -czf "$RUNNER_TEMP/supervisor-failure-evidence.tar.gz" bin/supervisor-acceptance
 
       - name: Retain supervisor failure evidence
         if: failure() && steps.supervisor.outcome == 'failure'
@@ -495,7 +501,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      actions: read
+      actions: read # Download the exact distribution artifact produced by this run.
     strategy:
       fail-fast: false
       matrix:
@@ -579,4 +585,4 @@ jobs:
     name: CCR integration
     needs: changes
     if: ${{ needs.changes.outputs.full == 'true' }}
-    uses: ./.github/workflows/ccr-integration.yml
+    uses: $/.github/workflows/ccr-integration.yml

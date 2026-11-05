@@ -12,15 +12,14 @@ from scripts.delegate_acceptance.tasks.runtime_metadata import _provider_runtime
 def dispatch_binding(response: dict[str, object], task_id: str, label: str) -> tuple[str, int]:
     require(response.get("task_id") == task_id, f"{label} changed task identity")
     root_id = response.get("root_id")
-    require(isinstance(root_id, str) and len(root_id) == 32 and
-            all(character in "0123456789abcdef" for character in root_id),
-            f"{label} returned no root identity")
+    if not _task_identity(root_id):
+        raise AcceptanceFailure(f"{label} returned no root identity")
     supervisor = response.get("supervisor")
-    require(isinstance(supervisor, dict) and supervisor.get("matched") is True,
-            f"{label} has no matched supervisor identity")
+    if not isinstance(supervisor, dict) or supervisor.get("matched") is not True:
+        raise AcceptanceFailure(f"{label} has no matched supervisor identity")
     numeric_id = supervisor.get("numeric_task_id")
-    require(type(numeric_id) is int and numeric_id >= 0,
-            f"{label} has no numeric supervisor identity")
+    if type(numeric_id) is not int or numeric_id < 0:
+        raise AcceptanceFailure(f"{label} has no numeric supervisor identity")
     return root_id, numeric_id
 
 
@@ -29,7 +28,8 @@ def _validate_bound_provider_record(
         meta_digest: str, spec_digest: object) -> dict[str, object]:
     """Validate the durable envelope shared by interrupted provider records."""
     label = f"task {task_id} {name}"
-    require(isinstance(evidence, dict), f"{label} is not an object")
+    if not isinstance(evidence, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     if name == "provider.start":
         _exact_keys(evidence, {
             "schema_version", "root_id", "task_id", "spec_sha256",
@@ -55,13 +55,13 @@ def _validate_bound_provider_record(
             evidence.get("meta_sha256") == meta_digest,
             f"{label} binding is invalid")
     if name == "provider.start":
-        require(type(evidence.get("budget_nanos")) is int and
-                0 < evidence.get("budget_nanos") < 2 ** 63,
+        budget = evidence.get("budget_nanos")
+        require(type(budget) is int and 0 < budget < 2 ** 63,
                 f"{label} budget_nanos is invalid")
         _canonical_timestamp(evidence.get("created_at"), f"{label} created_at")
     else:
-        require(type(evidence.get("diagnostic_nanos")) is int and
-                0 <= evidence.get("diagnostic_nanos") < 2 ** 63,
+        diagnostic = evidence.get("diagnostic_nanos")
+        require(type(diagnostic) is int and 0 <= diagnostic < 2 ** 63,
                 f"{label} diagnostic_nanos is invalid")
         _canonical_timestamp(evidence.get("started_at"), f"{label} started_at")
         _provider_runtime_identity(evidence, "started", label)

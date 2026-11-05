@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sys
 from typing import TYPE_CHECKING, Protocol
 
@@ -48,8 +49,8 @@ def success_receipt(
         })
         value["provider_exit"][name] = task_results[name]["provider_exit"]
         events = task_results[name]["events"]
-        require(events == {"A": 1, "S": 1, "E": 1, "seal": 1},
-                f"{name} one-use event counts are not exact: {events}")
+        if not isinstance(events, dict) or events != {"A": 1, "S": 1, "E": 1, "seal": 1}:
+            raise AcceptanceFailure(f"{name} one-use event counts are not exact: {events}")
         for event, count in events.items():
             value["events"][event] += count
     require(len(value["tasks"]) == 3 and len(set(value["tasks"])) == 3,
@@ -76,6 +77,8 @@ def _observe_retained_resource(
         value: object, label: str, retained: list[str], unresolved: list[str]) -> bool:
     """Record one resource only when it exists at terminal-receipt time."""
     try:
+        if not isinstance(value, (str, os.PathLike)):
+            raise TypeError("retention path is not path-like")
         path = Path(value)
     except (TypeError, ValueError):
         unresolved.append(f"{label} retention path is invalid")

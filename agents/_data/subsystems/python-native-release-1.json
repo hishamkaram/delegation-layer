@@ -53,6 +53,7 @@
       "py:delegate_acceptance.processes.observation",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.supervisor.config_policy",
+      "py:delegate_acceptance.tasks.contracts",
       "py:delegate_acceptance.tasks.operations",
       "py:functools",
       "py:pathlib",
@@ -328,9 +329,13 @@
     "layer": "runtime",
     "imports": [
       "py:__future__",
+      "py:delegate_acceptance.inspections.data",
       "py:delegate_acceptance.native.constants",
       "py:delegate_acceptance.supervisor.runner_layout",
-      "py:delegate_acceptance.tasks.operations"
+      "py:delegate_acceptance.tasks.contracts",
+      "py:delegate_acceptance.tasks.operations",
+      "py:pathlib",
+      "py:typing"
     ]
   },
   {
@@ -384,6 +389,7 @@
       "py:delegate_acceptance.native_evidence.proof",
       "py:delegate_acceptance.native_evidence.retention",
       "py:delegate_acceptance.native_evidence.retention_records",
+      "py:delegate_acceptance.native_evidence.summaries",
       "py:delegate_acceptance.native_evidence.validation",
       "py:pathlib",
       "py:re",
@@ -397,6 +403,7 @@
     "layer": "runtime",
     "imports": [
       "py:__future__",
+      "py:collections.abc",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.native_evidence.block_reason",
       "py:delegate_acceptance.native_evidence.contract",
@@ -444,12 +451,14 @@
       "py:__future__",
       "py:delegate_acceptance.evidence.bounded_files",
       "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.summaries",
       "py:hashlib",
       "py:json",
       "py:os",
       "py:pathlib",
       "py:stat",
-      "py:tempfile"
+      "py:tempfile",
+      "py:typing"
     ]
   },
   {
@@ -485,8 +494,10 @@
     "layer": "runtime",
     "imports": [
       "py:__future__",
+      "py:collections.abc",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.summaries",
       "py:os",
       "py:pathlib",
       "py:re"
@@ -634,6 +645,7 @@
     "layer": "runtime",
     "imports": [
       "py:__future__",
+      "py:builtins",
       "py:collections.abc",
       "py:dataclasses",
       "py:delegate_acceptance.processes.contracts",

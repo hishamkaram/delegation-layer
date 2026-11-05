@@ -279,17 +279,16 @@ def finish_gate(path: Path, receipt: dict, owner: DirectoryOwner, action,
     incidental_removed = (
         [str(temporary)] if temporary is not None and not os.path.lexists(temporary) else []
     )
-    final_verdict = receipt.get("verdict") if receipt.get("verdict") == "blocked" else "pass"
+    final_verdict = "blocked" if receipt.get("verdict") == "blocked" else "pass"
     if error is None and cleanup_mode == "remove":
         assets = locations.get("assets")
         target = identities.get(str(assets.resolve())) if assets is not None else None
         if not isinstance(target, dict):
             error = VerificationError("release_cleanup_identity_missing", "cleanup")
-
-    if error is None and cleanup_mode == "remove":
-        return _finish_removed_gate(
-            path, receipt, owner, target, final_verdict, incidental_removed,
-        )
+        else:
+            return _finish_removed_gate(
+                path, receipt, owner, target, final_verdict, incidental_removed,
+            )
     return _finish_retained_gate(
         path, receipt, owner, error, final_verdict, incidental_removed, locations,
     )

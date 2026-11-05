@@ -149,8 +149,9 @@ class ContributorAcceptance:
             time.sleep(0.1)
         raise RuntimeError("private supervisor readiness not established")
 
-    def client(self, name, operation, expected=0):
-        return self.processes.run(name, [self.pueue, "-c", self.config, *operation], self.base, expected)
+    def client(self, name, operation, expected=0, *, timeout: float = 15):
+        return self.processes.run(name, [self.pueue, "-c", self.config, *operation], self.base,
+                                  expected, timeout=timeout)
 
     def collect(self, name, task_id, expected):
         return self.processes.run(name, [self.delegate, "--root", self.root, "collect", task_id,
@@ -305,6 +306,8 @@ class ContributorAcceptance:
         pending = self.processes.drain(timeout=1, exclude=(self.daemon,))
         require(not pending, "owned client not finished")
         self.client("private-shutdown", ["shutdown"])
+        if self.daemon is None:
+            raise RuntimeError("private supervisor is unavailable for shutdown")
         self.daemon.wait(timeout=30, expected=0)
         self.closed = True
 

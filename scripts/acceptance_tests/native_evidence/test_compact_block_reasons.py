@@ -308,7 +308,9 @@ class ProducerValidatorTests(unittest.TestCase):
     def test_legacy_blocked_source_without_a_reason_serializes_unclassified(self):
         root, directory, value, code = self.build("legacy-source")
         self.assertEqual(code, 0)
-        for case in value["cases"]:
+        cases = value["cases"]
+        assert isinstance(cases, list)
+        for case in cases:
             self.assertEqual(case["evidence_status"], "RESOLVED")
             self.assertEqual(self.compact_of(case)["block_reason"], BlockReason.UNCLASSIFIED.value)
         evidence.validate_aggregate_receipt(root / evidence.AGGREGATE_RECEIPT_NAME)
@@ -444,7 +446,9 @@ class ProducerValidatorTests(unittest.TestCase):
                 root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
                 tag="v1.2.3", source_revision="a" * 40)
         self.assertEqual(code, 0)
-        for case in value["cases"]:
+        cases = value["cases"]
+        assert isinstance(cases, list)
+        for case in cases:
             compact = self.compact_of(case)
             self.assertEqual((compact["schema_version"], "block_reason" in compact), (SCHEMA_VERSION, False))
             self.assertIs(compact_block_reason(compact), BlockReason.UNCLASSIFIED)

@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
+from scripts.acceptance_tests.record_fixtures import object_at
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
@@ -23,7 +24,7 @@ class CanonicalEncodingTests(unittest.TestCase):
         self.assertEqual(canonical_go_json(value, newline=False), expected)
 
     def test_task_encoding_keeps_field_order_and_go_escaping(self):
-        task = {
+        task: dict[str, object] = {
             "brief_length": 1, "brief_sha256": "c" * 64, "budget_nanos": 1,
             "requested_config": {"permission": "read-only", "model": "雪<&>\u2028\u2029"},
             "canonical_cwd": "/workspace", "mode": "read-only", "provider": "pi:json",
@@ -40,7 +41,7 @@ class CanonicalEncodingTests(unittest.TestCase):
         for value, cause in ((float("nan"), ValueError), (object(), TypeError),
                              ("\ud800", UnicodeEncodeError)):
             with self.subTest(value_type=type(value).__name__):
-                task["requested_config"]["model"] = value
+                object_at(task, "requested_config")["model"] = value
                 with self.assertRaisesRegex(
                         AcceptanceFailure, "inspection task cannot be canonically encoded") as raised:
                     _canonical_task_bytes(task)
@@ -86,9 +87,15 @@ class FoundationPolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(AcceptanceFailure, "termination binding mismatch"):
                     self.validate_termination(changed, {"result": "success"})
 
+    def test_malformed_termination_cause_is_an_evidence_failure(self):
+        for cause in ([], {}, None):
+            with self.subTest(cause=cause):
+                with self.assertRaisesRegex(AcceptanceFailure, "termination binding mismatch"):
+                    self.validate_termination(self.termination(cause), {"result": "success"})
+
     def test_recovered_absence_cannot_be_projected_as_inspection_success(self):
-        result = {"reason": "eligible"}
-        completion = {"native_exit": "successful-exit"}
+        result: dict[str, object] = {"reason": "eligible"}
+        completion: dict[str, object] = {"native_exit": "successful-exit"}
         lifetime = {"worker_wait": {"result": "absent"}, "termination": self.termination()}
         with patch.object(Path, "open", side_effect=AssertionError("unexpected I/O")):
             with self.assertRaisesRegex(AcceptanceFailure, "successful inspection proof is incomplete"):

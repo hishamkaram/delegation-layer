@@ -162,8 +162,9 @@ class BuildInputs:
 def expected_inventory(version: str) -> tuple[tuple[str, ArtifactKind, str | None, str | None], ...]:
     """Return the exact (path, kind, os, arch) inventory, sorted by path."""
     tag = "v" + version
-    entries = [(expected_archive({"os": os_name, "arch": arch}, tag), ArtifactKind.ARCHIVE, os_name, arch)
-               for os_name, arch in PLATFORMS]
+    entries: list[tuple[str, ArtifactKind, str | None, str | None]] = [
+        (expected_archive({"os": os_name, "arch": arch}, tag), ArtifactKind.ARCHIVE, os_name, arch)
+        for os_name, arch in PLATFORMS]
     entries.extend((
         (CHECKSUMS_PATH, ArtifactKind.CHECKSUMS, None, None),
         (npm_package_path(version), ArtifactKind.NPM_PACKAGE, None, None),
@@ -260,11 +261,16 @@ def _parse_artifact(value: object) -> ArtifactEntry:
         kind = ArtifactKind(fields["kind"])
     except ValueError:
         raise VerificationError("candidate_artifact_invalid", STAGE) from None
-    for key in ("os", "arch"):
-        if fields[key] is not None and not isinstance(fields[key], str):
-            raise VerificationError("candidate_artifact_invalid", STAGE)
-    return ArtifactEntry(path=fields["path"], kind=kind, os=fields["os"], arch=fields["arch"],
-                         size=fields["size"], sha256=fields["sha256"])
+    os_name, arch = fields["os"], fields["arch"]
+    if ((os_name is not None and not isinstance(os_name, str)) or
+            (arch is not None and not isinstance(arch, str))):
+        raise VerificationError("candidate_artifact_invalid", STAGE)
+    path, size, digest = fields["path"], fields["size"], fields["sha256"]
+    if not isinstance(path, str) or not _safe_relative_path(path):
+        raise VerificationError("candidate_artifact_path_invalid", STAGE)
+    if not isinstance(size, int) or not isinstance(digest, str):
+        raise VerificationError("candidate_artifact_invalid", STAGE)
+    return ArtifactEntry(path=path, kind=kind, os=os_name, arch=arch, size=size, sha256=digest)
 
 
 def _parse_build(value: object) -> BuildInputs:
@@ -272,11 +278,14 @@ def _parse_build(value: object) -> BuildInputs:
         "goreleaser_config_sha256", "go_sum_sha256",
         "toolchains"}), STAGE)
     tools = exact_fields(fields["toolchains"], frozenset({"go", "goreleaser", "python", "node"}), STAGE)
+    toolchains = Toolchains(go=text(tools["go"], VERSION_RE, STAGE),
+                            goreleaser=text(tools["goreleaser"], VERSION_RE, STAGE),
+                            python=text(tools["python"], VERSION_RE, STAGE),
+                            node=text(tools["node"], VERSION_RE, STAGE))
     return BuildInputs(
-        goreleaser_config_sha256=fields["goreleaser_config_sha256"],
-        go_sum_sha256=fields["go_sum_sha256"],
-        toolchains=Toolchains(go=tools["go"], goreleaser=tools["goreleaser"],
-                              python=tools["python"], node=tools["node"]),
+        goreleaser_config_sha256=sha256_hex(fields["goreleaser_config_sha256"], STAGE),
+        go_sum_sha256=sha256_hex(fields["go_sum_sha256"], STAGE),
+        toolchains=toolchains,
     )
 
 
@@ -288,10 +297,16 @@ def parse_manifest(data: bytes) -> CandidateManifest:
         "schema_version", "kind", "version", "build_tag", "source", "build", "artifacts"}), STAGE)
     source = exact_fields(fields["source"], frozenset({"commit", "tree", "base_commit"}), STAGE)
     artifacts = object_list(fields["artifacts"], max_items=MAX_ARTIFACT_ENTRIES, stage=STAGE)
+    source_identity = SourceIdentity(commit=revision(source["commit"], STAGE),
+                                     tree=revision(source["tree"], STAGE),
+                                     base_commit=revision(source["base_commit"], STAGE))
+    build = _parse_build(fields["build"])
+    entries = tuple(_parse_artifact(item) for item in artifacts)
+    version = text(fields["version"], VERSION_RE, STAGE)
+    build_tag = fields["build_tag"]
+    if not isinstance(build_tag, str):
+        raise VerificationError("candidate_build_tag_mismatch", STAGE)
     return CandidateManifest(
-        version=fields["version"], build_tag=fields["build_tag"],
-        source=SourceIdentity(commit=source["commit"], tree=source["tree"],
-                              base_commit=source["base_commit"]),
-        build=_parse_build(fields["build"]),
-        artifacts=tuple(_parse_artifact(item) for item in artifacts),
+        version=version, build_tag=build_tag,
+        source=source_identity, build=build, artifacts=entries,
     )

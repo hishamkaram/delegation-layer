@@ -6,7 +6,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from scripts.delegate_acceptance.evidence.validation import _task_identity, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _task_identity, require
 from scripts.delegate_acceptance.tasks.runtime_metadata import (
     _provider_runtime_identity, validate_provider_runtime_metadata,
 )
@@ -45,8 +45,8 @@ class ProviderRuntimeBindings:
             if isinstance(policy, dict) and "runtime_sha256" in policy:
                 historical["provider_sha256"] = policy["runtime_sha256"]
             identity = _provider_runtime_identity(historical, "admitted", f"task {task_id}")
-        require(isinstance(identity, dict),
-                f"task {task_id} provider runtime identity is unavailable")
+        if not isinstance(identity, dict):
+            raise AcceptanceFailure(f"task {task_id} provider runtime identity is unavailable")
         existing = self._by_task_id.get(task_id)
         require(existing is None or existing == identity,
                 f"task {task_id} changed its admitted provider runtime identity")

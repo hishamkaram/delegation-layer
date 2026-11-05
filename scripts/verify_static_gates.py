@@ -51,9 +51,14 @@ def lint_fixtures(directory: Path) -> None:
         prove("ESLint", analysis.commands("javascript")[0], Path(local) / "fixture.mjs",
               "function example() { try { return 1; } finally { return 2; } }\nexample();\n",
               "function example() { return 1; }\nexample();\n", "no-unsafe-finally")
-    prove("actionlint", analysis.commands("workflows")[0],
+    prove("jactionlint", analysis.commands("workflows")[0],
           directory / "fixture.yml", "name: test\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo '${{ invalid.expression }}'\n",
           "name: test\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo valid\n", "undefined")
+    queue_workflow = ("name: test\non: push\nconcurrency:\n  group: fixture\n  queue: {queue}\n"
+                      "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo valid\n")
+    prove("jactionlint concurrency queue", analysis.commands("workflows")[0],
+          directory / "fixture.yml", queue_workflow.format(queue="invalid"),
+          queue_workflow.format(queue="max"), "queue")
 
 
 def type_fixtures(directory: Path) -> None:
@@ -64,6 +69,16 @@ def type_fixtures(directory: Path) -> None:
               "invalid-assignment")
 
 
+def security_fixtures(directory: Path) -> None:
+    workflow = ("name: test\non: push\npermissions:\n  contents: read\n"
+                "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+                "      - uses: actions/checkout@{revision}\n"
+                "        with:\n          persist-credentials: false\n")
+    prove("zizmor unpinned action", analysis.commands("zizmor")[0], directory / "fixture.yml",
+          workflow.format(revision="v4"),
+          workflow.format(revision="fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"), "unpinned-uses")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--diagnostic", action="store_true")
@@ -71,10 +86,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="static-proof-hidden-") as temporary:
         directory = Path(temporary) / ".hidden parent"
         directory.mkdir()
-        if args.diagnostic:
-            type_fixtures(directory)
-        else:
+        if not args.diagnostic:
             lint_fixtures(directory)
+        type_fixtures(directory)
+        security_fixtures(directory)
 
 
 if __name__ == "__main__":

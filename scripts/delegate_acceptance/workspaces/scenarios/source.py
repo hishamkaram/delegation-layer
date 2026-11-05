@@ -67,7 +67,13 @@ def _git(
     timeout: float = 30,
 ) -> tuple[int, bytes]:
     process = _git_process(context, arguments, cwd, label=label, expected=expected, timeout=timeout)
-    return process.result["exit_code"], process.output(MAX_RESPONSE_BYTES)
+    result = process.result
+    if result is None:
+        raise RuntimeError("git command omitted its observed exit: " + label)
+    code = result["exit_code"]
+    if type(code) is not int:
+        raise RuntimeError("git command omitted its observed exit: " + label)
+    return code, process.output(MAX_RESPONSE_BYTES)
 
 
 def _git_ok(context: WorkspaceContext, arguments: list[str], cwd: Path, *, label: str) -> bytes:

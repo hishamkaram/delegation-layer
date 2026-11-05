@@ -705,6 +705,7 @@ class LegacyDefaultPathTest(unittest.TestCase):
             self.exercise()
         self.assertEqual((caught.exception.code, caught.exception.stage), ("command_timeout", "delegate-version"))
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         settle_retained(self, self.tree, fault, (self.tree.root / "home", self.bin))
 

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.files import digest, read_json
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from pathlib import Path
 
 
 def verify_collected_outcome(collected: object, directory: Path, expected: str) -> tuple[dict[str, object], bytes]:
     """Bind a public collection response to the immutable outcome and bytes."""
-    require(isinstance(collected, dict), "collection response is not an object")
+    if not (isinstance(collected, dict)):
+        raise AcceptanceFailure("collection response is not an object")
     outcome = read_json(directory / "outcome.json")
-    require(isinstance(outcome, dict), "sole outcome authority is not an object")
+    if not (isinstance(outcome, dict)):
+        raise AcceptanceFailure("sole outcome authority is not an object")
     require(collected.get("outcome") == outcome, "CLI and sole outcome authority disagree")
     require(outcome.get("verdict") == expected, "collected outcome mismatch")
     return outcome, read_outcome_payload(directory, outcome)
@@ -22,12 +24,15 @@ def read_outcome_payload(directory: Path, outcome: dict[str, object]) -> bytes:
     """Read only the protocol's regular task-local publication file."""
     names = {"committed": "result.txt", "rejected": "publish.reject"}
     expected = names.get(outcome.get("verdict"))
-    require(expected is not None, "outcome verdict has no publication payload")
+    if expected is None:
+        raise AcceptanceFailure("outcome verdict has no publication payload")
     payload = outcome.get("payload")
-    require(isinstance(payload, dict), "outcome payload descriptor is absent")
+    if not (isinstance(payload, dict)):
+        raise AcceptanceFailure("outcome payload descriptor is absent")
     require(payload.get("basename") == expected, "outcome payload basename is invalid")
     length = payload.get("length")
-    require(type(length) is int and length >= 0, "outcome payload length is invalid")
+    if not (type(length) is int and length >= 0):
+        raise AcceptanceFailure("outcome payload length is invalid")
     path = directory / expected
     require(directory.is_dir() and not directory.is_symlink() and
             path.is_file() and not path.is_symlink(),

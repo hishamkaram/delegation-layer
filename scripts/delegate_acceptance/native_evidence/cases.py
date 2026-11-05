@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import prepare_directory_cleanup
@@ -40,8 +42,8 @@ def _sanitize_case(
         source: dict[str, object] | None,
         source_digest: str | None,
         cleanup: dict[str, object],
-        before: dict[str, object],
-        after: dict[str, object],
+        before: Mapping[str, object],
+        after: Mapping[str, object],
         evidence_status: str,
         evidence_error: str | None,
         source_proof: dict[str, object],

@@ -1,8 +1,11 @@
 """Cleanup ownership checks for the CCR fixture gate."""
 
+import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +16,8 @@ import acceptance_ccr_fixture as gate
 from acceptance_supervisor_common import DirectoryOwner
 from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import acceptance_lifecycle as lifecycle_impl
+from scripts.delegate_acceptance.processes.operations import Processes
+from scripts.delegate_acceptance.hermetic.contract import status_document, status_job
 
 
 class FixtureCleanupTests(unittest.TestCase):
@@ -140,6 +145,13 @@ class FixtureCleanupTests(unittest.TestCase):
             self.assertFalse(profile.exists())
             self.assertEqual(run.fixture_directories, ())
 
+    def test_finalize_forwards_blocked_state_to_native_owner(self):
+        run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+        run.fixture_directories = ()
+        with patch.object(gate.NativeAcceptance, "finalize", return_value=True) as finalize:
+            self.assertTrue(run.finalize(False, blocked=True))
+        finalize.assert_called_once_with(False, blocked=True)
+
     def test_finalize_retains_fixture_profile_until_native_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="ccr-fixture-retain-profile-unit-") as temporary:
             output = Path(temporary) / "evidence"
@@ -220,9 +232,10 @@ class FixturePublicationTests(unittest.TestCase):
         track_directory_pins(self, run.owned_directories + run.fixture_directories)
         run.output, run.base, run.state = self.output, base.directory, state.directory
         run.workspace, run.briefs = workspace.directory, briefs.directory
-        run.processes = SimpleNamespace(capture_root=raw)
+        run.processes = object.__new__(Processes)
+        run.processes.capture_root = raw
         run.closed, run.success_candidate = True, None
-        run.args, run.mode = SimpleNamespace(model="ok"), "read-only"
+        run.args, run.mode = argparse.Namespace(model="ok"), "read-only"
         run.tasks, run.numeric_ids = {}, {}
         run.root_id = ROOT_ID
         run.provider_executable = Path("/ccr")
@@ -267,15 +280,19 @@ class FixturePublicationTests(unittest.TestCase):
             return SimpleNamespace(json=lambda: response, result={"exit_code": exit_code})
 
         def client(name, _args):
-            rows = {str(number): {"status": {"Done": {}}} for number in run.numeric_ids.values()}
-            return SimpleNamespace(json=lambda: {"tasks": rows})
+            capture = run.output / "processes" / name
+            capture.mkdir()
+            rows = [status_job(number, "fixture:" + str(number), "ended")
+                    for number in run.numeric_ids.values()]
+            (capture / "stdout").write_text(json.dumps(status_document(rows)))
+            return SimpleNamespace(directory=capture, result={"exit_code": 0, "natural_wait": True})
 
-        run.direct = lambda *_args, **_kwargs: None
-        run.setup = lambda: None
-        run.ops = SimpleNamespace(client=client)
-        run.dispatch, run.command = dispatch, command
-        run.wait_done = lambda *_args: None
-        run.session_ref = lambda task_id: sessions[task_id]
+        patched_cli = patch.multiple(
+            run, create=True, direct=lambda *_args, **_kwargs: None, setup=lambda: None,
+            ops=SimpleNamespace(client=client), dispatch=dispatch, command=command,
+            wait_done=lambda *_args: None, session_ref=lambda task_id: sessions[task_id])
+        patched_cli.start()
+        self.addCleanup(patched_cli.stop)
 
     def main(self, run: gate.FixtureAcceptance, *patches):
         argv = ["acceptance_ccr_fixture.py", "--output", str(self.output)]
@@ -307,8 +324,12 @@ class FixturePublicationTests(unittest.TestCase):
         self.assertEqual(observed, [(True, False, False)])
         data = (self.output / lifecycle_impl.SUCCESS_CANDIDATE_NAME).read_bytes()
         self.assertEqual((self.output / "success.json").read_bytes(), data)
-        self.assertTrue(run.success_candidate.confirmed)
-        self.assertEqual(run.success_candidate.sha256, hashlib.sha256(data).hexdigest())
+        candidate = run.success_candidate
+        self.assertIsNotNone(candidate)
+        if candidate is None:
+            self.fail("successful run did not commit its candidate")
+        self.assertTrue(candidate.confirmed)
+        self.assertEqual(candidate.sha256, hashlib.sha256(data).hexdigest())
         receipt = json.loads(data)
         self.assertEqual((receipt["gate"], receipt["status"]), (gate.FIXTURE_GATE, "passed"))
         self.assertEqual(receipt["tasks"], run.tasks)
@@ -417,6 +438,30 @@ class FixturePublicationTests(unittest.TestCase):
 
 
 class FixtureWorkflowTests(unittest.TestCase):
+    def test_provider_lock_covers_each_supported_native_platform(self):
+        directory = Path(__file__).resolve().parents[1] / "tools/ccr-provider"
+        manifest = json.loads((directory / "package.json").read_text())
+        locked = json.loads((directory / "package-lock.json").read_text())
+        self.assertTrue(manifest["private"])
+        self.assertEqual(manifest["dependencies"], {"@anthropic-ai/claude-code": "2.1.318"})
+        self.assertEqual(manifest["allowScripts"], {"@anthropic-ai/claude-code@2.1.318": True})
+        packages = locked["packages"]
+        self.assertEqual(packages[""]["dependencies"], manifest["dependencies"])
+        wrapper = packages["node_modules/@anthropic-ai/claude-code"]
+        self.assertTrue(wrapper["hasInstallScript"])
+        self.assertEqual(wrapper["version"], "2.1.318")
+        for platform in ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"):
+            with self.subTest(platform=platform):
+                name = f"@anthropic-ai/claude-code-{platform}"
+                self.assertEqual(wrapper["optionalDependencies"][name], wrapper["version"])
+                native = packages[f"node_modules/{name}"]
+                self.assertTrue(native["optional"])
+                self.assertEqual(native["version"], wrapper["version"])
+                self.assertEqual(native["os"], [platform.split("-")[0]])
+                self.assertEqual(native["cpu"], [platform.split("-")[1]])
+                self.assertRegex(native["integrity"], r"^sha512-[A-Za-z0-9+/]{86}==$")
+                self.assertTrue(native["resolved"].startswith("https://registry.npmjs.org/"))
+
     def test_ci_retains_only_existing_public_control_records(self):
         workflow = Path(__file__).resolve().parents[1] / ".github/workflows/ccr-integration.yml"
         upload = workflow.read_text().split("      - name: Retain sanitized result\n", 1)[1]
@@ -427,6 +472,89 @@ class FixtureWorkflowTests(unittest.TestCase):
             "success.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
             "failure-diagnostics.json", "failure-cleanup.json", "failure-cleanup-expired.json")})
         self.assertIn("if: always()", upload)
+
+
+class ProviderInstallationWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="ccr-provider-workflow-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.repository = Path(__file__).resolve().parents[1]
+        workflow = (self.repository / ".github/workflows/ccr-integration.yml").read_text()
+        step = workflow.split("      - name: Install locked Claude Code and test supervisor\n", 1)[1]
+        body = step.split("      - name:", 1)[0].split("        run: |\n", 1)[1]
+        self.script = "\n".join(line[10:] for line in body.splitlines())
+        self.prefix = self.root / "runner temp/ccr-provider"
+        self.record = self.root / "npm-arguments"
+        self.events = self.root / "events"
+        self.github_path = self.root / "github-path"
+        self.environment = {"PATH": str(self.root / "stubs") + os.pathsep + os.environ["PATH"],
+                            "RUNNER_TEMP": str(self.prefix.parent), "GITHUB_PATH": str(self.github_path),
+                            "STUB_NPM_RECORD": str(self.record), "STUB_EVENTS": str(self.events)}
+        source = self.root / "tools/ccr-provider"
+        source.mkdir(parents=True)
+        for name in ("package.json", "package-lock.json"):
+            (source / name).write_bytes((self.repository / "tools/ccr-provider" / name).read_bytes())
+        self.write_executable("scripts/install-test-supervisor.sh", '#!/bin/sh\necho supervisor >> "$STUB_EVENTS"\n')
+        self.write_executable("stubs/npm", '''#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$STUB_NPM_RECORD"
+test "$1" = ci
+test "$2" = --prefix
+prefix="$3"
+test -f "$prefix/package.json"
+test -f "$prefix/package-lock.json"
+if [ "${STUB_INSTALL_FAILURE:-}" = 1 ]; then exit 23; fi
+mkdir -p "$prefix/node_modules/.bin"
+printf '%s\\n' '#!/bin/sh' 'test ! -e "$GITHUB_PATH" || exit 99' \
+    'echo claude >> "$STUB_EVENTS"' \
+    'if [ "${STUB_NATIVE_FAILURE:-}" = 1 ]; then exit 24; fi' \
+    'printf "%s\\n" "${STUB_CLAUDE_VERSION:-2.1.318} (Claude Code)"' > "$prefix/node_modules/.bin/claude"
+chmod +x "$prefix/node_modules/.bin/claude"
+''')
+
+    def write_executable(self, relative, content):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def run_install(self):
+        return subprocess.run(["bash", "-euo", "pipefail", "-c", self.script], cwd=self.root,
+                              env=self.environment, capture_output=True, text=True, check=False, timeout=30)
+
+    def test_install_uses_copied_lock_required_scripts_and_isolated_path(self):
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.record.read_text().splitlines(), [
+            "ci", "--prefix", str(self.prefix), "--include=optional", "--ignore-scripts=false", "--no-audit", "--no-fund"])
+        for name in ("package.json", "package-lock.json"):
+            self.assertEqual((self.prefix / name).read_bytes(),
+                             (self.repository / "tools/ccr-provider" / name).read_bytes())
+        self.assertEqual(self.github_path.read_text().splitlines(), [str(self.prefix / "node_modules/.bin")])
+        self.assertEqual(self.events.read_text().splitlines(), ["claude", "supervisor"])
+
+    def test_install_failure_does_not_expose_provider_or_run_supervisor_install(self):
+        self.environment["STUB_INSTALL_FAILURE"] = "1"
+        result = self.run_install()
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertFalse(self.github_path.exists())
+        self.assertFalse(self.events.exists())
+
+    def test_wrong_native_version_is_rejected_before_exposing_provider(self):
+        self.environment["STUB_CLAUDE_VERSION"] = "2.1.317"
+        result = self.run_install()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Expected Claude Code 2.1.318; received 2.1.317", result.stderr)
+        self.assertFalse(self.github_path.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
+
+    def test_native_check_failure_does_not_expose_provider_or_run_supervisor_install(self):
+        self.environment["STUB_NATIVE_FAILURE"] = "1"
+        result = self.run_install()
+        self.assertEqual(result.returncode, 24, result.stderr)
+        self.assertFalse(self.github_path.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
 
 
 if __name__ == "__main__":

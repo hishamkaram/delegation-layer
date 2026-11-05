@@ -40,19 +40,20 @@ def _without_model_discovery_queue(owner, status: dict[str, object]) -> dict[str
         return status
     rows = status.get("tasks")
     groups = status.get("groups")
-    require(isinstance(rows, dict) and isinstance(groups, dict),
-            "private queue status is malformed")
+    if not (isinstance(rows, dict) and isinstance(groups, dict)):
+        raise AcceptanceFailure("private queue status is malformed")
     model_group = INSPECTION_GROUP_PREFIX + root_id
     if model_group not in groups:
         return status
     retained_rows: dict[object, object] = {}
     model_rows: dict[object, object] = {}
     for numeric_id, row in rows.items():
-        require(isinstance(row, dict), "private queue contains a malformed row")
+        if not (isinstance(row, dict)):
+            raise AcceptanceFailure("private queue contains a malformed row")
         if row.get("group") == model_group:
             label = row.get("label")
-            require(isinstance(label, str) and label.startswith(model_group + "-"),
-                    "model discovery queue label is invalid")
+            if not (isinstance(label, str) and label.startswith(model_group + "-")):
+                raise AcceptanceFailure("model discovery queue label is invalid")
             require(done_result(row) is not None,
                     "model discovery queue row is not terminal")
             model_rows[numeric_id] = row
@@ -108,14 +109,14 @@ def _validate_inspection_runtime_bindings(
     acceptance = owner
     for task_id, journal in journals.items():
         identity = acceptance._provider_bindings.identity_for(task_id)
-        require(isinstance(identity, Mapping),
-                f"inspection task has no admitted provider runtime identity: {task_id}")
+        if not (isinstance(identity, Mapping)):
+            raise AcceptanceFailure(f"inspection task has no admitted provider runtime identity: {task_id}")
         request = journal.get("request")
         binding = request.get("binding") if isinstance(request, dict) else None
-        require(isinstance(binding, dict) and
+        if not (isinstance(binding, dict) and
                 binding.get("helper_executable") == identity.get("executable") and
-                binding.get("helper_sha256") == identity.get("sha256"),
-                f"inspection helper binding does not match admitted runtime for {task_id}")
+                binding.get("helper_sha256") == identity.get("sha256")):
+            raise AcceptanceFailure(f"inspection helper binding does not match admitted runtime for {task_id}")
 
 def _terminal_private_queue(owner, status: dict[str, object]) -> bool:
     acceptance = owner
@@ -148,8 +149,9 @@ def collect(owner, name: str, task_id: str) -> dict[str, object]:
         provider_exit = read_json(directory / "provider.exit")
     except (OSError, ValueError, TypeError, RecursionError, RuntimeError) as error:
         raise AcceptanceFailure(f"{name} provider evidence is malformed") from error
-    require(isinstance(provider_exit, dict), f"{name} provider evidence is malformed")
-    require(provider_exit.get("root_id") == acceptance.root_id and
+    if not (isinstance(provider_exit, dict)):
+        raise AcceptanceFailure(f"{name} provider evidence is malformed")
+    if not (provider_exit.get("root_id") == acceptance.root_id and
             provider_exit.get("task_id") == task_id and
             provider_exit.get("invocation_state") == "started" and
             isinstance(provider_exit.get("error"), str) and
@@ -159,16 +161,16 @@ def collect(owner, name: str, task_id: str) -> dict[str, object]:
             len(provider_exit["manifest_sha256"]) == 64 and
             all(character in "0123456789abcdef"
                 for character in provider_exit["manifest_sha256"]) and
-            outcome.get("evidence_sha256") == provider_exit.get("manifest_sha256"),
-            f"{name} lacks sealed provider evidence")
+            outcome.get("evidence_sha256") == provider_exit.get("manifest_sha256")):
+        raise AcceptanceFailure(f"{name} lacks sealed provider evidence")
     if not rejected:
         require(provider_exit.get("exit_code") == 0 and provider_exit.get("error") == "",
                 f"{name} lacks sealed provider evidence")
     collection_payload = response.get("payload")
-    require(isinstance(collection_payload, dict) and
+    if not (isinstance(collection_payload, dict) and
             collection_payload == outcome.get("payload") and
-            response.get("evidence_sha256") == outcome.get("evidence_sha256"),
-            f"{name} collection receipt descriptors are inconsistent")
+            response.get("evidence_sha256") == outcome.get("evidence_sha256")):
+        raise AcceptanceFailure(f"{name} collection receipt descriptors are inconsistent")
     if authentication_unavailable(directory):
         raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
                              reason=BlockReason.AUTH_UNAVAILABLE)
@@ -227,10 +229,10 @@ def _validate_provider_metadata_binding(
         owner, task_id: str, directory: Path,
         meta: dict[str, object], spec_digest: object) -> None:
     acceptance = owner
-    require(meta.get("root_id") == acceptance.root_id and meta.get("task_id") == task_id and
+    if not (meta.get("root_id") == acceptance.root_id and meta.get("task_id") == task_id and
             isinstance(spec_digest, str) and _hex_digest(spec_digest) and
-            spec_digest == digest(directory / "task.json"),
-            f"task {task_id} metadata binding is invalid")
+            spec_digest == digest(directory / "task.json")):
+        raise AcceptanceFailure(f"task {task_id} metadata binding is invalid")
 
 def _request_binding(owner, task_id: str, require_launch_evidence: bool = False,
                      require_started_evidence: bool = False,
@@ -256,13 +258,13 @@ def _request_binding(owner, task_id: str, require_launch_evidence: bool = False,
             f"task {task_id} changed its immutable binding")
     requested = record.get("requested_config")
     brief = directory / "brief.md"
-    require(isinstance(requested, dict) and requested.get("permission") == acceptance.mode and
+    if not (isinstance(requested, dict) and requested.get("permission") == acceptance.mode and
             requested.get("budget") == budget and
             record.get("budget_nanos") == budget_nanos and
             brief.is_file() and not brief.is_symlink() and
             record.get("brief_length") == brief.stat().st_size and
-            record.get("brief_sha256") == digest(brief),
-            f"task {task_id} request binding is invalid")
+            record.get("brief_sha256") == digest(brief)):
+        raise AcceptanceFailure(f"task {task_id} request binding is invalid")
     if acceptance.scenario == "interactive":
         require(requested.get("interactive") is True,
                 f"task {task_id} did not persist interactive mode")
@@ -298,18 +300,18 @@ def timeout_source_binding(owner, task_id: str) -> Path:
     args = getattr(acceptance, "args", None)
     requested_model = getattr(args, "model", None)
     requested_effort = getattr(args, "effort", None)
-    require(isinstance(requested, dict) and requested.get("permission") == acceptance.mode and
+    if not (isinstance(requested, dict) and requested.get("permission") == acceptance.mode and
             ((requested_model and requested.get("model") == requested_model) or
              (not requested_model and requested.get("model") in (None, ""))) and
             ((requested_effort and requested.get("effort") == requested_effort) or
              (not requested_effort and requested.get("effort") in (None, ""))) and
-            record.get("prior_session") is None,
-            "timed-out source request binding changed")
+            record.get("prior_session") is None):
+        raise AcceptanceFailure("timed-out source request binding changed")
     reference = read_json(directory / "provider.ref.json")
-    require(reference.get("root_id") == acceptance.root_id and reference.get("task_id") == task_id and
+    if not (reference.get("root_id") == acceptance.root_id and reference.get("task_id") == task_id and
             reference.get("provider") == acceptance.provider and
-            isinstance(reference.get("conversation_id"), str) and bool(reference["conversation_id"]),
-            "timed-out source has no resumable provider session")
+            isinstance(reference.get("conversation_id"), str) and bool(reference["conversation_id"])):
+        raise AcceptanceFailure("timed-out source has no resumable provider session")
     require(not (directory / "outcome.json").exists() and not (directory / "result.txt").exists(),
             "timed-out source published terminal artifacts")
     if acceptance.provider == OPENCODE_PROVIDER:
@@ -420,12 +422,12 @@ def _validate_task_selection(owner, task_id: str, record: dict[str, object]) -> 
     args = getattr(acceptance, "args", None)
     requested_model = getattr(args, "model", None)
     requested_effort = getattr(args, "effort", None)
-    require(isinstance(requested, dict) and
+    if not (isinstance(requested, dict) and
             ((requested_model and requested.get("model") == requested_model) or
              (not requested_model and requested.get("model") in (None, ""))) and
             ((requested_effort and requested.get("effort") == requested_effort) or
-             (not requested_effort and requested.get("effort") in (None, ""))),
-            f"task {task_id} model or effort selection changed")
+             (not requested_effort and requested.get("effort") in (None, "")))):
+        raise AcceptanceFailure(f"task {task_id} model or effort selection changed")
     if acceptance.provider == "codex:review":
         require(requested.get("review_target") == {"kind": "uncommitted"},
                 f"task {task_id} Codex review target is not persisted")
@@ -433,28 +435,28 @@ def _validate_task_selection(owner, task_id: str, record: dict[str, object]) -> 
 def _validate_task_policy(owner, task_id: str, meta: dict[str, object]) -> dict[str, object]:
     acceptance = owner
     identity = acceptance._provider_bindings.identity_for(task_id)
-    require(isinstance(identity, Mapping),
-            f"task {task_id} admitted provider runtime identity is unavailable")
+    if not (isinstance(identity, Mapping)):
+        raise AcceptanceFailure(f"task {task_id} admitted provider runtime identity is unavailable")
     require(meta.get("containment") == acceptance.mode,
             f"task {task_id} metadata containment changed")
     effective = meta.get("effective_config")
     policy = effective.get("policy") if isinstance(effective, dict) else None
-    require(isinstance(effective, dict) and effective.get("containment") == acceptance.mode and
+    if not (isinstance(effective, dict) and effective.get("containment") == acceptance.mode and
             isinstance(effective.get("digest"), str) and
             isinstance(policy, dict) and policy.get("workspace") == str(acceptance.workspace) and
-            _optional_hex_digest(policy.get("runtime_sha256")),
-            f"task {task_id} effective policy binding is invalid")
+            _optional_hex_digest(policy.get("runtime_sha256"))):
+        raise AcceptanceFailure(f"task {task_id} effective policy binding is invalid")
     if acceptance.provider == "antigravity:print":
         expected_approval = "plan" if acceptance.mode == "read-only" else "always-proceed"
         require(effective.get("approval") == expected_approval,
                 f"task {task_id} AGY native approval mode is invalid")
     predicate = meta.get("predicate")
-    require(isinstance(predicate, dict) and predicate.get("adapter") == acceptance.provider and
+    if not (isinstance(predicate, dict) and predicate.get("adapter") == acceptance.provider and
             predicate.get("mode") == acceptance.mode and isinstance(predicate.get("version"), str) and
             bool(predicate["version"]) and isinstance(predicate.get("sha256"), str) and
             len(predicate["sha256"]) == 64 and
-            all(character in "0123456789abcdef" for character in predicate["sha256"]),
-            f"task {task_id} predicate binding is invalid")
+            all(character in "0123456789abcdef" for character in predicate["sha256"])):
+        raise AcceptanceFailure(f"task {task_id} predicate binding is invalid")
     return predicate
 
 def _validate_task_provider_receipts(
@@ -464,13 +466,13 @@ def _validate_task_provider_receipts(
     submit = read_json(directory / "submit.json")
     label = f"delegate:{acceptance.root_id}:{task_id}"
     supervisor = submit.get("supervisor")
-    require(submit.get("root_id") == acceptance.root_id and submit.get("task_id") == task_id and
+    if not (submit.get("root_id") == acceptance.root_id and submit.get("task_id") == task_id and
             submit.get("spec_sha256") == spec_digest and submit.get("meta_sha256") == meta_digest and
             submit.get("label") == label and isinstance(supervisor, dict) and
             supervisor.get("client_executable") == str(acceptance.pueue) and
             supervisor.get("config_path") == str(acceptance.config) and
-            supervisor.get("observed_version") == acceptance.pueue_version,
-            f"task {task_id} supervisor submission binding is invalid")
+            supervisor.get("observed_version") == acceptance.pueue_version):
+        raise AcceptanceFailure(f"task {task_id} supervisor submission binding is invalid")
     for name in ("provider.start", "provider.started.json"):
         acceptance._read_bound_provider_evidence(
             task_id, directory, name, meta_digest, spec_digest)
@@ -478,7 +480,7 @@ def _validate_task_provider_receipts(
     manifest_digest = provider_exit.get("manifest_sha256")
     if not isinstance(manifest_digest, str):
         raise AcceptanceFailure(f"task {task_id} provider seal binding is invalid")
-    require(provider_exit.get("root_id") == acceptance.root_id and
+    if not (provider_exit.get("root_id") == acceptance.root_id and
             provider_exit.get("task_id") == task_id and
             provider_exit.get("spec_sha256") == spec_digest and
             provider_exit.get("meta_sha256") == meta_digest and
@@ -487,8 +489,8 @@ def _validate_task_provider_receipts(
             provider_exit.get("predicate") == predicate and
             isinstance(provider_exit.get("raw_manifest"), list) and
             len(manifest_digest) == 64 and
-            all(character in "0123456789abcdef" for character in manifest_digest),
-            f"task {task_id} provider seal binding is invalid")
+            all(character in "0123456789abcdef" for character in manifest_digest)):
+        raise AcceptanceFailure(f"task {task_id} provider seal binding is invalid")
     return manifest_digest
 
 def _validate_task_outcome(
@@ -498,11 +500,11 @@ def _validate_task_outcome(
     acceptance = owner
     reference = read_json(directory / "provider.ref.json")
     session = reference.get("conversation_id")
-    require(reference.get("root_id") == acceptance.root_id and reference.get("task_id") == task_id and
+    if not (reference.get("root_id") == acceptance.root_id and reference.get("task_id") == task_id and
             reference.get("spec_sha256") == spec_digest and
             reference.get("meta_sha256") == meta_digest and reference.get("provider") == acceptance.provider and
-            isinstance(session, str) and bool(session),
-            f"task {task_id} provider session binding is invalid")
+            isinstance(session, str) and bool(session)):
+        raise AcceptanceFailure(f"task {task_id} provider session binding is invalid")
     outcome = read_json(directory / "outcome.json")
     require(outcome.get("root_id") == acceptance.root_id and outcome.get("task_id") == task_id and
             outcome.get("spec_sha256") == spec_digest and outcome.get("meta_sha256") == meta_digest and
@@ -513,10 +515,10 @@ def _validate_task_outcome(
     if predecessor is None:
         require(prior is None, f"task {task_id} unexpectedly has a predecessor")
         return
-    require(isinstance(prior, dict) and prior.get("provider") == acceptance.provider and
+    if not (isinstance(prior, dict) and prior.get("provider") == acceptance.provider and
             prior.get("predecessor_task_id") == predecessor and
-            prior.get("conversation_id") == predecessor_session,
-            f"task {task_id} lacks the exact predecessor session binding")
+            prior.get("conversation_id") == predecessor_session):
+        raise AcceptanceFailure(f"task {task_id} lacks the exact predecessor session binding")
 
 def session_ref(owner, task_id: str) -> str:
     acceptance = owner
@@ -525,8 +527,8 @@ def session_ref(owner, task_id: str) -> str:
             reference.get("provider") == acceptance.provider,
             f"task {task_id} provider reference identity changed")
     session = reference.get("conversation_id")
-    require(isinstance(session, str) and bool(session),
-            f"task {task_id} has no provider session identity")
+    if not (isinstance(session, str) and bool(session)):
+        raise AcceptanceFailure(f"task {task_id} has no provider session identity")
     return session
 
 def replay(owner, records: dict[str, dict[str, object]] | None = None,

@@ -57,7 +57,9 @@ def unproven_then_retry(fault: ChildFault):
     def body(case: support.CandidateCase) -> None:
         with mock.patch.object(commands, "run_bounded_command", fault):
             request = case.request()
-            checksums = request.files.checksums.read_bytes()
+            checksums_path = request.files.checksums
+            assert checksums_path is not None
+            checksums = checksums_path.read_bytes()
             with case.assertRaises(VerificationError) as caught:
                 case.verify(request, channels=SHELL)
             case.assertEqual((caught.exception.code, caught.exception.stage),
@@ -66,7 +68,7 @@ def unproven_then_retry(fault: ChildFault):
                 case.request(checksum="0" * 64)
             with case.assertRaises(AssertionError):
                 case.verify(request, channels=SHELL)
-        case.assertEqual(request.files.checksums.read_bytes(), checksums)
+        case.assertEqual(checksums_path.read_bytes(), checksums)
         case.assertEqual(len(list(case.parent.iterdir())), 1)
     return body
 
@@ -76,9 +78,12 @@ def unproven_with_hook(fault: ChildFault, hooks: list[str]):
     def body(case: support.CandidateCase) -> None:
         request = case.request()
 
+        checksums = request.files.checksums
+        assert checksums is not None
+
         def tamper(name: str) -> None:
             hooks.append(name)
-            request.files.checksums.write_text("tampered\n")
+            checksums.write_text("tampered\n")
 
         case.recording.after = tamper
         with mock.patch.object(commands, "run_bounded_command", fault), \
@@ -102,8 +107,13 @@ class Outcome:
         self.result, self.case, self.stderr, self.descriptors = result, case, stderr, descriptors
 
     @property
+    def opened_case(self) -> support.CandidateCase:
+        assert self.case is not None, "case setup did not open its fixture"
+        return self.case
+
+    @property
     def root(self) -> Path:
-        return self.case.root
+        return self.opened_case.root
 
 
 class FixtureDispositionTests(support.CandidateCase):
@@ -164,12 +174,12 @@ class FixtureDispositionTests(support.CandidateCase):
         self.assertTrue(outcome.result.wasSuccessful())
         self.assertIn("command_termination_failed", outcome.stderr)
         self.assertIn(str(outcome.root), outcome.stderr)
-        (workspace,) = outcome.case.parent.iterdir()
+        (workspace,) = outcome.opened_case.parent.iterdir()
         self.assertTrue((workspace / "shell" / "shim-requests.log").is_file())
         self.assertTrue((outcome.root / "candidate" / "checksums.txt").is_file())
         self.assertPinsConsumed(outcome)
         # The containing tree keeps the same fact, so its own cleanup cannot remove the retained child.
-        self.assertIs(self.tree.unresolved, outcome.case.tree.unresolved)
+        self.assertIs(self.tree.unresolved, outcome.opened_case.tree.unresolved)
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(self.tree.dispose())
         self.assertTrue(outcome.root.is_dir())
@@ -182,12 +192,13 @@ class FixtureDispositionTests(support.CandidateCase):
         fault = ChildFault(lambda argv: argv[:1] == ["delegate"])
         outcome = self.run_inner(unproven_default_path(fault))
         self.assertTrue(outcome.result.wasSuccessful())
-        unresolved = outcome.case.tree.unresolved
+        unresolved = outcome.opened_case.tree.unresolved
         self.assertIs(type(unresolved), BoundedCommandError)
+        assert isinstance(unresolved, BoundedCommandError)
         self.assertIs(unresolved.reason, CommandFailure.TIMEOUT)
         self.assertIs(self.tree.unresolved, unresolved)
         self.assertIn(f"(command_timeout): {outcome.root}", outcome.stderr)
-        (workspace,) = outcome.case.parent.iterdir()
+        (workspace,) = outcome.opened_case.parent.iterdir()
         self.assertTrue((workspace / "shell" / "bin" / "delegate").is_file())
         self.assertPinsConsumed(outcome)
         self.assertGreater(fault.launched, 0)
@@ -205,13 +216,13 @@ class FixtureDispositionTests(support.CandidateCase):
         pack_files = {path.name: path.read_bytes() for path in pack.root.iterdir()}
         # The proof: no child ever launched, so every retained tree may go.
         self.assertEqual((fault.launched, fault.unclosed), (0, 0))
-        for tree in [outcome.case.tree for outcome in (first, second) if outcome.case is not None] + [pack]:
+        for tree in [outcome.opened_case.tree for outcome in (first, second) if outcome.case is not None] + [pack]:
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertFalse(tree.dispose())
             tree.remove_retained()
         self.assertEqual([trace for _, trace in first.result.failures + first.result.errors], [])
         self.assertIs(type(fact), BoundedCommandError)
-        self.assertIs(first.case.tree.unresolved, fact)
+        self.assertIs(first.opened_case.tree.unresolved, fact)
         ((_, trace),) = second.result.failures
         self.assertEqual(second.result.errors, [])
         self.assertIn(f"{support.TREE_LABEL} holds an unresolved child: {pack.root}", trace)
@@ -230,15 +241,15 @@ class FixtureDispositionTests(support.CandidateCase):
         self.assertTrue(outcome.result.wasSuccessful())
         self.assertEqual(hooks, [])
         self.assertNotEqual(checksums, b"tampered\n")
-        self.assertIs(type(outcome.case.tree.unresolved), BoundedCommandError)
-        self.assertIs(self.tree.unresolved, outcome.case.tree.unresolved)
+        self.assertIs(type(outcome.opened_case.tree.unresolved), BoundedCommandError)
+        self.assertIs(self.tree.unresolved, outcome.opened_case.tree.unresolved)
         self.assertPinsConsumed(outcome)
 
     def test_cleanup_failure_is_reported_and_retains_the_tree(self):
         outcome = self.run_inner(displace_workspace)
         ((_, trace),) = outcome.result.errors
         self.assertIn("directory rollback failed", trace)
-        self.assertTrue((outcome.case.parent / "displaced" / "shell").is_dir())
+        self.assertTrue((outcome.opened_case.parent / "displaced" / "shell").is_dir())
         self.assertTrue(outcome.root.exists())
         self.assertPinsConsumed(outcome)
         self.finish_workspace()

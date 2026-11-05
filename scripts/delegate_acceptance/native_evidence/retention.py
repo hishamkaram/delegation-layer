@@ -197,7 +197,10 @@ def _prune_retention_victims(
         parent: Path, current_owner: dict[str, object], count: int,
         plan_path: Path, plan: dict[str, object]) -> list[str]:
     errors: list[str] = []
-    for victim in plan["victims"]:
+    victims = plan["victims"]
+    if not isinstance(victims, list):
+        raise EvidenceError("retention_plan_invalid")
+    for victim in victims:
         if not isinstance(victim, dict):
             raise EvidenceError("retention_plan_invalid")
         path = Path(str(victim.get("path", "")))
@@ -252,7 +255,10 @@ def _retention_result(
     retained_entries: list[tuple[Path, dict[str, object], int]] = []
     if current_entry is not None:
         retained_entries.append(current_entry)
-    for retained in plan["retained"]:
+    retained_values, victims = plan["retained"], plan["victims"]
+    if not isinstance(retained_values, list) or not isinstance(victims, list):
+        raise EvidenceError("retention_plan_invalid")
+    for retained in retained_values:
         if not isinstance(retained, dict):
             raise EvidenceError("retention_plan_invalid")
         path = Path(str(retained.get("path", "")))
@@ -265,7 +271,7 @@ def _retention_result(
             continue
         retained_entries.append((path, resolved[0], order))
     after_summary = _aggregate_root_summary(retained_entries)
-    before_summary = _summary_with_removed(after_summary, plan["victims"])
+    before_summary = _summary_with_removed(after_summary, victims)
     pruned = [
         {
             "path": victim["path"],
@@ -273,7 +279,7 @@ def _retention_result(
             "journal_path": victim["journal_path"],
             "journal_sha256": victim["journal_sha256"],
         }
-        for victim in plan["victims"]
+        for victim in victims
         if isinstance(victim, dict) and isinstance(victim.get("journal_sha256"), str)
     ]
     result = {
@@ -283,7 +289,7 @@ def _retention_result(
         "pruned": pruned,
         "errors": errors,
         "status": "complete" if (not errors and len(retained_entries) <= count
-                                   and len(pruned) == len(plan["victims"])
+                                   and len(pruned) == len(victims)
                                    and before_summary.get("complete") is True
                                    and after_summary.get("complete") is True) else "partial",
     }
@@ -332,7 +338,7 @@ def _publish_completed_retention_receipt(
     verdict = receipt.get("case_results_verdict")
     cases = receipt.get("cases")
     policy = receipt.get("policy")
-    if (verdict not in {"PASS", "BLOCKED", "FAIL"}
+    if (not isinstance(verdict, str) or verdict not in {"PASS", "BLOCKED", "FAIL"}
             or not isinstance(cases, list)
             or not isinstance(policy, dict)
             or type(policy.get("require_at_least_one_pass")) is not bool):
@@ -353,19 +359,17 @@ def _publish_completed_retention_receipt(
     evidence = receipt.get("evidence")
     if not isinstance(evidence, dict):
         raise EvidenceError("aggregate_evidence_invalid")
+    case_raw = evidence.get("case_raw")
     evidence["case_raw"] = {
-        "before": evidence.get("case_raw", {}).get("before")
-        if isinstance(evidence.get("case_raw"), dict) else _empty_summary(),
+        "before": case_raw.get("before") if isinstance(case_raw, dict) else _empty_summary(),
         "after": _tree_summary(root / CASE_ROOT_NAME),
     }
     evidence["compact_receipts"] = _tree_summary(root / COMPACT_RECEIPT_ROOT_NAME)
     _write_atomic(receipt_path, receipt, MAX_AGGREGATE_BYTES)
+    tag, revision = receipt.get("tag"), receipt.get("source_revision")
     validate_aggregate_receipt(
         receipt_path,
-        expected_tag=receipt.get("tag") if isinstance(receipt.get("tag"), str) else None,
-        expected_source_revision=(
-            receipt.get("source_revision")
-            if isinstance(receipt.get("source_revision"), str) else None
-        ),
+        expected_tag=tag if isinstance(tag, str) else None,
+        expected_source_revision=revision if isinstance(revision, str) else None,
     )
     return receipt

@@ -242,7 +242,8 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
             "model discovery created an ordinary task record")
 
     task_id = _record_model_discovery_identity(acceptance)
-    require(task_id is not None, "model discovery inspection journal is absent")
+    if task_id is None:
+        raise AcceptanceFailure("model discovery inspection journal is absent")
     validator = NativeTaskOps(acceptance.processes, acceptance.delegate, acceptance.runner, acceptance.pueue,
                               acceptance.models_state.parent, acceptance.models_state, acceptance.output,
                               managed_runner=acceptance.ops.managed_runner,
@@ -257,11 +258,15 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
     journal = journals[task_id]
     request = journal["request"]
     binding = request["binding"]
+    if not isinstance(binding, dict):
+        raise AcceptanceFailure("model discovery provider binding changed")
     helper_executable = binding.get("helper_executable")
     require(binding.get("definition_revision") == MODEL_DISCOVERY_DEFINITION_REVISION and
             helper_executable == str(acceptance.provider_executable),
             "model discovery provider binding changed")
     task = request["task"]
+    if not isinstance(task, dict):
+        raise AcceptanceFailure("model discovery request is not the bounded metadata operation")
     discovery_mode = PROFILES[acceptance.provider]["modes"][0]
     require(task.get("provider") == acceptance.provider and
             task.get("mode") == discovery_mode and
@@ -272,19 +277,21 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
             task.get("brief_sha256") == hashlib.sha256(MODEL_DISCOVERY_BRIEF).hexdigest(),
             "model discovery request is not the bounded metadata operation")
     result = journal["result"]
-    require(isinstance(result, dict), "model discovery has no completed result")
+    if not (isinstance(result, dict)):
+        raise AcceptanceFailure("model discovery has no completed result")
     if result.get("reason") == "eligible":
-        require(isinstance(acceptance.model_discovery, dict), "model discovery response is absent")
+        if not (isinstance(acceptance.model_discovery, dict)):
+            raise AcceptanceFailure("model discovery response is absent")
         expected = {key: acceptance.model_discovery.get(key)
                     for key in ("status", "reason_code", "complete", "source", "models", "efforts")}
         require(result.get("facts") == expected, "model discovery facts changed")
     groups, rows = status.get("groups"), status.get("tasks")
     validator._validate_group_snapshot(groups, {"default", model_group})
-    require(isinstance(rows, dict) and len(rows) == 1,
-            "model discovery queue membership is not exact")
+    if not (isinstance(rows, dict) and len(rows) == 1):
+        raise AcceptanceFailure("model discovery queue membership is not exact")
     row_key, row = next(iter(rows.items()))
-    require(isinstance(row, dict) and row_key == str(journal["numeric_task_id"]),
-            "model discovery queue row is malformed")
+    if not (isinstance(row, dict) and row_key == str(journal["numeric_task_id"])):
+        raise AcceptanceFailure("model discovery queue row is malformed")
     validator._validate_inspection_queue_row(row, journal, allow_failure=True)
 
 def setup(owner) -> None:
@@ -299,13 +306,15 @@ def setup(owner) -> None:
     discovery = parse_json_output(
         acceptance.direct("discovery", [acceptance.delegate, "providers", "--json"], timeout=30), "provider discovery")
     providers = discovery.get("providers")
-    require(isinstance(providers, list), "compiled discovery has no provider list")
+    if not (isinstance(providers, list)):
+        raise AcceptanceFailure("compiled discovery has no provider list")
     selected = next((item for item in providers
                      if isinstance(item, dict) and item.get("id") == acceptance.provider), None)
-    require(isinstance(selected, dict), "selected provider is absent from compiled discovery")
+    if not (isinstance(selected, dict)):
+        raise AcceptanceFailure("selected provider is absent from compiled discovery")
     advertised = selected.get("supported_modes")
-    require(isinstance(advertised, list) and acceptance.mode in advertised,
-            f"compiled discovery does not advertise {acceptance.provider} {acceptance.mode}")
+    if not (isinstance(advertised, list) and acceptance.mode in advertised):
+        raise AcceptanceFailure(f"compiled discovery does not advertise {acceptance.provider} {acceptance.mode}")
     acceptance._prepare_codex_workspace()
     acceptance.daemon = acceptance.processes.start("pueued", [acceptance.pueued, "-c", acceptance.config], acceptance.base,
                                        on_spawned=acceptance._adopt_daemon)
@@ -334,9 +343,9 @@ def require_authentication_prerequisite(owner) -> None:
     arguments = acceptance.profile.get("authentication_status")
     if arguments is None:
         return
-    require(isinstance(arguments, tuple) and arguments and
-            all(isinstance(value, str) and value for value in arguments),
-            f"{acceptance.provider} authentication status command is invalid")
+    if not (isinstance(arguments, tuple) and arguments and
+            all(isinstance(value, str) and value for value in arguments)):
+        raise AcceptanceFailure(f"{acceptance.provider} authentication status command is invalid")
     process = acceptance.direct(
         "provider-authentication-status", [acceptance.provider_executable, *arguments],
         expected={0, 1}, timeout=20)
@@ -364,7 +373,8 @@ def require_default_model_prerequisite(owner) -> None:
         return
     acceptance.discover_models()
     response = acceptance.model_discovery
-    require(isinstance(response, dict), "Pi model discovery response is unavailable")
+    if not (isinstance(response, dict)):
+        raise AcceptanceFailure("Pi model discovery response is unavailable")
     status, reason = response.get("status"), response.get("reason_code")
     if status == "blocked":
         if model_discovery_block_reason(response) is BlockReason.AUTH_UNAVAILABLE:

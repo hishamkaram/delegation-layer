@@ -1,15 +1,19 @@
 """Hermetic oracles for a native acceptance behavior cohort."""
+
+from argparse import Namespace
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import native_acceptance_evidence as native_evidence
 from scripts import acceptance_native as entry
 from scripts.acceptance_tests.native.support import (
+    fixture_record,
+    fixture_text,
     physical_test_root,
     queue_oracle,
 )
@@ -32,7 +36,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         return delegate, runner, pueue, pueued
 
     @staticmethod
-    def _timeout_source_binding_operation(root: Path) -> tuple[object, str, Path]:
+    def _timeout_source_binding_operation(root: Path) -> tuple[gate.NativeAcceptance, str, Path]:
         root_id = "b" * 32
         task_id = "a" * 32
         state = root / "state"
@@ -98,7 +102,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.provider = "codex:exec"
         operation.mode = "workspace-write"
         operation.scenario = "timeout-resume"
-        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.args = Namespace(model=None, effort=None)
         operation.provider_executable = provider.resolve()
         operation.provider_version = "fixture-v2"
         operation.tasks = {"timeout_source": task_id}
@@ -116,8 +120,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
 
             self.assertEqual(operation.timeout_source_binding(task_id), task)
-            self.assertEqual(operation.provider_runtime_receipt()[
-                "provider_runtime_identities"][task_id], {
+            self.assertEqual(fixture_record(operation.provider_runtime_receipt()[
+                "provider_runtime_identities"])[task_id], {
                 "executable": str(operation.provider_executable),
                 "version": "fixture-v2", "sha256": "1" * 64,
             })
@@ -213,14 +217,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.root_id = None
             operation.tasks = {}
             operation.numeric_ids = {}
-            operation.ops = SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set(),
-                                            managed_runner=True, runner_placement=BUNDLE_RUNNER)
+            self.enterContext(patch.object(operation, "ops", SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set(),
+                                            managed_runner=True, runner_placement=BUNDLE_RUNNER), create=True))
             operation.state = root / "state"
             operation.state.mkdir()
             operation.models_state = root / "models-state"
             (operation.models_state / "inspections" / task_id).mkdir(parents=True)
             operation.model_discovery_task_id = None
-            operation.processes = object()
+            self.enterContext(patch.object(operation, "processes", object(), create=True))
             operation.delegate = selected
             operation.runner = selected
             operation.pueue = selected
@@ -233,7 +237,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.workspace = root / "workspace"
             operation.workspace.mkdir()
             operation.provider_executable = selected.resolve()
-            model_group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            model_group = gate.INSPECTION_GROUP_PREFIX + fixture_text(operation.models_root_id)
             journal = {
                 "numeric_task_id": 8,
                 "request": {
@@ -257,7 +261,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 },
                 "result": {"reason": "blocked"},
             }
-            status = {
+            status: dict[str, object] = {
                 "groups": {"default": {}, model_group: {}},
                 "tasks": {"8": {"id": 8}},
             }
@@ -280,16 +284,15 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_inspection_queue_rejects_missing_admitted_task_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory))
-            del operation.ops._inspection_journals
+            operation, status = queue_oracle(Path(directory), check=self, stub_inspection_journals=False)
             self.assertFalse(operation.terminal_private_queue(status))
 
     def test_empty_queue_is_terminal_before_any_task_is_admitted(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, _ = queue_oracle(Path(directory), with_inspection=False)
+            operation, _ = queue_oracle(Path(directory), with_inspection=False, check=self)
             operation.root_id = None
             operation.tasks = {}
-            status = {"tasks": {}, "groups": {
+            status: dict[str, object] = {"tasks": {}, "groups": {
                 "default": {"status": "Running", "parallel_tasks": 1},
             }}
             self.assertTrue(operation.terminal_private_queue(status))
@@ -345,7 +348,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 return SimpleNamespace(directory=process_directory,
                                        result={"exit_code": 1})
 
-            operation.direct = direct
+            operation.direct = Mock(side_effect=direct)
             stdout.write_text('{"loggedIn":false}\n', encoding="utf-8")
             with self.assertRaisesRegex(gate.BlockedFailure,
                                         "authentication is unavailable"):
@@ -363,7 +366,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 return SimpleNamespace(directory=process_directory,
                                        result={"exit_code": 0})
 
-            operation.direct = authenticated
+            operation.direct = Mock(side_effect=authenticated)
             operation.require_authentication_prerequisite()
             self.assertEqual(len(calls), 1)
 
@@ -620,7 +623,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 gate.require_discovery("pueue", selected, environment)
 
     def test_dispatch_binding_requires_exact_supervisor_identity(self):
-        response = {
+        response: dict[str, object] = {
             "task_id": "a" * 32,
             "root_id": "b" * 32,
             "supervisor": {"matched": True, "numeric_task_id": 7},
@@ -628,7 +631,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertEqual(gate.dispatch_binding(response, "a" * 32, "fresh"), ("b" * 32, 7))
         with self.assertRaises(gate.AcceptanceFailure):
             gate.dispatch_binding(response, "c" * 32, "fresh")
-        response["supervisor"]["matched"] = False
+        fixture_record(response["supervisor"])["matched"] = False
         with self.assertRaises(gate.AcceptanceFailure):
             gate.dispatch_binding(response, "a" * 32, "fresh")
 
@@ -640,14 +643,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.root_id = None
         operation.tasks = {}
         operation.numeric_ids = {}
-        operation.ops = SimpleNamespace(
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
             root_id=root,
             tasks={"fresh": task, "uncertain": uncertain},
             labels={"fresh": f"delegate:{root}:{task}",
                     "uncertain": f"delegate:{root}:{uncertain}"},
             numbers={"fresh": 7},
             dispatch_attempts={task, uncertain},
-        )
+        ), create=True))
 
         operation._sync_ops_owned_tasks()
 
@@ -740,15 +743,15 @@ class NativeFailureReceiptBudgetTests(unittest.TestCase):
         operation = object.__new__(gate.NativeAcceptance)
         operation.provider = provider
         operation.mode = "read-only"
-        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.args = Namespace(model=None, effort=None)
         operation.model_discovery_summary = {"status": "available"}
         operation.model_discovery_exit_code = 0
-        operation.discover_models = lambda: None
-        operation.shutdown = lambda: None
-        operation.native_mode_receipt = lambda: {}
-        operation.lifecycle_receipt = lambda: {}
+        operation.discover_models = Mock(return_value=None)
+        operation.shutdown = Mock(return_value=None)
+        operation.native_mode_receipt = Mock(return_value={})
+        operation.lifecycle_receipt = Mock(return_value={})
         assert operation._run_model_discovery() == 0
-        return operation.success_receipt
+        return fixture_record(operation.success_receipt)
 
     def test_model_discovery_receipts_bind_the_discovery_operation_budget_on_every_exit(self):
         # `delegate models` runs one bounded inspection whose persisted request

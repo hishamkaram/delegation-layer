@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 import json
 import shutil
 import unittest
+from unittest.mock import patch
 
 from scripts import acceptance_native as native_acceptance
 from scripts import acceptance_provider_common as provider_common
@@ -26,7 +26,8 @@ ROOT = "a" * 32
 TASK = "b" * 32
 
 
-from .fixtures import InspectionFixture
+from scripts.acceptance_tests.record_fixtures import object_at
+from .fixtures import InspectionFixture, FixtureProcesses, ObservedDaemon
 
 
 class InspectionHarnessTests(unittest.TestCase):
@@ -37,10 +38,10 @@ class InspectionHarnessTests(unittest.TestCase):
         self.fixture.inspection_records()
         status = self.fixture.status(self.fixture.inspection_row())
         calls = []
-        self.fixture.ops.queue_status = lambda _name: status
-        self.fixture.ops.processes = SimpleNamespace(drain=lambda **_kwargs: [])
-        self.fixture.ops.client = lambda name, operation, **_kwargs: calls.append((name, operation))
-        self.fixture.ops.daemon = SimpleNamespace(wait=lambda **_kwargs: None)
+        self.enterContext(patch.object(self.fixture.ops, "queue_status", return_value=status))
+        self.fixture.ops.processes = FixtureProcesses()
+        self.enterContext(patch.object(self.fixture.ops, "client", side_effect=lambda name, operation, **_kwargs: calls.append((name, operation))))
+        self.fixture.ops.daemon = ObservedDaemon()
 
         self.fixture.ops.shutdown()
 
@@ -89,15 +90,15 @@ class InspectionHarnessTests(unittest.TestCase):
             managed_exit_proof=True, helper_sha256="")
         request_bytes = (directory / "request.json").read_bytes()
         request = read_json(directory / "request.json")
-        self.assertEqual(request["binding"]["helper_sha256"], "")
+        self.assertEqual(object_at(request, "binding")["helper_sha256"], "")
 
         closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
 
-        proof = closure["inspections"][TASK]
-        self.assertEqual(proof["registration"]["owner_sha256"],
+        proof = object_at(closure, "inspections", TASK)
+        self.assertEqual(object_at(proof, "registration")["owner_sha256"],
                          digest(directory / "request.json"))
-        self.assertEqual(proof["worker_wait"]["result"], "success")
-        self.assertTrue(proof["termination"]["scope_empty"])
+        self.assertEqual(object_at(proof, "worker_wait")["result"], "success")
+        self.assertTrue(object_at(proof, "termination")["scope_empty"])
         self.assertEqual((directory / "request.json").read_bytes(), request_bytes)
 
     def test_inspection_binding_rejects_malformed_optional_provider_diagnostics(self):
@@ -127,7 +128,7 @@ class InspectionHarnessTests(unittest.TestCase):
             include_ordinary=False, revision="model-discovery-v1",
             managed_exit_proof=True)
         request = read_json(directory / "request.json")
-        request["binding"]["helper_sha256"] = "E" * 64
+        object_at(request, "binding")["helper_sha256"] = "E" * 64
         write_json(directory / "request.json", request, replace=True)
 
         with self.assertRaisesRegex(AcceptanceFailure, "helper_sha256 is invalid"):
@@ -139,9 +140,9 @@ class InspectionHarnessTests(unittest.TestCase):
         records = self.fixture.ops.validate_inspection_journals()
 
         self.assertFalse((directory / "worker-observation.json").exists())
-        proof = records[TASK]["managed_lifetime"]
-        self.assertEqual(proof["worker_wait"]["result"], "success")
-        self.assertTrue(proof["termination"]["scope_empty"])
+        proof = object_at(records, TASK, "managed_lifetime")
+        self.assertEqual(object_at(proof, "worker_wait")["result"], "success")
+        self.assertTrue(object_at(proof, "termination")["scope_empty"])
 
     def test_root_lifetime_closure_rejects_inspection_only_unfinished_state(self):
         directory = self.fixture.inspection_records(include_ordinary=False, managed_exit_proof=True)
@@ -153,7 +154,7 @@ class InspectionHarnessTests(unittest.TestCase):
     def test_root_lifetime_closure_accepts_expired_inspection_without_native_facts(self):
         directory = self.fixture.unlaunched_inspection()
         closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
-        proof = closure["inspections"][TASK]
+        proof = object_at(closure, "inspections", TASK)
         self.assertEqual(proof["mode"], "unlaunched")
         self.assertEqual(proof["unlaunched_sha256"],
                          digest(directory / "lifetime-unlaunched.json"))
@@ -164,8 +165,8 @@ class InspectionHarnessTests(unittest.TestCase):
         operation = "c" * 32
         self.fixture.unlaunched_inspection(operation)
         closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
-        self.assertEqual(set(closure["inspections"]), {operation})
-        self.assertEqual(closure["inspections"][operation]["unlaunched"]["task_id"], operation)
+        self.assertEqual(set(object_at(closure, "inspections")), {operation})
+        self.assertEqual(object_at(closure, "inspections", operation, "unlaunched")["task_id"], operation)
 
     def test_root_lifetime_closure_rejects_unlaunched_native_contradiction(self):
         directory = self.fixture.unlaunched_inspection()
@@ -232,7 +233,7 @@ class InspectionHarnessTests(unittest.TestCase):
             operation.numeric_ids = {TASK: 7}
             operation.provider_executable = Path(metadata["provider_executable"])
             operation.provider_version = "fixture-v1"
-            operation.ops = self.fixture.ops
+            self.enterContext(patch.object(operation, "ops", self.fixture.ops, create=True))
             return operation
 
         operation = operation_for(meta)
@@ -266,10 +267,10 @@ class InspectionHarnessTests(unittest.TestCase):
 
         closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
 
-        self.assertEqual(set(closure["tasks"]), {TASK})
-        self.assertEqual(set(closure["inspections"]), {TASK})
-        self.assertEqual(closure["tasks"][TASK]["worker_wait"]["result"], "success")
-        self.assertEqual(closure["inspections"][TASK]["worker_wait"]["result"], "success")
+        self.assertEqual(set(object_at(closure, "tasks")), {TASK})
+        self.assertEqual(set(object_at(closure, "inspections")), {TASK})
+        self.assertEqual(object_at(closure, "tasks", TASK, "worker_wait")["result"], "success")
+        self.assertEqual(object_at(closure, "inspections", TASK, "worker_wait")["result"], "success")
 
     def test_root_lifetime_closure_ignores_managed_plan_without_supervisor_handoff(self):
         self.fixture.inspection_records()
@@ -299,7 +300,9 @@ class InspectionHarnessTests(unittest.TestCase):
                     shutil.rmtree(self.fixture.state / "inspections")
                     self.fixture.ops.inspection_attempts.clear()
                     self.fixture.ops.inspection_bindings.clear()
-                self.fixture.inspection_records(**options)
+                self.fixture.inspection_records(
+                    custom_inspection=options.get("custom_inspection", False),
+                    legacy_admission=options.get("legacy_admission", False), include_ordinary=False)
                 closure = provider_common.validate_managed_lifetime_closure(self.fixture.state)
                 self.assertEqual(closure["tasks"], {})
                 self.assertEqual(closure["inspections"], {})
@@ -436,10 +439,10 @@ class InspectionHarnessTests(unittest.TestCase):
         self.fixture.managed_ordinary_lifetime(directory)
         status = self.fixture.ordinary_only_status()
         calls = []
-        self.fixture.ops.queue_status = lambda _name: status
-        self.fixture.ops.processes = SimpleNamespace(drain=lambda **_kwargs: [])
-        self.fixture.ops.client = lambda name, operation, **_kwargs: calls.append((name, operation))
-        self.fixture.ops.daemon = SimpleNamespace(wait=lambda **_kwargs: None)
+        self.enterContext(patch.object(self.fixture.ops, "queue_status", return_value=status))
+        self.fixture.ops.processes = FixtureProcesses()
+        self.enterContext(patch.object(self.fixture.ops, "client", side_effect=lambda name, operation, **_kwargs: calls.append((name, operation))))
+        self.fixture.ops.daemon = ObservedDaemon()
 
         self.fixture.ops.shutdown()
 
@@ -448,7 +451,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def test_managed_ordinary_successful_shutdown_without_closure_is_rejected(self):
         self.fixture.ordinary_only_admission("managed")
-        self.fixture.ops.queue_status = lambda _name: self.fixture.ordinary_only_status()
+        self.enterContext(patch.object(self.fixture.ops, "queue_status", return_value=self.fixture.ordinary_only_status()))
 
         with self.assertRaisesRegex(AcceptanceFailure, "lifetime"):
             self.fixture.ops.shutdown()

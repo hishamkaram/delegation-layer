@@ -4,7 +4,7 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.processes.observation import wait_until
 from scripts.delegate_acceptance.hermetic.contract import CASE_TIMEOUT
 from scripts.delegate_acceptance.hermetic.contract import MAX_CONTROL_BYTES
-from scripts.delegate_acceptance.hermetic.contract import require_true
+from scripts.delegate_acceptance.hermetic.contract import HarnessFailure, require_true
 import json
 import time
 
@@ -166,6 +166,8 @@ def control_owner_completion_for_entry(case, entry):
     if not command_ids:
         return None
     command_id = next(iter(command_ids))
+    if not isinstance(command_id, str):
+        raise HarnessFailure("supervisor invocation has no valid command ID")
     candidates = []
     for value in events(case):
         argv = value.get("argv") or []

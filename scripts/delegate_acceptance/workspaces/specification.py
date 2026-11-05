@@ -65,14 +65,18 @@ def _canonical_workspace_subject(
         expected_id: str | None = None, expected_sha256: str | None = None,
         ) -> dict[str, str]:
     """Validate one workspace Subject and return its Go field order."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _WORKSPACE_SUBJECT_KEYS, label=label)
     kind = value.get("kind")
     subject_id = value.get("id")
     request_sha256 = value.get("sha256")
-    require(kind in {"task", "operation", "admission"}, f"{label} kind is invalid")
-    require(_task_identity(subject_id), f"{label} id is invalid")
-    require(_hex_digest(request_sha256), f"{label} sha256 is invalid")
+    if not isinstance(kind, str) or kind not in {"task", "operation", "admission"}:
+        raise AcceptanceFailure(f"{label} kind is invalid")
+    if not _task_identity(subject_id):
+        raise AcceptanceFailure(f"{label} id is invalid")
+    if not _hex_digest(request_sha256):
+        raise AcceptanceFailure(f"{label} sha256 is invalid")
     if expected_kind is not None:
         require(kind == expected_kind, f"{label} kind does not match its owner")
     if expected_id is not None:
@@ -86,7 +90,8 @@ def _canonical_workspace_subject(
 def _canonical_workspace_resource_request_bytes(
         value: object, root: str, workspace: str, label: str) -> bytes:
     """Validate and marshal workspace.ResourceRequest exactly as Go does."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _RESOURCE_REQUEST_KEYS, label=label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             value.get("root_id") == root and value.get("workspace_id") == workspace,
@@ -121,7 +126,8 @@ def _canonical_workspace_reservation_bytes(
         value: object, workspace: str, sequence: int, task: str,
         request_sha256: str, label: str) -> bytes:
     """Validate one immutable admission reservation and marshal its bytes."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _WORKSPACE_RESERVATION_KEYS, label=label)
     stored_sequence = value.get("sequence")
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
@@ -144,7 +150,8 @@ def _canonical_workspace_reservation_bytes(
 def _canonical_workspace_closure_bytes(
         value: object, workspace: str, sequence: int, label: str) -> bytes:
     """Validate one immutable workspace reservation closure."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _WORKSPACE_CLOSURE_KEYS, _WORKSPACE_CLOSURE_OPTIONAL_KEYS, label)
     stored_sequence = value.get("sequence")
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
@@ -154,8 +161,8 @@ def _canonical_workspace_closure_bytes(
     require(type(sequence) is int and 0 < sequence <= _MAX_UINT64,
             f"{label} expected sequence is invalid")
     disposition = value.get("disposition")
-    require(disposition in {"captured", "unavailable", "aborted-not-launched",
-                            "operation-completed"},
+    require(isinstance(disposition, str) and disposition in {
+                "captured", "unavailable", "aborted-not-launched", "operation-completed"},
             f"{label} disposition is invalid")
     capture_id = value.get("capture_id")
     if "capture_id" in value:
@@ -173,14 +180,18 @@ def _canonical_workspace_closure_bytes(
 
 def _canonical_operation_subject(value: object, label: str) -> dict[str, str]:
     """Validate and order a workspace.Subject record."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _OPERATION_SUBJECT_KEYS, label=label)
     kind = value.get("kind")
     subject_id = value.get("id")
     subject_sha256 = value.get("sha256")
-    require(kind in {"task", "operation", "admission"}, f"{label} kind is invalid")
-    require(_task_identity(subject_id), f"{label} id is invalid")
-    require(_hex_digest(subject_sha256), f"{label} sha256 is invalid")
+    if not isinstance(kind, str) or kind not in {"task", "operation", "admission"}:
+        raise AcceptanceFailure(f"{label} kind is invalid")
+    if not _task_identity(subject_id):
+        raise AcceptanceFailure(f"{label} id is invalid")
+    if not _hex_digest(subject_sha256):
+        raise AcceptanceFailure(f"{label} sha256 is invalid")
     return {"kind": kind, "id": subject_id, "sha256": subject_sha256}
 
 
@@ -188,7 +199,8 @@ def _canonical_operation_request_bytes(
         value: object, root: str, operation: str, label: str = "workspace operation request",
         ) -> bytes:
     """Validate one exact workspace.OperationRequest and marshal its Go bytes."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _OPERATION_REQUEST_REQUIRED_KEYS, _OPERATION_REQUEST_OPTIONAL_KEYS, label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1,
             f"{label} schema mismatch")
@@ -199,7 +211,8 @@ def _canonical_operation_request_bytes(
     require(operation_id == operation and _task_identity(operation_id),
             f"{label} operation identity mismatch")
     kind = value.get("kind")
-    require(kind in _OPERATION_KINDS, f"{label} kind is invalid")
+    if not isinstance(kind, str) or kind not in _OPERATION_KINDS:
+        raise AcceptanceFailure(f"{label} kind is invalid")
     subject = _canonical_operation_subject(value.get("subject"), label + " subject")
     checkpoint = _canonical_operation_scope(value, kind, subject, label)
     deadline_value = value.get("deadline")
@@ -212,8 +225,8 @@ def _canonical_operation_request_bytes(
 
     arguments = value.get("arguments")
     if "arguments" in value:
-        require(isinstance(arguments, list) and not isinstance(arguments, tuple) and arguments,
-                f"{label} arguments must be a nonempty array when present")
+        if not isinstance(arguments, list) or not arguments:
+            raise AcceptanceFailure(f"{label} arguments must be a nonempty array when present")
         require(all(isinstance(argument, str) and "\x00" not in argument
                     for argument in arguments),
                 f"{label} arguments are invalid")
@@ -276,7 +289,8 @@ def _canonical_checkpoint_selection(
         value: object, workspace_id: object, label: str) -> dict[str, object]:
     """Validate contract.CheckpointSelection and preserve its omitempty shape."""
     label = label + " checkpoint selection"
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"kind"}, _CHECKPOINT_SELECTION_OPTIONAL_KEYS, label)
     kind = value.get("kind")
     if kind == "managed":
@@ -288,7 +302,8 @@ def _canonical_checkpoint_selection(
     require(workspace_id == "" and _raw_clean_absolute_path(cwd) and "\x00" not in cwd,
             f"{label} ordinary scope is invalid")
     identity = value.get("cwd_identity")
-    require(isinstance(identity, dict), f"{label} cwd identity is missing")
+    if not isinstance(identity, dict):
+        raise AcceptanceFailure(f"{label} cwd identity is missing")
     _exact_keys(identity, _DIRECTORY_IDENTITY_KEYS, label=label + " cwd identity")
     for key in ("device", "inode"):
         require(type(identity.get(key)) is int and 0 <= identity[key] <= _MAX_UINT64,
@@ -300,7 +315,8 @@ def _canonical_checkpoint_selection(
 
 def _canonical_operation_guard_bytes(value: object, request_digest: str, label: str) -> bytes:
     """Validate one create-once workspace operation guard."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"schema_version", "request_sha256"}, label=label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             value.get("request_sha256") == request_digest,
@@ -313,7 +329,8 @@ def _canonical_operation_guard_bytes(value: object, request_digest: str, label: 
 
 def _canonical_operation_receipt_bytes(value: object, request_digest: str, label: str) -> bytes:
     """Validate the numeric supervisor receipt for one workspace operation."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"schema_version", "request_sha256", "numeric_task_id"}, label=label)
     numeric = value.get("numeric_task_id")
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
@@ -329,7 +346,8 @@ def _canonical_operation_receipt_bytes(value: object, request_digest: str, label
 
 def _canonical_workspace_artifact(value: object, label: str) -> dict[str, object]:
     """Validate one workspace.Artifact and preserve its omitempty shape."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"name", "length"}, {"sha256", "omitted", "truncated"}, label)
     name = value.get("name")
     length = value.get("length")
@@ -341,7 +359,8 @@ def _canonical_workspace_artifact(value: object, label: str) -> dict[str, object
             name not in {".", ".."}
             and Path(name).name == name and "/" not in name and "\\" not in name
             and "\x00" not in name, f"{label} name is invalid")
-    require(type(length) is int and length >= 0, f"{label} length is invalid")
+    if type(length) is not int or length < 0:
+        raise AcceptanceFailure(f"{label} length is invalid")
     sha256 = value.get("sha256")
     omitted = value.get("omitted")
     truncated = value.get("truncated", False)
@@ -371,13 +390,15 @@ def _canonical_operation_result_bytes(
         value: object, operation: str, request_digest: str, kind: str, label: str,
         ) -> bytes:
     """Validate and marshal the workspace OperationResult record."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"schema_version", "operation_id", "request_sha256", "status"},
                 {"reason_code", "command_exit", "artifacts"}, label)
+    status = value.get("status")
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1 and
             value.get("operation_id") == operation and
             value.get("request_sha256") == request_digest and
-            value.get("status") in {"succeeded", "failed"},
+            isinstance(status, str) and status in {"succeeded", "failed"},
             f"{label} binding is invalid")
     reason_code = value.get("reason_code")
     if "reason_code" in value:
@@ -393,8 +414,8 @@ def _canonical_operation_result_bytes(
         require("command_exit" not in value, f"{label} command_exit is not allowed")
     artifacts = value.get("artifacts")
     if "artifacts" in value:
-        require(isinstance(artifacts, list) and artifacts,
-                f"{label} artifacts must be nonempty when present")
+        if not isinstance(artifacts, list) or not artifacts:
+            raise AcceptanceFailure(f"{label} artifacts must be nonempty when present")
         artifacts = [_canonical_workspace_artifact(item, f"{label} artifact")
                      for item in artifacts]
     canonical: dict[str, object] = {

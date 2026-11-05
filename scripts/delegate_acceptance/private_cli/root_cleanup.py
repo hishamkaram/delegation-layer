@@ -48,7 +48,8 @@ def remove_private_acceptance_root(
     _require_disposal_ready(managed, owned_roots)
     for state in sorted({Path(state) for state, _task_ids in managed}, key=str):
         if os.path.lexists(state / ".supervisor"):
-            require(disposal is not None, "private supervisor root has no disposal lease: " + str(state))
+            if disposal is None:
+                raise RuntimeError("private supervisor root has no disposal lease: " + str(state))
             require(
                 disposal.holds(state) or deadline is not None,
                 "private supervisor disposal lease has no deadline: " + str(state),

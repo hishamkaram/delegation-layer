@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
+
 import hashlib
 import json
 import os
+import operator
+from typing import NotRequired, TypedDict
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import acceptance_supervisor_common as supervisor_common
 from scripts import acceptance_native as entry
-from scripts.acceptance_tests.native.support import adjacent_runner_bundle
+from scripts.acceptance_tests.native.support import adjacent_runner_bundle, fixture_record, invoke_with_invalid_arguments
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, rollback_owned_directories
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native import acceptance as gate
@@ -29,6 +33,29 @@ from scripts.delegate_acceptance.evidence.files import digest
 FRESH, RESUME, MISS, ROOT = "1" * 32, "2" * 32, "3" * 32, "f" * 32
 SESSION = "0d7c6e2a-4a8f-4f3e-9b55-2f8b3a2f7c10"
 AMBIENT = {"HOME": "/home/fixture", "PATH": "/usr/bin", "TMPDIR": "/ambient-tmp", "OPENAI_API_KEY": "secret"}
+
+
+class RecordedTaskOverrides(TypedDict):
+    tmpdir: Path
+    roots: NotRequired[list[str]]
+    model: NotRequired[str | None]
+    executable: NotRequired[str]
+    recorded: NotRequired[bool]
+
+
+class SessionMissOptions(TypedDict, total=False):
+    verdict: str
+    stderr: str | None
+    exit_code: int
+    prior: str
+    reference: str | None
+    session_directory: Path | None
+
+
+class EnvironmentOptions(TypedDict, total=False):
+    observed: dict[str, object] | None
+    aggregate: bool
+    candidate: supplemental.Candidate | Exception | None
 
 
 class LaunchScopeTests(unittest.TestCase):
@@ -57,12 +84,15 @@ class LaunchScopeTests(unittest.TestCase):
         environments["successor"]["HOME"] = "/changed"
         self.assertEqual(scopes.environment("successor")["HOME"], AMBIENT["HOME"])
         with self.assertRaises(TypeError):
-            scopes.ambient["HOME"] = "/changed"
+            invoke_with_invalid_arguments(operator.setitem, (scopes.ambient, "HOME", "/changed"), {})
         self.assertIsNone(scopes.pi_sessions)
 
     def test_pi_session_directory_is_an_owned_marker_only(self):
         scopes = self.scopes(pi_sessions=True)
-        control, empty = scopes.pi_sessions
+        sessions = scopes.pi_sessions
+        if sessions is None:
+            self.fail("the Pi launch scope must own both session directories")
+        control, empty = sessions
         self.assertTrue(control.is_dir() and empty.is_dir() and control != empty)
         self.assertEqual(scopes.environment("successor", pi_session=empty)[scope.PI_SESSION_DIRECTORY_KEY],
                          str(empty))
@@ -107,7 +137,7 @@ class RecordedScopeTests(unittest.TestCase):
         self.assertEqual(facts["tmpdir_scopes"], {"fresh": "predecessor", "resume": "successor", "replay": "ambient"})
         self.assertTrue(facts["selection_inherited"])
         self.assertNotIn("/home/fixture", json.dumps(facts))
-        self.assertEqual(facts["meta_sha256"]["resume"], hashlib.sha256(
+        self.assertEqual(fixture_record(facts["meta_sha256"])["resume"], hashlib.sha256(
             (self.owner.state / "tasks" / RESUME / "meta.json").read_bytes()).hexdigest())
 
     def test_shared_ambient_roots_beside_each_own_tmpdir_are_accepted(self):
@@ -129,20 +159,19 @@ class RecordedScopeTests(unittest.TestCase):
                     scope.require_continuation_scope(self.owner, FRESH, RESUME)
 
     def test_successor_that_kept_its_predecessors_scope_is_refused(self):
-        refusals = {
+        refusals: dict[str, tuple[RecordedTaskOverrides, str]] = {
             "copied predecessor TMPDIR": (
-                dict(tmpdir=self.markers["predecessor"]), "caller's launch TMPDIR"),
-            "ambient TMPDIR": (dict(tmpdir=Path(AMBIENT["TMPDIR"])), "caller's launch TMPDIR"),
+                {'tmpdir': self.markers["predecessor"]}, "caller's launch TMPDIR"),
+            "ambient TMPDIR": ({'tmpdir': Path(AMBIENT["TMPDIR"])}, "caller's launch TMPDIR"),
             "predecessor roots": (
-                dict(tmpdir=self.markers["successor"],
-                     roots=[str(self.markers["successor"]), str(self.markers["predecessor"] / "x")]),
+                {'tmpdir': self.markers["successor"], 'roots': [str(self.markers["successor"]), str(self.markers["predecessor"] / "x")]},
                 "another scope's TMPDIR"),
-            "own roots dropped": (dict(tmpdir=self.markers["successor"], roots=["/tmp"]),
+            "own roots dropped": ({'tmpdir': self.markers["successor"], 'roots': ["/tmp"]},
                                   "writable roots from its own TMPDIR"),
-            "model override": (dict(tmpdir=self.markers["successor"], model="model-b"), "model or effort"),
-            "executable change": (dict(tmpdir=self.markers["successor"], executable="/other/provider"),
+            "model override": ({'tmpdir': self.markers["successor"], 'model': "model-b"}, "model or effort"),
+            "executable change": ({'tmpdir': self.markers["successor"], 'executable': "/other/provider"},
                                   "provider executable"),
-            "legacy record": (dict(tmpdir=self.markers["successor"], recorded=False),
+            "legacy record": ({'tmpdir': self.markers["successor"], 'recorded': False},
                               "no recorded launch environment"),
         }
         for label, (successor, message) in refusals.items():
@@ -154,10 +183,11 @@ class RecordedScopeTests(unittest.TestCase):
 
 
 class SuccessorAdmissionTests(unittest.TestCase):
-    def owner(self, root: Path, command: str) -> SimpleNamespace:
+    def owner(self, root: Path, command: str) -> tuple[
+            SimpleNamespace, Path, list[tuple[list[object], dict[str, str] | None]]]:
         brief = root / "brief.txt"
         brief.write_text("brief\n")
-        calls = []
+        calls: list[tuple[list[object], dict[str, str] | None]] = []
 
         def continue_task(name, argv, *, request=None, environment=None):
             calls.append((argv, environment))
@@ -173,7 +203,7 @@ class SuccessorAdmissionTests(unittest.TestCase):
         owner = SimpleNamespace(
             delegate=Path("/bin/delegate"), state=root / "state", config=root / "pueue.yml",
             runner=Path("/bin/delegate-run"), workspace=root, provider="claude:print", mode="read-only",
-            scenario="read-only", args=SimpleNamespace(model="model-a", effort="high"),
+            scenario="read-only", args=Namespace(model="model-a", effort="high"),
             root_id=ROOT, numeric_ids={}, tasks={}, continuation_command=command,
             ops=SimpleNamespace(managed_runner=True, root_id=None, continue_task=continue_task,
                                 dispatch=dispatch, dispatch_observations=[]))
@@ -250,7 +280,7 @@ class ResumableScenarioScopeTests(unittest.TestCase):
 
     def owner(self, command: str) -> MagicMock:
         owner = MagicMock()
-        owner.args = SimpleNamespace(model=None, effort=None)
+        owner.args = Namespace(model=None, effort=None)
         owner.provider, owner.mode, owner.scenario = "claude:print", "read-only", "read-only"
         owner.continuation_command = command
         owner.launch_environment.side_effect = lambda name, **_: {"TMPDIR": name}
@@ -338,13 +368,13 @@ class PiSessionMissTests(unittest.TestCase):
         self.assertEqual(owner.terminal, [("session-miss", "Success")])
 
     def test_other_outcomes_never_count_as_a_session_miss(self):
-        cases = {
-            "unexpected resume": (dict(verdict="committed"), "was not rejected"),
-            "transport failure": (dict(stderr="connect ECONNREFUSED\n"), "native session-not-found"),
-            "other session": (dict(stderr="No session found matching 'another'\n"), "native session-not-found"),
-            "provider crash": (dict(exit_code=134), "sealed native exit"),
-            "wrong predecessor": (dict(prior="another-session"), "exact predecessor session"),
-            "substituted session": (dict(reference="fresh-session"), "substituted another provider session"),
+        cases: dict[str, tuple[SessionMissOptions, str]] = {
+            "unexpected resume": ({'verdict': "committed"}, "was not rejected"),
+            "transport failure": ({'stderr': "connect ECONNREFUSED\n"}, "native session-not-found"),
+            "other session": ({'stderr': "No session found matching 'another'\n"}, "native session-not-found"),
+            "provider crash": ({'exit_code': 134}, "sealed native exit"),
+            "wrong predecessor": ({'prior': "another-session"}, "exact predecessor session"),
+            "substituted session": ({'reference': "fresh-session"}, "substituted another provider session"),
         }
         for label, (values, message) in cases.items():
             with self.subTest(label):
@@ -438,7 +468,7 @@ def write_pi_meta(directory: Path, session_directory: Path | None, *,
 class PiSessionMissScenarioTests(unittest.TestCase):
     def owner(self, launches: int) -> MagicMock:
         owner = MagicMock()
-        owner.args = SimpleNamespace(model=None, effort=None)
+        owner.args = Namespace(model=None, effort=None)
         owner.provider, owner.mode = "pi:json", "read-only"
         owner.scenario, owner.continuation_command = scope_scenario(), "continue"
         owner.launch_scopes.pi_sessions = (Path("/owned/s1"), Path("/owned/s2"))
@@ -508,7 +538,7 @@ class PiSessionMissScenarioTests(unittest.TestCase):
 class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
     """The process owner keeps the ambient snapshot; continue cases bind their candidate first."""
 
-    COMMITTED = {"harness_revision": "a" * 40, "harness_sha256": "7" * 64, "committed": True}
+    COMMITTED: dict[str, object] = {"harness_revision": "a" * 40, "harness_sha256": "7" * 64, "committed": True}
     AGGREGATE_SHA256 = "c" * 64
 
     def setUp(self):
@@ -526,7 +556,7 @@ class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
         return supplemental.Candidate(self.COMMITTED, self.AGGREGATE_SHA256, binaries, frozenset())
 
     def construct(self, command: str | None, *, observed: dict[str, object] | None = None,
-                  aggregate: bool = True, candidate: object = None):
+                  aggregate: bool = True, candidate: supplemental.Candidate | Exception | None = None):
         output = self.root / f"output-{command}-{len(list(self.root.iterdir()))}"
         output.mkdir()
         argv = ["--provider", "claude:print", "--permission", "read-only", "--output", str(output),
@@ -537,14 +567,17 @@ class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
         if aggregate:
             argv.extend(["--canonical-aggregate", str(self.aggregate)])
         args = entry.build_parser().parse_args(argv)
-        outcome = {"side_effect": candidate} if isinstance(candidate, Exception) else {
-            "return_value": self.candidate() if candidate is None else candidate}
+        read_candidate = (
+            patch.object(gate.supplemental, "candidate_from_aggregate", side_effect=candidate)
+            if isinstance(candidate, Exception) else
+            patch.object(gate.supplemental, "candidate_from_aggregate",
+                         return_value=self.candidate() if candidate is None else candidate))
         with patch.object(gate.Path, "home", return_value=self.home), \
                 patch.object(gate, "reject_tmp"), patch.object(gate, "require_discovery"), \
                 patch.object(gate, "native_environment", return_value=dict(AMBIENT)), \
                 patch.object(gate.supplemental, "observe_continuation_harness",
                              return_value=self.COMMITTED if observed is None else observed) as observe, \
-                patch.object(gate.supplemental, "candidate_from_aggregate", **outcome) as read:
+                read_candidate as read:
             operation = gate.NativeAcceptance(args, managed_runner=False)
         self.addCleanup(supervisor_common.rollback_owned_directories, operation.owned_directories)
         return operation, observe, read
@@ -566,16 +599,16 @@ class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
                     self.assertIsNone(operation.canonical_aggregate_sha256)
 
     def test_unbound_continue_case_is_refused_before_any_root_or_process(self):
-        refusals = {
-            "no canonical aggregate": (dict(aggregate=False), "requires --canonical-aggregate"),
-            "uncommitted harness": (dict(observed={**self.COMMITTED, "committed": False}), "committed harness"),
-            "unpassed aggregate": (dict(candidate=EvidenceError("canonical_aggregate_not_passed")),
+        refusals: dict[str, tuple[EnvironmentOptions, str]] = {
+            "no canonical aggregate": ({'aggregate': False}, "requires --canonical-aggregate"),
+            "uncommitted harness": ({'observed': {**self.COMMITTED, "committed": False}}, "committed harness"),
+            "unpassed aggregate": ({'candidate': EvidenceError("canonical_aggregate_not_passed")},
                                    "canonical_aggregate_not_passed"),
-            "wrong revision": (dict(candidate=EvidenceError("aggregate_source_revision_mismatch")),
+            "wrong revision": ({'candidate': EvidenceError("aggregate_source_revision_mismatch")},
                                "aggregate_source_revision_mismatch"),
-            "missing aggregate": (dict(candidate=FileNotFoundError(str(self.aggregate))), "not bound"),
-            "other runner": (dict(candidate=self.candidate(runner_sha256="9" * 64)), "candidate_runner_mismatch"),
-            "other pueued": (dict(candidate=self.candidate(pueued_sha256="9" * 64)), "candidate_pueued_mismatch"),
+            "missing aggregate": ({'candidate': FileNotFoundError(str(self.aggregate))}, "not bound"),
+            "other runner": ({'candidate': self.candidate(runner_sha256="9" * 64)}, "candidate_runner_mismatch"),
+            "other pueued": ({'candidate': self.candidate(pueued_sha256="9" * 64)}, "candidate_pueued_mismatch"),
         }
         for label, (options, message) in refusals.items():
             with self.subTest(label), patch.object(gate, "Processes") as processes:

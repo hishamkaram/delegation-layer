@@ -21,13 +21,18 @@ from .retention_records import (
 
 def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
     _validate_case_fields(case)
-    receipt_path = _inside(root, Path(case["receipt_path"]))
+    encoded_path = case["receipt_path"]
+    if not isinstance(encoded_path, str):
+        raise EvidenceError("aggregate_case_fields_invalid")
+    receipt_path = _inside(root, Path(encoded_path))
     if not HEX_DIGEST.fullmatch(str(case["receipt_sha256"])):
         raise EvidenceError("aggregate_case_digest_invalid")
     if _digest_file(receipt_path) != case["receipt_sha256"]:
         raise EvidenceError("aggregate_case_digest_mismatch")
     value, _ = _read_json(receipt_path, MAX_RECEIPT_BYTES)
     validate_case_proof(case, value)
+    if not isinstance(value, dict):
+        raise EvidenceError("aggregate_case_receipt_invalid")
     _validate_case_cleanup(root, value)
 
 
@@ -110,10 +115,8 @@ def _validate_retention(
             or not isinstance(value.get("plan_sha256"), str)
             or HEX_DIGEST.fullmatch(value["plan_sha256"]) is None):
         raise EvidenceError("aggregate_retention_incomplete")
-    before = value.get("before")
-    after = value.get("after")
-    _validate_summary(before)
-    _validate_summary(after)
+    before = _validate_summary(value.get("before"))
+    after = _validate_summary(value.get("after"))
     if (before["complete"] is not True or after["complete"] is not True
             or before["count"] != before["root_count"]
             or after["count"] != after["root_count"]

@@ -1,4 +1,6 @@
 """Hermetic oracles for a native acceptance behavior cohort."""
+
+from argparse import Namespace
 import json
 import os
 from pathlib import Path
@@ -33,7 +35,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.runner = Path("/runner")
         operation.provider = "claude:print"
         operation.workspace = Path("/workspace")
-        operation.ops = SimpleNamespace(managed_runner=False)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(managed_runner=False), create=True))
         argv = operation.model_discovery_argv()
         self.assertEqual(argv[argv.index("--pueue-config") + 1], operation.config)
         self.assertEqual(argv[argv.index("--root") + 1], operation.models_state)
@@ -50,16 +52,16 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.output = Path(directory)
             operation.provider = "codex:exec"
             operation.mode = "read-only"
-            operation.args = SimpleNamespace(model=None, effort=None)
+            operation.args = Namespace(model=None, effort=None)
             operation.discover_models_only = True
             operation.model_discovery_exit_code = None
             operation.model_discovery_summary = {"status": "available"}
             operation.closed = False
             operation.lifetime_closure = None
-            operation.setup = lambda: None
-            operation.discover_models = lambda: setattr(operation, "model_discovery_exit_code", 0)
-            operation.shutdown = lambda: setattr(operation, "closed", True)
-            operation.native_mode_receipt = lambda: None
+            operation.setup = Mock(return_value=None)
+            operation.discover_models = Mock(side_effect=lambda: setattr(operation, "model_discovery_exit_code", 0))
+            operation.shutdown = Mock(side_effect=lambda: setattr(operation, "closed", True))
+            operation.native_mode_receipt = Mock(return_value=None)
             self.assertEqual(operation.run(), 0)
             self.assertFalse((Path(directory) / "success.json").exists())
             with self.assertRaisesRegex(gate.AcceptanceFailure, "candidate was not committed"):
@@ -74,7 +76,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.provider = "pi:json"
             operation.mode = "read-only"
             operation.scenario = "read-only"
-            operation.args = SimpleNamespace(model=None)
+            operation.args = Namespace(model=None)
             operation.discover_models_only = False
             operation.setup = Mock()
             operation.workspace = Path(directory)
@@ -96,7 +98,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.subTest(provider=provider, model=model):
                 operation = object.__new__(gate.NativeAcceptance)
                 operation.provider = provider
-                operation.args = SimpleNamespace(model=model)
+                operation.args = Namespace(model=model)
                 operation.discover_models = Mock()
                 operation.require_default_model_prerequisite()
                 operation.discover_models.assert_not_called()
@@ -105,7 +107,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.subTest(status=status):
                 operation = object.__new__(gate.NativeAcceptance)
                 operation.provider = "pi:json"
-                operation.args = SimpleNamespace(model=None)
+                operation.args = Namespace(model=None)
                 operation.discover_models = Mock()
                 operation.model_discovery = {"status": status, "reason_code": reason}
                 operation.require_default_model_prerequisite()
@@ -114,7 +116,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_pi_model_prerequisite_keeps_discovery_failure_failed(self):
         operation = object.__new__(gate.NativeAcceptance)
         operation.provider = "pi:json"
-        operation.args = SimpleNamespace(model=None)
+        operation.args = Namespace(model=None)
         operation.discover_models = Mock()
         operation.model_discovery = {"status": "failed", "reason_code": "invalid_native_output"}
         with self.assertRaisesRegex(gate.AcceptanceFailure, "default-model discovery failed") as raised:
@@ -124,7 +126,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_pi_model_prerequisite_consumes_structured_authentication_block(self):
         operation = object.__new__(gate.NativeAcceptance)
         operation.provider = "pi:json"
-        operation.args = SimpleNamespace(model=None)
+        operation.args = Namespace(model=None)
         operation.discover_models = Mock()
         operation.model_discovery = {"status": "blocked", "reason_code": "authentication_unavailable"}
         with self.assertRaisesRegex(gate.BlockedFailure, "authentication"):
@@ -133,7 +135,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_pi_model_prerequisite_rejects_non_authentication_block(self):
         operation = object.__new__(gate.NativeAcceptance)
         operation.provider = "pi:json"
-        operation.args = SimpleNamespace(model=None)
+        operation.args = Namespace(model=None)
         operation.discover_models = Mock()
         operation.model_discovery = {"status": "blocked", "reason_code": "supervisor_upgrade_required"}
         with self.assertRaisesRegex(gate.AcceptanceFailure, "supervisor_upgrade_required") as raised:
@@ -286,12 +288,12 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_terminal_queue_accepts_owned_inspection_rows(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory))
+            operation, status = queue_oracle(Path(directory), check=self)
             self.assertTrue(operation.terminal_private_queue(status))
 
     def test_terminal_queue_accepts_expected_failed_ordinary_task(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory))
+            operation, status = queue_oracle(Path(directory), check=self)
             task = next(iter(operation.tasks.values()))
             operation.tasks = {"timeout-source": task}
             operation.ops.tasks = {"timeout-source": task}
@@ -304,14 +306,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_runtime_only_queue_uses_canonical_owner_without_inspection(self):
         with tempfile.TemporaryDirectory(prefix="native-runtime-only-queue-") as directory:
             operation, status = queue_oracle(
-                Path(directory), with_inspection=False, runtime_only=True)
+                Path(directory), with_inspection=False, runtime_only=True, check=self)
 
             self.assertTrue(operation.terminal_private_queue(status))
 
     def test_runtime_only_queue_rejects_an_inspection_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-runtime-only-queue-") as directory:
             operation, status = queue_oracle(
-                Path(directory), with_inspection=False, runtime_only=True)
+                Path(directory), with_inspection=False, runtime_only=True, check=self)
             (operation.state / "inspections" / operation.tasks["fresh"]).mkdir(parents=True)
 
             self.assertFalse(operation.terminal_private_queue(status))
@@ -326,14 +328,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     fixture_root.mkdir()
                     operation, status = queue_oracle(
                         fixture_root,
-                        with_inspection=False, runtime_only=True)
+                        with_inspection=False, runtime_only=True, check=self)
                     status["groups"]["default"] = group
 
                     self.assertFalse(operation.terminal_private_queue(status))
 
     def test_terminal_queue_rejects_unknown_inspection_rows(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory))
+            operation, status = queue_oracle(Path(directory), check=self)
             status["tasks"]["9"] = dict(status["tasks"]["8"])
             status["tasks"]["9"]["id"] = 9
             self.assertFalse(operation.terminal_private_queue(status))
@@ -384,7 +386,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_model_discovery_group_is_filtered_by_its_distinct_root(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory), with_inspection=False)
+            operation, status = queue_oracle(Path(directory), with_inspection=False, check=self)
             operation.models_root_id = "c" * 32
             group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
             status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
@@ -407,7 +409,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.models_state = Path(directory) / "models-state"
             operation.models_state.mkdir()
-            cleanup = SimpleNamespace(root_id=None, dispatch_attempts=set(), inspection_attempts=set())
+            cleanup = Mock(spec=gate.ModelDiscoveryCleanupOps, root_id=None, dispatch_attempts=set(), inspection_attempts=set())
 
             def record():
                 """Return the inspection the cleanup owner was bound to, if any."""
@@ -503,11 +505,11 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_standalone_model_shutdown_rejects_terminal_row_without_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-model-queue-unit-") as directory:
             root = Path(directory)
-            operation, status = queue_oracle(root, with_inspection=False)
+            operation, status = queue_oracle(root, with_inspection=False, check=self)
             operation.root_id = None
             operation.tasks = {}
             operation.numeric_ids = {}
-            operation.ops = SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set())
+            self.enterContext(patch.object(operation, "ops", SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set()), create=True))
             operation.discover_models_only = True
             operation.models_state = root / "models-state"
             operation.models_state.mkdir()
@@ -524,7 +526,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_model_prerequisite_shutdown_requires_its_own_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-model-prerequisite-queue-") as directory:
             root = Path(directory)
-            operation, status = queue_oracle(root, with_inspection=False)
+            operation, status = queue_oracle(root, with_inspection=False, check=self)
             operation.discover_models_only = False
             operation.models_state = root / "models-state"
             operation.models_state.mkdir()
@@ -541,7 +543,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_default_model_failure_uses_model_owner_before_ordinary_dispatch(self):
         with tempfile.TemporaryDirectory(prefix="native-model-owner-selection-") as directory:
             root = Path(directory)
-            operation, status = queue_oracle(root, with_inspection=False)
+            operation, status = queue_oracle(root, with_inspection=False, check=self)
             operation.root_id = None
             operation.tasks = {}
             operation.models_root_id = "c" * 32
@@ -563,7 +565,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_replay_membership_projects_model_group_before_canonical_validation(self):
         with tempfile.TemporaryDirectory(prefix="native-model-replay-membership-") as directory:
             root = Path(directory)
-            operation, status = queue_oracle(root, with_inspection=False)
+            operation, status = queue_oracle(root, with_inspection=False, check=self)
             operation.models_root_id = "c" * 32
             group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
             status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
@@ -617,7 +619,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_mixed_failure_projects_model_group_before_canonical_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="native-model-mixed-failure-") as directory:
             root = Path(directory)
-            operation, status = queue_oracle(root, with_inspection=False)
+            operation, status = queue_oracle(root, with_inspection=False, check=self)
             operation.models_root_id = "c" * 32
             group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
             status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
@@ -640,7 +642,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_terminal_queue_rejects_malformed_inspection_record(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = queue_oracle(Path(directory))
+            operation, status = queue_oracle(Path(directory), check=self)
             operation.ops._inspection_journals = lambda *_args: {
                 "a" * 32: {"task_id": "a" * 32,
                            "group": "delegation-inspection-" + "b" * 32,
@@ -653,14 +655,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_terminal_projection_sets_exact_inspection_coverage(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, _ = queue_oracle(Path(directory))
+            operation, _ = queue_oracle(Path(directory), check=self)
             task = next(iter(operation.tasks.values()))
             self.assertEqual(operation._expected_inspection_attempts(), {task})
             self.assertEqual(operation.ops.inspection_attempts, {task})
 
     def test_inspection_expectations_exclude_pending_runtime_tasks(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-runtime-drift-") as directory:
-            operation, _ = queue_oracle(Path(directory), with_inspection=False)
+            operation, _ = queue_oracle(Path(directory), with_inspection=False, check=self)
             first = operation.tasks["fresh"]
             second = "c" * 32
             operation.tasks["resume"] = second
@@ -687,7 +689,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.provider_executable = selected.resolve()
             task_id = "a" * 32
-            meta = {
+            meta: dict[str, object] = {
                 "provider_executable": str(foreign.resolve()),
                 "provider_version": "fixture-v2",
                 "effective_config": {"policy": {"runtime_sha256": "b" * 64}},
@@ -707,13 +709,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.provider_executable = selected.resolve()
             task_id = "a" * 32
-            meta = {
+            meta: dict[str, object] = {
                 "provider_executable": str(selected.resolve()),
                 "provider_version": "",
                 "runtime_preflight_sha256": "a" * 64,
                 "environment_recorded": True,
             }
-            started = {
+            started: dict[str, object] = {
                 "provider_executable": str(refreshed.resolve()),
                 "provider_version": "fixture-v2",
                 "provider_sha256": "b" * 64,
@@ -741,13 +743,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.provider_executable = selected.resolve()
             task_id = "a" * 32
-            meta = {
+            meta: dict[str, object] = {
                 "provider_executable": str(selected.resolve()),
                 "provider_version": "",
                 "runtime_preflight_sha256": "a" * 64,
                 "environment_recorded": True,
             }
-            started = {
+            started: dict[str, object] = {
                 "provider_executable": str(selected.resolve()),
                 "provider_version": "fixture-v2",
                 "provider_sha256": "b" * 64,

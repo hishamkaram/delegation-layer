@@ -28,6 +28,7 @@
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
       "py:argparse",
+      "py:delegate_acceptance.evidence.records",
       "py:http.server",
       "py:json",
       "py:os",
@@ -93,6 +94,7 @@
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
       "py:argparse",
+      "py:delegate_acceptance.tasks.contracts",
       "py:pathlib",
       "py:secrets",
       "py:shlex",
@@ -302,6 +304,7 @@
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
+      "py:acceptance_supervisor_native_cleanup",
       "py:acceptance_supervisor_yaml",
       "py:argparse",
       "py:pathlib",
@@ -346,6 +349,18 @@
       "py:sys",
       "py:time",
       "py:uuid"
+    ]
+  },
+  {
+    "name": "py:acceptance_supervisor_native_cleanup",
+    "owner": "py:acceptance_supervisor_native",
+    "layer": "runtime",
+    "imports": [
+      "py:collections.abc",
+      "py:delegate_acceptance.tasks.contracts",
+      "py:delegate_acceptance.tasks.operations",
+      "py:pathlib",
+      "py:typing"
     ]
   }
 ]

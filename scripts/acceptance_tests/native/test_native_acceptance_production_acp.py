@@ -1,12 +1,15 @@
 """The native harness proves production OpenCode ACP from admitted task records."""
 
+from argparse import Namespace
+from collections.abc import Mapping
+
 from pathlib import Path
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 from scripts.acceptance_tests.test_foundation_owners import failing_lstat
+from scripts.acceptance_tests.native.support import fixture_record
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_operations as operations_impl,
@@ -28,17 +31,17 @@ HISTORICAL_PREDICATE = {**PREDICATE, "version": "acp-v1"}
 class AcpTask:
     """One on-disk admitted OpenCode task with the records the core writes."""
 
-    def __init__(self, base: Path, task_id: str, *, prior: dict[str, object] | None = None,
-                 predicate: dict[str, object] = PREDICATE):
+    def __init__(self, base: Path, task_id: str, *, prior: Mapping[str, object] | None = None,
+                 predicate: Mapping[str, object] = PREDICATE):
         self.task_id = task_id
         self.directory = base / "tasks" / task_id
         (self.directory / "raw").mkdir(parents=True)
-        self.record = {"root_id": ROOT, "task_id": task_id, "provider": "opencode:run",
+        self.record: dict[str, object] = {"root_id": ROOT, "task_id": task_id, "provider": "opencode:run",
                        "requested_config": {"permission": "workspace-write"},
                        "prior_session": prior}
         gate.write_json(self.directory / "task.json", self.record)
         self.spec_digest = gate.digest(self.directory / "task.json")
-        self.meta = {"root_id": ROOT, "task_id": task_id, "spec_sha256": self.spec_digest,
+        self.meta: dict[str, object] = {"root_id": ROOT, "task_id": task_id, "spec_sha256": self.spec_digest,
                      "requested_config": {"permission": "workspace-write"},
                      "effective_config": {"policy": {"profile_revision": "opencode-acp-v1"}},
                      "predicate": dict(predicate)}
@@ -192,18 +195,19 @@ class ProductionAcpMarkerTests(unittest.TestCase):
         receipt = owner.receipt({"timeout_source": FRESH, "timeout_resume": RESUME})
         self.assertEqual((receipt["schema_version"], receipt["profile_revision"],
                           receipt["predicate_version"]), (1, "opencode-acp-v1", "acp-v2"))
+        turns = {alias: fixture_record(turn) for alias, turn in fixture_record(receipt["tasks"]).items()}
         self.assertEqual({alias: (turn["publication"], turn["predicate_version"],
                                   turn["profile_revision"])
-                          for alias, turn in receipt["tasks"].items()},
+                          for alias, turn in turns.items()},
                          {"timeout_source": ("unpublished", "acp-v2", "opencode-acp-v1"),
                           "timeout_resume": ("committed", "acp-v2", "opencode-acp-v1")})
-        self.assertEqual(receipt["tasks"]["timeout_resume"]["predecessor_task_id"], FRESH)
+        self.assertEqual(turns["timeout_resume"]["predecessor_task_id"], FRESH)
 
 
 class ProductionAcpOwnerTests(unittest.TestCase):
     def test_owner_records_each_task_once_and_requires_exact_coverage(self):
         owner = ProductionAcpEvidence()
-        marker = {"task_id": FRESH, "publication": "committed"}
+        marker: dict[str, object] = {"task_id": FRESH, "publication": "committed"}
         owner.record(FRESH, marker)
         owner.record(FRESH, dict(marker))
         with self.assertRaisesRegex(gate.AcceptanceFailure, "changed its production ACP marker"):
@@ -224,12 +228,12 @@ class ProductionAcpOwnerTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.AcceptanceFailure, "coverage is incomplete"):
             operation.production_acp_receipt({"fresh": FRESH})
         operation._production_acp.record(FRESH, {"task_id": FRESH})
-        self.assertEqual(operation.production_acp_receipt({"fresh": FRESH})["production_acp"]["tasks"],
+        self.assertEqual(fixture_record(operation.production_acp_receipt({"fresh": FRESH})["production_acp"])["tasks"],
                          {"fresh": {"task_id": FRESH}})
 
 
 class ProductionAcpBindingWiringTests(unittest.TestCase):
-    def operation(self, provider: str, task: AcpTask) -> object:
+    def operation(self, provider: str, task: AcpTask) -> gate.NativeAcceptance:
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = ROOT
         operation.provider = provider
@@ -247,7 +251,7 @@ class ProductionAcpBindingWiringTests(unittest.TestCase):
             task = AcpTask(Path(directory), FRESH)
             operation = self.operation("opencode:run", task)
             operation.task_binding(FRESH)
-            self.assertEqual(operation._production_acp.receipt({"fresh": FRESH})["tasks"]["fresh"],
+            self.assertEqual(fixture_record(operation._production_acp.receipt({"fresh": FRESH})["tasks"])["fresh"],
                              task.marker())
             codex = self.operation("codex:exec", task)
             codex.task_binding(FRESH)
@@ -255,7 +259,7 @@ class ProductionAcpBindingWiringTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.AcceptanceFailure, "coverage is incomplete"):
                 codex._production_acp.receipt({"fresh": FRESH})
 
-            task.meta["effective_config"]["policy"]["profile_revision"] = "opencode-native-v2"
+            fixture_record(fixture_record(task.meta["effective_config"])["policy"])["profile_revision"] = "opencode-native-v2"
             task.write_meta()
             legacy = self.operation("opencode:run", task)
             with self.assertRaisesRegex(gate.AcceptanceFailure, "production OpenCode ACP profile"):
@@ -268,7 +272,7 @@ class ProductionAcpBindingWiringTests(unittest.TestCase):
             operation = self.operation("opencode:run", task)
             operation.state = Path(directory)
             operation.mode = "workspace-write"
-            operation.args = SimpleNamespace(model=None, effort=None)
+            operation.args = Namespace(model=None, effort=None)
             self.assertEqual(operation.timeout_source_binding(FRESH), task.directory)
-            marker = operation._production_acp.receipt({"timeout_source": FRESH})["tasks"]
-            self.assertEqual(marker["timeout_source"]["publication"], "unpublished")
+            marker = fixture_record(operation._production_acp.receipt({"timeout_source": FRESH})["tasks"])
+            self.assertEqual(fixture_record(marker["timeout_source"])["publication"], "unpublished")

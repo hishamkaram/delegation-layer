@@ -138,7 +138,7 @@ class WorkflowSelectionTests(unittest.TestCase):
             self.assertIn(value, selector)
         ccr = job_text(self.workflow, "ccr")
         self.assertIn("needs.changes.outputs.full == 'true'", ccr)
-        self.assertIn("uses: ./.github/workflows/ccr-integration.yml", ccr)
+        self.assertIn("uses: $/.github/workflows/ccr-integration.yml", ccr)
         triggers = (self.root / ".github/workflows/ccr-integration.yml").read_text().split("permissions:", 1)[0]
         self.assertIn("  workflow_call:", triggers)
         self.assertIn("  workflow_dispatch:", triggers)

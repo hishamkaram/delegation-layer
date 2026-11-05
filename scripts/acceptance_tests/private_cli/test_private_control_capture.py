@@ -19,7 +19,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 class PrivateControlCaptureTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def test_pueue_snapshot_uses_shared_file_backed_capture(self):
         completed = subprocess.CompletedProcess([], 0, b'{"tasks": {}}\n', b"")

@@ -407,6 +407,23 @@ class ProcessOwnershipTests(unittest.TestCase):
             "uncertain start registration failed: RuntimeError: registration fault",
             "process launch outcome uncertain; capture retained: " + str(child)])
 
+    def test_uncertain_handle_refuses_identity_and_poll_without_manufacturing_completion(self):
+        book = self.book("uncertain-handle")
+        uncertain: list[processes.Process] = []
+        directory = book.directory / "001-uncertain"
+        with patch.object(processes.subprocess, "Popen", side_effect=OSError("lost native handle")), \
+                self.assertRaisesRegex(OSError, "lost native handle"):
+            processes.Process(directory, [PYTHON, "-c", "pass"], self.root, {}, book.capture_root,
+                              on_start_uncertain=uncertain.append)
+        self.assertEqual(len(uncertain), 1)
+        child = uncertain[0]
+        for observe in (lambda: child.pid, child.poll):
+            with self.assertRaisesRegex(RuntimeError, "process handle unavailable; ownership retained"):
+                observe()
+        self.assertIsNone(child.result)
+        self.assertTrue((directory / "invocation.json").is_file())
+        self.assertFalse((directory / "completed.json").exists())
+
     def test_invalid_capture_roots_refuse_before_spawn_or_capture(self):
         book = self.book("roots")
         other = DirectoryOwner()

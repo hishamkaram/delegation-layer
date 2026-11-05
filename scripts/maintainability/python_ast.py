@@ -159,6 +159,8 @@ def parse_source_facts(path, source, known):
             imports.extend({"target": "py:" + target, "line": node.lineno}
                            for target in sorted(targets))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.end_lineno is None:
+                raise ValueError("parsed function lacks its end location")
             functions.append({"name": node.name, "line": node.lineno,
                               "length": node.end_lineno - node.lineno + 1})
         elif isinstance(node, ast.Call):

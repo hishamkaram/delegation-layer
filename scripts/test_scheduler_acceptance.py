@@ -118,7 +118,10 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         self.lifetime.env = {"HOME": str(self.base / "home"), "PATH": str(self.base / "provider-bin") + ":/usr/bin:/bin"}
 
     def release_tokens(self):
-        if not self.lifetime.capture_token.consumed:
+        token = self.lifetime.capture_token
+        if token is None:
+            raise AssertionError("fixture capture ownership token is absent")
+        if not token.consumed:
             self.lifetime.ownership.release()
 
     def service(self, system="Linux"):
@@ -283,7 +286,10 @@ class SchedulerAcceptanceTests(unittest.TestCase):
             host.stop()
         self.assertFalse(host.processes.finished_naturally())
         self.assertFalse((self.state / "calls").exists())
-        self.assertTrue(next(self.lifetime.capture_token.directory.iterdir()).is_dir())
+        token = self.lifetime.capture_token
+        if token is None:
+            raise AssertionError("fixture capture ownership token is absent")
+        self.assertTrue(next(token.directory.iterdir()).is_dir())
 
     def test_post_start_receipt_fault_keeps_exact_handle_for_cooperative_stop_and_wait(self):
         host = self.host()
@@ -319,7 +325,10 @@ class SchedulerAcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "fixture retained") as raised:
                 application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
                                         receipt=case.receipt, failure=failure)
-        self.assertIs(raised.exception.__cause__.exceptions[0], failure)
+        cause = raised.exception.__cause__
+        if not isinstance(cause, BaseExceptionGroup):
+            raise AssertionError("retention failure must preserve the grouped original failure")
+        self.assertIs(cause.exceptions[0], failure)
         finalize.assert_not_called()
         discover.assert_not_called()
         self.assertTrue(self.base.is_dir())

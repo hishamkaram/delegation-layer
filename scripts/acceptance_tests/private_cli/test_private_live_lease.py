@@ -121,8 +121,11 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         self.addCleanup(self.reap, process)
-        process.stdin.write(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
-        process.stdin.close()
+        stream = process.stdin
+        if stream is None:
+            self.fail("the finite provider must own its configured stdin pipe")
+        stream.write(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+        stream.close()
         process.stdin = None
         fifo = private_cli.lease_fifo_path(waiters, self.nonce, process.pid)
         for _ in range(200):
@@ -161,8 +164,11 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         self.addCleanup(self.reap, process)
-        process.stdin.write(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
-        process.stdin.close()
+        stream = process.stdin
+        if stream is None:
+            self.fail("the finite provider must own its configured stdin pipe")
+        stream.write(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+        stream.close()
         process.stdin = None
         fifo = private_cli.lease_fifo_path(waiters, self.nonce, process.pid)
         for _ in range(200):
@@ -477,9 +483,12 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             descriptor = real_open(*args, **kwargs)
             opened.append(descriptor)
             if len(opened) == 3:
-                first.stdin.write(b"x")
-                first.stdin.flush()
-                first.stdin.close()
+                stream = first.stdin
+                if stream is None:
+                    self.fail("the finite provider must retain its stdin pipe")
+                stream.write(b"x")
+                stream.flush()
+                stream.close()
             return descriptor
 
         specifications = [

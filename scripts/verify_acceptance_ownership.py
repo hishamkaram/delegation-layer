@@ -181,7 +181,7 @@ def _import_aliases(tree: ast.AST, path: Path | None = None) -> ControlledAliase
 
 
 def _references(
-        node: ast.AST,
+        node: ast.AST | None,
         aliases: ControlledAliases,
 ) -> frozenset[ControlledReference]:
     """Return conservative controlled references without evaluating code."""
@@ -264,7 +264,7 @@ def _owner_receiver(
 
 
 def _owned_directory_constructor(
-        node: ast.AST, aliases: ControlledAliases) -> bool:
+        node: ast.AST | None, aliases: ControlledAliases) -> bool:
     if not isinstance(node, ast.Call):
         return False
     return _is_common_reference(node.func, "DirectoryOwner", aliases)

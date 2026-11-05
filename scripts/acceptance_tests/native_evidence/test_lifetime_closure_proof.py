@@ -81,10 +81,14 @@ class LifetimeClosureRuleTests(unittest.TestCase):
         self.assertEqual(lifetime_closure_error(proof, task_ids=(), model_discovery_required=False),
                          "lifetime_closure_incomplete")
         empty = deepcopy(proof)
-        empty["model_discovery"]["inspections"] = {}
+        empty_model = empty["model_discovery"]
+        assert isinstance(empty_model, dict)
+        empty_model["inspections"] = {}
         self.assertEqual(lifetime_closure_error(empty, task_ids=()), "lifetime_closure_incomplete")
         crossed = deepcopy(proof)
-        crossed["model_discovery"]["tasks"] = {FRESH: lifetime_closure_fact()}
+        crossed_model = crossed["model_discovery"]
+        assert isinstance(crossed_model, dict)
+        crossed_model["tasks"] = {FRESH: lifetime_closure_fact()}
         self.assertEqual(lifetime_closure_error(crossed, task_ids=()), "lifetime_closure_incomplete")
         missing = lifetime_closure_source(TASKS)
         self.assertEqual(lifetime_closure_error(missing, task_ids=TASKS.values(),
@@ -196,8 +200,10 @@ class ClosureAggregateTests(unittest.TestCase):
                     tag="v1.2.3", source_revision="a" * 40,
                 )
                 self.assertEqual(code, 1)
-                self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
-                compact = json.loads(Path(aggregate["cases"][0]["receipt_path"]).read_text(encoding="utf-8"))
+                cases = aggregate["cases"]
+                assert isinstance(cases, list)
+                self.assertEqual(cases[0]["evidence_status"], "UNRESOLVED")
+                compact = json.loads(Path(cases[0]["receipt_path"]).read_text(encoding="utf-8"))
                 lifecycle = compact["source_proof"]["lifecycle_proof"]
                 self.assertEqual((lifecycle["state"], lifecycle["closure"]), ("unresolved", None))
                 self.assertTrue(case_directory.is_dir())

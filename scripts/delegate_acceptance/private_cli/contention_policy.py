@@ -31,10 +31,12 @@ LOGICAL_IDENTITY_FIELDS = ("config_path", "config_digest", "resolved_config_sha2
 DAEMON_IDENTITY_FIELDS = ("executable", "sha256", *LOGICAL_IDENTITY_FIELDS)
 
 
-def require_migration_facts(facts: dict[str, object]) -> None:
-    """Assert this scenario's inputs; this grants no lifecycle mutation authority."""
+def _validated_migration_facts(
+    facts: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Validate scenario facts and return the existing daemon/writer identities."""
     published, daemon, writer = (facts.get(name) for name in ("published", "daemon", "writer"))
-    if not all(isinstance(value, dict) for value in (published, daemon, writer)):
+    if not isinstance(published, dict) or not isinstance(daemon, dict) or not isinstance(writer, dict):
         raise RuntimeError("modern migration omitted published or resolved writer identity")
     for field in LOGICAL_IDENTITY_FIELDS:
         if not isinstance(published.get(field), str) or not published[field] or daemon.get(field) != published[field]:
@@ -58,11 +60,16 @@ def require_migration_facts(facts: dict[str, object]) -> None:
             raise RuntimeError("modern migration recovery alias config digest changed")
     elif facts.get("alias_config_sha256") is not None:
         raise RuntimeError("modern migration has an orphaned recovery alias config")
+    return daemon, writer
+
+
+def require_migration_facts(facts: dict[str, object]) -> None:
+    """Assert this scenario's inputs; this grants no lifecycle mutation authority."""
+    _validated_migration_facts(facts)
 
 
 def migration_expectation(facts: dict[str, object], *, active: bool) -> MigrationExpectation:
-    require_migration_facts(facts)
-    daemon, writer = facts["daemon"], facts["writer"]
+    daemon, writer = _validated_migration_facts(facts)
     same = all(daemon[field] == writer[field] for field in ("executable", "sha256"))
     pending = facts.get("migration")
     if pending is not None:
@@ -87,6 +94,8 @@ def migration_expectation(facts: dict[str, object], *, active: bool) -> Migratio
 
 
 def require_migration_response(response: object, root_id: str, expected: MigrationExpectation) -> None:
+    if not isinstance(response, dict):
+        raise RuntimeError("modern control changed root identity")
     require_control_response(response, root_id, migration_state=expected.state)
     if type(response.get("schema_version")) is not int or response["schema_version"] != 1 or response.get("command") != "supervisor":
         raise RuntimeError("modern migration returned an invalid command envelope")
@@ -168,5 +177,7 @@ def require_same_lock(*observations: dict[str, object]) -> None:
 def require_boundary_order(
     shared: dict[str, object], shared_release: int, exclusive: dict[str, object], exclusive_release: int
 ) -> None:
-    if not shared["entered_ns"] < shared_release <= exclusive["entered_ns"] < exclusive_release:
+    shared_entered, exclusive_entered = shared["entered_ns"], exclusive["entered_ns"]
+    if (type(shared_entered) is not int or type(exclusive_entered) is not int or
+            not shared_entered < shared_release <= exclusive_entered < exclusive_release):
         raise RuntimeError("modern exclusive boundary crossed the shared release order")

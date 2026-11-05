@@ -15,6 +15,7 @@ import time
 
 from acceptance_native import NativeAcceptance, build_parser, choose_output
 from acceptance_provider_common import require
+from delegate_acceptance.evidence.records import status_jobs
 from acceptance_supervisor_common import (
     DirectoryOwner,
     rollback_owned_directories,
@@ -35,7 +36,7 @@ class Fixture:
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *_args):
+            def log_message(self, format: str, *args: object) -> None:
                 pass
 
             def do_GET(self):
@@ -81,18 +82,20 @@ class Fixture:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.end_headers()
-                frames = [
-                    {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "CCR_FIXTURE_OK"}}]},
-                    {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-                    {"choices": [], "usage": {"prompt_tokens": 8, "completion_tokens": 4}},
-                ]
+                first_delta: dict[str, object] = {"role": "assistant", "content": "CCR_FIXTURE_OK"}
+                finish_reason = "stop"
                 messages = request.get("messages", [])
                 if model == "write" and not any(m.get("role") == "tool" for m in messages):
                     command = "printf created > fixture-new.txt; printf edited > fixture-new.txt; printf changed > fixture-existing.txt; cat fixture-new.txt > fixture-shell.txt"
-                    frames[0]["choices"][0]["delta"] = {"tool_calls": [{"index": 0,
+                    first_delta = {"tool_calls": [{"index": 0,
                         "id": "call-fixture-write", "type": "function", "function": {
                             "name": "Bash", "arguments": json.dumps({"command": command})}}]}
-                    frames[1]["choices"][0]["finish_reason"] = "tool_calls"
+                    finish_reason = "tool_calls"
+                frames: list[dict[str, object]] = [
+                    {"choices": [{"index": 0, "delta": first_delta}]},
+                    {"choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]},
+                    {"choices": [], "usage": {"prompt_tokens": 8, "completion_tokens": 4}},
+                ]
                 for frame in frames:
                     frame["id"] = "chatcmpl-ccr-fixture"
                     self.wfile.write(("data: " + json.dumps(frame) + "\n\n").encode())
@@ -150,8 +153,8 @@ class FixtureAcceptance(NativeAcceptance):
             self.fixture_directories = ()
             raise
 
-    def finalize(self, success):
-        if not super().finalize(success):
+    def finalize(self, success: bool, *, blocked: bool = False) -> bool:
+        if not super().finalize(success, blocked=blocked):
             return False
         try:
             rollback_owned_directories(self.fixture_directories)
@@ -178,6 +181,21 @@ class FixtureAcceptance(NativeAcceptance):
         directory = self.state / "tasks" / task_id
         require((directory / "result.txt").read_text().strip() == "CCR_FIXTURE_OK", "fixture result changed")
         return self.session_ref(task_id)
+
+    def _wait_stopped(self, model: str, task_id: str) -> None:
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            tasks = status_jobs(self.ops.client(model + "-status", ["status", "--json"]))["tasks"]
+            if not isinstance(tasks, dict):
+                raise RuntimeError("fixture queue status has no task map")
+            row = tasks.get(str(self.numeric_ids[task_id]))
+            if not isinstance(row, dict):
+                raise RuntimeError("fixture task is absent from queue status")
+            if isinstance(row["status"], dict) and "Done" in row["status"]:
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError(model + " task did not stop")
 
     def exercise(self, fixture):
         self.setup()
@@ -222,14 +240,7 @@ class FixtureAcceptance(NativeAcceptance):
             if model == "cancel":
                 result = self.command("cancel-request", "cancel", task_id, "--json")
                 require(result.result["exit_code"] == 0, "cancel failed")
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                row = self.ops.client(model + "-status", ["status", "--json"]).json()["tasks"][str(self.numeric_ids[task_id])]
-                if isinstance(row["status"], dict) and "Done" in row["status"]:
-                    break
-                time.sleep(0.2)
-            else:
-                raise RuntimeError(model + " task did not stop")
+            self._wait_stopped(model, task_id)
             # A closed user cancellation is a terminal interruption (exit 1); a budget stop stays pending (exit 3).
             stopped = self.command(model + "-collect", "collect", task_id, "--json",
                                    expected=1 if model == "cancel" else 3).json()
@@ -343,6 +354,8 @@ def main():
     if primary_error is None and cleanup_error is None:
         try:
             # Publish only the confirmed candidate bytes, after every owned cleanup completed.
+            if run is None:
+                raise RuntimeError("CCR fixture acceptance was not prepared")
             run.publish_success(expected_gate=FIXTURE_GATE)
         except BaseException as error:
             primary_error = error
@@ -361,7 +374,8 @@ def main():
             pass
         if cleanup_error is not None:
             raise cleanup_error from primary_error
-        raise primary_error
+        if primary_error is not None:
+            raise primary_error
     print(json.dumps({"status": "passed", "evidence": str(output)}))
     return 0
 

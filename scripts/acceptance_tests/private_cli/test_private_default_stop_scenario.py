@@ -15,7 +15,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 class PrivateDefaultStopScenarioTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def test_orchestration_requires_live_leases_and_canonical_closure(self):
         records = _run_stop_scenario(self)
@@ -427,7 +427,10 @@ def _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, st
                     "requested": True, "terminated": False, "observed_state": "running",
                 }]}
         label = "interrupted" if observed.get("status") == "interrupted" else "status"
-        lifecycle.append(label + ":" + observed["liveness"])
+        liveness = observed["liveness"]
+        if not isinstance(liveness, str):
+            raise AssertionError("the status fixture must record textual liveness")
+        lifecycle.append(label + ":" + liveness)
         return observed
     return run_json
 

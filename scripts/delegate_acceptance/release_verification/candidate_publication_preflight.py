@@ -92,9 +92,10 @@ def latest_jobs(rows: list[dict[str, object]], *, run_id: int,
         if row.get("run_id") != run_id or row.get("head_sha") != head_sha or attempt > latest_attempt:
             raise _refuse("distribution_job_source_mismatch")
         previous = selected.get(name)
-        if previous is not None and previous["run_attempt"] == attempt:
+        previous_attempt = positive_id(previous.get("run_attempt"), STAGE) if previous is not None else None
+        if previous_attempt == attempt:
             ambiguous.add(name)
-        if previous is None or attempt > previous["run_attempt"]:
+        if previous_attempt is None or attempt > previous_attempt:
             selected[name] = row
             ambiguous.discard(name)
     if set(selected) != set(REQUIRED_JOBS):
@@ -117,10 +118,10 @@ def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> No
     run = _run(client, artifact)
     jobs = latest_jobs(_jobs(client, locator.repository, locator.run_id), run_id=locator.run_id,
                        head_sha=artifact.manifest.source.commit, latest_attempt=run)
-    producer = jobs[PRODUCER_JOB]["run_attempt"]
+    producer = positive_id(jobs[PRODUCER_JOB].get("run_attempt"), STAGE)
     if producer != locator.run_attempt:
         raise _refuse("distribution_artifact_superseded")
-    if any(jobs[name]["run_attempt"] < producer for name in INSTALL_JOBS):
+    if any(positive_id(jobs[name].get("run_attempt"), STAGE) < producer for name in INSTALL_JOBS):
         raise _refuse("distribution_install_predates_producer")
     commit = object_value(client.json(
         f"repos/{locator.repository}/commits/{artifact.manifest.source.commit}"), STAGE)

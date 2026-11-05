@@ -6,7 +6,7 @@ import json
 
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 
-def validate_l1_write_denial(stdout: bytes, stderr: bytes, conversation: str) -> None:
+def validate_l1_write_denial(stdout: bytes, stderr: bytes, conversation: object) -> None:
     """Validate a controlled denial, never authorize result publication."""
     require(len(stdout) <= 2 * 1024 * 1024, "L1 denial envelope exceeds observation bound")
     def unique_object(pairs):

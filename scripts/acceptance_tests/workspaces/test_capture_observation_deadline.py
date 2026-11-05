@@ -85,10 +85,9 @@ def workspace_response(state: str, code: int = 0, **fields: object) -> Response:
 
 
 def busy(path: str, capture: dict[str, object] | None = None) -> Response:
-    fields: dict[str, object] = {"path": path}
-    if capture is not None:
-        fields["capture"] = capture
-    return workspace_response("busy", **fields)
+    if capture is None:
+        return workspace_response("busy", path=path)
+    return workspace_response("busy", path=path, capture=capture)
 
 
 def undetermined() -> Response:

@@ -66,11 +66,11 @@ class StaticAnalysisTests(unittest.TestCase):
             names = ("ci.yml", "ccr-integration.yml", "future.yaml", "release.yml", "notes.md")
             for name in names:
                 (workflows / name).touch()
-            with mock.patch.object(analysis, "ROOT", root), mock.patch("builtins.print") as report:
+            with mock.patch.object(analysis, "ROOT", root):
                 self.assertEqual(analysis.workflow_paths(), [
-                    str(workflows / name) for name in ("ccr-integration.yml", "ci.yml", "future.yaml")])
-            report.assert_called_once_with(
-                "actionlint: release.yml remains unverified (unsupported concurrency.queue)", flush=True)
+                    str(workflows / name) for name in ("ccr-integration.yml", "ci.yml", "future.yaml", "release.yml")])
+        self.assertIn("--no-ignores", command)
+        self.assertIn("--no-baseline", command)
 
     def test_empty_workflow_scope_is_not_a_clean_scan(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -80,21 +80,17 @@ class StaticAnalysisTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "no supported workflow"):
                     analysis.workflow_paths()
 
-    def test_diagnostics_cannot_fail_the_publication_ci_run(self):
-        workflows = tools.ROOT / ".github/workflows"
-        ci = (workflows / "ci.yml").read_text()
-        diagnostic = (workflows / "static-diagnostics.yml").read_text()
-        self.assertNotIn("make diagnostics", ci)
-        self.assertIn("make diagnostic-tools", diagnostic)
-        self.assertIn("make diagnostics", diagnostic)
-        self.assertNotIn("continue-on-error", diagnostic)
-        self.assertNotIn("|| true", diagnostic)
-        self.assertIn(str(workflows / "static-diagnostics.yml"), analysis.workflow_paths())
+    def test_required_gate_runs_type_and_security_checks_and_preserves_failure(self):
+        with mock.patch.object(analysis.sys, "argv", ["static_analysis.py", "all"]), mock.patch.object(
+                analysis, "run_check", side_effect=[0, 0, 0, 0, 1, 0]) as run:
+            self.assertEqual(analysis.main(), 1)
+        self.assertEqual([call.args[0] for call in run.call_args_list],
+                         ["python", "javascript", "shell", "workflows", "ty", "zizmor"])
 
     def test_proofs_use_the_same_commands_as_the_gate(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(proofs, "prove") as prove:
             proofs.lint_fixtures(Path(directory))
-            checks = {"Ruff": "python", "ShellCheck": "shell", "ESLint": "javascript", "actionlint": "workflows"}
+            checks = {"Ruff": "python", "ShellCheck": "shell", "ESLint": "javascript", "jactionlint": "workflows"}
             for call in prove.call_args_list:
                 self.assertEqual(call.args[1], analysis.commands(checks[call.args[0].split()[0]])[0])
             prove.reset_mock()
@@ -102,6 +98,10 @@ class StaticAnalysisTests(unittest.TestCase):
             self.assertEqual(prove.call_count, 2)
             for call in prove.call_args_list:
                 self.assertEqual(call.args[1], analysis.commands("ty")[0])
+            prove.reset_mock()
+            proofs.security_fixtures(Path(directory))
+            self.assertEqual(prove.call_count, 1)
+            self.assertEqual(prove.call_args.args[1], analysis.commands("zizmor")[0])
 
     def test_killed_analyzer_is_not_a_clean_scan(self):
         with mock.patch.object(analysis.subprocess, "run", return_value=subprocess.CompletedProcess([], -9)):
@@ -110,6 +110,15 @@ class StaticAnalysisTests(unittest.TestCase):
 
 
 class StaticToolTests(unittest.TestCase):
+    def test_default_verification_requires_type_and_security_tool_versions(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(tools, "ROOT", Path(directory)), \
+                mock.patch.object(tools.sys, "argv", ["static_tools.py", "verify"]), \
+                mock.patch.object(tools, "python_tools") as python, \
+                mock.patch.object(tools, "node_tools"), mock.patch.object(tools, "require_banner"):
+            self.assertEqual(tools.main(), 0)
+        self.assertEqual(python.call_args_list,
+                         [mock.call("lint", install=False), mock.call("diagnostics", install=False)])
+
     def test_shellcheck_has_all_supported_targets(self):
         for system in ("Linux", "Darwin"):
             for machine in ("x86_64", "aarch64"):

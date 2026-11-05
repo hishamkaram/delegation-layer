@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from unittest import mock
 
 import scripts.delegate_acceptance.workspaces.scenarios.application as application
@@ -22,6 +23,7 @@ from scripts.delegate_acceptance.workspaces.scenarios.context import WorkspaceCo
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
 from scripts.delegate_acceptance.workspaces.scenarios.lifecycle import SuccessfulTaskEvidence
 from scripts.delegate_acceptance.workspaces.scenarios.source import _git_executable
+from scripts.delegate_acceptance.workspaces.scenarios.model import CaptureEvidence, WorkspaceTask
 
 ROOT_ID = "e" * 32
 PARENT_ID = "a" * 32
@@ -30,6 +32,19 @@ FIRST_OPERATION = "1" * 32
 SECOND_OPERATION = "2" * 32
 BASE_OID = "3" * 40
 HEAD_OID = "4" * 40
+
+
+def _task_fixture(task_id: str) -> WorkspaceTask:
+    return {"task_id": task_id, "workspace_id": task_id, "root_id": ROOT_ID,
+            "workspace": {"workspace": {"id": task_id}}}
+
+
+def _capture_evidence(operation_id: str, workspace_id: str = CHILD_ID) -> CaptureEvidence:
+    return {"operation_id": operation_id, "workspace_id": workspace_id, "root_id": ROOT_ID,
+            "base_oid": BASE_OID, "observed_head": HEAD_OID, "tree_oid": "6" * 40,
+            "snapshot_ref": "refs/delegate/" + ROOT_ID + "/workspaces/" + workspace_id
+                            + "/captures/" + operation_id,
+            "subject": {"kind": "task", "id": workspace_id, "sha256": "d" * 64}, "artifacts": []}
 
 
 def _write_capture(
@@ -138,7 +153,7 @@ class CaptureInventoryTests(unittest.TestCase):
         self.state = Path(self.directory.name)
         (self.state / "root.json").write_text(json.dumps({"root_id": ROOT_ID}))
         self.capture = _write_capture(self.state, FIRST_OPERATION, CHILD_ID, "6" * 40)
-        self.patch, self.names = self.capture["artifacts"]
+        self.patch, self.names = [object_at(item) for item in array_at(self.capture, "artifacts")]
         self.root = self.state / "workspace-operations" / FIRST_OPERATION / "artifacts"
 
     def _turn_pair(self):
@@ -152,7 +167,7 @@ class CaptureInventoryTests(unittest.TestCase):
     def _verify(self, artifacts, turn=None):
         capture = {**self.capture, "artifacts": artifacts}
         if turn is not None:
-            capture["candidate"] = {**capture["candidate"], "turn": turn}
+            capture["candidate"] = {**object_at(capture, "candidate"), "turn": turn}
         return lineage.verify_capture_receipt(self.state, capture)
 
     def test_cumulative_pair_is_required_with_or_without_a_turn(self):
@@ -243,7 +258,7 @@ class FreshTaskTurnTests(unittest.TestCase):
         self.turn = {"status": "observed", "baseline_ref": self.reference,
                      "start_tree_oid": "7" * 40, "content": "changed",
                      "head": "unchanged", "index": "changed"}
-        self.capture["candidate"]["turn"] = self.turn
+        object_at(self.capture, "candidate")["turn"] = self.turn
         self._artifact("turn-diff.patch", b"diff --git a/new b/new\n")
         self._artifact("turn-name-status.z", b"A\x00" + lineage.REUSED_FILE.encode() + b"\x00")
 
@@ -253,8 +268,8 @@ class FreshTaskTurnTests(unittest.TestCase):
     def _artifact(self, name, data):
         root = self.state / "workspace-operations" / FIRST_OPERATION / "artifacts"
         (root / name).write_bytes(data)
-        self.capture["artifacts"] = [item for item in self.capture["artifacts"] if item["name"] != name]
-        self.capture["artifacts"].append({"name": name, "length": len(data),
+        self.capture["artifacts"] = [item for item in array_at(self.capture, "artifacts") if object_at(item)["name"] != name]
+        array_at(self.capture, "artifacts").append({"name": name, "length": len(data),
                                            "sha256": hashlib.sha256(data).hexdigest()})
 
     def _verify(self, capture=None):
@@ -277,8 +292,8 @@ class FreshTaskTurnTests(unittest.TestCase):
     def test_missing_and_unavailable_turns_remain_generic_but_fail_fresh_acceptance(self):
         for turn in (None, {"status": "unavailable", "reason_code": "baseline_unavailable"}):
             capture = deepcopy(self.capture)
-            capture["candidate"]["turn"] = turn
-            capture["artifacts"] = capture["artifacts"][:2]
+            object_at(capture, "candidate")["turn"] = turn
+            capture["artifacts"] = array_at(capture, "artifacts")[:2]
             with self.subTest(turn=turn):
                 lineage.verify_capture_receipt(self.state, capture)
                 with self.assertRaisesRegex(RuntimeError, "not observed"):
@@ -289,7 +304,7 @@ class FreshTaskTurnTests(unittest.TestCase):
                  "content": "", "head": "unknown", "index": None}
         for field, value in cases.items():
             capture = deepcopy(self.capture)
-            capture["candidate"]["turn"][field] = value
+            object_at(capture, "candidate", "turn")[field] = value
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 self._verify(capture)
 
@@ -297,12 +312,12 @@ class FreshTaskTurnTests(unittest.TestCase):
         for subject in ({"kind": "operation", "id": CHILD_ID},
                         {"kind": "task", "id": PARENT_ID}):
             capture = deepcopy(self.capture)
-            capture["candidate"]["subject"].update(subject)
-            capture["subject"].update(subject)
+            object_at(capture, "candidate", "subject").update(subject)
+            object_at(capture, "subject").update(subject)
             with self.subTest(subject), self.assertRaisesRegex(RuntimeError, "exact task subject"):
                 self._verify(capture)
         capture = deepcopy(self.capture)
-        capture["subject"]["id"] = PARENT_ID
+        object_at(capture, "subject")["id"] = PARENT_ID
         with self.assertRaisesRegex(RuntimeError, "exact task subject"):
             self._verify(capture)
 
@@ -328,14 +343,14 @@ class FreshTaskTurnTests(unittest.TestCase):
                           self.reference.replace(CHILD_ID, PARENT_ID),
                           self.reference.rstrip("17") + "17/extra"):
             capture = deepcopy(self.capture)
-            capture["candidate"]["turn"]["baseline_ref"] = reference
+            object_at(capture, "candidate", "turn")["baseline_ref"] = reference
             with self.subTest(reference), self.assertRaisesRegex(RuntimeError, "task reservation"):
                 self._verify(capture)
 
     def test_start_tree_must_be_valid_and_match_the_pinned_tree(self):
         for tree in (None, "", "bad-oid", "8" * 40):
             capture = deepcopy(self.capture)
-            capture["candidate"]["turn"]["start_tree_oid"] = tree
+            object_at(capture, "candidate", "turn")["start_tree_oid"] = tree
             with self.subTest(tree), self.assertRaisesRegex(RuntimeError, "start tree"):
                 self._verify(capture)
         with mock.patch.object(scenario_workspace_operations, "_git_ok", side_effect=RuntimeError("missing ref")):
@@ -346,17 +361,20 @@ class FreshTaskTurnTests(unittest.TestCase):
     def test_turn_artifacts_must_be_present_complete_and_match_their_hashed_bytes(self):
         for name in ("turn-diff.patch", "turn-name-status.z"):
             capture = deepcopy(self.capture)
-            capture["artifacts"] = [item for item in capture["artifacts"] if item["name"] != name]
+            capture["artifacts"] = [item for item in array_at(capture, "artifacts") if object_at(item)["name"] != name]
             with self.subTest(name=name, fault="missing"), self.assertRaisesRegex(RuntimeError, "turn artifacts"):
                 self._verify(capture)
-            capture["artifacts"].append({"name": name, "omitted": "limit", "length": 0})
+            array_at(capture, "artifacts").append({"name": name, "omitted": "limit", "length": 0})
             with self.subTest(name=name, fault="omitted"), self.assertRaisesRegex(RuntimeError, "were omitted"):
                 self._verify(capture)
             capture = deepcopy(self.capture)
-            artifact = next(item for item in capture["artifacts"] if item["name"] == name)
-            for field, value in (("sha256", "0" * 64), ("length", artifact["length"] + 1)):
+            artifact = object_at(next(item for item in array_at(capture, "artifacts") if object_at(item)["name"] == name))
+            length = artifact["length"]
+            if type(length) is not int:
+                self.fail("fixture artifact length is not an integer")
+            for field, value in (("sha256", "0" * 64), ("length", length + 1)):
                 corrupt = deepcopy(capture)
-                next(item for item in corrupt["artifacts"] if item["name"] == name)[field] = value
+                object_at(next(item for item in array_at(corrupt, "artifacts") if object_at(item)["name"] == name))[field] = value
                 with self.subTest(name=name, fault=field), self.assertRaisesRegex(RuntimeError, "artifact digest"):
                     self._verify(corrupt)
 
@@ -389,12 +407,12 @@ class FreshTaskTurnTests(unittest.TestCase):
     def test_operation_capture_keeps_its_generic_historical_contract(self):
         for turn in (None, {"status": "unavailable"}):
             capture = deepcopy(self.capture)
-            capture["candidate"]["subject"]["kind"] = "operation"
-            capture["subject"]["kind"] = "operation"
-            capture["candidate"]["turn"] = turn
-            capture["artifacts"] = capture["artifacts"][:2]
+            object_at(capture, "candidate", "subject")["kind"] = "operation"
+            object_at(capture, "subject")["kind"] = "operation"
+            object_at(capture, "candidate")["turn"] = turn
+            capture["artifacts"] = array_at(capture, "artifacts")[:2]
             evidence = lineage.verify_capture_receipt(self.state, capture)
-            self.assertEqual(evidence["subject"]["kind"], "operation")
+            self.assertEqual(object_at(evidence, "subject")["kind"], "operation")
 
 
 class CheckoutIdentityTests(unittest.TestCase):
@@ -402,7 +420,7 @@ class CheckoutIdentityTests(unittest.TestCase):
         return lineage.CheckoutFacts(identifier, path, base, ref)
 
     def test_workspace_json_must_publish_path_and_owned_base_pin(self):
-        workspace = {"id": PARENT_ID, "path": "/c/a/checkout", "base_oid": BASE_OID,
+        workspace: dict[str, object] = {"id": PARENT_ID, "path": "/c/a/checkout", "base_oid": BASE_OID,
                      "base_ref": "refs/delegate/" + ROOT_ID + "/workspaces/" + PARENT_ID + "/base"}
         self.assertEqual(lineage.checkout_facts(workspace).base_ref, workspace["base_ref"])
         for key in ("path", "base_oid", "base_ref"):
@@ -478,6 +496,14 @@ class SharedHelperTests(unittest.TestCase):
         self.assertEqual(arguments[arguments.index("--cwd") + 1], "/c/a/checkout")
         self.assertEqual(arguments[arguments.index("--base") + 1], "9" * 40)
         self.assertNotIn("--workspace", arguments)
+
+    def test_workspace_reuse_without_identity_fails_before_recording_an_attempt(self):
+        context = self._dispatch_context()
+        with mock.patch.object(scenario_operations, "_control") as controlled:
+            with self.assertRaisesRegex(RuntimeError, "workspace reuse dispatch lacks ID"):
+                scenario_operations._dispatch(context, Path("/brief"), task_budget="30s", fresh=False)
+        controlled.assert_not_called()
+        self.assertEqual(context.attempted_task_ids, [])
 
     def test_workspace_reuse_cannot_override_source_or_base(self):
         for override in ({"source": "/c/a/checkout"}, {"base": BASE_OID}):
@@ -720,9 +746,9 @@ class LineageStageRecordTests(unittest.TestCase):
         workspace = {"id": PARENT_ID, "path": str(path), "base_oid": BASE_OID,
                      "base_ref": "refs/delegate/" + ROOT_ID + "/workspaces/" + PARENT_ID + "/base"}
         return SuccessfulTaskEvidence(
-            task={"task_id": PARENT_ID, "workspace_id": PARENT_ID, "root_id": ROOT_ID},
+            task=_task_fixture(PARENT_ID),
             status={}, workspace={"workspace": workspace}, capture={}, outcome={}, closure={},
-            session={}, capture_evidence={"operation_id": FIRST_OPERATION},
+            session={}, capture_evidence=_capture_evidence(FIRST_OPERATION, PARENT_ID),
         )
 
     def test_child_admission_refusal_names_its_stage_and_keeps_the_parent_record(self):
@@ -740,7 +766,7 @@ class LineageStageRecordTests(unittest.TestCase):
                     lineage._run_lineage(self._context(path), record)
             self.assertEqual(record["completed_stages"], ["parent-captured"])
             self.assertEqual(record["current_stage"], "child-first-turn")
-            self.assertEqual(record["parent"]["checkout"]["workspace_id"], PARENT_ID)
+            self.assertEqual(object_at(record, "parent", "checkout")["workspace_id"], PARENT_ID)
 
     def test_parent_pinned_to_another_base_stops_before_any_child_dispatch(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -814,13 +840,13 @@ class FreshTurnConsumerTests(unittest.TestCase):
             state = Path(temporary)
             context = mock.Mock(spec=WorkspaceContext)
             context.state = state
-            task = {"task_id": CHILD_ID}
+            task = _task_fixture(CHILD_ID)
             directory = state / "tasks" / CHILD_ID
             directory.mkdir(parents=True)
             (directory / "outcome.json").write_text(json.dumps({"verdict": "committed"}))
             capture = _write_capture(state, FIRST_OPERATION, CHILD_ID, "6" * 40)
             for turn in (None, {"status": "unavailable", "reason_code": "baseline_unavailable"}):
-                capture["candidate"]["turn"] = turn
+                object_at(capture, "candidate")["turn"] = turn
                 with (
                     self.subTest(turn=turn),
                     mock.patch.object(lineage, "_await_task", return_value={}),
@@ -838,11 +864,11 @@ class FreshTurnConsumerTests(unittest.TestCase):
         context = mock.Mock(spec=WorkspaceContext)
         context.brief_success = Path("/brief-success.md")
         context.container_token.directory = Path("/c")
-        task = {"root_id": ROOT_ID, "workspace_id": CHILD_ID, "task_id": CHILD_ID}
+        task = _task_fixture(CHILD_ID)
         parent = lineage.CheckoutFacts(PARENT_ID, "/c/parent", BASE_OID, "refs/delegate/parent/base")
-        workspace = {"workspace": {"id": CHILD_ID, "path": "/c/child", "base_oid": BASE_OID,
+        workspace: dict[str, object] = {"workspace": {"id": CHILD_ID, "path": "/c/child", "base_oid": BASE_OID,
                                     "base_ref": "refs/delegate/child/base"}}
-        first = lineage.TurnEvidence(task=task, workspace=workspace, capture={}, session={}, turn={})
+        first = lineage.TurnEvidence(task=task, workspace=workspace, capture=_capture_evidence(FIRST_OPERATION), session={}, turn={})
         with (
             mock.patch.object(lineage, "_dispatch", return_value=task),
             mock.patch.object(lineage, "_adopt_workspace_container"),
@@ -856,13 +882,13 @@ class FreshTurnConsumerTests(unittest.TestCase):
     def test_second_child_requires_reuse_and_excludes_the_previous_fixture_edit(self):
         context = mock.Mock(spec=WorkspaceContext)
         context.waiter_directory = Path("/fixture-waiters")
-        first = lineage.TurnEvidence(task={}, workspace={}, capture={"operation_id": FIRST_OPERATION},
+        first = lineage.TurnEvidence(task=_task_fixture(CHILD_ID), workspace={}, capture=_capture_evidence(FIRST_OPERATION),
                                      session={}, turn={})
-        task = {"task_id": CHILD_ID}
+        task = _task_fixture(CHILD_ID)
         second = lineage.TurnEvidence(task=task, workspace={}, session={}, turn={},
-                                      capture={"operation_id": SECOND_OPERATION, "base_oid": BASE_OID})
+                                      capture=_capture_evidence(SECOND_OPERATION))
         child = lineage.CheckoutFacts(CHILD_ID, "/c/child", BASE_OID, "refs/delegate/child/base")
-        record = {"completed_stages": []}
+        record: dict[str, object] = {"completed_stages": []}
         with (
             mock.patch.object(lineage, "_start_held_turn", return_value=task),
             mock.patch.object(lineage, "_observe_task", return_value={}),
@@ -914,8 +940,8 @@ class LineageApplicationTests(unittest.TestCase):
             finalizer.finalize("failed", "busy window failed", {"authorized": False})
             details = json.loads((Path(temporary) / "receipt.json").read_text())["details"]
             self.assertEqual(details["scenario"], "lineage")
-            self.assertEqual(details["lineage"]["current_stage"], "busy-window")
-            self.assertEqual(details["lineage"]["completed_stages"], ["parent-captured"])
+            self.assertEqual(object_at(details, "lineage")["current_stage"], "busy-window")
+            self.assertEqual(object_at(details, "lineage")["completed_stages"], ["parent-captured"])
 
     def test_passed_lineage_run_proves_the_original_source_untouched(self):
         context = mock.Mock(spec=WorkspaceContext)

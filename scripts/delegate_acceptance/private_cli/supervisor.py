@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from io import BufferedRandom
+from typing import Protocol
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
@@ -170,6 +170,17 @@ def private_socket_identity(endpoint):
     return info.st_dev, info.st_ino
 
 
+class BackupHandle(Protocol):
+    """The pinned backup's owner exposes only descriptor identity and closure."""
+
+    def fileno(self) -> int: ...
+
+    @property
+    def closed(self) -> bool: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class PredecessorShutdownTarget:
     """Shutdown authority captured for one generation before its config is retargeted.
@@ -182,7 +193,7 @@ class PredecessorShutdownTarget:
     config: Path
     state: Path
     backup: Path
-    backup_handle: BufferedRandom
+    backup_handle: BackupHandle
     backup_content: bytes
     pid: int
     endpoint: Path

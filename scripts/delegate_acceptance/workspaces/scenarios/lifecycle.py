@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from .context import WorkspaceContext
+from .model import CaptureEvidence, WorkspaceTask
 from .model import FIXTURE_FILE, SUCCESS_TASK_BUDGET, WAIT_SECONDS
 from .operations import (
     _adopt_workspace_container, _await_task, _collect_task, _dispatch,
@@ -22,14 +23,14 @@ from .workspace_operations import (
 
 @dataclass(frozen=True)
 class SuccessfulTaskEvidence:
-    task: dict[str, object]
+    task: WorkspaceTask
     status: dict[str, object]
     workspace: dict[str, object]
     capture: dict[str, object]
     outcome: dict[str, object]
     closure: dict[str, object]
     session: dict[str, object]
-    capture_evidence: dict[str, object]
+    capture_evidence: CaptureEvidence
 
 
 def _run_first_success(context: WorkspaceContext) -> SuccessfulTaskEvidence:
@@ -76,8 +77,8 @@ def _run_success(context: WorkspaceContext) -> dict[str, object]:
     reused_outcome = read_json(context.state / "tasks" / reused["task_id"] / "outcome.json")
     reused_capture_evidence = verify_capture_receipt(context.state, reused_capture)
     reused_subject = reused_capture_evidence["subject"]
-    require(isinstance(reused_subject, dict) and reused_subject.get("id") == reused["task_id"],
-            "reused task capture is bound to a different subject")
+    if not (isinstance(reused_subject, dict) and reused_subject.get("id") == reused["task_id"]):
+        raise RuntimeError("reused task capture is bound to a different subject")
     reused_closure = _prove_lifetimes_closed(context, [reused["task_id"]])
     reused_capture_evidence = _capture_roundtrip(
         context, reused_capture, label="reused-capture-roundtrip",

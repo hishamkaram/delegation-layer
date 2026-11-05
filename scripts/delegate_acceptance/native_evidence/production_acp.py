@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 
 from ..evidence.digests import sha as _digest_bytes
 
@@ -63,9 +64,10 @@ def _turn_is_bound(alias: str, entry: dict[str, object],
     else:
         publication_bound = (entry.get("publication") == "committed"
                              and all(_hex(entry.get(key)) for key in _DIGEST_KEYS))
-    return (entry.get("task_id") == task_ids.get(alias)
-            and isinstance(entry.get("task_id"), str)
-            and _TASK_ID.fullmatch(entry["task_id"]) is not None
+    task_id = entry.get("task_id")
+    return (task_id == task_ids.get(alias)
+            and isinstance(task_id, str)
+            and _TASK_ID.fullmatch(task_id) is not None
             and entry.get("predecessor_task_id") == expected_predecessor
             and _hex(entry.get("spec_sha256")) and _hex(entry.get("meta_sha256"))
             and publication_bound)
@@ -142,7 +144,7 @@ def _complete_proof_error(value: dict[str, object], task_ids: dict[str, str],
 
 
 def production_acp_proof_error(
-        provider: str, proof: dict[str, object], *, resolved_pass: bool,
+        provider: str, proof: Mapping[str, object], *, resolved_pass: bool,
         expected_aliases: tuple[str, ...]) -> str | None:
     """Return the canonical case-proof error for production ACP evidence."""
     if not requires_production_acp(provider):
@@ -150,7 +152,9 @@ def production_acp_proof_error(
     value = proof.get("production_acp")
     if value is None and not resolved_pass:
         return None
-    state = value.get("state") if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return "aggregate_case_production_acp_invalid"
+    state = value.get("state")
     if not isinstance(state, str) or state not in PRODUCTION_ACP_STATES:
         return "aggregate_case_production_acp_invalid"
     if state != "complete":

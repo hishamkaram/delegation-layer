@@ -106,7 +106,7 @@ def expected_claude_inspection_binding(
     executable = Path(executable).resolve()
     runner = Path(runner).resolve()
     values = _native_environment(environment)
-    definition = {
+    definition: dict[str, object] = {
         "revision": RUNTIME_INSPECTION_REVISION,
         "executable": str(executable),
         "executable_sha256": "",

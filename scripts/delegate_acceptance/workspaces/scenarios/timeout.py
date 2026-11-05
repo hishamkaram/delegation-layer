@@ -14,6 +14,7 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from .context import WorkspaceContext
 from .model import (
+    CaptureEvidence, WorkspaceTask,
     TIMEOUT_CONTINUE_TASK_BUDGET, TIMEOUT_TASK_BUDGET, TIMEOUT_WAIT_SECONDS, WAIT_SECONDS,
 )
 from .operations import (
@@ -32,7 +33,7 @@ from .workspace_operations import (
 
 
 
-def _wait_for_timeout(context: WorkspaceContext, task: dict[str, object]) -> dict[str, object]:
+def _wait_for_timeout(context: WorkspaceContext, task: WorkspaceTask) -> dict[str, object]:
     deadline = time.monotonic() + TIMEOUT_WAIT_SECONDS
     latest: dict[str, object] = {}
     while True:
@@ -59,7 +60,7 @@ def _wait_for_timeout(context: WorkspaceContext, task: dict[str, object]) -> dic
 
 @dataclass(frozen=True)
 class TimeoutPredecessor:
-    task: dict[str, object]
+    task: WorkspaceTask
     status: dict[str, object]
     outcome: dict[str, object] | None
     collected: dict[str, object] | None
@@ -70,14 +71,14 @@ class TimeoutPredecessor:
     capture: dict[str, object]
     session: dict[str, object]
     marker: dict[str, object]
-    capture_evidence: dict[str, object]
+    capture_evidence: CaptureEvidence
     subject: dict[str, object]
-    snapshot: dict[str, object]
+    snapshot: dict[str, bytes | None]
 
 
 @dataclass(frozen=True)
 class TimeoutContinuation:
-    task: dict[str, object]
+    task: WorkspaceTask
     status: dict[str, object]
     collected: dict[str, object]
     workspace: dict[str, object]
@@ -87,7 +88,7 @@ class TimeoutContinuation:
     binding: dict[str, object]
     session: dict[str, object]
     marker: dict[str, object]
-    capture_evidence: dict[str, object]
+    capture_evidence: CaptureEvidence
     subject: dict[str, object]
 
 
@@ -122,6 +123,8 @@ def _start_timeout(context: WorkspaceContext) -> TimeoutPredecessor:
         if outcome_path.exists() or outcome_path.is_symlink() else None
     )
     outcome = collected.get("outcome") if collected is not None else None
+    if outcome is not None and not isinstance(outcome, dict):
+        raise RuntimeError("collection omitted provider outcome")
     classification = classify_task_verdict(
         status, outcome, "timeout", lifetime_closed=bool(closure),
         capture_status=capture.get("status"),
@@ -129,13 +132,13 @@ def _start_timeout(context: WorkspaceContext) -> TimeoutPredecessor:
     require(classification["verdict"] == "passed", str(classification))
     session = _provider_session(context, task["task_id"])
     session_id = session.get("conversation_id")
-    require(isinstance(session_id, str) and session_id,
-            "timeout fixture session identity is unavailable")
+    if not (isinstance(session_id, str) and session_id):
+        raise RuntimeError("timeout fixture session identity is unavailable")
     marker = _fixture_session_marker(context, resumed=False)
     capture_evidence = _capture_roundtrip(context, capture)
     subject = capture_evidence["subject"]
-    require(isinstance(subject, dict) and subject.get("id") == task["task_id"],
-            "timeout capture is bound to a different predecessor")
+    if not (isinstance(subject, dict) and subject.get("id") == task["task_id"]):
+        raise RuntimeError("timeout capture is bound to a different predecessor")
     snapshot = _immutable_task_snapshot(context, task["task_id"])
     return TimeoutPredecessor(
         task=task,
@@ -169,8 +172,8 @@ def _continue_timeout(
     outcome = read_json(context.state / "tasks" / task["task_id"] / "outcome.json")
     capture_evidence = verify_capture_receipt(context.state, capture)
     subject = capture_evidence["subject"]
-    require(isinstance(subject, dict) and subject.get("id") == task["task_id"],
-            "continuation capture is bound to a different successor")
+    if not (isinstance(subject, dict) and subject.get("id") == task["task_id"]):
+        raise RuntimeError("continuation capture is bound to a different successor")
     closure = _prove_lifetimes_closed(context, [task["task_id"]])
     capture_evidence = _capture_roundtrip(
         context, capture, label="timeout-continuation-capture-roundtrip",

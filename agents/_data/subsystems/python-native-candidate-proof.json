@@ -72,6 +72,7 @@
       "py:delegate_acceptance.native_evidence.contract",
       "py:io",
       "py:pathlib",
+      "py:typing",
       "py:unittest",
       "py:unittest.mock",
       "py:verify_native_continuation"
