@@ -23,9 +23,12 @@ VERIFY_MAINTAINABILITY := go run ./cmd/maintainability --strict
 
 .PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-python test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-private-cli-default-stop acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
-tools:
-	./scripts/install-tools.sh
+tools: tools-go
 	python3 scripts/static_tools.py install
+
+.PHONY: tools-go check-platform
+tools-go:
+	./scripts/install-tools.sh
 
 .PHONY: static-tool-versions lint-static verify-static-gates diagnostic-tools diagnostics
 static-tool-versions:
@@ -308,6 +311,10 @@ vuln: tool-versions
 	"$(GOVULN_BIN)" ./...
 
 check:
+	$(MAKE) lint-static verify-static-gates
+	$(MAKE) check-platform
+
+check-platform:
 	$(MAKE) tool-versions
 	$(VERIFY_MAINTAINABILITY)
 	$(VERIFY_SKILLS)
@@ -319,8 +326,6 @@ check:
 	$(MAKE) config-check
 	$(MAKE) vet
 	$(MAKE) lint
-	$(MAKE) lint-static
-	$(MAKE) verify-static-gates
 	$(MAKE) verify-gates
 	$(MAKE) test-race
 	$(MAKE) test-python

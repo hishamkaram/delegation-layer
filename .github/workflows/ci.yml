@@ -301,11 +301,11 @@ jobs:
           go env GOHOSTOS GOHOSTARCH
           python3 --version
 
-      - name: Install tools
-        run: make tools
+      - name: Install platform tools
+        run: make tools-go
 
-      - name: Run gate checks
-        run: make check
+      - name: Run platform gate checks
+        run: make check-platform
 
       - name: Prove selected native lifetime backend
         id: native_lifetime

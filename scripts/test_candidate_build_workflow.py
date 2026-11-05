@@ -65,11 +65,22 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertIn("node-version: '18.x'", package)
             self.assertNotIn("node-version: '22.x'", package)
             self.assertEqual(package.count("run: make skill-package-check"), 1)
-        for name in ("gate-linux", "gate-macos"):
+        for name, tool_target, check_target in (("gate-linux", "tools", "check"),
+                                                 ("gate-macos", "tools-go", "check-platform")):
             with self.subTest(job=name):
                 gate = job_text(self.source, name)
                 self.assertIn("node-version: '22.x'", gate)
-                self.assertEqual(len(re.findall(r"^        run: make check$", gate, re.M)), 1)
+                self.assertEqual(re.findall(r"^        run: make (tools(?:-go)?)$", gate, re.M), [tool_target])
+                self.assertEqual(re.findall(r"^        run: make (check(?:-platform)?)$", gate, re.M), [check_target])
+
+    def test_shared_diagnostics_run_once_on_linux(self):
+        diagnostic = WORKFLOW.with_name("static-diagnostics.yml").read_text()
+        job = job_text(diagnostic, "static-diagnostics")
+        self.assertIn("runs-on: ubuntu-24.04\n", job)
+        self.assertNotIn("matrix", job)
+        self.assertEqual(job.count("run: make diagnostic-tools"), 1)
+        self.assertEqual(job.count("run: make diagnostics"), 1)
+        self.assertNotIn("continue-on-error", job)
 
     def test_full_pr_or_main_and_explicit_manual_candidate_build_the_distribution(self):
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split())

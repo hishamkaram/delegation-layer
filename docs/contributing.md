@@ -8,7 +8,8 @@ it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js
 22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is for installer/plugin checks;
 Python is for repository tooling and black-box tests, not the Go CLI runtime.
 Run `make tools` to install the project's tools under ignored `bin/`; it does
-not install Go. Then run `make build`, which requires both that compiler and the
+not install Go. `make tools-go` installs only the core Go tools for the platform
+checks. Then run `make build`, which requires both that compiler and the
 pinned tools checked by `make tool-versions`. Keep the native `bin/delegate`
 and `bin/delegate-run` from the same build colocated.
 
@@ -43,8 +44,12 @@ It covers Go race tests, Python discovery, architectural/static checks, package
 checks, formatting and vulnerability scanning. Do not run those suites again
 as separate targets after the aggregate unchanged. `make test-native-harness`
 is useful during acceptance-driver edits; its Python tests are already in
-`make test-python` and the final aggregate. Required CI validates Linux/macOS;
-do not dispatch a second full workflow merely to certify the first.
+`make test-python` and the final aggregate. Required CI runs the complete gate on
+Linux and `make check-platform` on macOS. The platform gate keeps Go vet, lint,
+builds, race tests, and Python/Node runtime tests on both hosts, including
+platform-specific source and behavior. It omits only the shared static checks
+already run on Linux. Do not dispatch a second full workflow merely to certify
+the first.
 
 Fix actual failures and rerun affected checks. Broaden only for changed inputs
 or a concrete concern. A setup failure is blocked, not a passing test. Reviewers
@@ -58,6 +63,9 @@ findings are reported separately, not automatically added to the ticket.
 locked JavaScript lint dependencies into `bin/`. `make lint-static` runs the
 mandatory language checks; `make verify-static-gates` proves rejection and
 acceptance with temporary fixtures. Both are included in `make check`.
+CI runs these shared source and workflow checks once on Linux; macOS installs
+`make tools-go` and runs `make check-platform`. The default `make check` runs
+the shared checks followed by the platform gate.
 The source inventory is authoritative: `go run ./cmd/maintainability --sources
 python` (or `javascript`, `shell`, `go`) emits absolute NUL-separated paths,
 including maintained untracked additions and excluding ignored scratch.
@@ -70,7 +78,8 @@ that coverage gap.
 Install exploratory tools separately with `make diagnostic-tools`, then run
 `make diagnostics`. This checks Python with pinned ty and all workflows with
 offline zizmor. The separate [Static diagnostics workflow](../.github/workflows/static-diagnostics.yml)
-runs on Linux and macOS for main pushes, pull requests, and manual dispatch.
+runs once on Linux for main pushes, pull requests, and manual dispatch. ty still
+checks all target platforms; running it on macOS would repeat the same analysis.
 Findings intentionally fail that workflow and remain visible; tool exit codes
 are not masked. Its result does not change the main CI workflow conclusion or
 its release eligibility. Diagnostic failures are outstanding findings, not

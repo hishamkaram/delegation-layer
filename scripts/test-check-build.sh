@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Black-box regression for the build and smoke stages of `make check`.
+# Black-box regression for check composition, tool installation, and build stages.
 # It runs the current Makefile with GNU Make in a disposable layout where
 # recording stubs replace compilers, validators, and gate scripts, so no real
 # build, provider, network, or recursive tooling regression runs.
@@ -26,7 +26,7 @@ write_stub() {
 # The compiler stub records each build's target platform and output path and
 # creates the output; STUB_FAIL_BUILD makes the first build fail after recording.
 write_stub "${STUB_PATH}/go" "
-if [[ \"\$1\" != build ]]; then echo \"go \$1\" >> '${RECORD}'; exit 0; fi
+if [[ \"\$1\" != build ]]; then echo \"go \$*\" >> '${RECORD}'; exit 0; fi
 output=''
 while [[ \$# -gt 0 ]]; do
     if [[ \"\$1\" == -o ]]; then output=\"\$2\"; fi
@@ -35,13 +35,14 @@ done
 echo \"build \${GOOS:-host}/\${GOARCH:-host} \${output}\" >> '${RECORD}'
 if [[ -n \"\${STUB_FAIL_BUILD:-}\" ]]; then exit 1; fi
 : > \"\${output}\""
-write_stub "${STUB_PATH}/python3" "echo \"python3 \$1\" >> '${RECORD}'"
+write_stub "${STUB_PATH}/python3" "echo \"python3 \$*\" >> '${RECORD}'"
 write_stub "${STUB_PATH}/sha256sum" "echo sha256sum >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/golangci-lint" "echo \"golangci-lint \$1\" >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/goreleaser" "echo goreleaser >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/govulncheck" "echo govulncheck >> '${RECORD}'"
 write_stub "${LAYOUT}/bin/gofumpt" "echo gofumpt >> '${RECORD}'"
 write_stub "${LAYOUT}/scripts/check-tool-versions.sh" ":"
+write_stub "${LAYOUT}/scripts/install-tools.sh" "echo install-tools >> '${RECORD}'"
 for gate in check-plugin-package check-skill-package verify-gates verify-tooling-regressions; do
     write_stub "${LAYOUT}/scripts/${gate}.sh" "echo ${gate} >> '${RECORD}'"
 done
@@ -63,14 +64,16 @@ BUILD_RECORDS=(
     "build linux/arm64 dist/delegate-linux-arm64/delegate"
     "build linux/arm64 dist/delegate-linux-arm64/delegate-run"
 )
-GATES_BEFORE_BUILD=(
-    "go run" "python3 scripts/verify_skills.py" sha256sum
+PLATFORM_GATES_BEFORE_BUILD=(
+    "go run ./cmd/maintainability --strict" "python3 scripts/verify_skills.py" sha256sum
     "python3 scripts/verify_acceptance_ownership.py" check-plugin-package
-    check-skill-package "go run" "golangci-lint config" goreleaser "go vet"
-    "golangci-lint run" "python3 scripts/static_tools.py" "python3 scripts/static_analysis.py"
-    "python3 scripts/static_tools.py" "python3 scripts/verify_static_gates.py"
-    verify-gates verify-tooling-regressions "go test"
-    "python3 -m"
+    check-skill-package "go run ./cmd/maintainability --go-sources" "golangci-lint config" goreleaser "go vet ./..."
+    "golangci-lint run" verify-gates verify-tooling-regressions "go test -race -count=1 -timeout=30m ./..."
+    "python3 -m unittest discover -s scripts -t scripts -p test_*.py -v"
+)
+SHARED_STATIC_GATES=(
+    "python3 scripts/static_tools.py verify" "python3 scripts/static_analysis.py all"
+    "python3 scripts/verify_static_gates.py"
 )
 
 PASSED_CASES=0
@@ -111,7 +114,18 @@ expect_run() {
 
 run_make check
 expect_run "check runs every gate in order and each of the 11 builds once before smoke" zero \
-    "${GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli govulncheck
+    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli govulncheck
+
+run_make check-platform
+expect_run "platform check retains Go lint, race and runtime tests without shared static checks" zero \
+    "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli smoke-cli govulncheck
+
+run_make tools-go
+expect_run "platform tools install only the pinned core tools" zero install-tools
+
+run_make tools
+expect_run "complete tools install core and shared static tools once" zero \
+    install-tools "python3 scripts/static_tools.py install"
 
 run_make build
 expect_run "standalone build compiles all 11 outputs" zero "${BUILD_RECORDS[@]}"
@@ -128,10 +142,10 @@ expect_run "standalone smoke-cli builds its prerequisite once, then smokes" zero
 
 run_make check STUB_FAIL_BUILD=1
 expect_run "check stops at a build failure before smoke and vuln" nonzero \
-    "${GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[0]}"
+    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[0]}"
 
 run_make check STUB_FAIL_SMOKE=1
 expect_run "check stops at a smoke failure before vuln" nonzero \
-    "${GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli
+    "${SHARED_STATIC_GATES[@]}" "${PLATFORM_GATES_BEFORE_BUILD[@]}" "${BUILD_RECORDS[@]}" smoke-cli
 
 echo "All ${PASSED_CASES} check build-stage regression checks passed."

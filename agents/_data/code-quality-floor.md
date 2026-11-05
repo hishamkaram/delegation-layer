@@ -19,6 +19,7 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
 - **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
+  `make tools-go` installs only the core Go tools needed by the platform gate.
 - **Static tools**: `scripts/static_tools.py` owns installation and version checks for
   ShellCheck 0.11.0 and actionlint 1.7.12. Ruff's exact pin and wheel hashes live in
   `tools/lint/requirements.txt`; ESLint and its dependencies use the separate
@@ -29,7 +30,7 @@ This document specifies the non-negotiable engineering floor for the repository.
   ty and zizmor wheels from `tools/diagnostics/requirements.txt`. `make diagnostics`
   reports actual failures and findings in the separate
   [Static diagnostics workflow](../../.github/workflows/static-diagnostics.yml)
-  on Linux and macOS. Findings fail that workflow without changing the main CI
+  once on Linux. ty still analyzes all configured target platforms. Findings fail that workflow without changing the main CI
   conclusion or its release eligibility; tool exit codes remain unmasked.
   These tools are not prerequisites of mandatory tool installation or
   `tool-versions`. They are not clean or promoted merely because blocking gates pass.
@@ -65,8 +66,12 @@ This document specifies the non-negotiable engineering floor for the repository.
 
 ## 3. Testing and Verification Discipline
 - **Sequential Gate:** The root [Makefile](../../Makefile) `check` target is
-  authoritative. Keep this contract aligned by referring to that recipe
-  rather than copying its command sequence here.
+  authoritative: shared static checks run before its `check-platform` target.
+  CI runs the complete gate on Linux and the platform gate on macOS. Go vet,
+  lint, builds, race tests and Python/Node runtime tests remain required on both
+  hosts; Ruff, ESLint, ShellCheck, actionlint and their rejection fixtures run
+  once on Linux. Keep this contract aligned by referring to those recipes
+  rather than copying their command sequence here.
 - **Race Detection**: The full Go unit and integration gate requires
   `-race -count=1` via `make test-race`. The narrower `make check-docs` target
   runs one Go documentation-consistency test with `-count=1` and without
