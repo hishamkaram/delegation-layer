@@ -89,14 +89,14 @@ def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
         acceptance.numeric_ids[task_id] = numeric_id
         acceptance.tasks[name] = task_id
         return task_id
-    except AcceptanceFailure:
+    except AcceptanceFailure as error:
         acceptance._sync_ops_owned_tasks()
         observation = acceptance.ops.dispatch_observations[-1] if acceptance.ops.dispatch_observations else {}
         refused = observation.get("response") if isinstance(observation, dict) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
             raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
-                                 reason=BlockReason.AUTH_UNAVAILABLE)
+                                 reason=BlockReason.AUTH_UNAVAILABLE) from error
         raise
 
 def continue_task(owner, name: str, brief: Path, predecessor: str, *,
@@ -125,14 +125,14 @@ def continue_public(owner, name: str, brief: Path, predecessor: str, *,
         acceptance.numeric_ids[task_id] = numeric_id
         acceptance.tasks[name] = task_id
         return task_id
-    except AcceptanceFailure:
+    except AcceptanceFailure as error:
         acceptance._sync_ops_owned_tasks()
         observation = acceptance.ops.dispatch_observations[-1] if acceptance.ops.dispatch_observations else {}
         refused = observation.get("response") if isinstance(observation, dict) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
             raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
-                                 reason=BlockReason.AUTH_UNAVAILABLE)
+                                 reason=BlockReason.AUTH_UNAVAILABLE) from error
         raise
 
 def wait_done(owner, name: str, task_id: str,

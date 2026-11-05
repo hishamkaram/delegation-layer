@@ -12,8 +12,9 @@ download() {
     local arch="$2"
     local asset="$3"
     local digest="$4"
-    local destination="${OUTPUT_ROOT}/${os}/${arch}/$(basename "${asset%%-*}")"
-    local asset_path="${TEMP_DIR}/$(basename "${asset}")"
+    local destination asset_path
+    destination="${OUTPUT_ROOT}/${os}/${arch}/$(basename "${asset%%-*}")"
+    asset_path="${TEMP_DIR}/$(basename "${asset}")"
 
     mkdir -p "$(dirname "${destination}")"
     curl -fsSL --retry 3 -o "${asset_path}" "${RELEASE_URL}/${asset}"

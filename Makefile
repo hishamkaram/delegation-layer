@@ -25,6 +25,25 @@ VERIFY_MAINTAINABILITY := go run ./cmd/maintainability --strict
 
 tools:
 	./scripts/install-tools.sh
+	python3 scripts/static_tools.py install
+
+.PHONY: static-tool-versions lint-static verify-static-gates diagnostic-tools diagnostics
+static-tool-versions:
+	python3 scripts/static_tools.py verify
+
+lint-static: static-tool-versions
+	python3 scripts/static_analysis.py all
+
+verify-static-gates: static-tool-versions
+	python3 scripts/verify_static_gates.py
+
+diagnostic-tools:
+	python3 scripts/static_tools.py install --diagnostic
+
+diagnostics:
+	python3 scripts/static_tools.py verify --diagnostic
+	python3 scripts/verify_static_gates.py --diagnostic
+	python3 scripts/static_analysis.py diagnostics
 
 tool-versions:
 	./scripts/check-tool-versions.sh
@@ -300,6 +319,8 @@ check:
 	$(MAKE) config-check
 	$(MAKE) vet
 	$(MAKE) lint
+	$(MAKE) lint-static
+	$(MAKE) verify-static-gates
 	$(MAKE) verify-gates
 	$(MAKE) test-race
 	$(MAKE) test-python

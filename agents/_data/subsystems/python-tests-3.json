@@ -160,7 +160,8 @@
       "py:json",
       "py:os",
       "py:unittest",
-      "py:unittest.mock"
+      "py:unittest.mock",
+      "py:acceptance_tests.private_cli.modern_application_fixture"
     ]
   },
   {

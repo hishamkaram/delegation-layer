@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 umask 077
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 if ! pueue_path=$(command -v pueue) || ! pueued_path=$(command -v pueued); then
     echo 'BLOCKED: installed pueue and pueued are required' >&2
     exit 2

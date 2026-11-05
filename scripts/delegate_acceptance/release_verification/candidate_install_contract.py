@@ -11,7 +11,7 @@ from .candidate_codec import text
 from .candidate_manifest import CHECKSUMS_PATH, ArtifactKind
 # EXPECTED_DEFAULT_STATE is re-exported: the shared contract owns it for every install probe.
 from .contract import (
-    EXPECTED_DEFAULT_STATE, TAG_RE, BinaryDigests, VerificationError, expected_archive,
+    EXPECTED_DEFAULT_STATE as EXPECTED_DEFAULT_STATE, TAG_RE, BinaryDigests, VerificationError, expected_archive,
 )
 from .published_contract import NPM_PACKAGE
 

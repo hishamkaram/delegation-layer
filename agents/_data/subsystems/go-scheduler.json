@@ -28,7 +28,8 @@
       "go:sync",
       "go:sync/atomic",
       "go:testing",
-      "go:time"
+      "go:time",
+      "go:internal/testutil/goroutinecheck"
     ]
   },
   {

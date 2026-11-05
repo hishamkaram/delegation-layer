@@ -6,7 +6,6 @@ adapter contract without adding a provider to production discovery.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import secrets
 import shutil
@@ -21,7 +20,7 @@ if __package__ in {None, ""}:
 
 from scripts.acceptance_supervisor_common import (
     DirectoryOwner, Processes, config_for, digest, inherited_environment,
-    read_json, finalize_acceptance_artifacts, require, sha, write_json,
+    read_json, finalize_acceptance_artifacts, require, write_json,
 )
 from scripts.acceptance_provider_common import (
     task_snapshot,

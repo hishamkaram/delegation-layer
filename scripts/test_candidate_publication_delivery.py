@@ -223,7 +223,6 @@ class PublicationTests(CandidateArtifactCase):
                 self.assertTrue((request.output_dir / delivery.WORKSPACE_NAME).is_dir())
 
     def test_explicit_resume_reuses_the_same_artifact_with_no_npm_secret(self):
-        request = self.request(resume=True)
         config = self.root / "config"
         env = environment()
         del env["NPM_TOKEN"]

@@ -4,8 +4,8 @@
 
 These repository guides describe main; published installs may lag. For a source
 build, install the Go release in [`.go-version`](../.go-version) yourself and put
-it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js 22 or
-newer and repository-local pinned tools. Node is for installer/plugin checks;
+it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js
+22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is for installer/plugin checks;
 Python is for repository tooling and black-box tests, not the Go CLI runtime.
 Run `make tools` to install the project's tools under ignored `bin/`; it does
 not install Go. Then run `make build`, which requires both that compiler and the
@@ -51,6 +51,39 @@ or a concrete concern. A setup failure is blocked, not a passing test. Reviewers
 can reuse trustworthy unchanged results. Final independent review covers the
 integrated change; do not repeat it separately for every worker. Unrelated
 findings are reported separately, not automatically added to the ticket.
+
+### Static analysis and diagnostic pilots
+
+`make tools` also installs Ruff, ShellCheck, actionlint, and the separately
+locked JavaScript lint dependencies into `bin/`. `make lint-static` runs the
+mandatory language checks; `make verify-static-gates` proves rejection and
+acceptance with temporary fixtures. Both are included in `make check`.
+The source inventory is authoritative: `go run ./cmd/maintainability --sources
+python` (or `javascript`, `shell`, `go`) emits absolute NUL-separated paths,
+including maintained untracked additions and excluding ignored scratch.
+
+Workflow syntax checks cover all repository workflows except release. The release
+workflow remains outside actionlint 1.7.12 because it uses GitHub's supported
+`concurrency.queue` property, which that version rejects. No suppression hides
+that coverage gap.
+
+Install exploratory tools separately with `make diagnostic-tools`, then run
+`make diagnostics`. This checks Python with pinned ty and all workflows with
+offline zizmor. The separate [Static diagnostics workflow](../.github/workflows/static-diagnostics.yml)
+runs on Linux and macOS for main pushes, pull requests, and manual dispatch.
+Findings intentionally fail that workflow and remain visible; tool exit codes
+are not masked. Its result does not change the main CI workflow conclusion or
+its release eligibility. Diagnostic failures are outstanding findings, not
+clean results. Review and fix real defects before promoting either tool. Do not
+hide findings in a baseline or add ignore rules
+to make a gate pass. Ruff automatic fixes are disabled; in particular, review
+facade consumers before changing an apparently unused import.
+
+Goleak supplements the existing race detector in adopted test packages. Its
+shared helper checks after test cleanup and preserves failing exit statuses.
+Tests which deliberately transfer work to another process keep their explicit
+helper exit path; normal tests must settle owned work before the suite ends.
+Neither check establishes native child-process closure by itself.
 
 ### Maintainability
 

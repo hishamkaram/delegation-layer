@@ -173,7 +173,8 @@
       "js:scripts/installer/application.mjs",
       "js:scripts/installer/picker-state.mjs",
       "js:scripts/installer/routing-rules.mjs",
-      "js:scripts/installer/terminal.mjs"
+      "js:scripts/installer/terminal.mjs",
+      "js:scripts/installer/routing-store.mjs"
     ]
   },
   {

@@ -20,6 +20,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,8 +45,10 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(RunRunner(os.Args[1:], io.Discard, io.Discard, Dependencies{ResourceChecker: fixtureResources}))
 	}
-	os.Exit(m.Run())
+	os.Exit(goroutinecheck.Run(m))
 }
+
+func TestGoroutineLeakGuard(t *testing.T) { goroutinecheck.VerifyInstalled(t) }
 
 func recordQueueMaintenanceDescriptorInheritance(args []string) error {
 	root := ""
@@ -194,6 +197,8 @@ func TestQueueMaintenanceLaunchParent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// This fixture proves the independent owner survives the launching process.
+	os.Exit(0)
 }
 
 func TestQueueMaintenanceOwnerSurvivesCallerProcessGroupInterruption(t *testing.T) {

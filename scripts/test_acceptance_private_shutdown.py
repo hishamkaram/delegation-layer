@@ -281,13 +281,15 @@ class PrivateShutdownTests(unittest.TestCase):
 
     def test_failed_presence_probe_is_not_exit_proof(self):
         failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"ps: malloc failed")
-        with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError()), \
+        lookup_error = ProcessLookupError()
+        with patch.object(private_cli.os, "getpgid", side_effect=lookup_error), \
                 patch.object(capture_impl, "run_captured_command", return_value=failed):
-            with self.assertRaisesRegex(RuntimeError, "PID presence is uncertain"):
+            with self.assertRaisesRegex(RuntimeError, "PID presence is uncertain") as raised:
                 private_cli.private_daemon_process_gone(
                     123, private_cli.time.monotonic() + 5,
                     capture_root=self.capture_root,
                 )
+        self.assertIs(raised.exception.__cause__, lookup_error)
 
     def test_transient_socket_timeout_does_not_prove_closure(self):
         with tempfile.TemporaryDirectory(prefix="dls-", dir="/tmp") as directory:

@@ -3,35 +3,14 @@
 
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-import os
-from pathlib import Path, PurePosixPath
-import platform
-import re
-import selectors
-import shutil
-import stat
-import struct
-import subprocess
+from pathlib import Path
 import sys
-import tarfile
-import tempfile
-import time
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.evidence.bounded_files import (
-    BoundedReadError, read_bounded_regular_file,
-)
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner as DirectoryOwner
-from scripts.delegate_acceptance.directories.journal import (
-    acquire_exclusive_file_lock, cleanup_journal_digest, prepare_directory_cleanup,
-    read_directory_cleanup, release_exclusive_file_lock, resume_directory_cleanup,
-)
 from scripts.delegate_acceptance.native_evidence.contract import EvidenceError as EvidenceError
 from scripts.delegate_acceptance.native_evidence.validation import validate_aggregate_receipt as validate_aggregate_receipt
 

@@ -509,6 +509,22 @@ elif grep -q "f.Sync" fixture.go 2>/dev/null; then
     echo "fixture.go:5:2: Error return value of \`f.Sync\` is not checked"
 elif grep -q "switch s" fixture.go 2>/dev/null; then
     echo "fixture.go:5:2: missing cases in switch of type State: Unknown"
+elif grep -Fq 'response, err := http.Get(' fixture.go 2>/dev/null; then
+    echo "fixture.go:4:30: response body must be closed"
+elif grep -Fq 'rows, err := db.Query(' fixture.go 2>/dev/null; then
+    if grep -Fq 'defer rows.Close()' fixture.go 2>/dev/null; then
+        echo "fixture.go:4:26: rows.Err must be checked"
+    else
+        echo "fixture.go:4:26: Rows/Stmt/NamedStmt was not closed"
+    fi
+elif grep -Fq 'io.EOF = nil' fixture.go 2>/dev/null; then
+    echo "fixture.go:4:5: reassigning variable EOF in other package io"
+elif grep -Fq '//go:generete ' fixture.go 2>/dev/null; then
+    echo "fixture.go:2:1: compiler directive unrecognized: //go:generete"
+elif grep -Fq 'slog.Info("fixture", "key")' fixture.go 2>/dev/null; then
+    echo "fixture.go:4:26: odd number of arguments passed as key-value pairs for logging"
+elif grep -Fq 'return value * time.Second' fixture.go 2>/dev/null; then
+    echo "fixture.go:4:12: Multiplication of durations"
 fi
 exit ${STUB_LINT_EXIT:-1}
 EOF

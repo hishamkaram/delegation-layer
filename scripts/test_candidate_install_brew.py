@@ -28,7 +28,7 @@ from scripts.delegate_acceptance.release_verification import candidate_install a
 from scripts.delegate_acceptance.release_verification import published_homebrew
 from scripts.delegate_acceptance.release_verification.assets import exercise_default_path, inspect_binaries
 from scripts.delegate_acceptance.release_verification.candidate_install_brew import observe_brew_install
-from scripts.delegate_acceptance.release_verification.candidate_install_contract import BootstrapTarget, CandidateFiles, CandidateInstallRequest
+from scripts.delegate_acceptance.release_verification.candidate_install_contract import BootstrapTarget, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest
 from scripts.delegate_acceptance.release_verification import commands
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import (

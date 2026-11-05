@@ -319,7 +319,7 @@ class FailureCleanupTests(unittest.TestCase):
             suite = native.NativeSuite.__new__(native.NativeSuite)
             suite.work = root / "work"
             owner = native.DirectoryOwner()
-            workspace = owner.create("workspace", suite.work, root)
+            owner.create("workspace", suite.work, root)
             retained = owner.create("retained", root / "retained", root)
             suite.owned_directories = owner.transfer()
 

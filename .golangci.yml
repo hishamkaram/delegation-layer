@@ -21,6 +21,13 @@ linters:
     - nolintlint
     - gocognit
     - gocyclo
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - reassign
+    - gocheckcompilerdirectives
+    - loggercheck
+    - durationcheck
   settings:
     # The maintainability audit runs this linter separately so staged baseline
     # findings retain exact source identity; tests receive the same limit.

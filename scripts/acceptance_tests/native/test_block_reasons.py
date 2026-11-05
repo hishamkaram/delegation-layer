@@ -178,6 +178,8 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
             with self.subTest(call=call), self.assertRaises(BlockedFailure) as raised:
                 call()
             self.assertIs(raised.exception.reason, BlockReason.AUTH_UNAVAILABLE)
+            self.assertIsInstance(raised.exception.__cause__, gate.AcceptanceFailure)
+            self.assertEqual(str(raised.exception.__cause__), "dispatch refused")
 
     def test_english_admission_error_text_is_not_a_block(self):
         for response in ({"status": "refused", "error": ENGLISH_AUTH_TEXT}, {}, None):

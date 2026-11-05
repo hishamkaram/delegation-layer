@@ -291,7 +291,147 @@ func Good(s State) string {
 	}
 }'
 
-# 10. Known-good full fixture that must pass the whole config
+# 11. HTTP response bodies must be closed after successful requests.
+run_fixture_test \
+    "http-body-close" \
+    "bodyclose" \
+    "response body must be closed" \
+    'package fixture
+import "net/http"
+func Bad() (string, error) {
+    response, err := http.Get("https://example.invalid")
+    if err != nil {
+        return "", err
+    }
+    return response.Status, nil
+}' \
+    'package fixture
+import "net/http"
+func Good() (string, error) {
+    response, err := http.Get("https://example.invalid")
+    if err != nil {
+        return "", err
+    }
+    defer response.Body.Close()
+    return response.Status, nil
+}'
+
+# 12. SQL row resources must be closed, independently of row error checks.
+run_fixture_test \
+    "sql-rows-close" \
+    "sqlclosecheck" \
+    "was not closed" \
+    'package fixture
+import "database/sql"
+func Bad(db *sql.DB) error {
+    rows, err := db.Query("SELECT 1")
+    if err != nil {
+        return err
+    }
+    for rows.Next() {}
+    return rows.Err()
+}' \
+    'package fixture
+import "database/sql"
+func Good(db *sql.DB) error {
+    rows, err := db.Query("SELECT 1")
+    if err != nil {
+        return err
+    }
+    defer rows.Close()
+    for rows.Next() {}
+    return rows.Err()
+}'
+
+# 13. Reaching the end of SQL iteration must not hide a row error.
+run_fixture_test \
+    "sql-rows-error" \
+    "rowserrcheck" \
+    "rows.Err must be checked" \
+    'package fixture
+import "database/sql"
+func Bad(db *sql.DB) error {
+    rows, err := db.Query("SELECT 1")
+    if err != nil {
+        return err
+    }
+    defer rows.Close()
+    for rows.Next() {}
+    return nil
+}' \
+    'package fixture
+import "database/sql"
+func Good(db *sql.DB) error {
+    rows, err := db.Query("SELECT 1")
+    if err != nil {
+        return err
+    }
+    defer rows.Close()
+    for rows.Next() {}
+    return rows.Err()
+}'
+
+# 14. Imported sentinel errors are read-only identities.
+run_fixture_test \
+    "imported-error-reassignment" \
+    "reassign" \
+    "reassigning variable EOF in other package io" \
+    'package fixture
+import "io"
+func Bad() {
+    io.EOF = nil
+}' \
+    'package fixture
+import "io"
+func Good() error {
+    return io.EOF
+}'
+
+# 15. The compiler ignores unknown directives; the linter must reject them.
+run_fixture_test \
+    "compiler-directive-typo" \
+    "gocheckcompilerdirectives" \
+    "compiler directive unrecognized: //go:generete" \
+    'package fixture
+//go:generete echo fixture
+func Bad() {}' \
+    'package fixture
+//go:generate echo fixture
+func Good() {}'
+
+# 16. Structured logs require a value for each key.
+run_fixture_test \
+    "logger-key-value" \
+    "loggercheck" \
+    "odd number of arguments passed as key-value pairs for logging" \
+    'package fixture
+import "log/slog"
+func Bad() {
+    slog.Info("fixture", "key")
+}' \
+    'package fixture
+import "log/slog"
+func Good() {
+    slog.Info("fixture", "key", "value")
+}'
+
+# 17. A duration is already a quantity of time, not a count of seconds.
+run_fixture_test \
+    "duration-multiplication" \
+    "durationcheck" \
+    "Multiplication of durations" \
+    'package fixture
+import "time"
+func Bad(value time.Duration) time.Duration {
+    return value * time.Second
+}' \
+    'package fixture
+import "time"
+func Good(value time.Duration) time.Duration {
+    return value
+}'
+
+# 18. Known-good full fixture that must pass the whole config
 echo "Testing known-good fixture against the complete configuration..."
 FULL_FIXTURE_DIR="${TMP_HARNESS}/known-good"
 mkdir -p "${FULL_FIXTURE_DIR}"

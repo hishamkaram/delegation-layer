@@ -275,7 +275,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             record["task_id"] = operation_id
             path.write_bytes(provider_common.canonical_go_json(record))
         registration_path = directory / "lifetime-registration.json"
-        registration = read_json(registration_path)
+        read_json(registration_path)
         registration_sha = provider_common.sha(registration_path.read_bytes())
         worker_path = directory / "lifetime-worker.json"
         worker = read_json(worker_path)

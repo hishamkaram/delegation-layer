@@ -57,9 +57,9 @@ func mergeFacts(language string, paths []string, facts, sources []policy.Source)
 }
 
 func pathsFor(language string, sources []policy.Source) []string {
-	extension := ".py"
-	if language == "javascript" {
-		extension = ".mjs"
+	extension := sourceExtension(language)
+	if extension == "" {
+		return nil
 	}
 	var paths []string
 	for _, source := range sources {

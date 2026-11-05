@@ -54,6 +54,8 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 		}
 		time.Sleep(5 * time.Second)
 	}
+	// The helper intentionally transfers daemon ownership beyond its own exit.
+	os.Exit(0)
 }
 
 func TestPrivateDaemonInheritsAvailableDescriptorLimit(t *testing.T) {

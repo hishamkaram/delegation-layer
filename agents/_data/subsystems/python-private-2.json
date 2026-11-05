@@ -727,7 +727,6 @@
       "py:delegate_acceptance.tasks.publication",
       "py:hashlib",
       "py:json",
-      "py:os",
       "py:time",
       "py:uuid"
     ]

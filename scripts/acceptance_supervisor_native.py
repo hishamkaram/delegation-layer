@@ -4,8 +4,6 @@ No native stop/remove/kill is permitted. Shutdown requires the sole finite job's
 positive completion plus the provider's actual Wait and complete capture.
 """
 import argparse
-import json
-import os
 from pathlib import Path
 import platform
 import re
@@ -17,7 +15,7 @@ import uuid
 
 from acceptance_supervisor_common import (
     DirectoryOwner, Processes, config_for, digest, inherited_environment,
-    read_json, require, rollback_owned_directories, sha, wait_until, write_json,
+    read_json, require, rollback_owned_directories, wait_until, write_json,
 )
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 from acceptance_supervisor_yaml import YAMLChecks

@@ -45,10 +45,26 @@
     "layer": "tool",
     "imports": [
       "go:encoding/json",
+      "go:errors",
       "go:flag",
       "go:fmt",
       "go:internal/maintainability",
+      "go:io",
       "go:os"
+    ]
+  },
+  {
+    "name": "go:cmd/maintainability#test",
+    "owner": "go:cmd/maintainability",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:testing"
     ]
   },
   {
@@ -188,7 +204,8 @@
       "go:testing",
       "go:testing/synctest",
       "go:time",
-      "go:unsafe"
+      "go:unsafe",
+      "go:internal/testutil/goroutinecheck"
     ]
   },
   {
@@ -281,7 +298,8 @@
       "go:strings",
       "go:sync",
       "go:testing",
-      "go:time"
+      "go:time",
+      "go:internal/testutil/goroutinecheck"
     ]
   },
   {
@@ -519,7 +537,8 @@
       "go:syscall",
       "go:testing",
       "go:testing/synctest",
-      "go:time"
+      "go:time",
+      "go:internal/testutil/goroutinecheck"
     ]
   },
   {

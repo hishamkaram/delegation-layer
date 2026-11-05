@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFixture
+from scripts.acceptance_tests.private_cli import modern_application_fixture
 from scripts.delegate_acceptance.private_cli import control_fixture
 from scripts.delegate_acceptance.private_cli.contention_controls import control_gate
 
@@ -13,6 +14,19 @@ from scripts.delegate_acceptance.private_cli.contention_controls import control_
 class ModernFiniteFixtureTests(unittest.TestCase):
     def setUp(self):
         self.fixture = ModernControlFixture(self)
+
+    def test_lock_deadline_retains_contention_cause_and_closes_descriptor(self):
+        contention = BlockingIOError("lock held")
+        with (
+            patch.object(modern_application_fixture.os, "open", return_value=42),
+            patch.object(modern_application_fixture.os, "close") as close,
+            patch.object(modern_application_fixture.fcntl, "flock", side_effect=contention),
+            patch.object(modern_application_fixture.time, "monotonic", side_effect=[0, 20]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "lock deadline expired") as raised:
+                modern_application_fixture.acquire_lock("fixture.lock", 1)
+        self.assertIs(raised.exception.__cause__, contention)
+        close.assert_called_once_with(42)
 
     def test_event_is_complete_create_once_and_never_overwrites_a_previous_receipt(self):
         event = self.fixture.controls.directory / "event.json"

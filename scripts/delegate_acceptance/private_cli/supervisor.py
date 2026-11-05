@@ -94,7 +94,7 @@ def private_daemon_process_gone(pid, deadline, *, capture_root):
     # exit proof; timeout is safer than treating either as a stopped daemon.
     try:
         os.getpgid(pid)
-    except ProcessLookupError:
+    except ProcessLookupError as error:
         # Darwin getpgid excludes zombies. Check PID presence without using
         # command names, which can change while a process becomes a zombie.
         result = run_captured_text_command(
@@ -107,7 +107,7 @@ def private_daemon_process_gone(pid, deadline, *, capture_root):
             return True
         if result.returncode == 0 and result.stdout.strip() == str(pid):
             return False
-        raise RuntimeError("private supervisor PID presence is uncertain")
+        raise RuntimeError("private supervisor PID presence is uncertain") from error
     return False
 
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { runInstaller as runInteractiveInstaller } from "./installer/application.mjs";
 import { createPickerState, transitionPicker } from "./installer/picker-state.mjs";
 import { countRoutingEvents, createRoutingPlan } from "./installer/routing-rules.mjs";
+import { applyRouting } from "./installer/routing-store.mjs";
 import { pickOptions } from "./installer/terminal.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -182,6 +183,123 @@ async function testTerminalCleanup() {
   assert.ok(failedOutput.writes.at(-1).includes("\u001b[?25h"));
 }
 
+async function replacementPlan(name) {
+  const path = join(root, name, "settings.json");
+  await mkdir(dirname(path), { recursive: true });
+  const before = '{"previous":true}';
+  await writeFile(path, before);
+  return { path, before, after: '{"updated":true}', mode: 0o600 };
+}
+
+function containsError(error, expected) {
+  if (error === expected) return true;
+  if (error instanceof AggregateError && error.errors.some((nested) => containsError(nested, expected))) return true;
+  return error instanceof Error && error.cause !== undefined && containsError(error.cause, expected);
+}
+
+async function testPrimaryAndCleanupFailures() {
+  const plan = await replacementPlan("primary-and-cleanup");
+  const primary = new Error("staged write failed");
+  const stageClose = new Error("staged close failed");
+  const stageRemove = new Error("staged removal failed");
+  const lockClose = new Error("lock close failed");
+  const lockRemove = new Error("lock removal failed");
+  const attempted = [];
+  await assert.rejects(applyRouting([plan], {
+    open: async (path, ...args) => {
+      const file = await open(path, ...args);
+      if (path.includes("-stage-")) return {
+        writeFile: async () => { throw primary; },
+        sync: () => file.sync(),
+        close: async () => { attempted.push("stage close"); await file.close(); throw stageClose; },
+      };
+      if (path.endsWith(".lock")) return {
+        close: async () => { attempted.push("lock close"); await file.close(); throw lockClose; },
+      };
+      return file;
+    },
+    unlink: async (path) => {
+      await unlink(path);
+      if (path.includes("-stage-")) { attempted.push("stage remove"); throw stageRemove; }
+      attempted.push("lock remove");
+      throw lockRemove;
+    },
+  }), (error) => {
+    for (const failure of [primary, stageClose, stageRemove, lockClose, lockRemove]) {
+      assert.ok(containsError(error, failure), `missing original failure: ${failure.message}`);
+      assert.ok(error.message.includes(failure.message));
+    }
+    return true;
+  });
+  assert.deepEqual(attempted, ["stage close", "stage remove", "lock close", "lock remove"]);
+  assert.equal(await readFile(plan.path, "utf8"), plan.before);
+  assert.ok((await readdir(dirname(plan.path))).every((name) => !name.includes("-stage-") && !name.endsWith(".lock")));
+}
+
+async function testBackupFailuresPreserved() {
+  const plan = await replacementPlan("backup-failures");
+  const writeFailure = new Error("backup write failed");
+  const closeFailure = new Error("backup close failed");
+  await assert.rejects(applyRouting([plan], {
+    open: async (path, ...args) => {
+      const file = await open(path, ...args);
+      if (!path.includes("-backup-")) return file;
+      return {
+        writeFile: async () => { throw writeFailure; },
+        sync: () => file.sync(),
+        close: async () => { await file.close(); throw closeFailure; },
+      };
+    },
+  }), (error) => containsError(error, writeFailure) && containsError(error, closeFailure));
+  assert.equal(await readFile(plan.path, "utf8"), plan.before);
+  await assert.rejects(readFile(plan.path + ".delegation-layer.lock"), { code: "ENOENT" });
+}
+
+async function testCleanupFailureRollsBackCommittedChange() {
+  const plan = await replacementPlan("committed-cleanup-failure");
+  const cleanupFailure = new Error("committed lock close failed");
+  let failClose = true;
+  await assert.rejects(applyRouting([plan], {
+    open: async (path, ...args) => {
+      const file = await open(path, ...args);
+      if (!path.endsWith(".lock")) return file;
+      return {
+        close: async () => {
+          await file.close();
+          if (failClose) { failClose = false; throw cleanupFailure; }
+        },
+      };
+    },
+  }), (error) => containsError(error, cleanupFailure) && /rolled back/.test(error.message));
+  assert.equal(await readFile(plan.path, "utf8"), plan.before, "a committed change must roll back despite cleanup failure");
+  assert.ok((await readdir(dirname(plan.path))).every((name) => !name.includes("-stage-") && !name.endsWith(".lock")));
+}
+
+async function testRollbackRetainsOriginalAndRollbackErrors() {
+  const first = await replacementPlan("rollback-errors-first");
+  const second = await replacementPlan("rollback-errors-second");
+  const third = await replacementPlan("rollback-errors-third");
+  const occupied = Object.assign(new Error("lock already occupied"), { code: "EEXIST" });
+  const rollbackFailure = new Error("rollback lock failed");
+  let secondLocks = 0;
+  await assert.rejects(applyRouting([first, second, third], {
+    open: async (path, ...args) => {
+      if (path === third.path + ".delegation-layer.lock") throw occupied;
+      if (path === second.path + ".delegation-layer.lock" && ++secondLocks === 2) throw rollbackFailure;
+      return open(path, ...args);
+    },
+  }), (error) => {
+    assert.ok(containsError(error, occupied), "original lock failure cause must remain available");
+    assert.ok(containsError(error, rollbackFailure), "rollback failure object must remain available");
+    assert.match(error.message, /rollback needs attention/);
+    assert.match(error.message, /rollback lock failed/);
+    return true;
+  });
+  assert.equal(await readFile(first.path, "utf8"), first.before, "rollback must continue after another rollback failed");
+  assert.equal(await readFile(second.path, "utf8"), second.after);
+  assert.equal(await readFile(third.path, "utf8"), third.before);
+}
+
 async function testLazyHomeResolution(cwd, root) {
   const homeCalls = [];
   const resolveHome = () => {
@@ -241,6 +359,10 @@ try {
   testRoutingRules();
   testPickerState();
   await testTerminalCleanup();
+  await testPrimaryAndCleanupFailures();
+  await testBackupFailuresPreserved();
+  await testCleanupFailureRollsBackCommittedChange();
+  await testRollbackRetainsOriginalAndRollbackErrors();
   await mkdir(join(home, ".claude"), { recursive: true });
   await mkdir(project);
   await testLazyHomeResolution(project, root);

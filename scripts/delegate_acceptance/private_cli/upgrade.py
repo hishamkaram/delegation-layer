@@ -14,7 +14,6 @@ import hashlib
 from scripts.delegate_acceptance.private_cli.installation import install_fixture
 from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
 import json
-import os
 from scripts.delegate_acceptance.private_cli.supervisor import predecessor_closed
 from scripts.delegate_acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort

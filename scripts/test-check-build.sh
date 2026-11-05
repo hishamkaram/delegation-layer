@@ -67,7 +67,9 @@ GATES_BEFORE_BUILD=(
     "go run" "python3 scripts/verify_skills.py" sha256sum
     "python3 scripts/verify_acceptance_ownership.py" check-plugin-package
     check-skill-package "go run" "golangci-lint config" goreleaser "go vet"
-    "golangci-lint run" verify-gates verify-tooling-regressions "go test"
+    "golangci-lint run" "python3 scripts/static_tools.py" "python3 scripts/static_analysis.py"
+    "python3 scripts/static_tools.py" "python3 scripts/verify_static_gates.py"
+    verify-gates verify-tooling-regressions "go test"
     "python3 -m"
 )
 

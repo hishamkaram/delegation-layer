@@ -19,6 +19,20 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
 - **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
+- **Static tools**: `scripts/static_tools.py` owns installation and version checks for
+  ShellCheck 0.11.0 and actionlint 1.7.12. Ruff's exact pin and wheel hashes live in
+  `tools/lint/requirements.txt`; ESLint and its dependencies use the separate
+  locked `tools/lint/package.json`, never the published package's dependencies.
+  `make lint-static` uses the maintainability inventory for Python, JavaScript,
+  and shell paths. Root `ruff.toml` and `eslint.config.mjs` own their rules.
+- **Diagnostic tools**: `make diagnostic-tools` installs the separately pinned
+  ty and zizmor wheels from `tools/diagnostics/requirements.txt`. `make diagnostics`
+  reports actual failures and findings in the separate
+  [Static diagnostics workflow](../../.github/workflows/static-diagnostics.yml)
+  on Linux and macOS. Findings fail that workflow without changing the main CI
+  conclusion or its release eligibility; tool exit codes remain unmasked.
+  These tools are not prerequisites of mandatory tool installation or
+  `tool-versions`. They are not clean or promoted merely because blocking gates pass.
 
 ## 2. Static Analysis & Linter Policy
 - Configuration in `.golangci.yml` using schema `version: "2"`, `linters.default: none`, and explicit linters:
@@ -28,6 +42,8 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `exhaustive`: `default-signifies-exhaustive: false` (all enum constants must be explicitly enumerated in switch statements).
   - `gocognit`: `min-complexity: 20`.
   - `gocyclo`: `min-complexity: 15`.
+  - `bodyclose`, `sqlclosecheck`, `rowserrcheck`, `reassign`,
+    `gocheckcompilerdirectives`, `loggercheck`, and `durationcheck`.
   - `nolintlint`: `require-explanation: true`, `require-specific: true`. No blanket or broad directory exclusions for real code.
   - `forbidigo`: Anchored patterns matching selector AST nodes:
     - `^os\.Process\.(Signal|Kill)$`
@@ -37,6 +53,15 @@ This document specifies the non-negotiable engineering floor for the repository.
     - `^exec\.CommandContext$`
     - `^exec\.Cmd\.WaitDelay$`
 - **Standalone Formatter**: Pinned `gofumpt 0.12.0` runs standalone via `make fmt` and `make fmt-check`. It is not duplicated inside golangci-lint.
+- **Python**: Ruff checks correctness without automatic fixes. `F401` is never
+  automatically fixed; facade exports must be verified before an import is
+  removed or explicitly re-exported. ty targets Python 3.12 and all platforms,
+  with both repository and scripts import roots; explicit input paths and
+  negative fixtures prove coverage. This is static analysis, not native-host proof.
+- **Workflows**: actionlint checks all repository workflows except `release.yml`
+  without suppressions. `release.yml` remains outside that gate because actionlint
+  1.7.12 rejects GitHub's supported `concurrency.queue` field. zizmor inspects all
+  workflows offline as a diagnostic, including release.
 
 ## 3. Testing and Verification Discipline
 - **Sequential Gate:** The root [Makefile](../../Makefile) `check` target is
@@ -55,4 +80,18 @@ This document specifies the non-negotiable engineering floor for the repository.
   Fake-only coverage establishes isolated protocol ordering, not durable
   recovery or a real consumer verdict.
 - **Gate Rejection Fixtures**: `scripts/verify-gates.sh` proves linter enforcement against isolated temporary modules for each forbidden pattern and verifies that corrected counterparts pass.
+- **Cross-language fixtures**: `make verify-static-gates` proves Ruff, ESLint,
+  ShellCheck, and actionlint rejection and acceptance using finite temporary
+  inputs. The diagnostic target also proves ty resolves both import forms and
+  rejects known type errors, including under hidden paths.
+- **Goroutine leaks**: goleak v1.3.0 supplements `-race`. The shared test helper
+  checks after suite cleanup, including failed suites, without replacing their
+  failure code. Each adopted package proves the hook with a finite re-executed
+  leak fixture. Helper processes exercising deliberate ownership transfer must
+  retain their explicit exit behavior. A clean goroutine scan is not evidence
+  that independent child processes exited; native closure tests remain required.
+  Initial adoption covers execution, scheduler host, Pueue control and application
+  composition. This does not establish leak-check coverage for the remaining
+  goroutine owners (guardian, lifetime, supervisor, scheduler runtime, transport,
+  inspection probes, verified execution, provider inspection and maintainability).
 - **No Test Weakening**: Tests must never be loosened, assertions must not be bypassed, and linters must never be suppressed to force green status.

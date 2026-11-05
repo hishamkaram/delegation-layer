@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 provider=${1:?usage: acceptance_native.sh PROVIDER [options]}
 shift
 
