@@ -148,6 +148,20 @@ class StaticToolTests(unittest.TestCase):
                 self.assertNotIn("x" * 201, str(raised.exception))
                 self.assertNotIn("\x1b", str(raised.exception))
 
+    def test_ty_version_accepts_build_metadata_but_requires_exact_version(self):
+        for payload in ('{"version":"0.0.97","commit_info":null}',
+                        '{"version":"0.0.97","commit_info":{"short":"58e168c67","date":"2026-11-04"}}'):
+            with self.subTest(payload=payload), mock.patch.object(
+                    tools.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, payload)) as run:
+                tools.require_ty_version(Path("/tools/ty"), "0.0.97")
+                self.assertEqual(run.call_args.args[0], ["/tools/ty", "version", "--output-format", "json"])
+        for payload in ('{"version":"0.0.970"}', '{"version":"0.0.96"}',
+                        '{"commit_info":null}', '[]', 'not JSON'):
+            with self.subTest(payload=payload), mock.patch.object(
+                    tools.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, payload)):
+                with self.assertRaises(ValueError):
+                    tools.require_ty_version(Path("/tools/ty"), "0.0.97")
+
     def test_download_script_does_not_mask_command_substitution_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / "basename"

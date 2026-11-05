@@ -46,6 +46,16 @@ def require_banner(command: list[str], expected: str) -> None:
                          f"received {observed!r}; run the matching tools target")
 
 
+def require_ty_version(executable: Path, expected: str) -> None:
+    result = subprocess.run([str(executable), "version", "--output-format", "json"],
+                            cwd=ROOT, text=True, capture_output=True, check=True, timeout=30)
+    version: object = json.loads(result.stdout)
+    if not isinstance(version, dict) or version.get("version") != expected:
+        observed = result.stdout.strip()[:200]
+        raise ValueError(f"unexpected ty version: expected {expected!r}, received {observed!r}; "
+                         "run make diagnostic-tools")
+
+
 def python_tools(group: str, *, install: bool) -> None:
     requirements = ROOT / "tools" / group / "requirements.txt"
     environment = ROOT / "bin" / group
@@ -56,8 +66,12 @@ def python_tools(group: str, *, install: bool) -> None:
                  "-r", str(requirements)])
     packages = ("ruff",) if group == "lint" else ("ty", "zizmor")
     for package in packages:
-        require_banner([str(environment / "bin" / package), "--version"],
-                       package + " " + requirement_version(requirements, package))
+        expected = requirement_version(requirements, package)
+        executable = environment / "bin" / package
+        if package == "ty":
+            require_ty_version(executable, expected)
+        else:
+            require_banner([str(executable), "--version"], package + " " + expected)
 
 
 def shellcheck_target(system: str, machine: str) -> tuple[str, str]:

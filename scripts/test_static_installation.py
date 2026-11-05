@@ -182,13 +182,15 @@ class InstallationBoundaryTests(unittest.TestCase):
                 patches.enter_context(mock.patch.object(tools.sys, "argv", ["static_tools.py", action, "--diagnostic"]))
                 commands = patches.enter_context(mock.patch.object(tools, "checked"))
                 banner = patches.enter_context(mock.patch.object(tools, "require_banner"))
+                ty_version = patches.enter_context(mock.patch.object(tools, "require_ty_version"))
                 shellcheck = patches.enter_context(mock.patch.object(tools, "install_shellcheck"))
                 node = patches.enter_context(mock.patch.object(tools, "node_tools"))
                 self.assertEqual(tools.main(), 0)
                 shellcheck.assert_not_called()
                 node.assert_not_called()
                 self.assertEqual(protected.read_bytes(), b"mandatory tool state")
-                self.assertEqual({call.args[1] for call in banner.call_args_list}, {"ty 0.0.1", "zizmor 1.2.3"})
+                ty_version.assert_called_once_with(root / "bin/diagnostics/bin/ty", "0.0.1")
+                banner.assert_called_once_with([str(root / "bin/diagnostics/bin/zizmor"), "--version"], "zizmor 1.2.3")
                 for call in commands.call_args_list:
                     command = call.args[0]
                     self.assertNotIn(command[0], ("go", "node", "npm", "curl"))
