@@ -604,7 +604,10 @@ func testShutdownLeaseCancellation(t *testing.T) {
 // this role. Selection checks metadata; the native case checks required CLI and
 // descriptor behavior. Neither step hashes installed program contents.
 func TestShutdownLeaseInstalledFixtureSelection(t *testing.T) {
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	installed := filepath.Join(base, "pueue")
 	if err := os.WriteFile(installed, []byte("owned fixture source\n"), 0o111); err != nil {
 		t.Fatal(err)
