@@ -6,6 +6,10 @@ Read the [product boundary](agents/_data/product-boundary.md) before proposing
 a design, guarantee or restriction. Delegate owns task lifecycle and evidence;
 users and providers own their CLI installations, settings and accounts.
 
+See [what Delegate provides](README.md#what-it-provides) for product purpose and
+current capabilities, and [architecture](docs/architecture.md) for implementation
+details.
+
 ## Shared engineering rules
 
 1. Do the smallest correct change. In the existing plan, name the requested
