@@ -46,6 +46,7 @@ def verify_current_installation_upgrade(
     *,
     lease_nonce,
     client_call_log,
+    upgraded_client_call_log,
     attempted_task_ids,
     capture_root,
     run_receipt=None,
@@ -70,6 +71,7 @@ def verify_current_installation_upgrade(
             evidence=evidence,
             lease_nonce=lease_nonce,
             client_call_log=client_call_log,
+            upgraded_client_call_log=upgraded_client_call_log,
             attempted_task_ids=attempted_task_ids,
             capture_root=capture_root,
             run_receipt=run_receipt,
@@ -102,6 +104,8 @@ def _run_capacity_case(case: CapacityRequest):
             raise RuntimeError("large-queue acceptance did not exceed the former 1 MiB status limit")
         if case.run_receipt is not None:
             case.run_receipt.stage("live-capacity-cohort-proved")
+        _observe_healthy_status_burst(case, evidence, receipts, responses)
+        if case.run_receipt is not None:
             case.run_receipt.phase("package_removal")
         rollback_owned_directories(case.old_layout_owned)
         if case.old_layout.exists() or case.old_layout.is_symlink():
@@ -286,10 +290,44 @@ def _observe_capacity_cohort(capacity_proof, case, deadline, expected_labels, he
         time.sleep(0.1)
 
 
+def _observe_healthy_status_burst(case, evidence, receipts, responses):
+    if case.run_receipt is not None:
+        case.run_receipt.phase("healthy_pair_observation")
+    counts = _observe_status_burst(
+        case, receipts, responses, case.client_call_log, "status-before-removal-"
+    )
+    callers = counts["concurrent_status_call_count"]
+    snapshots = counts["pueue_status_snapshot_count"]
+    counts["shared_status_call_count"] = callers - snapshots
+    evidence["status_coalescing"] = counts
+    (receipts / "status-coalescing.json").write_text(json.dumps(counts, sort_keys=True) + "\n")
+    if case.run_receipt is not None:
+        case.run_receipt.add_details(status_coalescing=counts)
+    if snapshots <= 0 or snapshots >= callers:
+        raise RuntimeError("concurrent public status calls did not coalesce queue snapshots: %r" % counts)
+
+
 def _observe_upgraded_status_burst(case, evidence, receipts, responses):
+    if case.run_receipt is not None:
+        case.run_receipt.phase("upgraded_observation")
+    counts = _observe_status_burst(
+        case, receipts, responses, case.upgraded_client_call_log, "status-after-upgrade-"
+    )
+    evidence["status_after_package_removal"] = counts
+    (receipts / "status-after-package-removal.json").write_text(json.dumps(counts, sort_keys=True) + "\n")
+    if case.run_receipt is not None:
+        case.run_receipt.add_details(status_after_package_removal=counts)
+    callers = counts["concurrent_status_call_count"]
+    # Each missing-pair caller proves compatibility before joining the row
+    # flight. Require at least one fresh row snapshot and sharing between calls.
+    if not callers < counts["pueue_status_snapshot_count"] < 2 * callers:
+        raise RuntimeError("concurrent public status calls did not retain compatibility probes and shared queue snapshots: %r" % counts)
+
+
+def _observe_status_burst(case, receipts, responses, client_call_log, receipt_prefix):
     status_probe_responses = responses[: min(case.parallel_tasks, 16)]
     status_probe_barrier = threading.Barrier(len(status_probe_responses))
-    status_snapshots_before = wrapper_command_counts(case.client_call_log).get("status", 0)
+    status_snapshots_before = wrapper_command_counts(client_call_log).get("status", 0)
 
     def observe(response):
         task_id = response["task_id"]
@@ -299,7 +337,7 @@ def _observe_upgraded_status_burst(case, evidence, receipts, responses):
             case.state,
             case.env,
             task_id,
-            receipts / ("status-after-upgrade-" + task_id + ".json"),
+            receipts / (receipt_prefix + task_id + ".json"),
             phase="managed-runner-observation",
             capture_root=case.capture_root,
         )
@@ -313,20 +351,13 @@ def _observe_upgraded_status_burst(case, evidence, receipts, responses):
         ):
             raise RuntimeError("upgraded installation did not observe its gated task running: %r" % observed)
 
-    if case.run_receipt is not None:
-        case.run_receipt.phase("upgraded_observation")
     with ThreadPoolExecutor(max_workers=len(status_probe_responses)) as pool:
         list(pool.map(observe, status_probe_responses))
-    status_snapshot_count = wrapper_command_counts(case.client_call_log).get("status", 0) - status_snapshots_before
-    status_coalescing = {
+    status_snapshot_count = wrapper_command_counts(client_call_log).get("status", 0) - status_snapshots_before
+    return {
         "concurrent_status_call_count": len(status_probe_responses),
         "pueue_status_snapshot_count": status_snapshot_count,
-        "shared_status_call_count": len(status_probe_responses) - status_snapshot_count,
     }
-    if status_snapshot_count <= 0 or status_snapshot_count >= len(status_probe_responses):
-        raise RuntimeError("concurrent public status calls did not coalesce queue snapshots: %r" % status_coalescing)
-    (receipts / "status-coalescing.json").write_text(json.dumps(status_coalescing, sort_keys=True) + "\n")
-    evidence["status_coalescing"] = status_coalescing
 
 
 def _collect_and_restart_capacity(capacity_proof, case, dispatcher, receipts, task_ids):
@@ -349,6 +380,19 @@ def _collect_and_restart_capacity(capacity_proof, case, dispatcher, receipts, ta
         case.run_receipt.phase("capacity_collection")
     with ThreadPoolExecutor(max_workers=min(case.parallel_tasks, 16)) as pool:
         list(pool.map(collect, task_ids))
+    if case.run_receipt is not None:
+        case.run_receipt.phase("supervisor_migration")
+    migrated = run_json(
+        case.delegate, case.env,
+        ["--root", str(case.state), "supervisor", "migrate", "--json"],
+        timeout=120,
+        receipt=receipts / "supervisor-migrate.json",
+        phase="supervisor-migration",
+        capture_root=case.capture_root,
+    )
+    control = migrated.get("supervisor_control")
+    if not isinstance(control, dict) or control.get("state") != "migrated" or control.get("next_action") != "retry_dispatch":
+        raise RuntimeError("installed pair migration did not authorize restart")
     shutdown_observed_private_supervisor(
         case.client,
         case.config,

@@ -335,6 +335,10 @@ resumed from the immutable migration journal. A successful JSON response has
 `supervisor_control.next_action: "retry_dispatch"`. The command never
 migrates or stops an external Pueue configuration.
 
+If the selected resident helper is missing, run `supervisor migrate` from
+outside a Delegate task; it replaces that serving resident through the current
+installation before migrating the supervisor.
+
 When the inspection journal points to an external supervisor, the same command
 prepares or reuses Delegate's private supervisor and records the
 inspection handoff. Existing tasks and inspections keep their saved supervisor

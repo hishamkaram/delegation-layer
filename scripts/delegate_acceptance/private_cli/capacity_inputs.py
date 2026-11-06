@@ -38,6 +38,7 @@ class CapacityRequest:
     evidence: dict[str, object] | None
     lease_nonce: str
     client_call_log: Path
+    upgraded_client_call_log: Path
     attempted_task_ids: list[str]
     capture_root: OwnedDirectory
     run_receipt: AcceptanceReceipt | None

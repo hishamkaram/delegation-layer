@@ -829,7 +829,8 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
         self.assertGreaterEqual(release_gate.descriptor, 0, "gate opened before concurrency proof")
         self.assertEqual(waiter_directory, base / "provider-waiters")
         self.assertEqual(_kwargs["client"], private_cli.package_layout(base / "upgraded", True)[2] / "pueue")
-        self.assertEqual(client_call_log, base / "upgraded-client-starts-calls")
+        self.assertEqual(client_call_log, base / "old-client-starts-calls")
+        self.assertEqual(_kwargs["upgraded_client_call_log"], base / "upgraded-client-starts-calls")
         requested_workers = dispatch_workers
         old_layout_entries = tuple(old_layout_owned)
         evidence.update({
@@ -859,6 +860,10 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
                 "concurrent_status_call_count": 16,
                 "pueue_status_snapshot_count": 1,
                 "shared_status_call_count": 15,
+            },
+            "status_after_package_removal": {
+                "concurrent_status_call_count": 16,
+                "pueue_status_snapshot_count": 17,
             },
         })
         if upgrade_failure:

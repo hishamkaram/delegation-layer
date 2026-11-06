@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -17,6 +18,50 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestWaitOwnerProcessClosedRetainsOriginalAfterSuccessorElection(t *testing.T) {
+	f, original := newOwnerStopReleasedSuccessorFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	result, err := WaitOwnerProcessClosed(ctx, f.reader, original.reference)
+	if !errors.Is(err, context.DeadlineExceeded) || result.State != OwnerServingReleased || result.ProcessClosure != OwnerProcessPending || result.Startup != original.reference || result.Process != original.assumption.Process {
+		t.Fatalf("serving release or successor replaced original process closure: %+v %v", result, err)
+	}
+	assertAvailable(t, f.lease.path, false)
+}
+
+func TestWaitOwnerProcessClosedObservesAbsentOriginalAfterSuccessorElection(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	selectAbsentOwnerStopIncarnation(t, f)
+	original := f.auth.request.Owner
+	if err := errors.Join(f.auth.listener.Close(), f.lease.Close()); err != nil {
+		t.Fatal(err)
+	}
+	publishOwnerStopSuccessorFixture(t, f)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result, err := WaitOwnerProcessClosed(ctx, f.reader, original)
+	if err != nil || result.Startup != original || result.ProcessClosure != OwnerProcessClosed || result.Process != f.auth.assumption.Process {
+		t.Fatalf("successor hid original exact-process absence: %+v %v", result, err)
+	}
+	assertAvailable(t, f.lease.path, false)
+}
+
+func TestWaitOwnerProcessClosedRejectsPreviousBootBeforeAbsence(t *testing.T) {
+	f := newStopLocatorFixture(t, false)
+	boot := otherStopBoot(f.owner.intent.Inputs.BootID)
+	f.rebind(t, bytes.Replace(f.records[0], []byte(f.owner.intent.Inputs.BootID), []byte(boot), 1), false)
+	selected, found, err := readOwnerStopLocator(t.Context(), f.reader)
+	if err != nil || !found {
+		t.Fatalf("coherent previous-boot fixture failed: found=%t err=%v", found, err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result, err := WaitOwnerProcessClosed(ctx, f.reader, selected.reference)
+	if !errors.Is(err, ErrIdentity) || result.ProcessClosure != OwnerProcessUnknown || result.State != OwnerStopUnknown {
+		t.Fatalf("unvalidated boot became original-process absence: %+v %v", result, err)
+	}
+}
 
 func TestOwnerStopClientObservesReleasedServingWhileProcessRemainsWaiter(t *testing.T) {
 	f := drainedServingReleaseFixture(t)

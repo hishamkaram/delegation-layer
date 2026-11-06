@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -67,8 +68,58 @@ func resumeInspectionSupervisorGenerationWithLock(ctx context.Context, store *ta
 		if err = supervisor.MigratePrivateSupervisorWithLock(ctx, store.Root); err != nil {
 			return err
 		}
+	} else {
+		prepared, prepareErr := reconcileInspectionMigrationEntryWithLock(ctx, store, supervisor)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		if prepared {
+			// The current head and recovery alias still own the published
+			// predecessor. Let the group callback journal its edge before the
+			// private owner accepts this different prepared logical target.
+			return nil
+		}
 	}
 	return RecoverInspectionGroupGenerationWithLock(ctx, store, supervisor, false)
+}
+
+func reconcileInspectionMigrationEntryWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client) (bool, error) {
+	head, _, err := inspection.ReadGroupHead(ctx, store)
+	headPresent := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	published, privateFound, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil {
+		return false, err
+	}
+	alias, aliasFound, err := pueue.ReadPrivateRecoveryBinding(store.Root)
+	if err != nil {
+		return false, err
+	}
+	if !headPresent || !privateFound || !aliasFound {
+		return false, nil
+	}
+	candidate := supervisor.Binding()
+	if task.SameSupervisorIdentity(head.Supervisor, published) &&
+		task.SameSupervisorIdentity(alias, published) &&
+		!task.SameSupervisorIdentity(published, candidate) {
+		return true, nil
+	}
+	if pueue.IsPrivateConfig(store.Root, head.Supervisor.ConfigPath) &&
+		sameInspectionMigrationTarget(published, candidate) && !task.SameSupervisorIdentity(alias, published) {
+		// The private owner validates the completed history and retires the
+		// predecessor alias before unchanged inspection recovery resolves B.
+		return false, supervisor.MigratePrivateSupervisorWithLock(ctx, store.Root)
+	}
+	return false, nil
+}
+
+func sameInspectionMigrationTarget(published, candidate task.SupervisorRef) bool {
+	return task.SameSupervisorIdentity(published, candidate) &&
+		published.ClientExecutable == candidate.ClientExecutable &&
+		published.DaemonExecutable == candidate.DaemonExecutable &&
+		published.ExecutableIdentity == candidate.ExecutableIdentity
 }
 
 func prepareInspectionGroupSupervisor(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, allowMigration bool) error {

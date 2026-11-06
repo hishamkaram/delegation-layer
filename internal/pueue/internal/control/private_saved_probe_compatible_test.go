@@ -59,6 +59,84 @@ func TestProbeSavedPrivateCompatibleUnavailablePairReadsThroughD(t *testing.T) {
 	}
 }
 
+func TestProbeSavedPrivateTaskObservationSeparatesCompatibilitySnapshotsFromSharedRows(t *testing.T) {
+	f := newCompletedPrivateSuccessorTestFixture(t, true)
+	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(f.base, "available-D"))
+	damageCompatibleProbePair(t, f, "missing client")
+	damageCompatibleProbePair(t, f, "missing daemon")
+	const callers = 16
+	identities := privateTaskObservationTestIdentities(callers)
+	writePrivateTaskObservationTestStatus(t, f.stateRoot, identities)
+	controlPath := filepath.Join(f.stateRoot, privateSupervisorDirectory, "compatible-observation-controls")
+	options := f.options
+	options.Environment = append(os.Environ(), "PRIVATE_CONTROL_MARKER="+controlPath)
+	selected := 0
+	selector := func(context.Context) (string, string, error) {
+		selected++
+		return clientPath, daemonPath, nil
+	}
+	clients := make([]*Client, 0, callers)
+	for index := range callers {
+		client, err := ProbeSavedPrivateTaskObservation(t.Context(), f.stateRoot, f.saved, options, selector)
+		t.Cleanup(func() { closeSavedProbeTestClient(t, client, err) })
+		if err != nil || client == nil {
+			t.Fatalf("compatible observation %d: client=%t err=%v", index, client != nil, err)
+		}
+		if client.Binding() != f.saved || client.RuntimeBinding().ClientExecutable != clientPath || client.RuntimeBinding().DaemonExecutable != daemonPath || !task.SameSupervisorIdentity(client.RuntimeBinding(), f.successor) {
+			t.Fatal("compatible observation changed the saved identity or selected runtime")
+		}
+		if got := privateTaskObservationStatusCount(t, controlPath); got != index+1 || selected != index+1 {
+			t.Fatalf("compatible observation %d: snapshots=%d selections=%d, want %d each", index, got, selected, index+1)
+		}
+		clients = append(clients, client)
+	}
+
+	assertCompatibleProbeSharedRows(t, clients, identities, controlPath)
+	current, found, err := loadPrivateSupervisorBinding(f.stateRoot)
+	if err != nil || !found || current != f.successor {
+		t.Fatalf("observation changed the canonical generation: found=%t err=%v", found, err)
+	}
+	assertPrivateDaemonStartCount(t, f.stateRoot, 2)
+}
+
+func assertCompatibleProbeSharedRows(t *testing.T, clients []*Client, identities []Identity, controlPath string) {
+	t.Helper()
+	// ReconcileStatus owns row sharing. Hold every caller immediately after it
+	// reads the entry flight ID, so compatibility reads cannot imply overlap.
+	callers := len(clients)
+	scope := newTestCallScope(t, clients[0].options)
+	entered := make(chan struct{}, callers)
+	released, release := scope.barrier()
+	calls := make([]*testCall[privateTaskObservationResult], 0, callers)
+	for index, client := range clients {
+		client.options.taskObservationEntryObserver = func() {
+			entered <- struct{}{}
+			<-released
+		}
+		ctx := scope.context()
+		calls = append(calls, startTestCall(scope, func() privateTaskObservationResult {
+			observation, err := client.ReconcileStatus(ctx, identities[index])
+			return privateTaskObservationResult{observation: observation, err: err}
+		}))
+	}
+	for _, call := range calls {
+		awaitEntry(scope, entered, call, "compatible row caller did not enter the shared observation")
+	}
+	if got := privateTaskObservationStatusCount(t, controlPath); got != callers {
+		t.Fatalf("row entry started a snapshot before release: got %d, want %d", got, callers)
+	}
+	release()
+	results := make(chan privateTaskObservationResult, callers)
+	for _, call := range calls {
+		results <- awaitCall(scope, call, "compatible shared row observation")
+	}
+	close(results)
+	assertPrivateTaskObservationResults(t, results)
+	if got := privateTaskObservationStatusCount(t, controlPath); got != callers+1 {
+		t.Fatalf("compatibility probes plus overlapping rows started %d snapshots, want %d", got, callers+1)
+	}
+}
+
 func damageCompatibleProbePair(t *testing.T, f completedPrivateSuccessorTestFixture, damage string) {
 	t.Helper()
 	path := f.clientPath

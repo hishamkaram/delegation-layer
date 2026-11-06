@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,4 +121,91 @@ func TestInfrastructureRoutingManualMigrationSkipsOwnerProbe(t *testing.T) {
 	if err != nil || selected.probeErr != nil || selected.owner != (infrastructure.StartupReference{}) {
 		t.Fatalf("manual migration probed an owner: selected=%+v error=%v", selected, err)
 	}
+}
+
+func TestManualMigrationHelperMetadataFaultsDoNotRefresh(t *testing.T) {
+	base := supervisorfixture.CanonicalTempDir(t)
+	plain := filepath.Join(base, "non-executable")
+	if err := os.WriteFile(plain, []byte("present file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		path string
+		want error
+	}{
+		{"present non-executable", plain, pueue.ErrConfiguration},
+		{"ENOTDIR", filepath.Join(plain, "delegate-run"), syscall.ENOTDIR},
+		{"invalid selected path", "relative-runner", pueue.ErrConfiguration},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			effects, owner := newManualMigrationEffects(t)
+			effects.artifacts[owner.Owner] = infrastructure.Artifacts{Runner: test.path}
+			_, err := requestInfrastructurePreparation(t.Context(), infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn}, owner, effects)
+			if !errors.Is(err, test.want) || len(effects.calls) != 1 || effects.calls[0] != "read:1" {
+				t.Fatalf("unproven helper absence released the owner: calls=%v err=%v", effects.calls, err)
+			}
+		})
+	}
+}
+
+func TestManualMigrationReplacementPreflightPreservesServingRole(t *testing.T) {
+	store := newBareInspectionStore(t)
+	available := canonicalAppTestExecutable(t)
+	for _, test := range []struct {
+		name    string
+		origin  string
+		runner  string
+		expired bool
+		want    error
+	}{
+		{"same-root nested", store.Root, available, false, infrastructure.ErrOwnerRequest},
+		{"cross-root nested", filepath.Join(supervisorfixture.CanonicalTempDir(t), "other-root"), available, false, infrastructure.ErrOwnerRequest},
+		{"missing B helper", "", filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing-b"), false, os.ErrNotExist},
+		{"expired budget", "", available, true, context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invocation := manualMigrationInvocation(t, test.origin, store.RootID)
+			budget := time.Minute
+			if test.expired {
+				budget = -time.Second
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
+			defer cancel()
+			contact := infrastructurePreparationContact{
+				routing:   infrastructureOwnerRouting{invocation: invocation, defaultRunner: test.runner},
+				resources: &infrastructureRoutingResources{target: store},
+				selection: infrastructureRoutingSelection{initial: infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn}},
+			}
+			before := snapshotContinuationSuccessorTestState(t, store.Root)
+			_, err := contact.ReleaseServing(ctx, manualMigrationStartup(1))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("replacement preflight reached stop with invalid source/budget/helper: %v", err)
+			}
+			if after := snapshotContinuationSuccessorTestState(t, store.Root); !maps.Equal(before, after) {
+				t.Fatal("refused replacement changed the target")
+			}
+		})
+	}
+}
+
+func manualMigrationInvocation(t *testing.T, root, rootID string) *capturedInfrastructureInvocation {
+	t.Helper()
+	unsetAppInvocationOrigin(t)
+	if root != "" {
+		origin, err := infrastructure.NewOrigin(root, rootID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		environment, err := infrastructure.WithOrigin([]string{}, origin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		setAppInvocationOrigin(t, environment)
+	}
+	invocation := captureInfrastructureInvocation(t.Context())
+	if invocation.err != nil {
+		t.Fatal(invocation.err)
+	}
+	return invocation
 }

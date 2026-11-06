@@ -54,7 +54,8 @@ def run_capacity_scenario(
         response_directory=response_directory,
         evidence=acceptance_evidence,
         lease_nonce=lease_nonce,
-        client_call_log=lifetime.base / "upgraded-client-starts-calls",
+        client_call_log=lifetime.base / "old-client-starts-calls",
+        upgraded_client_call_log=lifetime.base / "upgraded-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
         capture_root=lifetime.capture_token,
         run_receipt=run_receipt,
@@ -98,6 +99,7 @@ def record_capacity_scenario(
             "capacity_proof": acceptance_evidence["capacity_proof"],
             "dispatch_batch": acceptance_evidence["dispatch_batch"],
             "status_coalescing": acceptance_evidence["status_coalescing"],
+            "status_after_package_removal": acceptance_evidence["status_after_package_removal"],
             "capacity_proof_receipt": "capacity-proof.json",
             "dispatch_batch_receipt": "dispatch-batch.json",
             "status_coalescing_receipt": "status-coalescing.json",
@@ -117,10 +119,11 @@ def record_capacity_scenario(
                     else "private model discovery completed without changing ordinary supervisor ownership"
                 ),
                 "task completion survived removal of the original package layout",
-                "dispatch restarted the private supervisor after package removal",
+                "explicit migration selected the current installed pair before dispatch restarted the private supervisor",
                 "all requested fixture tasks retained live provider leases and lifetime-owner locks with bound native-scope registrations while Running",
                 "dispatch caller concurrency and burst metrics were recorded separately from capacity proof",
-                "sixteen concurrent public status calls coalesced into fewer authoritative queue snapshots",
+                "sixteen concurrent public status calls shared queue snapshots while the selected installed pair was available",
+                "sixteen concurrent public status calls retained compatibility probes and shared row observations after package removal",
             ],
         }
     )

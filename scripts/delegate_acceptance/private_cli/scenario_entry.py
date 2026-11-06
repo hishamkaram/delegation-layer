@@ -148,9 +148,9 @@ def run_noexec_state_scenario(lease_nonce, lifetime, response_directory, run_rec
         checks=[
             "the state root lived beneath a caller-provided noexec parent and refused direct execution",
             "the execution temporary root stayed executable and was captured in the task environment",
-            "the external inspection and the external task each recorded their own custody placement",
-            "each recorded pool is canonical, beneath the execution temporary root and outside the state root",
-            "each pool identity marker matched its registration after canonical lifetime closure",
+            "the external inspection and task recorded lifetime registrations without custody placement",
+            "their registrations matched the canonical task identities and external supervisor binding",
+            "both lifetimes had canonical closure before the external supervisor was shut down",
             "the external task committed its outcome while its state root was noexec",
         ],
     )

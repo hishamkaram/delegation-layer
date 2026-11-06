@@ -45,6 +45,67 @@ type OwnerStopResult struct {
 	Process ProcessIdentity `json:"process,omitzero"`
 }
 
+// ReadOwnerArtifacts reads the current exact owner's immutable startup selection.
+// It reports record facts only; the caller owns installed-helper availability policy.
+func ReadOwnerArtifacts(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (Artifacts, error) {
+	if err := expected.Validate(); err != nil {
+		return Artifacts{}, err
+	}
+	request, pin, err := currentOwnerRequestAtStartup(ctx, reader, ownerStatus, expected)
+	if err != nil {
+		return Artifacts{}, err
+	}
+	intent, _, _, err := readOwnerContactRecords(ctx, reader, pin, request)
+	if err != nil {
+		return Artifacts{}, err
+	}
+	return intent.Inputs.Artifacts, nil
+}
+
+// StopOwnerServingAt refuses a changed current owner before contacting it.
+// The selected locator remains the subject throughout the shared stop protocol.
+func StopOwnerServingAt(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (OwnerStopResult, error) {
+	result := OwnerStopResult{State: OwnerStopUnknown, ProcessClosure: OwnerProcessUnknown}
+	if err := expected.Validate(); err != nil {
+		return result, err
+	}
+	if err := validateOwnerStopContext(ctx, reader); err != nil {
+		return result, err
+	}
+	selected, found, err := readOwnerStopLocator(ctx, reader)
+	if err != nil {
+		return result, err
+	}
+	if !found || selected.reference != expected {
+		return result, task.ErrLockBusy
+	}
+	return stopSelectedOwnerServing(ctx, reader, selected)
+}
+
+// WaitOwnerProcessClosed observes only the original incarnation, including after
+// a successor is elected. It never sends another stop or substitutes that successor.
+func WaitOwnerProcessClosed(ctx context.Context, reader *taskdir.ReadOnlyStore, expected StartupReference) (OwnerStopResult, error) {
+	result := OwnerStopResult{State: OwnerStopUnknown, ProcessClosure: OwnerProcessUnknown, Startup: expected}
+	if err := expected.Validate(); err != nil {
+		return result, err
+	}
+	if err := validateOwnerStopContext(ctx, reader); err != nil {
+		return result, err
+	}
+	pin, err := reader.PinRootContext(ctx)
+	if err != nil {
+		return result, err
+	}
+	selected, err := readOwnerStopSequence(ctx, reader, pin, expected.Sequence)
+	if err != nil {
+		return result, err
+	}
+	if selected.reference != expected {
+		return result, ErrIdentity
+	}
+	return awaitOwnerClosure(ctx, reader, selected, result, true)
+}
+
 // StopOwnerServing contacts one existing selected owner at most once. It never
 // initializes, elects, repairs, starts or replays work. The caller owns its
 // finite context and borrowed reader. A released serving role is not process
@@ -65,11 +126,16 @@ func StopOwnerServing(ctx context.Context, reader *taskdir.ReadOnlyStore) (Owner
 		result.State = OwnerNotInitialized
 		return result, nil
 	}
+	return stopSelectedOwnerServing(ctx, reader, selected)
+}
+
+func stopSelectedOwnerServing(ctx context.Context, reader *taskdir.ReadOnlyStore, selected ownerStopLocator) (OwnerStopResult, error) {
+	result := OwnerStopResult{State: OwnerStopUnknown, ProcessClosure: OwnerProcessUnknown}
 	result.Startup = selected.reference
-	if err = validateOwnerStopBoot(ctx, selected); err != nil {
+	if err := validateOwnerStopBoot(ctx, selected); err != nil {
 		return result, err
 	}
-	result, err = observeOwnerStopClosure(ctx, reader, selected)
+	result, err := observeOwnerStopClosure(ctx, reader, selected)
 	if err != nil || result.State == OwnerServingReleased {
 		return result, err
 	}
@@ -245,13 +311,17 @@ func observeOwnerStopUnderLease(ctx context.Context, reader *taskdir.ReadOnlySto
 }
 
 func awaitOwnerStopClosure(ctx context.Context, reader *taskdir.ReadOnlyStore, selected ownerStopLocator, latest OwnerStopResult) (OwnerStopResult, error) {
+	return awaitOwnerClosure(ctx, reader, selected, latest, false)
+}
+
+func awaitOwnerClosure(ctx context.Context, reader *taskdir.ReadOnlyStore, selected ownerStopLocator, latest OwnerStopResult, requireProcessClosed bool) (OwnerStopResult, error) {
 	for {
 		observed, err := observeOwnerStopClosure(ctx, reader, selected)
 		if err != nil {
 			return latest, err
 		}
 		latest = observed
-		if latest.State == OwnerServingReleased {
+		if latest.State == OwnerServingReleased && (!requireProcessClosed || latest.ProcessClosure == OwnerProcessClosed) {
 			return latest, nil
 		}
 		timer := time.NewTimer(20 * time.Millisecond)

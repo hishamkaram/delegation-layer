@@ -5,14 +5,150 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+func TestReadOwnerArtifactsRequiresCurrentCanonicalSelection(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	before := stopRecordSnapshot(t, f.reader)
+	artifacts, err := ReadOwnerArtifacts(ctx, f.reader, f.auth.request.Owner)
+	if err != nil || artifacts != f.auth.intent.Inputs.Artifacts {
+		t.Fatalf("immutable owner artifacts changed: %+v %v", artifacts, err)
+	}
+	stale := f.auth.request.Owner
+	stale.Sequence++
+	if artifacts, err = ReadOwnerArtifacts(ctx, f.reader, stale); !errors.Is(err, task.ErrLockBusy) || artifacts != (Artifacts{}) {
+		t.Fatalf("stale selection exposed another owner's artifacts: %+v %v", artifacts, err)
+	}
+	if !maps.Equal(before, stopRecordSnapshot(t, f.reader)) {
+		t.Fatal("artifact observation changed canonical records")
+	}
+	requireNoOwnerContactConnection(t, f.auth.listener)
+}
+
+func TestReadOwnerArtifactsDoesNotTurnMissingEvidenceIntoArtifacts(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unreadable", true: "missing"}[missing], func(t *testing.T) {
+			f := newOwnerContactFixture(t)
+			path := filepath.Join(f.reader.Root(), "infrastructure", publicationName(1))
+			var err error
+			if missing {
+				err = os.Remove(path)
+			} else {
+				err = os.WriteFile(path, []byte("{}\n"), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			artifacts, err := ReadOwnerArtifacts(ctx, f.reader, f.auth.request.Owner)
+			if err == nil || artifacts != (Artifacts{}) {
+				t.Fatalf("invalid evidence became helper selection: %+v %v", artifacts, err)
+			}
+			requireNoOwnerContactConnection(t, f.auth.listener)
+		})
+	}
+}
+
+func TestOwnerStopAtBusyPreservesExactOwner(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	join := serveOwnerStopFixture(t, f, func(connection *net.UnixConn) error {
+		request, err := readOwnerFrame[ownerStopRequest](bufio.NewReader(connection))
+		if err != nil {
+			return err
+		}
+		return writeOwnerFrame(connection, ownerStopFixtureReply(request, ownerStopBusy))
+	})
+	result, err := StopOwnerServingAt(ctx, f.reader, f.auth.request.Owner)
+	if err != nil || result.State != OwnerStopBusy || result.Startup != f.auth.request.Owner || result.Process != f.auth.assumption.Process {
+		t.Fatalf("bound busy stop lost original owner: %+v %v", result, err)
+	}
+	if err = join(); err != nil {
+		t.Fatal(err)
+	}
+	assertAvailable(t, f.lease.path, false)
+	requireNoOwnerContactConnection(t, f.auth.listener)
+}
+
+func TestOwnerStopAtRefusesStaleSubjectBeforeContact(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	before := stopRecordSnapshot(t, f.reader)
+	stale := f.auth.request.Owner
+	stale.Sequence++
+	result, err := StopOwnerServingAt(ctx, f.reader, stale)
+	if !errors.Is(err, task.ErrLockBusy) || result.State != OwnerStopUnknown || result.Startup != (StartupReference{}) {
+		t.Fatalf("stale subject selected the current owner: %+v %v", result, err)
+	}
+	if !maps.Equal(before, stopRecordSnapshot(t, f.reader)) {
+		t.Fatal("stale stop changed canonical records")
+	}
+	requireNoOwnerContactConnection(t, f.auth.listener)
+}
+
+func TestOwnerStopAtDoesNotContactConcurrentSuccessor(t *testing.T) {
+	f, original := newOwnerStopReleasedSuccessorFixture(t)
+	intent, err := f.journal.readIntent(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := ReferenceStartup(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := ownerEndpointPath(f.reader.Root(), 2)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := listener.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	socket, err := observeEndpointSocket(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assumption := f.auth.assumption
+	assumption.Startup = reference
+	publication := f.auth.publication
+	publication.Startup = reference
+	publication.AssumptionSHA256, err = assumption.Digest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication.Endpoint.Path = endpoint
+	publication.Endpoint.SocketDev, publication.Endpoint.SocketInode = uint64(socket.Dev), uint64(socket.Ino)
+	writeOwnerEvidenceFixture(t, f.journal, assumptionName(2), assumption)
+	writeOwnerEvidenceFixture(t, f.journal, publicationName(2), publication)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	before := stopRecordSnapshot(t, f.reader)
+	result, err := StopOwnerServingAt(ctx, f.reader, original.reference)
+	if !errors.Is(err, task.ErrLockBusy) || result.State != OwnerStopUnknown || result.Startup != (StartupReference{}) {
+		t.Fatalf("stale A selected concurrent O2 for stop: %+v %v", result, err)
+	}
+	if !maps.Equal(before, stopRecordSnapshot(t, f.reader)) {
+		t.Fatal("stale A stop changed O2 records")
+	}
+	requireNoOwnerContactConnection(t, listener)
+}
 
 // These same-process native peers own one finite exchange and join it before
 // fixture cleanup. No resident process, daemon, provider or replacement starts.

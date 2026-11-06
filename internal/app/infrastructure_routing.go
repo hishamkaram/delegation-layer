@@ -117,11 +117,9 @@ func (r infrastructureOwnerRouting) prepare(ctx context.Context, target *taskdir
 	if err = established.Validate(); err != nil {
 		return outcome, err
 	}
-	outcome, err = infrastructure.RequestBoundPreparation(ctx, resources.reader, established.Owner, infrastructure.PreparationRequest{
-		Operation: selection.initial, Context: selection.reference,
-		InitialResultFor: established.InitialResultFor,
+	return requestInfrastructurePreparation(ctx, selection.initial, established, infrastructurePreparationContact{
+		routing: r, resources: resources, selection: selection,
 	})
-	return outcome, errors.Join(infrastructurePreparationOutcomeError(outcome), err)
 }
 
 func (r infrastructureOwnerRouting) selectPreparation(ctx context.Context, pin taskdir.RootPin, selected infrastructure.LaunchContext, initial infrastructure.InitialOperation) (infrastructureRoutingSelection, infrastructureEstablishmentHost, error) {

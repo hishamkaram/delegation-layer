@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -99,6 +100,73 @@ func TestInfrastructurePreparationOptionsUseOnlySelectedContext(t *testing.T) {
 	fixture.selected.ControlEnvironment[0], fixture.selected.MaintenanceEnvironment[0] = "MUTATED=1", "MUTATED=2"
 	if options.Environment[0] != "CONTROL=request-selected" || options.PrivateMaintenanceEnvironment[0] != "MAINTENANCE=request-selected" {
 		t.Fatal("options retained caller-owned environment slices")
+	}
+}
+
+func TestInfrastructurePreparationBindRetainsStartupHelperWithSelectedClient(t *testing.T) {
+	store, _, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	configPath := original.Binding().ConfigPath
+	base := filepath.Dir(configPath)
+	clientB := filepath.Join(owner.base, "installation-b", "pueue")
+	commandLog := filepath.Join(owner.base, "selected-client-commands")
+	writeRunnerFixture(t, clientB, `#!/bin/sh
+set -eu
+[ "$#" -eq 3 ]
+[ "$1" = -c ]
+[ "$3" = --version ]
+printf '%s\n' "$3" >> "$FIXTURE_COMMAND_LOG"
+printf '%s\n' 'pueue 4.0.4'
+`)
+	if err := os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runnerA := filepath.Join(owner.base, "installation-a", "delegate-run")
+	writeRunnerFixture(t, runnerA, "#!/bin/sh\nexit 0\n")
+	// The startup snapshot remains A even after that installation is removed.
+	artifactsA := infrastructure.Artifacts{Runner: runnerA}
+	if err := os.Remove(runnerA); err != nil {
+		t.Fatal(err)
+	}
+	origin, err := infrastructure.NewOrigin(store.Root, store.RootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := infrastructure.LaunchContext{
+		Protocol: infrastructure.RecordProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
+		SupervisorExecutable: clientB, ControlEnvironment: []string{"FIXTURE_COMMAND_LOG=" + commandLog}, MaintenanceEnvironment: []string{},
+	}
+	before := capturePairFaultWitness(t, base)
+	configBefore := string(readSupervisorProbeTestFile(t, configPath))
+
+	// The existing test executable implements the control-owner protocol in
+	// place. This establishes that B can complete the same Bind boundary.
+	optionsB, _, err := infrastructurePreparationOptions(origin, infrastructure.Artifacts{Runner: canonicalAppTestExecutable(t)}, selected, owner, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundB, err := pueue.Bind(t.Context(), selected.SupervisorExecutable, configPath, optionsB)
+	owner.ownClient(boundB, err)
+	if err != nil {
+		t.Fatalf("bind selected B with available helper: %v", err)
+	}
+	assertOrdinarySubmissionCommandCount(t, commandLog, "--version", 1)
+	if err = os.WriteFile(commandLog, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	optionsA, observation, err := infrastructurePreparationOptions(origin, artifactsA, selected, owner, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundA, err := pueue.Bind(t.Context(), selected.SupervisorExecutable, configPath, optionsA)
+	owner.ownClient(boundA, err)
+	var pathErr *os.PathError
+	if !errors.Is(err, os.ErrNotExist) || !errors.Is(err, pueue.ErrBinding) || !errors.As(err, &pathErr) || pathErr.Path != runnerA {
+		t.Fatalf("Bind with selected B lost missing startup helper A cause: %v", err)
+	}
+	assertOrdinarySubmissionCommandCount(t, commandLog, "--version", 0)
+	assertPairFaultWitness(t, base, before)
+	if string(readSupervisorProbeTestFile(t, configPath)) != configBefore || observation.Disposition() != (infrastructure.Disposition{}) {
+		t.Fatal("failed helper validation changed config or claimed readiness/Start")
 	}
 }
 
