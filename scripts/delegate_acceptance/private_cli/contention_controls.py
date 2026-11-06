@@ -46,7 +46,7 @@ from scripts.delegate_acceptance.private_cli.contention_policy import (
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
 from scripts.delegate_acceptance.private_cli.fixture_records import FixtureInstallation
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
 from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort, LockedReleaseGate
@@ -721,13 +721,15 @@ def run_prepared_modern_contention(
         lifetime.attempted_task_ids[:] = sorted(tasks.dispatch_attempts)
         finish_controls(processes, ())
     select_installation(tasks, candidate)
-    shutdown_private_supervisor(
+    shutdown_terminal_private_supervisor(
+        candidate.delegate,
         tasks.pueue,
         lifetime.private_config,
         lifetime.env,
         state=installed.state,
         task_ids=tuple(lifetime.attempted_task_ids),
         capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     run_receipt.add_details(modern_binary_contention=evidence)
     run_receipt.update_counts(

@@ -173,12 +173,15 @@ class InstalledDefaultCoreTests(unittest.TestCase):
 
     def test_verified_shutdown_releases_the_entry_before_the_revalidated_closure_is_checked(self):
         cleanup = packaged_defaults.register_installed_default(self.installed, self.ledger)
-        with patch.object(packaged_defaults, "shutdown_private_supervisor", return_value=self.closure({})) as down:
+        cleanup["task_ids"].append(TASK_ID)
+        with patch.object(packaged_defaults, "shutdown_pending_private_supervisor", side_effect=lambda pending, ledger, **_options: ledger.remove(pending) or self.closure({})) as down:
             with self.assertRaisesRegex(RuntimeError, "does not include"):
                 packaged_defaults.shutdown_installed_default(
                     self.installed, self.admitted, cleanup, self.ledger, capture_root=None)
-        self.assertEqual(down.call_args.args[0], self.root / "pair" / "pueue")
-        self.assertEqual(down.call_args.kwargs["task_ids"], (TASK_ID,))
+        self.assertIs(down.call_args.args[0], cleanup)
+        self.assertEqual(cleanup["delegate"], self.installed.delegate)
+        self.assertEqual(cleanup["client"], self.root / "pair" / "pueue")
+        self.assertEqual(tuple(cleanup["task_ids"]), (TASK_ID,))
         self.assertEqual(self.ledger, [])
 
     def test_a_disposal_owner_is_forwarded_to_the_shutdown_and_defaults_to_none(self):
@@ -187,8 +190,8 @@ class InstalledDefaultCoreTests(unittest.TestCase):
         for kwargs, expected in (({}, None), ({"disposal": owner}, owner)):
             with self.subTest(kwargs=kwargs):
                 cleanup = packaged_defaults.register_installed_default(self.installed, self.ledger)
-                with patch.object(packaged_defaults, "shutdown_private_supervisor",
-                                  return_value=self.closure({TASK_ID: task})) as down:
+                with patch.object(packaged_defaults, "shutdown_pending_private_supervisor",
+                                  side_effect=lambda pending, ledger, **_options: ledger.remove(pending) or self.closure({TASK_ID: task})) as down:
                     packaged_defaults.shutdown_installed_default(
                         self.installed, self.admitted, cleanup, self.ledger, capture_root=None, **kwargs)
                 self.assertIs(down.call_args.kwargs["disposal"], expected)

@@ -428,7 +428,7 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
                 raise OSError(errno.EIO, "injected lease close fault")
 
         args = SimpleNamespace(scenario="lease-teardown", output=self.base / "receipt.json", pueue=None)
-        with patch.object(finalization, "DisposalLeases", return_value=self.disposal), \
+        with patch.object(lifetime, "disposal", self.disposal), \
                 patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=CLOSED), \
                 patch.object(leases.os, "close", close):
             try:
@@ -478,7 +478,7 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
         args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=Path(__file__))
         with patch.object(finalization, "await_primary_readiness") as readiness, \
                 patch.object(finalization, "shutdown_pending_private_supervisor") as supplemental, \
-                patch.object(finalization, "shutdown_private_supervisor") as primary, \
+                patch.object(finalization, "shutdown_terminal_private_supervisor") as primary, \
                 patch.object(finalization, "remove_private_acceptance_root") as remove:
             finalization.finalize_fixture(args, failure, lifetime, receipt, False)
         readiness.assert_not_called()
@@ -499,7 +499,7 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
         args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=Path(__file__))
         with patch.object(finalization, "await_primary_readiness") as readiness, \
                 patch.object(finalization, "shutdown_pending_private_supervisor") as supplemental, \
-                patch.object(finalization, "shutdown_private_supervisor") as primary:
+                patch.object(finalization, "shutdown_terminal_private_supervisor") as primary:
             finalization.finalize_fixture(args, failure, lifetime, receipt, False)
         readiness.assert_not_called()
         supplemental.assert_not_called()
@@ -542,11 +542,11 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
 
         receipt = Mock()
         args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=None)
-        with patch.object(finalization, "DisposalLeases", return_value=self.disposal), \
+        with patch.object(lifetime, "disposal", self.disposal), \
                 patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=CLOSED), \
                 patch.object(root_cleanup, "rollback_owned_directories", side_effect=remove), \
                 patch.object(self.disposal, "release_all", side_effect=release_all), \
-                patch.object(finalization, "shutdown_private_supervisor") as shutdown:
+                patch.object(finalization, "shutdown_terminal_private_supervisor") as shutdown:
             finalization.finalize_fixture(args, None, lifetime, receipt, True)
         shutdown.assert_not_called()
         self.assertEqual(events, ["hook", "remove", "release"])

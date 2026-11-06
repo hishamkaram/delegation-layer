@@ -8,19 +8,23 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
-from typing import TypedDict
+from typing import TypedDict, NotRequired, Literal
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
 from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, LockedReleaseGate, _HeldDisposal
-from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget
+from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget, SelectedOwnerSubject
 
 
 class SupervisorCleanup(TypedDict):
+    delegate: Path
     client: Path
     config: Path
     env: dict[str, str]
     state: Path
     task_ids: list[str]
+    root_id: NotRequired[str]
+    owner: NotRequired[SelectedOwnerSubject | None | Literal["unresolved"]]
+    daemon: NotRequired[tuple[int, Path, tuple[int, int]]]
 
 
 class PredecessorCleanup(TypedDict):
@@ -54,6 +58,9 @@ class FixtureLifetime:
     private_config: Path | None = None
     gate: Path | None = None
     release_gate: LockedReleaseGate | None = None
+    # The installation owner supplies this path; cleanup never infers it from Pueue or PATH.
+    delegate: Path | None = None
+    disposal: DisposalLeases = field(default_factory=DisposalLeases)
     old_install: Path | None = None
     old_libexec: Path | None = None
     upgraded_libexec: Path | None = None

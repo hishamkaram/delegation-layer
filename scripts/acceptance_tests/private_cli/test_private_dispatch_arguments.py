@@ -570,7 +570,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             closure_calls.append((state, tuple(task_ids)))
             return {}
 
-        def record_shutdown(client, config, _env, *, state, task_ids, **_kwargs):
+        def record_shutdown(_delegate, client, config, _env, *, state, task_ids, **_kwargs):
             shutdown_calls.append((client, config, state, tuple(task_ids)))
 
         arguments = self.arguments(
@@ -595,7 +595,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 finalization_impl, "await_managed_lifetime_closure_until", side_effect=record_closure,
             ))
             stack.enter_context(patch.object(
-                finalization_impl, "shutdown_private_supervisor", side_effect=record_shutdown,
+                finalization_impl, "shutdown_terminal_private_supervisor", side_effect=record_shutdown,
             ))
             stack.enter_context(redirect_stdout(io.StringIO()))
             error = None
@@ -728,8 +728,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             stack.enter_context(patch.object(
                 application_impl, "DirectoryOwner", side_effect=tracked_owner,
             ))
-            shutdown = stack.enter_context(patch.object(capacity_entry_impl, "shutdown_observed_private_supervisor"))
-            stack.enter_context(patch.object(finalization_impl, "shutdown_private_supervisor", shutdown))
+            shutdown = stack.enter_context(patch.object(capacity_entry_impl, "shutdown_terminal_private_supervisor"))
+            stack.enter_context(patch.object(finalization_impl, "shutdown_terminal_private_supervisor", shutdown))
             stack.enter_context(patch.object(
                 finalization_impl, "remove_private_acceptance_root",
                 side_effect=remove_root,
@@ -828,7 +828,8 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
         self.assertEqual(release_gate.path, base / "blocker-gate")
         self.assertGreaterEqual(release_gate.descriptor, 0, "gate opened before concurrency proof")
         self.assertEqual(waiter_directory, base / "provider-waiters")
-        self.assertEqual(client_call_log, base / "old-client-starts-calls")
+        self.assertEqual(_kwargs["client"], private_cli.package_layout(base / "upgraded", True)[2] / "pueue")
+        self.assertEqual(client_call_log, base / "upgraded-client-starts-calls")
         requested_workers = dispatch_workers
         old_layout_entries = tuple(old_layout_owned)
         evidence.update({

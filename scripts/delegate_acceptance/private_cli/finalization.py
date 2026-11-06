@@ -8,15 +8,15 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure_until
 from scripts.delegate_acceptance.private_cli.supervisor import await_observed_disposal_readiness
 from scripts.delegate_acceptance.private_cli.capture import reap_captured_process
-from scripts.delegate_acceptance.private_cli.leases import DisposalLeases
 from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_ALREADY_CLOSED
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_SHUT_DOWN
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_pending_private_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_predecessor_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_custody_roots
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_remaining
+from scripts.delegate_acceptance.private_cli.supervisor import terminal_cleanup_evidence
 import time
 
 
@@ -29,7 +29,7 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
     run_receipt.phase("cleanup")
     # One disposal owner holds each root's lease from its authorized shutdown through root deletion.
     # Its teardown fault is a cleanup error: the one terminal receipt below still records it.
-    disposal = DisposalLeases()
+    disposal = lifetime.disposal
     try:
         current_handoff_binding, primary_closure_ready, primary_deadline, preparation_failed = release_fixture_workers(
             args, cleanup_errors, lifetime, success, disposal=disposal
@@ -77,6 +77,8 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
         ),
         "private_root": root_cleanup,
         "pending_supervisor_count": len(lifetime.supervisor_cleanups),
+        "pending_terminal_roots": [terminal_cleanup_evidence(entry) for entry in lifetime.supervisor_cleanups
+                                   if "predecessor" not in entry],
     }
     cleanup_failure = None
     if cleanup_errors and failure is None:
@@ -146,6 +148,9 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success, *, disposal
         closure_config = lifetime.private_config
         closure_env = lifetime.env
         closure_observer = lifetime.primary_observer
+    if any("predecessor" not in entry and entry["state"] == closure_state and "owner" in entry
+           for entry in lifetime.supervisor_cleanups):
+        closure_observer = None
     if (
         not success
         and primary_closure_ready
@@ -196,6 +201,7 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None
                     pending, lifetime.supervisor_cleanups, capture_root=lifetime.capture_token, disposal=disposal,
                     reader=lifetime.closure_reader,
                     deadline=deadline,
+                    closed_roots=lifetime.closed_roots,
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
@@ -259,17 +265,19 @@ def shutdown_primary_supervisor(
     disposal=None,
 ):
     if current_handoff_binding is not None:
+        cleanup_delegate = current_handoff_binding["delegate"]
         cleanup_client = current_handoff_binding["client"]
         cleanup_config = current_handoff_binding["config"]
         cleanup_env = current_handoff_binding["env"]
         cleanup_state = current_handoff_binding["state"]
         cleanup_task_ids = tuple(current_handoff_binding["task_ids"])
     else:
+        cleanup_delegate = lifetime.delegate
         cleanup_config = lifetime.private_config
         cleanup_env = lifetime.env
         cleanup_state = (
             lifetime.private_config.parent.parent
-            if lifetime.private_config is not None and lifetime.private_config.is_file()
+            if lifetime.private_config is not None
             else None
         )
         cleanup_task_ids = tuple(lifetime.attempted_task_ids)
@@ -290,22 +298,27 @@ def shutdown_primary_supervisor(
         and primary_closure_ready
         and cleanup_state not in lifetime.closed_roots
         and cleanup_state not in predecessor_roots
+        and not any("predecessor" not in entry and entry["state"] == cleanup_state
+                    for entry in lifetime.supervisor_cleanups)
         and cleanup_config is not None
-        and cleanup_config.is_file()
     ):
         client = cleanup_client
         if client is not None:
             try:
-                shutdown_private_supervisor(
+                shutdown_remaining(deadline)
+                shutdown_terminal_private_supervisor(
+                    cleanup_delegate,
                     client,
                     cleanup_config,
                     cleanup_env,
-                    timeout=shutdown_remaining(deadline),
+                    deadline=deadline,
                     state=cleanup_state,
                     task_ids=cleanup_task_ids,
                     capture_root=lifetime.capture_token,
                     disposal=disposal,
                     reader=lifetime.closure_reader,
+                    closed_roots=lifetime.closed_roots,
+                    supervisor_cleanups=lifetime.supervisor_cleanups,
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(

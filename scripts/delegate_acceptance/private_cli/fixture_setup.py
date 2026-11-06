@@ -49,6 +49,7 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     lifetime.old_install, old_bin, lifetime.old_libexec = install_package_layout(
         lifetime.old_layout_ownership, source, old_root, not legacy_mode
     )
+    lifetime.delegate = lifetime.old_install / "delegate"
     lifetime.old_layout_owned = lifetime.old_layout_ownership.transfer()
     upgraded_root = lifetime.ownership.create(
         "upgraded package root", lifetime.base / "upgraded", lifetime.base
@@ -67,6 +68,7 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     upgraded_install, upgraded_bin, lifetime.upgraded_libexec = install_package_layout(
         lifetime.ownership, upgraded_source, upgraded_root, True
     )
+    lifetime.delegate = upgraded_install / "delegate"
     response_directory.mkdir(mode=0o700)
     old_daemon_marker = lifetime.base / "old-daemon-starts"
     upgraded_daemon_marker = lifetime.base / "upgraded-daemon-starts"

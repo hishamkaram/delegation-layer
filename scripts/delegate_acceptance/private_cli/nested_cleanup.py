@@ -4,13 +4,13 @@ from pathlib import Path
 import time
 
 from scripts.delegate_acceptance.evidence.records import _read_control_record
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require, _hex_digest, _task_identity
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.private_cli.nested_observation import (
     lifetime_checkpoint, await_actor_closure, reconcile_prepared_actor, bound_private_client,
 )
 from scripts.delegate_acceptance.evidence.files import path_present, write_json
 from scripts.delegate_acceptance.private_cli.supervisor import (
-    await_observed_disposal_readiness, shutdown_custody_roots, shutdown_private_supervisor, shutdown_remaining,
+    await_observed_disposal_readiness, shutdown_custody_roots, close_private_root, register_terminal_private_root,
 )
 from scripts.delegate_acceptance.private_cli.disposal_observer import public_status_observer
 
@@ -157,51 +157,31 @@ def close_root(case, state, task_ids, deadline, disposal):
     if state in case.lifetime.closed_roots:
         return
     require(disposal is not None, "nested root closure requires the finalizer disposal owner")
-    observer = public_status_observer(Path(case.configuration["delegate"]), state, case.lifetime.env,
-                                      capture_root=case.lifetime.capture_token)
-    closure = await_observed_disposal_readiness(state, tuple(task_ids), shutdown_custody_roots(state, case.lifetime.env),
-                                               deadline, observer, reader=case.read_closure)
-    for task_id in closure["tasks"]:
-        await_actor_closure(case, state, {"root_id": closure["root_id"], "task_id": task_id}, deadline)
     config = state / ".supervisor" / "pueue.yml"
     selected = bound_private_client(state, case.lifetime.env) if path_present(config) else None
-    result = case.command(state, ["supervisor", "stop-owner"], "cleanup-owner-" + state.name,
-                          expected=(0, 1, 3), deadline=deadline)
-    process = selected_owner_process(result, closure["root_id"], config)
-    closed = None
-    if process is not None:
-        if selected is not None:
-            client, environment = selected
-            closure = shutdown_private_supervisor(client, config, environment, timeout=shutdown_remaining(deadline),
-                                                  state=state, task_ids=tuple(task_ids), capture_root=case.lifetime.capture_token,
-                                                  disposal=disposal, reader=case.read_closure)
-        await_selected_owner_absence(case, process, deadline)
-        if selected is not None:
-            closed = {"closure": closure, "disposal": disposal.require_held(state)}
+    client, environment = selected if selected is not None else (None, case.lifetime.env)
+    pending = register_terminal_private_root(
+        case.lifetime.supervisor_cleanups, Path(case.configuration["delegate"]), client, config, environment,
+        state=state, task_ids=task_ids)
+    if "owner" not in pending:
+        observer = public_status_observer(Path(case.configuration["delegate"]), state, case.lifetime.env,
+                                          capture_root=case.lifetime.capture_token)
+        closure = await_observed_disposal_readiness(state, tuple(task_ids), shutdown_custody_roots(state, case.lifetime.env),
+                                                   deadline, observer, reader=case.read_closure)
+        for task_id in closure["tasks"]:
+            await_actor_closure(case, state, {"root_id": closure["root_id"], "task_id": task_id}, deadline)
+    closure = close_private_root(
+        pending, capture_root=case.lifetime.capture_token,
+        disposal=disposal, deadline=deadline, reader=case.read_closure,
+        stop_owner=lambda until: case.command(state, ["supervisor", "stop-owner"], "cleanup-owner-" + state.name,
+                                              expected=(0, 1, 3), deadline=until),
+        owner_absent=lambda process, until: await_selected_owner_absence(case, process, until))
+    closed = {"closure": closure, "disposal": disposal.require_held(state)} if selected is not None else None
     # The selected incarnation alone is proven closed, not any future startup.
     case.lifetime.closed_roots[state] = closed
     case.lifetime.supervisor_cleanups[:] = [entry for entry in case.lifetime.supervisor_cleanups
                                            if entry.get("state") != state]
 
-
-def selected_owner_process(response, root_id, config):
-    require(isinstance(response, dict) and not response.get("error") and response.get("root_id") == root_id,
-            "owner stop failed or changed the selected root")
-    owner = response.get("supervisor_owner")
-    require(isinstance(owner, dict) and owner.get("action") == "stop-owner", "owner stop omitted its result")
-    if owner.get("state") == "not_initialized":
-        require(not path_present(config), "owner not initialized but private daemon config remains; retain root")
-        return None
-    require(owner.get("state") == "serving_released", "selected owner serving release was not proven: " + str(owner.get("state")))
-    startup = owner.get("startup")
-    require(isinstance(startup, dict) and type(startup.get("sequence")) is int and startup["sequence"] > 0
-            and _task_identity(startup.get("epoch")) and _hex_digest(startup.get("intent_sha256")),
-            "owner stop omitted its validated startup identity")
-    process = owner.get("process")
-    require(isinstance(process, dict) and type(process.get("pid")) is int and process["pid"] > 0
-            and isinstance(process.get("start_token"), str) and process["start_token"]
-            and "\x00" not in process["start_token"], "owner stop omitted its selected process identity")
-    return process
 
 
 def await_selected_owner_absence(case, process, deadline):

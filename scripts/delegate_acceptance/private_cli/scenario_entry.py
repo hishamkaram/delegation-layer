@@ -72,6 +72,7 @@ def run_stop_scenario(lease_nonce, lifetime, response_directory, run_receipt, fi
         run_receipt=run_receipt,
         attempted_task_ids=lifetime.attempted_task_ids,
         capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     wrapper_calls = wrapper_call_records(
         lifetime.base / "old-client-starts-calls", "client", "old"
@@ -177,6 +178,7 @@ def run_external_cases(
         lifetime.managed_state_roots.append((case_state, case_task_ids))
         lifetime.handoff_cleanup_bindings.append(
             {
+                "delegate": lifetime.old_install / "delegate",
                 "client": lifetime.old_libexec / "pueue",
                 "config": case_private_config,
                 "env": lifetime.env,
@@ -211,6 +213,7 @@ def run_external_cases(
             handoff_action=handoff_action,
             case_label=case_label,
             handoff_cases=handoff_cases,
+            supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
         )
         handoff_cases[case_label] = handoff
         lifetime.attempted_task_ids.extend(case_task_ids)

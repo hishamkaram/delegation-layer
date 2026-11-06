@@ -5,7 +5,7 @@ from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from scripts.delegate_acceptance.private_cli.wrapper_policy import compact_sequence_evidence
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.wrapper_policy import require_no_startup_control_calls
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_observed_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_records
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_command_counts
 
@@ -54,7 +54,7 @@ def run_capacity_scenario(
         response_directory=response_directory,
         evidence=acceptance_evidence,
         lease_nonce=lease_nonce,
-        client_call_log=lifetime.base / "old-client-starts-calls",
+        client_call_log=lifetime.base / "upgraded-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
         capture_root=lifetime.capture_token,
         run_receipt=run_receipt,
@@ -62,7 +62,8 @@ def run_capacity_scenario(
     # The upgrade probe has already removed every old-layout token;
     # never present those consumed handles to the final rollback.
     lifetime.old_layout_owned = ()
-    shutdown_observed_private_supervisor(
+    shutdown_terminal_private_supervisor(
+        delegate,
         lifetime.upgraded_libexec / "pueue",
         lifetime.private_config,
         lifetime.env,
@@ -70,6 +71,7 @@ def run_capacity_scenario(
         task_ids=tuple(lifetime.attempted_task_ids),
         capture_root=lifetime.capture_token,
         observe=lifetime.primary_observer,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     record_capacity_scenario(
         acceptance_evidence=acceptance_evidence, args=args, dispatch_workers=dispatch_workers, initial=initial,

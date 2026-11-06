@@ -17,7 +17,7 @@ from scripts.delegate_acceptance.private_cli.nested_observation import fixture_l
 from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, DISPOSAL_LOCK_ORDER
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime, SupervisorCleanup
 from scripts.delegate_acceptance.private_cli.nested_case import NestedCase
-from scripts.delegate_acceptance.private_cli import nested_cleanup
+from scripts.delegate_acceptance.private_cli import supervisor, nested_cleanup
 from scripts.delegate_acceptance.private_cli import nested_observation
 from scripts.delegate_acceptance.private_cli.supervisor import run_when_disposal_ready, await_managed_lifetime_closure_until
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
@@ -216,7 +216,7 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         self.config.write_text("shared: {}\n")
         for name in DISPOSAL_LOCK_ORDER:
             (self.config.parent / name).touch(mode=0o600)
-        self.pending: SupervisorCleanup = {"client": self.fixture.pueue, "config": self.config, "env": {}, "state": self.state, "task_ids": []}
+        self.pending: SupervisorCleanup = {"delegate": self.fixture.base / "delegate", "client": self.fixture.pueue, "config": self.config, "env": {}, "state": self.state, "task_ids": []}
         self.lifetime = FixtureLifetime(supervisor_cleanups=[self.pending], managed_state_roots=[(self.state, [])])
         self.reply: dict[str, object] = {"root_id": ROOT, "supervisor_owner": {
             "action": "stop-owner", "state": "serving_released", "process_closure": "pending",
@@ -225,7 +225,7 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         self.case = SimpleNamespace(configuration={"delegate": str(self.fixture.base / "delegate")},
                                     lifetime=self.lifetime, command=Mock(return_value=self.reply),
                                     native=Mock(return_value={"present": False, "identity_matches": False}),
-                                    read_closure=Mock())
+                                    read_closure=Mock(return_value={"root_id": ROOT, "tasks": {}}))
         self.disposal = DisposalLeases()
         self.addCleanup(self.disposal.release_all)
         self.readiness = self.patch("await_observed_disposal_readiness", return_value={"root_id": ROOT, "tasks": {}})
@@ -234,10 +234,12 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         self.selected_client = self.patch("bound_private_client", return_value=(self.fixture.pueue, {}))
 
         def shutdown(*_args, **options):
-            self.disposal.hold(self.state, time.monotonic() + options["timeout"])
+            self.assertTrue(self.disposal.holds(self.state))
             return {"root_id": ROOT, "tasks": {}}
 
-        self.shutdown = self.patch("shutdown_private_supervisor", side_effect=shutdown)
+        self.patch("private_shutdown_evidence", target=supervisor, return_value=(27182, self.config, (1, 2)))
+        self.patch("private_shutdown_closed", target=supervisor, return_value=False)
+        self.shutdown = self.patch("shutdown_observed_supervisor", target=supervisor, side_effect=shutdown)
 
     def patch(self, name, *, target=nested_cleanup, **options):
         patcher = patch.object(target, name, **options)
@@ -352,10 +354,11 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         deadline = time.monotonic() + 1
         self.case.command.side_effect = lambda *_args, **_options: events.append("stop") or self.reply
 
-        def shutdown(_client, _config, _env, **options):
-            self.assertIs(options["disposal"], self.disposal)
-            self.assertGreater(options["timeout"], 0)
-            self.assertLessEqual(options["timeout"], deadline - started)
+        def shutdown(_client, _config, _env, _evidence, actual_deadline, **options):
+            self.assertEqual(actual_deadline, deadline)
+            self.assertTrue(self.disposal.holds(self.state))
+            self.assertGreater(actual_deadline - time.monotonic(), 0)
+            self.assertLessEqual(actual_deadline - time.monotonic(), deadline - started)
             self.disposal.hold(self.state, deadline)
             self.assert_retained()
             events.append("daemon")
@@ -400,8 +403,11 @@ class NestedOwnerCleanupTests(unittest.TestCase):
               for process in (None, {"pid": True, "start_token": "selected"}, {"pid": 0, "start_token": "selected"},
                               {"pid": 31415, "start_token": ""}, {"pid": 31415, "start_token": "bad\x00token"})),
         ]
+        original = self.pending.copy()
         for reply in replies:
             with self.subTest(reply=reply):
+                self.pending = original.copy()
+                self.lifetime.supervisor_cleanups[:] = [self.pending]
                 self.case.command.return_value = reply
                 with self.assertRaises(AcceptanceFailure):
                     self.close()
@@ -431,7 +437,6 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         for observation in ({"present": True, "identity_matches": True},
                             {"present": True, "identity_matches": None}, RuntimeError("native observer fault")):
             with self.subTest(observation=observation):
-                self.case.command.reset_mock()
                 self.case.native.side_effect = observation if isinstance(observation, RuntimeError) else None
                 self.case.native.return_value = observation
                 with self.assertRaises((TimeoutError, AcceptanceFailure, RuntimeError)):

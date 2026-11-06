@@ -301,7 +301,7 @@ class SchedulerDefaultTests(unittest.TestCase):
         sibling = self.parent / "user-data"
         sibling.write_text("preserve")
         with (patch.object(case.service, "stop"),
-              patch.object(application, "shutdown_private_supervisor") as shutdown):
+              patch.object(application, "shutdown_terminal_private_supervisor") as shutdown):
             application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
                                     receipt=self.receipt, failure=None)
         self.assertFalse(self.base.exists())

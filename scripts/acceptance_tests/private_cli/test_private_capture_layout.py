@@ -212,7 +212,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
                              side_effect=lambda *_a, capture_root, **_k: fake_control(
                                  capture_root, {"groups": {"default": {"parallel_tasks": 0}}})), \
                 patch.object(capacity_entry, "verify_current_installation_upgrade", side_effect=upgrade), \
-                patch.object(capacity_entry, "shutdown_observed_private_supervisor",
+                patch.object(capacity_entry, "shutdown_terminal_private_supervisor",
                              side_effect=lambda *_a, capture_root, **_k: pid_fallback(capture_root)), \
                 patch.object(capacity_entry, "record_capacity_scenario"):
             capacity_entry.run_capacity_scenario(
@@ -243,7 +243,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
         self.assert_captures_outside_base(before, 2, designed)
         with patch.object(contention_controls, "run_modern_binary_contention", return_value={"modern": True}), \
                 patch.object(contention_controls, "select_installation"), \
-                patch.object(contention_controls, "shutdown_private_supervisor",
+                patch.object(contention_controls, "shutdown_terminal_private_supervisor",
                              side_effect=lambda *_a, capture_root, **_k: pid_fallback(capture_root)):
             contention_controls.run_prepared_modern_contention(
                 self.lifetime, fixture, self.responses, self.receipt
@@ -266,14 +266,14 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
             roots.append(capture_root)
             pid_fallback(capture_root)
 
-        def shutdown_pending(_pending, _ledger, *, capture_root, disposal, reader, deadline):
+        def shutdown_pending(_pending, _ledger, *, capture_root, disposal, reader, deadline, closed_roots):
             self.assertIs(reader, self.lifetime.closure_reader)
             self.assertIsNone(deadline)
             shutdown(capture_root=capture_root)
 
         target = Mock(spec=supervisor.PredecessorShutdownTarget, state=self.root / "predecessor",
                       backup_handle=SimpleNamespace(close=lambda: None))
-        pending: SupervisorCleanup = {"config": config, "client": fixture.provider_bin, "env": {},
+        pending: SupervisorCleanup = {"delegate": fixture.delegate_binary, "config": config, "client": fixture.provider_bin, "env": {},
                                       "state": fixture.state, "task_ids": []}
         predecessor: PredecessorCleanup = {"client": fixture.provider_bin, "env": {}, "task_ids": [],
                                           "predecessor": target}
@@ -283,7 +283,7 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
                 patch.object(finalization, "shutdown_predecessor_supervisor",
                              side_effect=lambda *_a, capture_root, **_k: (
                                  shutdown(capture_root=capture_root), finalization.PREDECESSOR_SHUT_DOWN)[1]), \
-                patch.object(finalization, "shutdown_private_supervisor", side_effect=shutdown):
+                patch.object(finalization, "shutdown_terminal_private_supervisor", side_effect=shutdown) as primary:
             errors = []
             finalization.shutdown_supplemental_supervisors(errors, self.lifetime)
             finalization.shutdown_primary_supervisor(
@@ -291,9 +291,10 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
                 predecessor_roots=frozenset(), deadline=time.monotonic() + 30,
             )
         self.assertEqual(errors, [])
-        self.assertEqual(len(roots), 3)
+        self.assertEqual(len(roots), 2)
+        primary.assert_not_called()
         self.assertEqual(len({id(root) for root in roots}), 1)
-        directory, _ = self.assert_captures_outside_base(before, 6)
+        directory, _ = self.assert_captures_outside_base(before, 4)
         self.assertEqual(roots[0].directory, directory)
 
     def test_success_root_cleanup_removes_and_consumes_the_capture_child_with_the_base(self):
@@ -429,7 +430,7 @@ class EarlyCaptureChildFailureTests(CaptureLayoutCase):
         self.assertEqual(self.lifetime.supervisor_cleanups, [])
         self.assertEqual(self.lifetime.managed_state_roots, [])
         self.assertEqual(sorted(path.name for path in base.iterdir()), ["private-control-captures"])
-        with patch.object(finalization, "shutdown_private_supervisor") as shutdown:
+        with patch.object(finalization, "shutdown_terminal_private_supervisor") as shutdown:
             finalization.finalize_fixture(
                 self.arguments(), RuntimeError("setup"), self.lifetime, self.receipt, False
             )

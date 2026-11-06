@@ -22,7 +22,7 @@ from scripts.delegate_acceptance.private_cli.supervisor import private_shutdown_
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.commands import run_json
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_pending_private_supervisor
 import shutil
 import uuid
 
@@ -126,6 +126,7 @@ def register_installed_default(installed, supervisor_cleanups, managed_state_roo
     if installed.state.exists() or installed.config.exists():
         raise RuntimeError("packaged default state was not fresh")
     cleanup = {
+        "delegate": installed.delegate,
         "client": installed.supervisor_directory / "pueue",
         "config": installed.config,
         "env": installed.env,
@@ -228,16 +229,10 @@ def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups
     A final-disposal caller passes its ``disposal`` owner, which then keeps the state root's lease held
     after the shutdown; without one the shutdown holds the transition lease only while it runs.
     """
-    closure = shutdown_private_supervisor(
-        admitted.pair / "pueue",
-        installed.config,
-        installed.env,
-        state=installed.state,
-        task_ids=(admitted.task_id,),
-        capture_root=capture_root,
-        disposal=disposal,
-    )
-    supervisor_cleanups.remove(cleanup)
+    if "owner" not in cleanup:
+        cleanup["client"] = admitted.pair / "pueue"
+    closure = shutdown_pending_private_supervisor(
+        cleanup, supervisor_cleanups, capture_root=capture_root, disposal=disposal)
     return require_task_closure(closure, admitted)
 
 
@@ -285,6 +280,7 @@ def verify_packaged_default_path(
     managed_state_roots=None,
     *,
     capture_root,
+    disposal,
 ):
     """Prove an adjacent release bundle bootstraps through only public defaults."""
     if run_receipt is not None:
@@ -313,7 +309,8 @@ def verify_packaged_default_path(
     if run_receipt is not None:
         run_receipt.increment("collected_task_count")
         run_receipt.phase("packaged_default_shutdown")
-    shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root)
+    shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root,
+                               disposal=disposal)
     pueue_snapshot(
         primary_client,
         primary_config,

@@ -1,6 +1,7 @@
 """Negative oracles for the native nested-survival scenario."""
 
 import tempfile
+import json
 import threading
 import time
 import fcntl
@@ -26,6 +27,8 @@ from scripts.delegate_acceptance.private_cli.nested_cleanup import cleanup_case,
 from scripts.delegate_acceptance.evidence.records import _read_control_record
 from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, ordinary_lifetime_owner_live
 from scripts.delegate_acceptance.private_cli.nested_fixture import wait_gate, dispatch_worker
+from scripts.delegate_acceptance.private_cli.nested_case import NestedCase
+from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 
 
 class NestedSurvivalOracleTests(unittest.TestCase):
@@ -316,3 +319,63 @@ class NestedSurvivalOracleTests(unittest.TestCase):
                         self.fail("changed capture pin accepted")
             finally:
                 rollback_owned_directories(owner.transfer())
+
+
+class NestedAdmissionReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.task_id = "a" * 32
+        self.case = NestedCase.__new__(NestedCase)
+        self.case.a = self.root
+        self.case.b_ids = []
+        self.case.lifetime = FixtureLifetime(old_install=self.root / "installed")
+        self.case.fixture = SimpleNamespace(workspace=self.root)
+        self.case.responses = {}
+        self.case.evidence = {}
+        self.case.receipts = self.root
+        self.receipt = AcceptanceReceipt(self.root / "receipt.json", 3, 1, {})
+        self.case.receipt = self.receipt
+        self.receipt.add_details(nested_survival=self.case.evidence)
+
+    def test_failed_admission_keeps_only_public_diagnostics_through_cleanup_failure(self):
+        failure = {"code": "resource_pressure", "stage": "resource-admission",
+                   "reason_code": "memory", "next_action": "retry_later", "private": "private-secret"}
+        public_failure = {key: failure[key] for key in ("code", "stage", "reason_code", "next_action")}
+        for record, returned_id in (("not_created", self.task_id), ("unknown", self.task_id),
+                                    ("created", "b" * 32), ("created", None)):
+            with self.subTest(record=record, returned_id=returned_id):
+                self.case.evidence.clear()
+                self.case.lifetime.attempted_task_ids.clear()
+                response = {"schema_version": 1, "command": "dispatch", "root_id": "c" * 32,
+                            "task_id": returned_id, "task_record": record, "admission": "not-admitted",
+                            "failure": failure, "error": "private-secret",
+                            "raw": {"stdout_tail": "private-secret", "stderr_tail": "private-secret"},
+                            "provider": {"session": "private-secret"}}
+                with patch.object(NestedCase, "command", return_value=response) as command:
+                    with self.assertRaisesRegex(AcceptanceFailure, "never redispatch"):
+                        self.case.dispatch(self.root, self.task_id, self.root / "brief", "3m", "leader")
+                self.assertEqual(command.call_count, 1)
+                self.assertEqual(self.case.lifetime.attempted_task_ids, [self.task_id])
+                self.assertEqual(self.case.responses, {})
+                self.assertIn("failed_admission", self.case.evidence)
+                expected = {key: response[key] for key in
+                            ("schema_version", "command", "root_id", "task_id", "task_record", "admission")}
+                expected.update(name="leader", requested_task_id=self.task_id, failure=public_failure)
+                self.receipt.write("FAIL", {"status": "failed"}, RuntimeError("cleanup failed"))
+                receipt_text = self.receipt.output.read_text()
+                published = json.loads(receipt_text)
+                self.assertEqual(published["nested_survival"]["failed_admission"], expected)
+                self.assertEqual(published["failure"]["code"], "cleanup_failed")
+                self.assertNotIn("private-secret", receipt_text)
+
+    def test_created_admission_keeps_status_observation_and_no_failure_receipt(self):
+        response = {"schema_version": 1, "command": "dispatch", "root_id": "c" * 32,
+                    "task_id": self.task_id, "task_record": "created", "admission": "admitted"}
+        with patch.object(NestedCase, "command", return_value=response) as command, \
+                patch("scripts.delegate_acceptance.private_cli.nested_case.observe_created_admission") as observe:
+            result = self.case.dispatch(self.root, self.task_id, self.root / "brief", "3m", "leader")
+        self.assertEqual(result, response)
+        self.assertEqual(command.call_count, 2)
+        observe.assert_called_once()
+        self.assertNotIn("failed_admission", self.case.evidence)
+        self.assertEqual(self.receipt.counts["dispatch_completed_count"], 1)

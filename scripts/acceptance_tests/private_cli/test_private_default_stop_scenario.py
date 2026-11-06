@@ -450,7 +450,7 @@ def _run_stop_scenario(self, *, error=None, ended_changes=None, user_closure_cau
                 gate=gate_path, waiter_directory=waiters,
                 config=root / "pueue.yml", env={}, response_directory=responses, provider_fixture=provider,
                 lease_nonce="e" * 32,
-                run_receipt=receipt, attempted_task_ids=records["attempted"], capture_root=self.capture_root,
+                run_receipt=receipt, attempted_task_ids=records["attempted"], capture_root=self.capture_root, disposal=None, supervisor_cleanups=[],
             )
 
         with patch.object(private_cli.LockedReleaseGate, "acquire", return_value=gate), \
@@ -460,7 +460,7 @@ def _run_stop_scenario(self, *, error=None, ended_changes=None, user_closure_cau
                 patch.object(stop_impl.time, "time_ns", return_value=budget["now_ns"]), \
                 patch.object(stop_impl, "default_stop_live_lease", side_effect=live_lease), \
                 patch.object(stop_impl, "await_managed_lifetime_closure", side_effect=closure), \
-                patch.object(stop_impl, "shutdown_private_supervisor", side_effect=shutdown_private):
+                patch.object(stop_impl, "shutdown_terminal_private_supervisor", side_effect=shutdown_private):
             if error is None:
                 records["evidence"] = run()
             else:

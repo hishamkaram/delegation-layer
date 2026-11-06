@@ -52,7 +52,7 @@ class NestedCase:
         lifetime.closure_reader = self.read_closure
         if self.b != self.a:
             lifetime.managed_state_roots.append((self.b, self.b_ids))
-            lifetime.supervisor_cleanups.append({"client": lifetime.old_libexec / "pueue",
+            lifetime.supervisor_cleanups.append({"delegate": lifetime.old_install / "delegate", "client": lifetime.old_libexec / "pueue",
                 "config": self.b / ".supervisor" / "pueue.yml", "env": lifetime.env, "state": self.b,
                 "task_ids": self.b_ids})
         self._write_configuration()
@@ -81,6 +81,15 @@ class NestedCase:
                                 "--id", task_id, "--budget", budget], name, expected=(0, 1))
         if response.get("task_id") == task_id and response.get("task_record") == "created":
             self.responses[name] = response
+        else:
+            failure = response.get("failure")
+            self.evidence["failed_admission"] = {
+                "name": name, "requested_task_id": task_id,
+                **{key: response.get(key) for key in
+                   ("schema_version", "command", "root_id", "task_id", "task_record", "admission")},
+                "failure": {key: failure[key] for key in ("code", "stage", "reason_code", "next_action")
+                            if key in failure} if isinstance(failure, dict) else {},
+            }
         require(response.get("task_id") == task_id and response.get("task_record") == "created",
                 "nested admission was not created; never redispatch")
         self.command(state, ["status", task_id], name + "-status")

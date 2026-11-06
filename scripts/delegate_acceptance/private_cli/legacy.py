@@ -23,7 +23,7 @@ from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.capture import reap_captured_process
 from scripts.delegate_acceptance.private_cli.wrapper_policy import require_no_startup_control_calls
 from scripts.delegate_acceptance.private_cli.commands import run_json
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor, shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.queue_policy import task_row_by_label
 from scripts.delegate_acceptance.private_cli.supervisor import wait_for_pueue_state
 from scripts.delegate_acceptance.private_cli.supervisor import wait_for_queued_label_prefix
@@ -64,13 +64,15 @@ def run_legacy_scenario(
     complete_legacy_package_removal(fixture, initial, lifetime, response_directory)
     upgraded_task_id = dispatch_upgraded_task(fixture, initial, lifetime, response_directory, installed_runner_path)
     restarted_task_id = restart_upgraded_supervisor(fixture, initial, lifetime, response_directory)
-    shutdown_private_supervisor(
+    shutdown_terminal_private_supervisor(
+        fixture.upgraded_install / "delegate",
         lifetime.upgraded_libexec / "pueue",
         lifetime.private_config,
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
         capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     wrapper_calls = (
         wrapper_call_records(lifetime.base / "old-client-starts-calls", "client", "old")

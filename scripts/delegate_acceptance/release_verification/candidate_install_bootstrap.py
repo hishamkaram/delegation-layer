@@ -36,12 +36,13 @@ from ..directories.journal import directory_identity_record
 from ..directories.operations import DirectoryOwner, OwnedDirectory, release_owned_directories
 from ..private_cli.fixtures import install_pi_fixture
 from ..private_cli.leases import DisposalLeases
+from ..private_cli.fixture_lifetime import SupervisorCleanup
 from ..private_cli.packaged_defaults import (
     INSTALLED_BINARIES, InstalledBootstrap, InstalledDefaults, isolated_default_state_path,
     prove_installed_default_bootstrap,
 )
 from ..private_cli.root_cleanup import remove_private_acceptance_root
-from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor
+from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor, terminal_cleanup_evidence
 from .candidate_install_contract import BOOTSTRAP_SHUTDOWN, BootstrapObservation, BootstrapTarget
 from .contract import InstalledExecutables, VerificationError
 
@@ -78,7 +79,7 @@ class InstalledBootstrapProbe:
         facts: dict[str, object] = {"status": "partial", "parent": str(self.parent), "root": str(root)}
         self.receipt["candidate_install"]["bootstrap"] = facts
         self.locations["bootstrap_root"] = root
-        ledger: list[dict] = []
+        ledger: list[SupervisorCleanup] = []
         token = None
         capture = None
         observation = None
@@ -197,7 +198,7 @@ def _release_unconsumed(entries: tuple[OwnedDirectory, ...], facts: dict[str, ob
 
 
 def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: BootstrapTarget,
-         ledger: list[dict], facts: dict[str, object],
+         ledger: list[SupervisorCleanup], facts: dict[str, object],
          disposal: DisposalLeases) -> tuple[Path, InstalledBootstrap]:
     """Run the shared core for one installed root; return its state root with the closed turn."""
     home, providers, workspace, responses = (
@@ -232,7 +233,7 @@ def _fault(error: BaseException) -> dict[str, object]:
 
 
 def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
-                      ledger: list[dict], facts: dict[str, object],
+                      ledger: list[SupervisorCleanup], facts: dict[str, object],
                       disposal: DisposalLeases) -> VerificationError | None:
     """Record the original fault and shut down each pending supervisor once; the root's disposal is the caller's.
 
@@ -266,7 +267,7 @@ def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
     return VerificationError("candidate_bootstrap_failed", STAGE)
 
 
-def _publish_unresolved(ledger: list[dict], facts: dict[str, object]) -> list[dict[str, object]]:
+def _publish_unresolved(ledger: list[SupervisorCleanup], facts: dict[str, object]) -> list[dict[str, object]]:
     """Record every pending supervisor, then keep each one after an attempted dispatch, with its evidence.
 
     The local ledger stays authoritative. Its entries are copied into the private facts before any
@@ -281,7 +282,8 @@ def _publish_unresolved(ledger: list[dict], facts: dict[str, object]) -> list[di
     facts["unresolved_ownership"] = records
     unresolved: list[dict[str, object]] = []
     for entry, record in zip(pending, records):
-        if entry["task_ids"] or entry["config"].exists():
+        record.update(terminal_cleanup_evidence(entry))
+        if entry["task_ids"] or entry["config"].exists() or "owner" in entry:
             _add_shutdown_evidence(record, entry["config"])
             unresolved.append(record)
     facts["unresolved_ownership"] = unresolved

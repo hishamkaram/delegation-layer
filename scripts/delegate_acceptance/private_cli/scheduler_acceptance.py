@@ -27,7 +27,7 @@ from scripts.delegate_acceptance.private_cli.scheduler_default import (
     bind_default_fixture, delete_default_schedule, run_fresh_default,
 )
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 
 
 @dataclass(frozen=True)
@@ -147,9 +147,11 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
             if lifetime.private_config is None or lifetime.old_libexec is None:
                 raise RuntimeError("scheduler fixture lost its private supervisor cleanup binding")
             receipt.phase("canonical_cleanup")
-            shutdown_private_supervisor(
+            shutdown_terminal_private_supervisor(
+                lifetime.delegate,
                 lifetime.old_libexec / "pueue", lifetime.private_config, lifetime.env,
                 state=case.fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
+                supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
             )
             retire_case_services(case)
         except BaseException as cleanup_error:

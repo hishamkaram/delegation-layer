@@ -23,6 +23,7 @@ from scripts.delegate_acceptance.workspaces.scenarios.context import (
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
 
 TASK_ID = "0123456789abcdef0123456789abcdef"
+ROOT_ID = "a" * 32
 
 
 class SupervisorClock:
@@ -443,7 +444,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         endpoint = context.private_config.parent / "run" / "pueue.sock"
         native = mock.Mock()
         native.evidence.return_value = (4242, endpoint, (1, 2))
-        native.gone.side_effect = [False, True]
+        native.gone.side_effect = [False, False, True]
         native.closed.return_value = True
         native.command.side_effect = shutdown_command
         output = self.home / "receipt.json"
@@ -454,6 +455,8 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
             mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", native.closed),
             mock.patch.object(private_cli_supervisor, "pueue_command", native.command),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value={
+                "root_id": ROOT_ID, "supervisor_owner": {"action": "stop-owner", "state": "not_initialized"}}),
         ):
             result = application._finalize_run(
                 ReceiptFinalizer(output, [], {}), context, None, "failed", "original reason")
@@ -469,12 +472,12 @@ class SetupProcessOwnershipTests(unittest.TestCase):
     def test_worker_closing_after_gate_release_still_shuts_down_the_private_daemon(self):
         events = []
         context, cohort = self._daemon_context(events)
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [AcceptanceFailure("worker still closing"), closed, closed, closed])
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed, closed, closed])
         # Closure is awaited, authorized before the lease, rechecked read-only under it, then shut down.
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
-                                  "closure-checked", "closure-checked", "closure-checked", "shutdown"])
+                                  "closure-checked", "closure-checked", "closure-checked", "closure-checked", "shutdown"])
         cohort.remove_closed_fifos.assert_not_called()
         self.assertEqual((context.gates, context.cohorts), ([], []))
         self.assertEqual(len(self.clock.sleeps), 1)
@@ -496,10 +499,10 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         events = []
         context, _cohort = self._daemon_context(events, lifecycle_locks=False)
         supervisor_entries = sorted(path.name for path in context.private_config.parent.iterdir())
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [closed, closed])
-        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked"])
+            context, events, [closed, closed, closed])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked", "closure-checked"])
         native.command.assert_not_called()
         self.assertFalse((context.private_config.parent / "transition.lock").exists())
         # The refused root is left exactly as found, without even the optional election lock.
@@ -517,7 +520,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         # Runs before the fixture releases its pins, which require the state at its owned path.
         self.addCleanup(lambda: moved.rename(context.state) if moved.is_dir() else None)
         canonical_validate = private_cli_supervisor.validate_managed_lifetime_closure
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
 
         def validate(state, task_ids):
             events.append("closure-checked")
@@ -529,7 +532,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             context.state.rename(moved)
 
         native = mock.Mock()
-        native.gone.side_effect = [False, True]
+        native.gone.side_effect = [False, False, True]
         with (
             mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", side_effect=validate),
             mock.patch.object(private_cli_supervisor, "private_shutdown_evidence",
@@ -537,22 +540,24 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
             mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", return_value=True),
             mock.patch.object(private_cli_supervisor, "pueue_command", side_effect=shutdown_then_rename),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value={
+                "root_id": ROOT_ID, "supervisor_owner": {"action": "stop-owner", "state": "not_initialized"}}),
         ):
             cleanup = context.cleanup("passed")
         self.assertEqual((cleanup["daemon_closed"], cleanup["authorized"], cleanup["decision"]),
                          (True, False, "cleanup-failed-evidence-retained"))
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked",
-                                  "closure-checked", "shutdown", "closure-checked"])
+                                  "closure-checked", "closure-checked", "shutdown", "closure-checked"])
         self.assertTrue(context.root_token.directory.is_dir() and moved.is_dir())
 
     def test_closure_without_a_private_config_is_awaited_and_no_shutdown_is_called(self):
         events = []
         context, _cohort = self._daemon_context(events, private_config=False)
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [AcceptanceFailure("worker still closing"), closed])
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed])
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
-                                  "closure-checked"])
+                                  "closure-checked", "closure-checked"])
         self.assertEqual(len(self.clock.sleeps), 1)
         native.evidence.assert_not_called()
         native.command.assert_not_called()

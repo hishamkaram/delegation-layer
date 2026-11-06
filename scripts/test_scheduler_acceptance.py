@@ -807,7 +807,7 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         service = self.service()
         case = self.case(service)
         with (patch.object(service, "stop"), patch.object(case, "discover", side_effect=RuntimeError("unreadable store")),
-              patch.object(application, "shutdown_private_supervisor") as shutdown,
+              patch.object(application, "shutdown_terminal_private_supervisor") as shutdown,
               patch.object(application, "finalize_fixture") as finalize):
             with self.assertRaisesRegex(RuntimeError, "fixture retained"):
                 application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
@@ -824,7 +824,7 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         events = []
         with (patch.object(service, "stop", side_effect=lambda: events.append("stop")),
               patch.object(case, "discover", side_effect=lambda: events.append("discover")),
-              patch.object(application, "shutdown_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")),
+              patch.object(application, "shutdown_terminal_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")),
               patch.object(service, "retire", side_effect=lambda: events.append("retire")),
               patch.object(application, "finalize_fixture", side_effect=lambda *args: events.append("finalize"))):
             application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,

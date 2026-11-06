@@ -39,6 +39,7 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
         run_receipt=run_receipt,
         managed_state_roots=lifetime.managed_state_roots,
         capture_root=lifetime.capture_token,
+        disposal=lifetime.disposal,
     )
 
     inspection_group = "delegation-inspection-" + dispatch["root_id"]
