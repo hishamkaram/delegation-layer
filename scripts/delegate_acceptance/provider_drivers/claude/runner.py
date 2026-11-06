@@ -29,7 +29,7 @@ from scripts.delegate_acceptance.directories.finalization import finalize_accept
 from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.provider_drivers.claude.constants import APPROVAL
-from scripts.delegate_acceptance.provider_drivers.claude.evidence import provider_record_snapshot, validate_task_meta as validate_claude_task_meta, validate_task_outcome as validate_claude_task_outcome, validate_task_publication as validate_claude_task_publication, validate_task_request as validate_claude_task_request, validate_task_contract as validate_claude_task_contract
+from scripts.delegate_acceptance.provider_drivers.claude.evidence import TaskRecord, provider_record_snapshot, validate_task_meta as validate_claude_task_meta, validate_task_outcome as validate_claude_task_outcome, validate_task_publication as validate_claude_task_publication, validate_task_request as validate_claude_task_request, validate_task_contract as validate_claude_task_contract
 from scripts.delegate_acceptance.provider_drivers.claude.protocol import parse_claude_events, validate_fresh_controls
 from scripts.delegate_acceptance.provider_drivers.claude.runtime import (BlockedFailure, expected_claude_inspection_binding, fresh_session_id, host_home_directory, native_account_acceptance_environment, path_validation_environment, reject_runtime_roots, require_discovery, resolve_executable, task_id)
 from scripts.delegate_acceptance.provider_drivers.claude.identity import is_session_id, is_task_id
@@ -160,7 +160,7 @@ class ClaudeAcceptance:
         self.labels = self.ops.labels
         self.numbers = self.ops.numbers
         self.dispatch_attempts = self.ops.dispatch_attempts
-        self.records: dict[str, dict[str, object]] = {}
+        self.records: dict[str, TaskRecord] = {}
         self.queue_before_replay = None
 
     def provider_argv(self, session_id: str, resume: bool = False) -> list[str]:
@@ -168,6 +168,18 @@ class ClaudeAcceptance:
                 "--verbose", "--permission-mode", "plan", "--permission-prompts", "none"]
         args.extend(["--resume", session_id] if resume else ["--session-id", session_id])
         return args
+
+    def _require_root_id(self) -> str:
+        root_id = self.root_id
+        if root_id is None:
+            raise AcceptanceFailure("root identity is unavailable")
+        return root_id
+
+    def _require_pueue_config(self) -> Path:
+        config = self.pueue_config
+        if config is None:
+            raise AcceptanceFailure("pueue is not configured")
+        return config
 
     def setup(self) -> None:
         try:
@@ -198,11 +210,14 @@ class ClaudeAcceptance:
             workspace=self.workspace, executable=self.claude, runner=self.runner, environment=self.environment,
             pueue_version=self.pueue_version)
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         for _ in range(200):
             require(self.daemon.poll() is None, "private pueued exited before readiness")
             process = self.ops.client("ready", ["status", "--json"], expected={0, 1}, timeout=15)
-            if int(process.result["exit_code"]) == 0:
+            result = process.result
+            if result is None or type(result.get("exit_code")) is not int:
+                raise AcceptanceFailure("private pueue readiness has no observed exit code")
+            if result["exit_code"] == 0:
                 status = self.ops.queue_status("ready-status")
                 require(status["tasks"] == {}, "new private pueue queue was not empty")
                 break
@@ -277,7 +292,8 @@ class ClaudeAcceptance:
         self.ops.expect_inspection(task, self.inspection_binding)
         response = self.ops.dispatch(name, task, self.dispatch_arguments(task, brief, predecessor))
         root = response.get("root_id")
-        require(is_task_id(root), f"{name} omitted a valid root identity")
+        if not (is_task_id(root)):
+            raise AcceptanceFailure(f"{name} omitted a valid root identity")
         self.root_id = root
         self.ops.root_id = root
         return response
@@ -292,12 +308,13 @@ class ClaudeAcceptance:
 
     def read_record(self, task: str, name: str) -> dict[str, object]:
         value = read_json(self.state / "tasks" / task / name)
-        require(isinstance(value, dict), f"{task}/{name} must be an object")
+        if not (isinstance(value, dict)):
+            raise AcceptanceFailure(f"{task}/{name} must be an object")
         return value
 
     def validate_task(self, name: str, task: str, expected_answer: bytes,
                       predecessor: str | None = None,
-                      expected_session: str | None = None) -> dict[str, object]:
+                      expected_session: str | None = None) -> TaskRecord:
         directory = self.state / "tasks" / task
         require(directory.is_dir() and not directory.is_symlink(), f"{name} task directory is absent")
         self._require_task_records(directory, name)
@@ -317,14 +334,14 @@ class ClaudeAcceptance:
     def _validate_task_request(self, name: str, task: str, directory: Path,
                                predecessor: str | None) -> dict[str, object]:
         return validate_claude_task_request(
-            name=name, task=task, directory=directory, root_id=self.root_id, workspace=self.workspace,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(), workspace=self.workspace,
             predecessor=predecessor,
             provider=PROVIDER, mode=MODE, budget=CANONICAL_TASK_BUDGET)
 
     def _validate_task_meta(self, name: str, task: str,
                             directory: Path) -> dict[str, object]:
         meta, profile_revision = validate_claude_task_meta(
-            name=name, task=task, directory=directory, root_id=self.root_id,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(),
             workspace=self.workspace, mode=MODE,
             approval=APPROVAL,
             revision=NATIVE_PROFILE_REVISION)
@@ -339,20 +356,20 @@ class ClaudeAcceptance:
     def _validate_task_publication(self, name: str, task: str, directory: Path,
                                    meta: dict[str, object]) -> dict[str, object]:
         return validate_claude_task_publication(
-            name=name, task=task, directory=directory, root_id=self.root_id, label=self.labels[name],
-            pueue_config=self.pueue_config,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(), label=self.labels[name],
+            pueue_config=self._require_pueue_config(),
             pueue_version=self.pueue_version, pueue=self.pueue, meta=meta)
 
     def _validate_task_outcome(self, *, name: str, task: str, directory: Path,
                                expected_answer: bytes, predecessor: str | None,
                                expected_session: str | None, request: dict[str, object],
-                               meta: dict[str, object], seal: dict[str, object]) -> dict[str, object]:
+                               meta: dict[str, object], seal: dict[str, object]) -> TaskRecord:
         return validate_claude_task_outcome(
             name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
             expected_session=expected_session,
-            request=request, meta=meta, seal=seal, root_id=self.root_id, workspace=self.workspace, provider=PROVIDER)
+            request=request, meta=meta, seal=seal, root_id=self._require_root_id(), workspace=self.workspace, provider=PROVIDER)
 
-    def run_fresh(self) -> dict[str, object]:
+    def run_fresh(self) -> TaskRecord:
         brief = self.fresh_brief()
         task = task_id()
         response = self.dispatch("fresh", task, brief)
@@ -361,7 +378,7 @@ class ClaudeAcceptance:
         outcome, data = verify_collected_outcome(collected, self.state / "tasks" / task, "committed")
         require(data == self.nonce, "fresh Claude result was not exactly the nonce")
         require(self.root_id is not None, "fresh Claude root identity is unavailable")
-        expected_session = fresh_session_id(self.root_id, task)
+        expected_session = fresh_session_id(self._require_root_id(), task)
         parsed = parse_claude_events((self.state / "tasks" / task / "raw/stdout").read_bytes())
         controls = validate_fresh_controls(parsed, self.nonce_file, self.workspace,
                                            self.sibling, self.nonce, expected_session)
@@ -370,7 +387,9 @@ class ClaudeAcceptance:
         require(self.sibling_before == snapshot(self.sibling, ignored_prefixes=()),
                 "Claude changed the sibling sentinel")
         record = self.validate_task("fresh", task, data, expected_session=expected_session)
-        record.update({"dispatch": response, "collect": collected, "controls": controls})
+        record["dispatch"] = response
+        record["collect"] = collected
+        record["controls"] = controls
         self.records["fresh"] = record
         write_json(self.output / "fresh-control.json", {
             "task_id": task, "conversation_id": record["reference"]["conversation_id"],
@@ -387,10 +406,11 @@ class ClaudeAcceptance:
         })
         return record
 
-    def run_resume(self, predecessor: dict[str, object]) -> dict[str, object]:
+    def run_resume(self, predecessor: TaskRecord) -> TaskRecord:
         predecessor_task = self.tasks["fresh"]
         original_snapshot = predecessor["snapshot"]
-        require(isinstance(original_snapshot, dict), "fresh task snapshot is unavailable")
+        if not (isinstance(original_snapshot, dict)):
+            raise AcceptanceFailure("fresh task snapshot is unavailable")
         self.nonce_file.unlink(missing_ok=False)
         require(not self.nonce_file.exists(), "resume nonce file still exists")
         workspace_before = snapshot(self.workspace, ignored_prefixes=())
@@ -401,9 +421,9 @@ class ClaudeAcceptance:
         outcome, data = verify_collected_outcome(collected, self.state / "tasks" / task, "committed")
         require(data == self.resume_challenge(), "Claude resume did not recover the prior answer context")
         predecessor_reference = predecessor.get("reference")
-        require(isinstance(predecessor_reference, dict) and
-                is_session_id(predecessor_reference.get("conversation_id")),
-                "fresh Claude predecessor session identity is unavailable")
+        if not (isinstance(predecessor_reference, dict) and
+                is_session_id(predecessor_reference.get("conversation_id"))):
+            raise AcceptanceFailure("fresh Claude predecessor session identity is unavailable")
         expected_session = str(predecessor_reference["conversation_id"])
         record = self.validate_task("resume", task, data, predecessor_task, expected_session)
         require(record["reference"]["conversation_id"] == predecessor["reference"]["conversation_id"],
@@ -415,9 +435,10 @@ class ClaudeAcceptance:
         require(self.sibling_before == snapshot(self.sibling, ignored_prefixes=()),
                 "Claude resume changed sibling sentinel")
         controls = record.get("resume_controls")
-        require(isinstance(controls, dict) and controls.get("tool_free") is True,
-                "Claude resume tool-free oracle result is absent")
-        record.update({"dispatch": response, "collect": collected})
+        if not (isinstance(controls, dict) and controls.get("tool_free") is True):
+            raise AcceptanceFailure("Claude resume tool-free oracle result is absent")
+        record["dispatch"] = response
+        record["collect"] = collected
         self.records["resume"] = record
         write_json(self.output / "resume-control.json", {
             "task_id": task, "predecessor_task_id": predecessor_task,
@@ -439,14 +460,14 @@ class ClaudeAcceptance:
 
     def shutdown(self) -> None:
         self.ops.root_id = self.root_id
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         self.ops.shutdown()
         self.closed = self.ops.closed
 
     def safe_failure_shutdown(self) -> bool:
         self.ops.root_id = self.root_id
         if self.pueue_config is not None:
-            self.ops.bind_supervisor(self.pueue_config, self.daemon)
+            self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         result = self.ops.safe_failure_shutdown()
         self.closed = self.ops.closed
         return result
@@ -455,7 +476,7 @@ class ClaudeAcceptance:
         """Retain active acceptance processes until exact natural cleanup."""
         self.ops.root_id = self.root_id
         if self.pueue_config is not None:
-            self.ops.bind_supervisor(self.pueue_config, self.daemon)
+            self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         result = self.ops.retain_failure_ownership()
         self.closed = self.ops.closed
         return result

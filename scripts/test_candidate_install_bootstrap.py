@@ -9,6 +9,7 @@ exercise real children.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import errno
 import fcntl
 from pathlib import Path
@@ -17,6 +18,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from typing import TypeVar
 from unittest import mock
 
 if __package__ in {None, ""}:
@@ -43,6 +45,9 @@ ROOT_ID = "1" * 32
 TASK_ID = "2" * 32
 # The canonical validator, kept to refuse a state root that is gone; cases otherwise replace its closure read.
 REAL_AUTHORIZE = root_cleanup.authorize_managed_lifetime_closure
+
+
+ExpectedError = TypeVar("ExpectedError", bound=BaseException)
 
 
 class ProbeCase(unittest.TestCase):
@@ -96,10 +101,10 @@ class ProbeCase(unittest.TestCase):
             self.on_spawn(env)
         raise OSError(errno.EPERM, "no child may start in this test")
 
-    def call(self, expected: type[BaseException]) -> BaseException:
+    def call(self, expected: type[ExpectedError]) -> ExpectedError:
         """Call the public probe once; every pin it held must be released whatever escapes."""
         before = open_descriptors()
-        with self.assertRaises(BaseException) as caught:
+        with self.assertRaises(expected) as caught:
             self.probe(self.target)
         self.assertEqual(open_descriptors(), before, "the probe left owned directory pins open")
         self.assertIsInstance(caught.exception, expected)
@@ -489,8 +494,13 @@ class DisposalLeaseTests(ProbeCase):
         at_delete: list[tuple[bool, bool]] = []
         real_remove = root_cleanup.remove_private_acceptance_root
 
-        def observed(token, entries, managed_state_roots=(), *, disposal=None, deadline=None):
-            (state, _task_ids), = managed_state_roots
+        def observed(token, entries, managed_state_roots: Sequence[tuple[Path, Sequence[str]]] = (),
+                     *, disposal=None, deadline=None):
+            self.assertEqual(len(managed_state_roots), 1)
+            state, _task_ids = managed_state_roots[0]
+            self.assertIsNotNone(disposal)
+            if disposal is None:
+                self.fail("shutdown did not retain its disposal lease")
             at_delete.append((disposal.holds(state), election_free(state)))
             return real_remove(token, entries, managed_state_roots, disposal=disposal, deadline=deadline)
 

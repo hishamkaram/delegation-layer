@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import NotRequired, TypedDict
 
 DRIVER_DESCRIPTION = (
     "Native managed-workspace acceptance through the shipped Delegate CLI.\n\n"
@@ -37,3 +38,52 @@ FIXTURE_FILE = "managed-workspace-fixture.txt"
 
 class AcceptanceBlocked(RuntimeError):
     """A native prerequisite was unavailable or inconclusive."""
+
+
+WorkspaceTask = TypedDict("WorkspaceTask", {
+    "task_id": str,
+    "workspace_id": str,
+    "root_id": str,
+    "workspace": dict[str, object],
+    "dispatch": NotRequired[dict[str, object]],
+    "parent_task_id": NotRequired[str],
+    "continue": NotRequired[dict[str, object]],
+})
+
+
+class CaptureArtifact(TypedDict):
+    name: str
+    length: NotRequired[int]
+    sha256: NotRequired[str]
+    omitted: NotRequired[str]
+
+
+class CaptureEvidence(TypedDict):
+    workspace_id: str
+    operation_id: str
+    base_oid: str
+    observed_head: str
+    tree_oid: str
+    root_id: str
+    snapshot_ref: str
+    subject: dict[str, object]
+    artifacts: list[CaptureArtifact]
+    turn: NotRequired[dict[str, object]]
+
+
+class FileDigest(TypedDict):
+    bytes: int
+    sha256: str
+
+
+class IndexObservation(FileDigest):
+    device: int
+    inode: int
+
+
+class CheckoutSnapshot(TypedDict):
+    head: str
+    head_ref: str | None
+    index: IndexObservation
+    status: FileDigest
+    files: dict[str, str | None]

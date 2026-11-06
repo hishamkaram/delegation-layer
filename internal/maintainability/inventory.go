@@ -23,6 +23,9 @@ func Inventory(root string, generated []policy.Generated) ([]policy.Source, erro
 	if err != nil {
 		return nil, fmt.Errorf("inventory maintained paths: %w", err)
 	}
+	if len(output) == 0 {
+		return nil, nil
+	}
 	names := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
 	slices.Sort(names)
 	names = slices.Compact(names)
@@ -42,6 +45,43 @@ func Inventory(root string, generated []policy.Generated) ([]policy.Source, erro
 // GoSourcePaths gives formatting the same maintained-file boundary as the audit.
 // Generated classification does not change inclusion in this inventory.
 func GoSourcePaths(root string) ([]string, error) {
+	return sourcePaths(root, sourceExtension("go"))
+}
+
+// SourcePaths selects one language from the audit's maintained-file inventory.
+// Unlike the formatting compatibility API, an empty selection is an error: a
+// successful check must not silently skip every source of its requested kind.
+func SourcePaths(root, language string) ([]string, error) {
+	extension := sourceExtension(language)
+	if extension == "" {
+		return nil, fmt.Errorf("unsupported source language %q: choose go, python, javascript, or shell", language)
+	}
+	paths, err := sourcePaths(root, extension)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no maintained %s sources found", language)
+	}
+	return paths, nil
+}
+
+func sourceExtension(language string) string {
+	switch language {
+	case "go":
+		return ".go"
+	case "python":
+		return ".py"
+	case "javascript":
+		return ".mjs"
+	case "shell":
+		return ".sh"
+	default:
+		return ""
+	}
+}
+
+func sourcePaths(root, extension string) ([]string, error) {
 	canonical, err := canonicalRoot(root)
 	if err != nil {
 		return nil, err
@@ -52,7 +92,7 @@ func GoSourcePaths(root string) ([]string, error) {
 	}
 	var paths []string
 	for _, source := range sources {
-		if filepath.Ext(source.Path) == ".go" {
+		if filepath.Ext(source.Path) == extension {
 			paths = append(paths, filepath.Join(canonical, source.Path))
 		}
 	}

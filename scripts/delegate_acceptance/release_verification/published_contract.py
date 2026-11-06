@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 import base64
@@ -217,11 +218,11 @@ def parse_npm_view(raw: bytes, package_version: str, release_commit: str) -> Pac
             or not SHASUM_RE.fullmatch(values["dist.shasum"])
             or values["dist.tarball"] != registry_tarball_url(package_version)):
         raise VerificationError("npm_package_identity_mismatch", "npm-view")
-    if head is not None and head != release_commit:
+    if head is not None and (not isinstance(head, str) or head != release_commit):
         raise VerificationError("npm_package_revision_mismatch", "npm-view")
     return PackageIdentity(
         name=NPM_PACKAGE, version=package_version, integrity=values["dist.integrity"],
-        shasum=values["dist.shasum"], tarball=values["dist.tarball"], git_head=head,
+        shasum=values["dist.shasum"], tarball=registry_tarball_url(package_version), git_head=head,
     )
 
 
@@ -332,13 +333,13 @@ def decide_latest(npm_latest: str, github_tag: str, tag: str) -> LatestDecision:
     return LatestDecision(npm_latest, github_tag, True, "both_latest_equal_target")
 
 
-def _passthrough(inherited: dict[str, str]) -> dict[str, str]:
+def _passthrough(inherited: Mapping[str, str]) -> dict[str, str]:
     return {name: inherited[name] for name in _TLS_PASSTHROUGH if inherited.get(name)}
 
 
 def npm_environment(
         *, path: str, home: str, cache: str, user_npmrc: str, global_npmrc: str,
-        inherited: dict[str, str]) -> dict[str, str]:
+        inherited: Mapping[str, str]) -> dict[str, str]:
     """Allowlisted npm child environment: private config, explicit registry, no tokens."""
     return {
         "PATH": path, "HOME": home, "TMPDIR": home, "LANG": "C", "LC_ALL": "C",
@@ -350,7 +351,7 @@ def npm_environment(
     }
 
 
-def homebrew_environment(*, path: str, home: str, inherited: dict[str, str]) -> dict[str, str]:
+def homebrew_environment(*, path: str, home: str, inherited: Mapping[str, str]) -> dict[str, str]:
     return {
         "PATH": path, "HOME": home, "TMPDIR": home, "LANG": "C", "LC_ALL": "C",
         "HOMEBREW_NO_ANALYTICS": "1", "HOMEBREW_NO_AUTO_UPDATE": "1",

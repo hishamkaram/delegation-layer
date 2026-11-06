@@ -27,13 +27,15 @@ def status_jobs(process: OwnedProcess) -> dict[str, object]:
 
 def status_row(status: dict[str, object], task_number: int) -> dict[str, object] | None:
     tasks = status["tasks"]
-    require(isinstance(tasks, dict), "pueue tasks is not an object")
+    if not isinstance(tasks, dict):
+        raise AcceptanceFailure("pueue tasks is not an object")
     row = tasks.get(str(task_number))
     return row if isinstance(row, dict) else None
 
 def row_state(row: dict[str, object]) -> str:
     status = row.get("status")
-    require(isinstance(status, dict), "pueue row status is not a one-state object")
+    if not isinstance(status, dict):
+        raise AcceptanceFailure("pueue row status is not a one-state object")
     recognized = [name for name in status
                   if name in {"Queued", "Running", "Paused", "Stashed", "Done", "Locked"}]
     require(len(status) == len(recognized),
@@ -42,10 +44,11 @@ def row_state(row: dict[str, object]) -> str:
     return recognized[0]
 
 def validate_queue_row(row: dict[str, object], label: str, runner: Path, state: Path, task: str) -> None:
-    require(type(row.get("id")) is int and row["id"] >= 0,
-            f"pueue numeric identity is invalid for {task}")
+    number = row.get("id")
+    if type(number) is not int or number < 0:
+        raise AcceptanceFailure(f"pueue numeric identity is invalid for {task}")
     validate_exact_queue_row(
-        row, label, runner, state, task, row["id"], "default", supervised=True)
+        row, label, runner, state, task, number, "default", supervised=True)
     command = f"{row['original_command']}\n{row['command']}"
     require("--brief" not in command and "OUTSIDE-WRITE-PROBE" not in command,
             f"brief content leaked into pueue command for {task}")

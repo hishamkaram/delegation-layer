@@ -50,6 +50,7 @@ class ArchiveVerifierHomeTests(base.PublishedBase):
         self.children = ChildFault(marker_then_fault)
         self.assertEqual(self.verify_archive(), 1)
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         receipt = json.loads(self.archive_receipt.read_text(encoding="utf-8"))
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),
@@ -119,6 +120,7 @@ class ArchiveVerifierHomeTests(base.PublishedBase):
         self.assertEqual(self.verify_archive(), 1)
         self.assertEqual(open_descriptors(), before)
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         receipt = json.loads(self.archive_receipt.read_text(encoding="utf-8"))
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),
@@ -139,6 +141,7 @@ class PublishedChildOwnershipTests(base.PublishedBase):
         self.children = ChildFault(lambda argv: argv[:1] == ["delegate"])
         self.assertEqual(self.publish(), 1)
         self.assertIs(type(self.tree.unresolved), BoundedCommandError)
+        assert isinstance(self.tree.unresolved, BoundedCommandError)
         self.assertIs(self.tree.unresolved.reason, CommandFailure.TIMEOUT)
         receipt = self.receipt()
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),

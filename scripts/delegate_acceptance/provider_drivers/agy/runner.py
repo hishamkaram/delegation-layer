@@ -25,6 +25,7 @@ from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.provider_drivers.agy.constants import (FINALIZATION_SECONDS, L3_NATIVE_TIMEOUT, MODE, PROVIDER, TASK_BUDGET, TIMEOUT_MARKER, WATCH_SECONDS)
 from scripts.delegate_acceptance.provider_drivers.agy.runtime import PUEUE_PARENT
 from scripts.delegate_acceptance.provider_drivers.agy.evidence import (
+    TaskEvidence,
     directory_snapshot,
     immutable_task_snapshot,
     read_inspection_records,
@@ -136,6 +137,12 @@ class NativeRun:
                timeout: float = 30) -> OwnedProcess:
         return self.processes.run(name, argv, REPO_ROOT, expected=expected, timeout=timeout)
 
+    def _require_pueue_config(self) -> Path:
+        config = self.pueue_config
+        if config is None:
+            raise AcceptanceFailure("pueue is not configured")
+        return config
+
     def setup(self) -> None:
         require(self.prepared.state.resolve() == self.prepared.state, "state path must be canonical")
         write_json(self.output / "prepared-input.json", self.prepared.data)
@@ -183,8 +190,8 @@ class NativeRun:
         self.wait_daemon_ready()
 
     def status(self, name: str) -> dict[str, object]:
-        require(self.pueue_config is not None, "pueue is not configured")
-        process = self.direct(name, pueue_command(self.pueue, self.pueue_config, "status", "--json"), timeout=20)
+        config = self._require_pueue_config()
+        process = self.direct(name, pueue_command(self.pueue, config, "status", "--json"), timeout=20)
         value = status_jobs(process)
         self.last_queue = value
         write_json(self.output / f"{name}.json", value)
@@ -193,12 +200,15 @@ class NativeRun:
     def wait_daemon_ready(self) -> None:
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            require(self.pueue_config is not None, "pueue is not configured")
+            config = self._require_pueue_config()
             process = self.direct(
                 f"daemon-status-{len(self.processes.entries):03d}",
-                pueue_command(self.pueue, self.pueue_config, "status", "--json"),
+                pueue_command(self.pueue, config, "status", "--json"),
                 expected={0, 1}, timeout=20)
-            if int(process.result["exit_code"]) == 0:
+            result = process.result
+            if result is None or type(result.get("exit_code")) is not int:
+                raise AcceptanceFailure("pueue readiness has no observed exit code")
+            if result["exit_code"] == 0:
                 value = status_jobs(process)
                 tasks = value.get("tasks")
                 if isinstance(tasks, dict) and not tasks:
@@ -208,8 +218,8 @@ class NativeRun:
         raise AcceptanceFailure("pueued readiness observation expired")
 
     def dispatch(self, name: str, task: str, brief: Path, resume: str | None, native_timeout: str | None) -> dict[str, object]:
-        require(self.pueue_config is not None, "pueue is not configured")
-        argv = [str(self.delegate), "--root", str(self.prepared.state), "--pueue-config", str(self.pueue_config),
+        config = self._require_pueue_config()
+        argv = [str(self.delegate), "--root", str(self.prepared.state), "--pueue-config", str(config),
                 "--runner", str(self.runner), "dispatch", "--json", "--id", task, "--provider", PROVIDER,
                 "--brief", str(brief), "--cwd", str(self.prepared.workspace), "--permission", MODE,
                 "--budget", TASK_BUDGET]
@@ -225,15 +235,17 @@ class NativeRun:
         require(response.get("admission") == "admitted", f"{name} was not admitted: {response}")
         require(response.get("task_id") == task, f"{name} task identity mismatch")
         root = response.get("root_id")
-        require(isinstance(root, str) and root, f"{name} omitted root identity")
+        if not isinstance(root, str) or not root:
+            raise AcceptanceFailure(f"{name} omitted root identity")
         if self.root_id is None:
             self.root_id = root
         require(root == self.root_id, f"{name} changed the immutable root identity")
         supervisor = response.get("supervisor")
-        require(isinstance(supervisor, dict) and supervisor.get("matched") is True,
-                f"{name} lacks positive supervisor admission")
+        if not isinstance(supervisor, dict) or supervisor.get("matched") is not True:
+            raise AcceptanceFailure(f"{name} lacks positive supervisor admission")
         numeric = supervisor.get("numeric_task_id")
-        require(isinstance(numeric, int) and numeric >= 0, f"{name} lacks numeric pueue identity")
+        if not isinstance(numeric, int) or numeric < 0:
+            raise AcceptanceFailure(f"{name} lacks numeric pueue identity")
         self.task_numbers[task] = numeric
         self.labels[task] = f"delegate:{root}:{task}"
         write_json(self.output / f"{name}-dispatch.json", response)
@@ -245,7 +257,8 @@ class NativeRun:
         while time.monotonic() < deadline:
             value = self.status(f"{name}-status-{int(time.monotonic() * 1000)}")
             row = status_row(value, self.task_numbers[task])
-            require(row is not None, f"{name} task disappeared from private pueue queue")
+            if row is None:
+                raise AcceptanceFailure(f"{name} task disappeared from private pueue queue")
             validate_queue_row(row, self.labels[task], self.runner, self.prepared.state, task)
             state = row_state(row)
             if state == "Done":
@@ -274,20 +287,27 @@ class NativeRun:
     def read_record(self, task: str, name: str) -> dict[str, object]:
         return read_task_record(self.prepared.state, task, name)
 
-    def validate_evidence(self, name: str, task: str, expected_verdict: str) -> dict[str, object]:
+    def validate_evidence(self, name: str, task: str, expected_verdict: str) -> TaskEvidence:
+        root_id = self.root_id
+        if root_id is None:
+            raise AcceptanceFailure(f"{name} task identity or provider binding mismatch")
+        config = self._require_pueue_config()
+        version = self.pueue_version
+        if version is None:
+            raise AcceptanceFailure(f"{name} submit supervisor binding mismatch")
         directory = self.prepared.state / "tasks" / task
         for record in ("brief.md", "task.json", "meta.json", "submit.json", "provider.start",
                        "provider.started.json", "provider.exit"):
             require((directory / record).is_file(), f"{name} missing one-use evidence {record}")
         request = self.read_record(task, "task.json")
-        validate_task_request(name, task, request, self.root_id)
+        validate_task_request(name, task, request, root_id)
         submit = self.read_record(task, "submit.json")
         supervisor = validate_submit_record(
-            name=name, task=task, submit=submit, root_id=self.root_id, label=self.labels[task],
-            pueue_config=self.pueue_config, pueue_version=self.pueue_version, pueue=self.pueue)
+            name=name, task=task, submit=submit, root_id=root_id, label=self.labels[task],
+            pueue_config=config, pueue_version=version, pueue=self.pueue)
         start = self.read_record(task, "provider.start")
         started = self.read_record(task, "provider.started.json")
-        validate_start_records(name, task, start, started, self.root_id)
+        validate_start_records(name, task, start, started, root_id)
         meta = self.read_record(task, "meta.json")
         predicate = validate_meta_supervisor(name, meta, supervisor)
         policy, profile_revision = validate_effective_policy(
@@ -300,7 +320,7 @@ class NativeRun:
         provider_exit = self.read_record(task, "provider.exit")
         validate_provider_exit(
             name=name, task=task, meta=meta, started=started, provider_exit=provider_exit,
-            root_id=self.root_id, predicate=predicate, expected_verdict=expected_verdict)
+            root_id=root_id, predicate=predicate, expected_verdict=expected_verdict)
         outcome = self.read_record(task, "outcome.json")
         payload_bytes = validate_outcome(
             name, task, expected_verdict, directory, outcome, provider_exit)
@@ -320,7 +340,7 @@ class NativeRun:
 
     def set_queue_running(self, running: bool, label: str) -> None:
         args = ("start", "--group", "default") if running else ("pause", "--wait")
-        self.direct(label, pueue_command(self.pueue, self.pueue_config, *args))
+        self.direct(label, pueue_command(self.pueue, self._require_pueue_config(), *args))
 
     def assert_unstarted_queued(self, task: str, label: str) -> None:
         status = self.status(label)
@@ -344,7 +364,15 @@ class NativeRun:
         self.set_queue_running(False, "drift-pause")
         self.dispatch("policy-drift", task, brief, None, None)
         self.assert_unstarted_queued(task, "drift-queued")
-        admitted = self.read_record(task, "meta.json")["effective_config"]["policy"]["sources"]
+        effective = self.read_record(task, "meta.json").get("effective_config")
+        if not isinstance(effective, dict):
+            raise AcceptanceFailure("drift fixture was not bound at admission")
+        effective_policy = effective.get("policy")
+        if not isinstance(effective_policy, dict):
+            raise AcceptanceFailure("drift fixture was not bound at admission")
+        admitted = effective_policy.get("sources")
+        if not isinstance(admitted, list):
+            raise AcceptanceFailure("drift fixture was not bound at admission")
         require(any(source["path"] == str(policy) and source["sha256"] == sha(initial)
                     for source in admitted), "drift fixture was not bound at admission")
         with policy.open("wb") as stream:
@@ -358,10 +386,13 @@ class NativeRun:
                         ("provider.start", "provider.started.json", "provider.exit")),
                 "drifted policy crossed provider Start")
         logs = self.direct("drift-runner-log", pueue_command(
-            self.pueue, self.pueue_config, "log", "--json", "--full", str(self.task_numbers[task])))
+            self.pueue, self._require_pueue_config(), "log", "--json", "--full", str(self.task_numbers[task])))
         require(b"record identity does not match expected task or root" in logs.output(),
                 "runner did not report the expected policy identity mismatch")
-        require(row["status"]["Done"].get("result") != "Success", "drifted runner unexpectedly succeeded")
+        status = row.get("status")
+        if not isinstance(status, dict) or not isinstance(status.get("Done"), dict):
+            raise AcceptanceFailure("drifted runner has no terminal queue result")
+        require(status["Done"].get("result") != "Success", "drifted runner unexpectedly succeeded")
         self.nonprovider_tasks[task] = {"case": "policy-drift", "provider_start_records": 0, "row": row}
         write_json(self.output / "policy-drift-verified.json", self.nonprovider_tasks[task])
         policy.unlink()
@@ -378,13 +409,21 @@ class NativeRun:
         self.inspection_attempts.add(refused_task)
         process = self.direct("busy-refusal", argv, expected=1, timeout=45)
         response = parse_json_output(process, "busy-refusal")
-        require("session continuation busy" in response.get("error", ""), "overlapping continuation was not refused as busy")
+        error = response.get("error", "")
+        require(isinstance(error, str) and "session continuation busy" in error,
+                "overlapping continuation was not refused as busy")
         directory = self.prepared.state / "tasks" / refused_task
         require(not any((directory / name).exists() for name in
                         ("submit.json", "provider.start", "provider.started.json", "provider.exit")),
                 "busy continuation crossed submission or Start")
         self.assert_unstarted_queued(queued_task, "L2-still-queued")
-        queue = self.last_queue["tasks"]
+        if self.last_queue is None:
+            raise AcceptanceFailure("paused continuation has no queue observation")
+        queue = self.last_queue.get("tasks")
+        if not isinstance(queue, dict):
+            raise AcceptanceFailure("paused continuation queue has no tasks object")
+        require(all(isinstance(row, dict) and isinstance(row.get("label"), str) for row in queue.values()),
+                "paused continuation queue has a malformed task row")
         require(not any(row.get("label", "").endswith(":" + refused_task) for row in queue.values()),
                 "refused continuation acquired a queue row")
         # Positive CLI refusal plus absent create-once submission guard proves
@@ -410,7 +449,8 @@ class NativeRun:
         if authentication_unavailable(self.prepared.state / "tasks" / task):
             raise BlockedFailure("Antigravity authentication is unavailable")
         verdict = self.read_record(task, "outcome.json").get("verdict")
-        require(verdict in {"committed", "rejected"}, "L1 has no terminal outcome")
+        if not isinstance(verdict, str) or verdict not in {"committed", "rejected"}:
+            raise AcceptanceFailure("L1 has no terminal outcome")
         evidence = self.validate_evidence("L1", task, verdict)
         payload = evidence["payload"]
         require(isinstance(payload, bytes), "L1 payload is not bytes")
@@ -442,7 +482,8 @@ class NativeRun:
             directory = self.prepared.state / "tasks" / task
             seal = evidence["provider_exit"]
             require(seal.get("exit_code") == 0 and seal.get("error") == "", "L1 failed for a reason other than a controlled denial")
-            require(evidence["outcome"]["payload"]["basename"] == "publish.reject" and
+            descriptor = evidence["outcome"].get("payload")
+            require(isinstance(descriptor, dict) and descriptor.get("basename") == "publish.reject" and
                     not (directory / "publish.commit").exists(), "L1 denial has a successful publication")
             reference = self.read_record(task, "provider.ref.json")
             validate_l1_write_denial((directory / "raw/stdout").read_bytes(),
@@ -457,8 +498,8 @@ class NativeRun:
         self.l1_snapshot = before
         provider_ref = self.read_record(task, "provider.ref.json")
         conversation = provider_ref.get("conversation_id")
-        require(provider_ref.get("provider") == PROVIDER and isinstance(conversation, str) and conversation,
-                "L1 provider identity is absent")
+        if provider_ref.get("provider") != PROVIDER or not isinstance(conversation, str) or not conversation:
+            raise AcceptanceFailure("L1 provider identity is absent")
         self.l1_conversation = conversation
         self.task_results["L1"] = {"task_id": task, "conversation_id": conversation, "response": response,
                                     "snapshot": before, "events": evidence["events"], "provider_exit": evidence["provider_exit"]}
@@ -477,8 +518,11 @@ class NativeRun:
         return destination
 
     def run_l2(self) -> None:
-        require(self.l1_conversation is not None and self.l1_snapshot is not None, "L2 requires L1 identity and snapshot")
-        require(self.l1_nonce is not None and self.l1_nonce_bytes is not None, "L2 requires the pre-dispatch nonce")
+        if self.l1_conversation is None or self.l1_snapshot is None:
+            raise AcceptanceFailure("L2 requires L1 identity and snapshot")
+        nonce = self.l1_nonce
+        if nonce is None or self.l1_nonce_bytes is None:
+            raise AcceptanceFailure("L2 requires the pre-dispatch nonce")
         require(not self.prepared.nonce_file.exists(), "L2 nonce fixture was not removed")
         task = self.prepared.ids["L2"]
         brief = self.copy_brief("L2")
@@ -489,7 +533,7 @@ class NativeRun:
         _, collect_response = self.collect("L2-collect", task, {0})
         evidence = self.validate_evidence("L2", task, "committed")
         payload = evidence["payload"]
-        require(isinstance(payload, bytes) and self.l1_nonce in payload.decode(errors="replace"),
+        require(isinstance(payload, bytes) and nonce in payload.decode(errors="replace"),
                 "L2 response did not recall the L1 nonce")
         provider_ref = self.read_record(task, "provider.ref.json")
         require(provider_ref.get("provider") == PROVIDER and provider_ref.get("conversation_id") == self.l1_conversation,
@@ -534,10 +578,11 @@ class NativeRun:
         return self.lifetime_closure
 
     def shutdown(self) -> None:
-        require(self.pueue_config is not None, "pueue is not configured")
+        config = self._require_pueue_config()
         final = self.status("final-status")
         tasks = final.get("tasks")
-        require(isinstance(tasks, dict), "private pueue queue has no tasks object")
+        if not isinstance(tasks, dict):
+            raise AcceptanceFailure("private pueue queue has no tasks object")
         ordinary = {key: row for key, row in tasks.items()
                     if isinstance(row, dict) and row.get("group") == "default"}
         inspection = {key: row for key, row in tasks.items()
@@ -550,22 +595,29 @@ class NativeRun:
                 "private pueue queue has an unexpected inspection job count")
         for task, number in self.task_numbers.items():
             row = status_row(final, number)
-            require(row is not None, f"final private pueue status lost {task}")
+            if row is None:
+                raise AcceptanceFailure(f"final private pueue status lost {task}")
             validate_queue_row(row, self.labels[task], self.runner, self.prepared.state, task)
             require(row_state(row) == "Done", f"private pueue job {task} was not positively observed Done")
         for task, record in expected_inspections.items():
-            number = record["receipt"]["numeric_task_id"]
+            receipt = record.get("receipt")
+            if not isinstance(receipt, dict) or type(receipt.get("numeric_task_id")) is not int:
+                raise AcceptanceFailure(f"inspection identity is malformed for {task}")
+            number = receipt["numeric_task_id"]
             row = status_row(final, number)
-            require(row is not None, f"final private pueue status lost inspection {task}")
+            if row is None:
+                raise AcceptanceFailure(f"final private pueue status lost inspection {task}")
             validate_inspection_queue_row(row, record, self.runner, self.prepared.state)
         self.authorize_lifetime_closure()
         self.final_queue = final
         pending = self.processes.pending(exclude=(self.daemon,) if self.daemon is not None else ())
         require(not pending, f"owned command remains pending at supervisor shutdown: {pending}")
-        require(self.daemon is not None, "pueued was not started")
-        process = self.direct("pueue-shutdown", pueue_command(self.pueue, self.pueue_config, "shutdown"), timeout=30)
+        daemon = self.daemon
+        if daemon is None:
+            raise AcceptanceFailure("pueued was not started")
+        process = self.direct("pueue-shutdown", pueue_command(self.pueue, config, "shutdown"), timeout=30)
         require(process.result is not None and process.result["exit_code"] == 0, "pueue shutdown was not acknowledged")
-        self.daemon.wait(30, 0)
+        daemon.wait(30, 0)
         self.daemon_done = True
 
     def failure_shutdown(self) -> bool:
@@ -629,7 +681,10 @@ class NativeRun:
                 return False
             by_label = {row.get("label"): row for row in inspection_rows}
             for record in expected_inspections.values():
-                row = by_label.get(record["request"].get("label"))
+                request = record.get("request")
+                if not isinstance(request, dict):
+                    return False
+                row = by_label.get(request.get("label"))
                 if not isinstance(row, dict):
                     return False
                 try:

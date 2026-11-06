@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import os
@@ -15,6 +15,7 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from .context import WorkspaceContext
 from .lifecycle import SuccessfulTaskEvidence, _run_first_success
 from .model import (
+    CaptureEvidence, WorkspaceTask,
     CAPACITY_TASK_BUDGET, FIXTURE_FILE, OID_RE, SUCCESS_TASK_BUDGET, TASK_ID_RE, WAIT_SECONDS,
 )
 from .operations import (
@@ -54,9 +55,9 @@ class CheckoutFacts:
 
 @dataclass(frozen=True)
 class TurnEvidence:
-    task: dict[str, object]
+    task: WorkspaceTask
     workspace: dict[str, object]
-    capture: dict[str, object]
+    capture: CaptureEvidence
     session: dict[str, object]
     turn: dict[str, object]
 
@@ -64,9 +65,10 @@ class TurnEvidence:
 def checkout_facts(workspace: dict[str, object]) -> CheckoutFacts:
     path = workspace.get("path")
     base_ref = workspace.get("base_ref")
-    require(isinstance(path, str) and os.path.isabs(path), "workspace omitted its checkout path")
-    require(isinstance(base_ref, str) and base_ref.startswith("refs/delegate/"),
-            "workspace omitted its owned base pin")
+    if not (isinstance(path, str) and os.path.isabs(path)):
+        raise RuntimeError("workspace omitted its checkout path")
+    if not (isinstance(base_ref, str) and base_ref.startswith("refs/delegate/")):
+        raise RuntimeError("workspace omitted its owned base pin")
     return CheckoutFacts(
         workspace_id=_validate_hex(workspace.get("id"), TASK_ID_RE, "workspace ID"),
         path=path,
@@ -105,7 +107,7 @@ def commit_and_dirty_script(git: str) -> str:
 
 
 def verify_task_observation(
-    state: Path, response: dict[str, object], expected_capture: dict[str, object],
+    state: Path, response: dict[str, object], expected_capture: Mapping[str, object],
     *, expected_state: str | None = None,
 ) -> dict[str, object]:
     """A task observation names its own turn's capture and never overstates current state."""
@@ -119,7 +121,8 @@ def verify_task_observation(
         require(current == "retained",
                 "task observation advertises continuation while workspace is " + repr(current))
     capture = workspace.get("capture")
-    require(isinstance(capture, dict), "task observation omitted its workspace capture")
+    if not (isinstance(capture, dict)):
+        raise RuntimeError("task observation omitted its workspace capture")
     observed = verify_capture_receipt(state, capture)
     require(observed == expected_capture,
             "task observation points to capture " + str(observed["operation_id"])
@@ -130,17 +133,18 @@ def verify_task_observation(
 
 
 @contextmanager
-def _stage(record: dict[str, object], name: str) -> Iterator[None]:
+def _stage(record: dict[str, object], name: str) -> Generator[None]:
     """Name the failing stage in the receipt; only a finished stage is recorded as completed."""
     record["current_stage"] = name
     yield
     completed = record["completed_stages"]
-    require(isinstance(completed, list), "lineage record lost its stage list")
+    if not (isinstance(completed, list)):
+        raise RuntimeError("lineage record lost its stage list")
     completed.append(name)
 
 
 def _settle_turn(
-    context: WorkspaceContext, task: dict[str, object], *, label: str,
+    context: WorkspaceContext, task: WorkspaceTask, *, label: str,
     expected_files: frozenset[str], forbidden_files: frozenset[str] = frozenset(),
 ) -> TurnEvidence:
     status = _await_task(context, task, WAIT_SECONDS)
@@ -163,7 +167,7 @@ def _settle_turn(
 
 
 def _observe_task(
-    context: WorkspaceContext, task: dict[str, object], expected_capture: dict[str, object],
+    context: WorkspaceContext, task: WorkspaceTask, expected_capture: Mapping[str, object],
     *, label: str, expected_state: str | None = None,
 ) -> dict[str, object]:
     _code, status = _control(
@@ -205,7 +209,8 @@ def _run_child_first_turn(
                         expected_files=frozenset({FIXTURE_FILE}))
     facts = checkout_facts(_workspace_from(turn.workspace))
     container = context.container_token.directory if context.container_token else None
-    require(container is not None, "managed root container was not adopted")
+    if container is None:
+        raise RuntimeError("managed root container was not adopted")
     require_sibling_checkouts(parent, facts, container)
     require(_verify_ref(context, facts.base_ref, "lineage-child-base-ref", (0,)) == 0,
             "child base pin does not resolve")
@@ -216,7 +221,7 @@ def _run_child_first_turn(
 
 def _start_held_turn(
     context: WorkspaceContext, child: CheckoutFacts,
-) -> dict[str, object]:
+) -> WorkspaceTask:
     brief = context.base / "brief-lineage-gated-reuse.md"
     brief.write_text(GATED_REUSE_BRIEF, encoding="utf-8")
     brief.chmod(0o600)
@@ -292,7 +297,7 @@ def _verify_snapshot_tree(context: WorkspaceContext, snapshot: str) -> None:
 def _commit_and_capture(
     context: WorkspaceContext, record: dict[str, object], first: TurnEvidence,
     second: TurnEvidence, child: CheckoutFacts,
-) -> dict[str, object]:
+) -> CaptureEvidence:
     script = commit_and_dirty_script(str(_git_executable()))
     executed = _workspace_exec(
         context, second.task, command=("/bin/sh", "-c", script), label="workspace-exec-lineage",
@@ -321,7 +326,7 @@ def _commit_and_capture(
 
 def _finish_child(
     context: WorkspaceContext, record: dict[str, object], task_ids: list[str],
-    child: CheckoutFacts, captures: list[dict[str, object]],
+    child: CheckoutFacts, captures: Sequence[Mapping[str, object]],
 ) -> None:
     record["lifetime_closure"] = _prove_lifetimes_closed(context, task_ids)
     snapshots = [str(capture["snapshot_ref"]) for capture in captures]

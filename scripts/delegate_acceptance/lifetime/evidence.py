@@ -117,8 +117,8 @@ def _validate_intent_only_lifetime_absence(
         directory: Path, root: str, task: str, owner_kind: str,
         intent: dict[str, object], intent_path: Path,
         wait: dict[str, object] | None) -> dict[str, object]:
-    require(wait is not None and wait.get("result") == "absent",
-            f"unregistered lifetime lacks recovered absence for {task}")
+    if wait is None or wait.get("result") != "absent":
+        raise AcceptanceFailure(f"unregistered lifetime lacks recovered absence for {task}")
     worker = _read_optional_control_record(
         directory / _lifetime_record_name(owner_kind, "worker"), f"lifetime worker for {task}")
     termination = _read_optional_control_record(
@@ -190,13 +190,13 @@ def _read_lifetime_worker(
             "process_start", "boot_id", "started_at",
         }, label=f"{evidence} lifetime worker for {task}")
         worker_pid = worker.get("pid")
-        require(type(worker.get("schema_version")) is int and worker["schema_version"] == 1 and
+        if not (type(worker.get("schema_version")) is int and worker["schema_version"] == 1 and
                 worker.get("root_id") == root and worker.get("task_id") == task and
                 worker.get("registration_sha256") == registration_digest and
                 type(worker_pid) is int and worker_pid > 0 and
                 _lifetime_token(worker.get("process_start")) and
-                worker.get("boot_id") == registration.get("boot_id"),
-                f"{evidence} lifetime worker binding mismatch for {task}")
+                worker.get("boot_id") == registration.get("boot_id")):
+            raise AcceptanceFailure(f"{evidence} lifetime worker binding mismatch for {task}")
         worker_started = _canonical_timestamp(
             worker.get("started_at"), f"{evidence} lifetime worker started_at for {task}")
         require(recovered or _timestamp_at_or_after(worker_started, registration_created),
@@ -237,13 +237,13 @@ def _read_lifetime_launches(
                     label=f"{evidence} lifetime launch {sequence} for {task}")
         pid = launch.get("pid")
         pgid = launch.get("pgid", 0)
-        require(type(launch.get("schema_version")) is int and launch["schema_version"] == 1 and
+        if not (type(launch.get("schema_version")) is int and launch["schema_version"] == 1 and
                 launch.get("root_id") == root and launch.get("task_id") == task and
                 launch.get("registration_sha256") == registration_digest and
                 type(launch.get("sequence")) is int and launch["sequence"] == sequence and
                 type(pid) is int and pid > 0 and
-                type(pgid) is int and pgid >= 0 and _lifetime_token(launch.get("process_start")),
-                f"{evidence} lifetime launch binding mismatch for {task}")
+                type(pgid) is int and pgid >= 0 and _lifetime_token(launch.get("process_start"))):
+            raise AcceptanceFailure(f"{evidence} lifetime launch binding mismatch for {task}")
         launched_at = _canonical_timestamp(
             launch.get("started_at"), f"{evidence} lifetime launch started_at for {task}")
         require(recovered or (_timestamp_at_or_after(launched_at, registration_created) and

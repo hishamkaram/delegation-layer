@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import errno
 import hashlib
 import json
@@ -119,7 +120,7 @@ class GitHubClient:
         return result
 
     def _run(self, argv: list[str], record: dict[str, object], *, limit: int,
-             timeout: float) -> bytes:
+             timeout: float) -> builtins.bytes:
         try:
             result = self._execute(argv, record, limit=limit, timeout=timeout)
         except BoundedCommandError as error:
@@ -129,7 +130,7 @@ class GitHubClient:
         return result.output
 
     def _request(self, endpoint: str, *, method: str, accept: str,
-                 fields: dict[str, str] | None, limit: int) -> bytes:
+                 fields: dict[str, str] | None, limit: int) -> builtins.bytes:
         record = self._begin(endpoint, method)
         argv = _api_argv(endpoint, method, accept)
         for name, value in (fields or {}).items():
@@ -163,17 +164,17 @@ class GitHubClient:
         argv.extend(["-H", "Content-Type: application/json", "--input", str(body_path)])
         return _json_response(self._run(argv, record, limit=limit, timeout=REQUEST_TIMEOUT))
 
-    def bytes(self, endpoint: str, *, limit: int) -> bytes:
+    def bytes(self, endpoint: str, *, limit: int) -> builtins.bytes:
         return self._request(endpoint, method="GET", accept="application/octet-stream",
                              fields=None, limit=limit)
 
-    def artifact_archive(self, repo: str, artifact_id: int, *, limit: int) -> bytes:
+    def artifact_archive(self, repo: str, artifact_id: int, *, limit: int) -> builtins.bytes:
         # Actions archive redirects require the GitHub API media type, unlike release assets.
         return self._request(f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
                              method="GET", accept="application/vnd.github+json",
                              fields=None, limit=limit)
 
-    def raw_blob(self, repo: str, blob_sha: str, *, limit: int) -> bytes:
+    def raw_blob(self, repo: str, blob_sha: str, *, limit: int) -> builtins.bytes:
         """Return the exact bytes of one Git blob; the caller decides whether they hash to ``blob_sha``.
 
         The blob endpoint answers raw content only to its raw media type and refuses

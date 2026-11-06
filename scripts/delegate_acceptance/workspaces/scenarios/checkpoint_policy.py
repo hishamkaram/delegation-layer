@@ -9,6 +9,7 @@ pending or unavailable state from an omitted description.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.workspaces.checkpoint_records import checkpoint_ref
@@ -51,16 +52,17 @@ class CheckpointFacts:
 
 
 def _canonical_id(value: object, label: str) -> str:
-    require(isinstance(value, str) and TASK_ID_RE.fullmatch(value) is not None, label + " is invalid")
+    if not (isinstance(value, str) and TASK_ID_RE.fullmatch(value) is not None):
+        raise AcceptanceFailure(label + " is invalid")
     return value
 
 
-def _failure(label: str, code: int, block: dict[str, object], response: dict[str, object]) -> AcceptanceFailure:
+def _failure(label: str, code: int, block: Mapping[str, object], response: Mapping[str, object]) -> AcceptanceFailure:
     return AcceptanceFailure(
         f"{label}: exit {code} checkpoint {block!r} error {response.get('error', '')!r}")
 
 
-def checkpoint_block(response: dict[str, object], root_id: str, *, listing: bool = False) -> dict[str, object]:
+def checkpoint_block(response: Mapping[str, object], root_id: str, *, listing: bool = False) -> dict[str, object]:
     """Validate the shared response frame and return its checkpoint projection."""
     require(response.get("schema_version") == 1 and response.get("command") == "checkpoint",
             "checkpoint response frame is invalid")
@@ -73,16 +75,17 @@ def checkpoint_block(response: dict[str, object], root_id: str, *, listing: bool
     require("checkpoints" not in response and "checkpoint_cursor" not in response,
             "checkpoint command carried a list page")
     block = response.get("checkpoint")
-    require(isinstance(block, dict), "checkpoint response omitted its checkpoint projection")
+    if not (isinstance(block, dict)):
+        raise AcceptanceFailure("checkpoint response omitted its checkpoint projection")
     require(set(block) <= _BLOCK_KEYS, "checkpoint projection has unknown fields")
     return block
 
 
-def _refusal(code: int, block: dict[str, object], action: str) -> bool:
+def _refusal(code: int, block: Mapping[str, object], action: str) -> bool:
     return code == 3 and block == {"reason_code": NOT_AUTHORIZED, "next_action": "retry_" + action}
 
 
-def classify_creation(code: int, response: dict[str, object], root_id: str) -> Acknowledgement:
+def classify_creation(code: int, response: Mapping[str, object], root_id: str) -> Acknowledgement:
     """Classify `checkpoint create`; a refusal has no acknowledged checkpoint."""
     block = checkpoint_block(response, root_id)
     if _refusal(code, block, "create"):
@@ -99,7 +102,7 @@ def classify_creation(code: int, response: dict[str, object], root_id: str) -> A
     raise _failure("checkpoint creation", code, block, response)
 
 
-def classify_removal(code: int, response: dict[str, object], root_id: str, checkpoint_id: str) -> Acknowledgement:
+def classify_removal(code: int, response: Mapping[str, object], root_id: str, checkpoint_id: str) -> Acknowledgement:
     """Classify `checkpoint remove C`; only an accepted removal names its exact attempt R."""
     block = checkpoint_block(response, root_id)
     if _refusal(code, block, "remove"):
@@ -120,21 +123,21 @@ def classify_removal(code: int, response: dict[str, object], root_id: str, check
     raise _failure("checkpoint removal", code, block, response)
 
 
-def _described_states(current: dict[str, object]) -> tuple[str, str | None]:
+def _described_states(current: Mapping[str, object]) -> tuple[str, str | None]:
     state = current.get("state")
-    require(state in CREATION_STATES and isinstance(current.get("usable"), bool),
-            "checkpoint description state is outside the delivered vocabulary")
+    if not (state in CREATION_STATES and isinstance(current.get("usable"), bool)):
+        raise AcceptanceFailure("checkpoint description state is outside the delivered vocabulary")
     removal = current.get("removal")
     if removal is None:
         return str(state), None
-    require(isinstance(removal, dict) and removal.get("state") in REMOVAL_STATES,
-            "latest removal state is outside the delivered vocabulary")
+    if not (isinstance(removal, dict) and removal.get("state") in REMOVAL_STATES):
+        raise AcceptanceFailure("latest removal state is outside the delivered vocabulary")
     _canonical_id(removal.get("operation_id"), "latest removal operation ID")
     return str(state), str(removal["state"])
 
 
 def classify_status(
-        code: int, response: dict[str, object], root_id: str, checkpoint_id: str) -> dict[str, object] | None:
+        code: int, response: Mapping[str, object], root_id: str, checkpoint_id: str) -> dict[str, object] | None:
     """Classify plain `checkpoint status C`: None while pending, else the observed description.
 
     Exit 0 is a successful observation, not usability: unavailable history is
@@ -144,8 +147,9 @@ def classify_status(
     current = block.get("current")
     if code == 3 and block.get("next_action") == WATCH and "operation" not in block:
         if current is not None:
-            require(isinstance(current, dict) and current.get("id") == checkpoint_id and
-                    PENDING in _described_states(current), "pending status described settled state")
+            if not (isinstance(current, dict) and current.get("id") == checkpoint_id and
+                    PENDING in _described_states(current)):
+                raise AcceptanceFailure("pending status described settled state")
         return None
     if code != 0 or not isinstance(current, dict) or "operation" in block:
         raise _failure("checkpoint status " + checkpoint_id, code, block, response)
@@ -162,14 +166,15 @@ def classify_status(
 
 
 def classify_removal_status(
-        code: int, response: dict[str, object], root_id: str, *, checkpoint_id: str,
+        code: int, response: Mapping[str, object], root_id: str, *, checkpoint_id: str,
         operation_id: str) -> dict[str, object] | None:
     """Classify `status C --operation R`: only R's own state chooses the result, never the latest head."""
     block = checkpoint_block(response, root_id)
     operation = block.get("operation")
     if operation is not None:
-        require(isinstance(operation, dict) and operation.get("operation_id") == operation_id and
-                operation.get("state") in REMOVAL_STATES, "selected removal described another attempt")
+        if not (isinstance(operation, dict) and operation.get("operation_id") == operation_id and
+                operation.get("state") in REMOVAL_STATES):
+            raise AcceptanceFailure("selected removal described another attempt")
     if code == 3 and block.get("next_action") == WATCH:
         require(operation is None or operation["state"] == PENDING,
                 "pending removal status described a settled attempt")
@@ -184,7 +189,7 @@ def classify_removal_status(
 
 
 def qualified_checkpoint(
-        current: dict[str, object], *, root_id: str, selection: str, cwd: str | None = None,
+        current: Mapping[str, object], *, root_id: str, selection: str, cwd: str | None = None,
         workspace_id: str | None = None) -> CheckpointFacts:
     """Require a usable checkpointed description bound to its exact target and owned ref."""
     checkpoint_id = _canonical_id(current.get("id"), "checkpoint ID")
@@ -195,14 +200,15 @@ def qualified_checkpoint(
             current.get("workspace_id") == workspace_id,
             "checkpoint does not describe its requested target")
     commit = current.get("commit_oid")
-    require(isinstance(commit, str) and OID_RE.fullmatch(commit) is not None, "checkpoint commit is invalid")
+    if not (isinstance(commit, str) and OID_RE.fullmatch(commit) is not None):
+        raise AcceptanceFailure("checkpoint commit is invalid")
     require(current.get("snapshot_ref") == checkpoint_ref(root_id, checkpoint_id),
             "checkpoint does not name its owned ref")
     return CheckpointFacts(checkpoint_id=checkpoint_id, commit_oid=commit,
                            snapshot_ref=str(current["snapshot_ref"]))
 
 
-def removed_history(current: dict[str, object], facts: CheckpointFacts, operation_id: str) -> None:
+def removed_history(current: Mapping[str, object], facts: CheckpointFacts, operation_id: str) -> None:
     """A removed checkpoint keeps its qualified creation, is no longer usable, and names R as latest."""
     require(current.get("id") == facts.checkpoint_id and current.get("state") == CHECKPOINTED and
             current.get("usable") is False and current.get("commit_oid") == facts.commit_oid and
@@ -213,20 +219,23 @@ def removed_history(current: dict[str, object], facts: CheckpointFacts, operatio
 
 
 def list_page(
-        response: dict[str, object], root_id: str, *, limit: int, after: str) -> tuple[list[dict[str, object]], str]:
+        response: Mapping[str, object], root_id: str, *, limit: int, after: str) -> tuple[list[dict[str, object]], str]:
     """Validate one metadata page: ascending IDs after the cursor and a cursor only for a full page."""
     checkpoint_block(response, root_id, listing=True)
     entries = response.get("checkpoints")
-    require(isinstance(entries, list) and len(entries) <= limit, "checkpoint page is invalid")
+    if not (isinstance(entries, list) and len(entries) <= limit):
+        raise AcceptanceFailure("checkpoint page is invalid")
     previous = after
     for entry in entries:
-        require(isinstance(entry, dict), "checkpoint page entry is not an object")
+        if not (isinstance(entry, dict)):
+            raise AcceptanceFailure("checkpoint page entry is not an object")
         identity = _canonical_id(entry.get("id"), "listed checkpoint ID")
         require(identity > previous, "checkpoint page is not in ascending ID order after its cursor")
         _described_states(entry)
         previous = identity
     cursor = response.get("checkpoint_cursor", "")
-    require(isinstance(cursor, str), "checkpoint cursor is invalid")
+    if not (isinstance(cursor, str)):
+        raise AcceptanceFailure("checkpoint cursor is invalid")
     if cursor:
         require(len(entries) == limit and cursor == entries[-1]["id"],
                 "checkpoint cursor is not the last entry of a full page")
@@ -255,7 +264,7 @@ def ref_observation(
     return commit
 
 
-def closure_facts(closure: dict[str, object]) -> dict[str, object]:
+def closure_facts(closure: Mapping[str, object]) -> dict[str, object]:
     """Project a validated operation closure's mode and native scope facts for the receipt."""
     lifetime = closure.get("managed_lifetime")
     intent = lifetime.get("intent") if isinstance(lifetime, dict) else None
@@ -265,7 +274,7 @@ def closure_facts(closure: dict[str, object]) -> dict[str, object]:
     return facts
 
 
-def unchanged_checkout(before: dict[str, object], after: dict[str, object], label: str) -> None:
+def unchanged_checkout(before: Mapping[str, object], after: Mapping[str, object], label: str) -> None:
     """HEAD, the real index's bytes and identity, status and worktree bytes stay exactly the same."""
     for field in sorted(before.keys() | after.keys()):
         require(before.get(field) == after.get(field), label + " changed its " + field)

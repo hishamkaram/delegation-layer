@@ -100,6 +100,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:acceptance_tests.record_fixtures",
       "py:delegate_acceptance.evidence.files",
       "py:delegate_acceptance.private_cli.contention_controls",
       "py:delegate_acceptance.private_cli.contention_locks",
@@ -136,6 +137,7 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.private_cli.fixtures",
       "py:acceptance_tests.private_cli.modern_application_fixture",
       "py:acceptance_tests.private_cli.modern_fixtures",
       "py:delegate_acceptance.private_cli.contention_controls",
@@ -154,6 +156,7 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.private_cli.modern_application_fixture",
       "py:acceptance_tests.private_cli.modern_fixtures",
       "py:delegate_acceptance.private_cli.contention_controls",
       "py:delegate_acceptance.private_cli.control_fixture",
@@ -183,6 +186,8 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.invalid_calls",
+      "py:acceptance_tests.record_fixtures",
       "py:copy",
       "py:delegate_acceptance.private_cli.contention_policy",
       "py:unittest"
@@ -194,6 +199,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:acceptance_tests.record_fixtures",
       "py:delegate_acceptance.private_cli.contention_controls",
       "py:delegate_acceptance.private_cli.contention_locks",
       "py:delegate_acceptance.private_cli.leases",
@@ -256,8 +262,11 @@
       "py:acceptance_private_cli",
       "py:acceptance_tests.private_cli.fixtures",
       "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.commands",
       "py:delegate_acceptance.private_cli.stop",
+      "py:json",
       "py:pathlib",
+      "py:subprocess",
       "py:tempfile",
       "py:unittest",
       "py:unittest.mock"
@@ -413,6 +422,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:acceptance_tests.record_fixtures",
       "py:copy",
       "py:delegate_acceptance.evidence.files",
       "py:delegate_acceptance.evidence.records",
@@ -508,6 +518,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_tests.release_fixture",
+      "py:collections.abc",
       "py:contextlib",
       "py:delegate_acceptance.processes.contracts",
       "py:delegate_acceptance.processes.operations",

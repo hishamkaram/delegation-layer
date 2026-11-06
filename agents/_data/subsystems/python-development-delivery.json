@@ -282,9 +282,9 @@
       "py:__future__",
       "py:collections.abc",
       "py:delegate_acceptance.release_verification.contract",
-      "py:delegate_acceptance.release_verification.github",
       "py:io",
       "py:stat",
+      "py:typing",
       "py:zipfile",
       "py:zlib"
     ]
@@ -295,6 +295,7 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:collections.abc",
       "py:delegate_acceptance.release_verification.actions_artifacts",
       "py:delegate_acceptance.release_verification.contract",
       "py:io",

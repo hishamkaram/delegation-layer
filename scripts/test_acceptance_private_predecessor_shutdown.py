@@ -1,5 +1,6 @@
 """A captured predecessor supervisor is shut down once through its canonical owner."""
 
+from dataclasses import replace
 import json
 import shutil
 from pathlib import Path
@@ -9,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from typing import TypeGuard
 
 import acceptance_private_cli as private_cli
 import acceptance_provider_common as provider_common
@@ -16,11 +18,20 @@ from scripts.delegate_acceptance.private_cli import finalization as finalization
 from scripts.delegate_acceptance.private_cli import leases as leases_impl
 from scripts.delegate_acceptance.private_cli import supervisor as supervisor_impl
 from scripts.delegate_acceptance.private_cli import upgrade as upgrade_impl
-from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime, PredecessorCleanup, SupervisorCleanup
 from scripts.delegate_acceptance.processes.observation import wait_until
 from test_acceptance_private_shutdown import ManagedLifetimeFixture
 from test_acceptance_private_shutdown import TASK_ID
 from test_acceptance_private_shutdown import write_record
+
+
+def is_predecessor(entry: SupervisorCleanup | PredecessorCleanup) -> TypeGuard[PredecessorCleanup]:
+    return isinstance(entry.get("predecessor"), supervisor_impl.PredecessorShutdownTarget)
+
+
+def predecessor_entry(entry: SupervisorCleanup | PredecessorCleanup) -> PredecessorCleanup:
+    assert is_predecessor(entry), "fixture did not retain predecessor cleanup authority"
+    return entry
 
 
 class FinalizerArguments:
@@ -163,7 +174,7 @@ class PredecessorShutdownTests(unittest.TestCase):
 
     def captured_target(self):
         self.stage()
-        return self.lifetime.supervisor_cleanups[-1]["predecessor"]
+        return predecessor_entry(self.lifetime.supervisor_cleanups[-1])["predecessor"]
 
     def assert_refused_before_shutdown(self, target):
         with patch.object(supervisor_impl, "pueue_command") as command:
@@ -248,7 +259,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.assertEqual(self.calls, [(self.backup, ["shutdown"])])
         self.assertEqual(len(self.lifetime.supervisor_cleanups), 1)
         self.assertIs(self.lifetime.supervisor_cleanups[0], pending)
-        self.assertTrue(pending["predecessor"].backup_handle.closed)
+        self.assertTrue(predecessor_entry(pending)["predecessor"].backup_handle.closed)
         self.assertEqual((result, str(error)), ("FAIL", "original"))
         self.assertEqual((cleanup["status"], cleanup["pending_supervisor_count"]), ("failed", 1))
 
@@ -257,10 +268,10 @@ class PredecessorShutdownTests(unittest.TestCase):
         pending = self.lifetime.supervisor_cleanups[-1]
         self.stop_daemon()
         self.listener.close()
-        upgrade_impl.await_pending_predecessor(self.capture_root, pending["predecessor"])
+        upgrade_impl.await_pending_predecessor(self.capture_root, predecessor_entry(pending)["predecessor"])
         finalization_impl.release_pending_predecessor(pending, self.lifetime.supervisor_cleanups)
         self.assertEqual(self.lifetime.supervisor_cleanups, [])
-        self.assertTrue(pending["predecessor"].backup_handle.closed)
+        self.assertTrue(predecessor_entry(pending)["predecessor"].backup_handle.closed)
         with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
             result, cleanup, _ = self.finalize(RuntimeError("original"), self.pueue_command)
         primary.assert_called_once()
@@ -272,7 +283,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         pending = self.lifetime.supervisor_cleanups[-1]
         self.stop_daemon()
         self.listener.close()
-        upgrade_impl.await_pending_predecessor(self.capture_root, pending["predecessor"])
+        upgrade_impl.await_pending_predecessor(self.capture_root, predecessor_entry(pending)["predecessor"])
         real_handle, fault = self.inject_close_fault(pending)
         with self.assertRaises(OSError) as raised:
             finalization_impl.release_pending_predecessor(pending, self.lifetime.supervisor_cleanups)
@@ -442,7 +453,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.stage()
         pending = self.lifetime.supervisor_cleanups[-1]
         self.publish_successor()
-        private_cli.os.pwrite(pending["predecessor"].backup_handle.fileno(), b"#", 0)
+        private_cli.os.pwrite(predecessor_entry(pending)["predecessor"].backup_handle.fileno(), b"#", 0)
         failure = RuntimeError("original")
         with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, self.successor_command)
@@ -470,7 +481,7 @@ class PredecessorShutdownTests(unittest.TestCase):
                 self.stage()
         self.assertEqual(len(self.captured), 1)
         self.assertEqual(len(self.lifetime.supervisor_cleanups), 1)
-        target = self.lifetime.supervisor_cleanups[0]["predecessor"]
+        target = predecessor_entry(self.lifetime.supervisor_cleanups[0])["predecessor"]
         self.assertIs(target, self.captured[0])
         self.assertFalse(target.backup_handle.closed)
         failure = RuntimeError("original")
@@ -493,7 +504,7 @@ class PredecessorShutdownTests(unittest.TestCase):
             _, staged = self.stage()
         self.assertEqual(staged[3], expected)
         self.assertEqual(len(self.lifetime.supervisor_cleanups), 1)
-        self.assertIs(self.lifetime.supervisor_cleanups[0]["predecessor"], self.captured[0])
+        self.assertIs(predecessor_entry(self.lifetime.supervisor_cleanups[0])["predecessor"], self.captured[0])
 
 
     def test_unknown_predecessor_disposition_fails_closed(self):
@@ -507,17 +518,17 @@ class PredecessorShutdownTests(unittest.TestCase):
         predecessor.assert_called_once()
         primary.assert_not_called()
         self.assertEqual(self.lifetime.supervisor_cleanups, [pending])
-        self.assertTrue(pending["predecessor"].backup_handle.closed)
+        self.assertTrue(predecessor_entry(pending)["predecessor"].backup_handle.closed)
         self.assertEqual((result, error), ("FAIL", failure))
         self.assertEqual((cleanup["status"], cleanup["pending_supervisor_count"]), ("failed", 1))
 
 
     def inject_close_fault(self, pending):
         """Swap in a handle wrapper; the test's capture cleanup still closes the real handle."""
-        real_handle = pending["predecessor"].backup_handle
+        real_handle = predecessor_entry(pending)["predecessor"].backup_handle
         fault_handle = CloseFaultHandle(real_handle)
-        pending["predecessor"] = supervisor_impl.PredecessorShutdownTarget(
-            **{**vars(pending["predecessor"]), "backup_handle": fault_handle})
+        predecessor_entry(pending)["predecessor"] = replace(
+            predecessor_entry(pending)["predecessor"], backup_handle=fault_handle)
         return real_handle, fault_handle.error
 
     def assert_close_fault_retains_owned_entry(self, pueue_command):

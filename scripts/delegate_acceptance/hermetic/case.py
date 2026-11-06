@@ -229,7 +229,8 @@ class Case:
 
     def set_status(self, state, label=None, numeric_id=None, duplicate=False):
         if label is None:
-            require_true(self.root_id is not None, "status label requested before add identity")
+            if self.root_id is None:
+                raise HarnessFailure("status label requested before add identity")
             label = "delegate:" + self.root_id + ":" + self.task_id
         if numeric_id is None:
             numeric_id = self.numeric_id

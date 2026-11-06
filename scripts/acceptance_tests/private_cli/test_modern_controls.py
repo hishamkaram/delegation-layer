@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFixture
+from scripts.acceptance_tests.record_fixtures import object_at
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.processes import operations as process_owner
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
@@ -122,10 +123,13 @@ class ModernBinaryControlTests(unittest.TestCase):
         evidence = controls.prove_exclusive_handoff(
             task_ops, self.fixture.candidate, self.fixture.controls, self.immutable
         )
-        self.assertEqual(evidence["response"]["supervisor_control"]["state"], "migrated")
-        self.assertFalse(evidence["boundary"]["lease"]["probe_shared_acquired"])
-        self.assertIn("pueue-pair-", evidence["candidate_pair"])
-        self.assertTrue(evidence["final_lock"]["probe_exclusive_acquired"])
+        self.assertEqual(object_at(evidence, "response", "supervisor_control")["state"], "migrated")
+        self.assertFalse(object_at(evidence, "boundary", "lease")["probe_shared_acquired"])
+        pair = evidence["candidate_pair"]
+        if not isinstance(pair, str):
+            self.fail("candidate pair identity is not text")
+        self.assertIn("pueue-pair-", pair)
+        self.assertTrue(object_at(evidence, "final_lock")["probe_exclusive_acquired"])
         self.assertEqual(evidence["immutable_content_before"], evidence["immutable_content_after"])
 
     def test_response_root_drift_is_rejected_after_both_controls_are_reaped(self):

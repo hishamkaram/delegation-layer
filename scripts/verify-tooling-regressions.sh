@@ -483,35 +483,7 @@ expect_download_boundary "install-tools valid control passes Go check and reache
 
 # --- 8. verify-gates: Linter Exit Code Black-Box Harness ---
 # Setup controlled mock golangci-lint inside DISPOSABLE_REPO/bin
-cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
-#!/usr/bin/env bash
-if grep -q "func Good" fixture.go 2>/dev/null || grep -q "CheckState" fixture.go 2>/dev/null; then
-    exit 0
-fi
-
-if grep -q "Signal" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: p.Signal: Direct process signals are prohibited"
-elif grep -q "Process.Kill" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: cmd.Process.Kill: Direct process signals are prohibited"
-elif grep -q "syscall.Kill" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: syscall.Kill: Direct syscall signals and setsid are prohibited"
-elif grep -q "unix.Kill" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: unix.Kill: Direct process signals are prohibited"
-elif grep -q "syscall.Setsid" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: syscall.Setsid: Direct syscall signals and setsid are prohibited"
-elif grep -q "CommandContext" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: exec.CommandContext: defaults to Process.Kill"
-elif grep -q "WaitDelay" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: cmd.WaitDelay: Nonzero Cmd.WaitDelay can implicitly kill"
-elif grep -q "os.Remove" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: Error return value of \`os.Remove\` is not checked"
-elif grep -q "f.Sync" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: Error return value of \`f.Sync\` is not checked"
-elif grep -q "switch s" fixture.go 2>/dev/null; then
-    echo "fixture.go:5:2: missing cases in switch of type State: Unknown"
-fi
-exit ${STUB_LINT_EXIT:-1}
-EOF
+cp "${SCRIPT_DIR}/test-fixtures/golangci-lint-gate-stub.sh" "${DISPOSABLE_REPO}/bin/golangci-lint"
 chmod +x "${DISPOSABLE_REPO}/bin/golangci-lint"
 
 # 8a. Exact-1 positive control: passes all fixtures

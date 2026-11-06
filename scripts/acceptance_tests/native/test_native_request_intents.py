@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
+
 from dataclasses import FrozenInstanceError
+from collections.abc import Callable, Iterable, Mapping, Sequence
 import hashlib
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from typing import TypedDict
 
+from scripts.acceptance_tests.native.support import CapturedCommand, construct_with_invalid_fields
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.native import acceptance as gate
 from scripts.delegate_acceptance.native.constants import (
@@ -24,7 +28,8 @@ from scripts.delegate_acceptance.native.model_discovery_intent import (
     MODEL_DISCOVERY_DEFINITION_REVISION,
     ModelDiscoveryIntent,
 )
-from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
+from scripts.delegate_acceptance.tasks.request_intent import TaskRequestIntent
 
 
 PROVIDER = "codex:exec"
@@ -36,17 +41,23 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-class LaunchProbe:
+class LaunchProbe[T]:
     """Fake process owner: snapshots the owner's intents at the launch call, then fails or answers."""
 
-    def __init__(self, snapshot, outcome: object) -> None:
-        self.snapshot, self.outcome, self.snapshots = snapshot, outcome, []
+    def __init__(self, snapshot: Callable[[], T], outcome: TaskCommand | BaseException) -> None:
+        self.snapshot, self.outcome = snapshot, outcome
+        self.snapshots: list[T] = []
 
-    def run(self, name: str, argv: list[object], cwd: Path, **_options: object) -> object:
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15,
+            stdin: bytes | None = None, *, environment: Mapping[str, str] | None = None) -> TaskCommand:
         self.snapshots.append(self.snapshot())
         if isinstance(self.outcome, BaseException):
             raise self.outcome
         return self.outcome
+
+    def drain(self, timeout: float = 70, exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        raise AssertionError("the launch probe must not be used for process cleanup")
 
 
 class NativeRequestIntentTests(unittest.TestCase):
@@ -57,24 +68,27 @@ class NativeRequestIntentTests(unittest.TestCase):
         self.brief = self.base / "brief"
         self.brief.write_bytes(b"timeout brief\n")
 
-    def operation(self, outcome: object) -> tuple[gate.NativeAcceptance, LaunchProbe]:
+    def operation(self, outcome: TaskCommand | BaseException) -> tuple[
+            gate.NativeAcceptance, LaunchProbe[list[TaskRequestIntent]]]:
         operation = object.__new__(gate.NativeAcceptance)
         operation.delegate, operation.config, operation.runner = (
             self.base / "delegate", self.base / "pueue.yml", self.base / "runner")
         operation.base, operation.state, operation.workspace = (
             self.base, self.base / "state", self.base / "workspace")
         operation.models_state = self.base / "models-state"
+        operation.output, operation.pueue = self.base, self.base / "pueue"
         for directory in (operation.state, operation.workspace, operation.models_state):
             directory.mkdir()
         operation.provider, operation.mode, operation.scenario = PROVIDER, "workspace-write", "timeout-resume"
-        operation.args = SimpleNamespace(model="gpt-test", effort="high")
+        operation.args = Namespace(model="gpt-test", effort="high")
         operation.environment = {"PATH": "/usr/bin", "OPENAI_API_KEY": SECRET}
         operation.root_id, operation.tasks, operation.numeric_ids = None, {}, {}
         operation._sync_ops_owned_tasks = Mock()
         probe = LaunchProbe(lambda: list(operation.ops.request_intents), outcome)
-        operation.processes = probe
-        operation.ops = NativeTaskOps(probe, operation.delegate, operation.runner, self.base / "pueue",
-                                      self.base, operation.state, self.base)
+        process_patch = patch.object(operation, "processes", probe, create=True)
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
+        operation.ops = gate.NativeAcceptanceTaskOps(operation, managed_runner=False)
         return operation, probe
 
     def test_lost_timeout_source_reply_retains_role_budget_and_brief(self) -> None:
@@ -100,8 +114,8 @@ class NativeRequestIntentTests(unittest.TestCase):
         directory = self.base / "continuation"
         directory.mkdir()
         (directory / "stdout").write_bytes(b"not json")
-        operation, probe = self.operation(SimpleNamespace(directory=directory,
-                                                          result={"exit_code": 1, "natural_wait": True}))
+        operation, probe = self.operation(CapturedCommand(
+            directory=directory, result={"exit_code": 1, "natural_wait": True}))
         operation.root_id = "a" * 32
         with self.assertRaisesRegex(AcceptanceFailure, "invalid JSON evidence"):
             operation.continue_public("timeout-resume", self.brief, PREDECESSOR)
@@ -116,13 +130,16 @@ class NativeRequestIntentTests(unittest.TestCase):
         self.assertIsNone(intent.request.provider)
         self.assertEqual((operation.ops.continuation_successors, operation.ops.dispatch_attempts), ({}, set()))
 
-    def discovery(self, outcome: object) -> tuple[gate.NativeAcceptance, LaunchProbe]:
+    def discovery(self, outcome: TaskCommand | BaseException) -> tuple[
+            gate.NativeAcceptance, LaunchProbe[ModelDiscoveryIntent | None]]:
         operation, _ = self.operation(outcome)
         (operation.models_state / "existing-entry").mkdir()
         operation.provider_executable = self.base / "codex"
         operation.provider_executable.write_bytes(b"helper fixture\n")
         probe = LaunchProbe(lambda: operation._discovery_state().intent, outcome)
-        operation.processes = probe
+        process_patch = patch.object(operation, "processes", probe)
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
         return operation, probe
 
     def test_discovery_records_one_owned_intent_before_launch_without_environment(self) -> None:
@@ -131,7 +148,8 @@ class NativeRequestIntentTests(unittest.TestCase):
             operation.discover_models()
         self.assertEqual(len(probe.snapshots), 1)
         intent = probe.snapshots[0]
-        self.assertIsNotNone(intent, "discovery must retain its intent before launch")
+        if intent is None:
+            self.fail("discovery must retain its intent before launch")
         self.assertIs(operation._discovery_state().intent, intent)
         self.assertEqual((intent.models_root, intent.initial_entries, intent.provider, intent.cwd),
                          (str(operation.models_state), ("existing-entry",), PROVIDER, str(operation.workspace)))
@@ -167,15 +185,26 @@ class NativeRequestIntentTests(unittest.TestCase):
 INVALID_INTENT = "model discovery request intent is invalid"
 
 
-def intent_fields(**overrides: object) -> dict[str, object]:
-    fields: dict[str, object] = {
-        "models_root": "/models-state", "initial_entries": ("existing-entry",), "provider": PROVIDER,
+class IntentFields(TypedDict):
+    models_root: str
+    initial_entries: tuple[str, ...]
+    provider: str
+    permission: str
+    cwd: str
+    definition_revision: str
+    budget: str
+    budget_nanos: int
+    brief_sha256: str
+    helper_executable: str
+
+
+def intent_fields(initial_entries: tuple[str, ...] = ("existing-entry",)) -> IntentFields:
+    return {
+        "models_root": "/models-state", "initial_entries": initial_entries, "provider": PROVIDER,
         "permission": PROFILES[PROVIDER]["modes"][0], "cwd": "/workspace",
         "definition_revision": MODEL_DISCOVERY_DEFINITION_REVISION, "budget": MODEL_DISCOVERY_TASK_BUDGET,
         "budget_nanos": MODEL_DISCOVERY_TASK_BUDGET_NANOS, "brief_sha256": sha(b"model discovery"),
         "helper_executable": "/bin/codex"}
-    fields.update(overrides)
-    return fields
 
 
 class ModelDiscoveryIntentValueTests(unittest.TestCase):
@@ -198,17 +227,17 @@ class ModelDiscoveryIntentValueTests(unittest.TestCase):
         for digest in ("", "a" * 63, "a" * 65, "A" * 64, "g" * 64, None):
             with self.subTest(digest=digest), \
                     self.assertRaisesRegex(AcceptanceFailure, INVALID_INTENT):
-                ModelDiscoveryIntent(**intent_fields(brief_sha256=digest))
+                construct_with_invalid_fields(ModelDiscoveryIntent, {**intent_fields(), "brief_sha256": digest})
 
     def test_boolean_zero_or_negative_budget_is_refused(self) -> None:
         for budget in (True, False, 0, -1, -MODEL_DISCOVERY_TASK_BUDGET_NANOS):
             with self.subTest(budget=budget), self.assertRaisesRegex(AcceptanceFailure, INVALID_INTENT):
-                ModelDiscoveryIntent(**intent_fields(budget_nanos=budget))
+                construct_with_invalid_fields(ModelDiscoveryIntent, {**intent_fields(), "budget_nanos": budget})
 
     def test_mutable_initial_entries_are_refused_without_changing_the_caller_value(self) -> None:
         entries = ["existing-entry"]
         with self.assertRaisesRegex(AcceptanceFailure, INVALID_INTENT):
-            ModelDiscoveryIntent(**intent_fields(initial_entries=entries))
+            construct_with_invalid_fields(ModelDiscoveryIntent, {**intent_fields(), "initial_entries": entries})
         self.assertEqual(entries, ["existing-entry"])
 
     def test_legacy_state_without_an_intent_keeps_its_released_behavior(self) -> None:

@@ -1,4 +1,6 @@
 """Hermetic oracles for a native acceptance behavior cohort."""
+
+from argparse import Namespace
 from copy import deepcopy
 from pathlib import Path
 import tempfile
@@ -18,8 +20,8 @@ from scripts.delegate_acceptance.native.constants import case_task_budget
 class OptionalRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self.task_id = "a" * 32
-        self.meta = {"provider_executable": "/admitted/provider", "provider_version": ""}
-        self.started = {"provider_executable": "/upgraded/provider"}
+        self.meta: dict[str, object] = {"provider_executable": "/admitted/provider", "provider_version": ""}
+        self.started: dict[str, object] = {"provider_executable": "/upgraded/provider"}
         self.bindings = ProviderRuntimeBindings()
 
     def test_launch_without_diagnostics_uses_actual_path(self):
@@ -140,7 +142,7 @@ class NativeTaskBindingFixture:
         operation.provider_version = ""
         operation.pueue, operation.config = root / "pueue", root / "pueue.yml"
         operation.pueue_version = "pueue fixture-v1"
-        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.args = Namespace(model=None, effort=None)
         operation._provider_bindings = ProviderRuntimeBindings()
         return operation
 
@@ -302,7 +304,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
         operation = object.__new__(gate.NativeAcceptance)
         operation.root_id = "e" * 32
-        operation.ops = SimpleNamespace(root_id=None, replay=replay)
+        ops = SimpleNamespace(root_id=None, replay=replay)
         operation.records = {
             "fresh-collect": {"directory": Path("/fixture/fresh"),
                                "outcome": fresh_outcome, "payload": payload},
@@ -310,9 +312,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                                 "outcome": resume_outcome, "payload": resume_payload},
         }
 
-        operation.replay()
+        with patch.object(operation, "ops", ops, create=True):
+            operation.replay()
 
-        self.assertEqual(operation.ops.root_id, operation.root_id)
+        self.assertEqual(ops.root_id, operation.root_id)
         self.assertEqual(len(captured), 1)
         records = captured[0]
         self.assertEqual(records["fresh"]["directory"], Path("/fixture/fresh"))
@@ -326,7 +329,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         with self.assertRaises(gate.AcceptanceFailure):
             gate.require_same_session("session-1", "session-2")
 
-        before = {"outcome.json": {"sha256": "a"}}
+        before: dict[str, dict[str, object]] = {"outcome.json": {"sha256": "a"}}
         gate.require_replay_unchanged(before, {"outcome.json": {"sha256": "a"}})
         with self.assertRaises(gate.AcceptanceFailure):
             gate.require_replay_unchanged(before, {"outcome.json": {"sha256": "b"}})

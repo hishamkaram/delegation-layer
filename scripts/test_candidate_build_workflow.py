@@ -65,11 +65,30 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertIn("node-version: '18.x'", package)
             self.assertNotIn("node-version: '22.x'", package)
             self.assertEqual(package.count("run: make skill-package-check"), 1)
-        for name in ("gate-linux", "gate-macos"):
+        for name, tool_target, check_target in (("gate-linux", "tools", "check"),
+                                                 ("gate-macos", "tools-go", "check-platform")):
             with self.subTest(job=name):
                 gate = job_text(self.source, name)
                 self.assertIn("node-version: '22.x'", gate)
-                self.assertEqual(len(re.findall(r"^        run: make check$", gate, re.M)), 1)
+                self.assertEqual(re.findall(r"^        run: make (tools(?:-go)?)$", gate, re.M), [tool_target])
+                self.assertEqual(re.findall(r"^        run: make (check(?:-platform)?)$", gate, re.M), [check_target])
+
+    def test_shared_analysis_is_required_by_linux_without_a_duplicate_workflow(self):
+        linux = job_text(self.source, "gate-linux")
+        macos = job_text(self.source, "gate-macos")
+        self.assertEqual(linux.count("run: make check\n"), 1)
+        self.assertNotIn("continue-on-error", linux)
+        self.assertIn("run: make check-platform\n", macos)
+        self.assertFalse(WORKFLOW.with_name("static-diagnostics.yml").exists())
+
+    def test_ci_and_ccr_checkouts_do_not_persist_credentials(self):
+        for workflow in (WORKFLOW, WORKFLOW.with_name("ccr-integration.yml")):
+            with self.subTest(workflow=workflow.name):
+                checkouts = [block for block in workflow.read_text().split("\n      - ")
+                             if re.search(r"(?m)^(?:        )?uses: actions/checkout@", block)]
+                self.assertTrue(checkouts, "workflow must contain a checkout")
+                for checkout in checkouts:
+                    self.assertRegex(checkout, r"(?m)^          persist-credentials: false$")
 
     def test_full_pr_or_main_and_explicit_manual_candidate_build_the_distribution(self):
         condition = " ".join(self.job.split("    runs-on:", 1)[0].split())
@@ -165,7 +184,8 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.assertIn("    runs-on: ${{ matrix.os }}\n", self.job)
 
     def test_job_is_read_only_with_the_token_scoped_to_the_proof_step(self):
-        self.assertIn("    permissions:\n      contents: read\n      actions: read\n    strategy:", self.job)
+        self.assertRegex(self.job, r"    permissions:\n      contents: read\n"
+                                  r"      actions: read(?: #[^\n]*)?\n    strategy:")
         for forbidden in FORBIDDEN:
             if forbidden != "GITHUB_TOKEN":
                 self.assertNotIn(forbidden, self.job)

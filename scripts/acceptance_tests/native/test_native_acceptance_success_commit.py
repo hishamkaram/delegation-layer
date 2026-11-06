@@ -148,6 +148,8 @@ class SuccessCommitTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse((self.output / "success.json").exists())
         data = (self.output / CANDIDATE).read_bytes()
+        if run.success_candidate is None:
+            self.fail("success cleanup must retain its committed candidate")
         self.assertEqual(hashlib.sha256(data).hexdigest(), run.success_candidate.sha256)
         self.assertEqual(json.loads(data), run.success_receipt)
         cleanup = json.loads((self.output / "cleanup.json").read_text())

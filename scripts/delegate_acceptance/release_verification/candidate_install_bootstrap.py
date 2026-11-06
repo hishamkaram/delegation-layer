@@ -153,6 +153,8 @@ def _remove_or_retain(entries: tuple[OwnedDirectory, ...], root_token: OwnedDire
         _release_unconsumed(entries, facts)
         return
     try:
+        if root_token is None:
+            raise RuntimeError("private acceptance root identity token is required")
         # The shutdown already holds the lease; a root not yet held gets one attempt per lock, no wait.
         remove_private_acceptance_root(root_token, entries, managed_roots, disposal=disposal,
                                        deadline=time.monotonic())
@@ -222,7 +224,7 @@ def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: 
     return installed.state, closed
 
 
-def _fault(error: BaseException) -> dict[str, str]:
+def _fault(error: BaseException) -> dict[str, object]:
     """The private receipt's record of one original fault; a verifier fault is named by its code."""
     if isinstance(error, VerificationError):
         return {"type": type(error).__name__, "code": error.code}
@@ -273,10 +275,11 @@ def _publish_unresolved(ledger: list[dict], facts: dict[str, object]) -> list[di
     a task ID or a config no delegate child ever ran.
     """
     pending = tuple(ledger)
-    records = [{"config": str(entry["config"]), "state": str(entry["state"]), "task_ids": list(entry["task_ids"])}
-               for entry in pending]
+    records: list[dict[str, object]] = [
+        {"config": str(entry["config"]), "state": str(entry["state"]), "task_ids": list(entry["task_ids"])}
+        for entry in pending]
     facts["unresolved_ownership"] = records
-    unresolved = []
+    unresolved: list[dict[str, object]] = []
     for entry, record in zip(pending, records):
         if entry["task_ids"] or entry["config"].exists():
             _add_shutdown_evidence(record, entry["config"])

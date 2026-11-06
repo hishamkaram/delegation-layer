@@ -14,7 +14,7 @@ class PayloadTests(unittest.TestCase):
             for verdict, name in (("committed", "result.txt"), ("rejected", "publish.reject")):
                 (directory / name).write_bytes(b"x")
                 payload = {"basename": name, "length": 1, "sha256": sha(b"x")}
-                outcome = {"verdict": verdict, "payload": payload}
+                outcome: dict[str, object] = {"verdict": verdict, "payload": payload}
                 self.assertEqual(read_outcome_payload(directory, outcome), b"x")
                 for bad in ("../result.txt", "/tmp/result.txt", "other.txt", "raw/stdout"):
                     with self.subTest(basename=bad), self.assertRaises(AcceptanceFailure):

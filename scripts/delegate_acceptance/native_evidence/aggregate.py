@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from .summaries import TreeSummary
 from ..directories.journal import acquire_exclusive_file_lock
 import re
 from ..directories.journal import release_exclusive_file_lock
@@ -35,6 +36,7 @@ from .contract import (
     MatrixRow,
     SCHEMA_VERSION,
     _aggregate_exit,
+    _aggregate_exit_code,
     _case_result_verdict,
     _digest_bytes,
     _empty_summary,
@@ -334,7 +336,7 @@ def _build_case(row: MatrixRow, aggregate_root: Path) -> dict[str, object]:
 def _new_aggregate_receipt(
         *, aggregate_root: Path, rows_tuple: tuple[MatrixRow, ...],
         compact_cases: list[dict[str, object]], unresolved: list[str],
-        raw_before: dict[str, int | bool], existing_nonterminal: dict[str, object] | None,
+        raw_before: TreeSummary, existing_nonterminal: dict[str, object] | None,
         tag: str | None, source_revision: str | None,
         require_pass: bool, retention: int) -> dict[str, object]:
     cases_root = aggregate_root / CASE_ROOT_NAME
@@ -384,7 +386,7 @@ def _new_aggregate_receipt(
 
 def _publish_aggregate(
         *, aggregate_root: Path, receipt_path: Path, receipt: dict[str, object],
-        retention: int, unresolved: list[str], raw_before: dict[str, int | bool],
+        retention: int, unresolved: list[str], raw_before: TreeSummary,
         cases_root: Path, receipts_root: Path) -> tuple[dict[str, object], int]:
     # The provisional receipt makes this aggregate visible to the retention scan.
     _write_atomic(receipt_path, receipt, MAX_AGGREGATE_BYTES)
@@ -406,7 +408,7 @@ def _publish_aggregate(
     receipt = _publish_completed_retention_receipt(
         aggregate_root, receipt_path, receipt, retention_result,
     )
-    return receipt, int(receipt["exit_code"])
+    return receipt, _aggregate_exit_code(receipt["exit_code"])
 
 
 def _build_aggregate_locked(
@@ -439,11 +441,17 @@ def _build_aggregate_locked(
         aggregate_root, receipt_path, tag, source_revision, require_pass,
     )
     if existing is not None and existing.get("terminal_evidence_published") is True:
-        return existing, int(existing["exit_code"])
+        return existing, _aggregate_exit_code(existing["exit_code"])
     rows = _parse_matrix(matrix_path)
     raw_before = _tree_summary(cases_root)
     compact_cases = [_build_case(row, aggregate_root) for row in rows]
-    unresolved = [case["case_id"] for case in compact_cases if case["evidence_status"] == "UNRESOLVED"]
+    unresolved: list[str] = []
+    for case in compact_cases:
+        case_id = case["case_id"]
+        if not isinstance(case_id, str):
+            raise EvidenceError("aggregate_case_fields_invalid")
+        if case["evidence_status"] == "UNRESOLVED":
+            unresolved.append(case_id)
     retention = _retention_count(retention_count)
     receipt = _new_aggregate_receipt(
         aggregate_root=aggregate_root, rows_tuple=tuple(rows), compact_cases=compact_cases, unresolved=unresolved,

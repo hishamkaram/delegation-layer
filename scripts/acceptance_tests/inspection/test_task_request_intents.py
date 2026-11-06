@@ -5,13 +5,15 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import tempfile
-from types import SimpleNamespace
+from collections.abc import Iterable, Mapping, Sequence
 import unittest
 
 from scripts.acceptance_supervisor_common import write_json
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
-from scripts.delegate_acceptance.tasks.request_intent import CONTINUE, DISPATCH, TaskRequest
+from scripts.delegate_acceptance.tasks.request_intent import CONTINUE, DISPATCH, TaskRequest, TaskRequestIntent
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
+from .fixtures import CapturedCommand
 
 
 ROOT = "a" * 32
@@ -24,15 +26,21 @@ BRIEF = hashlib.sha256(b"brief\n").hexdigest()
 class RecordingProcesses:
     """Fake process owner that snapshots the ledger's intents at the launch boundary."""
 
-    def __init__(self, ops_holder: list[NativeTaskOps], outcome: object) -> None:
+    def __init__(self, ops_holder: list[NativeTaskOps], outcome: TaskCommand | BaseException) -> None:
         self.ops_holder, self.outcome = ops_holder, outcome
-        self.intents_at_launch: list[tuple[object, ...]] = []
+        self.intents_at_launch: list[tuple[TaskRequestIntent, ...]] = []
 
-    def run(self, name: str, argv: list[object], cwd: Path, **_options: object) -> object:
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15,
+            stdin: bytes | None = None, *, environment: Mapping[str, str] | None = None) -> TaskCommand:
         self.intents_at_launch.append(tuple(self.ops_holder[0].request_intents))
         if isinstance(self.outcome, BaseException):
             raise self.outcome
         return self.outcome
+
+    def drain(self, timeout: float = 70,
+              exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        raise AssertionError("unexpected process drain")
 
 
 class TaskRequestIntentTests(unittest.TestCase):
@@ -43,7 +51,7 @@ class TaskRequestIntentTests(unittest.TestCase):
         for name in ("state", "state-parent", "output"):
             (self.base / name).mkdir()
 
-    def ops(self, outcome: object) -> tuple[NativeTaskOps, RecordingProcesses]:
+    def ops(self, outcome: TaskCommand | BaseException) -> tuple[NativeTaskOps, RecordingProcesses]:
         holder: list[NativeTaskOps] = []
         processes = RecordingProcesses(holder, outcome)
         ops = NativeTaskOps(processes, self.base / "delegate", self.base / "runner", self.base / "pueue",
@@ -52,14 +60,14 @@ class TaskRequestIntentTests(unittest.TestCase):
         holder.append(ops)
         return ops, processes
 
-    def process(self, stdout: object, exit_code: int = 0) -> SimpleNamespace:
+    def process(self, stdout: object, exit_code: int = 0) -> CapturedCommand:
         directory = self.base / f"process-{len(list(self.base.iterdir()))}"
         directory.mkdir()
         if isinstance(stdout, bytes):
             (directory / "stdout").write_bytes(stdout)
         elif stdout is not None:
             write_json(directory / "stdout", stdout)
-        return SimpleNamespace(directory=directory, result={"exit_code": exit_code, "natural_wait": True})
+        return CapturedCommand(directory=directory, result={"exit_code": exit_code, "natural_wait": True})
 
     def continuation(self) -> TaskRequest:
         return TaskRequest(role="timeout-resume", brief_sha256=BRIEF, budget="5m",
@@ -126,12 +134,12 @@ class TaskRequestIntentTests(unittest.TestCase):
         self.assertEqual(ops.continuation_successors, {0: SUCCESSOR})
 
     def test_successor_binding_refuses_undeclared_dispatch_and_shared_successors(self) -> None:
-        ops, _ = self.ops(RuntimeError("reply lost"))
+        ops, processes = self.ops(RuntimeError("reply lost"))
         for _ in range(2):
             with self.assertRaises(RuntimeError):
                 ops.continue_task("timeout-resume", ["delegate"], request=self.continuation())
         self.assertEqual(len(ops.request_intents), 2, "each continuation must retain its intent")
-        ops.processes.outcome = RuntimeError("dispatch reply lost")
+        processes.outcome = RuntimeError("dispatch reply lost")
         with self.assertRaises(RuntimeError):
             ops.dispatch("fresh", TASK, ["delegate"],
                          request=TaskRequest(role="fresh", brief_sha256=BRIEF, budget="5m"))

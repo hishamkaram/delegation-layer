@@ -39,7 +39,7 @@ def source_block_reason(
         return BlockReason.UNCLASSIFIED, "source_block_reason_invalid"
 
 
-def encode_block_reason(status: str, reason: BlockReason | None) -> str | None:
+def encode_block_reason(status: str, reason: object) -> str | None:
     """Serialize the version 2 field, enforcing: non-null exactly for BLOCKED.
 
     Only a BLOCKED status with a canonical reason member, or a PASS or FAIL

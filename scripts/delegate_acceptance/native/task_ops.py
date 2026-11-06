@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Protocol
 
+from scripts.delegate_acceptance.inspections.data import InspectionEvidence
 from scripts.delegate_acceptance.native.constants import RUNNER_STATUS_POLL_SECONDS, case_task_budget
 from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
+from scripts.delegate_acceptance.tasks.contracts import TaskDaemon, TaskProcesses
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
+
+
+class NativeTaskOwner(Protocol):
+    """Acceptance-owned state read by task cleanup; mutations use the owner's callbacks."""
+
+    @property
+    def processes(self) -> TaskProcesses: ...
+    @property
+    def delegate(self) -> Path: ...
+    @property
+    def runner(self) -> Path: ...
+    @property
+    def pueue(self) -> Path: ...
+    @property
+    def models_state(self) -> Path: ...
+    @property
+    def output(self) -> Path: ...
+    @property
+    def base(self) -> Path: ...
+    @property
+    def state(self) -> Path: ...
+    @property
+    def provider(self) -> str: ...
+    @property
+    def root_id(self) -> str | None: ...
+    @property
+    def config(self) -> Path: ...
+    @property
+    def daemon(self) -> TaskDaemon | None: ...
+    @property
+    def ops(self) -> NativeTaskOps: ...
+
+    def _sync_model_cleanup(self, ops: ModelDiscoveryCleanupOps) -> None: ...
+
+    def _without_model_discovery_queue(self, status: dict[str, object]) -> dict[str, object]: ...
 
 
 class ModelDiscoveryCleanupOps(NativeTaskOps):
@@ -15,7 +54,7 @@ class ModelDiscoveryCleanupOps(NativeTaskOps):
     the cleanup ledger reuses that one owner's managed mode and placement.
     """
 
-    def __init__(self, owner) -> None:
+    def __init__(self, owner: NativeTaskOwner) -> None:
         super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
                          owner.models_state.parent, owner.models_state, owner.output,
                          expected_inspection_binding_required=False,
@@ -41,7 +80,7 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
     The runner wait and failure cleanup observe the provider case's budget contract.
     """
 
-    def __init__(self, owner, *, managed_runner: bool = True) -> None:
+    def __init__(self, owner: NativeTaskOwner, *, managed_runner: bool = True) -> None:
         super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
                          owner.base, owner.state, owner.output,
                          watch_seconds=case_task_budget(owner.provider).watch_seconds,
@@ -52,7 +91,7 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
 
     def _validate_queue_membership(
             self, status: dict[str, object], allow_failure: bool
-            ) -> dict[str, dict[str, object]]:
+            ) -> dict[str, InspectionEvidence]:
         filtered = self.owner._without_model_discovery_queue(status)
         return super()._validate_queue_membership(filtered, allow_failure)
 

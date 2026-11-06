@@ -15,7 +15,8 @@ MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES = 64 * 1024
 def runtime_capability_sha(definition: dict[str, object]) -> str:
     """Hash runtime capability fields while excluding executable identity."""
     runtime = definition.get("runtime")
-    require(isinstance(runtime, dict), "runtime capability definition is missing runtime fields")
+    if not (isinstance(runtime, dict)):
+        raise AcceptanceFailure("runtime capability definition is missing runtime fields")
 
     def go_slice(value: object) -> object:
         # The Go digest clones slices into nil-backed values, so an empty
@@ -38,14 +39,15 @@ def runtime_capability_sha(definition: dict[str, object]) -> str:
 
 def _provider_runtime_identity(evidence: object, phase: str,
                                label: str) -> dict[str, str]:
-    require(isinstance(evidence, dict), f"{label} {phase} evidence is not an object")
+    if not (isinstance(evidence, dict)):
+        raise AcceptanceFailure(f"{label} {phase} evidence is not an object")
     executable = evidence.get("provider_executable")
     version = evidence.get("provider_version", "")
     sha256 = evidence.get("provider_sha256", "")
-    require(_raw_clean_absolute_path(executable),
-            f"{label} {phase} executable is invalid")
-    require(isinstance(version, str) and (version == "" or bool(version.strip())),
-            f"{label} {phase} version is invalid")
+    if not (_raw_clean_absolute_path(executable)):
+        raise AcceptanceFailure(f"{label} {phase} executable is invalid")
+    if not (isinstance(version, str) and (version == "" or bool(version.strip()))):
+        raise AcceptanceFailure(f"{label} {phase} version is invalid")
     try:
         version_bytes = version.encode("utf-8")
     except UnicodeEncodeError as error:
@@ -54,7 +56,8 @@ def _provider_runtime_identity(evidence: object, phase: str,
             f"{label} {phase} version exceeds the terminal evidence bound")
     require(not any(unicodedata.category(character) == "Cc" for character in version),
             f"{label} {phase} version contains control characters")
-    require(_optional_hex_digest(sha256), f"{label} {phase} digest is invalid")
+    if not (_optional_hex_digest(sha256)):
+        raise AcceptanceFailure(f"{label} {phase} digest is invalid")
     return {"executable": executable, "version": version, "sha256": sha256}
 
 
@@ -64,12 +67,13 @@ def validate_provider_runtime_metadata(
         started_evidence: dict[str, object] | None = None,
         label: str = "provider runtime metadata") -> dict[str, str] | None:
     """Validate recorded runtime facts; ignore observed_version for legacy API compatibility."""
-    require(isinstance(meta, dict), f"{label} is not an object")
+    if not (isinstance(meta, dict)):
+        raise AcceptanceFailure(f"{label} is not an object")
     require(not (launch_evidence is not None and started_evidence is not None),
             f"{label} launch evidence modes are mutually exclusive")
     executable = meta.get("provider_executable")
-    require(_raw_clean_absolute_path(executable),
-            f"{label} executable is invalid")
+    if not (_raw_clean_absolute_path(executable)):
+        raise AcceptanceFailure(f"{label} executable is invalid")
     pending = "runtime_preflight_sha256" in meta
     version = meta.get("provider_version")
     if pending:
@@ -79,8 +83,8 @@ def validate_provider_runtime_metadata(
         require(meta.get("environment_recorded") is True,
                 f"{label} pending environment is not recorded")
     else:
-        require(isinstance(version, str) and (version == "" or bool(version.strip())),
-                f"{label} version is invalid")
+        if not (isinstance(version, str) and (version == "" or bool(version.strip()))):
+            raise AcceptanceFailure(f"{label} version is invalid")
     if "environment_recorded" in meta:
         require(type(meta["environment_recorded"]) is bool,
                 f"{label} environment marker is invalid")

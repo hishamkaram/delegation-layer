@@ -162,9 +162,11 @@ class RefusalTests(FixtureCase):
                             stage="git-base-ancestor")
 
     def test_malformed_identity_and_foreign_root_are_refused_before_any_work(self):
-        for overrides in ({"version": "0.1.37-rc.1"}, {"commit": "abc"}, {"repository": "no-slash"}):
+        cases: tuple[dict[str, str], ...] = (
+            {"version": "0.1.37-rc.1"}, {"commit": "abc"}, {"repository": "no-slash"})
+        for overrides in cases:
             with self.subTest(overrides=overrides):
-                result = self.build(**overrides)
+                result = self.run_builder(*self.fixture.build_arguments(self.scratch, **overrides))
                 self.assertEqual(result.exit_code, 1)
                 self.assertIn("candidate_field_invalid", result.output)
                 self.assertFalse((self.scratch / "work").exists())
@@ -334,6 +336,8 @@ class BuilderBoundaryTests(unittest.TestCase):
         failure = self.run_builder(fake=BoundedCommandError(CommandFailure.TIMEOUT))
         self.assertEqual((failure.code, failure.stage), ("command_timeout", "fixture-cli"))
         self.settle(retained=True)
+        assert isinstance(self.case.unresolved, VerificationError)
+        assert isinstance(self.outer.unresolved, VerificationError)
         self.assertEqual((self.case.unresolved.code, self.outer.unresolved.code),
                          ("command_timeout", "command_timeout"))
 
@@ -342,6 +346,7 @@ class BuilderBoundaryTests(unittest.TestCase):
                    "cleanup": {"dispositions": {"scratch": "retained", "payload": "retained"}}}
         self.assertIsNone(self.run_builder(fake=self.fake_receipt(receipt)))
         self.settle(retained=True)
+        assert isinstance(self.outer.unresolved, VerificationError)
         self.assertEqual(self.outer.unresolved.code, "command_termination_failed")
 
     def test_failed_build_that_retained_a_tree_retains_both_owners(self):
@@ -595,6 +600,7 @@ class BuilderGuardRegressionTests(unittest.TestCase):
         self.assertEqual(open_descriptors(), before)
         for tree in (inner.case, inner.outer):
             self.assertFalse(tree.root.exists())
+            assert isinstance(tree.unresolved, VerificationError)
             self.assertEqual(tree.unresolved.code, "command_timeout")
             self.assertIn(f"{tree.label} retained (command_timeout)", stderr.getvalue())
 
@@ -646,6 +652,7 @@ class RetryLoopReuseRegressionTests(unittest.TestCase):
         self.assertEqual(self.launches, [])
         self.assertFalse(result.wasSuccessful())
         first = tree.unresolved
+        assert isinstance(first, VerificationError)
         self.assertEqual((first.code, first.stage), ("command_timeout", "fixture-cli"))
         self.assertIs(inner.case.unresolved, first)
         return fixture, inner.case.root

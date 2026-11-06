@@ -5,7 +5,7 @@ import { assertNoSymlinkComponents, existingPath } from "./filesystem.mjs";
 import { countRoutingEvents, createRoutingPlan, routingPath, validateHookConfig } from "./routing-rules.mjs";
 import { targetFor } from "./selection.mjs";
 
-export async function prepareRouting(selected, action, { environment, platform, sourceDirectory }) {
+export async function prepareRouting(selected, action, { environment, platform }) {
   const plans = [];
   for (const name of new Set(selected.harnessNames)) {
     const path = routingPath(name, {
@@ -55,85 +55,118 @@ export async function prepareRouting(selected, action, { environment, platform, 
   return plans;
 }
 
-async function replaceRoutingConfig(plan, before, after) {
-  await assertNoSymlinkComponents(plan.path);
-  await mkdir(dirname(plan.path), { recursive: true });
+const routingFileOperations = Object.freeze({ open, mkdir, readFile, rename, unlink, existingPath, assertNoSymlinkComponents });
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function combinedFailure(failures) {
+  if (failures.length === 1) return failures[0];
+  return new AggregateError(failures, failures.map(errorMessage).join("; "), { cause: failures[0] });
+}
+
+async function writeAndClose(file, contents) {
+  const failures = [];
+  try {
+    await file.writeFile(contents);
+    await file.sync();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await file.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length) throw combinedFailure(failures);
+}
+
+async function cleanupReplacement(lock, temporary, lockPath, operations) {
+  const failures = [];
+  try {
+    await operations.unlink(temporary);
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) failures.push(error);
+  }
+  try {
+    await lock.close();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await operations.unlink(lockPath);
+  } catch (error) {
+    failures.push(error);
+  }
+  return failures;
+}
+
+async function replaceRoutingConfig(plan, before, after, operations, onCommitted) {
+  await operations.assertNoSymlinkComponents(plan.path);
+  await operations.mkdir(dirname(plan.path), { recursive: true });
   const lockPath = plan.path + ".delegation-layer.lock";
   let lock;
   try {
-    lock = await open(lockPath, "wx", 0o600);
+    lock = await operations.open(lockPath, "wx", 0o600);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      throw new Error(`routing configuration is locked: ${lockPath}; verify no other installer is running before removing a stale lock`);
+      throw new Error(`routing configuration is locked: ${lockPath}; verify no other installer is running before removing a stale lock`, { cause: error });
     }
     throw error;
   }
   const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const temporary = plan.path + `.delegation-layer-stage-${suffix}`;
+  const failures = [];
   try {
-    const stat = await existingPath(plan.path);
+    const stat = await operations.existingPath(plan.path);
     if (stat && (!stat.isFile() || stat.isSymbolicLink())) {
       throw new Error(`routing configuration changed during installation: ${plan.path}`);
     }
-    const current = stat ? await readFile(plan.path, "utf8") : null;
+    const current = stat ? await operations.readFile(plan.path, "utf8") : null;
     if (current !== before) throw new Error(`routing configuration changed during installation; retry: ${plan.path}`);
     if (before !== null) {
-      const backup = await open(plan.path + `.delegation-layer-backup-${suffix}`, "wx", 0o600);
-      try {
-        await backup.writeFile(before);
-        await backup.sync();
-      } finally {
-        await backup.close();
-      }
+      const backup = await operations.open(plan.path + `.delegation-layer-backup-${suffix}`, "wx", 0o600);
+      await writeAndClose(backup, before);
     }
     if (after === null) {
-      await unlink(plan.path);
-      return;
+      await operations.unlink(plan.path);
+    } else {
+      const staged = await operations.open(temporary, "wx", plan.mode);
+      await writeAndClose(staged, after);
+      await operations.rename(temporary, plan.path);
     }
-    const staged = await open(temporary, "wx", plan.mode);
-    try {
-      await staged.writeFile(after);
-      await staged.sync();
-    } finally {
-      await staged.close();
-    }
-    await rename(temporary, plan.path);
-  } finally {
-    try {
-      try {
-        await unlink(temporary);
-      } catch (error) {
-        if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
-      }
-    } finally {
-      try {
-        await lock.close();
-      } finally {
-        await unlink(lockPath);
-      }
-    }
+    onCommitted?.();
+  } catch (error) {
+    failures.push(error);
   }
+  failures.push(...await cleanupReplacement(lock, temporary, lockPath, operations));
+  if (failures.length) throw combinedFailure(failures);
 }
 
-export async function applyRouting(plans) {
+export async function applyRouting(plans, fileOperations = {}) {
+  const operations = { ...routingFileOperations, ...fileOperations };
+  // This transaction owns committed mutations, including commits followed by a cleanup failure.
   const applied = [];
   try {
     for (const plan of plans) {
       if (!plan.path || plan.before === plan.after) continue;
-      await replaceRoutingConfig(plan, plan.before, plan.after);
-      applied.push(plan);
+      await replaceRoutingConfig(plan, plan.before, plan.after, operations, () => applied.push(plan));
     }
   } catch (error) {
     const failures = [];
     for (const plan of applied.reverse()) {
       try {
-        await replaceRoutingConfig(plan, plan.after, plan.before);
+        await replaceRoutingConfig(plan, plan.after, plan.before, operations);
       } catch (rollbackError) {
-        failures.push(rollbackError instanceof Error ? rollbackError.message : String(rollbackError));
+        failures.push(rollbackError);
       }
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${reason}${failures.length ? `; rollback needs attention: ${failures.join("; ")}` : "; earlier routing changes rolled back"}`);
+    const reason = errorMessage(error);
+    if (failures.length) {
+      throw new AggregateError([error, ...failures], `${reason}; rollback needs attention: ${failures.map(errorMessage).join("; ")}`, { cause: error });
+    }
+    throw new Error(`${reason}; earlier routing changes rolled back`, { cause: error });
   }
 }
 

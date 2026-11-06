@@ -6,6 +6,7 @@ built in memory. No network, file or process is used.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import io
 from pathlib import Path
 import sys
@@ -26,7 +27,7 @@ RUN_ID = 42
 class FakeClient:
     """Answers the listing pages in order and records each endpoint with its reply bound."""
 
-    def __init__(self, pages: list[object]):
+    def __init__(self, pages: Sequence[object]):
         self.pages = pages
         self.requests: list[tuple[str, int]] = []
 
@@ -56,11 +57,11 @@ def plain_zip(members: dict[str, bytes], *, mode: int = 0o100644,
 
 
 class ListingTests(unittest.TestCase):
-    def listing(self, pages: list[object]) -> tuple[list[dict[str, object]], FakeClient]:
+    def listing(self, pages: Sequence[object]) -> tuple[list[dict[str, object]], FakeClient]:
         client = FakeClient(pages)
         return artifacts.list_run_artifacts(client, REPOSITORY, RUN_ID, reply_limit=1234), client
 
-    def assertRefused(self, pages: list[object], code: str) -> None:
+    def assertRefused(self, pages: Sequence[object], code: str) -> None:
         with self.assertRaises(VerificationError) as caught:
             self.listing(pages)
         self.assertEqual((caught.exception.code, caught.exception.stage), (code, artifacts.STAGE))

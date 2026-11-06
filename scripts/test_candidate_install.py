@@ -57,6 +57,7 @@ class ShellInstallTests(support.CandidateCase):
         facts = self.verify(self.request(), channels=SHELL)
         self.assertTrue(self.recording.calls)
         for call in self.recording.calls:
+            assert call.cwd is not None
             self.assertFalse(call.cwd.is_relative_to(support.REPO_ROOT), call.name)
             self.assertTrue(call.cwd.is_relative_to(self.layout.root), call.name)
             self.assertNotIn(support.SECRET, json.dumps(call.env), call.name)
@@ -88,7 +89,13 @@ class ShellInstallTests(support.CandidateCase):
 
     def test_candidate_file_changed_during_install_is_refused(self):
         request = self.request()
-        self.recording.after = lambda name: request.files.checksums.write_text("tampered\n")
+        checksums = request.files.checksums
+        assert checksums is not None
+
+        def tamper(_name: str) -> None:
+            checksums.write_text("tampered\n")
+
+        self.recording.after = tamper
         self.assertRefused("candidate_file_changed", request)
 
     def test_missing_prerequisite_is_explicit_and_unused_tools_are_not_required(self):
@@ -205,6 +212,7 @@ class NpmInstallTests(support.PackedCandidateCase):
         npm_calls = [call for call in self.recording.calls if call.name.startswith("candidate-npm-")]
         self.assertEqual([call.name for call in npm_calls], ["candidate-npm-install-cli", "candidate-npm-skill"])
         for call in npm_calls:
+            assert call.cwd is not None
             self.assertIn(f"--package={self.package}", call.argv)
             self.assertEqual(call.env["npm_config_offline"], "true")
             self.assertEqual(Path(call.env["npm_config_userconfig"]).stat().st_size, 0)
@@ -243,7 +251,7 @@ class NpmInstallTests(support.PackedCandidateCase):
         request = self.request()
         wrong = tuple((name, "0" * 64 if name == "delegate" else digest) for name, digest in request.binaries)
         with self.assertRaises(VerificationError) as caught:
-            self.verify(type(request)(**{**request.__dict__, "binaries": wrong}), channels=(CHANNEL_NPM,))
+            self.verify(replace(request, binaries=wrong), channels=(CHANNEL_NPM,))
         self.assertEqual(caught.exception.code, "installed_binary_hash_mismatch")
 
     def test_missing_npm_is_explicit(self):

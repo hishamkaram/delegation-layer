@@ -76,6 +76,7 @@ class InterruptedGateTests(unittest.TestCase):
                 self.assertNotIn("completion", receipt)
                 self.assertTrue(self.workspace.is_dir())
                 self.assertPinsConsumed()
+        assert isinstance(fault, SystemExit)
         self.assertEqual(fault.code, 3)
 
     def test_a_receipt_write_fault_keeps_the_interrupt_with_an_errno_only_note(self) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,7 +25,40 @@ TASK = "b" * 32
 
 from scripts.delegate_acceptance.tasks import operations as task_operations
 from scripts.delegate_acceptance.processes import operations as process_operations
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
 from .fixtures import InspectionFixture
+
+
+class ScriptedProcesses:
+    """Only drain observations are expected; an attempted launch fails the test."""
+
+    def __init__(self, *snapshots: list[dict[str, object]]):
+        self.snapshots = snapshots
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15,
+            stdin: bytes | None = None, *, environment: Mapping[str, str] | None = None) -> TaskCommand:
+        raise AssertionError("cleanup fixture unexpectedly launched a command")
+
+    def drain(self, timeout: float = 70, exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        self.calls.append({"timeout": timeout, "exclude": tuple(exclude)})
+        return self.snapshots[min(len(self.calls) - 1, len(self.snapshots) - 1)]
+
+
+class ScriptedDaemon:
+    """Finite daemon observations, with no authority to wait on a real process."""
+
+    def __init__(self, *states: int | None):
+        self.states = iter(states)
+        self.last: int | None = None
+
+    def poll(self, deadline: float | None = None) -> object | None:
+        self.last = next(self.states, self.last)
+        return self.last
+
+    def wait(self, timeout: float = 15, expected: int | set[int] | None = 0) -> object:
+        raise AssertionError("cleanup fixture unexpectedly waited on a daemon")
 
 
 class InspectionHarnessTests(unittest.TestCase):
@@ -184,7 +218,7 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertFalse(self.fixture.ops.failure_queue_finished(status))
 
         self.fixture.ops = NativeTaskOps(
-            SimpleNamespace(), self.fixture.base / "delegate", self.fixture.runner, self.fixture.pueue,
+            self.fixture.ops.processes, self.fixture.base / "delegate", self.fixture.runner, self.fixture.pueue,
             self.fixture.state_parent, self.fixture.state, self.fixture.output,
             expected_inspection_binding_required=False)
         self.fixture.ops.bind_supervisor(self.fixture.config)
@@ -206,12 +240,11 @@ class InspectionHarnessTests(unittest.TestCase):
         write_json(ordinary / "outcome.json", outcome)
         response = {"task_id": TASK, "outcome": outcome, "payload": payload,
                     "evidence_sha256": outcome["evidence_sha256"]}
-        self.fixture.ops.queue_status = lambda _name: status
-        self.fixture.ops.collect = lambda _name, task: dict(response, task_id=task)
-
-        self.fixture.ops.replay({
-            "fresh": {"directory": ordinary, "outcome": outcome, "payload": payload},
-        }, names=("fresh",))
+        with patch.object(self.fixture.ops, "queue_status", return_value=status), \
+                patch.object(self.fixture.ops, "collect", side_effect=lambda _name, task: dict(response, task_id=task)):
+            self.fixture.ops.replay({
+                "fresh": {"directory": ordinary, "outcome": outcome, "payload": payload},
+            }, names=("fresh",))
 
     def test_fixture_binding_uses_static_definition_and_supervisor_sources(self):
         helper = self.fixture.base / "inspection-helper"
@@ -231,9 +264,11 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual(binding["helper_executable"], str(helper.resolve()))
         self.assertEqual(binding["worker_executable"], str(self.fixture.runner.resolve()))
         self.assertEqual(binding["supervisor"], supervisor)
-        self.assertEqual(binding["supervisor"]["endpoint"],
+        bound_supervisor = binding["supervisor"]
+        assert isinstance(bound_supervisor, dict)
+        self.assertEqual(bound_supervisor["endpoint"],
                          "unix:" + str((self.fixture.base / "run" / "p.sock").resolve()))
-        self.assertEqual(binding["supervisor"]["config_digest"], digest(self.fixture.config))
+        self.assertEqual(bound_supervisor["config_digest"], digest(self.fixture.config))
 
         changed_environment = dict(environment, FIXTURE="changed")
         changed = inspection_acceptance.fixture_inspection_binding(
@@ -260,6 +295,16 @@ class InspectionHarnessTests(unittest.TestCase):
         binding["resolution_cwd"] = str(self.fixture.base)
 
         provider_common._validate_supervisor_binding(binding, "legacy supervisor")
+
+    def test_malformed_resolution_os_is_an_evidence_failure(self):
+        binding = provider_common.supervisor_binding(
+            self.fixture.pueue, self.fixture.config, self.fixture.base,
+            digest(self.fixture.config), "pueue fixture")
+        for operating_system in ([], {}, None):
+            binding["resolution_os"] = operating_system
+            with self.subTest(operating_system=operating_system):
+                with self.assertRaisesRegex(AcceptanceFailure, "resolution operating system is invalid"):
+                    provider_common._validate_supervisor_binding(binding, "supervisor")
 
     def test_noneligible_inspection_facts_and_exit_must_be_empty_and_unavailable(self):
         directory = self.fixture.inspection_records(result="unavailable")
@@ -348,7 +393,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def test_queue_rejects_foreign_groups_even_without_inspection_rows(self):
         self.fixture.state.joinpath("inspections").mkdir(mode=0o700)
-        status = {
+        status: dict[str, object] = {
             "tasks": {"7": self.fixture.ordinary_row()},
             "groups": {
                 "default": {"status": "Running", "parallel_tasks": 1},
@@ -364,23 +409,35 @@ class InspectionHarnessTests(unittest.TestCase):
         shutil.rmtree(self.fixture.state / "inspections")
         self.fixture.ops.inspection_attempts.clear()
         self.fixture.ops.inspection_bindings.clear()
-        status = {
+        status: dict[str, object] = {
             "tasks": {"7": self.fixture.ordinary_row()},
             "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
         }
         self.assertTrue(self.fixture.ops.failure_queue_finished(status))
 
         wrong_id = deepcopy(status)
-        wrong_id["tasks"]["7"]["id"] = 8
+        wrong_tasks = wrong_id["tasks"]
+        assert isinstance(wrong_tasks, dict)
+        wrong_row = wrong_tasks["7"]
+        assert isinstance(wrong_row, dict)
+        wrong_row["id"] = 8
         self.assertFalse(self.fixture.ops.failure_queue_finished(wrong_id))
 
         foreign_group = deepcopy(status)
-        foreign_group["tasks"]["7"]["group"] = "foreign"
+        foreign_tasks = foreign_group["tasks"]
+        assert isinstance(foreign_tasks, dict)
+        foreign_row = foreign_tasks["7"]
+        assert isinstance(foreign_row, dict)
+        foreign_row["group"] = "foreign"
         self.assertFalse(self.fixture.ops.failure_queue_finished(foreign_group))
 
         duplicate_label = deepcopy(status)
-        duplicate_label["tasks"]["8"] = deepcopy(duplicate_label["tasks"]["7"])
-        duplicate_label["tasks"]["8"]["id"] = 8
+        duplicate_tasks = duplicate_label["tasks"]
+        assert isinstance(duplicate_tasks, dict)
+        duplicate_row = deepcopy(duplicate_tasks["7"])
+        assert isinstance(duplicate_row, dict)
+        duplicate_tasks["8"] = duplicate_row
+        duplicate_row["id"] = 8
         self.assertFalse(self.fixture.ops.failure_queue_finished(duplicate_label))
 
     def test_status_observation_requires_successful_natural_exit_and_strict_schema(self):
@@ -446,9 +503,8 @@ class InspectionHarnessTests(unittest.TestCase):
     def test_replay_preserves_inspection_journal_and_queue(self):
         self.fixture.inspection_records()
         status = self.fixture.status(self.fixture.inspection_row())
-        self.fixture.ops.queue_status = lambda _name: deepcopy(status)
-
-        self.fixture.ops.replay({}, names=())
+        with patch.object(self.fixture.ops, "queue_status", side_effect=lambda _name: deepcopy(status)):
+            self.fixture.ops.replay({}, names=())
 
         self.assertEqual(self.fixture.ops.queue_before_replay, {
             "tasks": status["tasks"], "groups": status["groups"]})
@@ -460,7 +516,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
         self.assertTrue(self.fixture.ops.failure_queue_finished(failed))
 
-        empty = {"tasks": {}, "groups": {}}
+        empty: dict[str, object] = {"tasks": {}, "groups": {}}
         self.assertFalse(self.fixture.ops.failure_queue_finished(empty))
 
         lost_response = deepcopy(failed)
@@ -515,7 +571,7 @@ class InspectionHarnessTests(unittest.TestCase):
         shutil.rmtree(self.fixture.state / "inspections")
         self.fixture.ops.inspection_attempts.clear()
         self.fixture.ops.inspection_bindings.clear()
-        status = {
+        status: dict[str, object] = {
             "tasks": {"7": self.fixture.ordinary_row()},
             "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
         }
@@ -567,28 +623,26 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertFalse(self.fixture.ops.failure_queue_finished(status))
 
     def test_retain_failure_ownership_waits_for_callers_then_observes_shutdown(self):
-        pending = [{"pid": 17, "argv": ["caller"], "directory": "/owned/caller"}]
-        drain_calls = []
-        self.fixture.ops.processes = SimpleNamespace(
-            drain=lambda **kwargs: drain_calls.append(kwargs) or
-            (pending if len(drain_calls) == 1 else []))
-        daemon = SimpleNamespace(poll=lambda: None)
+        pending: list[dict[str, object]] = [{"pid": 17, "argv": ["caller"], "directory": "/owned/caller"}]
+        processes = ScriptedProcesses(pending, [])
+        self.fixture.ops.processes = processes
+        daemon = ScriptedDaemon(None)
         self.fixture.ops.daemon = daemon
         shutdown_calls = []
-        self.fixture.ops.safe_failure_shutdown = lambda: shutdown_calls.append(True) or True
-
-        with patch.object(task_operations.time, "sleep") as sleep:
+        with patch.object(self.fixture.ops, "safe_failure_shutdown",
+                          side_effect=lambda: shutdown_calls.append(True) or True), \
+                patch.object(task_operations.time, "sleep") as sleep:
             self.assertTrue(self.fixture.ops.retain_failure_ownership())
 
-        self.assertEqual(len(drain_calls), 2)
-        self.assertEqual(drain_calls[0]["exclude"], (daemon,))
+        self.assertEqual(len(processes.calls), 2)
+        self.assertEqual(processes.calls[0]["exclude"], (daemon,))
         self.assertEqual(shutdown_calls, [True])
         sleep.assert_called_once_with(0.25)
 
     def test_retain_failure_ownership_stops_at_finite_observation_deadline(self):
-        pending = [{"pid": 17, "argv": ["caller"], "directory": "/owned/caller"}]
-        self.fixture.ops.processes = SimpleNamespace(drain=lambda **_kwargs: pending)
-        self.fixture.ops.daemon = SimpleNamespace(poll=lambda: None)
+        pending: list[dict[str, object]] = [{"pid": 17, "argv": ["caller"], "directory": "/owned/caller"}]
+        self.fixture.ops.processes = ScriptedProcesses(pending)
+        self.fixture.ops.daemon = ScriptedDaemon(None)
 
         with patch.object(task_operations, "failure_cleanup_deadline", return_value=10.0), \
                 patch.object(task_operations, "wait_for_failure_cleanup", return_value=False):
@@ -600,12 +654,10 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual(receipt["signals_sent"], 0)
 
     def test_retain_failure_ownership_does_not_pass_unknown_queue(self):
-        self.fixture.ops.processes = SimpleNamespace(drain=lambda **_kwargs: [])
-        states = iter((None, 0))
-        self.fixture.ops.daemon = SimpleNamespace(poll=lambda: next(states))
-        self.fixture.ops.safe_failure_shutdown = lambda: False
-
-        with patch.object(task_operations.time, "sleep") as sleep, \
+        self.fixture.ops.processes = ScriptedProcesses([])
+        self.fixture.ops.daemon = ScriptedDaemon(None, 0)
+        with patch.object(self.fixture.ops, "safe_failure_shutdown", return_value=False), \
+                patch.object(task_operations.time, "sleep") as sleep, \
                 patch.object(task_operations.time, "monotonic",
                       side_effect=(10.0, 10.1, 10.2, 10.3, 10.4)):
             self.assertFalse(self.fixture.ops.retain_failure_ownership())
@@ -638,13 +690,12 @@ class InspectionHarnessTests(unittest.TestCase):
 
         processes = supervisor_common.Processes(self.fixture.base / "processes", {"PATH": "/usr/bin"})
         track_directory_pins(self, (processes.capture_root,))
-        daemon = SimpleNamespace(poll=lambda: None)
+        daemon = ScriptedDaemon(None)
         ops = NativeTaskOps(processes, self.fixture.base / "delegate", self.fixture.runner, self.fixture.pueue,
                             self.fixture.state_parent, self.fixture.state, self.fixture.output)
         ops.bind_supervisor(self.fixture.config, daemon)
-        ops.safe_failure_shutdown = lambda: True
-
-        with patch.object(process_operations.subprocess, "Popen", FakePopen), \
+        with patch.object(ops, "safe_failure_shutdown", return_value=True), \
+                patch.object(process_operations.subprocess, "Popen", FakePopen), \
                 patch.object(process_operations, "write_json", side_effect=fail_first_completion):
             process = processes.start("caller", ["/bin/sh"], self.fixture.base)
             process.process.returncode = 0

@@ -130,7 +130,10 @@ class ReceiptFinalizer:
         }
         encoded = json.dumps(_compact(payload), sort_keys=True, separators=(",", ":")).encode()
         require(len(encoded) <= MAX_RECEIPT_BYTES, "compact receipt exceeds bound")
-        return _compact(payload)
+        compacted = _compact(payload)
+        if not isinstance(compacted, dict):
+            raise RuntimeError("compact receipt payload is not an object")
+        return compacted
 
     def finalize(self, verdict: str, reason: str, cleanup: dict[str, object]) -> None:
         write_json(self.output, self._payload(verdict, reason, cleanup), replace=True)

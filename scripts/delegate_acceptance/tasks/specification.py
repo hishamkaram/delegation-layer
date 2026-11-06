@@ -13,6 +13,7 @@ from scripts.delegate_acceptance.evidence.validation import (
     require,
 )
 from scripts.delegate_acceptance.paths.policy import historical_clean_absolute_path
+from scripts.delegate_acceptance.workspaces.data import WorkspaceBinding
 
 
 _TASK_REQUIRED_KEYS = {
@@ -40,20 +41,23 @@ _MAX_INT64 = (1 << 63) - 1
 _MAX_UINT64 = (1 << 64) - 1
 
 
-def _canonical_workspace_binding(value: object, label: str) -> dict[str, object]:
+def _canonical_workspace_binding(value: object, label: str) -> WorkspaceBinding:
     """Validate and order the optional TaskRecord workspace binding."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _WORKSPACE_BINDING_KEYS, label=label)
     binding_id = value.get("id")
     reservation = value.get("reservation")
     request_sha256 = value.get("request_sha256")
     budget_nanos = value.get("budget_nanos")
-    require(_task_identity(binding_id), f"{label} id is invalid")
-    require(type(reservation) is int and 0 < reservation <= _MAX_UINT64,
-            f"{label} reservation is invalid")
-    require(_hex_digest(request_sha256), f"{label} request_sha256 is invalid")
-    require(type(budget_nanos) is int and 0 < budget_nanos <= _MAX_INT64,
-            f"{label} budget_nanos is invalid")
+    if not _task_identity(binding_id):
+        raise AcceptanceFailure(f"{label} id is invalid")
+    if type(reservation) is not int or not 0 < reservation <= _MAX_UINT64:
+        raise AcceptanceFailure(f"{label} reservation is invalid")
+    if not _hex_digest(request_sha256):
+        raise AcceptanceFailure(f"{label} request_sha256 is invalid")
+    if type(budget_nanos) is not int or not 0 < budget_nanos <= _MAX_INT64:
+        raise AcceptanceFailure(f"{label} budget_nanos is invalid")
     return {
         "id": binding_id,
         "reservation": reservation,
@@ -66,7 +70,8 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
     """Marshal a TaskRecord in the field order and escaping used by Go."""
     _exact_keys(value, _TASK_REQUIRED_KEYS, _TASK_OPTIONAL_KEYS, "inspection task")
     config = value["requested_config"]
-    require(isinstance(config, dict), "inspection task requested_config is not an object")
+    if not isinstance(config, dict):
+        raise AcceptanceFailure("inspection task requested_config is not an object")
     _exact_keys(config, set(), _TASK_CONFIG_KEYS, "inspection task requested_config")
     canonical_config: dict[str, object] = {}
     if config.get("interactive") is True:
@@ -81,7 +86,8 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
     prior = value.get("prior_session")
     canonical_prior = None
     if prior is not None:
-        require(isinstance(prior, dict), "inspection task prior_session is not an object")
+        if not isinstance(prior, dict):
+            raise AcceptanceFailure("inspection task prior_session is not an object")
         _exact_keys(prior, _PRIOR_SESSION_KEYS, label="inspection task prior_session")
         require(all(isinstance(prior[key], str) and prior[key] for key in _PRIOR_SESSION_KEYS),
                 "inspection task prior_session has invalid fields")
@@ -113,7 +119,8 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
 
 def _validate_task_record(value: object, root: str, task: str, label: str) -> str:
     """Check the bounded TaskRecord shape and return its canonical digest."""
-    require(isinstance(value, dict), f"{label} is not a task record")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not a task record")
     _exact_keys(value, _TASK_REQUIRED_KEYS, _TASK_OPTIONAL_KEYS, label)
     require(type(value.get("schema_version")) is int and value["schema_version"] == 1,
             f"{label} schema mismatch")
@@ -133,7 +140,8 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
             f"{label} brief_length is invalid")
     require(_hex_digest(value.get("brief_sha256")), f"{label} brief digest is invalid")
     config = value.get("requested_config")
-    require(isinstance(config, dict), f"{label} requested_config is invalid")
+    if not isinstance(config, dict):
+        raise AcceptanceFailure(f"{label} requested_config is invalid")
     _exact_keys(config, set(), _TASK_CONFIG_KEYS, f"{label} requested_config")
     for key, item in config.items():
         if key == "interactive":
@@ -145,7 +153,8 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
                     f"{label} requested_config has invalid fields")
     prior = value.get("prior_session")
     if prior is not None:
-        require(isinstance(prior, dict), f"{label} prior_session is invalid")
+        if not isinstance(prior, dict):
+            raise AcceptanceFailure(f"{label} prior_session is invalid")
         _exact_keys(prior, _PRIOR_SESSION_KEYS, label=f"{label} prior_session")
         require(all(isinstance(item, str) and item for item in prior.values()),
                 f"{label} prior_session has invalid fields")
@@ -156,13 +165,15 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
 
 def _canonical_review_target(value: object, label: str) -> dict[str, str]:
     """Validate and normalize the persisted ReviewTarget JSON shape."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, {"kind"}, {"value"}, label)
     kind = value.get("kind")
     target_value = value.get("value", "")
-    require(isinstance(kind, str) and kind in {"uncommitted", "base", "commit"},
-            f"{label} kind is invalid")
-    require(isinstance(target_value, str), f"{label} value is invalid")
+    if not isinstance(kind, str) or kind not in {"uncommitted", "base", "commit"}:
+        raise AcceptanceFailure(f"{label} kind is invalid")
+    if not isinstance(target_value, str):
+        raise AcceptanceFailure(f"{label} value is invalid")
     if kind == "uncommitted":
         require(target_value == "", f"{label} uncommitted target has a value")
         return {"kind": kind}

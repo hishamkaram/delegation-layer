@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from scripts.acceptance_tests.record_fixtures import object_at
 from unittest import mock
 
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
@@ -15,7 +16,7 @@ import scripts.delegate_acceptance.workspaces.scenarios.checkpoints as checkpoin
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.processes.operations import Processes
-from scripts.delegate_acceptance.workspaces.scenarios import checkpoint_policy as policy
+from scripts.delegate_acceptance.workspaces.scenarios import checkpoint_policy as policy, source as scenario_source
 from scripts.delegate_acceptance.workspaces.scenarios.context import WorkspaceContext
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
 from scripts.delegate_acceptance.workspaces.scenarios.lineage import CheckoutFacts
@@ -47,6 +48,16 @@ def _current(state="checkpointed", usable=True, **extra):
                "snapshot_ref": REF, "commit_oid": COMMIT, "usable": usable}
     current.update(extra)
     return current
+
+
+class CommandObservationTests(unittest.TestCase):
+    def test_git_requires_an_actual_observed_integer_exit(self):
+        for result in (None, {"exit_code": None}, {"exit_code": True}):
+            process = mock.Mock(result=result)
+            with self.subTest(result=result), mock.patch.object(scenario_source, "_git_process", return_value=process):
+                with self.assertRaisesRegex(RuntimeError, "git command omitted its observed exit: fixture"):
+                    scenario_source._git(mock.Mock(spec=WorkspaceContext), [], Path("/source"), label="fixture")
+            process.output.assert_not_called()
 
 
 class CreationAndRemovalAcknowledgementTests(unittest.TestCase):
@@ -108,6 +119,8 @@ class StatusObservationTests(unittest.TestCase):
         observed = policy.classify_status(
             0, _response({"id": CHECKPOINT, "current": history, "next_action": policy.STOP_AND_REPORT}),
             ROOT_ID, CHECKPOINT)
+        if observed is None:
+            self.fail("successful checkpoint observation is missing")
         self.assertEqual(observed["state"], "unavailable")
         with self.assertRaisesRegex(AcceptanceFailure, "not a usable"):
             policy.qualified_checkpoint(observed, root_id=ROOT_ID, selection="ordinary", cwd="/source")
@@ -280,6 +293,8 @@ class RealGitObserverTests(unittest.TestCase):
         self.head = self.git(["rev-parse", "HEAD"]).decode().strip()
 
     def git(self, arguments):
+        if self.processes is None:
+            self.fail("fixture processes are not initialized")
         return self.processes.run("git", [_git_executable(), "-C", str(self.repository), *arguments],
                                   self.repository, stdin=b"").output()
 
@@ -291,6 +306,8 @@ class RealGitObserverTests(unittest.TestCase):
         self.git(["symbolic-ref", REF, "refs/heads/missing"])
         with self.assertRaisesRegex(AcceptanceFailure, "symbolic"):
             checkpoints._owned_ref(self.context, self.repository, REF, label="dangling")
+        if self.processes is None:
+            self.fail("fixture processes are not initialized")
         self.assertEqual(self.processes.pending(), [])
 
     def test_checkout_observer_never_writes_the_real_index(self):
@@ -402,7 +419,7 @@ class ObserverCleanupControlTests(unittest.TestCase):
 class ScenarioOrderingTests(unittest.TestCase):
     def setUp(self):
         self.context = mock.Mock(spec=WorkspaceContext)
-        self.record = {"commands": []}
+        self.record: dict[str, object] = {"commands": []}
         patcher = mock.patch.object(checkpoints, "_root_id", return_value=ROOT_ID)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -495,9 +512,9 @@ class CheckpointApplicationTests(unittest.TestCase):
             untouched.assert_not_called()
             finalizer.finalize("failed", "fork failed", {"authorized": False})
             receipt = json.loads((Path(temporary) / "receipt.json").read_text())
-        self.assertEqual((receipt["claim_class"], receipt["details"]["scenario"]),
+        self.assertEqual((receipt["claim_class"], object_at(receipt, "details")["scenario"]),
                          ("native-fixture-only", "checkpoint"))
-        self.assertEqual(receipt["details"]["checkpoint"]["current_stage"], "ordinary-fork")
+        self.assertEqual(object_at(receipt, "details", "checkpoint")["current_stage"], "ordinary-fork")
 
     def test_passed_run_still_proves_the_clean_source_untouched(self):
         finalizer = ReceiptFinalizer(Path("/unused"), [], {})

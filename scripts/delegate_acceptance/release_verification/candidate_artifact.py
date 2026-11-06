@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import re
 import stat
-from typing import BinaryIO
+from typing import BinaryIO, IO
 import zipfile
 import zlib
 
@@ -341,14 +341,14 @@ def _plain_member(info: zipfile.ZipInfo) -> bool:
             and info.compress_type in _SUPPORTED_COMPRESSION)
 
 
-def _open_member(bundle: zipfile.ZipFile, info: zipfile.ZipInfo) -> zipfile.ZipExtFile:
+def _open_member(bundle: zipfile.ZipFile, info: zipfile.ZipInfo) -> IO[bytes]:
     try:
         return bundle.open(info)
     except _ZIP_ERRORS as error:
         raise VerificationError("candidate_zip_invalid", STAGE) from error
 
 
-def _read_chunk(member: zipfile.ZipExtFile) -> bytes:
+def _read_chunk(member: IO[bytes]) -> bytes:
     """Read at most one chunk; the standard reader checks the CRC when the member ends."""
     try:
         return member.read(_MEMBER_CHUNK)

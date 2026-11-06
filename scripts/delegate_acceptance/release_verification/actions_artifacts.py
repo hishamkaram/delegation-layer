@@ -19,7 +19,13 @@ import zipfile
 import zlib
 
 from .contract import VerificationError
-from .github import GitHubClient
+from typing import Protocol
+
+
+class ArtifactClient(Protocol):
+    """The listing consumes bounded JSON; transport ownership stays with its caller."""
+
+    def json(self, endpoint: str, *, limit: int) -> object: ...
 
 
 STAGE = "actions-artifacts"
@@ -52,7 +58,7 @@ def _record(value: object) -> dict[str, object]:
     return value
 
 
-def list_run_artifacts(client: GitHubClient, repository: str, run_id: int, *,
+def list_run_artifacts(client: ArtifactClient, repository: str, run_id: int, *,
                        reply_limit: int) -> list[dict[str, object]]:
     """Every artifact row of the run; an inconsistent, duplicated or unfinished listing refuses."""
     rows: list[dict[str, object]] = []

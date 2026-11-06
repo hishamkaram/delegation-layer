@@ -147,7 +147,9 @@ class SupplementalFixture:
         self.pi_control.mkdir()
         tasks = self.task_ids(("fresh", "resume", "session_miss"))
         closure = lifetime_closure_source(tasks)
-        for fact in closure["ordinary"]["tasks"].values():
+        ordinary = closure["ordinary"]
+        assert isinstance(ordinary, dict)
+        for fact in ordinary["tasks"].values():
             fact["launch_count"] = PI_GUARDIAN_LAUNCHES
         _write(self.pi_control / "success.json", {
             "gate": PI_SESSION_MISS_GATE, "status": "passed", "provider": "pi:json",
@@ -169,7 +171,7 @@ class SupplementalFixture:
         return tasks
 
     def validate(self, receipt: Path, revision: str = REVISION, *,
-                 observed: tuple[str, str, bool] = (REVISION, FINGERPRINT, True)) -> dict[str, object]:
+                 observed: tuple[str, str, bool] = (REVISION, FINGERPRINT, True)) -> supplemental.SupplementalSummary:
         # The Git observation is the I/O owner; the fixture fixes what it reports.
         with mock.patch.object(supplemental, "observe_harness", return_value=observed) as observe:
             summary = supplemental.validate_supplemental(
@@ -239,7 +241,9 @@ class SupplementalValidationTests(unittest.TestCase):
         self.assertEqual(bound["source_receipt_sha256"], source_sha256)
         self.assertEqual(bound["source_proof"]["source_receipt_sha256"], source_sha256)
         self.assertEqual(bound["continue_attempt_sha256"], attempt_sha256)
-        self.assertEqual(bound["source_proof"]["binary_identities"]["task_ids"], sorted(bound["tasks"].values()))
+        binaries = bound["source_proof"]["binary_identities"]
+        assert isinstance(binaries, dict)
+        self.assertEqual(binaries["task_ids"], sorted(bound["tasks"].values()))
         self.assertNotIn("receipt_path", bound)
 
     def test_late_bad_pi_control_leaves_all_cases_and_a_pi_fix_succeeds(self):

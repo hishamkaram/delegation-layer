@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,7 @@ PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home(
 class BlockedFailure(AcceptanceFailure):
     """A required native authentication or prerequisite is unavailable."""
 
-def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
+def provider_runtime_roots(environment: Mapping[str, str]) -> list[Path]:
     home = Path(environment.get("HOME", str(Path.home()))).resolve(strict=False)
     roots = [Path(item) for item in ("/tmp", "/var/tmp", "/var/folders", "/dev")]
     roots.extend(home / item for item in (
@@ -48,7 +49,7 @@ def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
         roots.extend(Path(item) for item in environment.get(name, "").split(os.pathsep) if item)
     return sorted({root.resolve(strict=False) for root in roots})
 
-def reject_runtime_roots(path: Path, label: str, environment: dict[str, str]) -> None:
+def reject_runtime_roots(path: Path, label: str, environment: Mapping[str, str]) -> None:
     resolved = path.resolve(strict=False)
     for root in provider_runtime_roots(environment):
         if resolved == root or root in resolved.parents:
@@ -85,7 +86,8 @@ def resolve_executable(value: str | None, default: Path, label: str) -> Path:
 
 def require_discovery(name: str, selected: Path) -> None:
     discovered = shutil.which(name)
-    require(discovered is not None, f"{name} is not discoverable in the inherited PATH")
+    if discovered is None:
+        raise AcceptanceFailure(f"{name} is not discoverable in the inherited PATH")
     require(Path(discovered).resolve() == selected,
             f"{name} discovery does not match selected executable; PATH shadowing is forbidden")
 

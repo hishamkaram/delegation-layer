@@ -14,9 +14,11 @@ _TIMESTAMP_PATTERN = re.compile(
 
 def _canonical_timestamp(value: object, label: str) -> tuple[datetime, int]:
     """Parse the canonical UTC RFC3339Nano form used by Go records."""
-    require(isinstance(value, str), f"{label} is not a timestamp")
+    if not isinstance(value, str):
+        raise AcceptanceFailure(f"{label} is not a timestamp")
     match = _TIMESTAMP_PATTERN.fullmatch(value)
-    require(match is not None, f"{label} is not canonical UTC RFC3339Nano")
+    if match is None:
+        raise AcceptanceFailure(f"{label} is not canonical UTC RFC3339Nano")
     fraction = match.group("fraction") or ""
     # RFC3339Nano omits insignificant trailing zeroes in a fractional part.
     require(not fraction or not fraction.endswith("0"),

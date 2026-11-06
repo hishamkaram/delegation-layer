@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.resources import DirectoryPinOwner
+from scripts.acceptance_tests.private_cli.fixtures import ready_path
 from scripts.delegate_acceptance.private_cli import application, handoff as handoff_impl
 from scripts.delegate_acceptance.private_cli import fixture_setup, scenario_entry
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
@@ -80,7 +81,7 @@ class FixtureCase(unittest.TestCase):
 class NoexecFixtureTests(FixtureCase):
     def test_default_scenarios_keep_state_under_the_acceptance_root_without_a_temporary_override(self):
         fixture, probe = self.prepare(EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         self.assertEqual(fixture.state, base / "state")
         self.assertEqual(self.lifetime.private_config, base / "state" / ".supervisor" / "pueue.yml")
         self.assertNotIn("TMPDIR", self.lifetime.env)
@@ -95,7 +96,7 @@ class NoexecFixtureTests(FixtureCase):
 
     def test_noexec_scenario_puts_only_the_state_root_in_the_caller_parent(self):
         fixture, probe = self.prepare(EXTERNAL_NOEXEC_STATE_SCENARIO, self.parent)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         container = self.parent / base.name
         self.assertEqual(fixture.state, container / "state")
         self.assertEqual(sorted(entry.name for entry in container.iterdir()), ["state"])
@@ -103,6 +104,7 @@ class NoexecFixtureTests(FixtureCase):
         self.assertEqual(self.lifetime.private_config, container / "state" / ".supervisor" / "pueue.yml")
         for tool in (fixture.workspace, fixture.provider_bin, fixture.waiter_directory, self.lifetime.old_install,
                      self.lifetime.old_libexec, self.lifetime.upgraded_libexec, self.lifetime.gate):
+            tool = ready_path(tool)
             self.assertTrue(tool.is_relative_to(base))
             self.assertFalse(tool.is_relative_to(container))
         self.assertEqual(self.lifetime.env["TMPDIR"], str(base / "tmp"))
@@ -122,7 +124,7 @@ class NoexecFixtureTests(FixtureCase):
 
     def test_success_cleanup_removes_only_the_container_and_acceptance_root(self):
         self.prepare(EXTERNAL_NOEXEC_STATE_SCENARIO, self.parent)
-        base = self.lifetime.base
+        base = ready_path(self.lifetime.base)
         container = self.parent / base.name
         success, root_cleanup = finish_root_cleanup([], None, self.lifetime, True)
         self.assertTrue(success)
@@ -134,7 +136,7 @@ class NoexecFixtureTests(FixtureCase):
 
     def test_a_later_failure_retains_the_named_container_and_never_touches_the_caller_parent(self):
         self.prepare(EXTERNAL_NOEXEC_STATE_SCENARIO, self.parent)
-        container = self.parent / self.lifetime.base.name
+        container = self.parent / ready_path(self.lifetime.base).name
         (container / "state" / "evidence.txt").write_text("diagnostic\n")
         success, root_cleanup = finish_root_cleanup([], RuntimeError("later failure"), self.lifetime, False)
         self.assertFalse(success)
@@ -150,20 +152,20 @@ class NoexecFixtureTests(FixtureCase):
         with self.assertRaises(AcceptanceBlocked) as blocked:
             self.prepare(EXTERNAL_NOEXEC_STATE_SCENARIO, self.parent, probe)
         self.assertEqual(blocked.exception.code, "noexec-state-parent-executable")
-        container = self.parent / self.lifetime.base.name
+        container = self.parent / ready_path(self.lifetime.base).name
         self.assertTrue(container.is_dir())
         self.assertEqual(self.receipt.details["noexec_state"], {"state_container": str(container)})
         success, root_cleanup = finish_root_cleanup([], blocked.exception, self.lifetime, False)
         self.assertFalse(success)
         self.assertEqual(root_cleanup, {"status": "retained", "verified": True})
         self.assertTrue(container.is_dir())
-        self.assertTrue(self.lifetime.base.is_dir())
+        self.assertTrue(ready_path(self.lifetime.base).is_dir())
 
     def test_a_missing_parent_blocks_before_creating_anything(self):
         with self.assertRaises(AcceptanceBlocked) as blocked:
             self.prepare(EXTERNAL_NOEXEC_STATE_SCENARIO, self.root / "absent")
         self.assertEqual(blocked.exception.code, "noexec-state-parent-unavailable")
-        self.assertFalse((self.lifetime.base / "tmp").exists())
+        self.assertFalse((ready_path(self.lifetime.base) / "tmp").exists())
         self.assertEqual(list(self.parent.iterdir()), [self.sentinel])
 
 
@@ -190,7 +192,7 @@ class NoexecScenarioEntryTests(FixtureCase):
         self.assertEqual(inputs["state"], fixture.state)
         self.assertEqual((inputs["case_label"], inputs["handoff_action"]),
                          (EXTERNAL_NOEXEC_STATE_SCENARIO, EXTERNAL_NOEXEC_STATE_SCENARIO))
-        self.assertEqual(inputs["env"]["TMPDIR"], str(self.lifetime.base / "tmp"))
+        self.assertEqual(inputs["env"]["TMPDIR"], str(ready_path(self.lifetime.base) / "tmp"))
         self.assertEqual(inputs["private_config"], self.lifetime.private_config)
         self.assertTrue((self.root / "responses" / ("external-handoff-" + EXTERNAL_NOEXEC_STATE_SCENARIO)).is_dir())
         self.assertEqual(self.receipt.current_phase, "external_noexec_state")

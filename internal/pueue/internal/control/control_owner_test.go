@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue/protocol"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,8 +29,10 @@ func TestMain(m *testing.M) {
 	if code, handled := RunControlOwnerMode(os.Args[1:]); handled {
 		os.Exit(code)
 	}
-	os.Exit(m.Run())
+	os.Exit(goroutinecheck.Run(m))
 }
+
+func TestGoroutineLeakGuard(t *testing.T) { goroutinecheck.VerifyInstalled(t) }
 
 func runControlOwnerCallerTest(args []string) int {
 	if len(args) < 4 {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from .summaries import TreeSummary
+from typing import TypeGuard
+
 from pathlib import Path
 import hashlib
 import json
@@ -124,7 +127,7 @@ def _inside(root: Path, candidate: Path) -> Path:
     return candidate
 
 
-def _tree_summary(path: Path) -> dict[str, int | bool]:
+def _tree_summary(path: Path) -> TreeSummary:
     """Inventory one private raw-evidence tree within the private budget."""
     _reject_path_components(path)
     if not path.exists() and not path.is_symlink():
@@ -212,7 +215,7 @@ def _identity_matches(path: Path, identity: object) -> bool:
     return observed == identity
 
 
-def _identity_shape(identity: object, path: Path, parent: Path) -> bool:
+def _identity_shape(identity: object, path: Path, parent: Path) -> TypeGuard[dict[str, object]]:
     return (isinstance(identity, dict)
             and identity.get("path") == str(path.absolute())
             and identity.get("parent") == str(parent.absolute())

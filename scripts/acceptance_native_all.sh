@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 artifact_bin=${DELEGATE_ACCEPTANCE_BIN_DIR:-$repo_root/bin}
 passed=0
 blocked=0
@@ -15,7 +15,7 @@ if [ -e "$aggregate_output_root" ] || [ -L "$aggregate_output_root" ]; then
 fi
 mkdir -p "$aggregate_output_root"
 chmod 700 "$aggregate_output_root"
-aggregate_output_root=$(CDPATH= cd -- "$aggregate_output_root" && pwd)
+aggregate_output_root=$(CDPATH='' cd -- "$aggregate_output_root" && pwd)
 case_root=$aggregate_output_root/cases
 matrix_path=$aggregate_output_root/case-matrix.tsv
 mkdir -p "$case_root"

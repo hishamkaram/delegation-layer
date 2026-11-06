@@ -10,14 +10,18 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
 )
 
 func TestMain(m *testing.M) {
 	if code, handled := RunCommandOwnerMode(os.Args[1:]); handled {
 		os.Exit(code)
 	}
-	os.Exit(m.Run())
+	os.Exit(goroutinecheck.Run(m))
 }
+
+func TestGoroutineLeakGuard(t *testing.T) { goroutinecheck.VerifyInstalled(t) }
 
 func TestNativeCommandExitHelper(t *testing.T) {
 	switch os.Getenv("DELEGATE_NATIVE_COMMAND_TEST") {

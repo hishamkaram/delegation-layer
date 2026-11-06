@@ -14,6 +14,7 @@ import hashlib
 import os
 from pathlib import Path
 import time
+from typing import Mapping, Sequence
 
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 from scripts.delegate_acceptance.directories.policy import require
@@ -29,7 +30,7 @@ from .context import WorkspaceContext
 from .lifecycle import SuccessfulTaskEvidence, _run_first_success
 from .lineage import REUSED_FILE, CheckoutFacts, _settle_turn, _stage, _start_held_turn, checkout_facts
 from .model import (
-    ADMISSION_COMMAND_TIMEOUT_SECONDS, FIXTURE_FILE, MAX_RESPONSE_BYTES, SUCCESS_TASK_BUDGET,
+    ADMISSION_COMMAND_TIMEOUT_SECONDS, CaptureEvidence, CheckoutSnapshot, WorkspaceTask, FIXTURE_FILE, MAX_RESPONSE_BYTES, SUCCESS_TASK_BUDGET,
     TASK_ID_RE, WAIT_SECONDS, WORKSPACE_OPERATION_BUDGET,
 )
 from .operations import (
@@ -84,7 +85,8 @@ def _checkpoint_command(
         timeout=ADMISSION_COMMAND_TIMEOUT_SECONDS, phase=label,
     )
     commands = record["commands"]
-    require(isinstance(commands, list), "checkpoint record lost its command log")
+    if not (isinstance(commands, list)):
+        raise RuntimeError("checkpoint record lost its command log")
     commands.append({"label": label, "arguments": args, "exit_code": code})
     return code, response
 
@@ -201,7 +203,7 @@ def _owned_ref(context: WorkspaceContext, repository: Path, reference: str, *, l
     )
 
 
-def _observe_checkout(context: WorkspaceContext, checkout: Path, *, label: str) -> dict[str, object]:
+def _observe_checkout(context: WorkspaceContext, checkout: Path, *, label: str) -> CheckoutSnapshot:
     """Read HEAD, the real index and worktree bytes without letting the observer write the index."""
     def git(arguments: list[str], suffix: str) -> bytes:
         return _git_ok(context, ["-C", str(checkout), *arguments], checkout, label=label + "-" + suffix)
@@ -263,10 +265,10 @@ def _creation_journal(
             "checkpoint journal is not one qualified creation without removals")
     candidate = read_json(directory / CHECKPOINT_CANDIDATE_RECORD)
     target = candidate.get("target")
-    require(str(candidate.get("commit_oid", "")).lower() == checkpoint.commit_oid and
+    if not (str(candidate.get("commit_oid", "")).lower() == checkpoint.commit_oid and
             candidate.get("snapshot_ref") == checkpoint.snapshot_ref and
-            isinstance(target, dict) and target.get("checkout_root") == str(checkout),
-            "checkpoint journal candidate differs from the public description")
+            isinstance(target, dict) and target.get("checkout_root") == str(checkout)):
+        raise RuntimeError("checkpoint journal candidate differs from the public description")
     return {"closure": closure_facts(closure), "tree_oid": candidate.get("tree_oid")}
 
 
@@ -286,7 +288,7 @@ def _prepare_dirty_source(context: WorkspaceContext) -> Path:
 
 def _create_ordinary(
     context: WorkspaceContext, record: dict[str, object],
-) -> tuple[Path, CheckpointFacts, dict[str, object]]:
+) -> tuple[Path, CheckpointFacts, CheckoutSnapshot]:
     checkout = _prepare_dirty_source(context)
     before = _observe_checkout(context, checkout, label="checkpoint-ordinary-before")
     require(before["head"] == context.source_baseline["head"] and before["status"]["bytes"] > 0,
@@ -309,8 +311,8 @@ def _create_ordinary(
 
 
 def _settle_fork(
-    context: WorkspaceContext, task: dict[str, object], checkpoint: CheckpointFacts,
-) -> tuple[CheckoutFacts, dict[str, object]]:
+    context: WorkspaceContext, task: WorkspaceTask, checkpoint: CheckpointFacts,
+) -> tuple[CheckoutFacts, CaptureEvidence]:
     status = _await_task(context, task, WAIT_SECONDS)
     response, capture = _wait_capture(context, task)
     outcome = read_json(context.state / "tasks" / str(task["task_id"]) / "outcome.json")
@@ -320,9 +322,9 @@ def _settle_fork(
     require(classification["verdict"] == "passed", str(classification))
     evidence = verify_capture_receipt(context.state, capture)
     subject = evidence["subject"]
-    require(isinstance(subject, dict) and subject.get("id") == task["task_id"] and
-            evidence["base_oid"] == checkpoint.commit_oid,
-            "fork capture is not its own task's capture over the checkpoint commit")
+    if not (isinstance(subject, dict) and subject.get("id") == task["task_id"] and
+            evidence["base_oid"] == checkpoint.commit_oid):
+        raise RuntimeError("fork capture is not its own task's capture over the checkpoint commit")
     return checkout_facts(_workspace_from(response)), evidence
 
 
@@ -345,13 +347,14 @@ def require_checkpoint_fork(
 def _fork(
     context: WorkspaceContext, checkpoint: CheckpointFacts, *, source: Path, brief: Path,
     present: dict[str, bytes], absent: frozenset[str], origin_base: str, parent: CheckoutFacts | None,
-) -> tuple[dict[str, object], CheckoutFacts, dict[str, object]]:
+) -> tuple[WorkspaceTask, CheckoutFacts, dict[str, object]]:
     task = _dispatch(context, brief, task_budget=SUCCESS_TASK_BUDGET, fresh=True,
                      source=source, base=checkpoint.commit_oid)
     _adopt_workspace_container(context, task["root_id"], task["workspace_id"])
     child, capture = _settle_fork(context, task, checkpoint)
     container = context.container_token.directory if context.container_token else None
-    require(container is not None, "managed root container was not adopted")
+    if container is None:
+        raise RuntimeError("managed root container was not adopted")
     require_checkpoint_fork(child, checkpoint, origin_base=origin_base, container=container, parent=parent)
     head = _git_ok(context, ["-C", child.path, "rev-parse", "--verify", "HEAD^{commit}"],
                    Path(child.path), label="checkpoint-fork-head").decode("ascii").strip()
@@ -365,7 +368,7 @@ def _fork(
 
 def _refuse_busy_managed(
     context: WorkspaceContext, record: dict[str, object], *, known: list[str],
-) -> tuple[SuccessfulTaskEvidence, CheckoutFacts, dict[str, object]]:
+) -> tuple[SuccessfulTaskEvidence, CheckoutFacts, WorkspaceTask]:
     """A busy managed target refuses creation without an ID; it is never retargeted through --cwd."""
     parent = _run_first_success(context)
     facts = checkout_facts(_workspace_from(parent.workspace))
@@ -386,7 +389,7 @@ def _refuse_busy_managed(
 
 def _create_managed(
     context: WorkspaceContext, record: dict[str, object], parent: SuccessfulTaskEvidence,
-    facts: CheckoutFacts, held: dict[str, object],
+    facts: CheckoutFacts, held: Mapping[str, object],
 ) -> CheckpointFacts:
     checkout = Path(facts.path)
     task_ids = (str(parent.task["task_id"]), str(held["task_id"]))
@@ -404,6 +407,9 @@ def _create_managed(
     collected = _collect_task(context, held, COLLECT_WATCH_SECONDS)
     for task_id, snapshot in snapshots.items():
         _assert_immutable_task_snapshot(context, task_id, snapshot)
+    collected_outcome = collected.get("outcome")
+    if not isinstance(collected_outcome, dict):
+        raise RuntimeError("collection omitted provider outcome")
     record["managed"] = {
         "acknowledgement": {"checkpoint_id": acknowledgement.checkpoint_id, "settled": acknowledgement.settled},
         "checkpoint": asdict(checkpoint), "checkout_before": before, "checkout_after_creation": after,
@@ -411,7 +417,7 @@ def _create_managed(
                                           tree=MANAGED_TREE),
         "journal": _creation_journal(context, checkpoint, checkout=checkout),
         "collect_after_checkpoint": {"publication": collected.get("publication"),
-                                     "verdict": (collected.get("outcome") or {}).get("verdict")},
+                                     "verdict": collected_outcome.get("verdict")},
     }
     return checkpoint
 
@@ -434,7 +440,7 @@ def _require_listing(
 
 
 def _release_origin(
-    context: WorkspaceContext, record: dict[str, object], held: dict[str, object], facts: CheckoutFacts,
+    context: WorkspaceContext, record: dict[str, object], held: Mapping[str, object], facts: CheckoutFacts,
     managed: CheckpointFacts,
 ) -> None:
     """The managed checkpoint's ref and usability survive its workspace's release and forget."""
@@ -467,7 +473,8 @@ def _remove(
             "removed checkpoint ref remains")
     creation = context.state / "workspace-operations" / checkpoint.checkpoint_id
     root_id = _root_id(context)
-    require(validate_managed_workspace_operation_closure(creation, root_id).get("checkpoint", {}).get("removals")
+    checkpoint_closure = validate_managed_workspace_operation_closure(creation, root_id).get("checkpoint", {})
+    require(isinstance(checkpoint_closure, dict) and checkpoint_closure.get("removals")
             == [{"sequence": 1, "operation_id": acknowledgement.operation_id, "status": "removed"}],
             "checkpoint journal does not close its exact removal")
     removal = validate_managed_workspace_operation_closure(
@@ -480,7 +487,7 @@ def _remove(
 
 def _release_forks(
     context: WorkspaceContext, record: dict[str, object],
-    forks: list[tuple[dict[str, object], CheckoutFacts, Path]],
+    forks: Sequence[tuple[Mapping[str, object], CheckoutFacts, Path]],
 ) -> None:
     record["lifetime_closure"] = _prove_lifetimes_closed(context, list(context.task_ids))
     released = []

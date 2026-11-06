@@ -2,21 +2,42 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from copy import deepcopy
 import re
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
-from scripts.delegate_acceptance.evidence.validation import _optional_hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _optional_hex_digest, require
 from scripts.delegate_acceptance.tasks.runtime_metadata import validate_provider_runtime_metadata
 from scripts.delegate_acceptance.tasks.publication import snapshot
 from scripts.delegate_acceptance.evidence.files import digest, read_json
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.provider_drivers.codex.constants import MAX_PROVIDER_BYTES, OUTPUT_NAME
 from scripts.delegate_acceptance.provider_drivers.codex.protocol import (
+    ParsedStream,
     parse_codex_events,
     validate_tool_free_resume,
 )
 from scripts.delegate_acceptance.provider_drivers.codex.identity import is_thread_id
+
+
+class TaskRecord(TypedDict):
+    directory: Path
+    request: dict[str, object]
+    meta: dict[str, object]
+    seal: dict[str, object]
+    reference: dict[str, object]
+    outcome: dict[str, object]
+    payload: object
+    parsed: ParsedStream
+    resume_controls: dict[str, object] | None
+    snapshot: dict[str, dict[str, object]]
+    dispatch: NotRequired[dict[str, object]]
+    collect: NotRequired[dict[str, object]]
+    stderr_sha256: str
+    controls: NotRequired[dict[str, object]]
 
 
 def binding_record(*, provider: str, mode: str, approval: str, codex: Path,
@@ -67,7 +88,7 @@ def binding_record(*, provider: str, mode: str, approval: str, codex: Path,
 
 
 def success_record(status: str, provider: str, planned_native_ai_turns: int,
-                   tasks: dict[str, str], records: dict[str, dict[str, object]],
+                   tasks: dict[str, str], records: dict[str, TaskRecord],
                    naturally_shutdown: bool) -> dict[str, object]:
     """Build the success receipt from validated task records."""
     return {
@@ -92,17 +113,18 @@ def success_record(status: str, provider: str, planned_native_ai_turns: int,
 
 def validate_manifest(directory: Path, seal: dict[str, object]) -> None:
     manifest = seal.get("raw_manifest")
-    require(isinstance(manifest, list) and 2 <= len(manifest) <= 18,
-            "provider.exit raw manifest is absent or has an invalid entry count")
+    if not (isinstance(manifest, list) and 2 <= len(manifest) <= 18):
+        raise AcceptanceFailure("provider.exit raw manifest is absent or has an invalid entry count")
     paths: set[str] = set()
     previous: str | None = None
     for entry in manifest:
-        require(isinstance(entry, dict), "raw manifest entry is not an object")
+        if not (isinstance(entry, dict)):
+            raise AcceptanceFailure("raw manifest entry is not an object")
         relative = entry.get("path")
         size = entry.get("size")
         checksum = entry.get("sha256")
-        require(isinstance(relative, str) and relative.startswith("raw/") and relative not in paths,
-                "raw manifest path is malformed or duplicated")
+        if not (isinstance(relative, str) and relative.startswith("raw/") and relative not in paths):
+            raise AcceptanceFailure("raw manifest path is malformed or duplicated")
         basename = relative[4:]
         require(basename in {"stdout", "stderr"} or
                 (not basename.startswith("stage.") and
@@ -110,9 +132,9 @@ def validate_manifest(directory: Path, seal: dict[str, object]) -> None:
                 "raw manifest path is not a safe task-local basename")
         require(previous is None or previous < relative,
                 "raw manifest paths are not strictly sorted")
-        require(isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= MAX_PROVIDER_BYTES and
-                isinstance(checksum, str) and re.fullmatch(r"[0-9a-f]{64}", checksum) is not None,
-                "raw manifest descriptor is malformed")
+        if not (isinstance(size, int) and not isinstance(size, bool) and 0 <= size <= MAX_PROVIDER_BYTES and
+                isinstance(checksum, str) and re.fullmatch(r"[0-9a-f]{64}", checksum) is not None):
+            raise AcceptanceFailure("raw manifest descriptor is malformed")
         path = directory / relative
         require(path.is_file() and not path.is_symlink(), "raw manifest file is absent")
         require(path.stat().st_size == size and digest(path) == checksum,
@@ -123,15 +145,17 @@ def validate_manifest(directory: Path, seal: dict[str, object]) -> None:
             "Codex raw manifest omitted required evidence")
 
 
-def validate_record_usage(outcome: dict[str, object], parsed: dict[str, object], name: str) -> None:
+def validate_record_usage(outcome: dict[str, object], parsed: Mapping[str, object], name: str) -> None:
     """Check cumulative event counters without deriving a task delta."""
     event_usage = parsed.get("usage")
     recorded = outcome.get("usage")
     if event_usage is None:
         require(recorded in (None, []), f"{name} invented usage without provider counters")
         return
-    require(isinstance(recorded, list) and len(recorded) == 1 and isinstance(recorded[0], dict),
-            f"{name} omitted cumulative provider usage")
+    if not isinstance(event_usage, dict):
+        raise AcceptanceFailure(f"{name} provider usage is not an object")
+    if not (isinstance(recorded, list) and len(recorded) == 1 and isinstance(recorded[0], dict)):
+        raise AcceptanceFailure(f"{name} omitted cumulative provider usage")
     value = recorded[0]
     require(value.get("scope") == "conversation-cumulative" and
             value.get("source") == "provider-event" and
@@ -161,7 +185,8 @@ def provider_record_snapshot(directory: Path) -> dict[str, dict[str, object]]:
 
 def _read_task_record(directory: Path, task: str, record: str) -> dict[str, object]:
     value = read_json(directory / record)
-    require(isinstance(value, dict), f"{task}/{record} must be an object")
+    if not (isinstance(value, dict)):
+        raise AcceptanceFailure(f"{task}/{record} must be an object")
     return value
 
 
@@ -177,19 +202,19 @@ def validate_task_request(*, name: str, task: str, directory: Path, root_id: str
             request.get("canonical_cwd") == str(workspace),
             f"{name} task identity or workspace binding mismatch")
     requested = request.get("requested_config")
-    require(isinstance(requested, dict) and requested.get("permission") == mode and
+    if not (isinstance(requested, dict) and requested.get("permission") == mode and
             requested.get("budget") == budget and
-            request.get("budget_nanos") == 120_000_000_000,
-            f"{name} request budget or permission mismatch")
+            request.get("budget_nanos") == 120_000_000_000):
+        raise AcceptanceFailure(f"{name} request budget or permission mismatch")
     brief = (directory / "brief.md").read_bytes()
     require(request.get("brief_length") == len(brief) and request.get("brief_sha256") == sha(brief),
             f"{name} persisted brief digest mismatch")
     if predecessor is not None:
         prior = request.get("prior_session")
-        require(isinstance(prior, dict) and prior.get("provider") == provider and
+        if not (isinstance(prior, dict) and prior.get("provider") == provider and
                 prior.get("predecessor_task_id") == predecessor and
-                is_thread_id(prior.get("conversation_id")),
-                f"{name} lacks the exact predecessor session reference")
+                is_thread_id(prior.get("conversation_id"))):
+            raise AcceptanceFailure(f"{name} lacks the exact predecessor session reference")
     else:
         require(request.get("prior_session") is None, f"{name} unexpectedly has a predecessor")
     return request
@@ -204,13 +229,13 @@ def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
             meta.get("containment") == mode and meta.get("approval") == approval,
             f"{name} meta provider or policy binding mismatch")
     effective = meta.get("effective_config")
-    require(isinstance(effective, dict) and effective.get("containment") == mode and
-            effective.get("approval") == approval and isinstance(effective.get("digest"), str),
-            f"{name} effective read-only policy is absent")
+    if not (isinstance(effective, dict) and effective.get("containment") == mode and
+            effective.get("approval") == approval and isinstance(effective.get("digest"), str)):
+        raise AcceptanceFailure(f"{name} effective read-only policy is absent")
     policy = effective.get("policy")
-    require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            _optional_hex_digest(policy.get("runtime_sha256")),
-            f"{name} persisted Codex runtime policy is incomplete")
+    if not (isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
+            _optional_hex_digest(policy.get("runtime_sha256"))):
+        raise AcceptanceFailure(f"{name} persisted Codex runtime policy is incomplete")
     profile_revision = policy.get("profile_revision")
     require(profile_revision == revision,
             f"{name} native effective policy revision is absent or stale")
@@ -224,8 +249,8 @@ def validate_task_policy(*, name: str, meta: dict[str, object], policy: dict[str
                          output_argument_index: int) -> None:
     require(not policy.get("sources"), f"{name} native policy unexpectedly inventories config sources")
     roots = policy.get("writable_roots")
-    require(isinstance(roots, list) and all(isinstance(root, str) for root in roots),
-            f"{name} writable runtime roots are absent")
+    if not (isinstance(roots, list) and all(isinstance(root, str) for root in roots)):
+        raise AcceptanceFailure(f"{name} writable runtime roots are absent")
     codex_home = environment.get("CODEX_HOME", str(Path.home() / ".codex"))
     require(str(Path(codex_home).resolve()) in {str(Path(root).resolve()) for root in roots},
             f"{name} CODEX_HOME was not preserved in runtime policy")
@@ -236,10 +261,10 @@ def validate_task_policy(*, name: str, meta: dict[str, object], policy: dict[str
     require(meta.get("output_writer_contract") == output_contract,
             f"{name} output-writer contract mismatch")
     artifacts = meta.get("output_artifacts")
-    require(isinstance(artifacts, list) and len(artifacts) == 1 and
+    if not (isinstance(artifacts, list) and len(artifacts) == 1 and
             isinstance(artifacts[0], dict) and artifacts[0].get("name") == output_name and
-            artifacts[0].get("argument_index") == output_argument_index,
-            f"{name} Codex output staging declaration is absent")
+            artifacts[0].get("argument_index") == output_argument_index):
+        raise AcceptanceFailure(f"{name} Codex output staging declaration is absent")
 
 
 def validate_task_seal(*, name: str, task: str, directory: Path, root_id: str,
@@ -252,22 +277,24 @@ def validate_task_seal(*, name: str, task: str, directory: Path, root_id: str,
             submit.get("meta_sha256") == digest(directory / "meta.json"),
             f"{name} submit binding mismatch")
     supervisor = submit.get("supervisor")
-    require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(pueue_config) and
+    if not (isinstance(supervisor, dict) and supervisor.get("config_path") == str(pueue_config) and
             supervisor.get("observed_version") == pueue_version and
-            supervisor.get("client_executable") == str(pueue),
-            f"{name} submit supervisor binding mismatch")
+            supervisor.get("client_executable") == str(pueue)):
+        raise AcceptanceFailure(f"{name} submit supervisor binding mismatch")
     start = _read_task_record(directory, task, "provider.start")
-    require(start.get("root_id") == root_id and start.get("task_id") == task and
+    budget = start.get("budget_nanos")
+    if not (start.get("root_id") == root_id and start.get("task_id") == task and
             start.get("spec_sha256") == meta.get("spec_sha256") and
             start.get("meta_sha256") == digest(directory / "meta.json") and
-            isinstance(start.get("budget_nanos"), int) and start["budget_nanos"] > 0,
-            f"{name} provider.start binding mismatch")
+            isinstance(budget, int) and budget > 0):
+        raise AcceptanceFailure(f"{name} provider.start binding mismatch")
     started = _read_task_record(directory, task, "provider.started.json")
-    require(started.get("root_id") == root_id and started.get("task_id") == task and
+    diagnostic = started.get("diagnostic_nanos")
+    if not (started.get("root_id") == root_id and started.get("task_id") == task and
             started.get("spec_sha256") == meta.get("spec_sha256") and
             started.get("meta_sha256") == digest(directory / "meta.json") and
-            isinstance(started.get("diagnostic_nanos"), int) and started["diagnostic_nanos"] >= 0,
-            f"{name} provider.started evidence mismatch")
+            isinstance(diagnostic, int) and diagnostic >= 0):
+        raise AcceptanceFailure(f"{name} provider.started evidence mismatch")
     seal = _read_task_record(directory, task, "provider.exit")
     require(seal.get("root_id") == root_id and seal.get("task_id") == task and
             seal.get("spec_sha256") == meta.get("spec_sha256") and
@@ -285,7 +312,7 @@ def validate_task_result(*, name: str, task: str, directory: Path,
                          expected_answer: bytes, predecessor: str | None,
                          request: dict[str, object], meta: dict[str, object],
                          seal: dict[str, object], root_id: str,
-                         provider: str) -> dict[str, object]:
+                         provider: str) -> TaskRecord:
     predicate = meta.get("predicate")
     raw_stdout = (directory / "raw" / "stdout").read_bytes()
     raw_stderr = (directory / "raw" / "stderr").read_bytes()
@@ -310,8 +337,8 @@ def validate_task_result(*, name: str, task: str, directory: Path,
             reference.get("provider") == provider and
             reference.get("conversation_id") == parsed["thread_id"],
             f"{name} provider thread identity mismatch")
-    require(is_thread_id(reference.get("conversation_id")),
-            f"{name} provider thread ID is invalid")
+    if not (is_thread_id(reference.get("conversation_id"))):
+        raise AcceptanceFailure(f"{name} provider thread ID is invalid")
     outcome = _read_task_record(directory, task, "outcome.json")
     require(outcome.get("root_id") == root_id and outcome.get("task_id") == task and
             outcome.get("spec_sha256") == meta.get("spec_sha256") and
@@ -321,11 +348,11 @@ def validate_task_result(*, name: str, task: str, directory: Path,
             f"{name} outcome authority mismatch")
     validate_record_usage(outcome, parsed, name)
     payload = outcome.get("payload")
-    require(isinstance(payload, dict) and payload.get("basename") == "result.txt" and
+    if not (isinstance(payload, dict) and payload.get("basename") == "result.txt" and
             payload.get("length") == len(expected_answer) and
             payload.get("sha256") == sha(expected_answer) and
-            (directory / "result.txt").read_bytes() == expected_answer,
-            f"{name} committed payload mismatch")
+            (directory / "result.txt").read_bytes() == expected_answer):
+        raise AcceptanceFailure(f"{name} committed payload mismatch")
     return {"directory": directory, "request": request, "meta": meta, "seal": seal,
             "reference": reference, "outcome": outcome, "payload": deepcopy(payload),
             "parsed": parsed, "stderr_sha256": sha(raw_stderr),

@@ -8,6 +8,7 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests.record_fixtures import object_at, array_at
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.release_verification.candidate_manifest import (
     CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, MAX_CONTAINER_BYTES, parse_manifest, payload_paths,
@@ -75,10 +76,10 @@ class LoadTests(CandidateArtifactCase):
                           "sha256": sha(container)},
             "payload": {"path": str(payload), "files": list(payload_paths(VERSION))},
         })
-        record["workflow"]["state"] = "edited"
-        record["payload"]["files"].clear()
-        self.assertEqual(loaded.observation_record()["workflow"]["state"], "active")
-        self.assertEqual(loaded.observation_record()["payload"]["files"], list(payload_paths(VERSION)))
+        object_at(record, "workflow")["state"] = "edited"
+        array_at(record, "payload", "files").clear()
+        self.assertEqual(object_at(loaded.observation_record(), "workflow")["state"], "active")
+        self.assertEqual(object_at(loaded.observation_record(), "payload")["files"], list(payload_paths(VERSION)))
 
     def test_workflow_and_attempt_state_are_recorded_not_gated(self):
         def change(replies):

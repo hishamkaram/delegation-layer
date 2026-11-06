@@ -1,0 +1,6 @@
+target-version = "py312"
+fix = false
+
+[lint]
+select = ["F401", "F821", "F841", "B006", "B012", "B904"]
+unfixable = ["F401"]

@@ -7,6 +7,8 @@ live provider behavior is intentionally exercised only by the explicitly invoked
 from __future__ import annotations
 
 import json
+from argparse import Namespace
+from collections.abc import Mapping
 from pathlib import Path
 import shlex
 import tempfile
@@ -18,6 +20,7 @@ import scripts.acceptance_codex as gate
 import scripts.acceptance_provider_common as provider_common
 from scripts.acceptance_supervisor_common import sha
 from scripts.delegate_acceptance.provider_drivers.codex import constants as codex_constants
+from scripts.delegate_acceptance.provider_drivers.codex import evidence as codex_evidence
 from scripts.delegate_acceptance.provider_drivers.codex import probe as codex_probe
 from scripts.delegate_acceptance.provider_drivers.codex import protocol as codex_protocol
 from scripts.delegate_acceptance.provider_drivers.codex import runner as codex_runner
@@ -31,7 +34,7 @@ ROOT = "a" * 32
 TASK = "b" * 32
 
 
-def event(value: dict[str, object]) -> bytes:
+def event(value: Mapping[str, object]) -> bytes:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode()
 
 
@@ -111,7 +114,7 @@ def probe_events(probe: Path, nonce_file: Path, inside: Path, sibling: Path,
     return b"\n".join(event(value) for value in values)
 
 
-def probe_owner(root: Path, nonce: bytes = b"nonce-value-7f3a") -> tuple[object, Path, Path, Path, Path]:
+def probe_owner(root: Path, nonce: bytes = b"nonce-value-7f3a") -> tuple[gate.CodexAcceptance, Path, Path, Path, Path]:
     root = root.resolve()
     state_parent = root / "state-parent"
     state = state_parent / "state"
@@ -165,6 +168,15 @@ def resume_events(nonce: bytes, extra_type: str | None = None,
 
 
 class CodexOracleTests(unittest.TestCase):
+    def test_usage_rejects_malformed_provider_counter_objects(self) -> None:
+        outcome: dict[str, object] = {"usage": [{
+            "scope": "conversation-cumulative", "source": "provider-event", "reliability": "reported"}]}
+        for usage in ([], "malformed", 1):
+            untrusted: dict[str, object] = {"usage": usage}
+            with self.subTest(usage=usage), self.assertRaisesRegex(
+                    AcceptanceFailure, "provider usage is not an object"):
+                codex_evidence.validate_record_usage(outcome, untrusted, "usage")
+
     def test_behavioral_success_is_not_published_when_finalization_fails(self):
         for failure in (False, OSError("injected finalization failure")):
             with self.subTest(failure=repr(failure)), \
@@ -189,13 +201,16 @@ class CodexOracleTests(unittest.TestCase):
                         "reference": {"conversation_id": THREAD},
                         "directory": directory,
                         "outcome": {"evidence_sha256": "c" * 64},
+                        "request": {}, "meta": {}, "seal": {}, "payload": None,
+                        "parsed": codex_protocol.parse_codex_events(resume_events(b"fixture")),
+                        "resume_controls": None, "snapshot": {}, "stderr_sha256": "d" * 64,
                     }
-                owner.setup = lambda: None
-                owner.run_fresh = lambda: owner.records["fresh"]
-                owner.run_resume = lambda _fresh: owner.records["resume"]
-                owner.replay = lambda: None
-                owner.shutdown = lambda: None
-                owner.safe_failure_shutdown = lambda: True
+                self.enterContext(patch.object(owner, 'setup', lambda: None))
+                self.enterContext(patch.object(owner, 'run_fresh', lambda: owner.records["fresh"]))
+                self.enterContext(patch.object(owner, 'run_resume', lambda _fresh: owner.records["resume"]))
+                self.enterContext(patch.object(owner, 'replay', lambda: None))
+                self.enterContext(patch.object(owner, 'shutdown', lambda: None))
+                self.enterContext(patch.object(owner, 'safe_failure_shutdown', lambda: True))
                 calls = []
 
                 def finalize(success):
@@ -204,7 +219,7 @@ class CodexOracleTests(unittest.TestCase):
                         raise failure
                     return not success or failure is not False
 
-                owner.finalize = finalize
+                self.enterContext(patch.object(owner, 'finalize', finalize))
                 argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
                         "--output", str(output)]
                 with patch.object(gate, "CodexAcceptance", return_value=owner):
@@ -228,6 +243,7 @@ class CodexOracleTests(unittest.TestCase):
             parsed = codex_protocol.parse_codex_events(successful_events(nonce_file, inside, sibling, nonce))
             self.assertEqual(parsed["thread_id"], THREAD)
             self.assertEqual(parsed["final_message"], b"final answer")
+            assert parsed["usage"] is not None
             self.assertEqual(parsed["usage"]["cached_input_tokens"], 3)
             self.assertEqual(len(parsed["commands"]), 3)
             self.assertEqual(parsed["incomplete_commands"], [])
@@ -633,27 +649,27 @@ class CodexOracleTests(unittest.TestCase):
         run.runner = Path("/controlled/delegate-run")
         run.state = Path("/controlled/state")
         command = f"{run.runner} --root {run.state} {TASK}"
-        done = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+        done: dict[str, object] = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
                                   "original_command": command,
                                   "command": command, "path": str(run.state),
                                   "status": {"Done": {"result": "Success"}}}}, "groups": {}}
         self.assertTrue(run.failure_queue_finished(done))
-        malformed = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+        malformed: dict[str, object] = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
                                         "original_command": command,
                                         "command": command, "path": str(run.state),
                                         "status": {"Done": {}}}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(malformed))
-        unknown_result = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+        unknown_result: dict[str, object] = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
                                             "original_command": command,
                                             "command": command, "path": str(run.state),
                                             "status": {"Done": {"result": "Unknown"}}}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(unknown_result))
-        running = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+        running: dict[str, object] = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
                                      "original_command": command,
                                      "command": command, "path": str(run.state),
                                      "status": "Running"}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(running))
-        missing = {"tasks": {}, "groups": {}}
+        missing: dict[str, object] = {"tasks": {}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(missing))
 
     def test_diagnostic_failure_does_not_skip_codex_cleanup(self):
@@ -669,9 +685,9 @@ class CodexOracleTests(unittest.TestCase):
             run.tasks = {}
             run.dispatch_attempts = set()
             run.daemon = None
-            run.setup = lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))
-            run.safe_failure_shutdown = lambda: calls.append("shutdown") or True
-            run.finalize = lambda success: calls.append(("finalize", success)) or True
+            self.enterContext(patch.object(run, 'setup', lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))))
+            self.enterContext(patch.object(run, 'safe_failure_shutdown', lambda: calls.append("shutdown") or True))
+            self.enterContext(patch.object(run, 'finalize', lambda success: calls.append(("finalize", success)) or True))
             with patch.object(codex_runner, "write_json", side_effect=OSError("diagnostic disk full")):
                 with self.assertRaisesRegex(RuntimeError, "primary failure"):
                     run.run()
@@ -691,9 +707,9 @@ class CodexOracleTests(unittest.TestCase):
             run.tasks = {}
             run.dispatch_attempts = set()
             run.daemon = None
-            run.setup = lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))
-            run.safe_failure_shutdown = lambda: calls.append("shutdown") or True
-            run.finalize = lambda success: calls.append(("finalize", success)) or False
+            self.enterContext(patch.object(run, 'setup', lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))))
+            self.enterContext(patch.object(run, 'safe_failure_shutdown', lambda: calls.append("shutdown") or True))
+            self.enterContext(patch.object(run, 'finalize', lambda success: calls.append(("finalize", success)) or False))
             with patch.object(codex_runner, "write_json"):
                 with self.assertRaisesRegex(AcceptanceFailure, "cleanup failed"):
                     run.run()
@@ -715,7 +731,7 @@ class CodexOracleTests(unittest.TestCase):
             workspace_parent = root / "workspaces"
             pueue_parent = root / "pueue"
             output = root / "evidence"
-            args = SimpleNamespace(
+            args = Namespace(
                 tools=str(tools), delegate=str(executables["delegate"]),
                 runner=str(executables["delegate-run"]), pueue=str(executables["pueue"]),
                 pueued=str(executables["pueued"]), codex=str(executables["codex"]),
@@ -780,7 +796,8 @@ class CodexOracleTests(unittest.TestCase):
             owner.pueue_base = pueue
             owner.owned_directories = (state_token, workspace_token, sibling_token, raw_token)
             owner.pueue_owned_directories = (pueue_token,)
-            owner.processes = type("Processes", (), {"capture_root": raw_token})()
+            owner.processes = codex_runner.Processes.__new__(codex_runner.Processes)
+            owner.processes.capture_root = raw_token
             with patch.object(codex_runner, "DEFAULT_STATE_PARENT", state_parent), \
                     patch.object(codex_runner, "DEFAULT_WORKSPACE_PARENT", workspace_parent), \
                     patch.object(codex_runner, "PUEUE_PARENT", pueue_parent):

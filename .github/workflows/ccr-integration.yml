@@ -18,8 +18,11 @@ jobs:
         os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          persist-credentials: false
           repository: hishamkaram/claude-code-router
           ref: 51ca1381f954162aced231d58176783c610fc882
           path: .local/ccr
@@ -39,9 +42,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.x'
-      - name: Install current Claude Code and test supervisor
+      - name: Install locked Claude Code and test supervisor
         run: |
-          npm install --global @anthropic-ai/claude-code
+          provider_dir="$RUNNER_TEMP/ccr-provider"
+          mkdir -p "$provider_dir"
+          cp tools/ccr-provider/package.json tools/ccr-provider/package-lock.json "$provider_dir/"
+          # The reviewed postinstall places the locked native binary at Claude's entrypoint.
+          npm ci --prefix "$provider_dir" --include=optional --ignore-scripts=false --no-audit --no-fund
+          expected_version="$(node --print "require(process.argv[1]).dependencies['@anthropic-ai/claude-code']" "$provider_dir/package.json")"
+          actual_version="$("$provider_dir/node_modules/.bin/claude" --version)"
+          if [ "$actual_version" != "$expected_version (Claude Code)" ]; then
+            printf 'Expected Claude Code %s; received %s\n' "$expected_version" "$actual_version" >&2
+            exit 1
+          fi
+          printf '%s\n' "$actual_version"
+          echo "$provider_dir/node_modules/.bin" >> "$GITHUB_PATH"
           ./scripts/install-test-supervisor.sh
       - name: Build Delegate
         run: |

@@ -47,10 +47,10 @@ def acquire_lock(path, operation):
             if operation is not None:
                 fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
             return descriptor
-        except BlockingIOError:
+        except BlockingIOError as error:
             if time.monotonic() >= deadline:
                 os.close(descriptor)
-                raise RuntimeError("finite fake control lock deadline expired")
+                raise RuntimeError("finite fake control lock deadline expired") from error
             time.sleep(0.01)
 
 

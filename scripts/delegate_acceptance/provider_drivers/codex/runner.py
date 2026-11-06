@@ -14,6 +14,7 @@ import traceback
 from datetime import datetime, timezone
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
 from scripts.delegate_acceptance.evidence.records import bounded_text
 from scripts.delegate_acceptance.paths.policy import clean_absolute
 from scripts.delegate_acceptance.paths.operations import ensure_private_directory
@@ -35,7 +36,7 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.provider_drivers.codex.constants import CANONICAL_TASK_BUDGET, OUTPUT_ARGUMENT_INDEX, OUTPUT_NAME
-from scripts.delegate_acceptance.provider_drivers.codex.evidence import binding_record, provider_record_snapshot, success_record, validate_task_meta as validate_codex_task_meta, validate_task_policy as validate_codex_task_policy, validate_task_request as validate_codex_task_request, validate_task_result as validate_codex_task_result, validate_task_seal as validate_codex_task_seal
+from scripts.delegate_acceptance.provider_drivers.codex.evidence import TaskRecord, binding_record, provider_record_snapshot, success_record, validate_task_meta as validate_codex_task_meta, validate_task_policy as validate_codex_task_policy, validate_task_request as validate_codex_task_request, validate_task_result as validate_codex_task_result, validate_task_seal as validate_codex_task_seal
 from scripts.delegate_acceptance.provider_drivers.codex.probe import probe_script_bytes, require_probe_file_unchanged, validate_command_execution_controls
 from scripts.delegate_acceptance.provider_drivers.codex.protocol import parse_codex_events
 from scripts.delegate_acceptance.provider_drivers.codex.requests import dispatch_arguments as codex_dispatch_arguments, write_fresh_brief, write_resume_brief
@@ -175,7 +176,7 @@ class CodexAcceptance:
         self.tasks = self.ops.tasks
         self.labels = self.ops.labels
         self.numbers = self.ops.numbers
-        self.records: dict[str, dict[str, object]] = {}
+        self.records: dict[str, TaskRecord] = {}
         self.dispatch_attempts = self.ops.dispatch_attempts
         self.queue_before_replay: dict[str, object] | None = None
 
@@ -187,14 +188,32 @@ class CodexAcceptance:
             phase=phase, expected_size=self.probe_size, expected_digest=self.probe_sha256, nonce=self.nonce)
 
     def direct(self, name: str, argv: list[object], expected: int | set[int] = 0,
-               timeout: float = 30):
+               timeout: float = 30) -> TaskCommand:
         return self.ops.direct(name, argv, expected=expected, timeout=timeout)
 
     def client(self, name: str, operation: list[str], expected: int | set[int] = 0,
-               timeout: float = 30):
+               timeout: float = 30) -> TaskCommand:
         require(self.pueue_config is not None, "pueue is not configured")
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         return self.ops.client(name, operation, expected=expected, timeout=timeout)
+
+    def _require_root_id(self) -> str:
+        root_id = self.root_id
+        if root_id is None:
+            raise AcceptanceFailure("root identity is unavailable")
+        return root_id
+
+    def _require_pueue_config(self) -> Path:
+        config = self.pueue_config
+        if config is None:
+            raise AcceptanceFailure("pueue is not configured")
+        return config
+
+    def _require_pueue_base(self) -> Path:
+        base = self.pueue_base
+        if base is None:
+            raise AcceptanceFailure("private pueue base is unavailable")
+        return base
 
     def setup(self) -> None:
         self.require_probe_unchanged("before setup")
@@ -236,17 +255,21 @@ class CodexAcceptance:
         self.pueued_version = observed_pueue_version(
             bounded_text(pueued_version.directory / "stdout", "pueued version output"), "pueued")
         self.inspection_binding = expected_codex_inspection_binding(
-            pueue=self.pueue, config=self.pueue_config, base=self.pueue_base, config_digest=digest(self.pueue_config),
+            pueue=self.pueue, config=self._require_pueue_config(), base=self._require_pueue_base(),
+            config_digest=digest(self._require_pueue_config()),
             runner=self.runner, workspace=self.workspace, environment=self.environment, provider=self.codex,
             pueue_version=self.pueue_version)
 
     def _start_private_daemon(self) -> None:
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         for _ in range(200):
             require(self.daemon.poll() is None, "private pueued exited before readiness")
             process = self.client("ready", ["status", "--json"], expected={0, 1}, timeout=15)
-            if int(process.result["exit_code"]) == 0:
+            result = process.result
+            if result is None or type(result.get("exit_code")) is not int:
+                raise AcceptanceFailure("private pueue readiness has no observed exit code")
+            if result["exit_code"] == 0:
                 status = status_jobs(process)
                 require(status["tasks"] == {}, "new private pueue queue was not empty")
                 break
@@ -255,6 +278,9 @@ class CodexAcceptance:
             raise AcceptanceFailure("private pueue readiness was not established")
 
     def _write_binding_record(self) -> None:
+        version, daemon_version = self.pueue_version, self.pueued_version
+        if version is None or daemon_version is None:
+            raise AcceptanceFailure("private supervisor versions were not observed")
         binding = binding_record(
             provider=PROVIDER,
             mode=MODE,
@@ -270,10 +296,10 @@ class CodexAcceptance:
             pueue_digest=digest(self.pueue),
             pueued=self.pueued,
             pueued_digest=digest(self.pueued),
-            pueue_version=self.pueue_version,
-            pueued_version=self.pueued_version,
-            pueue_base=self.pueue_base,
-            pueue_config=self.pueue_config,
+            pueue_version=version,
+            pueued_version=daemon_version,
+            pueue_base=self._require_pueue_base(),
+            pueue_config=self._require_pueue_config(),
             config_digest=digest(self.pueue_config),
             state=self.state,
             workspace=self.workspace,
@@ -306,7 +332,7 @@ class CodexAcceptance:
     def dispatch_arguments(self, task: str, brief: Path, predecessor: str | None = None) -> list[object]:
         require(self.pueue_config is not None, "pueue is not configured")
         return codex_dispatch_arguments(
-            delegate=self.delegate, state=self.state, pueue_config=self.pueue_config, runner=self.runner,
+            delegate=self.delegate, state=self.state, pueue_config=self._require_pueue_config(), runner=self.runner,
             task=task, brief=brief,
             workspace=self.workspace, provider=PROVIDER, mode=MODE, predecessor=predecessor)
 
@@ -317,7 +343,8 @@ class CodexAcceptance:
         self.ops.expect_inspection(task, self.inspection_binding)
         response = self.ops.dispatch(name, task, self.dispatch_arguments(task, brief, predecessor))
         root = response.get("root_id")
-        require(is_task_id(root), f"{name} omitted a valid root identity")
+        if not (is_task_id(root)):
+            raise AcceptanceFailure(f"{name} omitted a valid root identity")
         self.root_id = root
         self.ops.root_id = root
         require(self.root_id == root, f"{name} changed root identity")
@@ -334,11 +361,12 @@ class CodexAcceptance:
 
     def read_record(self, task: str, name: str) -> dict[str, object]:
         value = read_json(self.state / "tasks" / task / name)
-        require(isinstance(value, dict), f"{task}/{name} must be an object")
+        if not (isinstance(value, dict)):
+            raise AcceptanceFailure(f"{task}/{name} must be an object")
         return value
 
     def validate_task(self, name: str, task: str, expected_answer: bytes,
-                      predecessor: str | None = None) -> dict[str, object]:
+                      predecessor: str | None = None) -> TaskRecord:
         directory = self.state / "tasks" / task
         require(directory.is_dir() and not directory.is_symlink(), f"{name} task directory is absent")
         request = self._validate_task_request(name, task, directory, predecessor)
@@ -351,14 +379,14 @@ class CodexAcceptance:
     def _validate_task_request(self, name: str, task: str, directory: Path,
                                predecessor: str | None) -> dict[str, object]:
         return validate_codex_task_request(
-            name=name, task=task, directory=directory, root_id=self.root_id, workspace=self.workspace,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(), workspace=self.workspace,
             predecessor=predecessor,
             provider=PROVIDER, mode=MODE, budget=CANONICAL_TASK_BUDGET)
 
     def _validate_task_meta(self, name: str, task: str,
                             directory: Path) -> dict[str, object]:
         meta, policy, profile_revision = validate_codex_task_meta(
-            name=name, task=task, directory=directory, root_id=self.root_id,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(),
             workspace=self.workspace, mode=MODE, approval=APPROVAL,
             revision=NATIVE_PROFILE_REVISION)
         if self.profile_revision is None:
@@ -375,20 +403,20 @@ class CodexAcceptance:
     def _validate_task_seal(self, name: str, task: str, directory: Path,
                             meta: dict[str, object]) -> dict[str, object]:
         return validate_codex_task_seal(
-            name=name, task=task, directory=directory, root_id=self.root_id, label=self.labels[name],
-            pueue_config=self.pueue_config,
+            name=name, task=task, directory=directory, root_id=self._require_root_id(), label=self.labels[name],
+            pueue_config=self._require_pueue_config(),
             pueue_version=self.pueue_version, pueue=self.pueue, meta=meta)
 
     def _validate_task_result(self, *, name: str, task: str, directory: Path,
                               expected_answer: bytes, predecessor: str | None,
                               request: dict[str, object], meta: dict[str, object],
-                              seal: dict[str, object]) -> dict[str, object]:
+                              seal: dict[str, object]) -> TaskRecord:
         return validate_codex_task_result(
             name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
             request=request, meta=meta, seal=seal,
-            root_id=self.root_id, provider=PROVIDER)
+            root_id=self._require_root_id(), provider=PROVIDER)
 
-    def run_fresh(self) -> dict[str, object]:
+    def run_fresh(self) -> TaskRecord:
         self.require_probe_unchanged("before fresh dispatch")
         brief = self.fresh_brief()
         task = task_id()
@@ -406,7 +434,9 @@ class CodexAcceptance:
         require(self.sibling_before == snapshot(self.sibling, ignored_prefixes=()),
                 "Codex changed the sibling sentinel")
         record = self.validate_task("fresh", task, data)
-        record.update({"dispatch": response, "collect": collected, "controls": controls})
+        record["dispatch"] = response
+        record["collect"] = collected
+        record["controls"] = controls
         self.records["fresh"] = record
         write_json(self.output / "fresh-control.json", {
             "task_id": task,
@@ -430,11 +460,12 @@ class CodexAcceptance:
         })
         return record
 
-    def run_resume(self, predecessor: dict[str, object]) -> dict[str, object]:
+    def run_resume(self, predecessor: TaskRecord) -> TaskRecord:
         self.require_probe_unchanged("before resume dispatch")
         predecessor_task = self.tasks["fresh"]
         original_snapshot = predecessor["snapshot"]
-        require(isinstance(original_snapshot, dict), "fresh task snapshot is unavailable")
+        if not (isinstance(original_snapshot, dict)):
+            raise AcceptanceFailure("fresh task snapshot is unavailable")
         self.nonce_file.unlink(missing_ok=False)
         require(not self.nonce_file.exists(), "resume nonce file still exists")
         workspace_before_resume = snapshot(self.workspace, ignored_prefixes=())
@@ -457,9 +488,10 @@ class CodexAcceptance:
         require(self.sibling_before == snapshot(self.sibling, ignored_prefixes=()),
                 "resume changed the sibling sentinel")
         resume_controls = record.get("resume_controls")
-        require(isinstance(resume_controls, dict) and resume_controls.get("tool_free") is True,
-                "resume tool-free oracle result is absent")
-        record.update({"dispatch": response, "collect": collected})
+        if not (isinstance(resume_controls, dict) and resume_controls.get("tool_free") is True):
+            raise AcceptanceFailure("resume tool-free oracle result is absent")
+        record["dispatch"] = response
+        record["collect"] = collected
         self.records["resume"] = record
         write_json(self.output / "resume-control.json", {
             "task_id": task,
@@ -478,7 +510,7 @@ class CodexAcceptance:
         return record
 
     def queue_status(self, name: str) -> dict[str, object]:
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         return self.ops.queue_status(name)
 
     def replay(self) -> None:
@@ -495,7 +527,7 @@ class CodexAcceptance:
 
     def shutdown(self) -> None:
         self.ops.root_id = self.root_id
-        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         self.ops.shutdown()
         self.closed = self.ops.closed
 
@@ -503,7 +535,7 @@ class CodexAcceptance:
         """Shutdown only after an all-Done observation; never signals unknown work."""
         self.ops.root_id = self.root_id
         if self.pueue_config is not None:
-            self.ops.bind_supervisor(self.pueue_config, self.daemon)
+            self.ops.bind_supervisor(self._require_pueue_config(), self.daemon)
         result = self.ops.safe_failure_shutdown()
         self.closed = self.ops.closed
         return result

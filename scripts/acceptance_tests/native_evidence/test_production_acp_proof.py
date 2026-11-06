@@ -47,13 +47,23 @@ FRESH, RESUME = "1" * 32, "2" * 32
 SOURCE, SUCCESSOR = "3" * 32, "4" * 32
 
 
+def object_field(value: dict[str, object], key: str) -> dict[str, object]:
+    field = value[key]
+    assert isinstance(field, dict)
+    return field
+
+
+def source_turn(value: dict[str, object], alias: str) -> dict[str, object]:
+    return object_field(object_field(value, "tasks"), alias)
+
+
 def historical(marker: dict[str, object], *aliases: str, envelope: bool = True) -> dict[str, object]:
     """Return a copy whose envelope and the named turns carry the retired predicate."""
     value = deepcopy(marker)
     if envelope:
         value["predicate_version"] = "acp-v1"
     for alias in aliases:
-        value["tasks"][alias]["predicate_version"] = "acp-v1"
+        source_turn(value, alias)["predicate_version"] = "acp-v1"
     return value
 
 
@@ -125,10 +135,10 @@ class ProductionAcpProofTests(unittest.TestCase):
         for label, (alias, key, value) in tampers.items():
             with self.subTest(label=label):
                 marker = production_acp_source(tasks, {alias: "session-1" for alias in tasks})
-                marker["tasks"][alias][key] = value
+                source_turn(marker, alias)[key] = value
                 self.assertEqual(self.compact(marker, tasks, aliases), {"state": "invalid"})
         for label, mutate in {
-                "extra field": lambda marker: marker["tasks"]["fresh"].update(stdout="raw"),
+                "extra field": lambda marker: source_turn(marker, "fresh").update(stdout="raw"),
                 "missing turn": lambda marker: marker["tasks"].pop("resume"),
                 "wrong kind": lambda marker: marker.update(kind="opencode-acp-probe"),
                 "string schema": lambda marker: marker.update(schema_version="1"),
@@ -164,7 +174,7 @@ class ProductionAcpProofTests(unittest.TestCase):
             for alias in aliases:
                 with self.subTest(value=value, alias=alias):
                     marker = deepcopy(control)
-                    marker["tasks"][alias]["predicate_sha256"] = value
+                    source_turn(marker, alias)["predicate_sha256"] = value
                     self.assertEqual(self.compact(marker, tasks, aliases), {"state": "invalid"})
 
     def test_non_string_compact_state_is_invalid_not_a_crash(self):
@@ -190,7 +200,7 @@ class ProductionAcpProofTests(unittest.TestCase):
         for key, value in (("publication", "committed"), ("outcome_sha256", "c" * 64)):
             with self.subTest(key=key):
                 marker = production_acp_source(tasks, {alias: "session-1" for alias in tasks})
-                marker["tasks"]["timeout_source"][key] = value
+                source_turn(marker, "timeout_source")[key] = value
                 self.assertEqual(self.compact(marker, tasks, aliases), {"state": "invalid"})
 
     def test_case_validator_requires_complete_bound_opencode_proof(self):
@@ -216,11 +226,11 @@ class ProductionAcpProofTests(unittest.TestCase):
         rebound = {**proof, "task_session_bindings": bindings({"fresh": FRESH, "resume": "5" * 32})}
         self.assertEqual(error("opencode:run", rebound), "aggregate_case_production_acp_unbound")
         relabeled = deepcopy(proof)
-        relabeled["production_acp"]["profile_revision"] = "opencode-native-v2"
+        object_field(relabeled, "production_acp")["profile_revision"] = "opencode-native-v2"
         self.assertEqual(error("opencode:run", relabeled), "aggregate_case_production_acp_invalid")
         # Every other fact is valid and bound; only the retired predicate is wrong.
         retired = deepcopy(proof)
-        retired["production_acp"]["predicate_version"] = "acp-v1"
+        object_field(retired, "production_acp")["predicate_version"] = "acp-v1"
         self.assertEqual(error("opencode:run", retired), "aggregate_case_production_acp_invalid")
         self.assertEqual(error("opencode:run", proof), None)
 

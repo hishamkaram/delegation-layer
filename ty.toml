@@ -1,0 +1,4 @@
+[environment]
+python-version = "3.12"
+python-platform = "all"
+root = [".", "scripts"]

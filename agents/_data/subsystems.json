@@ -42,7 +42,10 @@
     "agents/_data/subsystems/python-native-request-intents.json",
     "agents/_data/subsystems/go-resource-admission.json",
     "agents/_data/subsystems/go-scheduler.json",
-    "agents/_data/subsystems/go-teams.json"
+    "agents/_data/subsystems/go-teams.json",
+    "agents/_data/subsystems/tooling-static.json",
+    "agents/_data/subsystems/python-native-tests.json",
+    "agents/_data/subsystems/python-inspection-tests.json"
   ],
   "migration": "agents/_data/maintainability-migration.jsonl",
   "generated": [
@@ -100,6 +103,16 @@
       "path": "scripts/_data/unicode-simple-fold.json",
       "generator": "go generate ./internal/testutil/unicodefold (go1.27.2)",
       "source": "internal/testutil/unicodefold/generate.go"
+    },
+    {
+      "path": "tools/lint/package-lock.json",
+      "generator": "npm install --package-lock-only --ignore-scripts",
+      "source": "tools/lint/package.json"
+    },
+    {
+      "path": "tools/ccr-provider/package-lock.json",
+      "generator": "npm install --package-lock-only --ignore-scripts",
+      "source": "tools/ccr-provider/package.json"
     }
   ]
 }

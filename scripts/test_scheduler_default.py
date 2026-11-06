@@ -62,7 +62,10 @@ class SchedulerDefaultTests(unittest.TestCase):
         self.receipt = AcceptanceReceipt(self.parent / "receipt.json", 1, 1, {})
 
     def release_tokens(self):
-        if not self.lifetime.base_token.consumed:
+        token = self.lifetime.base_token
+        if token is None:
+            raise AssertionError("fixture base ownership token is absent")
+        if not token.consumed:
             self.lifetime.ownership.release()
 
     def bound_fixture(self, system="Linux"):

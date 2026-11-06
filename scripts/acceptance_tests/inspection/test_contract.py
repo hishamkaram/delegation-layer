@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
+from typing import TypedDict
 import unittest
 from unittest.mock import Mock, patch
 
@@ -22,12 +23,17 @@ TASK = "b" * 32
 from .fixtures import InspectionFixture
 
 
+class RuntimeEvidenceOptions(TypedDict, total=False):
+    started_evidence: dict[str, object]
+    launch_evidence: tuple[dict[str, object], dict[str, object]]
+
+
 class InspectionHarnessTests(unittest.TestCase):
     def setUp(self):
         self.fixture = InspectionFixture(self)
 
     def test_expired_inspection_response_requires_bounded_failure_context(self):
-        response = {
+        response: dict[str, object] = {
             "task_id": TASK,
             "root_id": ROOT,
             "task_record": "unknown",
@@ -55,7 +61,11 @@ class InspectionHarnessTests(unittest.TestCase):
                 ("journal_task_id", "c" * 32)):
             with self.subTest(field=field):
                 changed = deepcopy(response)
-                changed["failure"]["inspection"][field] = value
+                failure = changed["failure"]
+                assert isinstance(failure, dict)
+                inspection = failure["inspection"]
+                assert isinstance(inspection, dict)
+                inspection[field] = value
                 with self.assertRaisesRegex(
                         AcceptanceFailure, "stable provider-preflight failure envelope"):
                     inspection_acceptance.validate_expired_inspection_response(
@@ -65,11 +75,11 @@ class InspectionHarnessTests(unittest.TestCase):
         acceptance = inspection_acceptance.InspectionAcceptance.__new__(
             inspection_acceptance.InspectionAcceptance)
         acceptance.blocker = (7, "bounded-blocker")
-        acceptance.ops = SimpleNamespace(root_id=ROOT)
+        acceptance.ops = self.fixture.ops
         acceptance.daemon = SimpleNamespace(poll=lambda: None)
-        acceptance.queue = lambda: {"tasks": {
+        acceptance.queue = Mock(return_value={"tasks": {
             "7": {"label": "bounded-blocker", "status": {"Running": {}}},
-        }}
+        }})
         with patch.object(inspection_acceptance, "failure_cleanup_deadline",
                           return_value=10.0), \
                 patch.object(inspection_acceptance, "wait_for_failure_cleanup",
@@ -94,7 +104,7 @@ class InspectionHarnessTests(unittest.TestCase):
         acceptance.configure = Mock(return_value=(TASK, Path("/brief"), Path("/case"), Path("/config")))
         acceptance.argv = Mock(return_value=["delegate"])
         acceptance.expected_inspection_binding = Mock(return_value={"binding": "expected"})
-        response = {
+        response: dict[str, object] = {
             "task_id": TASK,
             "root_id": ROOT,
             "task_record": "created",
@@ -104,20 +114,17 @@ class InspectionHarnessTests(unittest.TestCase):
             "supervisor": {"matched": True, "numeric_task_id": 7},
         }
         process = SimpleNamespace(result={"exit_code": 0})
-        acceptance.ops = SimpleNamespace(
-            dispatch_attempts=set(),
-            direct=Mock(return_value=process),
-            expect_inspection=Mock(),
-            record_admission=Mock(),
-            root_id=ROOT,
-            watch_seconds=150,
-        )
+        acceptance.ops = self.fixture.ops
+        acceptance.ops.dispatch_attempts.clear()
 
-        with patch.object(inspection_acceptance, "parse_json_output", return_value=response):
+        with patch.object(inspection_acceptance, "parse_json_output", return_value=response), \
+                patch.object(acceptance.ops, "direct", return_value=process), \
+                patch.object(acceptance.ops, "expect_inspection"), \
+                patch.object(acceptance.ops, "record_admission") as record_admission:
             with self.assertRaisesRegex(AcceptanceFailure, "stable provider-preflight failure envelope"):
                 acceptance.failed_inspection("running-expiry", 1)
 
-        acceptance.ops.record_admission.assert_called_once_with("running-expiry", TASK, response)
+        record_admission.assert_called_once_with("running-expiry", TASK, response)
 
     def test_failure_cleanup_records_retention_error_and_still_finalizes(self):
         with tempfile.TemporaryDirectory(prefix="inspection-retention-error-") as directory:
@@ -128,20 +135,16 @@ class InspectionHarnessTests(unittest.TestCase):
             acceptance.case_records = {}
             acceptance.state = Path(directory) / "state"
             acceptance.config = Path(directory) / "config"
-            acceptance.setup = lambda: None
-
-            def fail_success():
-                raise RuntimeError("primary inspection failure")
-
-            acceptance.success = fail_success
+            acceptance.setup = Mock()
+            acceptance.success = Mock(side_effect=RuntimeError("primary inspection failure"))
             acceptance.cleanup_blocker_after_failure = Mock(return_value=True)
             acceptance.finalize = Mock(return_value=True)
-            acceptance.ops = SimpleNamespace(
-                closed=False,
-                retain_failure_ownership=Mock(side_effect=RuntimeError("retention failed")),
-            )
+            acceptance.ops = self.fixture.ops
+            acceptance.ops.closed = False
 
-            with self.assertRaisesRegex(RuntimeError, "primary inspection failure"):
+            with patch.object(acceptance.ops, "retain_failure_ownership",
+                              side_effect=RuntimeError("retention failed")), \
+                    self.assertRaisesRegex(RuntimeError, "primary inspection failure"):
                 acceptance.run()
 
             acceptance.finalize.assert_called_once_with(False)
@@ -177,7 +180,8 @@ class InspectionHarnessTests(unittest.TestCase):
             pueue_owner.adopt_created("private pueue", pueue, pueue_parent)
             acceptance.pueue_directories = pueue_owner.transfer()
             acceptance.pueue_base = pueue
-            acceptance.ops = SimpleNamespace(closed=True)
+            acceptance.ops = self.fixture.ops
+            acceptance.ops.closed = True
 
             self.assertTrue(acceptance.finalize(True))
 
@@ -187,14 +191,14 @@ class InspectionHarnessTests(unittest.TestCase):
             self.assertFalse((output / "processes").exists())
 
     def test_concurrent_response_accepts_only_known_admission_races(self):
-        creation_race = {
+        creation_race: dict[str, object] = {
             "task_id": TASK, "root_id": ROOT, "task_record": "unknown",
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "dispatch_failed", "stage": "create-task-record",
                          "next_action": "stop_and_report"},
             "error": "Delegate could not complete the operation.",
         }
-        submission_race = {
+        submission_race: dict[str, object] = {
             "task_id": TASK, "root_id": ROOT, "task_record": "created",
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "task_submission_preparation_failed",
@@ -208,7 +212,7 @@ class InspectionHarnessTests(unittest.TestCase):
                     inspection_acceptance.validate_concurrent_response(response, 1, TASK), ROOT)
 
     def test_concurrent_response_rejects_unbounded_failure(self):
-        response = {
+        response: dict[str, object] = {
             "task_id": TASK, "root_id": ROOT, "task_record": "unknown",
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "provider_preparation_failed", "stage": "prepare-provider",
@@ -234,7 +238,7 @@ class InspectionHarnessTests(unittest.TestCase):
                 b" " * provider_common.MAX_CONTROL_BYTES + b"version", "pueue")
 
     def test_runtime_capability_digest_encodes_empty_slices_like_go(self):
-        definition = {
+        definition: dict[str, object] = {
             "revision": "runtime-capability-v1",
             "directory": "/workspace",
             "environment": [],
@@ -252,10 +256,11 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual(provider_common.runtime_capability_sha(definition), expected)
 
     def test_runtime_capability_digest_preserves_go_version_args_order_and_omission(self):
-        definition = {
+        runtime: dict[str, object] = {"help_args": ["--help"], "required_flags": ["--json"]}
+        definition: dict[str, object] = {
             "revision": "runtime-capability-v1", "directory": "/workspace",
             "environment": [], "output_limit": 1024,
-            "runtime": {"help_args": ["--help"], "required_flags": ["--json"]},
+            "runtime": runtime,
         }
         # runtimeCapabilityContract in internal/provider/runtime_facts.go:
         # version_args is between output_limit and help_args, with omitempty.
@@ -267,15 +272,15 @@ class InspectionHarnessTests(unittest.TestCase):
                  (["version", "--json"], b'"version_args":["version","--json"],'))
         for version_args, field in cases:
             with self.subTest(version_args=version_args):
-                definition["runtime"]["version_args"] = version_args
+                runtime["version_args"] = version_args
                 self.assertEqual(provider_common.runtime_capability_sha(definition),
                                  provider_common.sha(prefix + field + suffix))
-        del definition["runtime"]["version_args"]
+        del runtime["version_args"]
         self.assertEqual(provider_common.runtime_capability_sha(definition),
                          provider_common.sha(prefix + suffix))
 
     def test_review_target_is_part_of_the_canonical_task_record(self):
-        task = {
+        task: dict[str, object] = {
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "provider": "codex:review", "mode": "read-only",
             "canonical_cwd": "/workspace",
@@ -293,7 +298,9 @@ class InspectionHarnessTests(unittest.TestCase):
             provider_common.sha(encoded),
         )
         invalid = deepcopy(task)
-        invalid["requested_config"]["review_target"] = {
+        requested_config = invalid["requested_config"]
+        assert isinstance(requested_config, dict)
+        requested_config["review_target"] = {
             "kind": "uncommitted", "value": "main",
         }
         with self.assertRaises(AcceptanceFailure):
@@ -306,7 +313,7 @@ class InspectionHarnessTests(unittest.TestCase):
             provider_common.bounded_text(path, "version output")
 
     def test_provider_runtime_metadata_accepts_pending_admission_contract(self):
-        meta = {
+        meta: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "",
             "runtime_preflight_sha256": "a" * 64,
@@ -320,6 +327,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
         ordinary = self.fixture.ops._durable_ordinary_admission(TASK, None)
 
+        assert ordinary is not None
         self.assertEqual(ordinary["task_id"], TASK)
         self.assertEqual(
             read_json(directory / "meta.json")["provider_version"], "")
@@ -333,6 +341,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
         ordinary = self.fixture.ops._durable_ordinary_admission(TASK, None)
 
+        assert ordinary is not None
         self.assertEqual(ordinary["task_id"], TASK)
 
     def test_ordinary_task_evidence_rejects_pending_runtime_digest(self):
@@ -366,7 +375,7 @@ class InspectionHarnessTests(unittest.TestCase):
             self.fixture.ops._durable_ordinary_admission(TASK, None)
 
     def test_provider_runtime_metadata_rejects_invalid_pending_contract(self):
-        base = {
+        base: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "",
             "runtime_preflight_sha256": "a" * 64,
@@ -394,7 +403,7 @@ class InspectionHarnessTests(unittest.TestCase):
     # The historical test ID is part of the relocation contract.
     def test_provider_runtime_metadata_keeps_historical_version_equality(self):
         """Legacy observed_version calls preserve authoritative historical metadata."""
-        meta = {
+        meta: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "fixture-v1",
         }
@@ -406,7 +415,7 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual(meta["provider_version"], "fixture-v1")
 
     def test_provider_runtime_metadata_requires_a_string_version_but_allows_empty(self):
-        meta = {"provider_executable": "/fixture/provider", "provider_version": ""}
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": ""}
         self.assertIsNone(provider_common.validate_provider_runtime_metadata(meta))
         del meta["provider_version"]
         with self.assertRaisesRegex(AcceptanceFailure, "version is invalid"):
@@ -418,10 +427,10 @@ class InspectionHarnessTests(unittest.TestCase):
                     dict(meta, provider_version=version))
 
     def test_provider_runtime_metadata_accepts_upgraded_launch_identity(self):
-        meta = {"provider_executable": "/fixture/provider", "provider_version": "fixture-v1"}
-        started = {"provider_executable": "/fixture/provider-v2",
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": "fixture-v1"}
+        started: dict[str, object] = {"provider_executable": "/fixture/provider-v2",
                    "provider_version": "fixture-v2", "provider_sha256": "b" * 64}
-        expected = {"executable": "/fixture/provider-v2",
+        expected: dict[str, object] = {"executable": "/fixture/provider-v2",
                     "version": "fixture-v2", "sha256": "b" * 64}
         self.assertEqual(provider_common.validate_provider_runtime_metadata(
             meta, started_evidence=started), expected)
@@ -429,11 +438,11 @@ class InspectionHarnessTests(unittest.TestCase):
             meta, launch_evidence=(started, dict(started))), expected)
 
     def test_provider_runtime_metadata_accepts_unobserved_launch_diagnostics(self):
-        meta = {"provider_executable": "/fixture/provider", "provider_version": ""}
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": ""}
         for version in (None, "", "fixture-v2"):
             for digest in (None, "", "b" * 64):
                 with self.subTest(version=version, digest=digest):
-                    started = {"provider_executable": "/fixture/provider-v2"}
+                    started: dict[str, object] = {"provider_executable": "/fixture/provider-v2"}
                     exited = dict(started, provider_version="", provider_sha256="")
                     if version is not None:
                         started["provider_version"] = version
@@ -441,7 +450,7 @@ class InspectionHarnessTests(unittest.TestCase):
                     if digest is not None:
                         started["provider_sha256"] = digest
                         exited["provider_sha256"] = digest
-                    expected = {"executable": "/fixture/provider-v2",
+                    expected: dict[str, object] = {"executable": "/fixture/provider-v2",
                                 "version": version or "", "sha256": digest or ""}
                     self.assertEqual(provider_common.validate_provider_runtime_metadata(
                         meta, started_evidence=started), expected)
@@ -449,16 +458,18 @@ class InspectionHarnessTests(unittest.TestCase):
                         meta, launch_evidence=(started, exited)), expected)
 
     def test_provider_runtime_metadata_rejects_malformed_present_diagnostics(self):
-        meta = {"provider_executable": "/fixture/provider", "provider_version": ""}
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": ""}
         for field, values in (
                 ("provider_version", (None, False, 123, [], {}, " ")),
                 ("provider_sha256", (None, False, 123, [], {}, "invalid", "B" * 64))):
             for value in values:
-                invalid = {"provider_executable": "/fixture/provider", field: value}
-                valid = {"provider_executable": "/fixture/provider"}
-                cases = ({"started_evidence": invalid},
-                         {"launch_evidence": (invalid, valid)},
-                         {"launch_evidence": (valid, invalid)})
+                invalid: dict[str, object] = {"provider_executable": "/fixture/provider", field: value}
+                valid: dict[str, object] = {"provider_executable": "/fixture/provider"}
+                cases: tuple[RuntimeEvidenceOptions, ...] = (
+                    {"started_evidence": invalid},
+                    {"launch_evidence": (invalid, valid)},
+                    {"launch_evidence": (valid, invalid)},
+                )
                 message = "version is invalid" if field == "provider_version" else "digest is invalid"
                 for kwargs in cases:
                     with self.subTest(field=field, value=value, kwargs=kwargs):
@@ -466,25 +477,28 @@ class InspectionHarnessTests(unittest.TestCase):
                             provider_common.validate_provider_runtime_metadata(meta, **kwargs)
 
     def test_provider_runtime_metadata_requires_clean_executable_with_optional_diagnostics(self):
-        meta = {"provider_executable": "/fixture/provider", "provider_version": ""}
-        valid = {"provider_executable": "/fixture/provider"}
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": ""}
+        valid: dict[str, object] = {"provider_executable": "/fixture/provider"}
         for executable in (None, "", "provider", "/fixture//provider", "//fixture/provider"):
-            invalid = {"provider_executable": executable}
-            for kwargs in ({"started_evidence": invalid},
-                           {"launch_evidence": (invalid, valid)},
-                           {"launch_evidence": (valid, invalid)}):
+            invalid: dict[str, object] = {"provider_executable": executable}
+            cases: tuple[RuntimeEvidenceOptions, ...] = (
+                {"started_evidence": invalid},
+                {"launch_evidence": (invalid, valid)},
+                {"launch_evidence": (valid, invalid)},
+            )
+            for kwargs in cases:
                 with self.subTest(executable=executable, kwargs=kwargs):
                     with self.assertRaisesRegex(AcceptanceFailure, "executable is invalid"):
                         provider_common.validate_provider_runtime_metadata(meta, **kwargs)
 
     def test_provider_runtime_metadata_rejects_actual_launch_identity_mismatch(self):
-        meta = {
+        meta: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "",
             "runtime_preflight_sha256": "a" * 64,
             "environment_recorded": True,
         }
-        started = {
+        started: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "fixture-v2",
             "provider_sha256": "b" * 64,
@@ -500,13 +514,13 @@ class InspectionHarnessTests(unittest.TestCase):
                         meta, launch_evidence=(started, exited))
 
     def test_provider_runtime_metadata_accepts_started_only_interrupted_identity(self):
-        meta = {
+        meta: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "",
             "runtime_preflight_sha256": "a" * 64,
             "environment_recorded": True,
         }
-        started = {
+        started: dict[str, object] = {
             "provider_executable": "/fixture/provider-v2",
             "provider_version": "fixture-v2",
             "provider_sha256": "b" * 64,
@@ -523,20 +537,20 @@ class InspectionHarnessTests(unittest.TestCase):
                 meta, launch_evidence=(started, started), started_evidence=started)
 
     def test_provider_runtime_evidence_matches_go_identity_contract_for_both_modes(self):
-        meta = {
+        meta: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": "",
             "runtime_preflight_sha256": "a" * 64,
             "environment_recorded": True,
         }
-        valid = {
+        valid: dict[str, object] = {
             "provider_executable": "/fixture/provider",
             "provider_version": " fixture-v2 ",
             "provider_sha256": "b" * 64,
         }
         for mode in ("started", "sealed"):
             with self.subTest(mode=mode):
-                kwargs = ({"started_evidence": valid} if mode == "started" else
+                kwargs: RuntimeEvidenceOptions = ({"started_evidence": valid} if mode == "started" else
                           {"launch_evidence": (valid, dict(valid))})
                 self.assertEqual(
                     provider_common.validate_provider_runtime_metadata(meta, **kwargs),
@@ -554,7 +568,7 @@ class InspectionHarnessTests(unittest.TestCase):
                             changed["provider_executable"] = value
                         else:
                             changed["provider_version"] = value
-                        changed_kwargs = ({"started_evidence": changed} if mode == "started" else
+                        changed_kwargs: RuntimeEvidenceOptions = ({"started_evidence": changed} if mode == "started" else
                                           {"launch_evidence": (changed, dict(changed))})
                         with self.assertRaises(AcceptanceFailure):
                             provider_common.validate_provider_runtime_metadata(

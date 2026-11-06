@@ -6,6 +6,8 @@ import selectors
 import subprocess
 import sys
 import unittest
+from collections.abc import Callable
+from typing import NotRequired, TypedDict
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.release_fixture import open_descriptors
@@ -24,6 +26,10 @@ EMIT = ("import sys; sys.stdout.buffer.write({out}); sys.stdout.buffer.flush(); 
         "sys.stderr.buffer.write({err}); sys.stderr.buffer.flush(); sys.exit({code})")
 # Captured at import: the fakes patch Popen on the one shared subprocess module.
 CHILD_SPEC = subprocess.Popen
+
+
+class CaptureOptions(TypedDict):
+    sink: NotRequired[Callable[[bytes], None]]
 
 
 class StderrCaptureTests(unittest.TestCase):
@@ -198,7 +204,8 @@ class StderrCaptureFaultTests(unittest.TestCase):
         self.child.stderr.close.assert_not_called()
 
     def test_stderr_capture_requires_capture_and_starts_no_child(self):
-        for options in ({}, {"sink": lambda _chunk: None}):
+        cases: tuple[CaptureOptions, ...] = ({}, {"sink": lambda _chunk: None})
+        for options in cases:
             with self.subTest(options=options), self.assertRaises(ValueError):
                 run_bounded_command(["finite-control-fixture"], {}, max_output=LIMIT, capture_stderr=True,
                                     **options)
@@ -347,6 +354,8 @@ class StderrCaptureFaultTests(unittest.TestCase):
                     self.assertIs(caught.exception.__cause__, fault)
                     self.assertEqual(self.child.returncode, -9)
                     continue
+                if not isinstance(caught.exception, BoundedCommandError):
+                    self.fail("bounded command failure did not retain its structured error")
                 self.assertIs(caught.exception.reason, reason)
                 self.assertIsNone(caught.exception.exit_code)
                 self.assertIs(caught.exception.__cause__, primary)

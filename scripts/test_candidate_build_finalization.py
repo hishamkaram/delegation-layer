@@ -8,7 +8,7 @@ exactly as for the builder CLI. Every case also proves that all directory pins
 were consumed by comparing open descriptor counts.
 """
 
-from collections.abc import Iterator
+from collections.abc import Generator
 import contextlib
 from contextlib import contextmanager
 from dataclasses import replace
@@ -113,7 +113,7 @@ class InProcessCase(unittest.TestCase):
         return result
 
     @contextmanager
-    def stop_command(self, fragment: str, failure: CommandFailure) -> Iterator[None]:
+    def stop_command(self, fragment: str, failure: CommandFailure) -> Generator[None, None, None]:
         """While active, refuse every matching command before it starts."""
         self.stop = (fragment, failure)
         try:
@@ -136,7 +136,7 @@ class InProcessCase(unittest.TestCase):
         return patch.object(DirectoryOwner, "rollback", autospec=True, side_effect=rollback)
 
     @contextmanager
-    def fail_receipt_replace(self, paths: BuildPaths) -> Iterator[list[str]]:
+    def fail_receipt_replace(self, paths: BuildPaths) -> Generator[list[str], None, None]:
         """Fail the real terminal receipt's atomic replace with ENOSPC; every other replace runs."""
         real = filesystem.os.replace
         refused: list[str] = []
@@ -309,6 +309,7 @@ class SettlementFaultTests(InProcessCase):
             with self.assertRaises((VerificationError, OSError)) as caught:
                 self.build_in_process(paths)
         self.assertIsInstance(caught.exception, VerificationError)
+        assert isinstance(caught.exception, VerificationError)
         self.assertEqual(caught.exception.code, "build_receipt_unwritable")
         self.assertEqual(caught.exception.__notes__,
                          ["build receipt was not written: build_receipt_write_failed"])
@@ -325,6 +326,7 @@ class SettlementFaultTests(InProcessCase):
                 with self.assertRaises((VerificationError, OSError)) as caught:
                     self.build_in_process(paths)
         self.assertIsInstance(caught.exception, VerificationError)
+        assert isinstance(caught.exception, VerificationError)
         self.assertEqual(caught.exception.code, "command_timeout")
         self.assertEqual(caught.exception.__notes__,
                          ["build receipt was not written: build_receipt_write_failed"])
@@ -402,6 +404,7 @@ class SetupLedgerRegressionTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()):
             probe.run(result)
         self.assertEqual((self.launches, len(self.delegated)), ([], 1))
+        assert isinstance(probe.outer.unresolved, VerificationError)
         self.assertEqual(probe.outer.unresolved.code, "command_timeout")
         self.assertTrue(probe.outer.root.is_dir(), "settlement removed a fixture retained by setup")
         self.assertEqual((probe.launched, probe.waited), (1, 0))

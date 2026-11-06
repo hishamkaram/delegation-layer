@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from typing import TypedDict
 
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _optional_hex_digest, require
 from scripts.delegate_acceptance.evidence.digests import sha
@@ -19,6 +20,14 @@ from scripts.delegate_acceptance.provider_drivers.agy.constants import (
 )
 from scripts.delegate_acceptance.provider_drivers.agy.queue import row_state
 from scripts.delegate_acceptance.provider_drivers.agy.runtime import provider_runtime_roots
+
+
+class TaskEvidence(TypedDict):
+    meta: dict[str, object]
+    provider_exit: dict[str, object]
+    outcome: dict[str, object]
+    payload: bytes
+    events: dict[str, int]
 
 
 def directory_snapshot(
@@ -54,9 +63,9 @@ def validate_task_request(name: str, task: str, request: dict[str, object], root
             request.get("provider") == PROVIDER and request.get("mode") == MODE,
             f"{name} task identity or provider binding mismatch")
     requested = request.get("requested_config")
-    require(isinstance(requested, dict) and requested.get("budget") == CANONICAL_TASK_BUDGET and
-            request.get("budget_nanos") == 120_000_000_000,
-            f"{name} outer task budget is not 120s")
+    if (not isinstance(requested, dict) or requested.get("budget") != CANONICAL_TASK_BUDGET or
+            request.get("budget_nanos") != 120_000_000_000):
+        raise AcceptanceFailure(f"{name} outer task budget is not 120s")
     expected_timeout = L3_NATIVE_TIMEOUT if name == "L3" else None
     if expected_timeout is None:
         require(requested.get("native_timeout") in (None, ""),
@@ -72,20 +81,22 @@ def validate_submit_record(
     require(submit.get("root_id") == root_id and submit.get("task_id") == task and
             submit.get("label") == label, f"{name} submit evidence identity mismatch")
     supervisor = submit.get("supervisor")
-    require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(pueue_config) and
-            supervisor.get("observed_version") == pueue_version and
-            supervisor.get("client_executable") == str(pueue),
-            f"{name} submit supervisor binding mismatch")
+    if (not isinstance(supervisor, dict) or supervisor.get("config_path") != str(pueue_config) or
+            supervisor.get("observed_version") != pueue_version or
+            supervisor.get("client_executable") != str(pueue)):
+        raise AcceptanceFailure(f"{name} submit supervisor binding mismatch")
     return supervisor
 
 
 def validate_start_records(
         name: str, task: str, start: dict[str, object], started: dict[str, object], root_id: str) -> None:
+    budget = start.get("budget_nanos")
+    diagnostic = started.get("diagnostic_nanos")
     require(start.get("root_id") == root_id and start.get("task_id") == task and
-            isinstance(start.get("budget_nanos"), int) and start["budget_nanos"] > 0,
+            isinstance(budget, int) and budget > 0,
             f"{name} provider.start evidence identity mismatch")
     require(started.get("root_id") == root_id and started.get("task_id") == task and
-            isinstance(started.get("diagnostic_nanos"), int) and started["diagnostic_nanos"] >= 0,
+            isinstance(diagnostic, int) and diagnostic >= 0,
             f"{name} provider.started evidence identity mismatch")
 
 
@@ -94,10 +105,10 @@ def validate_meta_supervisor(
     require(meta.get("supervisor_config") == supervisor,
             f"{name} meta supervisor binding differs from submit evidence")
     predicate = meta.get("predicate")
-    require(isinstance(predicate, dict) and predicate.get("adapter") == PROVIDER and
-            predicate.get("mode") == MODE and predicate.get("version") == PREDICATE_VERSION and
-            predicate.get("sha256") == PREDICATE_SHA256,
-            f"{name} predicate contract mismatch")
+    if (not isinstance(predicate, dict) or predicate.get("adapter") != PROVIDER or
+            predicate.get("mode") != MODE or predicate.get("version") != PREDICATE_VERSION or
+            predicate.get("sha256") != PREDICATE_SHA256):
+        raise AcceptanceFailure(f"{name} predicate contract mismatch")
     return predicate
 
 
@@ -105,16 +116,16 @@ def validate_effective_policy(
         name: str, meta: dict[str, object], workspace: Path) -> tuple[dict[str, object], str]:
     validate_provider_runtime_metadata(meta, label=f"{name} provider runtime metadata")
     effective = meta.get("effective_config")
-    require(isinstance(effective, dict) and effective.get("containment") == MODE and
-            isinstance(effective.get("digest"), str) and effective.get("digest"),
-            f"{name} effective policy is absent")
+    if (not isinstance(effective, dict) or effective.get("containment") != MODE or
+            not isinstance(effective.get("digest"), str) or not effective.get("digest")):
+        raise AcceptanceFailure(f"{name} effective policy is absent")
     policy = effective.get("policy")
-    require(isinstance(policy, dict) and policy.get("workspace") == str(workspace) and
-            _optional_hex_digest(policy.get("runtime_sha256")),
-            f"{name} effective policy binding mismatch")
+    if (not isinstance(policy, dict) or policy.get("workspace") != str(workspace) or
+            not _optional_hex_digest(policy.get("runtime_sha256"))):
+        raise AcceptanceFailure(f"{name} effective policy binding mismatch")
     profile_revision = policy.get("profile_revision")
-    require(isinstance(profile_revision, str) and profile_revision,
-            f"{name} effective policy revision is absent")
+    if not isinstance(profile_revision, str) or not profile_revision:
+        raise AcceptanceFailure(f"{name} effective policy revision is absent")
     return policy, profile_revision
 
 
@@ -152,8 +163,8 @@ def validate_outcome(
     require(outcome.get("task_id") == task and outcome.get("verdict") == expected_verdict,
             f"{name} outcome verdict mismatch")
     payload = outcome.get("payload")
-    require(isinstance(payload, dict) and isinstance(payload.get("basename"), str),
-            f"{name} payload descriptor missing")
+    if not isinstance(payload, dict) or not isinstance(payload.get("basename"), str):
+        raise AcceptanceFailure(f"{name} payload descriptor missing")
     payload_path = directory / payload["basename"]
     require(payload_path.is_file() and not payload_path.is_symlink(), f"{name} payload is absent")
     payload_bytes = payload_path.read_bytes()
@@ -193,8 +204,8 @@ def validate_inspection_queue_row(
         row: dict[str, object], record: dict[str, object], runner: Path, state: Path) -> None:
     request = record["request"]
     receipt = record["receipt"]
-    require(isinstance(request, dict) and isinstance(receipt, dict),
-            "inspection record is malformed")
+    if not isinstance(request, dict) or not isinstance(receipt, dict):
+        raise AcceptanceFailure("inspection record is malformed")
     task = request.get("task_id")
     label = request.get("label")
     group = request.get("group")
@@ -212,7 +223,8 @@ def validate_inspection_queue_row(
                 "--root", str(state), task]
     for key in ("original_command", "command"):
         command = row.get(key)
-        require(isinstance(command, str), f"inspection queue row missing {key} for {task}")
+        if not isinstance(command, str):
+            raise AcceptanceFailure(f"inspection queue row missing {key} for {task}")
         try:
             parsed = shlex.split(command)
         except ValueError as error:

@@ -2,6 +2,7 @@
 
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -25,7 +26,13 @@ DENIED_KEYS = frozenset({
 })
 
 
-def acceptance_for(fixture: InspectionFixture, tasks: dict[str, str], *,
+@dataclass(frozen=True)
+class ClosureRoot:
+    state: Path
+    base: Path
+
+
+def acceptance_for(fixture: InspectionFixture | ClosureRoot, tasks: dict[str, str], *,
                    managed: bool = True, models_state: Path | None = None,
                    model_task: str | None = None) -> SimpleNamespace:
     """Project the acceptance attributes the closure producer reads."""
@@ -120,7 +127,7 @@ class ManagedClosureProducerTests(unittest.TestCase):
         model_fixture.inspection_records(include_ordinary=False, managed_exit_proof=True)
         ordinary_state = model_fixture.base / "ordinary-state"
         ordinary_state.mkdir()
-        empty = SimpleNamespace(state=ordinary_state, base=model_fixture.base)
+        empty = ClosureRoot(state=ordinary_state, base=model_fixture.base)
         acceptance = acceptance_for(empty, {}, models_state=model_fixture.state, model_task=TASK)
         lifecycle_impl.record_lifetime_closure(acceptance)
         self.assertEqual(acceptance.lifetime_closure["ordinary"],
@@ -138,7 +145,7 @@ class ManagedClosureProducerTests(unittest.TestCase):
 
     def test_an_uninspectable_inventory_is_not_a_known_no_launch(self):
         fixture = InspectionFixture(self)
-        empty = SimpleNamespace(state=fixture.base / "ordinary-state", base=fixture.base)
+        empty = ClosureRoot(state=fixture.base / "ordinary-state", base=fixture.base)
         empty.state.mkdir()
         for label, target in (("ordinary tasks", empty.state / "tasks"),
                               ("ordinary inspections", empty.state / "inspections"),

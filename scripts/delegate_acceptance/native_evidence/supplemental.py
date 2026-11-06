@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import platform
 import re
-from typing import Mapping
+from typing import Mapping, TypedDict
 
 from ..evidence.files import digest
 from ..native.constants import PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO
@@ -58,13 +58,42 @@ CONTINUATION_TMPDIR_SCOPES = {"fresh": "predecessor", "resume": "successor", "re
 _TASK_ID = re.compile(r"[0-9a-f]{32}")
 
 
+class HarnessObservation(TypedDict):
+    harness_revision: str
+    harness_sha256: str
+    committed: bool
+
+
+class ContinueCase(TypedDict):
+    case_id: str
+    command: str
+    tasks: dict[str, str]
+    source_receipt_sha256: str | None
+    continue_attempt_sha256: str
+    source_proof: dict[str, object]
+
+
+class SupplementalSummary(TypedDict):
+    kind: str
+    claim: str
+    source_revision: str
+    harness_revision: str
+    harness_sha256: str
+    canonical_aggregate_sha256: str
+    binaries: dict[str, str]
+    host_os: str
+    cases: list[ContinueCase]
+    pi_session_miss: dict[str, object]
+    credentials_in_receipt: bool
+
+
 def supplemental_cases() -> tuple[CaseDefinition, ...]:
     """Return the canonical plain resumable rows the supplemental group repeats."""
     return tuple(case for case in EXPECTED_CASES
                  if case.scenario in {"read-only", "write"} and case.provider != "codex:review")
 
 
-def observe_continuation_harness(environment: Mapping[str, str], checkout: Path) -> dict[str, object]:
+def observe_continuation_harness(environment: Mapping[str, str], checkout: Path) -> HarnessObservation:
     """Observe the HEAD, import-closure fingerprint and committed match of the executing harness."""
     try:
         head, fingerprint, committed = observe_harness(
@@ -95,14 +124,28 @@ def candidate_from_aggregate(receipt: Path, harness: Mapping[str, object], deleg
         raise EvidenceError("canonical_aggregate_not_passed")
     binaries: dict[str, str] | None = None
     task_ids: set[str] = set()
-    for case in value["cases"]:
-        identities = case["binary_identities"]
-        task_ids.update(identities["task_ids"])
+    cases = value["cases"]
+    if not isinstance(cases, list):
+        raise EvidenceError("canonical_aggregate_not_passed")
+    for case in cases:
+        identities = case.get("binary_identities") if isinstance(case, dict) else None
+        if not isinstance(identities, dict):
+            raise EvidenceError("canonical_candidate_binaries_incomplete")
+        recorded_tasks = identities.get("task_ids")
+        if not isinstance(recorded_tasks, list) or any(not isinstance(task, str) for task in recorded_tasks):
+            raise EvidenceError("canonical_candidate_binaries_incomplete")
+        task_ids.update(recorded_tasks)
         if case["status"] != "PASS":
             raise EvidenceError("canonical_aggregate_not_passed")
-        hashes = {key: identities["sha256"].get(key) for key in CANDIDATE_BINARIES}
-        if identities["state"] != "complete" or any(item is None for item in hashes.values()):
+        checksums = identities.get("sha256")
+        if identities["state"] != "complete" or not isinstance(checksums, dict):
             raise EvidenceError("canonical_candidate_binaries_incomplete")
+        hashes: dict[str, str] = {}
+        for key in CANDIDATE_BINARIES:
+            checksum = checksums.get(key)
+            if not isinstance(checksum, str):
+                raise EvidenceError("canonical_candidate_binaries_incomplete")
+            hashes[key] = checksum
         if binaries is not None and hashes != binaries:
             raise EvidenceError("canonical_candidate_binaries_inconsistent")
         binaries = hashes
@@ -146,6 +189,8 @@ def _continue_attempt(directory: Path, tasks: dict[str, str]) -> str:
     if (directory / DISPATCH_ATTEMPT_NAME).exists() or (directory / DISPATCH_ATTEMPT_NAME).is_symlink():
         raise EvidenceError("supplemental_dispatch_substituted")
     attempt, data = _read_json(directory / CONTINUE_ATTEMPT_NAME, MAX_RECEIPT_BYTES)
+    if not isinstance(attempt, dict):
+        raise EvidenceError("supplemental_continue_binding_invalid")
     response = attempt.get("response") if isinstance(attempt, dict) else None
     if (not isinstance(response, dict) or attempt.get("task_id") != tasks["resume"]
             or response.get("command") != "continue" or response.get("admission") != "admitted"
@@ -156,7 +201,7 @@ def _continue_attempt(directory: Path, tasks: dict[str, str]) -> str:
 
 
 def _validate_continue_case(root: Path, definition: CaseDefinition, candidate: Candidate,
-                            excluded: set[str]) -> dict[str, object]:
+                            excluded: set[str]) -> ContinueCase:
     """Judge one raw case with the canonical observation and proof owners, mutating nothing."""
     row = MatrixRow(definition, 0, "PASS")
     observation = _observe_case(row, root)
@@ -185,6 +230,8 @@ def _validate_continue_case(root: Path, definition: CaseDefinition, candidate: C
     reference["binary_identities"] = observation.proof["binary_identities"]
     proof = validate_case_proof(reference, compact)
     binaries = proof["binary_identities"]
+    if not isinstance(binaries, dict) or not isinstance(binaries.get("sha256"), dict):
+        raise EvidenceError("supplemental_binary_mismatch")
     if proof["source_receipt_sha256"] != observation.source_digest:
         raise EvidenceError("supplemental_source_binding_invalid")
     if (binaries["task_ids"] != sorted(tasks.values())
@@ -241,7 +288,7 @@ def validate_pi_control(directory: Path, candidate: Candidate, excluded: set[str
 
 def validate_supplemental(*, supplemental_root: Path, canonical_aggregate: Path, source_revision: str | None,
                           candidate_delegate: Path, pi_control: Path, environment: Mapping[str, str],
-                          checkout: Path) -> dict[str, object]:
+                          checkout: Path) -> SupplementalSummary:
     """Validate every mandatory supplemental receipt; any refusal leaves all evidence unchanged."""
     harness = observe_continuation_harness(environment, checkout)
     revision = _parse_optional_revision(source_revision)

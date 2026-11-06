@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 import json
+from typing import TypedDict
 
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.evidence.json_decoder import unique_object
@@ -12,6 +14,16 @@ from scripts.delegate_acceptance.provider_drivers.codex.constants import (
     MAX_ITEMS, MAX_PROVIDER_BYTES, RESUME_ALLOWED_ITEM_TYPES,
 )
 from scripts.delegate_acceptance.provider_drivers.codex.identity import is_thread_id
+
+
+class ParsedStream(TypedDict):
+    thread_id: str
+    final_message: bytes
+    usage: dict[str, int | None] | None
+    commands: list[dict[str, object]]
+    incomplete_commands: list[str]
+    item_states: list[dict[str, object]]
+    unknown_events: list[str]
 
 def reject_constant(value: str) -> None:
     raise ValueError("nonfinite JSON number: " + value)
@@ -25,17 +37,18 @@ def decode_event(line: bytes) -> dict[str, object]:
         value = json.loads(text, object_pairs_hook=unique_object, parse_constant=reject_constant)
     except (UnicodeError, ValueError, TypeError, RecursionError) as error:
         raise AcceptanceFailure(f"invalid Codex JSONL event: {error}") from error
-    require(isinstance(value, dict), "Codex JSONL event is not an object")
-    require(isinstance(value.get("type"), str) and value["type"],
-            "Codex JSONL event type is missing")
+    if not (isinstance(value, dict)):
+        raise AcceptanceFailure("Codex JSONL event is not an object")
+    if not (isinstance(value.get("type"), str) and value["type"]):
+        raise AcceptanceFailure("Codex JSONL event type is missing")
     return value
 
 
 def nonnegative_counter(value: object, label: str) -> int | None:
     if value is None:
         return None
-    require(isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_INT64,
-            f"{label} is not a nonnegative integer")
+    if not (isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_INT64):
+        raise AcceptanceFailure(f"{label} is not a nonnegative integer")
     return value
 
 
@@ -43,7 +56,8 @@ def parse_usage(event: dict[str, object]) -> dict[str, int | None] | None:
     usage = event.get("usage")
     if usage is None:
         return None
-    require(isinstance(usage, dict), "turn.completed usage is not an object")
+    if not (isinstance(usage, dict)):
+        raise AcceptanceFailure("turn.completed usage is not an object")
     return {
         "input_tokens": nonnegative_counter(usage.get("input_tokens"), "usage input_tokens"),
         "cached_input_tokens": nonnegative_counter(usage.get("cached_input_tokens"), "usage cached_input_tokens"),
@@ -75,6 +89,9 @@ class _CodexStream:
 
     def consume(self, event: dict[str, object]) -> None:
         event_type = event["type"]
+        if not isinstance(event_type, str) or not event_type:
+            self.fault("Codex JSONL event type is missing")
+            return
         if event_type == "thread.started":
             self._thread_started(event)
         elif event_type == "turn.started":
@@ -247,7 +264,11 @@ class _CodexStream:
         else:
             state["completed"] = True
             if item_type == "agent_message":
-                self.final_message = state.get("text", "").encode("utf-8")
+                text = state.get("text", "")
+                if not isinstance(text, str):
+                    self.fault("agent_message text is not a string")
+                    return
+                self.final_message = text.encode("utf-8")
 
     def _unknown_event(self, event_type: str) -> None:
         # Unknown nonterminal events remain tolerated unless they alter turn identity.
@@ -256,18 +277,21 @@ class _CodexStream:
         else:
             self.unknown_events.append(event_type)
 
-    def finish(self) -> dict[str, object]:
+    def finish(self) -> ParsedStream:
         require(self.semantic_error is None,
                 self.semantic_error or "invalid Codex JSONL evidence")
-        require(self.thread_id is not None, "Codex JSONL has no thread.started identity")
+        thread_id = self.thread_id
+        if thread_id is None:
+            raise AcceptanceFailure("Codex JSONL has no thread.started identity")
         require(self.turn_started and self.turn_completed and
                 not self.terminal_failed and not self.interrupted,
                 "Codex JSONL has no successful completed turn")
-        require(self.final_message is not None and self.final_message.strip(),
-                "Codex JSONL has no non-whitespace final agent message")
-        return self._result()
+        final_message = self.final_message
+        if final_message is None or not final_message.strip():
+            raise AcceptanceFailure("Codex JSONL has no non-whitespace final agent message")
+        return self._result(thread_id, final_message)
 
-    def _result(self) -> dict[str, object]:
+    def _result(self, thread_id: str, final_message: bytes) -> ParsedStream:
         # Only item.completed commands prove provider action; earlier command
         # events can contain a plan without showing that it was attempted.
         completed_commands = [
@@ -284,8 +308,8 @@ class _CodexStream:
             for item_id, state in self.items.items()
         ]
         return {
-            "thread_id": self.thread_id,
-            "final_message": self.final_message,
+            "thread_id": thread_id,
+            "final_message": final_message,
             "usage": self.usage,
             "commands": completed_commands,
             "incomplete_commands": incomplete_commands,
@@ -294,7 +318,7 @@ class _CodexStream:
         }
 
 
-def parse_codex_events(raw: bytes) -> dict[str, object]:
+def parse_codex_events(raw: bytes) -> ParsedStream:
     """Apply the immutable Codex JSONL selection and completion rules."""
     require(len(raw) <= MAX_PROVIDER_BYTES, "Codex stdout exceeds observation bound")
     lines = raw.split(b"\n")
@@ -312,24 +336,27 @@ def parse_codex_events(raw: bytes) -> dict[str, object]:
     return stream.finish()
 
 
-def validate_tool_free_resume(parsed: dict[str, object], expected_answer: bytes) -> dict[str, object]:
+def validate_tool_free_resume(parsed: Mapping[str, object], expected_answer: bytes) -> dict[str, object]:
     """Require a resumed turn to contain only conversational item kinds."""
-    require(isinstance(expected_answer, bytes), "resume expected answer is not bytes")
+    if not (isinstance(expected_answer, bytes)):
+        raise AcceptanceFailure("resume expected answer is not bytes")
     item_states = parsed.get("item_states")
-    require(isinstance(item_states, list), "resume item type evidence is absent")
+    if not (isinstance(item_states, list)):
+        raise AcceptanceFailure("resume item type evidence is absent")
     unknown_events = parsed.get("unknown_events")
-    require(isinstance(unknown_events, list) and not unknown_events,
-            "resume contains unknown event types")
+    if not (isinstance(unknown_events, list) and not unknown_events):
+        raise AcceptanceFailure("resume contains unknown event types")
     types: list[str] = []
     for state in item_states:
-        require(isinstance(state, dict), "resume item type evidence is malformed")
+        if not (isinstance(state, dict)):
+            raise AcceptanceFailure("resume item type evidence is malformed")
         item_type = state.get("type")
-        require(isinstance(item_type, str) and item_type in RESUME_ALLOWED_ITEM_TYPES,
-                "resume contains disallowed item type: " + str(item_type))
+        if not (isinstance(item_type, str) and item_type in RESUME_ALLOWED_ITEM_TYPES):
+            raise AcceptanceFailure("resume contains disallowed item type: " + str(item_type))
         types.append(item_type)
     commands = parsed.get("commands")
-    require(isinstance(commands, list) and not commands,
-            "resume contains completed command_execution evidence")
+    if not (isinstance(commands, list) and not commands):
+        raise AcceptanceFailure("resume contains completed command_execution evidence")
     require(parsed.get("final_message") == expected_answer,
             "resume final message is not the exact recovered nonce")
     return {"item_count": len(item_states), "item_types": sorted(set(types)),

@@ -1,6 +1,8 @@
 """Reject false modern contention evidence without IO or subprocesses."""
 
 from copy import deepcopy
+from scripts.acceptance_tests.invalid_calls import invoke_invalid
+from scripts.acceptance_tests.record_fixtures import object_at
 import unittest
 
 from scripts.delegate_acceptance.private_cli.contention_policy import (
@@ -21,7 +23,10 @@ class ModernContentionPolicyTests(unittest.TestCase):
                 if type(shared) is bool and (shared, exclusive) == flags:
                     continue
                 with self.subTest(mode=mode, flags=(shared, exclusive)), self.assertRaisesRegex(RuntimeError, "lease"):
-                    require_lease_mode(mode, shared, exclusive)
+                    if type(shared) is bool:
+                        require_lease_mode(mode, shared, exclusive)
+                    else:
+                        invoke_invalid(require_lease_mode, mode, shared, exclusive)
         with self.assertRaises(RuntimeError):
             require_lease_mode("unknown", True, False)
 
@@ -54,7 +59,7 @@ class ModernContentionPolicyTests(unittest.TestCase):
                 require_boundary_identity({**receipt, key: bad}, "nonce", 100, "/config")
 
     def test_checks_every_lock_observation_and_boundary_order(self):
-        lock = {"path": "/state/.supervisor/bootstrap.lock", "device": 1, "inode": 2, "file_mode": "0o600"}
+        lock: dict[str, object] = {"path": "/state/.supervisor/bootstrap.lock", "device": 1, "inode": 2, "file_mode": "0o600"}
         require_same_lock(lock, dict(lock), dict(lock), dict(lock))
         for key, bad in (("path", "/other"), ("device", 2), ("inode", 3), ("file_mode", "0o644")):
             with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "lock identity"):
@@ -63,11 +68,18 @@ class ModernContentionPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "release order"):
             require_boundary_order({"entered_ns": 1}, 3, {"entered_ns": 2}, 4)
 
+    def test_malformed_boundary_time_is_a_control_failure(self):
+        for invalid in ([], {}, None):
+            with self.subTest(shared=invalid), self.assertRaisesRegex(RuntimeError, "release order"):
+                require_boundary_order({"entered_ns": invalid}, 2, {"entered_ns": 3}, 4)
+            with self.subTest(exclusive=invalid), self.assertRaisesRegex(RuntimeError, "release order"):
+                require_boundary_order({"entered_ns": 1}, 2, {"entered_ns": invalid}, 4)
+
     def test_preserves_nested_content_and_exact_response_identity(self):
         content = {"task": {"meta": "digest", "closure": {"registration": {"scope_id": "exact"}}}}
         require_content_identity(content, deepcopy(content), "check")
         changed = deepcopy(content)
-        changed["task"]["closure"]["registration"]["scope_id"] = "changed"
+        object_at(changed, "task", "closure", "registration")["scope_id"] = "changed"
         with self.assertRaisesRegex(RuntimeError, "immutable"):
             require_content_identity(content, changed, "check")
         response = {"root_id": "root", "task_id": "task", "supervisor_control": {"state": "blocked"}}

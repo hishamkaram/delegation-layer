@@ -4,11 +4,12 @@
 
 These repository guides describe main; published installs may lag. For a source
 build, install the Go release in [`.go-version`](../.go-version) yourself and put
-it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js 22 or
-newer and repository-local pinned tools. Node is for installer/plugin checks;
+it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js
+22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is for installer/plugin checks;
 Python is for repository tooling and black-box tests, not the Go CLI runtime.
 Run `make tools` to install the project's tools under ignored `bin/`; it does
-not install Go. Then run `make build`, which requires both that compiler and the
+not install Go. `make tools-go` installs only the core Go tools for the platform
+checks. Then run `make build`, which requires both that compiler and the
 pinned tools checked by `make tool-versions`. Keep the native `bin/delegate`
 and `bin/delegate-run` from the same build colocated.
 
@@ -43,14 +44,55 @@ It covers Go race tests, Python discovery, architectural/static checks, package
 checks, formatting and vulnerability scanning. Do not run those suites again
 as separate targets after the aggregate unchanged. `make test-native-harness`
 is useful during acceptance-driver edits; its Python tests are already in
-`make test-python` and the final aggregate. Required CI validates Linux/macOS;
-do not dispatch a second full workflow merely to certify the first.
+`make test-python` and the final aggregate. Required CI runs the complete gate on
+Linux and `make check-platform` on macOS. The platform gate keeps Go vet, lint,
+builds, race tests, and Python/Node runtime tests on both hosts, including
+platform-specific source and behavior. It omits only the shared static checks
+already run on Linux. Do not dispatch a second full workflow merely to certify
+the first.
 
 Fix actual failures and rerun affected checks. Broaden only for changed inputs
 or a concrete concern. A setup failure is blocked, not a passing test. Reviewers
 can reuse trustworthy unchanged results. Final independent review covers the
 integrated change; do not repeat it separately for every worker. Unrelated
 findings are reported separately, not automatically added to the ticket.
+
+### Static analysis
+
+`make tools` installs Ruff, ty, ShellCheck, jactionlint, zizmor, and the separately
+locked JavaScript lint dependencies into `bin/`. `make lint-static` runs all six
+mandatory checks; `make verify-static-gates` proves rejection and acceptance
+with temporary fixtures. Both are included in `make check`, and any finding
+fails the gate.
+
+CI runs these shared source and workflow checks once on Linux; macOS installs
+`make tools-go` and runs `make check-platform`. Go vet, lint, builds, race tests,
+and Python/Node runtime tests still run on both native hosts. The default
+`make check` runs the shared checks followed by the platform gate.
+The source inventory is authoritative: `go run ./cmd/maintainability --sources
+python` (or `javascript`, `shell`, `go`) emits absolute NUL-separated paths,
+including maintained untracked additions and excluding ignored scratch.
+
+Workflow syntax checks use the pinned jactionlint correctness profile, which
+preserves actionlint checks and supports current GitHub syntax. All workflows,
+including release, are checked without ignores or baselines. Zizmor checks
+workflow security offline with its default `regular` profile, strict input
+parsing, and ignores/configuration loading disabled. ty targets Python 3.12 and all platforms; this is
+source analysis, not proof of execution on each host.
+
+For a focused type/security check, run `make diagnostics`; install just those
+tools with `make diagnostic-tools`. They keep their historical
+`bin/diagnostics/` installation directory but are also required by the main
+gate. Review findings against the code and fix real defects with regression
+coverage. Do not hide findings in a baseline or weaken checks to obtain a pass.
+Ruff automatic fixes are disabled; review facade consumers before changing an
+apparently unused import.
+
+Goleak supplements the existing race detector in adopted test packages. Its
+shared helper checks after test cleanup and preserves failing exit statuses.
+Tests which deliberately transfer work to another process keep their explicit
+helper exit path; normal tests must settle owned work before the suite ends.
+Neither check establishes native child-process closure by itself.
 
 ### Maintainability
 
@@ -200,7 +242,12 @@ task outcomes, real cleanup and diagnostics; no development-proof branch,
 registration or proof upload is needed. Keep raw private output off public CI.
 
 The CCR foreground fixture uses real Delegate/CCR/Claude binaries against a
-local HTTP fixture, without account credentials or paid requests:
+local HTTP fixture, without account credentials or paid requests. CI installs
+the reviewed Claude Code version from `tools/ccr-provider/package-lock.json` in
+a temporary directory and verifies its version before running the fixture.
+This CI pin does not control users’ provider installations.
+
+Run it locally with your installed provider:
 
 ```sh
 PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py

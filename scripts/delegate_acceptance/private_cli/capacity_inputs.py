@@ -2,9 +2,21 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from scripts.delegate_acceptance.directories.operations import OwnedDirectory
-from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate, LiveFIFOLeaseCohort
+from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
+
+
+class ReleaseGate(Protocol):
+    """The capacity cohort reads a gate's path and requests release from its owner."""
+
+    @property
+    def path(self) -> Path:
+        ...
+
+    def release(self) -> None:
+        ...
 
 
 @dataclass(frozen=True)
@@ -13,7 +25,7 @@ class CapacityRequest:
     state: Path
     workspace: Path
     brief: Path
-    release_gate: LockedReleaseGate
+    release_gate: ReleaseGate
     waiter_directory: Path
     env: dict[str, str]
     old_layout: Path

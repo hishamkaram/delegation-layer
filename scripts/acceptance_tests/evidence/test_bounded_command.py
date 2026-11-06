@@ -6,11 +6,20 @@ import selectors
 import subprocess
 import sys
 import unittest
+from typing import Callable, Mapping, TypeVar
 from unittest.mock import Mock, patch
 
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.processes.operations import run_bounded_command
 from scripts.delegate_acceptance.processes import operations
+
+
+Result = TypeVar("Result")
+
+
+def invoke_invalid_bounds(operation: Callable[..., Result], options: Mapping[str, object]) -> Result:
+    # Negative bounds deliberately violate the static contract; forward the actual values unchanged.
+    return operation(["finite-control-fixture"], {}, **options)
 
 
 class BoundedCommandTests(unittest.TestCase):
@@ -36,7 +45,10 @@ class BoundedCommandTests(unittest.TestCase):
             self.run_python("import signal; signal.pause()", timeout=1)
         self.assertIs(captured.exception.reason, CommandFailure.TIMEOUT)
         self.assertIsInstance(captured.exception.exit_code, int)
-        self.assertLess(captured.exception.exit_code, 0)
+        exit_code = captured.exception.exit_code
+        if exit_code is None:
+            self.fail("timed-out child has no exact Wait result")
+        self.assertLess(exit_code, 0)
 
     def test_nonzero_exit_remains_an_observation_for_the_consumer(self):
         result = self.run_python("import sys; sys.exit(7)")
@@ -113,6 +125,20 @@ class BoundedCommandFailureTests(unittest.TestCase):
                 self.assertEqual(str(caught.exception), CommandFailure.CAPTURE_UNAVAILABLE.value)
                 self.assertEqual(caught.exception.exit_code, -9)
                 self.assert_closed(selector=stage != "constructor")
+
+    def test_selector_descriptor_uses_the_original_owned_pipe(self):
+        ready = selectors.SelectorKey(10, 10, selectors.EVENT_READ, None)
+        self.selector.select.return_value = [(ready, selectors.EVENT_READ)]
+        result = self.invoke()
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.output, b"")
+        self.selector.unregister.assert_called_once_with(self.child.stdout)
+        self.child.kill.assert_not_called()
+        self.child.wait.assert_called_once()
+        self.child.stdout.close.assert_called_once()
+        self.selector.close.assert_called_once()
+        calls = [call[0] for call in self.order.mock_calls]
+        self.assertLess(calls.index("wait"), calls.index("pipe_close"))
 
     def test_unknown_errors_and_cancellation_keep_the_primary_exception_after_wait(self):
         for failure in (RuntimeError("unexpected fixture failure"), KeyboardInterrupt(), SystemExit(17)):
@@ -211,7 +237,8 @@ class BoundedCommandFailureTests(unittest.TestCase):
         self.assertIs(caught.exception.reason, CommandFailure.CAPTURE_UNAVAILABLE)
         self.assertIsNone(caught.exception.exit_code)
         closure = caught.exception.__cause__
-        self.assertIsInstance(closure, BoundedCommandError)
+        if not isinstance(closure, BoundedCommandError):
+            self.fail("pipe failure lost the typed closure failure")
         self.assertIs(closure.reason, CommandFailure.TERMINATION_TIMEOUT)
         self.assertIs(closure.__cause__, primary)
         self.assertEqual(self.child.wait.call_count, 2)
@@ -260,11 +287,12 @@ class BoundedCommandFailureTests(unittest.TestCase):
         self.assertEqual(self.child.wait.call_count, 2)
 
     def test_invalid_bounds_fail_before_starting_a_child(self):
-        cases = [{"timeout": value, "max_output": 0} for value in (0, -1, float("nan"), float("inf"))]
+        cases: list[dict[str, object]] = [
+            {"timeout": value, "max_output": 0} for value in (0, -1, float("nan"), float("inf"))]
         cases.extend({"timeout": 1, "max_output": value} for value in (-1, 1.5))
         for options in cases:
             with self.subTest(options=options), self.assertRaises(ValueError):
-                run_bounded_command(["finite-control-fixture"], {}, **options)
+                invoke_invalid_bounds(run_bounded_command, options)
         self.spawn.assert_not_called()
 
     def test_start_failure_keeps_its_code_and_does_not_close_an_unowned_child(self):
@@ -357,7 +385,10 @@ class BoundedCommandSinkTests(unittest.TestCase):
             self.run_sink("import signal, sys; sys.stdout.buffer.write(b'x'); sys.stdout.flush();"
                           " signal.pause()", refuse, maximum=128)
         self.assertIs(captured.exception.reason, CommandFailure.CAPTURE_UNAVAILABLE)
-        self.assertLess(captured.exception.exit_code, 0)
+        exit_code = captured.exception.exit_code
+        if exit_code is None:
+            self.fail("refused capture has no exact Wait result")
+        self.assertLess(exit_code, 0)
         self.assertNotIn("private-sink-detail", str(captured.exception))
 
     def test_other_sink_failures_propagate_unchanged_after_the_child_is_closed(self):
@@ -379,7 +410,10 @@ class BoundedCommandSinkTests(unittest.TestCase):
         with self.assertRaises(BoundedCommandError) as captured:
             self.run_sink("import signal; signal.pause()", chunks.append, maximum=128, timeout=1)
         self.assertIs(captured.exception.reason, CommandFailure.TIMEOUT)
-        self.assertLess(captured.exception.exit_code, 0)
+        exit_code = captured.exception.exit_code
+        if exit_code is None:
+            self.fail("timed-out sink has no exact Wait result")
+        self.assertLess(exit_code, 0)
         self.assertEqual(chunks, [])
 
     def test_sink_requires_capture_and_starts_no_child(self):

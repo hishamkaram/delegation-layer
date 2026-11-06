@@ -22,11 +22,14 @@ concurrency:
 
 jobs:
   publish:
+    name: Publish verified distribution
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
+      # Read the selected tested distribution artifact and its source run.
       actions: read
+      # Publish the verified tag and release assets.
       contents: write
     steps:
       - name: Checkout trusted publication code

@@ -115,10 +115,7 @@
     "layer": "tool",
     "imports": [
       "py:__future__",
-      "py:argparse",
-      "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.directories.operations",
-      "py:delegate_acceptance.evidence.bounded_files",
       "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.validation",
       "py:delegate_acceptance.release_verification.assets",
@@ -129,21 +126,8 @@
       "py:delegate_acceptance.release_verification.filesystem",
       "py:delegate_acceptance.release_verification.source",
       "py:delegate_acceptance.release_verification.verification",
-      "py:hashlib",
-      "py:json",
-      "py:os",
       "py:pathlib",
-      "py:platform",
-      "py:re",
-      "py:selectors",
-      "py:shutil",
-      "py:stat",
-      "py:struct",
-      "py:subprocess",
-      "py:sys",
-      "py:tarfile",
-      "py:tempfile",
-      "py:time"
+      "py:sys"
     ]
   },
   {

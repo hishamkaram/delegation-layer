@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from scripts.acceptance_tests.record_fixtures import object_at
 from scripts.acceptance_tests.private_cli.fixtures import (
     canonical_pool_marker,
     create_private_pool_directory,
@@ -184,19 +185,19 @@ class NoexecProbeTests(unittest.TestCase):
 
 class UnplacedRegistrationTests(unittest.TestCase):
     def setUp(self):
-        self.closures = {
+        self.closures: dict[str, object] = {
             "tasks": {TASK: {"registration": {"scope_kind": "process-group"}}},
             "inspections": {INSPECTION: {"registration": {"scope_kind": "process-group"}}},
         }
 
     def test_each_registered_task_and_inspection_is_reported(self):
-        self.closures["tasks"][OTHER_TASK] = {"registration": {"scope_kind": "process-group"}}
+        object_at(self.closures, "tasks")[OTHER_TASK] = {"registration": {"scope_kind": "process-group"}}
         self.assertEqual(noexec_state.require_unplaced_registrations(self.closures),
                          {"tasks": sorted([TASK, OTHER_TASK]), "inspections": [INSPECTION]})
 
     def test_any_present_placement_in_either_namespace_is_refused(self):
         for kind, identity in (("tasks", TASK), ("inspections", INSPECTION)):
-            registration = self.closures[kind][identity]["registration"]
+            registration = object_at(self.closures, kind, identity, "registration")
             for value in (None, {}, "", {"version": 1, "pool_id": POOL_A, "pool_root": "/pool"}):
                 with self.subTest(kind=kind, value=value):
                     registration["custody_placement"] = value
@@ -205,14 +206,14 @@ class UnplacedRegistrationTests(unittest.TestCase):
             del registration["custody_placement"]
 
     def test_another_valid_registration_cannot_vouch_for_a_placed_one(self):
-        self.closures["tasks"][OTHER_TASK] = {"registration": {"custody_placement": None}}
+        object_at(self.closures, "tasks")[OTHER_TASK] = {"registration": {"custody_placement": None}}
         with self.assertRaisesRegex(RuntimeError, "task " + OTHER_TASK):
             noexec_state.require_unplaced_registrations(self.closures)
 
     def test_genuinely_unregistered_rows_are_skipped(self):
         for kind in ("tasks", "inspections"):
-            self.closures[kind][OTHER_TASK] = {"registration": None}
-            self.closures[kind]["unlaunched"] = {}
+            object_at(self.closures, kind)[OTHER_TASK] = {"registration": None}
+            object_at(self.closures, kind)["unlaunched"] = {}
         self.assertEqual(noexec_state.require_unplaced_registrations(self.closures),
                          {"tasks": [TASK], "inspections": [INSPECTION]})
 

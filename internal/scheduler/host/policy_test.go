@@ -6,13 +6,17 @@ import (
 )
 
 func TestRestartPolicyExactDelaysCapAndHealthyReset(t *testing.T) {
-	want := []time.Duration{1, 2, 4, 8, 16, 30, 60, 120, 300, 300, 300, 300}
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second,
+		16 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute,
+		5 * time.Minute, 5 * time.Minute, 5 * time.Minute, 5 * time.Minute,
+	}
 	failures := 0
-	for index, seconds := range want {
+	for index, expected := range want {
 		var delay time.Duration
 		failures, delay = afterExit(failures, 0)
-		if delay != seconds*time.Second {
-			t.Fatalf("failure %d: delay=%s, want %s", index+1, delay, seconds*time.Second)
+		if delay != expected {
+			t.Fatalf("failure %d: delay=%s, want %s", index+1, delay, expected)
 		}
 	}
 	if _, delay := afterExit(failures, 5*time.Minute-time.Nanosecond); delay != 300*time.Second {

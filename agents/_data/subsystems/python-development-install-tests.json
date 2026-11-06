@@ -61,6 +61,7 @@
       "py:__future__",
       "py:acceptance_tests.candidate_fixtures",
       "py:acceptance_tests.release_fixture",
+      "py:collections.abc",
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.private_cli.capture",
       "py:delegate_acceptance.private_cli.finalization",
@@ -80,6 +81,7 @@
       "py:sys",
       "py:tempfile",
       "py:types",
+      "py:typing",
       "py:unittest"
     ]
   },
@@ -146,6 +148,7 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.invalid_calls",
       "py:acceptance_tests.release_fixture",
       "py:collections.abc",
       "py:contextlib",
@@ -155,6 +158,7 @@
       "py:delegate_acceptance.release_verification.published_contract",
       "py:io",
       "py:pathlib",
+      "py:typing",
       "py:unittest"
     ]
   },

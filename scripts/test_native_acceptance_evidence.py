@@ -15,6 +15,7 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests.record_fixtures import object_at
 from scripts import acceptance_supervisor_common as common
 from scripts import native_acceptance_evidence as evidence
 from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
@@ -23,6 +24,13 @@ from scripts.delegate_acceptance.native_evidence import cases as case_operations
 from scripts.delegate_acceptance.native_evidence import contract as evidence_contract
 from scripts.delegate_acceptance.native_evidence import retention as retention_operations
 from scripts.delegate_acceptance.native_evidence import validation as evidence_validation
+
+
+
+def _first_receipt_path(value: object) -> str:
+    path = object_at(value, "cases", 0)["receipt_path"]
+    assert isinstance(path, str), "aggregate case receipt path is not text"
+    return path
 
 
 class NativeAcceptanceEvidenceTests(unittest.TestCase):
@@ -212,7 +220,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         aggregate = root / evidence.AGGREGATE_RECEIPT_NAME
         value, _ = evidence.validate_aggregate_receipt(aggregate)
-        compact = Path(value["cases"][0]["receipt_path"])
+        compact = Path(_first_receipt_path(value))
         compact.write_text(compact.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8")
         with self.assertRaisesRegex(evidence.EvidenceError, "aggregate_case_digest_mismatch"):
             evidence.validate_aggregate_receipt(aggregate)
@@ -228,7 +236,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(len(list(compact_root.glob("*.cleanup.json"))), len(evidence.EXPECTED_CASES))
         self.assertEqual(len(list(compact_root.glob("*.cleanup.json.lock"))), len(evidence.EXPECTED_CASES))
         self.assertEqual(list((root / evidence.CASE_ROOT_NAME).iterdir()), [])
-        compact = json.loads(Path(value["cases"][0]["receipt_path"]).read_text(encoding="utf-8"))
+        compact = json.loads(Path(_first_receipt_path(value)).read_text(encoding="utf-8"))
         self.assertEqual(compact["source_proof"]["requested_options_state"], "recorded")
         self.assertIsNone(compact["source_proof"]["requested_model"])
         self.assertIsNone(compact["source_proof"]["requested_effort"])
@@ -240,7 +248,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             requested_effort="high",
         )
         self.assertEqual(code, 0)
-        compact_path = Path(value["cases"][0]["receipt_path"])
+        compact_path = Path(_first_receipt_path(value))
         compact = json.loads(compact_path.read_text(encoding="utf-8"))
         proof = compact["source_proof"]
         self.assertEqual(proof["requested_options_state"], "recorded")
@@ -254,7 +262,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         )
         self.assertRegex(replay_code, r"^[0-9a-f]{64}$")
         replayed_compact = json.loads(
-            Path(replayed["cases"][0]["receipt_path"]).read_text(encoding="utf-8"),
+            Path(_first_receipt_path(replayed)).read_text(encoding="utf-8"),
         )
         self.assertEqual(replayed_compact["source_proof"]["requested_model"], proof["requested_model"])
         self.assertEqual(replayed_compact["source_proof"]["requested_effort"], proof["requested_effort"])
@@ -279,10 +287,10 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 1)
                 self.assertEqual(aggregate["status"], "FAIL")
-                self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+                self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
                 case_directory = root / evidence.EXPECTED_CASES[0].case_output
                 self.assertTrue((case_directory / "success.json").is_file())
-                compact = json.loads(Path(aggregate["cases"][0]["receipt_path"]).read_text())
+                compact = json.loads(Path(_first_receipt_path(aggregate)).read_text())
                 self.assertEqual(compact["source_proof"]["requested_options_state"], label)
                 self.assertIsNone(compact["source_proof"]["requested_model"])
                 self.assertIsNone(compact["source_proof"]["requested_effort"])
@@ -295,11 +303,11 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(code, 0)
         aggregate_path = root / evidence.AGGREGATE_RECEIPT_NAME
         aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
-        compact_path = Path(aggregate["cases"][0]["receipt_path"])
+        compact_path = Path(_first_receipt_path(aggregate))
         compact = json.loads(compact_path.read_text(encoding="utf-8"))
         compact["source_proof"]["requested_model"] = "model-b"
         compact_path.write_text(json.dumps(compact), encoding="utf-8")
-        aggregate["cases"][0]["receipt_sha256"] = hashlib.sha256(
+        object_at(aggregate, "cases", 0)["receipt_sha256"] = hashlib.sha256(
             compact_path.read_bytes(),
         ).hexdigest()
         aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
@@ -321,9 +329,9 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
         compact = json.loads(
-            Path(aggregate["cases"][0]["receipt_path"]).read_text(encoding="utf-8"),
+            Path(_first_receipt_path(aggregate)).read_text(encoding="utf-8"),
         )
         self.assertEqual(compact["source_proof"]["requested_options_state"], "invalid")
         self.assertEqual(compact["evidence_error"], "source_requested_options_invalid")
@@ -398,7 +406,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         root = self.root / "native-aggregate-runtime-drift"
         value, code = self.build(root=root, status="PASS")
         self.assertEqual(code, 0)
-        compact = json.loads(Path(value["cases"][0]["receipt_path"]).read_text(encoding="utf-8"))
+        compact = json.loads(Path(_first_receipt_path(value)).read_text(encoding="utf-8"))
         binaries = compact["source_proof"]["binary_identities"]
         runtimes = binaries["provider_runtime_identities"]
         self.assertEqual(len(runtimes), 2)
@@ -425,7 +433,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue(case_directory.is_dir())
 
     def test_pass_rejects_first_binding_runtime_mismatch(self):
@@ -442,7 +450,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue(case_directory.is_dir())
 
     def test_replay_uses_terminal_receipts_after_matrix_removal(self):
@@ -557,8 +565,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertTrue((root / evidence.EXPECTED_CASES[0].case_output).exists())
-        self.assertEqual(value["cases"][0]["evidence_status"], "UNRESOLVED")
-        self.assertEqual(value["cases"][0]["receipt_sha256"].__class__, str)
+        self.assertEqual(object_at(value, "cases", 0)["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(value, "cases", 0)["receipt_sha256"].__class__, str)
 
     def test_large_aggregate_replays_with_long_native_paths(self):
         root = self.root / ("native-path-" + "x" * 150) / ("nested-" + "y" * 150)
@@ -596,7 +604,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         compact = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{evidence.EXPECTED_CASES[0].case_id}.json"
         self.assertNotIn("provider secret", compact.read_text(encoding="utf-8"))
         self.assertEqual(value["unresolved_case_count"], 1)
-        case = dict(value["cases"][0])
+        case = dict(object_at(value, "cases", 0))
         proof = evidence_contract._validate_case_proof_identity(case, json.loads(compact.read_bytes()))
         sessions = evidence_contract._validate_case_sessions(proof)
         binaries = evidence_contract._validate_case_binaries(case, proof)
@@ -642,7 +650,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(value["status"], "FAIL")
         self.assertTrue(raw.is_file())
-        self.assertEqual(value["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(value, "cases", 0)["evidence_status"], "UNRESOLVED")
 
     def test_replaced_case_directory_is_not_removed(self):
         root = self.root / "native-aggregate-replaced"
@@ -657,7 +665,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(value["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(value, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue(case_directory.is_symlink())
 
     def test_regular_case_replacement_after_creation_is_not_removed(self):
@@ -674,7 +682,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(value["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(value, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue(marker.is_file())
         self.assertTrue(original.is_dir())
 
@@ -690,7 +698,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue((root / evidence.EXPECTED_CASES[0].case_output).is_dir())
 
     def test_pass_rejects_broken_task_session_continuity_before_raw_cleanup(self):
@@ -707,7 +715,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             tag="v1.2.3", source_revision="a" * 40,
         )
         self.assertEqual(code, 1)
-        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        self.assertEqual(object_at(aggregate, "cases", 0)["evidence_status"], "UNRESOLVED")
         self.assertTrue((case_directory / "success.json").is_file())
 
     def test_pending_retention_receipt_never_validates_or_replays(self):
@@ -837,7 +845,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertTrue(first_value["terminal_evidence_published"])
         self.assertEqual((first_value["status"], first_value["unresolved_case_count"]),
                          ("PASS", 0))
-        self.assertEqual(first_value["retention"]["after"]["root_count"], 1)
+        self.assertEqual(object_at(first_value, "retention", "after")["root_count"], 1)
         self.assertEqual(value["retention"]["after"]["root_count"], 2)
         first_plan = json.loads((first / evidence.RETENTION_PLAN_NAME).read_text(encoding="utf-8"))
         self.assertEqual(first_plan["state"], "complete")
@@ -869,7 +877,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.build(root=first, status="PASS", retention_count=1)
         receipt = first / evidence.AGGREGATE_RECEIPT_NAME
         value = json.loads(receipt.read_text(encoding="utf-8"))
-        del value["cases"][0]["binary_identities"]["task_ids"]
+        del object_at(value, "cases", 0, "binary_identities")["task_ids"]
         evidence._write_atomic(receipt, value, evidence.MAX_AGGREGATE_BYTES)
         terminal_bytes = receipt.read_bytes()
         with self.assertRaises(evidence.EvidenceError):

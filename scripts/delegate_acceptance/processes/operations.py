@@ -8,7 +8,6 @@ if __name__ != "scripts.delegate_acceptance.processes.operations":
 import json
 import os
 import selectors
-import struct
 import subprocess
 import time
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
@@ -19,10 +18,10 @@ from scripts.delegate_acceptance.processes.contracts import (
     BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture, OutputSink,
 )
 from scripts.delegate_acceptance.processes.observation import (
-    inherited_environment, selected_environment, validate_bounded_command_bounds,
+    _bounded_command_pending_bytes, inherited_environment, selected_environment, validate_bounded_command_bounds,
 )
 from pathlib import Path
-from typing import IO, Callable, Mapping, NoReturn
+from typing import IO, Callable, Mapping, NoReturn, Sequence
 
 
 class Process:
@@ -103,7 +102,10 @@ class Process:
             if on_started is not None:
                 on_started(self)
             if self._stdin_data is not None:
-                os.set_blocking(self.process.stdin.fileno(), False)
+                stream = self._started_child().stdin
+                if stream is None:
+                    raise self._failure_type("started process has no requested stdin pipe")
+                os.set_blocking(stream.fileno(), False)
             if self._stdout_capture is not None:
                 self._stdout_capture.writer.close()
             ownership.transfer_child_to(capture_root)
@@ -113,7 +115,13 @@ class Process:
 
     @property
     def pid(self):
-        return self.process.pid
+        return self._started_child().pid
+
+    def _started_child(self) -> subprocess.Popen[bytes]:
+        child = self.process
+        if child is None:
+            raise self._failure_type("process handle unavailable; ownership retained: " + str(self.directory))
+        return child
 
     def _close_stdin(self):
         if self._stdin_closed:
@@ -129,13 +137,14 @@ class Process:
         self._stdin_closed = True
 
     def _write_stdin(self, deadline=None):
-        if (self._stdin_data is None or self._stdin_closed or self.process is None or
-                getattr(self.process, "stdin", None) is None):
+        if self._stdin_data is None or self._stdin_closed or self.process is None:
+            return True
+        stream = self.process.stdin
+        if stream is None:
             return True
         if self._stdin_offset >= len(self._stdin_data):
             self._close_stdin()
             return True
-        stream = self.process.stdin
         try:
             while self._stdin_offset < len(self._stdin_data):
                 if deadline is not None and time.monotonic() >= deadline:
@@ -174,7 +183,8 @@ class Process:
             return self.result
         if self._stdout_capture is not None and not self._stdout_capture.eof:
             self._stdout_capture.drain()
-        if self.process.poll() is None:
+        child = self._started_child()
+        if child.poll() is None:
             if not self._write_stdin(deadline):
                 return None
         else:
@@ -182,13 +192,13 @@ class Process:
                     self._stdin_error is None):
                 self._stdin_error = "child exited before stdin EOF"
             self._close_stdin()
-        if self.process.poll() is None:
+        if child.poll() is None:
             return None
         if self._stdout_capture is not None and not self._stdout_capture.eof:
             return None
         # Popen caches the exact Wait, so a retried finalization observes the
         # same exit; each step below resumes from its recorded progress.
-        code = self.process.wait()
+        code = child.wait()
         if self._ended_ns is None:
             self._ended_ns = time.time_ns()
         _commit_sanitized_stdout(self, code)
@@ -199,7 +209,8 @@ class Process:
 
     def wait(self, timeout=15, expected=0):
         deadline = time.monotonic() + timeout
-        while self.poll(deadline=deadline) is None:
+        result = self.poll(deadline=deadline)
+        while result is None:
             if time.monotonic() >= deadline:
                 if (self._stdin_data is not None and self._stdin_offset < len(self._stdin_data) and
                         self._stdin_error is None):
@@ -215,18 +226,19 @@ class Process:
                 raise self._failure_type(
                     "process observation expired; ownership retained: " + str(self.directory))
             time.sleep(0.025)
-        if not self.result["natural_wait"]:
+            result = self.poll(deadline=deadline)
+        if not result["natural_wait"]:
             raise self._failure_type("process ended by signal: " + str(self.directory))
-        if self.result.get("capture_error"):
+        if result.get("capture_error"):
             raise self._failure_type("status capture failed: " + str(self.directory))
-        if self.result.get("stdin_error"):
+        if result.get("stdin_error"):
             raise self._failure_type("stdin write failed: " + str(self.directory))
         if expected is not None:
             allowed = {expected} if isinstance(expected, int) else set(expected)
-            if self.result["exit_code"] not in allowed:
+            if result["exit_code"] not in allowed:
                 raise self._failure_type(
-                    "unexpected exit %s for %s" % (self.result["exit_code"], self.directory))
-        return self.result if self._return_result else self.result["exit_code"]
+                    "unexpected exit %s for %s" % (result["exit_code"], self.directory))
+        return result if self._return_result else result["exit_code"]
 
     def output(self, bound=8 * 1024 * 1024):
         if self.result is None:
@@ -416,7 +428,7 @@ def _raise_process_failure(error: BaseException, failure_type) -> NoReturn:
     raise error
 
 
-def _note_cleanup_failures(error: BaseException, failures: list[tuple[str, BaseException]]) -> None:
+def _note_cleanup_failures(error: BaseException, failures: Sequence[tuple[str, BaseException]]) -> None:
     for label, failure in failures:
         error.add_note("%s failed: %s: %s" % (label, type(failure).__name__, failure))
 
@@ -518,10 +530,13 @@ def _commit_sanitized_stdout(process: Process, code: int) -> None:
     data = memoryview(process._sanitized_stdout)
     if process._stdout_committed == len(data):
         return
-    if process.stdout.closed:
+    stream = process.stdout
+    if stream is None:
+        raise process._failure_type("stdout capture is missing before sanitized commit: " + str(process.directory))
+    if stream.closed:
         raise process._failure_type(
             "stdout closed before sanitized capture was committed: " + str(process.directory))
-    descriptor = process.stdout.fileno()
+    descriptor = stream.fileno()
     while process._stdout_committed < len(data):
         written = os.write(descriptor, data[process._stdout_committed:])
         if written <= 0:
@@ -539,6 +554,9 @@ def _close_finished_streams(process: Process) -> None:
         except (OSError, ValueError) as close_error:
             failures.append(("stdout capture close", close_error))
     for label, stream in (("stdout close", process.stdout), ("stderr close", process.stderr)):
+        if stream is None:
+            failures.append((label, process._failure_type("owned process capture stream is missing: " + label)))
+            continue
         if stream.closed:
             continue
         try:
@@ -592,18 +610,6 @@ def _terminate_bounded_command(process: subprocess.Popen[bytes]) -> None:
             raise BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT) from None
 
 
-def _bounded_command_pending_bytes(pipe: IO[bytes]) -> int | None:
-    """Inspect a pipe without adding bytes beyond the capture bound."""
-    try:
-        import fcntl
-        import termios
-
-        result = fcntl.ioctl(pipe.fileno(), termios.FIONREAD, struct.pack("I", 0))
-        return struct.unpack("I", result)[0]
-    except (ImportError, OSError, struct.error, AttributeError):
-        return None
-
-
 def _close_bounded_command_selector(
         selector: selectors.BaseSelector | None, failure: BaseException | None) -> None:
     if selector is not None:
@@ -650,15 +656,15 @@ def _bounded_command_bytes(
         raise BoundedCommandError(CommandFailure.CAPTURE_UNAVAILABLE)
     captured, errors = bytearray(), bytearray()
     # Each still-open pipe and its receiver; a pipe leaves at its own EOF.
-    receivers: dict[IO[bytes], Callable[[bytes], None]] = {
-        stdout: captured.extend if sink is None else sink}
+    receivers: dict[int, tuple[IO[bytes], Callable[[bytes], None]]] = {
+        stdout.fileno(): (stdout, captured.extend if sink is None else sink)}
     if stderr is not None:
-        receivers[stderr] = errors.extend
+        receivers[stderr.fileno()] = (stderr, errors.extend)
     selector = None
     failure = None
     try:
         selector = selectors.DefaultSelector()
-        for pipe in receivers:
+        for pipe, _receive in receivers.values():
             selector.register(pipe, selectors.EVENT_READ)
         total = 0
         deadline = time.monotonic() + timeout
@@ -672,13 +678,14 @@ def _bounded_command_bytes(
                     raise BoundedCommandError(CommandFailure.TIMEOUT)
                 continue
             for key, _mask in events:
-                chunk = _read_bounded_command_chunk(process, key.fileobj, max_output - total)
+                pipe, receive = receivers[key.fd]
+                chunk = _read_bounded_command_chunk(process, pipe, max_output - total)
                 if chunk:
-                    receivers[key.fileobj](chunk)
+                    receive(chunk)
                     total += len(chunk)
                 else:
-                    selector.unregister(key.fileobj)
-                    del receivers[key.fileobj]
+                    selector.unregister(pipe)
+                    del receivers[key.fd]
     except BaseException as error:
         failure = error
         raise

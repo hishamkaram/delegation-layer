@@ -4,7 +4,7 @@ from pathlib import Path
 import sqlite3
 import time
 
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.private_cli.capacity_ownership import lease_candidate_specifications, prove_lifetime_owner_cohort
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
 from scripts.delegate_acceptance.private_cli.commands import run_json
@@ -54,7 +54,8 @@ class SchedulerCase:
     def command(self, name: str, arguments: list[str], expected: tuple[int, ...] = (0,)) -> dict[str, object]:
         self.command_count += 1
         if self.default_root:
-            require(isinstance(self.service, SchedulerHost), "default-root case requires the managed host")
+            if not isinstance(self.service, SchedulerHost):
+                raise AcceptanceFailure("default-root case requires the managed host")
             require(self.remaining() > 0, "scheduler case command deadline expired")
             # Reuse the host's process registry so this caller has an explicit,
             # different cwd and every control child retains the same Wait owner.
@@ -282,7 +283,8 @@ def run_overlap_stop(case: SchedulerCase) -> None:
         case.service.stop()
         require_occurrences(case.discover(), case.schedule_id, (case.first_due_ns,))
         case.held(row, cohort)
-        require(case.lifetime.release_gate is not None, "scheduler held gate owner disappeared")
+        if case.lifetime.release_gate is None:
+            raise AcceptanceFailure("scheduler held gate owner disappeared")
         case.lifetime.release_gate.release()
         case.collect(row)
     case.receipt.add_details(actual_minute_ticks=2, overlap_tick_without_backlog=True,

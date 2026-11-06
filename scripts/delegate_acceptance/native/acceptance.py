@@ -67,6 +67,7 @@ from scripts.delegate_acceptance.native.timeouts import (
 )
 from scripts.delegate_acceptance.native.constants import (
     PROFILES,
+    ProviderProfile,
     PI_SESSION_MISS_SCENARIO,
     TASK_BUDGET as TASK_BUDGET,
     CANONICAL_TASK_BUDGET as CANONICAL_TASK_BUDGET,
@@ -121,13 +122,14 @@ from scripts.delegate_acceptance.supervisor.config_policy import config_for
 from scripts.delegate_acceptance.tasks.operations import (
     NativeTaskOps as NativeTaskOps,
 )
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
 
 
 # Providers selected for the workspace-write timeout-resume scenario.
 TIMEOUT_RESUME_PROVIDERS = frozenset({"codex:exec", "opencode:run"})
 
 
-def _resolve_provider_executable(args: argparse.Namespace, profile: dict[str, object],
+def _resolve_provider_executable(args: argparse.Namespace, profile: ProviderProfile,
                                  environment: dict[str, str]) -> Path:
     """Resolve the provider CLI; its absence is the one typed executable block."""
     discovered = shutil.which(profile["executable"], path=environment.get("PATH"))
@@ -209,7 +211,7 @@ class NativeAcceptance:
         self.pueued = resolve_executable(args.pueued, Path(shutil.which("pueued", path=self.environment.get("PATH")) or "pueued"), "pueued")
         self.provider_executable = _resolve_provider_executable(args, profile, self.environment)
         require_discovery(profile["executable"], self.provider_executable, self.environment)
-        self.harness_observation: dict[str, object] | None = None
+        self.harness_observation: supplemental.HarnessObservation | None = None
         self.canonical_aggregate_sha256: str | None = None
         if continuation_command == "continue" and not discover_models:
             self._bind_continuation_candidate(repository)
@@ -285,6 +287,7 @@ class NativeAcceptance:
         self.lifetime_closure: dict[str, object] | None = None
         # The lifecycle owner commits this candidate before any success cleanup.
         self.success_candidate: SuccessCandidate | None = None
+        self.success_receipt: dict[str, object] | None = None
         self.model_discovery_state = ModelDiscoveryState()
         self.root_id: str | None = None
         self.provider_version: str | None = None
@@ -435,7 +438,7 @@ class NativeAcceptance:
     def require_continuation_scope(self, predecessor: str, successor: str) -> dict[str, object]:
         return continuation_scope.require_continuation_scope(self, predecessor, successor)
 
-    def direct(self, name: str, argv: list[object], expected=0, timeout=30):
+    def direct(self, name: str, argv: list[object], expected=0, timeout=30) -> TaskCommand:
         return acceptance_operations.direct(self, name, argv, expected, timeout)
 
     def _sync_ops_owned_tasks(self) -> None:
@@ -547,15 +550,16 @@ class NativeAcceptance:
     @staticmethod
     def interactive_request(state: dict[str, object]) -> tuple[str, str]:
         requests = state.get("pending_requests")
-        require(isinstance(requests, list) and len(requests) == 1,
-                "interactive acceptance did not expose one pending question")
+        if not isinstance(requests, list) or len(requests) != 1:
+            raise AcceptanceFailure("interactive acceptance did not expose one pending question")
         request = requests[0]
-        require(isinstance(request, dict), "interactive pending question is malformed")
+        if not isinstance(request, dict):
+            raise AcceptanceFailure("interactive pending question is malformed")
         request_id = request.get("id")
         turn_id = request.get("turn_id")
-        require(_task_identity(request_id) and isinstance(turn_id, str) and bool(turn_id) and
-                request.get("blocking") is True,
-                "interactive pending question identity is invalid")
+        if not (_task_identity(request_id) and isinstance(turn_id, str) and bool(turn_id) and
+                request.get("blocking") is True):
+            raise AcceptanceFailure("interactive pending question identity is invalid")
         questions = request.get("questions")
         require(isinstance(questions, list) and len(questions) == 1,
                 "interactive acceptance did not expose one question")
@@ -611,7 +615,8 @@ class NativeAcceptance:
     @staticmethod
     def _validate_terminal_default_group(status: dict[str, object]) -> None:
         groups = status.get("groups")
-        require(isinstance(groups, dict), "private queue groups object is absent")
+        if not isinstance(groups, dict):
+            raise AcceptanceFailure("private queue groups object is absent")
         default = groups.get("default")
         require(isinstance(default, dict) and default.get("status") == "Running" and
                 type(default.get("parallel_tasks")) is int and

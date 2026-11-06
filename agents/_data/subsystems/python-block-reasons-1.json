@@ -14,6 +14,9 @@
     "layer": "test",
     "imports": [
       "py:acceptance_native",
+      "py:acceptance_tests.native.support",
+      "py:argparse",
+      "py:collections.abc",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_discovery",
       "py:delegate_acceptance.native.errors",
@@ -25,6 +28,7 @@
       "py:pathlib",
       "py:tempfile",
       "py:types",
+      "py:typing",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -59,6 +63,7 @@
     "owner": "py:delegate_acceptance.native_evidence",
     "layer": "test",
     "imports": [
+      "py:argparse",
       "py:contextlib",
       "py:delegate_acceptance.native_evidence.cli",
       "py:delegate_acceptance.native_evidence.contract",
@@ -71,7 +76,6 @@
       "py:pathlib",
       "py:tempfile",
       "py:test_native_acceptance_evidence",
-      "py:types",
       "py:unittest",
       "py:unittest.mock"
     ]

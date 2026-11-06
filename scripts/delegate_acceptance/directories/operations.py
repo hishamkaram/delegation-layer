@@ -605,7 +605,7 @@ class DirectoryOwner:
                                                parent_identity)
             self._entries.append(entry)
             return entry
-        except BaseException as error:
+        except BaseException:
             if close_after:
                 _close_parent_descriptor(parent_fd)
             raise

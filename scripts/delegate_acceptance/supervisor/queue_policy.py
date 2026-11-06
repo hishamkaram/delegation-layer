@@ -30,7 +30,8 @@ _PUEUE_ROW_KEYS = {
 
 def row_state(row: dict[str, object]) -> str:
     value = row.get("status")
-    require(isinstance(value, dict), "pueue row status is not a one-state object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure("pueue row status is not a one-state object")
     require(set(value) <= PUEUE_STATE_VARIANTS,
             "pueue row status contains an unknown lifecycle variant")
     recognized = [name for name in value if name in PUEUE_STATE_VARIANTS]
@@ -65,7 +66,8 @@ def done_result(row: dict[str, object]) -> str | None:
 
 
 def _validate_pueue_timestamp(value: object, label: str) -> None:
-    require(isinstance(value, str) and value, f"pueue {label} is invalid")
+    if not isinstance(value, str) or not value:
+        raise AcceptanceFailure(f"pueue {label} is invalid")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as error:
@@ -74,7 +76,8 @@ def _validate_pueue_timestamp(value: object, label: str) -> None:
 
 
 def _validate_pueue_state(value: object, label: str, depth: int = 0) -> None:
-    require(isinstance(value, dict), f"pueue {label} state is invalid")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"pueue {label} state is invalid")
     require(depth <= 32, f"pueue {label} state nesting is excessive")
     require(set(value) <= PUEUE_STATE_VARIANTS,
             f"pueue {label} state contains an unknown lifecycle variant")
@@ -121,8 +124,10 @@ def _validate_pueue_status(value: dict[str, object]) -> None:
     _required_keys(value, _PUEUE_STATUS_KEYS, label="pueue status")
     tasks = value["tasks"]
     groups = value["groups"]
-    require(isinstance(tasks, dict), "pueue status JSON has no tasks object")
-    require(isinstance(groups, dict), "pueue status JSON has no groups object")
+    if not isinstance(tasks, dict):
+        raise AcceptanceFailure("pueue status JSON has no tasks object")
+    if not isinstance(groups, dict):
+        raise AcceptanceFailure("pueue status JSON has no groups object")
     for name, group in groups.items():
         require(isinstance(name, str), "pueue group name is invalid")
         require(isinstance(group, dict), f"pueue group {name} is not an object")
@@ -176,7 +181,10 @@ def validate_queue_row(row: dict[str, object], label: str, runner: Path,
     commands = []
     for key in ("original_command", "command"):
         try:
-            commands.append(shlex.split(row[key]))
+            command = row[key]
+            if not isinstance(command, str):
+                raise AcceptanceFailure(f"pueue row missing {key} for {task}")
+            commands.append(shlex.split(command))
         except ValueError as error:
             raise AcceptanceFailure(f"pueue row command is invalid for {task}") from error
     require(commands[0] == expected and commands[1] == expected,

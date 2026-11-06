@@ -63,6 +63,10 @@ def capacity_lease_specifications(state, responses, waiter_directory, lease_nonc
         )
         launches = _read_task_launches(launch_paths, registration_digest, root_id, task_id)
         pid = launches[-1]["pid"]
+        scope_plan = intent["scope_plan"]
+        scope_id = registration["scope_id"]
+        if not isinstance(scope_plan, str) or not isinstance(scope_id, str):
+            raise AcceptanceFailure("capacity lifetime scope identity is invalid")
         specifications.append(
             {
                 "root_id": root_id,
@@ -74,8 +78,8 @@ def capacity_lease_specifications(state, responses, waiter_directory, lease_nonc
                 "registration_sha256": registration_digest,
                 "scope_kind": registration["scope_kind"],
                 "assurance": registration["assurance"],
-                "scope_plan_sha256": hashlib.sha256(intent["scope_plan"].encode()).hexdigest(),
-                "scope_id_sha256": hashlib.sha256(registration["scope_id"].encode()).hexdigest(),
+                "scope_plan_sha256": hashlib.sha256(scope_plan.encode()).hexdigest(),
+                "scope_id_sha256": hashlib.sha256(scope_id.encode()).hexdigest(),
                 "deadline": intent.get("deadline"),
             }
         )

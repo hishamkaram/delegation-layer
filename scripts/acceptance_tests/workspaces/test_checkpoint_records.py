@@ -8,13 +8,15 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from typing import NotRequired, TypedDict
+from scripts.acceptance_tests.record_fixtures import object_at
 
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.records import _read_control_record
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
-from scripts.delegate_acceptance.workspaces import checkpoint_records as records
+from scripts.delegate_acceptance.workspaces import checkpoint_records as records, specification
 from scripts.delegate_acceptance.workspaces.closure import (
     validate_managed_workspace_operation_closure,
 )
@@ -87,7 +89,7 @@ def ordinary_request(root: str = GO_ROOT, operation: str = GO_CHECKPOINT) -> dic
 
 def managed_request() -> dict[str, object]:
     request = go_request("checkpoint")
-    request["subject"]["kind"] = "task"
+    object_at(request, "subject")["kind"] = "task"
     request["checkpoint"] = {"kind": "managed"}
     return request
 
@@ -152,7 +154,63 @@ def attempt(checkpoint: str, sequence: int, removal: str, removal_digest: str) -
             "operation_id": removal, "request_sha256": removal_digest}
 
 
+class ReceiptJournalOptions(TypedDict):
+    cause: NotRequired[str]
+    wait: NotRequired[str]
+    termination: NotRequired[str | None]
+    legacy: NotRequired[bool]
+    success: NotRequired[bool]
+
+
 class CheckpointCodecParityTests(unittest.TestCase):
+    def test_malformed_subject_and_operation_kinds_are_protocol_failures(self) -> None:
+        for invalid in ([], {}, None):
+            subject = {"kind": invalid, "id": GO_CHECKPOINT, "sha256": "a" * 64}
+            for validate in (specification._canonical_workspace_subject,
+                             specification._canonical_operation_subject):
+                with self.subTest(validator=validate.__name__, invalid=invalid):
+                    with self.assertRaisesRegex(AcceptanceFailure, "subject kind is invalid"):
+                        validate(subject, "subject")
+            request = go_request("capture")
+            request["kind"] = invalid
+            with self.subTest(operation_kind=invalid):
+                with self.assertRaisesRegex(AcceptanceFailure, "kind is invalid"):
+                    request_bytes(request)
+
+    def test_malformed_checkpoint_format_and_status_are_protocol_failures(self) -> None:
+        request = ordinary_request()
+        digest = sha(request_bytes(request))
+        for invalid in ([], {}, None):
+            target = ordinary_target()
+            source = target["source"]
+            assert isinstance(source, dict)
+            source["ObjectFormat"] = invalid
+            with self.subTest(object_format=invalid):
+                with self.assertRaisesRegex(AcceptanceFailure, "object format is invalid"):
+                    records.canonical_checkpoint_candidate_bytes(
+                        candidate(request, digest, target), request, digest, "candidate")
+            receipt = checkpointed_receipt(
+                candidate(request, digest, ordinary_target()), "f" * 64, "0" * 64)
+            receipt["status"] = invalid
+            with self.subTest(status=invalid):
+                with self.assertRaisesRegex(AcceptanceFailure, "status is invalid"):
+                    records.canonical_checkpoint_receipt_bytes(receipt, request, digest, "receipt")
+
+    def test_malformed_closure_and_result_states_are_protocol_failures(self) -> None:
+        for invalid in ([], {}, None):
+            closure = {"schema_version": 1, "workspace_id": GO_CHECKPOINT,
+                       "sequence": 1, "disposition": invalid}
+            with self.subTest(disposition=invalid):
+                with self.assertRaisesRegex(AcceptanceFailure, "disposition is invalid"):
+                    specification._canonical_workspace_closure_bytes(
+                        closure, GO_CHECKPOINT, 1, "closure")
+            result = {"schema_version": 1, "operation_id": GO_CHECKPOINT,
+                      "request_sha256": "a" * 64, "status": invalid}
+            with self.subTest(result_status=invalid):
+                with self.assertRaisesRegex(AcceptanceFailure, "binding is invalid"):
+                    specification._canonical_operation_result_bytes(
+                        result, GO_CHECKPOINT, "a" * 64, "capture", "result")
+
     def test_historical_kinds_keep_go_owned_digests_and_workspace_scope(self) -> None:
         for kind, digest in HISTORICAL_DIGESTS.items():
             with self.subTest(kind=kind):
@@ -181,7 +239,7 @@ class CheckpointCodecParityTests(unittest.TestCase):
     def test_checkpoint_request_scope_refusals(self) -> None:
         def ordinary(**changes: object) -> dict[str, object]:
             request = ordinary_request()
-            request["checkpoint"].update(changes)
+            object_at(request, "checkpoint").update(changes)
             return request
 
         managed_with_workspace = ordinary_request()
@@ -197,7 +255,7 @@ class CheckpointCodecParityTests(unittest.TestCase):
         removal_workspace = removal_request(GO_CHECKPOINT, "f" * 64)
         removal_workspace["workspace_id"] = "3" * 32
         removal_task = removal_request(GO_CHECKPOINT, "f" * 64)
-        removal_task["subject"]["kind"] = "task"
+        object_at(removal_task, "subject")["kind"] = "task"
         removal_selection = removal_request(GO_CHECKPOINT, "f" * 64)
         removal_selection["checkpoint"] = {"kind": "managed"}
         cases = {
@@ -288,9 +346,7 @@ class CheckpointCodecParityTests(unittest.TestCase):
 
         def changed(path: tuple[str, ...], value: object) -> dict[str, object]:
             result = deepcopy(valid)
-            owner = result
-            for key in path[:-1]:
-                owner = owner[key]
+            owner = object_at(result, *path[:-1])
             if value is KeyError:
                 del owner[path[-1]]
             else:
@@ -329,7 +385,7 @@ class CheckpointCodecParityTests(unittest.TestCase):
         managed = managed_request()
         managed_digest = sha(request_bytes(managed))
         disguised = candidate(managed, managed_digest, managed_target())
-        disguised["target"]["checkout_root"] = "/source"
+        object_at(disguised, "target")["checkout_root"] = "/source"
         with self.assertRaises(AcceptanceFailure):
             records.canonical_checkpoint_candidate_bytes(disguised, managed, managed_digest, "candidate")
         with self.assertRaises(AcceptanceFailure):
@@ -466,7 +522,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
         another boot), missing, or unregistered (intent-only absence).
         """
         lifetime = lifetime_records(directory.name, request_digest)
-        lifetime["lifetime-termination.json"]["cause"] = cause
+        object_at(lifetime, "lifetime-termination.json")["cause"] = cause
         if wait == "recovered":
             lifetime["lifetime-worker-wait.json"] = recovered_wait(lifetime["lifetime-worker-wait.json"])
         if wait == "previous-boot":
@@ -532,8 +588,8 @@ class CheckpointClosureScanTests(unittest.TestCase):
         return directory, receipt_path
 
     def receipt_status(self, path: str) -> object:
-        checkpoint = self.scan()["workspace"][CHECKPOINT]["checkpoint"]
-        return checkpoint["status"] if path == "creation" else checkpoint["removals"][0]["status"]
+        checkpoint = object_at(self.scan(), "workspace", CHECKPOINT, "checkpoint")
+        return checkpoint["status"] if path == "creation" else object_at(checkpoint, "removals", 0)["status"]
 
     def checkpoint(self, *, wait: str = "native", receipt: bool = True) -> tuple[Path, str, dict[str, object]]:
         directory, digest = self.journal(ordinary_request(ROOT, CHECKPOINT))
@@ -581,12 +637,12 @@ class CheckpointClosureScanTests(unittest.TestCase):
         self.removal(digest)
         closure = self.scan()
         self.assertEqual(closure["tasks"], {})
-        creation = closure["workspace"][CHECKPOINT]
+        creation = object_at(closure, "workspace", CHECKPOINT)
         self.assertEqual(creation["mode"], "terminated")
         self.assertEqual(creation["checkpoint"], {
             "candidate": True, "status": "checkpointed",
             "removals": [{"sequence": 1, "operation_id": REMOVAL, "status": "removed"}]})
-        self.assertEqual(closure["workspace"][REMOVAL]["checkpoint_removal"],
+        self.assertEqual(object_at(closure, "workspace", REMOVAL)["checkpoint_removal"],
                          {"checkpoint_id": CHECKPOINT, "sequence": 1})
 
     def test_pending_or_missing_wait_never_qualifies(self) -> None:
@@ -603,7 +659,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
             with self.assertRaises(AcceptanceFailure):
                 self.scan()
             fcntl.flock(held.fileno(), fcntl.LOCK_UN)
-        self.assertEqual(self.scan()["workspace"][CHECKPOINT]["checkpoint"]["status"], "checkpointed")
+        self.assertEqual(object_at(self.scan(), "workspace", CHECKPOINT, "checkpoint")["status"], "checkpointed")
 
     def test_recovered_absence_cannot_be_advertised_as_success(self) -> None:
         directory, _, _ = self.checkpoint(wait="recovered")
@@ -620,7 +676,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
             "reason_code": "checkpoint_result_unavailable",
             "termination_sha256": value["termination_sha256"],
             "worker_wait_sha256": value["worker_wait_sha256"]})
-        self.assertEqual(self.scan()["workspace"][CHECKPOINT]["checkpoint"]["status"], "unavailable")
+        self.assertEqual(object_at(self.scan(), "workspace", CHECKPOINT, "checkpoint")["status"], "unavailable")
 
     def test_receipt_closure_must_equal_actual_lifetime_records(self) -> None:
         directory, _, _ = self.checkpoint()
@@ -646,7 +702,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
                    "status": "unavailable", "reason_code": "checkpoint_not_launched",
                    "unlaunched_sha256": sha(canonical_go_json(fence))}
         write_record(directory / records.CHECKPOINT_RECEIPT_RECORD, receipt)
-        self.assertEqual(self.scan()["workspace"][CHECKPOINT]["checkpoint"]["status"], "unavailable")
+        self.assertEqual(object_at(self.scan(), "workspace", CHECKPOINT, "checkpoint")["status"], "unavailable")
         receipt["unlaunched_sha256"] = "9" * 64
         write_record(directory / records.CHECKPOINT_RECEIPT_RECORD, receipt)
         with self.assertRaises(AcceptanceFailure):
@@ -661,7 +717,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
         with self.assertRaises(AcceptanceFailure):
             self.scan()
         (directory / records.CHECKPOINT_RECEIPT_RECORD).unlink()
-        self.assertEqual(self.scan()["workspace"][CHECKPOINT]["mode"], "unsubmitted")
+        self.assertEqual(object_at(self.scan(), "workspace", CHECKPOINT)["mode"], "unsubmitted")
         for name, mutate in {
                 "candidate bytes": lambda path: path.write_bytes(b"{ " + path.read_bytes()[1:]),
                 "candidate missing": lambda path: path.unlink(),
@@ -704,10 +760,10 @@ class CheckpointClosureScanTests(unittest.TestCase):
         self.removal(digest, status=None)
         self.journal(removal_request(CHECKPOINT, digest, root=ROOT, operation=OTHER_REMOVAL))
         closure = self.scan()["workspace"]
-        self.assertEqual(closure[CHECKPOINT]["checkpoint"]["removals"],
+        self.assertEqual(object_at(closure, CHECKPOINT, "checkpoint")["removals"],
                          [{"sequence": 1, "operation_id": REMOVAL, "status": None}])
-        self.assertEqual(closure[OTHER_REMOVAL]["mode"], "unsubmitted")
-        self.assertEqual(closure[OTHER_REMOVAL]["checkpoint_removal"],
+        self.assertEqual(object_at(closure, OTHER_REMOVAL)["mode"], "unsubmitted")
+        self.assertEqual(object_at(closure, OTHER_REMOVAL)["checkpoint_removal"],
                          {"checkpoint_id": CHECKPOINT, "sequence": None})
 
     def test_prior_removal_attempts_require_unavailable_receipts(self) -> None:
@@ -729,16 +785,16 @@ class CheckpointClosureScanTests(unittest.TestCase):
                 self.removal(digest, status="unavailable")
                 self.removal(digest, operation=OTHER_REMOVAL, sequence=2, status=head, wait=wait)
                 closure = self.scan()["workspace"]
-                self.assertEqual(closure[CHECKPOINT]["checkpoint"]["removals"], [
+                self.assertEqual(object_at(closure, CHECKPOINT, "checkpoint")["removals"], [
                     {"sequence": 1, "operation_id": REMOVAL, "status": "unavailable"},
                     {"sequence": 2, "operation_id": OTHER_REMOVAL, "status": head}])
-                self.assertEqual(closure[OTHER_REMOVAL]["mode"],
+                self.assertEqual(object_at(closure, OTHER_REMOVAL)["mode"],
                                  "terminated" if wait == "native" else "unsubmitted")
         with self.subTest("sole unsubmitted head"):
             self.reset()
             _, digest, _ = self.checkpoint()
             self.removal(digest, status=None, wait="unsubmitted")
-            self.assertEqual(self.scan()["workspace"][CHECKPOINT]["checkpoint"]["removals"],
+            self.assertEqual(object_at(self.scan(), "workspace", CHECKPOINT, "checkpoint")["removals"],
                              [{"sequence": 1, "operation_id": REMOVAL, "status": None}])
 
     def test_receiptless_head_needs_independent_lifetime_closure(self) -> None:
@@ -771,7 +827,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
                 self.publish_previous_boot_absence(lifetime)
                 self.assertEqual(self.receipt_status(path), "unavailable")
                 self.assertEqual(receipt.read_bytes(), before)
-                self.assertEqual(self.scan()["workspace"][lifetime.name]["mode"], "recovered")
+                self.assertEqual(object_at(self.scan(), "workspace", lifetime.name)["mode"], "recovered")
 
     def test_recovered_receipt_after_previous_boot_absence_stays_valid(self) -> None:
         for path in ("creation", "removal"):
@@ -781,7 +837,7 @@ class CheckpointClosureScanTests(unittest.TestCase):
                 self.assertEqual(self.receipt_status(path), "unavailable")
 
     def test_legacy_receipt_refusals_after_absence(self) -> None:
-        cases = {
+        cases: dict[str, tuple[ReceiptJournalOptions, dict[str, str] | None, str]] = {
             "wrong termination digest": (
                 {"termination": "9" * 64}, {}, "closure does not match"),
             "wrong termination cause": ({"cause": "completed"}, {}, "closure does not match"),

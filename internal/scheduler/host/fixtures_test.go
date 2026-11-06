@@ -18,6 +18,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/scheduler"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"github.com/jonboulle/clockwork"
 	"golang.org/x/sys/unix"
@@ -34,8 +35,10 @@ func TestMain(m *testing.M) {
 			os.Exit(fixtureFDProbeResult())
 		}
 	}
-	os.Exit(m.Run())
+	os.Exit(goroutinecheck.Run(m))
 }
+
+func TestGoroutineLeakGuard(t *testing.T) { goroutinecheck.VerifyInstalled(t) }
 
 func fixtureConfig(store *taskdir.Store) (Config, error) {
 	executable, err := os.Executable()

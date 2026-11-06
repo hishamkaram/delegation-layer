@@ -16,11 +16,21 @@ from acceptance_provider_common import (
     supervisor_binding,
     verify_collected_outcome, write_bytes, write_json,
 )
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand
+
 from acceptance_supervisor_common import (
     DirectoryOwner, OwnedDirectory, Processes, config_for, digest,
     failure_cleanup_deadline, finalize_acceptance_artifacts, inherited_environment,
     read_json, rollback_owned_directories, sha, wait_for_failure_cleanup,
 )
+
+
+def _command_exit(command: TaskCommand) -> int:
+    result = command.result
+    code = result.get("exit_code") if result is not None else None
+    if type(code) is not int:
+        raise AcceptanceFailure("inspection command has no observed exit code")
+    return code
 
 
 def no_secret_bytes(paths: list[Path], sentinel: bytes) -> None:
@@ -45,7 +55,8 @@ def no_secret_bytes(paths: list[Path], sentinel: bytes) -> None:
 
 def _owned_directory_path(token: OwnedDirectory) -> Path:
     """Read the path from an ownership token without accepting path tuples."""
-    require(isinstance(token, OwnedDirectory), "owned directory token is invalid")
+    if not (isinstance(token, OwnedDirectory)):
+        raise AcceptanceFailure("owned directory token is invalid")
     return token.directory
 
 
@@ -100,8 +111,8 @@ def validate_blocker_row(row: dict[str, object], numeric: int, group: str, label
                         expected_state: str) -> None:
     """Bind the bounded blocker to its exact identity, argv, and state."""
     row_id = row.get("id")
-    require(isinstance(row_id, int) and not isinstance(row_id, bool) and row_id == numeric,
-            "bounded blocker numeric identity mismatch")
+    if not (isinstance(row_id, int) and not isinstance(row_id, bool) and row_id == numeric):
+        raise AcceptanceFailure("bounded blocker numeric identity mismatch")
     require(row.get("group") == group and row.get("label") == label,
             "bounded blocker group or label mismatch")
     require(row_state(row) == expected_state, "bounded blocker state mismatch")
@@ -109,7 +120,8 @@ def validate_blocker_row(row: dict[str, object], numeric: int, group: str, label
         require(done_result(row) is None, "running blocker already has a terminal result")
     for field in ("command", "original_command"):
         value = row.get(field)
-        require(isinstance(value, str), "bounded blocker row is missing " + field)
+        if not (isinstance(value, str)):
+            raise AcceptanceFailure("bounded blocker row is missing " + field)
         try:
             command = shlex.split(value)
         except ValueError as error:
@@ -120,7 +132,8 @@ def validate_blocker_row(row: dict[str, object], numeric: int, group: str, label
 def _read_record(path: Path, description: str) -> dict[str, object]:
     require(path.is_file() and not path.is_symlink(), description + " is not a regular record")
     value = read_json(path)
-    require(isinstance(value, dict), description + " is not an object")
+    if not (isinstance(value, dict)):
+        raise AcceptanceFailure(description + " is not an object")
     return value
 
 
@@ -146,13 +159,14 @@ def validate_expired_inspection(state: Path, task_id: str, row: dict[str, object
     require(request.get("schema_version") == 1 and request.get("task_id") == task_id,
             "inspection request identity is invalid")
     deadline = request.get("deadline")
-    require(isinstance(deadline, str) and deadline, "inspection request deadline is absent")
+    if not (isinstance(deadline, str) and deadline):
+        raise AcceptanceFailure("inspection request deadline is absent")
 
     receipt_path = directory / "receipt.json"
     receipt = _read_record(receipt_path, "inspection receipt")
     numeric = row.get("id")
-    require(isinstance(numeric, int) and not isinstance(numeric, bool) and numeric >= 0,
-            "expired inspection row has no numeric identity")
+    if not (isinstance(numeric, int) and not isinstance(numeric, bool) and numeric >= 0):
+        raise AcceptanceFailure("expired inspection row has no numeric identity")
     require(receipt.get("schema_version") == 1 and
             receipt.get("request_sha256") == request_digest and
             receipt.get("numeric_task_id") == numeric,
@@ -214,8 +228,8 @@ def _validate_expired_inspection_stop(directory: Path, request: dict[str, object
 
     stop_request = _read_record(stop_request_path, "inspection stop request")
     binding = request.get("binding")
-    require(isinstance(binding, dict) and isinstance(binding.get("supervisor"), dict),
-            "inspection request supervisor binding is absent")
+    if not (isinstance(binding, dict) and isinstance(binding.get("supervisor"), dict)):
+        raise AcceptanceFailure("inspection request supervisor binding is absent")
     require(stop_request.get("schema_version") == 1 and
             stop_request.get("request_sha256") == request_digest and
             stop_request.get("numeric_task_id") == numeric and
@@ -227,12 +241,12 @@ def _validate_expired_inspection_stop(directory: Path, request: dict[str, object
     if stop_reply_path.exists() or stop_reply_path.is_symlink():
         reply = _read_record(stop_reply_path, "inspection stop reply")
         acknowledged = reply.get("acknowledged")
-        require(reply.get("schema_version") == 1 and
+        if not (reply.get("schema_version") == 1 and
                 reply.get("stop_sha256") == stop_digest and
                 reply.get("numeric_task_id") == numeric and
                 reply.get("action") == "kill" and
-                isinstance(acknowledged, bool),
-                "inspection stop reply is not an exact bounded kill result")
+                isinstance(acknowledged, bool)):
+            raise AcceptanceFailure("inspection stop reply is not an exact bounded kill result")
     if stop_observation_path.exists() or stop_observation_path.is_symlink():
         observation = _read_record(stop_observation_path, "inspection stop observation")
         require(observation.get("schema_version") == 1 and
@@ -245,17 +259,17 @@ def _validate_expired_inspection_stop(directory: Path, request: dict[str, object
 def validate_concurrent_response(response: dict[str, object], exit_code: int, task_id: str) -> str:
     require(response.get("task_id") == task_id, "concurrent caller changed task identity")
     root = response.get("root_id")
-    require(isinstance(root, str) and len(root) == 32 and
-            all(character in "0123456789abcdef" for character in root),
-            "concurrent caller omitted a canonical root identity")
+    if not (isinstance(root, str) and len(root) == 32 and
+            all(character in "0123456789abcdef" for character in root)):
+        raise AcceptanceFailure("concurrent caller omitted a canonical root identity")
     if exit_code == 0:
         require(response.get("admission") == "admitted", "successful caller did not prove admission")
         return root
     failure = response.get("failure")
-    require(exit_code == 1 and response.get("admission") == "unknown" and
+    if not (exit_code == 1 and response.get("admission") == "unknown" and
             response.get("liveness") == "undetermined" and
-            response.get("publication") == "unknown" and isinstance(failure, dict),
-            "concurrent caller did not report a bounded non-admitted result")
+            response.get("publication") == "unknown" and isinstance(failure, dict)):
+        raise AcceptanceFailure("concurrent caller did not report a bounded non-admitted result")
     stage = failure.get("stage")
     code = failure.get("code")
     next_action = failure.get("next_action")
@@ -392,7 +406,7 @@ class InspectionAcceptance:
         while time.monotonic() < deadline:
             require(self.daemon.poll() is None, "fixture daemon exited during startup")
             proc = self.ops.client("ready", ["status", "--json"], expected={0, 1})
-            if proc.result["exit_code"] == 0:
+            if _command_exit(proc) == 0:
                 require(not read_json(proc.directory / "stdout")["tasks"], "private queue was not empty")
                 return
             time.sleep(0.1)
@@ -432,9 +446,9 @@ class InspectionAcceptance:
         return task_id, brief, case, helper_config
 
     def expected_inspection_binding(self, helper_config: Path) -> dict[str, object]:
-        require(self.pueue_base is not None and self.config is not None and
-                self.supervisor_config_digest is not None and self.pueue_version is not None,
-                "fixture supervisor binding is unavailable")
+        if (self.pueue_base is None or self.config is None or
+                self.supervisor_config_digest is None or self.pueue_version is None):
+            raise AcceptanceFailure("fixture supervisor binding is unavailable")
         supervisor = supervisor_binding(
             self.pueue, self.config, self.pueue_base, self.supervisor_config_digest,
             self.pueue_version)
@@ -451,10 +465,17 @@ class InspectionAcceptance:
         self.serial += 1
         return self.ops.queue_status("inspection-observation-" + str(self.serial))
 
+    def queue_rows(self) -> dict[str, dict[str, object]]:
+        rows = self.queue()["tasks"]
+        if not isinstance(rows, dict) or any(
+                not isinstance(key, str) or not isinstance(row, dict) for key, row in rows.items()):
+            raise AcceptanceFailure("private inspection queue has malformed task rows")
+        return rows
+
     def wait_row(self, label: str, timeout: float = 45) -> dict[str, object]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            rows = [row for row in self.queue()["tasks"].values() if row.get("label") == label]
+            rows = [row for row in self.queue_rows().values() if row.get("label") == label]
             require(len(rows) <= 1, "duplicate inspection fixture label")
             if rows and row_state(rows[0]) == "Done":
                 require(done_result(rows[0]) is not None, "unknown fixture completion")
@@ -467,7 +488,7 @@ class InspectionAcceptance:
         """Observe the exact blocker running before admitting queued expiry."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            rows = [row for row in self.queue()["tasks"].values()
+            rows = [row for row in self.queue_rows().values()
                     if isinstance(row, dict) and row.get("label") == label]
             require(len(rows) <= 1, "duplicate bounded blocker label")
             if rows:
@@ -510,11 +531,11 @@ class InspectionAcceptance:
                     self.ops.record_admission("success", task_id, response)
                 else:
                     supervisor = response.get("supervisor")
-                    require(response.get("root_id") == self.ops.root_id and
+                    if not (response.get("root_id") == self.ops.root_id and
                             isinstance(supervisor, dict) and supervisor.get("matched") is True and
                             type(supervisor.get("numeric_task_id")) is int and
-                            supervisor["numeric_task_id"] == self.ops.numbers["success"],
-                            "concurrent positive callers observed different supervisor identities")
+                            supervisor["numeric_task_id"] == self.ops.numbers["success"]):
+                        raise AcceptanceFailure("concurrent positive callers observed different supervisor identities")
         observed_roots = set()
         for caller, response in responses:
             observed_roots.add(validate_concurrent_response(response, caller.result["exit_code"], task_id))
@@ -560,10 +581,13 @@ class InspectionAcceptance:
         response = parse_json_output(proc, name)
         # Retain an unexpected positive admission before asserting the expiry
         # envelope. Failure cleanup must still own and reconcile that task.
-        if proc.result["exit_code"] == 0:
+        if _command_exit(proc) == 0:
             self.ops.record_admission(name, task_id, response)
+        root_id = self.ops.root_id
+        if root_id is None:
+            raise AcceptanceFailure("expired inspection has no admitted root identity")
         validate_expired_inspection_response(
-            response, proc.result["exit_code"], self.ops.root_id, task_id)
+            response, _command_exit(proc), root_id, task_id)
         label = "delegation-inspection-" + str(self.ops.root_id) + "-" + task_id
         row = self.wait_row(label)
         require(done_result(row) != "Success", "expired inspection worker reported success")
@@ -601,7 +625,7 @@ class InspectionAcceptance:
         validate_blocker_row(row, numeric, group, label, "Done")
         require(done_result(row) == "Success", "bounded queue blocker did not complete successfully")
         self.ops.client("remove-completed-blocker", ["remove", str(numeric)])
-        require(all(row.get("id") != numeric for row in self.queue()["tasks"].values()),
+        require(all(row.get("id") != numeric for row in self.queue_rows().values()),
                 "completed blocker removal was not observed")
         self.blocker = None
 
@@ -618,7 +642,7 @@ class InspectionAcceptance:
             if self.daemon is None or self.daemon.poll() is not None:
                 return False
             try:
-                rows = [row for row in self.queue()["tasks"].values()
+                rows = [row for row in self.queue_rows().values()
                         if isinstance(row, dict) and row.get("label") == label]
                 require(len(rows) == 1, "bounded blocker disappeared during failure cleanup")
                 row = rows[0]
@@ -630,7 +654,7 @@ class InspectionAcceptance:
                 require(done_result(row) == "Success",
                         "bounded blocker did not complete successfully during cleanup")
                 self.ops.client("failure-remove-blocker", ["remove", str(numeric)], timeout=20)
-                require(all(candidate.get("id") != numeric for candidate in self.queue()["tasks"].values()),
+                require(all(candidate.get("id") != numeric for candidate in self.queue_rows().values()),
                         "failure cleanup did not remove the completed blocker")
                 self.blocker = None
                 return True
@@ -661,6 +685,8 @@ class InspectionAcceptance:
             self.failed_inspection("running-expiry", RUNNING_EXPIRY_DELAY_MS)
             self.queued_expiry()
             require(self.ops.safe_failure_shutdown(), "exact terminal fixture queue was not safely shut down")
+            if self.pueue_base is None:
+                raise AcceptanceFailure("fixture supervisor base is unavailable")
             no_secret_bytes([self.workspace, self.state, self.events, self.cases, self.output / "processes",
                              self.pueue_base / "state"], self.sentinel)
             success_receipt = {

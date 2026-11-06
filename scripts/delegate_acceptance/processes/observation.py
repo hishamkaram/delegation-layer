@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import math
 import os
+import struct
 import time
-from typing import Mapping
+from typing import IO, Mapping
 from scripts.delegate_acceptance.directories.policy import require
 
 
@@ -82,3 +83,15 @@ def inherited_environment():
             "LC_CTYPE", "TZ", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
             "XDG_RUNTIME_DIR", "__CF_USER_TEXT_ENCODING"}
     return {key: value for key, value in os.environ.items() if key in keys}
+
+
+def _bounded_command_pending_bytes(pipe: IO[bytes]) -> int | None:
+    """Inspect a pipe without adding bytes beyond the capture bound."""
+    try:
+        import fcntl
+        import termios
+
+        result = fcntl.ioctl(pipe.fileno(), termios.FIONREAD, struct.pack("I", 0))
+        return struct.unpack("I", result)[0]
+    except (ImportError, OSError, struct.error, AttributeError):
+        return None

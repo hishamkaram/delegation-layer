@@ -81,12 +81,14 @@ def without_nofollow():
     """Model a platform whose os module lacks the optional O_NOFOLLOW flag, then restore it."""
     present = hasattr(os, "O_NOFOLLOW")
     saved = getattr(os, "O_NOFOLLOW", None)
+    if present and type(saved) is not int:
+        raise AssertionError("fixture O_NOFOLLOW flag is not an integer")
     if present:
         del os.O_NOFOLLOW
     try:
         yield
     finally:
-        if present:
+        if type(saved) is int:
             os.O_NOFOLLOW = saved
 
 

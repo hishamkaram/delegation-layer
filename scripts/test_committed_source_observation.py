@@ -15,6 +15,7 @@ from unittest import mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.release_verification import candidate_source_observation, source
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
@@ -55,7 +56,10 @@ class HarnessCase(unittest.TestCase):
             raise
 
     def fingerprint(self, seeds: tuple[str, ...] = SEEDS) -> str:
-        return source.fingerprint_sources(self.repository.path, seeds)["sha256"]
+        fingerprint = source.fingerprint_sources(self.repository.path, seeds)["sha256"]
+        if not isinstance(fingerprint, str):
+            raise AssertionError("fixture source fingerprint is not text")
+        return fingerprint
 
     def assertRefused(self, code: str, stage: str, **kwargs) -> None:
         with self.assertRaises(VerificationError) as caught:
@@ -81,8 +85,13 @@ class CommittedMatchTests(HarnessCase):
                             for argument in record["argv"]))
         self.assertIn(self.head, receipt["commands"][1]["argv"])
         self.assertEqual({record["exit_code"] for record in receipt["commands"]}, {0})
-        self.assertEqual(sorted(item["path"] for item in source.fingerprint_sources(
-            self.repository.path, SEEDS)["files"]), sorted(FILES))
+        paths: list[str] = []
+        for item in array_at(source.fingerprint_sources(self.repository.path, SEEDS), "files"):
+            path = object_at(item)["path"]
+            if not isinstance(path, str):
+                raise AssertionError("fixture fingerprint file path is not text")
+            paths.append(path)
+        self.assertEqual(sorted(paths), sorted(FILES))
 
     def assertNotCommitted(self, *, head: str, seeds: tuple[str, ...] = SEEDS) -> None:
         receipt = {"commands": []}

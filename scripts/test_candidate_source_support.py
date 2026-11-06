@@ -14,12 +14,22 @@ from collections.abc import Callable
 import contextlib
 import io
 from pathlib import Path
+from typing import NotRequired, TypedDict, Unpack
 import unittest
 
 from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure, OutputSink
 from scripts.delegate_acceptance.processes.operations import run_bounded_command
 from scripts.test_candidate_build_support import git
+
+
+class CommandOptions(TypedDict):
+    max_output: int
+    capture: NotRequired[bool]
+    capture_stderr: NotRequired[bool]
+    timeout: NotRequired[float]
+    cwd: NotRequired[Path | None]
+    sink: NotRequired[OutputSink | None]
 
 
 class SourceRepository:
@@ -65,7 +75,7 @@ class ChildFault:
         self.launched = 0
         self.unclosed = 0
 
-    def __call__(self, argv: list[str], environment: dict[str, str], **options: object) -> BoundedCommandResult:
+    def __call__(self, argv: list[str], environment: dict[str, str], **options: Unpack[CommandOptions]) -> BoundedCommandResult:
         if self.matches(argv):
             self.faulted.append(argv)
             raise BoundedCommandError(CommandFailure.TIMEOUT)

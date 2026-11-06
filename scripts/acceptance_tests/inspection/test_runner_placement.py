@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
 
 from scripts.acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 from scripts.acceptance_supervisor_common import digest
+from scripts.acceptance_tests.invalid_calls import invoke_invalid
 from scripts.delegate_acceptance.supervisor.runner_layout import (
     BUNDLE_RUNNER,
     STATE_INSTALLED_RUNNER,
@@ -14,7 +14,7 @@ from scripts.delegate_acceptance.supervisor.runner_layout import (
     managed_state_runner,
 )
 
-from .fixtures import ROOT, TASK, InspectionFixture
+from .fixtures import ROOT, TASK, InspectionFixture, FixtureProcesses
 
 
 PLACEMENTS: tuple[RunnerPlacement, ...] = (BUNDLE_RUNNER, STATE_INSTALLED_RUNNER)
@@ -23,7 +23,7 @@ PLACEMENTS: tuple[RunnerPlacement, ...] = (BUNDLE_RUNNER, STATE_INSTALLED_RUNNER
 def managed_ledger(fixture: InspectionFixture, placement: RunnerPlacement,
                    state=None) -> NativeTaskOps:
     """Return a managed task ledger over the fixture's records and runner."""
-    ops = NativeTaskOps(SimpleNamespace(), fixture.base / "delegate", fixture.runner,
+    ops = NativeTaskOps(FixtureProcesses(), fixture.base / "delegate", fixture.runner,
                         fixture.pueue, fixture.state_parent, state or fixture.state, fixture.output,
                         managed_runner=True, runner_placement=placement)
     ops.bind_supervisor(fixture.config)
@@ -49,7 +49,7 @@ def managed_runtime_inspection(check: unittest.TestCase,
 def validate_all(ops: NativeTaskOps, fixture: InspectionFixture) -> None:
     """Run the ordinary binding, inspection journal, and inspection queue validators."""
     row = fixture.ordinary_row()
-    ops.validate_ordinary_queue_row(row, row["label"], TASK, 7, "default")
+    ops.validate_ordinary_queue_row(row, f"delegate:{ROOT}:{TASK}", TASK, 7, "default")
     journal = ops.validate_inspection_journal(TASK, fixture.state / "inspections" / TASK)
     ops._validate_inspection_queue_row(fixture.inspection_row(), journal, allow_failure=False)
 
@@ -81,7 +81,7 @@ class RunnerPlacementTests(unittest.TestCase):
                 row = fixture.ordinary_row()
                 with self.assertRaisesRegex(AcceptanceFailure,
                                             "ordinary task managed runner executable changed"):
-                    ops.validate_ordinary_queue_row(row, row["label"], TASK, 7, "default")
+                    ops.validate_ordinary_queue_row(row, f"delegate:{ROOT}:{TASK}", TASK, 7, "default")
                 with self.assertRaisesRegex(AcceptanceFailure, "worker mismatch"):
                     ops.validate_inspection_journal(TASK, fixture.state / "inspections" / TASK)
                 journal = fixture.ops.validate_inspection_journal(
@@ -115,13 +115,13 @@ class RunnerPlacementTests(unittest.TestCase):
 
     def test_placement_is_a_typed_managed_only_choice(self):
         fixture = InspectionFixture(self)
-        arguments = (SimpleNamespace(), fixture.base / "delegate", fixture.runner, fixture.pueue,
+        arguments = (FixtureProcesses(), fixture.base / "delegate", fixture.runner, fixture.pueue,
                      fixture.state_parent, fixture.state, fixture.output)
         self.assertEqual(NativeTaskOps(*arguments).runner_placement, BUNDLE_RUNNER)
         with self.assertRaisesRegex(AcceptanceFailure, "only a managed admission installs"):
             NativeTaskOps(*arguments, runner_placement=STATE_INSTALLED_RUNNER)
         with self.assertRaisesRegex(AcceptanceFailure, "runner placement is invalid"):
-            NativeTaskOps(*arguments, managed_runner=True, runner_placement="existing")
+            invoke_invalid(NativeTaskOps, *arguments, managed_runner=True, runner_placement="existing")
 
 
 if __name__ == "__main__":

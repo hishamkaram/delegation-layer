@@ -5,6 +5,10 @@ finite fixtures the neighbouring native cohorts already use. English wording
 never selects a neutral reason: only structured facts do.
 """
 
+from argparse import Namespace
+from collections.abc import Mapping
+from typing import ClassVar
+
 import hashlib
 import json
 import os
@@ -15,6 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.native.support import invoke_with_invalid_arguments
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_discovery as discovery_impl,
@@ -32,7 +37,7 @@ AUTH_BLOCK_RESPONSE = {
     }},
 }
 ENGLISH_AUTH_TEXT = "provider authentication unavailable: please sign in again"
-STRUCTURED_AUTH_DIAGNOSTIC = {
+STRUCTURED_AUTH_DIAGNOSTIC: dict[str, object] = {
     "code": "authentication-unavailable", "event": 1,
     "message": "Provider authentication was unavailable.",
 }
@@ -61,11 +66,11 @@ class BlockedFailureContractTests(unittest.TestCase):
                           SimpleNamespace(value="auth-unavailable")):
             with self.subTest(candidate=candidate):
                 with self.assertRaises(TypeError):
-                    BlockedFailure("blocked", reason=candidate)
+                    invoke_with_invalid_arguments(BlockedFailure, ("blocked",), {"reason": candidate})
 
     def test_the_reason_is_keyword_only(self):
         with self.assertRaises(TypeError):
-            BlockedFailure("blocked", BlockReason.AUTH_UNAVAILABLE)
+            invoke_with_invalid_arguments(BlockedFailure, ("blocked", BlockReason.AUTH_UNAVAILABLE), {})
 
 
 class AuthenticationStatusSiteTests(unittest.TestCase):
@@ -76,8 +81,8 @@ class AuthenticationStatusSiteTests(unittest.TestCase):
         operation.provider = "claude:print"
         operation.profile = gate.PROFILES[operation.provider]
         operation.provider_executable = Path("/usr/bin/claude")
-        operation.direct = lambda name, argv, expected, timeout: SimpleNamespace(
-            directory=process_directory, result={"exit_code": exit_code})
+        operation.direct = Mock(side_effect=lambda name, argv, expected, timeout: SimpleNamespace(
+            directory=process_directory, result={"exit_code": exit_code}))
         return operation
 
     def test_logged_out_status_is_auth_unavailable(self):
@@ -108,7 +113,7 @@ class ModelDiscoverySiteTests(unittest.TestCase):
     def _prerequisite(self, response: dict[str, object]):
         operation = object.__new__(gate.NativeAcceptance)
         operation.provider = "pi:json"
-        operation.args = SimpleNamespace(model=None)
+        operation.args = Namespace(model=None)
         operation.discover_models = Mock()
         operation.model_discovery = response
         operation.require_default_model_prerequisite()
@@ -160,14 +165,14 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
         operation.provider = "codex:exec"
         operation.mode, operation.scenario = "read-only", "read-only"
         operation.workspace = Path(temporary.name)
-        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.args = Namespace(model=None, effort=None)
         operation.root_id = None
         operation.dispatch_argv = Mock(return_value=["delegate"])
         operation.task_command_prefix = Mock(return_value=["delegate"])
         operation._sync_ops_owned_tasks = Mock()
-        operation.ops = SimpleNamespace(
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
             root_id=None, dispatch=refuse, continue_task=refuse,
-            dispatch_observations=[{"response": response}])
+            dispatch_observations=[{"response": response}]), create=True))
         return operation
 
     def test_structured_admission_block_is_auth_unavailable_for_dispatch_and_continue(self):
@@ -178,6 +183,8 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
             with self.subTest(call=call), self.assertRaises(BlockedFailure) as raised:
                 call()
             self.assertIs(raised.exception.reason, BlockReason.AUTH_UNAVAILABLE)
+            self.assertIsInstance(raised.exception.__cause__, gate.AcceptanceFailure)
+            self.assertEqual(str(raised.exception.__cause__), "dispatch refused")
 
     def test_english_admission_error_text_is_not_a_block(self):
         for response in ({"status": "refused", "error": ENGLISH_AUTH_TEXT}, {}, None):
@@ -191,7 +198,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
                 self.assertNotIsInstance(raised.exception, BlockedFailure)
                 self.assertEqual(str(raised.exception), "dispatch refused")
 
-    def _wait_operation(self, state: Path, outcome: dict[str, object] | None):
+    def _wait_operation(self, state: Path, outcome: Mapping[str, object] | None):
         task = "a" * 32
         task_directory = state / "tasks" / task
         task_directory.mkdir(parents=True)
@@ -205,9 +212,9 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
         operation.root_id = "b" * 32
         operation.state = state
         operation.provider = "ccr:print"
-        operation.ops = SimpleNamespace(
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
             root_id=None, wait_task=failed,
-            status=Mock(return_value={"admission": "admitted", "liveness": "stopped"}))
+            status=Mock(return_value={"admission": "admitted", "liveness": "stopped"})), create=True))
         return operation, task
 
     def test_runner_failure_with_a_structured_diagnostic_is_auth_unavailable(self):
@@ -219,7 +226,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
             self.assertIs(raised.exception.reason, BlockReason.AUTH_UNAVAILABLE)
 
     def test_runner_failure_with_english_diagnostic_text_stays_a_failure(self):
-        english = {"code": "provider-failed", "event": 1, "message": ENGLISH_AUTH_TEXT}
+        english: dict[str, object] = {"code": "provider-failed", "event": 1, "message": ENGLISH_AUTH_TEXT}
         for outcome in (None, {"verdict": "rejected", "diagnostics": [english]}):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory(
                     prefix="block-reason-wait-english-") as directory:
@@ -250,8 +257,8 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
         operation.root_id = root_id
         operation.state = state
         operation.provider = "pi:json"
-        operation.ops = SimpleNamespace(
-            root_id=None, collect=lambda *_arguments, **_keywords: response)
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
+            root_id=None, collect=lambda *_arguments, **_keywords: response), create=True))
         return operation, task
 
     def test_rejected_collection_with_a_structured_diagnostic_is_auth_unavailable(self):
@@ -262,7 +269,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
             self.assertIs(raised.exception.reason, BlockReason.AUTH_UNAVAILABLE)
 
     def test_rejected_collection_with_english_text_stays_a_failure(self):
-        english = {"code": "provider-failed", "event": 1, "message": ENGLISH_AUTH_TEXT}
+        english: dict[str, object] = {"code": "provider-failed", "event": 1, "message": ENGLISH_AUTH_TEXT}
         with tempfile.TemporaryDirectory(prefix="block-reason-collect-english-") as directory:
             operation, task = self._collect_operation(Path(directory), [english])
             with self.assertRaises(gate.AcceptanceFailure) as raised:
@@ -385,6 +392,7 @@ class MainReceiptTests(unittest.TestCase):
     def _run(*, result: int | None = None, error: BaseException | None = None,
              summary: object = None, discovery_exit_code: int = 2):
         class Run:
+            model_discovery_summary: ClassVar[object]
             model_discovery_exit_code = discovery_exit_code
 
             def run(self):
@@ -483,12 +491,12 @@ class MainReceiptTests(unittest.TestCase):
         def run_factory():
             operation = object.__new__(gate.NativeAcceptance)
             operation.provider = "pi:json"
-            operation.args = SimpleNamespace(model=None)
+            operation.args = Namespace(model=None)
             operation.discover_models = Mock()
             operation.model_discovery = {"status": "blocked",
                                          "reason_code": "authentication_unavailable"}
-            operation.finalize = lambda _success, *, blocked=False: True
-            operation.run = operation.require_default_model_prerequisite
+            operation.finalize = Mock(return_value=True)
+            operation.run = Mock(side_effect=operation.require_default_model_prerequisite)
             return operation
 
         code, receipt = self._main(run_factory)

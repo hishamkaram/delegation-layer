@@ -8,7 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import acceptance_supervisor_common as supervisor_common
 import acceptance_supervisor_hermetic as hermetic
@@ -17,6 +17,7 @@ from scripts.delegate_acceptance.hermetic import case as hermetic_case
 from scripts.delegate_acceptance.hermetic import suite as hermetic_suite
 from scripts.delegate_acceptance.hermetic import observations as hermetic_observations
 from scripts.delegate_acceptance.hermetic import scenarios_admission
+from scripts.delegate_acceptance.hermetic.contract import HarnessFailure
 from scripts.acceptance_tests.hermetic.fixtures import retry_case
 from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.processes import operations as process_operations
@@ -349,7 +350,8 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
             case.base.mkdir()
             case.case_id = "failed-case"
             case.suite = SimpleNamespace(output=root / "evidence")
-            case.processes = SimpleNamespace(drain=lambda **_kwargs: [{"pid": 123, "termination": "unknown"}])
+            case.processes = Mock(spec=supervisor_common.Processes,
+                                  drain=Mock(return_value=[{"pid": 123, "termination": "unknown"}]))
             (case.base / "stderr").write_bytes(b"diagnostic bytes")
             (case.base / "unavailable-link").symlink_to(root / "not-present")
             case.retain_failure(RuntimeError("injected failure"))
@@ -388,22 +390,20 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
 
     @staticmethod
     def suite(directory, status):
-        suite = object.__new__(HermeticSuite)
+        class RecordedSuite(HermeticSuite):
+            def run_case(self, case_id, fn, **kwargs):
+                self.results.append({"case": case_id, "status": status,
+                                     "error": "injected assertion", "traceback": "injected traceback"})
+
+        suite = object.__new__(RecordedSuite)
         suite.tools = Path(directory)
         suite.output = Path(directory)
         suite.results = []
-
-        def run_case(case_id, _function):
-            suite.results.append({"case": case_id, "status": status,
-                                  "error": "injected assertion", "traceback": "injected traceback"})
-
-        suite.run_case = run_case
         return suite
 
 
 class CaseFinalizationTests(unittest.TestCase):
-    @staticmethod
-    def fake_case(root, case_id, events):
+    def fake_case(self, root, case_id, events):
         output = root / "output"
         output.mkdir()
         source = root / "private-base"
@@ -420,10 +420,8 @@ class CaseFinalizationTests(unittest.TestCase):
         case.external_wait_unknown = {}
         case.owned_directories = ("owned-token",)
         case.outcome = None
-        case.processes = SimpleNamespace(
-            drain=lambda **_kwargs: [],
-            finished_naturally=lambda **_kwargs: True,
-        )
+        case.processes = Mock(spec=supervisor_common.Processes, drain=Mock(return_value=[]),
+                              finished_naturally=Mock(return_value=True))
 
         def copy_evidence():
             events.append("copy")
@@ -435,10 +433,8 @@ class CaseFinalizationTests(unittest.TestCase):
             events.append("receipt")
             return {"case": case_id}
 
-        case.copy_evidence = copy_evidence
-        case.receipt = receipt
-        case.finish = lambda status="pass": Case.finish(case, status)
-        case.retain_failure = lambda error: Case.retain_failure(case, error)
+        self.enterContext(patch.object(case, "copy_evidence", side_effect=copy_evidence))
+        self.enterContext(patch.object(case, "receipt", side_effect=receipt))
         return case, output, source, destination
 
     @staticmethod
@@ -513,6 +509,15 @@ class CaseFinalizationTests(unittest.TestCase):
             self.assertTrue((destination / "private-base" / "diagnostic.txt").exists())
             self.assertTrue(source.exists())
             self.assertEqual(events, ["copy", "receipt", "rollback"])
+
+
+class ControlOwnerIdentityTests(unittest.TestCase):
+    def test_control_owner_rejects_non_text_command_identity(self):
+        with patch.object(hermetic_observations, "supervisor_observer_events_for_entry",
+                          return_value=[{"command": {"command_id": 7}}]), \
+                patch.object(hermetic_observations, "events", return_value=[]):
+            with self.assertRaisesRegex(HarnessFailure, "no valid command ID"):
+                hermetic_observations.control_owner_completion_for_entry(None, {})
 
 
 class A06RetryObservationTests(unittest.TestCase):

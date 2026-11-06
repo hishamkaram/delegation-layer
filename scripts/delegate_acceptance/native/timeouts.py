@@ -88,11 +88,13 @@ class TimeoutFifoLease:
 
     def observe(self) -> None:
         self._verify_path()
-        require(self.fd is not None, f"{self.label} FIFO reader is unavailable")
+        descriptor = self.fd
+        if descriptor is None:
+            raise AcceptanceFailure(f"{self.label} FIFO reader is unavailable")
         if self.eof:
             return
         poller = select.poll()
-        poller.register(self.fd, select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL)
+        poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL)
         events = poller.poll(0)
         if not events and not self.writer_observed:
             return
@@ -101,7 +103,7 @@ class TimeoutFifoLease:
                 f"{self.label} FIFO observation failed")
         while True:
             try:
-                chunk = os.read(self.fd, TIMEOUT_LEASE_MAX_BYTES)
+                chunk = os.read(descriptor, TIMEOUT_LEASE_MAX_BYTES)
             except BlockingIOError:
                 return
             except OSError as error:
@@ -220,9 +222,8 @@ class TimeoutLeaseOwner:
         resources: dict[str, dict[str, object]] = {}
         for name in ("parent", "child"):
             lease = self.leases.get(name)
-            require(lease is not None and type(lease.device) is int and
-                    type(lease.inode) is int,
-                    f"timeout {name} FIFO identity is unavailable")
+            if lease is None or type(lease.device) is not int or type(lease.inode) is not int:
+                raise AcceptanceFailure(f"timeout {name} FIFO identity is unavailable")
             resources[name] = {
                 "path": str(lease.path), "device": lease.device, "inode": lease.inode,
                 "type": "fifo", "ready": lease.ready, "closed": lease.eof,

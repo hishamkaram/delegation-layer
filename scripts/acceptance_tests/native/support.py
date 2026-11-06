@@ -1,10 +1,15 @@
 """Shared data-only helpers for the native acceptance unit cohorts."""
 
 from pathlib import Path
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 import shlex
+import unittest
+from unittest.mock import patch
 
 import acceptance_provider_common as provider_common
 from scripts.delegate_acceptance.native import acceptance as gate
+from scripts.delegate_acceptance.tasks.contracts import TaskCommand, TaskProcesses
 # The fixture builds the current contract; tests assert its literal pins independently.
 from scripts.delegate_acceptance.native_evidence.production_acp import (
     ACP_PREDICATE_VERSION,
@@ -13,6 +18,71 @@ from scripts.delegate_acceptance.native_evidence.production_acp import (
 
 
 AGGREGATE_WRAPPER_TEST_TIMEOUT = 60
+
+
+def construct_with_invalid_fields[T](constructor: Callable[..., T], fields: Mapping[str, object]) -> T:
+    # Negative tests intentionally exceed the static input contract; the actual constructor validates them.
+    return constructor(**fields)
+
+
+def invoke_with_invalid_arguments[T](operation: Callable[..., T], arguments: Sequence[object],
+                                     fields: Mapping[str, object]) -> T:
+    # Negative tests intentionally exceed the static call contract; the actual operation must reject them.
+    return operation(*arguments, **fields)
+
+
+@dataclass(frozen=True)
+class CapturedCommand:
+    """A fixture's observed command capture; its enclosing test owns the files."""
+
+    directory: Path
+    result: Mapping[str, object]
+
+    def json(self, bound: int = 8 * 1024 * 1024) -> object:
+        return gate.read_json(self.directory / "stdout", bound)
+
+
+def fixture_record(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise AssertionError("fixture evidence must be an object with string keys")
+    return value
+
+
+def fixture_list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        raise AssertionError("fixture evidence must be a list")
+    return value
+
+
+def fixture_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise AssertionError("fixture evidence must be text")
+    return value
+
+
+class NoCommands:
+    """Pure ledger fixtures must refuse any attempted child launch or cleanup."""
+
+    def run(self, name: str, argv: list[object], cwd: Path,
+            expected: int | set[int] | None = 0, timeout: float = 15,
+            stdin: bytes | None = None, *, environment: Mapping[str, str] | None = None) -> TaskCommand:
+        raise AssertionError("a pure ledger fixture must not launch a command")
+
+    def drain(self, timeout: float = 70, exclude: Iterable[object] = ()) -> Sequence[Mapping[str, object]]:
+        raise AssertionError("a pure ledger fixture must not request process cleanup")
+
+
+def task_owner(check: unittest.TestCase, *, processes: TaskProcesses, provider: str,
+               delegate: Path, runner: Path, pueue: Path, base: Path, state: Path,
+               output: Path) -> gate.NativeAcceptance:
+    """Build the native state read by a task ledger, with a test-owned process boundary."""
+    owner = object.__new__(gate.NativeAcceptance)
+    owner.provider, owner.delegate, owner.runner, owner.pueue = provider, delegate, runner, pueue
+    owner.base, owner.state, owner.output = base, state, output
+    owner.models_state, owner.config = base / "models-state", base / "pueue.yml"
+    owner.root_id, owner.daemon = None, None
+    check.enterContext(patch.object(owner, "processes", processes, create=True))
+    return owner
 
 
 FAKE_NATIVE_PYTHON_SCRIPT = '''#!/bin/sh
@@ -192,7 +262,7 @@ def fake_native_python_script() -> str:
     return FAKE_NATIVE_PYTHON_SCRIPT
 
 
-def queue_oracle_owner(root: Path, runtime_only: bool):
+def queue_oracle_owner(root: Path, runtime_only: bool, check: unittest.TestCase):
     state = root / "state"
     state.mkdir()
     runner = root / "delegate-run"
@@ -205,7 +275,7 @@ def queue_oracle_owner(root: Path, runtime_only: bool):
     operation.runner = runner
     operation.tasks = {"fresh": task}
     operation.numeric_ids = {task: 7}
-    operation.processes = object()
+    check.enterContext(patch.object(operation, "processes", NoCommands(), create=True))
     operation.delegate = runner
     operation.pueue = root / "pueue"
     operation.config = root / "pueue.yml"
@@ -213,15 +283,16 @@ def queue_oracle_owner(root: Path, runtime_only: bool):
     operation.output.mkdir()
     operation.pueue.write_text("pueue\n")
     operation.config.write_text("config\n")
-    operation.ops = provider_common.NativeTaskOps(
-        operation.processes, operation.delegate, operation.runner,
+    ledger = provider_common.NativeTaskOps(
+        NoCommands(), operation.delegate, operation.runner,
         operation.pueue, state.parent, state, operation.output)
+    check.enterContext(patch.object(operation, "ops", ledger, create=True))
     operation.ops.expected_results = {"fresh": "Success"}
     operation.provider_executable = runner
     operation.daemon = None
     task_directory = state / "tasks" / task
     task_directory.mkdir(parents=True)
-    metadata = {
+    metadata: dict[str, object] = {
         "root_id": operation.root_id,
         "task_id": task,
         "provider_executable": str(runner),
@@ -246,8 +317,9 @@ def queue_oracle_owner(root: Path, runtime_only: bool):
 
 
 def queue_oracle(root: Path, with_inspection: bool = True,
-                 runtime_only: bool = False):
-    operation, task, runner = queue_oracle_owner(root, runtime_only)
+                 runtime_only: bool = False, *, check: unittest.TestCase,
+                 stub_inspection_journals: bool = True):
+    operation, task, runner = queue_oracle_owner(root, runtime_only, check)
     state = operation.state
     ordinary_command = shlex.join([str(runner), "--root", str(state), task])
     rows = {"7": {
@@ -277,7 +349,7 @@ def queue_oracle(root: Path, with_inspection: bool = True,
     operation.ops.numbers = {"fresh": 7}
     operation.ops.expected_results = {"fresh": "Success"}
     operation.ops.dispatch_attempts = {task}
-    if with_inspection:
+    if with_inspection and stub_inspection_journals:
         inspection_record = {
             "task_id": task, "group": inspection_group, "label": inspection_label,
             "operation_id": task, "group_parallelism": 1,
@@ -290,7 +362,7 @@ def queue_oracle(root: Path, with_inspection: bool = True,
             }},
             "result": {"reason": "eligible"},
         }
-        operation.ops._inspection_journals = lambda *_args: {task: inspection_record}
+        check.enterContext(patch.object(operation.ops, "_inspection_journals", return_value={task: inspection_record}))
     return operation, {"tasks": rows, "groups": groups}
 
 

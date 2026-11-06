@@ -19,6 +19,7 @@ from scripts.delegate_acceptance.tasks.specification import (
 from scripts.delegate_acceptance.workspaces.admission_identity import (
     _admission_attempt_operation_id,
 )
+from scripts.delegate_acceptance.workspaces.data import InspectionIdentity, WorkspaceAdmissionAttempt
 from scripts.delegate_acceptance.workspaces.specification import (
     _canonical_workspace_closure_bytes,
     _canonical_workspace_reservation_bytes,
@@ -29,10 +30,13 @@ from pathlib import Path
 
 def _workspace_admission_attempt(
         state: Path, root: str, task_record: object, label: str,
-        ) -> dict[str, object]:
+        ) -> WorkspaceAdmissionAttempt:
     """Resolve one TaskRecord workspace binding through its durable reservation."""
-    require(isinstance(task_record, dict), f"{label} task is not an object")
+    if not isinstance(task_record, dict):
+        raise AcceptanceFailure(f"{label} task is not an object")
     task = task_record.get("task_id")
+    if not _task_identity(task):
+        raise AcceptanceFailure(f"{label} task_id is invalid")
     _validate_task_record(task_record, root, task, label)
     binding = _canonical_workspace_binding(task_record.get("workspace"),
                                            f"{label} workspace")
@@ -98,9 +102,10 @@ def _workspace_admission_attempt(
 def _inspection_request_identity(
         state: Path, root: str, request: object, directory_name: str,
         label: str,
-        ) -> dict[str, object]:
+        ) -> InspectionIdentity:
     """Validate logical/effective inspection identity and resolve workspace attempts."""
-    require(isinstance(request, dict), f"{label} is not an object")
+    if not isinstance(request, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(request, {
         "schema_version", "root_id", "task_id", "task", "task_sha256", "binding",
         "group", "label", "created_at", "deadline",
@@ -108,8 +113,11 @@ def _inspection_request_identity(
     require(type(request.get("schema_version")) is int and request["schema_version"] == 1 and
             request.get("root_id") == root, f"{label} identity is invalid")
     logical = request.get("task_id")
-    require(_task_identity(logical), f"{label} task_id is invalid")
+    if not _task_identity(logical):
+        raise AcceptanceFailure(f"{label} task_id is invalid")
     embedded_task = request.get("task")
+    if not isinstance(embedded_task, dict):
+        raise AcceptanceFailure(f"{label} task is not a task record")
     embedded_digest = _validate_task_record(embedded_task, root, logical,
                                              f"{label} task")
     require(_hex_digest(request.get("task_sha256")) and
@@ -117,7 +125,8 @@ def _inspection_request_identity(
             f"{label} task digest is invalid")
     operation_id = request.get("operation_id")
     if operation_id is not None:
-        require(_task_identity(operation_id), f"{label} operation_id is invalid")
+        if not _task_identity(operation_id):
+            raise AcceptanceFailure(f"{label} operation_id is invalid")
     attempt = None
     if "workspace" in embedded_task:
         attempt = _workspace_admission_attempt(
@@ -137,32 +146,41 @@ def _inspection_request_identity(
 
 
 def _validate_historical_workspace_attempt(
-        state: Path, attempt: dict[str, object], current_task: object, root: str,
-        label: str) -> dict[str, object]:
+        state: Path, attempt: object, current_task: object, root: str,
+        label: str) -> WorkspaceAdmissionAttempt:
     """Allow only an exact later task after a positively aborted old attempt."""
-    require(isinstance(attempt, dict), f"{label} old admission attempt is invalid")
+    if not isinstance(attempt, dict):
+        raise AcceptanceFailure(f"{label} old admission attempt is invalid")
     closure = attempt.get("closure")
     require(isinstance(closure, dict) and
             closure.get("disposition") == "aborted-not-launched",
             f"{label} old admission lacks an aborted-not-launched closure")
-    require(isinstance(current_task, dict), f"{label} current task is invalid")
+    if not isinstance(current_task, dict):
+        raise AcceptanceFailure(f"{label} current task is invalid")
     task = current_task.get("task_id")
+    if not _task_identity(task):
+        raise AcceptanceFailure(f"{label} current task task_id is invalid")
     _validate_task_record(current_task, root, task, f"{label} current task")
     current_attempt = _workspace_admission_attempt(
         state, root, current_task, f"{label} current admission")
+    sequence = attempt.get("sequence")
+    if type(sequence) is not int:
+        raise AcceptanceFailure(f"{label} old admission attempt sequence is invalid")
     require(current_attempt["workspace_id"] == attempt.get("workspace_id") and
-            current_attempt["sequence"] > attempt.get("sequence") and
+            current_attempt["sequence"] > sequence and
             current_attempt["operation_id"] != attempt.get("operation_id"),
             f"{label} current admission is not a later reservation")
     old_task = attempt.get("task_record")
-    require(isinstance(old_task, dict), f"{label} old admission task is missing")
+    if not isinstance(old_task, dict):
+        raise AcceptanceFailure(f"{label} old admission task is missing")
     normalized_old = deepcopy(old_task)
     old_workspace = normalized_old.get("workspace")
     current_workspace = current_task.get("workspace")
-    require(isinstance(old_workspace, dict) and isinstance(current_workspace, dict),
-            f"{label} workspace binding is missing")
-    normalized_old["workspace"] = deepcopy(old_workspace)
-    normalized_old["workspace"]["reservation"] = current_workspace.get("reservation")
+    if not isinstance(old_workspace, dict) or not isinstance(current_workspace, dict):
+        raise AcceptanceFailure(f"{label} workspace binding is missing")
+    normalized_workspace = deepcopy(old_workspace)
+    normalized_workspace["reservation"] = current_workspace.get("reservation")
+    normalized_old["workspace"] = normalized_workspace
     require(normalized_old == current_task,
             f"{label} ordinary task differs from aborted admission beyond reservation")
     return current_attempt

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import time
+from typing import Mapping
 
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 from scripts.delegate_acceptance.workspaces.closure import (
@@ -16,6 +17,7 @@ from scripts.delegate_acceptance.directories.policy import require
 from .context import WorkspaceContext
 from .evidence import _compact
 from .model import (
+    CaptureArtifact, CaptureEvidence,
     FIXTURE_FILE, MAX_RESPONSE_BYTES, OID_RE, SHA256_RE, TASK_ID_RE, WAIT_SECONDS,
     WORKSPACE_OPERATION_BUDGET,
 )
@@ -51,11 +53,12 @@ def _verify_previous_boot_capture(
     operation_path = Path(state) / "workspace-operations" / operation_id
     closure = validate_managed_workspace_operation_closure(operation_path, root_id)
     native = closure.get("managed_lifetime")
-    require(isinstance(native, dict), "previous-boot capture has no native closure")
+    if not (isinstance(native, dict)):
+        raise RuntimeError("previous-boot capture has no native closure")
     termination = native.get("termination")
-    require(isinstance(termination, dict) and termination.get("cause") == "previous-boot" and
-            digest(operation_path / "lifetime-termination.json") == termination_sha256,
-            "previous-boot capture termination does not match retained closure")
+    if not (isinstance(termination, dict) and termination.get("cause") == "previous-boot" and
+            digest(operation_path / "lifetime-termination.json") == termination_sha256):
+        raise RuntimeError("previous-boot capture termination does not match retained closure")
 
 
 def _capture_binding(state: Path, capture: dict[str, object]) -> CaptureBinding:
@@ -73,11 +76,13 @@ def _capture_binding(state: Path, capture: dict[str, object]) -> CaptureBinding:
         _validate_hex(capture.get("worker_wait_sha256"), SHA256_RE,
                       "capture worker_wait_sha256")
     candidate = capture.get("candidate")
-    require(isinstance(candidate, dict), "captured workspace omitted its candidate")
+    if not (isinstance(candidate, dict)):
+        raise RuntimeError("captured workspace omitted its candidate")
     require(candidate.get("workspace_id") == workspace_id, "capture candidate workspace mismatch")
     require(candidate.get("operation_id") == operation_id, "capture candidate operation mismatch")
     subject = candidate.get("subject")
-    require(isinstance(subject, dict), "capture candidate omitted subject")
+    if not (isinstance(subject, dict)):
+        raise RuntimeError("capture candidate omitted subject")
     _validate_hex(subject.get("id"), TASK_ID_RE, "capture subject ID")
     _validate_hex(subject.get("sha256"), SHA256_RE, "capture subject SHA256")
     base_oid = _validate_hex(candidate.get("base_oid"), OID_RE, "capture base OID")
@@ -89,13 +94,11 @@ def _capture_binding(state: Path, capture: dict[str, object]) -> CaptureBinding:
         + re.escape(workspace_id) + r"/captures/" + re.escape(operation_id) + r"$"
     )
     ref_match = expected_ref.fullmatch(snapshot_ref) if isinstance(snapshot_ref, str) else None
-    require(
-        isinstance(snapshot_ref, str)
+    if not (isinstance(snapshot_ref, str)
         and ref_match is not None
         and "\x00" not in snapshot_ref
-        and len(snapshot_ref) <= 256,
-        "capture snapshot ref is not the exact owned workspace ref",
-    )
+        and len(snapshot_ref) <= 256):
+        raise RuntimeError("capture snapshot ref is not the exact owned workspace ref")
     root_record_path = Path(state) / "root.json"
     if root_record_path.is_file() and not root_record_path.is_symlink():
         root_record = read_json(root_record_path)
@@ -125,22 +128,25 @@ def _capture_observed_turn(capture: dict[str, object]) -> bool:
     turn = candidate.get("turn") if isinstance(candidate, dict) else None
     if turn is None:
         return False
-    require(isinstance(turn, dict) and turn.get("status") in {"observed", "unavailable"},
-            "capture turn observation is invalid")
+    if not (isinstance(turn, dict) and turn.get("status") in {"observed", "unavailable"}):
+        raise RuntimeError("capture turn observation is invalid")
     return turn["status"] == "observed"
 
 
-def _verify_artifact_descriptor(artifact_root: Path, artifact: object) -> dict[str, object]:
+def _verify_artifact_descriptor(artifact_root: Path, artifact: object) -> CaptureArtifact:
     """Match the Go descriptor contract, then bind complete bytes to the retained file."""
-    require(isinstance(artifact, dict), "capture artifact is not an object")
+    if not (isinstance(artifact, dict)):
+        raise RuntimeError("capture artifact is not an object")
     name = artifact.get("name")
-    require(isinstance(name, str) and name in CUMULATIVE_CAPTURE_ARTIFACTS | TURN_CAPTURE_ARTIFACTS,
-            "capture artifact name is not allowlisted")
+    if not (isinstance(name, str) and name in CUMULATIVE_CAPTURE_ARTIFACTS | TURN_CAPTURE_ARTIFACTS):
+        raise RuntimeError("capture artifact name is not allowlisted")
     omitted = artifact.get("omitted", "")
-    require(isinstance(omitted, str), "capture omitted reason is invalid")
+    if not (isinstance(omitted, str)):
+        raise RuntimeError("capture omitted reason is invalid")
     require(artifact.get("truncated", False) is False, "capture artifact is truncated")
     length = artifact.get("length")
-    require(type(length) is int and length >= 0, "capture artifact length is invalid")
+    if not (type(length) is int and length >= 0):
+        raise RuntimeError("capture artifact length is invalid")
     if omitted:
         require(omitted == "limit" and length == 0 and artifact.get("sha256", "") == "",
                 "capture omitted artifact is not an empty limit descriptor")
@@ -156,10 +162,11 @@ def _verify_artifact_descriptor(artifact_root: Path, artifact: object) -> dict[s
 
 def _verify_capture_artifacts(
     state: Path, operation_id: str, artifacts_value: object, observed_turn: bool,
-) -> list[dict[str, object]]:
-    require(isinstance(artifacts_value, list), "capture artifact inventory is not a list")
+) -> list[CaptureArtifact]:
+    if not (isinstance(artifacts_value, list)):
+        raise RuntimeError("capture artifact inventory is not a list")
     artifact_root = Path(state) / "workspace-operations" / operation_id / "artifacts"
-    verified: list[dict[str, object]] = []
+    verified: list[CaptureArtifact] = []
     for artifact in artifacts_value:
         item = _verify_artifact_descriptor(artifact_root, artifact)
         require(all(prior["name"] != item["name"] for prior in verified),
@@ -174,7 +181,7 @@ def _verify_capture_artifacts(
     return verified
 
 
-def verify_capture_receipt(state: Path, capture: dict[str, object]) -> dict[str, object]:
+def verify_capture_receipt(state: Path, capture: dict[str, object]) -> CaptureEvidence:
     """Verify capture digests and artifact paths against retained state evidence."""
     binding = _capture_binding(state, capture)
     artifacts = _verify_capture_artifacts(
@@ -199,16 +206,16 @@ def verify_capture_receipt(state: Path, capture: dict[str, object]) -> dict[str,
 
 
 def _task_baseline_ref(
-    context: WorkspaceContext, evidence: dict[str, object], *, task_id: str,
+    context: WorkspaceContext, evidence: CaptureEvidence, *, task_id: str,
 ) -> str:
     record = _task_record(context, task_id)
     require(record.get("root_id") == evidence["root_id"], "turn task root identity changed")
     binding = record.get("workspace")
-    require(isinstance(binding, dict) and binding.get("id") == evidence["workspace_id"],
-            "turn task workspace binding changed")
+    if not (isinstance(binding, dict) and binding.get("id") == evidence["workspace_id"]):
+        raise RuntimeError("turn task workspace binding changed")
     sequence = binding.get("reservation")
-    require(type(sequence) is int and 0 < sequence < 2**64,
-            "turn task reservation is invalid")
+    if not (type(sequence) is int and 0 < sequence < 2**64):
+        raise RuntimeError("turn task reservation is invalid")
     return ("refs/delegate/" + str(evidence["root_id"]) + "/workspaces/"
             + str(evidence["workspace_id"]) + f"/baselines/{sequence:020d}")
 
@@ -232,18 +239,21 @@ def _turn_files(data: bytes) -> frozenset[bytes]:
 def verify_task_turn(
     context: WorkspaceContext, capture: dict[str, object], *, task_id: str,
     expected_files: frozenset[str], forbidden_files: frozenset[str] = frozenset(),
-) -> dict[str, object]:
+) -> CaptureEvidence:
     """Require a fresh task's own baseline and retained, attributable turn artifacts."""
     _validate_hex(task_id, TASK_ID_RE, "turn task ID")
     evidence = verify_capture_receipt(context.state, capture)
     subject = evidence["subject"]
-    require(isinstance(subject, dict) and subject.get("kind") == "task"
-            and subject.get("id") == task_id and capture.get("subject") == subject,
-            "turn capture is not bound to the exact task subject")
+    if not (isinstance(subject, dict) and subject.get("kind") == "task"
+            and subject.get("id") == task_id and capture.get("subject") == subject):
+        raise RuntimeError("turn capture is not bound to the exact task subject")
     candidate = capture["candidate"]
+    if not isinstance(candidate, dict):
+        raise RuntimeError("captured workspace omitted its candidate")
     turn = candidate.get("turn")
-    require(isinstance(turn, dict) and turn.get("status") == "observed"
-            and turn.get("reason_code", "") == "", "fresh task turn was not observed")
+    if not (isinstance(turn, dict) and turn.get("status") == "observed"
+            and turn.get("reason_code", "") == ""):
+        raise RuntimeError("fresh task turn was not observed")
     for field in ("content", "head", "index"):
         require(turn.get(field) in {"changed", "unchanged"},
                 "fresh task turn has invalid " + field + " observation")
@@ -273,7 +283,7 @@ def _capture_roundtrip(
     capture: dict[str, object],
     *,
     label: str = "capture-roundtrip",
-) -> dict[str, object]:
+) -> CaptureEvidence:
     evidence = verify_capture_receipt(context.state, capture)
     ref = evidence["snapshot_ref"]
     code, _ = _git(
@@ -315,13 +325,13 @@ def _capture_roundtrip(
 
 def _workspace_exec(
     context: WorkspaceContext,
-    task: dict[str, object],
+    task: Mapping[str, object],
     *,
     command: tuple[str, ...] = FIXTURE_EXEC_COMMAND,
     label: str = "workspace-exec",
 ) -> dict[str, object]:
     """Run one literal argv through supervised workspace verification and wait for its result."""
-    workspace_id = task["workspace_id"]
+    workspace_id = _validate_hex(task["workspace_id"], TASK_ID_RE, "workspace ID")
     code, response = _workspace_mutation(
         context,
         [
@@ -329,17 +339,17 @@ def _workspace_exec(
             "--budget", WORKSPACE_OPERATION_BUDGET, "--json", "--", *command,
         ],
         action="exec", workspace_id=workspace_id,
-        label=label, task_id=task["task_id"],
+        label=label, task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
     )
     operation_id = _operation_id(response)
     require(operation_id is not None, "workspace exec omitted operation identity")
     observed = _wait_workspace(
         context, workspace_id, operation_id=operation_id, state="retained", timeout=WAIT_SECONDS,
-        task_id=task["task_id"],
+        task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
     )
     operation = _workspace_from(observed).get("operation")
-    require(isinstance(operation, dict) and operation.get("status") == "succeeded",
-            "workspace exec operation did not succeed")
+    if not (isinstance(operation, dict) and operation.get("status") == "succeeded"):
+        raise RuntimeError("workspace exec operation did not succeed")
     require(operation.get("command_exit") == 0, "workspace exec command did not exit zero")
     return {
         "exit_code": code,
@@ -396,8 +406,8 @@ def _verify_ref(context: WorkspaceContext, reference: str, label: str, expected:
     return code
 
 
-def _release_and_forget(context: WorkspaceContext, task: dict[str, object]) -> dict[str, object]:
-    workspace_id = task["workspace_id"]
+def _release_and_forget(context: WorkspaceContext, task: Mapping[str, object]) -> dict[str, object]:
+    workspace_id = _validate_hex(task["workspace_id"], TASK_ID_RE, "workspace ID")
     _code, released = _workspace_mutation(
         context,
         [
@@ -405,12 +415,12 @@ def _release_and_forget(context: WorkspaceContext, task: dict[str, object]) -> d
             "--budget", WORKSPACE_OPERATION_BUDGET, "--json",
         ],
         action="release", workspace_id=workspace_id,
-        label="workspace-release", task_id=task["task_id"],
+        label="workspace-release", task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
     )
     release_operation = _operation_id(released)
     released_observed = _wait_workspace(
         context, workspace_id, operation_id=release_operation,
-        state="released", timeout=WAIT_SECONDS, task_id=task["task_id"],
+        state="released", timeout=WAIT_SECONDS, task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
     )
     return {
         "release_state": _workspace_from(released_observed).get("state"),
@@ -418,8 +428,8 @@ def _release_and_forget(context: WorkspaceContext, task: dict[str, object]) -> d
     }
 
 
-def _forget_workspace(context: WorkspaceContext, task: dict[str, object]) -> dict[str, object]:
-    workspace_id = task["workspace_id"]
+def _forget_workspace(context: WorkspaceContext, task: Mapping[str, object]) -> dict[str, object]:
+    workspace_id = _validate_hex(task["workspace_id"], TASK_ID_RE, "workspace ID")
     _code, forgotten = _workspace_mutation(
         context,
         [
@@ -427,7 +437,7 @@ def _forget_workspace(context: WorkspaceContext, task: dict[str, object]) -> dic
             "--budget", WORKSPACE_OPERATION_BUDGET, "--json",
         ],
         action="forget", workspace_id=workspace_id,
-        label="workspace-forget", task_id=task["task_id"],
+        label="workspace-forget", task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
     )
     forget_operation = _operation_id(forgotten)
     if _workspace_from(forgotten).get("state") == "forgotten":
@@ -435,7 +445,7 @@ def _forget_workspace(context: WorkspaceContext, task: dict[str, object]) -> dic
     else:
         final = _wait_workspace(
             context, workspace_id, operation_id=forget_operation,
-            state="forgotten", timeout=WAIT_SECONDS, task_id=task["task_id"],
+            state="forgotten", timeout=WAIT_SECONDS, task_id=_validate_hex(task["task_id"], TASK_ID_RE, "task ID"),
         )
     require(_workspace_from(final).get("state") == "forgotten",
             "workspace forget did not reach forgotten state")

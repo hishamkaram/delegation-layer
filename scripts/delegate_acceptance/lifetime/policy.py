@@ -12,7 +12,7 @@ from scripts.delegate_acceptance.evidence.timestamps import (
     _timestamp_at_or_after,
     _timestamp_before,
 )
-from scripts.delegate_acceptance.evidence.validation import _exact_keys, _hex_digest, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _exact_keys, _hex_digest, require
 from scripts.delegate_acceptance.lifetime.identity import _lifetime_token
 
 
@@ -39,9 +39,10 @@ def _validate_lifetime_intent(
             f"{evidence} lifetime intent binding mismatch for {task}")
     scope_kind = intent.get("scope_kind")
     assurance = intent.get("assurance")
-    require((scope_kind == "cgroup-v2" and assurance == "exact") or
-            (scope_kind == "process-group" and assurance == "cooperative"),
-            f"{evidence} lifetime intent scope is invalid for {task}")
+    if (not isinstance(scope_kind, str) or not isinstance(assurance, str) or
+            not ((scope_kind == "cgroup-v2" and assurance == "exact") or
+                 (scope_kind == "process-group" and assurance == "cooperative"))):
+        raise AcceptanceFailure(f"{evidence} lifetime intent scope is invalid for {task}")
     intent_deadline = _canonical_timestamp(
         intent.get("deadline"), f"{evidence} lifetime intent deadline for {task}")
     require(_lifetime_token(intent.get("scope_plan")) and
@@ -69,12 +70,14 @@ def validate_custody_placement(placement: object, label: str) -> dict[str, objec
     IsCanonicalCwd), and a 64-lowercase-hex pool id. It never consults the
     filesystem, so a pool that no longer exists is still a valid observation.
     """
-    require(isinstance(placement, dict), f"{label} is not an object")
+    if not isinstance(placement, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(placement, CUSTODY_PLACEMENT_FIELDS, label=label)
     require(type(placement["version"]) is int and placement["version"] == CUSTODY_PLACEMENT_VERSION,
             f"{label} version is unsupported")
     pool_root = placement["pool_root"]
-    require(isinstance(pool_root, str), f"{label} pool root is not text")
+    if not isinstance(pool_root, str):
+        raise AcceptanceFailure(f"{label} pool root is not text")
     require(_clean_absolute_path(pool_root), f"{label} pool root is not a clean absolute path")
     require(_hex_digest(placement["pool_id"]), f"{label} pool id is not 64 lowercase hex")
     return placement
@@ -154,12 +157,12 @@ def _validate_lifetime_wait(
             (wait_result == "wait-error" and (exit_code is None or type(exit_code) is int)))
         not_started = (wait_result == "not-started" and worker_sha == "" and
                        child_pid == 0 and exit_code is None)
-        require(type(wait.get("schema_version")) is int and wait["schema_version"] == 1 and
+        if not (type(wait.get("schema_version")) is int and wait["schema_version"] == 1 and
                 wait.get("root_id") == root and wait.get("task_id") == task and
                 wait.get("registration_sha256") == registration_digest and
                 (worker_sha == "" or _hex_digest(worker_sha)) and
-                type(child_pid) is int and (started_wait or not_started),
-                f"{evidence} lifetime worker Wait binding mismatch for {task}")
+                type(child_pid) is int and (started_wait or not_started)):
+            raise AcceptanceFailure(f"{evidence} lifetime worker Wait binding mismatch for {task}")
         if worker is None:
             require(not_started or
                     (assurance == "exact" and worker_sha == "" and child_pid > 0),
@@ -191,6 +194,7 @@ def _validate_lifetime_termination(
     launch_set_digest = sha(canonical_go_json(
         [_canonical_lifetime_launch(launch, label=f"{evidence} lifetime launch for {task}")
          for launch in launches]))
+    cause = termination.get("cause")
     require(type(termination.get("schema_version")) is int and
             termination["schema_version"] == 1 and
             termination.get("root_id") == root and termination.get("task_id") == task and
@@ -198,7 +202,7 @@ def _validate_lifetime_termination(
             type(termination.get("launch_count")) is int and
             termination["launch_count"] == len(launches) and
             termination.get("launch_set_sha256") == launch_set_digest and
-            termination.get("cause") in {
+            isinstance(cause, str) and cause in {
                 "completed", "budget", "requested", "recovery", "previous-boot"} and
             termination.get("scope_empty") is True,
             f"{evidence} lifetime termination binding mismatch for {task}")
@@ -252,7 +256,8 @@ def _canonical_unlaunched_bytes(
         value: object, root: str, operation: str, owner_digest: str, deadline: str,
         label: str = "workspace unlaunched fence", *, owner_kind: str = "workspace") -> bytes:
     """Validate the typed no-native-start proof and marshal its Go bytes."""
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     required = {
         "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
         "deadline", "cause", "observed_at",

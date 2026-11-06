@@ -1,8 +1,17 @@
 """Immutable native acceptance budgets, profiles, and validation limits."""
 
 from dataclasses import dataclass
+from typing import NotRequired, TypedDict
 
-PROFILES = {
+
+class ProviderProfile(TypedDict):
+    executable: str
+    modes: tuple[str, ...]
+    default_mode: str
+    authentication_status: NotRequired[tuple[str, ...]]
+
+
+PROFILES: dict[str, ProviderProfile] = {
     "ccr:print": {
         "executable": "ccr", "modes": ("read-only", "workspace-write"),
         "default_mode": "read-only",

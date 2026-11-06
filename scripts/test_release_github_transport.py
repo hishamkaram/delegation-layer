@@ -1,5 +1,6 @@
 """GitHub transport uses the canonical bounded owner without logging secrets."""
 
+from collections.abc import Sequence
 import contextlib
 import errno
 from functools import partial
@@ -349,7 +350,7 @@ class GitHubReleaseListingTests(unittest.TestCase):
     def rows(self, page: int, count: int = 30) -> list[dict]:
         return [{"id": 1000 * page + n, "tag_name": f"v0.{page}.{n}"} for n in range(count)]
 
-    def consume(self, pages: list[object]) -> tuple[list[object], VerificationError | None, int]:
+    def consume(self, pages: Sequence[object]) -> tuple[list[object], VerificationError | None, int]:
         """Every row the iterator yielded before it ended or refused, the refusal and the request count."""
         seen: list[object] = []
         with patch.object(self.client, "json", side_effect=pages) as request:
@@ -372,12 +373,14 @@ class GitHubReleaseListingTests(unittest.TestCase):
             with self.subTest(late=type(late).__name__):
                 seen, error, requests = self.consume([self.rows(1), late])
                 self.assertEqual(seen, self.rows(1))
+                assert error is not None
                 self.assertEqual((error.code, error.stage, requests),
                                  ("github_releases_invalid", "github-release", 2))
 
     def test_a_full_final_page_leaves_the_listing_incomplete(self):
         seen, error, requests = self.consume([self.rows(page) for page in range(1, 101)])
         self.assertEqual(len(seen), 3000)
+        assert error is not None
         self.assertEqual((error.code, error.stage, requests),
                          ("github_releases_pagination_incomplete", "github-release", 100))
 
@@ -470,6 +473,7 @@ class GitHubJsonBodyTests(FakeGhCase):
             with self.assertRaises(VerificationError) as caught:
                 self.send({"a": 1})
         error = caught.exception
+        assert isinstance(error, VerificationError)
         self.assertEqual((error.code, error.stage), ("github_request_body_write_failed", "github-api"))
         self.assertIsNone(error.__cause__)
         self.assertTrue(error.__suppress_context__)
@@ -510,6 +514,7 @@ class GitHubJsonBodyTests(FakeGhCase):
     def test_a_body_close_failure_alone_is_the_typed_write_failure(self):
         error, constructed = self.failed_preparation(contextlib.nullcontext())
         self.assertEqual(constructed, [error])
+        assert isinstance(error, VerificationError)
         self.assertEqual((error.code, error.stage), ("github_request_body_write_failed", "github-api"))
         self.assertIsNone(error.__cause__)
         self.assertTrue(error.__suppress_context__)
@@ -528,6 +533,7 @@ class GitHubJsonBodyTests(FakeGhCase):
                 error, constructed = self.failed_preparation(fault)
                 self.assertEqual(len(constructed), 1)
                 self.assertIs(error, constructed[0])
+                assert isinstance(error, VerificationError)
                 self.assertEqual((error.code, error.stage), ("github_request_body_write_failed", "github-api"))
                 self.assertIsNone(error.__cause__)
                 self.assertTrue(error.__suppress_context__)
@@ -636,6 +642,7 @@ class GitHubRawBlobTests(FakeGhCase):
                 self.assertEqual(run.call_count, 1)
                 self.assertEqual(self.receipt["commands"][0]["exit_code"], None)
         # The unproven Wait is the tree's to retain; its fixture never launched a child.
+        assert isinstance(self.tree.unresolved, VerificationError)
         self.assertEqual(self.tree.unresolved.code, "command_timeout")
         removed, message = self.settle()
         self.assertFalse(removed)
@@ -699,6 +706,7 @@ class GitHubArtifactDownloadTests(FakeGhCase):
     def test_timeout_retains_the_partial_and_request_evidence_until_closure_is_proven(self):
         with self.assertRaisesRegex(VerificationError, "command_timeout"):
             self.download("hang", total=4, timeout=1)
+        assert isinstance(self.tree.unresolved, VerificationError)
         self.assertEqual(self.tree.unresolved.code, "command_timeout")
         self.assertLessEqual((self.work / "artifact.zip").stat().st_size, 4)
         self.assertIsNone(self.receipt["commands"][0]["sha256"])
@@ -728,13 +736,18 @@ class GitHubArtifactDownloadTests(FakeGhCase):
         self.assertEqual((self.work / "artifact.zip").stat().st_size, 1024)
 
     def test_short_write_then_failure_accounts_for_the_bytes_actually_stored(self):
-        real_write, calls = os.write, []
+        real_write, calls, stored_bytes = os.write, [], 0
 
         def short_then_full_disk(descriptor, data):
+            nonlocal stored_bytes
             calls.append(descriptor)
-            if len(calls) == 1:
-                return real_write(descriptor, bytes(data[:100]))
-            raise OSError(errno.ENOSPC, "private-disk-detail")
+            # Pipe reads may split the ZIP header from its body. Fail after the
+            # same stored-byte budget regardless of the producer's chunking.
+            if stored_bytes == 100:
+                raise OSError(errno.ENOSPC, "private-disk-detail")
+            written = real_write(descriptor, bytes(data[:100 - stored_bytes]))
+            stored_bytes += written
+            return written
 
         with patch.object(github.os, "write", side_effect=short_then_full_disk):
             with self.assertRaisesRegex(VerificationError, "github_download_write_failed"):
@@ -751,6 +764,7 @@ class GitHubArtifactDownloadTests(FakeGhCase):
         with self.closing_fault():
             with self.assertRaisesRegex(VerificationError, "github_download_close_failed") as caught:
                 self.download("stream", total=_MIB)
+        assert isinstance(caught.exception.__cause__, OSError)
         self.assertEqual(caught.exception.__cause__.errno, errno.EIO)
         record = self.receipt["commands"][0]
         self.assertEqual((record["bytes"], record["sha256"], record["close_failed"],
@@ -786,6 +800,7 @@ class GitHubArtifactDownloadTests(FakeGhCase):
         """Disposal retains the evidence; only the zero-launch oracle permits its removal."""
         removed, message = self.settle()
         self.assertFalse(removed)
+        assert isinstance(self.tree.unresolved, VerificationError)
         self.assertIn(f"{self.tree.unresolved.code}): {self.root}", message)
         self.assertTrue((self.work / "artifact.zip").is_file())
         self.assertEqual(launches.call_count, 0)

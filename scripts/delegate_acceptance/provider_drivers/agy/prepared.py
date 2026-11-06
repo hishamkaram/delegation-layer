@@ -8,7 +8,7 @@ from pathlib import Path
 
 from scripts.delegate_acceptance.paths.policy import clean_absolute
 from scripts.delegate_acceptance.paths.operations import ensure_private_directory, reject_tmp
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.paths.operations import write_bytes
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
 from scripts.delegate_acceptance.evidence.files import read_json, write_json
@@ -65,7 +65,8 @@ class Prepared:
 
     @staticmethod
     def _briefs(value: object) -> dict[str, Path]:
-        require(isinstance(value, dict), "prepared briefs must be an object")
+        if not isinstance(value, dict):
+            raise AcceptanceFailure("prepared briefs must be an object")
         result = {}
         for name in ("L1", "L2", "L3"):
             path = clean_absolute(value.get(name), f"prepared brief {name}")
@@ -75,12 +76,13 @@ class Prepared:
 
     @staticmethod
     def _ids(value: object) -> dict[str, str]:
-        require(isinstance(value, dict), "prepared task_ids must be an object")
+        if not isinstance(value, dict):
+            raise AcceptanceFailure("prepared task_ids must be an object")
         result = {}
         for name in ("L1", "L2", "L3"):
             item = value.get(name)
-            require(isinstance(item, str) and len(item) == 32 and all(c in "0123456789abcdef" for c in item),
-                    f"prepared task ID {name} is invalid")
+            if not isinstance(item, str) or len(item) != 32 or not all(c in "0123456789abcdef" for c in item):
+                raise AcceptanceFailure(f"prepared task ID {name} is invalid")
             result[name] = item
         require(len(set(result.values())) == 3, "prepared task IDs must be distinct")
         return result
@@ -120,7 +122,8 @@ def fresh_prepared(run_name: str | None = None) -> Prepared:
         inside = workspace / "inside-sentinel.txt"
         outside = scratch / "outside-sentinel.txt"
         write_bytes(nonce_file, (nonce + "\n").encode())
-        data = {
+        brief_paths = {name: str(briefs / f"{name}.brief.txt") for name in ("L1", "L2", "L3")}
+        data: dict[str, object] = {
         "created_at": stamp,
         "workspace": str(workspace),
         "scratch": str(scratch),
@@ -128,17 +131,12 @@ def fresh_prepared(run_name: str | None = None) -> Prepared:
         "nonce_file": str(nonce_file),
         "inside_sentinel": str(inside),
         "outside_sentinel": str(outside),
-        "briefs": {},
+        "briefs": brief_paths,
         "task_ids": {name: task_id() for name in ("L1", "L2", "L3")},
         "budget": TASK_BUDGET,
         "watch": "150s",
         "L3_native_timeout": L3_NATIVE_TIMEOUT,
         "status": "fresh controlled fixture; process and supervisor receipts determine launch state",
-        }
-        data["briefs"] = {
-        "L1": str(briefs / "L1.brief.txt"),
-        "L2": str(briefs / "L2.brief.txt"),
-        "L3": str(briefs / "L3.brief.txt"),
         }
         source_briefs = {
         "L1": (f"Read nonce.txt in the current workspace using the file tool. Create {inside} containing exactly that nonce. "
@@ -149,7 +147,7 @@ def fresh_prepared(run_name: str | None = None) -> Prepared:
         "L3": "Output consecutive integers from 1 through 100000, one integer per line. Begin immediately with 1 and continue without commentary.",
         }
         for name, text in source_briefs.items():
-            write_bytes(Path(data["briefs"][name]), text.encode())
+            write_bytes(Path(brief_paths[name]), text.encode())
         write_json(state_parent / "PREPARED.json", data)
         prepared = Prepared(data, state_parent / "PREPARED.json")
     except BaseException:

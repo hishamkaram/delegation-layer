@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from .summaries import TreeSummary
+
 from pathlib import Path
 import os
 import re
@@ -33,12 +36,12 @@ def _retention_count(value: int | None) -> int:
     return value
 
 
-def _aggregate_root_summary(entries: list[tuple[Path, dict[str, object], int]]) -> dict[str, object]:
+def _aggregate_root_summary(entries: list[tuple[Path, dict[str, object], int]]) -> TreeSummary:
     summaries = [_tree_summary(path) for path, _, _ in entries]
     complete = all(summary.get("complete") is True for summary in summaries)
     file_count = sum(int(summary.get("file_count", 0)) for summary in summaries)
     byte_count = sum(int(summary.get("byte_count", 0)) for summary in summaries)
-    result: dict[str, object] = {
+    result: TreeSummary = {
         "root_count": len(entries), "file_count": file_count, "byte_count": byte_count,
         "complete": complete,
         "count": len(entries), "bytes": byte_count,
@@ -67,7 +70,7 @@ def _retention_authorization(
         configured_count: int,
         path: Path,
         identity: dict[str, object],
-        before: dict[str, object]) -> str:
+        before: Mapping[str, object]) -> str:
     return _digest_bytes(canonical_json({
         "kind": "native-acceptance-retention-victim",
         "current_owner": current_owner,

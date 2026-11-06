@@ -191,6 +191,9 @@ def export_file(path: Path, data: bytes) -> bytes:
 
 def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: DirectoryOwner,
            locations: dict[str, Path]) -> None:
+    bootstrap_parent = request.bootstrap_parent
+    if bootstrap_parent is None:
+        raise VerificationError("candidate_install_bootstrap_parent_invalid", STAGE)
     info = platform_identity()
     receipt["platform"] = info
     platform = (info["os"], info["arch"])
@@ -234,8 +237,8 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
         tag=manifest.build_tag, repo=locator.repository, installer=installer, files=files,
         binaries=tuple(sorted(binaries.as_mapping().items())), skill=skill)
     layout = open_workspace(owner=owner, parent=workspace, receipt=receipt)
-    receipt["candidate_install"]["bootstrap_parent"] = str(request.bootstrap_parent)
-    probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=request.bootstrap_parent)
+    receipt["candidate_install"]["bootstrap_parent"] = str(bootstrap_parent)
+    probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=bootstrap_parent)
     facts = verify_candidate_install(install_request, ports=ports, probe=probe, receipt=receipt, layout=layout,
                                      info=info, channels=(request.channel.value,))
     if tuple(observation.channel for observation in facts.installs) != (request.channel.value,):

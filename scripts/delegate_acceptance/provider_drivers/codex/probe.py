@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import os
 import re
 import shlex
@@ -110,7 +112,8 @@ def probe_script_bytes(nonce_file: Path, inside: Path, sibling: Path) -> bytes:
 
 def parse_probe_markers(output: str, nonce: bytes, inside: Path, sibling: Path) -> dict[str, object]:
     """Parse the probe's bounded machine markers from one command result."""
-    require(isinstance(output, str), "probe command output is not text")
+    if not (isinstance(output, str)):
+        raise AcceptanceFailure("probe command output is not text")
     try:
         output_bytes = output.encode("utf-8")
     except UnicodeEncodeError as error:
@@ -143,14 +146,14 @@ def parse_probe_markers(output: str, nonce: bytes, inside: Path, sibling: Path) 
         rc_name = name + "_rc"
         stderr_name = name + "_stderr"
         value = parsed[rc_name]
-        require(isinstance(value, str) and re.fullmatch(r"[0-9]+", value) is not None,
-                f"probe {name} exit code is not numeric")
+        if not (isinstance(value, str) and re.fullmatch(r"[0-9]+", value) is not None):
+            raise AcceptanceFailure(f"probe {name} exit code is not numeric")
         code = int(value)
         require(0 < code <= 255, f"probe {name} write was not independently denied")
         parsed[rc_name] = code
         diagnostic = parsed[stderr_name]
-        require(isinstance(diagnostic, str) and diagnostic,
-                f"probe {name} denial diagnostic is empty")
+        if not (isinstance(diagnostic, str) and diagnostic):
+            raise AcceptanceFailure(f"probe {name} denial diagnostic is empty")
         diagnostic_lower = diagnostic.lower()
         require(str(path) in diagnostic,
                 f"probe {name} denial diagnostic names the wrong absolute path")
@@ -159,29 +162,32 @@ def parse_probe_markers(output: str, nonce: bytes, inside: Path, sibling: Path) 
     return parsed
 
 
-def validate_command_execution_controls(parsed: dict[str, object], probe: Path,
+def validate_command_execution_controls(parsed: Mapping[str, object], probe: Path,
                                         inside: Path, sibling: Path, nonce: bytes) -> dict[str, object]:
     """Require one immutable probe command and actual read/write observations."""
     commands = parsed.get("commands")
-    require(isinstance(commands, list) and len(commands) == 1,
-            "Codex must produce exactly one completed probe command_execution item")
+    if not (isinstance(commands, list) and len(commands) == 1):
+        raise AcceptanceFailure("Codex must produce exactly one completed probe command_execution item")
     incomplete = parsed.get("incomplete_commands", [])
-    require(isinstance(incomplete, list) and not incomplete,
-            "incomplete command_execution items cannot prove probe controls")
+    if not (isinstance(incomplete, list) and not incomplete):
+        raise AcceptanceFailure("incomplete command_execution items cannot prove probe controls")
     item = commands[0]
-    require(isinstance(item, dict), "probe command_execution item is malformed")
+    if not (isinstance(item, dict)):
+        raise AcceptanceFailure("probe command_execution item is malformed")
     require(item.get("type") == "command_execution", "probe command_execution item has the wrong type")
     item_id = item.get("id")
-    require(isinstance(item_id, str) and item_id, "probe command_execution item has no identity")
+    if not (isinstance(item_id, str) and item_id):
+        raise AcceptanceFailure("probe command_execution item has no identity")
     command = item.get("command")
-    require(isinstance(command, str) and exact_probe_command(command, probe),
-            "command_execution evidence is not the exact immutable /bin/sh probe")
+    if not (isinstance(command, str) and exact_probe_command(command, probe)):
+        raise AcceptanceFailure("command_execution evidence is not the exact immutable /bin/sh probe")
     exit_code = item.get("exit_code")
-    require(item.get("status") == "completed" and isinstance(exit_code, int) and
-            not isinstance(exit_code, bool) and exit_code == 0,
-            "probe command_execution did not complete successfully")
+    if not (item.get("status") == "completed" and isinstance(exit_code, int) and
+            not isinstance(exit_code, bool) and exit_code == 0):
+        raise AcceptanceFailure("probe command_execution did not complete successfully")
     output = item.get("aggregated_output")
-    require(isinstance(output, str), "probe command_execution output is not text")
+    if not (isinstance(output, str)):
+        raise AcceptanceFailure("probe command_execution output is not text")
     markers = parse_probe_markers(output, nonce, inside, sibling)
     return {
         "probe_command_id": item_id,

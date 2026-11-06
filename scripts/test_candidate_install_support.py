@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 import contextlib
 from dataclasses import dataclass
 from functools import partial
@@ -100,7 +100,7 @@ def _observed(runner: Launch, *, tree: FixtureTree, dependencies: tuple[FixtureT
 
 
 @contextlib.contextmanager
-def observed_children(tree: FixtureTree, *, dependencies: tuple[FixtureTree, ...] = ()) -> Iterator[None]:
+def observed_children(tree: FixtureTree, *, dependencies: tuple[FixtureTree, ...] = ()) -> Generator[None, None, None]:
     """Each release child's original failure reaches ``tree`` and ``dependencies`` before any conversion.
 
     Release children launch through the canonical runner as bound in ``commands`` (ports, Git and
@@ -193,6 +193,7 @@ def pack_checkout(destination: Path, scratch: Path) -> Path:
         path=tool_path(ConsumerPorts(run=command, which=shutil.which), ("npm", "node")), home=str(home),
         cache=str(cache), user_npmrc=str(user_rc), global_npmrc=str(global_rc), inherited={})
     receipt = new_receipt("candidate-install-pack", "v0.0.0", "a" * 40)
+    assert npm is not None, "npm prerequisite was not resolved"
     output = command(receipt, "npm-pack", [
         npm, "pack", "--ignore-scripts", "--json", "--pack-destination", str(destination)],
         env, capture=True, timeout=180, cwd=REPO_ROOT)

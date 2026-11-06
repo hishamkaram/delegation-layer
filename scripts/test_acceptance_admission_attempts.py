@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 import shlex
 import tempfile
 import unittest
@@ -12,6 +11,8 @@ from unittest.mock import patch
 
 import acceptance_provider_common as provider_common
 from scripts.acceptance_tests.inspection import fixtures as inspection_fixtures
+from scripts.acceptance_tests.inspection.fixtures import FixtureProcesses
+from scripts.acceptance_tests.record_fixtures import object_at
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
 from acceptance_supervisor_common import read_json, write_json
 
@@ -214,15 +215,18 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "spec_sha256": spec_sha, "meta_sha256": meta_sha,
             "numeric_task_id": numeric, "label": label,
-            **binding["supervisor"],
+            **object_at(binding, "supervisor"),
         })
         return directory
 
     def queue_ops(self, binding: dict[str, object]) -> NativeTaskOps:
         ops = NativeTaskOps(
-            SimpleNamespace(), self.state_parent / "delegate", self.runner, self.pueue,
+            FixtureProcesses(), self.state_parent / "delegate", self.runner, self.pueue,
             self.state_parent, self.state, self.state_parent)
-        ops.bind_supervisor(Path(binding["supervisor"]["config_path"]))
+        config_path = object_at(binding, "supervisor")["config_path"]
+        if not isinstance(config_path, str):
+            raise AssertionError("fixture supervisor config path is not text")
+        ops.bind_supervisor(Path(config_path))
         ops.tasks = {"fresh": TASK}
         ops.labels = {"fresh": f"delegate:{ROOT}:{TASK}"}
         ops.numbers = {"fresh": 7}
@@ -255,6 +259,8 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         if include_inspection:
             require_operation = inspection_operation
             self.assertIsNotNone(require_operation)
+            if require_operation is None:
+                raise AssertionError("inspection operation is absent")
             label = provider_common._inspection_label(ROOT, require_operation)
             argv = shlex.join([
                 str(self.runner), "--inspection", "--guardian", "--supervised",
@@ -275,7 +281,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             record["task_id"] = operation_id
             path.write_bytes(provider_common.canonical_go_json(record))
         registration_path = directory / "lifetime-registration.json"
-        registration = read_json(registration_path)
+        read_json(registration_path)
         registration_sha = provider_common.sha(registration_path.read_bytes())
         worker_path = directory / "lifetime-worker.json"
         worker = read_json(worker_path)
@@ -354,7 +360,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         request["task_id"] = other
         write_json(directory / "request.json", request)
         ops = NativeTaskOps(
-            SimpleNamespace(), self.state_parent / "delegate", self.runner, self.pueue,
+            FixtureProcesses(), self.state_parent / "delegate", self.runner, self.pueue,
             self.state_parent, self.state, self.state_parent)
         ops.dispatch_attempts = {TASK}
         with self.assertRaisesRegex(AcceptanceFailure, "unattempted task"):
@@ -376,7 +382,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
                         "kind": "admission", "id": TASK, "sha256": REPLAY_REQUEST,
                     })
                 else:
-                    binding = task["workspace"]
+                    binding = object_at(task, "workspace")
                     self.assertIsInstance(binding, dict)
                     binding = deepcopy(binding)
                     binding.update(changes)
@@ -421,7 +427,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
     def test_queue_oracle_uses_effective_id_for_label_and_argv(self):
         operation_id = "2d299e0d7e6f79ed6ea4bfed37314c67"
         ops = NativeTaskOps(
-            SimpleNamespace(), self.state_parent / "delegate", self.runner, self.pueue,
+            FixtureProcesses(), self.state_parent / "delegate", self.runner, self.pueue,
             self.state_parent, self.state, self.state_parent)
         ops.bind_supervisor(self.config)
         journal = {
@@ -434,7 +440,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         }
         argv = [str(self.runner), "--inspection", "--guardian", "--supervised",
                 "--root", str(self.state), operation_id]
-        row = {
+        row: dict[str, object] = {
             "id": 42,
             "label": journal["label"],
             "group": journal["group"],
@@ -536,7 +542,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         status = self.queue_status(
             ops, include_inspection=True, inspection_group="default",
             inspection_operation=directory.name)
-        status["tasks"]["42"]["status"] = {"Done": {"result": {"Failed": 1}}}
+        object_at(status, "tasks", "42")["status"] = {"Done": {"result": {"Failed": 1}}}
         self.assertFalse(ops.failure_queue_finished(status))
         with self.assertRaisesRegex(AcceptanceFailure, "historical inspection closure is absent"):
             ops.validate_inspection_journals(allow_failure=True)
@@ -574,7 +580,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         self.assertFalse(selected["ordinary_task_present"])
         self.assertEqual(len(selected["historical_attempts"]), 1)
         request = read_json(directories[0] / "request.json")
-        request["task"]["budget_nanos"] = 2
+        object_at(request, "task")["budget_nanos"] = 2
         request["task_sha256"] = provider_common.sha(
             provider_common._canonical_task_bytes(request["task"]))
         self.replace_request_fixture(directories[0], request)
@@ -587,8 +593,8 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         self.write_helper_result(directory, "eligible")
         journal = ops.validate_inspection_journals(allow_failure=True)[TASK]
         self.assertTrue(journal["historical_aborted"])
-        self.assertEqual(journal["result"]["reason"], "eligible")
-        self.assertEqual(journal["managed_lifetime"]["worker_wait"]["result"], "success")
+        self.assertEqual(object_at(journal, "result")["reason"], "eligible")
+        self.assertEqual(object_at(journal, "managed_lifetime", "worker_wait")["result"], "success")
 
     def test_aborted_admission_preserves_started_helper_without_result(self):
         _, directory, ops = self.managed_history()
@@ -597,7 +603,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         self.assertTrue(journal["historical_aborted"])
         self.assertIsNotNone(journal["start"])
         self.assertIsNone(journal["result"])
-        self.assertEqual(journal["managed_lifetime"]["worker_wait"]["result"], "exit-error")
+        self.assertEqual(object_at(journal, "managed_lifetime", "worker_wait")["result"], "exit-error")
 
     def test_aborted_admission_keeps_eligible_candidate_before_completion_crash(self):
         _, directory, ops = self.managed_history()
@@ -609,9 +615,9 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         path.write_bytes(provider_common.canonical_go_json(wait))
         journal = ops.validate_inspection_journals(allow_failure=True)[TASK]
         self.assertTrue(journal["historical_aborted"])
-        self.assertEqual(journal["result"]["reason"], "eligible")
+        self.assertEqual(object_at(journal, "result")["reason"], "eligible")
         self.assertIsNone(journal["completion"])
-        self.assertEqual(journal["managed_lifetime"]["worker_wait"]["result"], "exit-error")
+        self.assertEqual(object_at(journal, "managed_lifetime", "worker_wait")["result"], "exit-error")
 
     def test_aborted_admission_keeps_previous_boot_closure_without_native_wait(self):
         _, directory, ops = self.managed_history()
@@ -623,8 +629,8 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         path.write_bytes(provider_common.canonical_go_json(termination))
         journal = ops.validate_inspection_journals(allow_failure=True)[TASK]
         self.assertTrue(journal["historical_aborted"])
-        self.assertEqual(journal["result"]["reason"], "eligible")
-        self.assertIsNone(journal["managed_lifetime"]["worker_wait"])
+        self.assertEqual(object_at(journal, "result")["reason"], "eligible")
+        self.assertIsNone(object_at(journal, "managed_lifetime")["worker_wait"])
 
     def test_completed_scope_without_wait_is_still_invalid_history(self):
         _, directory, ops = self.managed_history()
@@ -748,6 +754,30 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             provider_common._validate_historical_workspace_attempt(
                 self.state, old_attempt, changed, ROOT, "history")
 
+    def test_workspace_attempt_rejects_a_malformed_task_identity(self):
+        self.write_workspace()
+        for invalid in (None, True, "not-a-task-id"):
+            record = self.task_record()
+            record["task_id"] = invalid
+            with self.subTest(task=invalid), self.assertRaisesRegex(
+                    AcceptanceFailure, "admission task_id is invalid"):
+                provider_common._workspace_admission_attempt(
+                    self.state, ROOT, record, "admission")
+
+    def test_history_rejects_noninteger_sequences_including_booleans(self):
+        self.write_workspace(sequence=1, closure="aborted-not-launched")
+        original = provider_common._workspace_admission_attempt(
+            self.state, ROOT, self.task_record(reservation=1), "old admission")
+        self.write_workspace(sequence=2, closure="operation-completed")
+        current = self.task_record(reservation=2)
+        for sequence in (None, "1", True):
+            invalid: dict[str, object] = dict(original)
+            invalid["sequence"] = sequence
+            with self.subTest(sequence=sequence), self.assertRaisesRegex(
+                    AcceptanceFailure, "old admission attempt sequence is invalid"):
+                provider_common._validate_historical_workspace_attempt(
+                    self.state, invalid, current, ROOT, "history")
+
     def test_full_journal_accepts_existing_ordinary_workspace_attempt(self):
         self.write_workspace()
         task = self.task_record()
@@ -805,7 +835,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         })
 
         ops = NativeTaskOps(
-            SimpleNamespace(), self.state_parent / "delegate", self.runner, self.pueue,
+            FixtureProcesses(), self.state_parent / "delegate", self.runner, self.pueue,
             self.state_parent, self.state, self.state_parent)
         ops.bind_supervisor(self.config)
         ops.dispatch_attempts = {TASK}
@@ -867,7 +897,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             inspection_operation=operation_id)
         ops._validate_queue_membership(status, allow_failure=False)
         wrong_parallelism = deepcopy(status)
-        wrong_parallelism["groups"]["default"]["parallel_tasks"] = 1
+        object_at(wrong_parallelism, "groups", "default")["parallel_tasks"] = 1
         with self.assertRaises(AcceptanceFailure):
             ops._validate_queue_membership(wrong_parallelism, allow_failure=False)
 

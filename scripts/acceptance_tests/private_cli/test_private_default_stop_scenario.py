@@ -1,12 +1,15 @@
 """Implementation methods for PrivateDefaultStopScenarioTests; collected once by the acceptance_tests discovery."""
 
 from pathlib import Path
+import json
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 from scripts import acceptance_private_cli as private_cli
 from scripts.delegate_acceptance.private_cli import stop as stop_impl
 from scripts.delegate_acceptance.private_cli import admission as admission_impl
+from scripts.delegate_acceptance.private_cli import commands as commands_impl
 from scripts.acceptance_tests.private_cli.fixtures import (
     set_up_private_capture_root,
 )
@@ -15,7 +18,7 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 class PrivateDefaultStopScenarioTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
-        set_up_private_capture_root(self)
+        self.capture_root = set_up_private_capture_root(self)
 
     def test_orchestration_requires_live_leases_and_canonical_closure(self):
         records = _run_stop_scenario(self)
@@ -84,6 +87,150 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
         self.assertEqual(records["lifecycle"], ["enter", "cancel", "closure", "exit"])
         self.assertEqual(records["lease_cleanup_calls"], [])
         self.assertEqual(len(records["dispatches"]), 1)
+
+
+class DefaultStopDispatchReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.capture_root = set_up_private_capture_root(self)
+        temporary = tempfile.TemporaryDirectory(prefix="default-stop-dispatch-receipt-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.delegate = self.root / "delegate"
+        self.delegate.write_bytes(b"fixture executable\n")
+        self.receipts = self.root / "responses"
+        self.receipts.mkdir()
+        self.receipt = private_cli.AcceptanceReceipt(self.root / "receipt.json", 2, 2, {"delegate": self.delegate})
+        self.receipt.phase("default_stop_user")
+        self.dispatch, _close = stop_impl._default_stop_task_operations(
+            capture_root=self.capture_root, delegate=self.delegate, env={"PRIVATE_CANARY": "PRIVATE_DIAGNOSTIC_CANARY"},
+            receipts=self.receipts, run_receipt=self.receipt, state=self.root / "state",
+            waiting_brief=self.root / "brief.md", workspace=self.root,
+        )
+
+    def invoke(self, response: object, *, exit_code: int = 0, error: str | None = None):
+        stdout = (json.dumps(response) + "\n").encode()
+        completed = subprocess.CompletedProcess([], exit_code, stdout, b"PRIVATE_DIAGNOSTIC_CANARY")
+        with patch.object(commands_impl, "run_captured_command", return_value=completed) as command:
+            if error is None:
+                observed = self.dispatch(TASK, "5m", "dispatch-default-stop-user.json")
+                self.assertEqual(observed, response)
+                self.receipt.write("PASS", {"status": "not-required"})
+            else:
+                with self.assertRaisesRegex(RuntimeError, error) as raised:
+                    self.dispatch(TASK, "5m", "dispatch-default-stop-user.json")
+                self.receipt.write("FAIL", {"status": "retained"}, raised.exception)
+        command.assert_called_once()
+        text = self.receipt.output.read_text()
+        self.assertNotIn("PRIVATE_DIAGNOSTIC_CANARY", text)
+        recorded = json.loads(text)
+        self.assertIn("default_stop_dispatch", recorded)
+        return recorded
+
+    def test_nonzero_public_resource_refusal_survives_creation_rejection(self):
+        response = {
+            "task_id": TASK, "task_record": "not_created", "admission": "unknown",
+            "failure": {"code": "resource_pressure", "reason_code": "host_cpu_sustained",
+                        "stage": "check-resource-admission", "next_action": "retry_later",
+                        "retry_after_seconds": 30, "recovery_command": "PRIVATE_DIAGNOSTIC_CANARY"},
+            "resource_admission": {"status": "pressure", "warnings": ["PRIVATE_DIAGNOSTIC_CANARY"]},
+            "error": "PRIVATE_DIAGNOSTIC_CANARY", "profile": {"secret": "PRIVATE_DIAGNOSTIC_CANARY"},
+        }
+        recorded = self.invoke(response, exit_code=1, error="did not create the requested task")
+        self.assertEqual(recorded["default_stop_dispatch"], {
+            "phase": "default_stop_user", "receipt": "dispatch-default-stop-user.json",
+            "expected_task_id_match": True, "task_id": TASK, "root_id": None,
+            "task_record": "not_created", "admission": "unknown",
+            "failure": {"code": "resource_pressure", "reason_code": "host_cpu_sustained",
+                        "stage": "check-resource-admission", "next_action": "retry_later", "retry_after_seconds": 30},
+            "resource_admission": {"status": "pressure"},
+        })
+        self.assertEqual(recorded["failure"]["exception_type"], "RuntimeError")
+        self.assertEqual(recorded["counts"]["dispatch_completed_count"], 0)
+        self.assertEqual(recorded["counts"]["admitted_task_count"], 0)
+        command_record = json.loads((self.receipts / "dispatch-default-stop-user.json").read_text())
+        self.assertEqual(command_record["exit_code"], 1)
+        self.assertIn("PRIVATE_DIAGNOSTIC_CANARY", command_record["stdout_tail"])
+
+    def test_zero_exit_wrong_identity_survives_rejection_without_another_command(self):
+        recorded = self.invoke({"task_id": "c" * 32, "root_id": ROOT, "task_record": "created",
+                                "admission": "admitted", "stdout": "PRIVATE_DIAGNOSTIC_CANARY"},
+                               error="did not create the requested task")
+        self.assertEqual(recorded["default_stop_dispatch"], {
+            "phase": "default_stop_user", "receipt": "dispatch-default-stop-user.json",
+            "expected_task_id_match": False, "task_id": "c" * 32, "root_id": ROOT,
+            "task_record": "created", "admission": "admitted", "failure": {},
+        })
+        self.assertEqual(recorded["counts"]["admitted_task_count"], 0)
+        command_record = json.loads((self.receipts / "dispatch-default-stop-user.json").read_text())
+        self.assertNotIn("stdout_tail", command_record)
+        self.assertNotIn("response", command_record)
+
+    def test_created_but_unadmitted_response_is_recorded_before_the_admission_guard(self):
+        recorded = self.invoke({"task_id": TASK, "root_id": ROOT, "task_record": "created",
+                                "admission": "unknown", "error": "PRIVATE_DIAGNOSTIC_CANARY",
+                                "failure": {"code": "task_submission_uncertain", "stage": "submit-task",
+                                            "next_action": "check_status"}},
+                               exit_code=1, error="did not admit the requested task")
+        self.assertEqual(recorded["default_stop_dispatch"], {
+            "phase": "default_stop_user", "receipt": "dispatch-default-stop-user.json",
+            "expected_task_id_match": True, "task_id": TASK, "root_id": ROOT,
+            "task_record": "created", "admission": "unknown",
+            "failure": {"code": "task_submission_uncertain", "stage": "submit-task", "next_action": "check_status"},
+        })
+        self.assertEqual(recorded["counts"]["dispatch_completed_count"], 0)
+        self.assertEqual(recorded["counts"]["admitted_task_count"], 0)
+
+    def test_success_keeps_public_projection_and_one_admission(self):
+        recorded = self.invoke({"task_id": TASK, "root_id": ROOT, "task_record": "created",
+                                "admission": "admitted", "resource_admission": {"status": "clear"},
+                                "profile": "PRIVATE_DIAGNOSTIC_CANARY"})
+        self.assertEqual(recorded["default_stop_dispatch"], {
+            "phase": "default_stop_user", "receipt": "dispatch-default-stop-user.json",
+            "expected_task_id_match": True, "task_id": TASK, "root_id": ROOT,
+            "task_record": "created", "admission": "admitted", "failure": {},
+            "resource_admission": {"status": "clear"},
+        })
+        self.assertEqual(recorded["counts"]["dispatch_completed_count"], 1)
+        self.assertEqual(recorded["counts"]["admitted_task_count"], 1)
+
+    def test_malformed_diagnostic_fields_never_replace_the_creation_error(self):
+        for failure in (["PRIVATE_DIAGNOSTIC_CANARY"], {"code": {"private": "PRIVATE_DIAGNOSTIC_CANARY"},
+                "stage": "PRIVATE_DIAGNOSTIC_CANARY", "next_action": "bad action PRIVATE_DIAGNOSTIC_CANARY",
+                "reason_code": "x" * 129, "retry_after_seconds": True}):
+            with self.subTest(failure=failure):
+                recorded = self.invoke({"task_id": {"secret": "PRIVATE_DIAGNOSTIC_CANARY"},
+                                        "root_id": "PRIVATE_DIAGNOSTIC_CANARY", "task_record": ["created"],
+                                        "admission": {"secret": "PRIVATE_DIAGNOSTIC_CANARY"},
+                                        "failure": failure, "resource_admission": {"status": {"secret": "PRIVATE_DIAGNOSTIC_CANARY"}}},
+                                       exit_code=1, error="did not create the requested task")
+                self.assertEqual(recorded["default_stop_dispatch"], {
+                    "phase": "default_stop_user", "receipt": "dispatch-default-stop-user.json",
+                    "expected_task_id_match": False, "task_id": None, "root_id": None,
+                    "task_record": None, "admission": None, "failure": {},
+                })
+                self.assertEqual(recorded["failure"]["exception_type"], "RuntimeError")
+                self.assertEqual(recorded["counts"]["admitted_task_count"], 0)
+
+
+class DefaultStopDispatchProjectionTests(unittest.TestCase):
+    def test_retry_advice_is_a_positive_go_integer_and_never_a_boolean_or_raw_value(self):
+        cases = (
+            (1, {"retry_after_seconds": 1}), (30, {"retry_after_seconds": 30}),
+            (2**63 - 1, {"retry_after_seconds": 2**63 - 1}),
+            (False, {}), (True, {}), (0, {}), (-1, {}), (30.0, {}), ("30", {}),
+            (2**63, {}), (None, {}), ({}, {}), ([], {}),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                evidence = stop_impl.default_stop_dispatch_evidence({"failure": {"retry_after_seconds": value}})
+                self.assertEqual(evidence["failure"], expected)
+
+    def test_non_object_response_has_no_untrusted_projection(self):
+        for value in (None, ["PRIVATE_DIAGNOSTIC_CANARY"], "PRIVATE_DIAGNOSTIC_CANARY"):
+            with self.subTest(value=value):
+                evidence = stop_impl.default_stop_dispatch_evidence(value, expected_task_id=TASK)
+                self.assertEqual(evidence, {"task_id": None, "root_id": None, "task_record": None,
+                                           "admission": None, "failure": {}, "expected_task_id_match": False})
 
 
 TASK = "a" * 32
@@ -427,7 +574,10 @@ def _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, st
                     "requested": True, "terminated": False, "observed_state": "running",
                 }]}
         label = "interrupted" if observed.get("status") == "interrupted" else "status"
-        lifecycle.append(label + ":" + observed["liveness"])
+        liveness = observed["liveness"]
+        if not isinstance(liveness, str):
+            raise AssertionError("the status fixture must record textual liveness")
+        lifecycle.append(label + ":" + liveness)
         return observed
     return run_json
 

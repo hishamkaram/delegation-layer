@@ -8,8 +8,10 @@ import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict, Unpack
 
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
+from scripts.acceptance_tests.invalid_calls import invoke_invalid
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_contract import (
@@ -18,6 +20,11 @@ from scripts.delegate_acceptance.release_verification.published_contract import 
 
 LABEL = "release fixture test"
 PREFIX = "release-fixture-test"
+
+
+class ObserveOptions(TypedDict, total=False):
+    dependencies: tuple[FixtureTree, ...]
+    closure_required: bool
 
 
 @dataclass
@@ -105,6 +112,7 @@ class FixtureTreeTests(unittest.TestCase):
 
                 outcome = self.run_inner(fail_unknown)
                 self.assertTrue(outcome.result.wasSuccessful())
+                assert isinstance(outcome.tree.unresolved, VerificationError)
                 self.assertEqual(outcome.tree.unresolved.code, code)
                 self.assertEqual((outcome.tree.root / "evidence").read_text(), "child output")
                 self.assertEqual(outcome.stderr, f"{LABEL} retained ({code}): {outcome.tree.root}\n")
@@ -184,6 +192,7 @@ class FixtureTreeTests(unittest.TestCase):
             self.assertFalse(tree.dispose())
         tree.remove_retained()
         self.assertFalse(tree.root.exists())
+        assert isinstance(tree.unresolved, VerificationError)
         self.assertEqual(tree.unresolved.code, "command_termination_failed")
         with contextlib.redirect_stderr(io.StringIO()) as stderr:
             self.assertFalse(tree.dispose())
@@ -225,7 +234,7 @@ class FixtureTreeTests(unittest.TestCase):
         self.finish_outer()
 
     def operate(self, tree: FixtureTree, error: BaseException,
-                **options: tuple[FixtureTree, ...] | bool) -> list[int]:
+                **options: Unpack[ObserveOptions]) -> list[int]:
         """Run one failing operation through the owner; the caller sees the very same error.
 
         The operation starts no child, so a retained tree it leaves is settled with zero starts proven.
@@ -318,7 +327,7 @@ class FixtureTreeTests(unittest.TestCase):
         case, other, calls = self.inner(), self.inner(), []
         for dependencies in ([other], (case.owner,), (case, "tree")):
             with self.subTest(dependencies=dependencies), self.assertRaises(TypeError):
-                case.observe_operation(lambda: calls.append(1), dependencies=dependencies)
+                invoke_invalid(case.observe_operation, lambda: calls.append(1), dependencies=dependencies)
         self.assertEqual(calls, [])
         self.assertEqual((case.unresolved, other.unresolved), (None, None))
         self.assertEqual((case.dispose(), other.dispose()), (True, True))
@@ -453,17 +462,17 @@ class FixtureTreeTests(unittest.TestCase):
         for flag in (1, 0, "true", None, 1.0):
             with self.subTest(flag=flag):
                 with self.assertRaises(TypeError):
-                    case.observe_operation(lambda: calls.append(1), dependencies=(other,), closure_required=flag)
+                    invoke_invalid(case.observe_operation, lambda: calls.append(1), dependencies=(other,), closure_required=flag)
                 with self.assertRaises(TypeError):
-                    case.observe(error, closure_required=flag)
+                    invoke_invalid(case.observe, error, closure_required=flag)
         for value in ("child_natural_completion_unproven", None):
             with self.subTest(error=value), self.assertRaises(TypeError):
-                case.observe(value, closure_required=True)
+                invoke_invalid(case.observe, value, closure_required=True)
         self.assertEqual(calls, [])
         self.assertEqual((case.unresolved, other.unresolved), (None, None))
         case.observe(error)
         with self.assertRaises(TypeError):
-            case.observe(error, closure_required=1)
+            invoke_invalid(case.observe, error, closure_required=1)
         self.assertIs(case.unresolved, error)
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(case.dispose())

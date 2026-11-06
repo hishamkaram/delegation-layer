@@ -23,13 +23,13 @@ FORMULA = f"{TAP}/delegation-layer"
 class FakeBrewWorld(base.FakeWorld):
     def __init__(self, extract, keg):
         super().__init__(extract)
-        self.keg = keg
+        self.keg: Path = keg
         self.prefix = "/opt/homebrew"
         self.taps = ["homebrew/core"]
         self.installed = ["git"]
         self.info_version = "1.2.3"
         self.info_tap = TAP
-        self.keg_response = None
+        self.keg_response: bytes | None = None
 
     def which(self, name):
         return "/opt/homebrew/bin/brew" if name == "brew" else None
@@ -63,6 +63,7 @@ class FakeBrewWorld(base.FakeWorld):
 
 
 class HomebrewTests(base.PublishedBase):
+    world: FakeBrewWorld
     channel = "homebrew"
 
     def setUp(self):
@@ -140,7 +141,7 @@ class HomebrewTests(base.PublishedBase):
                 self.assertEqual(receipt["published"]["verified"]["homebrew_install"], "completed-and-retained")
 
     def test_missing_keg_binary_is_a_typed_failure(self):
-        self.world.install_keg = lambda: None
+        self.enterContext(patch.object(self.world, "install_keg", return_value=None))
         self.assertFailed("homebrew_binary_invalid")
 
     def test_install_timeout_retains_workspace_and_reports_unresolved_ownership(self):
@@ -162,7 +163,7 @@ class HomebrewTests(base.PublishedBase):
         self.assertNotIsInstance(platform.system, NonCallableMock)
 
     def test_missing_brew_is_reported(self):
-        self.world.which = lambda name: None
+        self.enterContext(patch.object(self.world, "which", return_value=None))
         self.assertFailed("brew_unavailable")
 
 

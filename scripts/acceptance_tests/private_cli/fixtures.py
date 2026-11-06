@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import unittest
+from typing import TypeGuard
 from unittest.mock import patch
 from scripts import acceptance_private_cli as private_cli
 from scripts import acceptance_supervisor_common as common
@@ -25,15 +27,33 @@ def _release_live_directory_tokens(entries):
             common.release_owned_directory(entry)
 
 
-def set_up_private_capture_root(test_case):
+def set_up_private_capture_root(test_case: unittest.TestCase) -> common.OwnedDirectory:
     temporary = tempfile.TemporaryDirectory(prefix="delegate-capture-root-test-")
     test_case.addCleanup(temporary.cleanup)
     root = Path(temporary.name)
-    test_case.capture_owner = private_cli.DirectoryOwner()
-    test_case.capture_root = test_case.capture_owner.create(
+    owner = private_cli.DirectoryOwner()
+    capture_root = owner.create(
         "private control capture root", root / "capture-root", root,
     )
-    test_case.addCleanup(test_case.capture_owner.rollback)
+    test_case.addCleanup(owner.rollback)
+    return capture_root
+
+
+def ready_path(value: object) -> Path:
+    if not isinstance(value, Path):
+        raise AssertionError("the prepared fixture must have an initialized path")
+    return value
+
+
+def _string_paths(value: object) -> TypeGuard[tuple[str, ...]]:
+    return isinstance(value, tuple) and all(isinstance(path, str) for path in value)
+
+
+def exception_capture_paths(error: BaseException, attribute: str = "capture_paths") -> tuple[str, ...]:
+    paths: object = getattr(error, attribute, None)
+    if not _string_paths(paths):
+        raise AssertionError("the capture failure must retain its exact capture path tuple")
+    return paths
 
 
 class RecordingReleaseGate:

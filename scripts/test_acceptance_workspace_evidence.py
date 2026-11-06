@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from scripts.acceptance_tests.record_fixtures import object_at
 from unittest import mock
 
 import acceptance_provider_common as common
@@ -63,7 +64,7 @@ class WorkspaceEvidenceTests(unittest.TestCase):
             with mock.patch.object(workspaces.private_cli.time, "sleep", side_effect=finish_capture) as wait:
                 proof = workspaces._prove_lifetimes_closed(context, [])
         wait.assert_called_once()
-        self.assertEqual(proof["workspace"][OPERATION]["managed_lifetime"]["worker_wait"]["result"], "success")
+        self.assertEqual(object_at(proof, "workspace", OPERATION, "managed_lifetime", "worker_wait")["result"], "success")
         self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
 
     def test_workspace_driver_does_not_accept_persistent_capture_identity_fault(self) -> None:
@@ -145,7 +146,7 @@ class WorkspaceEvidenceTests(unittest.TestCase):
                     mock.patch.object(workspaces.private_cli.time, "sleep", side_effect=finish_capture) as wait:
                 proof = workspaces._prove_lifetimes_closed(context, [])
         wait.assert_called_once()
-        self.assertEqual(proof["workspace"][OPERATION]["managed_lifetime"]["worker_wait"]["result"], "success")
+        self.assertEqual(object_at(proof, "workspace", OPERATION, "managed_lifetime", "worker_wait")["result"], "success")
         self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
 
     def test_unreadable_artifacts_fail_closed_instead_of_scanning_empty(self) -> None:
@@ -379,15 +380,15 @@ class WorkspaceEvidenceTests(unittest.TestCase):
 
     def test_exact_worker_absence_proves_recovery_without_success_or_clock_order(self) -> None:
         self.write_recovered_records(registered=True, proof="exact-worker")
-        closure = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]
+        closure = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION)
         self.assertEqual(closure["mode"], "recovered")
-        wait = closure["managed_lifetime"]["worker_wait"]
+        wait = object_at(closure, "managed_lifetime", "worker_wait")
         self.assertEqual(wait["result"], "absent")
         self.assertNotIn("exit_code", wait)
 
     def test_intent_only_recovery_requires_no_synthetic_native_facts(self) -> None:
         self.write_recovered_records(registered=False, proof="unregistered-disposed")
-        native = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]["managed_lifetime"]
+        native = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION, "managed_lifetime")
         self.assertIsNone(native["registration"])
         self.assertIsNone(native["worker"])
         self.assertIsNone(native["termination"])
@@ -395,10 +396,10 @@ class WorkspaceEvidenceTests(unittest.TestCase):
 
     def test_intent_only_previous_boot_recovery_has_no_registration_or_termination(self) -> None:
         self.write_recovered_records(registered=False, proof="previous-boot", observed_boot=OTHER_BOOT)
-        native = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]["managed_lifetime"]
+        native = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION, "managed_lifetime")
         self.assertIsNone(native["registration"])
         self.assertIsNone(native["termination"])
-        self.assertEqual(native["worker_wait"]["child_pid"], 0)
+        self.assertEqual(object_at(native, "worker_wait")["child_pid"], 0)
 
     def test_registered_previous_boot_recovery_allows_missing_worker_record(self) -> None:
         operation = self.write_recovered_records(registered=True, proof="previous-boot", observed_boot=OTHER_BOOT)
@@ -408,9 +409,9 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         del wait["worker_sha256"]
         wait["child_pid"] = 0
         write_record(path, wait)
-        native = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]["managed_lifetime"]
+        native = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION, "managed_lifetime")
         self.assertIsNone(native["worker"])
-        self.assertEqual(native["worker_wait"]["absence_proof"], "previous-boot")
+        self.assertEqual(object_at(native, "worker_wait")["absence_proof"], "previous-boot")
 
     def test_legacy_previous_boot_termination_remains_readable_without_fake_wait(self) -> None:
         operation = self.write_native_records(include_worker_wait=False)
@@ -418,9 +419,9 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         termination = common.read_json(path)
         termination["cause"] = "previous-boot"
         write_record(path, termination)
-        native = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]["managed_lifetime"]
+        native = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION, "managed_lifetime")
         self.assertIsNone(native["worker_wait"])
-        self.assertEqual(native["termination"]["cause"], "previous-boot")
+        self.assertEqual(object_at(native, "termination")["cause"], "previous-boot")
 
     def test_captured_receipt_survives_previous_boot_completion_gap(self) -> None:
         operation = self.write_recovered_records(
@@ -470,9 +471,9 @@ class WorkspaceEvidenceTests(unittest.TestCase):
 
     def test_previous_boot_recovery_preserves_prior_completed_termination(self) -> None:
         self.write_recovered_records(registered=True, proof="previous-boot", observed_boot=OTHER_BOOT)
-        native = common.validate_managed_lifetime_closure(self.state)["workspace"][OPERATION]["managed_lifetime"]
-        self.assertEqual(native["termination"]["cause"], "completed")
-        self.assertEqual(native["worker_wait"]["absence_proof"], "previous-boot")
+        native = object_at(common.validate_managed_lifetime_closure(self.state), "workspace", OPERATION, "managed_lifetime")
+        self.assertEqual(object_at(native, "termination")["cause"], "completed")
+        self.assertEqual(object_at(native, "worker_wait")["absence_proof"], "previous-boot")
 
     def test_previous_boot_cannot_be_inferred_from_unknown_or_mixed_tokens(self) -> None:
         operation = self.write_recovered_records(registered=True, proof="previous-boot")
@@ -528,10 +529,10 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         closure = common.validate_managed_lifetime_closure(self.state)
 
         self.assertEqual(closure["tasks"], {})
-        self.assertIn(OPERATION, closure["workspace"])
-        self.assertEqual(closure["workspace"][OPERATION]["mode"], "terminated")
+        self.assertIn(OPERATION, object_at(closure, "workspace"))
+        self.assertEqual(object_at(closure, "workspace", OPERATION)["mode"], "terminated")
         self.assertIsInstance(
-            closure["workspace"][OPERATION]["managed_lifetime"]["worker_wait"], dict)
+            object_at(closure, "workspace", OPERATION, "managed_lifetime")["worker_wait"], dict)
 
     def test_active_owner_absent_termination_and_missing_wait_fail_closed(self) -> None:
         with self.subTest("active owner"):
@@ -596,7 +597,7 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         })
 
         closure = common.validate_managed_lifetime_closure(self.state)
-        evidence = closure["workspace"][OPERATION]
+        evidence = object_at(closure, "workspace", OPERATION)
         self.assertEqual(evidence["mode"], "unlaunched")
         self.assertIn("unlaunched", evidence)
         self.assertNotIn("managed_lifetime", evidence)
@@ -622,10 +623,11 @@ class WorkspaceEvidenceTests(unittest.TestCase):
             common.validate_managed_lifetime_closure(self.state)
 
     def test_workspace_binding_uses_canonical_task_bytes_and_strict_values(self) -> None:
-        task = {
+        task_id = "1" * 32
+        task: dict[str, object] = {
             "schema_version": 1,
             "root_id": ROOT,
-            "task_id": "1" * 32,
+            "task_id": task_id,
             "provider": "fixture:test",
             "mode": "workspace-write",
             "canonical_cwd": "/private/workspace",
@@ -640,7 +642,7 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         raw_without_binding = common._canonical_task_bytes(task)
         self.assertNotIn(b'"workspace"', raw_without_binding)
         self.assertEqual(
-            common._validate_task_record(task, ROOT, task["task_id"], "task"),
+            common._validate_task_record(task, ROOT, task_id, "task"),
             common.sha(raw_without_binding),
         )
 
@@ -653,14 +655,14 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         raw_with_binding = common._canonical_task_bytes(task)
         self.assertIn(b'"workspace"', raw_with_binding)
         self.assertEqual(
-            common._validate_task_record(task, ROOT, task["task_id"], "task"),
+            common._validate_task_record(task, ROOT, task_id, "task"),
             common.sha(raw_with_binding),
         )
-        task_path = self.state / "tasks" / task["task_id"] / "task.json"
+        task_path = self.state / "tasks" / task_id / "task.json"
         write_record(task_path, task)
         stored_task = common._read_control_record(task_path, "fixture task")
         self.assertEqual(
-            common._validate_task_record(stored_task, ROOT, task["task_id"], "task"),
+            common._validate_task_record(stored_task, ROOT, task_id, "task"),
             common.sha(raw_with_binding),
         )
 
@@ -673,15 +675,15 @@ class WorkspaceEvidenceTests(unittest.TestCase):
                 ("budget_nanos", True),
         ):
             invalid = deepcopy(task)
-            invalid["workspace"][field] = value
+            object_at(invalid, "workspace")[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(
                     common.AcceptanceFailure):
-                common._validate_task_record(invalid, ROOT, task["task_id"], "task")
+                common._validate_task_record(invalid, ROOT, task_id, "task")
 
         invalid_task = deepcopy(task)
         invalid_task["budget_nanos"] = 1 << 63
         with self.assertRaises(common.AcceptanceFailure):
-            common._validate_task_record(invalid_task, ROOT, task["task_id"], "task")
+            common._validate_task_record(invalid_task, ROOT, task_id, "task")
 
     def test_operation_request_digest_is_the_canonical_on_disk_bytes(self) -> None:
         operation, request_digest = self.operation_directory()

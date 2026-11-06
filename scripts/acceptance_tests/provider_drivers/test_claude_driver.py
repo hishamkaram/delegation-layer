@@ -42,6 +42,15 @@ from scripts.acceptance_tests.provider_drivers.claude_fixtures import (
 
 
 class ClaudeOracleTests(unittest.TestCase):
+    def test_resume_rejects_malformed_event_collections(self) -> None:
+        parsed = claude_protocol.parse_claude_events(stream([init_event(), answer_event()]))
+        for events in (None, {}, 1):
+            untrusted: dict[str, object] = dict(parsed)
+            untrusted["events"] = events
+            with self.subTest(events=events), self.assertRaisesRegex(
+                    AcceptanceFailure, "resume event evidence is malformed"):
+                claude_protocol.validate_tool_free_resume(untrusted, NONCE)
+
     def test_behavioral_success_is_not_published_when_finalization_fails(self):
         for failure in (False, OSError("injected finalization failure")):
             with self.subTest(failure=repr(failure)), \
@@ -62,17 +71,21 @@ class ClaudeOracleTests(unittest.TestCase):
                     directory = root / name
                     directory.mkdir()
                     (directory / "outcome.json").write_text("{}")
+                    parsed = claude_protocol.parse_claude_events(stream([init_event(), answer_event()]))
                     owner.records[name] = {
                         "reference": {"conversation_id": SESSION},
                         "directory": directory,
                         "outcome": {"evidence_sha256": "c" * 64},
+                        "request": {}, "meta": {}, "seal": {}, "payload": None,
+                        "parsed": parsed, "init": claude_protocol.validate_init_profile(parsed),
+                        "resume_controls": None, "snapshot": {},
                     }
-                owner.setup = lambda: None
-                owner.run_fresh = lambda: owner.records["fresh"]
-                owner.run_resume = lambda _fresh: owner.records["resume"]
-                owner.replay = lambda: None
-                owner.shutdown = lambda: None
-                owner.retain_failure_ownership = lambda: True
+                self.enterContext(patch.object(owner, 'setup', lambda: None))
+                self.enterContext(patch.object(owner, 'run_fresh', lambda: owner.records["fresh"]))
+                self.enterContext(patch.object(owner, 'run_resume', lambda _fresh: owner.records["resume"]))
+                self.enterContext(patch.object(owner, 'replay', lambda: None))
+                self.enterContext(patch.object(owner, 'shutdown', lambda: None))
+                self.enterContext(patch.object(owner, 'retain_failure_ownership', lambda: True))
                 calls = []
 
                 def finalize(success):
@@ -81,7 +94,7 @@ class ClaudeOracleTests(unittest.TestCase):
                         raise failure
                     return not success or failure is not False
 
-                owner.finalize = finalize
+                self.enterContext(patch.object(owner, 'finalize', finalize))
                 argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
                         "--output", str(output)]
                 with patch.object(gate, "ClaudeAcceptance", return_value=owner):
@@ -112,8 +125,8 @@ class ClaudeOracleTests(unittest.TestCase):
                 raise RuntimeError("primary acceptance failure")
 
             retained = []
-            owner.setup = fail_setup
-            owner.retain_failure_ownership = lambda: retained.append(True) or True
+            self.enterContext(patch.object(owner, 'setup', fail_setup))
+            self.enterContext(patch.object(owner, 'retain_failure_ownership', lambda: retained.append(True) or True))
             original_write_json = claude_runner.write_json
 
             def fail_diagnostics(path, *args, **kwargs):
@@ -233,7 +246,9 @@ class ClaudeOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "identity|precedes system/init"):
             claude_protocol.parse_claude_events(stream([init_event(), answer_event(), trailing_identity]))
         bad = tool_use("x", "Read", file_path="/x")
-        bad["message"]["content"][0]["input"] = []
+        message = bad["message"]
+        assert isinstance(message, dict)
+        message["content"][0]["input"] = []
         with self.assertRaisesRegex(RuntimeError, "input is not an object"):
             claude_protocol.parse_claude_events(stream([init_event(), bad, answer_event()]))
 
@@ -398,7 +413,9 @@ class ClaudeOracleTests(unittest.TestCase):
                 claude_protocol.parse_claude_events(provider_owned.encode()), nonce_file, workspace, sibling, NONCE)
             self.assertEqual(provider_controls["nonce_tool_name"], "NativeRead")
             wrong_path = claude_protocol.parse_claude_events(fresh_stream(nonce_file=nonce_file, workspace=workspace))
-            wrong_path["tool_uses"][0]["input"]["command"] = f"cat -- {root / 'other'}"
+            tool_input = wrong_path["tool_uses"][0]["input"]
+            assert isinstance(tool_input, dict)
+            tool_input["command"] = f"cat -- {root / 'other'}"
             with self.assertRaisesRegex(RuntimeError, "hidden nonce"):
                 claude_protocol.validate_fresh_controls(wrong_path, nonce_file, workspace, sibling, NONCE)
             wrong_session = claude_runtime.fresh_session_id(
@@ -505,7 +522,7 @@ class ClaudeOracleTests(unittest.TestCase):
                                                            "outputTokens": 3,
                                                            "costUSD": None}}})
         parsed = claude_protocol.parse_claude_events(stream([init, result]))
-        outcome = {"usage": [
+        usage: list[dict[str, object]] = [
             {"scope": "main-agent", "source": "provider-envelope", "reliability": "reported",
              "input_tokens": 11, "output_tokens": 3, "num_turns": 1,
              "duration_seconds": "1.5", "model": "claude-test"},
@@ -513,13 +530,14 @@ class ClaudeOracleTests(unittest.TestCase):
              "estimated_cost_usd": "0.0012"},
             {"scope": "whole-tree", "source": "provider-envelope", "reliability": "reported",
              "model": "claude-sonnet", "input_tokens": 11, "output_tokens": 3},
-        ]}
+        ]
+        outcome: dict[str, object] = {"usage": usage}
         claude_evidence.validate_record_usage(outcome, parsed, "usage")
-        outcome["usage"][0]["input_tokens"] = False
+        usage[0]["input_tokens"] = False
         with self.assertRaisesRegex(RuntimeError, "input_tokens"):
             claude_evidence.validate_record_usage(outcome, parsed, "usage")
-        outcome["usage"][0]["input_tokens"] = 11
-        outcome["usage"].pop()
+        usage[0]["input_tokens"] = 11
+        usage.pop()
         with self.assertRaisesRegex(RuntimeError, "omitted or synthesized"):
             claude_evidence.validate_record_usage(outcome, parsed, "usage")
 
@@ -634,8 +652,10 @@ class ClaudeOracleTests(unittest.TestCase):
             self.assertEqual(binding["helper_executable"], str(claude.resolve()))
             self.assertEqual(binding["worker_executable"], str(runner.resolve()))
             self.assertEqual(binding["environment"], definition["environment"])
-            self.assertEqual(binding["supervisor"]["config_digest"], common.digest(config))
-            self.assertEqual(binding["supervisor"]["endpoint"],
+            supervisor = binding["supervisor"]
+            assert isinstance(supervisor, dict)
+            self.assertEqual(supervisor["config_digest"], common.digest(config))
+            self.assertEqual(supervisor["endpoint"],
                              "unix:" + str(base.resolve() / "run" / "p.sock"))
 
     def test_expected_inspection_binding_keeps_native_discovery_without_secrets(self):
@@ -662,21 +682,23 @@ class ClaudeOracleTests(unittest.TestCase):
                 pueue=paths[0], config=config, base=base, config_digest=common.digest(config), workspace=home,
                 executable=paths[2], runner=paths[1], environment=environment,
                 pueue_version="pueue fixture")
-            self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), binding["environment"])
-            self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), binding["environment"])
-            self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", binding["environment"])
+            observed_environment = binding["environment"]
+            assert isinstance(observed_environment, list)
+            self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), observed_environment)
+            self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), observed_environment)
+            self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", observed_environment)
 
     def test_dispatch_registers_complete_expected_binding_before_admission(self):
-        class FakeOps:
+        class FakeOps(provider_common.NativeTaskOps):
             root_id = None
 
             def __init__(self):
                 self.expected = None
 
-            def expect_inspection(self, task, binding):
-                self.expected = task, binding
+            def expect_inspection(self, task_id, binding=None):
+                self.expected = task_id, binding
 
-            def dispatch(self, name, task, argv):
+            def dispatch(self, name, task, argv, **_options: object):
                 self.dispatched = name, task, argv
                 return {"root_id": "a" * 32}
 
@@ -692,12 +714,13 @@ class ClaudeOracleTests(unittest.TestCase):
             "environment": ["HOME=/fixture/home"],
             "supervisor": {"expected": True},
         }
-        owner.ops = FakeOps()
-        owner.dispatch_arguments = lambda task, brief, predecessor=None: ["delegate", task]
+        operations = FakeOps()
+        owner.ops = operations
+        self.enterContext(patch.object(owner, 'dispatch_arguments', lambda task, brief, predecessor=None: ["delegate", task]))
         binding = owner.inspection_binding
         response = owner.dispatch("fresh", "b" * 32, Path("/fixture/brief"))
         self.assertEqual(response["root_id"], "a" * 32)
-        self.assertEqual(owner.ops.expected, ("b" * 32, binding))
+        self.assertEqual(operations.expected, ("b" * 32, binding))
 
     def test_executable_alias_and_runtime_roots(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -873,7 +896,8 @@ class ClaudeOracleTests(unittest.TestCase):
             )
             owner.pueue_base = pueue
             owner.pueue_owned_directories = (pueue_token,)
-            owner.processes = type("Processes", (), {"capture_root": raw_token})()
+            owner.processes = common.Processes.__new__(common.Processes)
+            owner.processes.capture_root = raw_token
             with patch.object(claude_runner, "DEFAULT_STATE_PARENT", state_parent), \
                     patch.object(claude_runtime, "PUEUE_PARENT", pueue_parent):
                 self.assertTrue(owner.finalize(True))

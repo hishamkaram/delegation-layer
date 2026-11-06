@@ -640,7 +640,8 @@ class LatestGuardTests(DeliveryCase):
             with self.subTest(code=code, flags=flags, faults=len(faults)):
                 self.fresh()
                 if flags is not None:
-                    self.seed_other("v0.1.36", latest=True, **flags)
+                    self.seed_other("v0.1.36", latest=True, draft=flags.get("draft", False),
+                                    prerelease=flags.get("prerelease", False))
                 for fault in faults:
                     self.fault(fault)
                 self.refused(code, self.prepare)

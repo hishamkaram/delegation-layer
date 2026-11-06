@@ -7,6 +7,7 @@ appends one log line per invocation. Nothing touches the network or a provider.
 
 from __future__ import annotations
 
+from collections.abc import Buffer
 from dataclasses import dataclass
 import io
 import json
@@ -88,14 +89,18 @@ def manifest_bytes(files: dict[str, bytes], *, commit: str = COMMIT) -> bytes:
     return encode_manifest(build_manifest(request, tree=TREE, inputs=inputs, files=observed))
 
 
-class _ForwardOnly:
+class _ForwardOnly(io.BufferedIOBase):
     """A non-seekable sink, so ZipFile writes data descriptors as the producer does."""
 
     def __init__(self, raw: io.BufferedWriter):
+        super().__init__()
         self._raw = raw
 
-    def write(self, data: bytes) -> int:
+    def write(self, data: Buffer) -> int:
         return self._raw.write(data)
+
+    def writable(self) -> bool:
+        return True
 
     def tell(self) -> int:
         return self._raw.tell()
@@ -124,7 +129,7 @@ def members(files: dict[str, bytes], manifest: bytes, **compression: int) -> lis
 
 def write_zip(path: Path, entries: list[Member], *, comment: bytes = b"", central=None) -> bytes:
     """Write a real streamed ZIP; ``central`` may alter central-directory records before close."""
-    with path.open("xb") as raw, zipfile.ZipFile(_ForwardOnly(raw), "w") as bundle:
+    with path.open("xb") as raw, _ForwardOnly(raw) as writer, zipfile.ZipFile(writer, "w") as bundle:
         bundle.comment = comment
         for entry in entries:
             info = zipfile.ZipInfo(entry.name, date_time=(2026, 1, 1, 0, 0, 0))
@@ -230,7 +235,7 @@ class CandidateArtifactCase(unittest.TestCase):
         replies = metadata(len(data), sha(data))
         if change is not None:
             change(replies)
-        routes = {ENDPOINTS[kind]: {"json": reply} for kind, reply in replies.items()}
+        routes: dict[str, dict[str, object]] = {ENDPOINTS[kind]: {"json": reply} for kind, reply in replies.items()}
         routes[DOWNLOAD] = {"file": str(container)}
         self.routes_path.write_text(json.dumps(routes))
         return Served(container, locator(data, manifest), files, manifest)

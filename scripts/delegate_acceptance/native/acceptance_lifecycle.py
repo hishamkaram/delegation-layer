@@ -64,7 +64,8 @@ def commit_success_candidate(owner) -> bool:
                     "acceptance success candidate changed")
             return True
         receipt = acceptance.success_receipt
-        require(isinstance(receipt, dict), "acceptance success receipt is unavailable")
+        if not (isinstance(receipt, dict)):
+            raise AcceptanceFailure("acceptance success receipt is unavailable")
         acceptance.success_candidate = SuccessCandidate(sha256=None, confirmed=False)
         write_json(acceptance.output / SUCCESS_CANDIDATE_NAME, receipt)
         data = _read_candidate(acceptance.output)
@@ -130,8 +131,8 @@ def publish_success(owner, *, expected_gate: str = "acceptance-native") -> None:
     The caller names its own gate; the candidate never chooses its expectation.
     """
     acceptance = owner
-    require(isinstance(expected_gate, str) and bool(expected_gate),
-            "acceptance success gate expectation is invalid")
+    if not (isinstance(expected_gate, str) and bool(expected_gate)):
+        raise AcceptanceFailure("acceptance success gate expectation is invalid")
     candidate = acceptance.success_candidate
     require(candidate is not None and candidate.confirmed,
             "acceptance success candidate was not committed")
@@ -139,9 +140,9 @@ def publish_success(owner, *, expected_gate: str = "acceptance-native") -> None:
     require(hashlib.sha256(data).hexdigest() == candidate.sha256,
             "acceptance success candidate changed")
     receipt = json.loads(data)
-    require(isinstance(receipt, dict) and receipt.get("gate") == expected_gate and
-            receipt.get("status") == "passed",
-            "acceptance success candidate is not a passed native receipt")
+    if not (isinstance(receipt, dict) and receipt.get("gate") == expected_gate and
+            receipt.get("status") == "passed"):
+        raise AcceptanceFailure("acceptance success candidate is not a passed native receipt")
     write_bytes(acceptance.output / "success.json", data)
 
 def _record_sha256(directory: Path, owner_kind: str, record: str) -> str | None:
@@ -151,7 +152,8 @@ def _record_sha256(directory: Path, owner_kind: str, record: str) -> str | None:
 
 def _lifetime_facts(directory: Path, owner_kind: str, record: object) -> dict[str, object]:
     """Keep sanitized closure facts only: no PID, boot, environment, or argv."""
-    require(isinstance(record, dict), "managed lifetime closure record is malformed")
+    if not (isinstance(record, dict)):
+        raise AcceptanceFailure("managed lifetime closure record is malformed")
     termination, wait = record.get("termination"), record.get("worker_wait")
     termination = termination if isinstance(termination, dict) else {}
     wait = wait if isinstance(wait, dict) else {}
@@ -173,8 +175,8 @@ def managed_root_closure(state: Path, task_ids: set[str]) -> dict[str, object]:
     """
     closure = validate_managed_lifetime_closure(state, task_ids)
     tasks, inspections = closure.get("tasks"), closure.get("inspections")
-    require(isinstance(tasks, dict) and isinstance(inspections, dict),
-            "managed lifetime closure is malformed")
+    if not (isinstance(tasks, dict) and isinstance(inspections, dict)):
+        raise AcceptanceFailure("managed lifetime closure is malformed")
     parent = state / "inspections"
     journals = {entry.name for entry in parent.iterdir()} if parent.is_dir() else set()
     # The scanner skips queue-owned and unsubmitted inspections; a managed
@@ -226,9 +228,10 @@ def record_lifetime_closure(owner) -> None:
                                    model_discovery_required=discovery_required)
     require(error is None, f"managed lifetime closure is not proven: {error}")
     discovery = proof["model_discovery"]
-    require(discovery is None or (isinstance(discovery, dict) and isinstance(discovery.get("inspections"), dict) and
-                                  set(discovery["inspections"]) == {acceptance.model_discovery_task_id}),
-            "model discovery lifetime closure does not cover its inspection")
+    if discovery is not None:
+        inspections = discovery.get("inspections") if isinstance(discovery, dict) else None
+        if not isinstance(inspections, dict) or set(inspections) != {acceptance.model_discovery_task_id}:
+            raise AcceptanceFailure("model discovery lifetime closure does not cover its inspection")
     acceptance.lifetime_closure = proof
 
 

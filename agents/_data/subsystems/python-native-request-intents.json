@@ -27,13 +27,15 @@
     "imports": [
       "py:__future__",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.inspection.fixtures",
+      "py:collections.abc",
       "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.contracts",
       "py:delegate_acceptance.tasks.operations",
       "py:delegate_acceptance.tasks.request_intent",
       "py:hashlib",
       "py:pathlib",
       "py:tempfile",
-      "py:types",
       "py:unittest"
     ]
   },
@@ -43,17 +45,21 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.native.support",
+      "py:argparse",
+      "py:collections.abc",
       "py:dataclasses",
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.constants",
       "py:delegate_acceptance.native.model_discovery",
       "py:delegate_acceptance.native.model_discovery_intent",
-      "py:delegate_acceptance.tasks.operations",
+      "py:delegate_acceptance.tasks.contracts",
+      "py:delegate_acceptance.tasks.request_intent",
       "py:hashlib",
       "py:pathlib",
       "py:tempfile",
-      "py:types",
+      "py:typing",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -99,6 +105,7 @@
       "py:acceptance_native",
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.native.support",
+      "py:argparse",
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.evidence.files",
       "py:delegate_acceptance.evidence.validation",
@@ -111,10 +118,12 @@
       "py:delegate_acceptance.native_evidence.supplemental",
       "py:hashlib",
       "py:json",
+      "py:operator",
       "py:os",
       "py:pathlib",
       "py:tempfile",
       "py:types",
+      "py:typing",
       "py:unittest",
       "py:unittest.mock"
     ]

@@ -194,7 +194,7 @@ class WorkspaceContext:
         self.gates.clear()
 
     def close_cohorts(self, remove_closed: bool) -> list[dict[str, object]]:
-        evidence = []
+        evidence: list[dict[str, object]] = []
         for cohort in tuple(self.cohorts):
             try:
                 if remove_closed:

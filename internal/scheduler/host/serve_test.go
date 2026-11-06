@@ -85,19 +85,23 @@ func TestHostRetriesOnlyAfterWaitWithExactIndefiniteCap(t *testing.T) {
 	clock := clockwork.NewFakeClock()
 	done := runLocalHost(t, config, clock)
 	query := queryFor(t, config)
-	for index, seconds := range []time.Duration{1, 2, 4, 8, 16, 30, 60, 120, 300, 300} {
+	for index, delay := range []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second,
+		8 * time.Second, 16 * time.Second, 30 * time.Second, time.Minute,
+		2 * time.Minute, 5 * time.Minute, 5 * time.Minute,
+	} {
 		attempt := uint64(index + 1)
 		status := eventuallyStatus(t, query, func(status Status) bool {
 			return status.Attempt == attempt && status.State == "backoff" && status.Child == nil
 		})
-		want := clock.Now().Add(seconds * time.Second).UTC()
+		want := clock.Now().Add(delay).UTC()
 		if status.NextRetryAt == nil || !status.NextRetryAt.Equal(want) {
 			t.Fatalf("attempt %d retry=%v want=%s", attempt, status.NextRetryAt, want)
 		}
 		if index == 9 {
 			break
 		}
-		clock.Advance(seconds*time.Second - time.Nanosecond)
+		clock.Advance(delay - time.Nanosecond)
 		before, err := Observe(t.Context(), query)
 		if err != nil || before.Attempt != attempt {
 			t.Fatalf("child started before cooldown: %+v %v", before, err)

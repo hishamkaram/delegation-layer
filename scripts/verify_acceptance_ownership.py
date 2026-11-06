@@ -181,7 +181,7 @@ def _import_aliases(tree: ast.AST, path: Path | None = None) -> ControlledAliase
 
 
 def _references(
-        node: ast.AST,
+        node: ast.AST | None,
         aliases: ControlledAliases,
 ) -> frozenset[ControlledReference]:
     """Return conservative controlled references without evaluating code."""
@@ -264,7 +264,7 @@ def _owner_receiver(
 
 
 def _owned_directory_constructor(
-        node: ast.AST, aliases: ControlledAliases) -> bool:
+        node: ast.AST | None, aliases: ControlledAliases) -> bool:
     if not isinstance(node, ast.Call):
         return False
     return _is_common_reference(node.func, "DirectoryOwner", aliases)
@@ -387,6 +387,96 @@ def _call_violations(
     return violations
 
 
+def _module_binding_names(node: ast.AST) -> set[str]:
+    """Conservatively collect module writes, including evaluated definition expressions."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        expressions = [*node.decorator_list, node.args]
+        if node.returns is not None:
+            expressions.append(node.returns)
+        return {node.name} | {name for value in expressions for name in _module_binding_names(value)}
+    if isinstance(node, ast.ClassDef):
+        return {node.name} | {name for value in (*node.decorator_list, *node.bases, *node.keywords)
+                              for name in _module_binding_names(value)}
+    if isinstance(node, ast.Import):
+        return {item.asname or item.name.split(".", 1)[0] for item in node.names}
+    if isinstance(node, ast.ImportFrom):
+        return {item.asname or item.name for item in node.names}
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        return {node.id}
+    if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        name = _dotted_name(node)
+        roots = {name.split(".", 1)[0]} if name is not None else set()
+        return roots | _module_binding_names(node.value)
+    names = {name for child in ast.iter_child_nodes(node) for name in _module_binding_names(child)}
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name is not None:
+        names.add(node.name)
+    if isinstance(node, ast.MatchMapping) and node.rest is not None:
+        names.add(node.rest)
+    return names
+
+
+def _direct_schema_base(statement: ast.stmt) -> tuple[ast.Name, str] | None:
+    """The exact import read allowed by the supported direct schema declaration."""
+    if (not isinstance(statement, ast.ClassDef) or statement.decorator_list or
+            len(statement.bases) != 1 or any(keyword.arg != "total" for keyword in statement.keywords)):
+        return None
+    base = statement.bases[0]
+    if isinstance(base, ast.Name):
+        return base, "TypedDict"
+    if isinstance(base, ast.Attribute) and base.attr == "TypedDict" and isinstance(base.value, ast.Name):
+        return base.value, "typing"
+    return None
+
+
+def _typed_dict_field_targets(tree: ast.Module) -> set[ast.Name]:
+    """Recognize direct schema-only fields; ambiguous bindings keep the runtime checks."""
+    bindings: dict[str, str] = {}
+    base_reads = {reference[0] for statement in tree.body
+                  if (reference := _direct_schema_base(statement)) is not None}
+    untrusted_bindings = {name for node in ast.walk(tree) if isinstance(node, ast.Global) for name in node.names}
+    untrusted_bindings.update(node.id for node in ast.walk(tree)
+                              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                              and node not in base_reads)
+    canonical_import_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(item.name == "*" for item in node.names):
+            return set()
+        if isinstance(node, ast.Import):
+            canonical_import_names.update(item.asname or item.name for item in node.names if item.name == "typing")
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "typing":
+            canonical_import_names.update(item.asname or item.name for item in node.names if item.name == "TypedDict")
+    # These imports share module/factory objects, even when their local names differ.
+    if canonical_import_names & untrusted_bindings:
+        return set()
+    fields: set[ast.Name] = set()
+    for statement in tree.body:
+        rebound = _module_binding_names(statement)
+        if "*" in rebound:
+            bindings.clear()
+        for name in rebound:
+            bindings.pop(name, None)
+        if isinstance(statement, ast.ImportFrom):
+            for item in statement.names:
+                name = item.asname or item.name
+                bindings.pop(name, None)
+                if (statement.level == 0 and statement.module == "typing" and item.name == "TypedDict"
+                        and name not in untrusted_bindings):
+                    bindings[name] = "TypedDict"
+        elif isinstance(statement, ast.Import):
+            for item in statement.names:
+                name = item.asname or item.name.split(".", 1)[0]
+                bindings.pop(name, None)
+                if item.name == "typing" and name not in untrusted_bindings:
+                    bindings[name] = "typing"
+        elif isinstance(statement, ast.ClassDef):
+            reference = _direct_schema_base(statement)
+            if reference is not None and bindings.get(reference[0].id) == reference[1]:
+                fields.update(field.target for field in statement.body
+                              if isinstance(field, ast.AnnAssign) and field.value is None
+                              and isinstance(field.target, ast.Name))
+    return fields
+
+
 def find_violations(paths: tuple[Path, ...] | list[Path]) -> tuple[Violation, ...]:
     violations: list[Violation] = []
     for candidate in paths:
@@ -430,8 +520,9 @@ def find_violations(paths: tuple[Path, ...] | list[Path]) -> tuple[Violation, ..
         violations.extend(_call_violations(
             path, tree, aliases, owner_names, owner_type_names))
 
+        schema_fields = _typed_dict_field_targets(tree)
         for node in ast.walk(tree):
-            if isinstance(node, (ast.Name, ast.Attribute)):
+            if isinstance(node, (ast.Name, ast.Attribute)) and node not in schema_fields:
                 name = _name(node)
                 if name in {
                     "raw_process_captures", "raw_process_captures_owned",

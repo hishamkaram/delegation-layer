@@ -17,6 +17,19 @@ from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.processes.observation import failure_cleanup_deadline
 from pathlib import Path
+from typing import NotRequired, TypedDict
+
+
+class CleanupReceipt(TypedDict):
+    supervisor_shutdown_observed: bool
+    completion: str
+    removed: list[str]
+    retained: list[str]
+    retained_owned_directories: list[dict[str, object]]
+    raw_process_captures: str
+    status: NotRequired[str]
+    reason: NotRequired[str]
+    failures: NotRequired[list[dict[str, str]]]
 
 
 # One fixed, trusted message per cleanup operation. Cleanup receipts never carry
@@ -105,7 +118,7 @@ def finalize_acceptance_artifacts(
         # Callers turn this false result into a failed successful run, while a
         # failure path retains its original diagnostic and leaves all state.
         return False
-    receipt = {
+    receipt: CleanupReceipt = {
         "supervisor_shutdown_observed": bool(supervisor_closed),
         "completion": "passed" if success else "failed",
         "removed": [],
@@ -185,7 +198,7 @@ def _finalize_owned_entries(
         *, entries: tuple[OwnedDirectory, ...],
         entry_identities: dict[int, dict[str, object]],
         raw_process_captures_token: OwnedDirectory | None,
-        receipt: dict[str, object],
+        receipt: CleanupReceipt,
         remove_failed_process_captures: bool,
         retained_entry_ids: set[int],
         success: bool,

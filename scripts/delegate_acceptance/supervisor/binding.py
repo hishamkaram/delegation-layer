@@ -41,7 +41,7 @@ _SUPERVISOR_BINDING_OPTIONAL_KEYS = {
 }
 
 
-def observed_pueue_version(value: str | bytes, command: str) -> str:
+def observed_pueue_version(value: object, command: str) -> str:
     """Validate one bounded pueue executable version observation."""
     if isinstance(value, bytes):
         require(len(value) <= MAX_CONTROL_BYTES, f"{command} version output exceeds the control bound")
@@ -49,7 +49,8 @@ def observed_pueue_version(value: str | bytes, command: str) -> str:
             value = value.decode("utf-8")
         except UnicodeDecodeError as error:
             raise AcceptanceFailure(f"{command} version output is not valid UTF-8") from error
-    require(isinstance(value, str), f"{command} version output is malformed")
+    if not isinstance(value, str):
+        raise AcceptanceFailure(f"{command} version output is malformed")
     try:
         raw_length = len(value.encode("utf-8"))
     except UnicodeEncodeError as error:
@@ -64,7 +65,8 @@ def observed_pueue_version(value: str | bytes, command: str) -> str:
 
 
 def _validate_supervisor_binding(value: object, label: str) -> None:
-    require(isinstance(value, dict), f"{label} is not an object")
+    if not isinstance(value, dict):
+        raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _SUPERVISOR_BINDING_KEYS, _SUPERVISOR_BINDING_OPTIONAL_KEYS, label)
     for key in ("client_executable", "config_path"):
         path = value.get(key)
@@ -93,7 +95,7 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
         required = {"resolution_os", "resolution_home", "resolution_data_local",
                     "resolution_config", "resolution_username"}
         require(required <= resolution_keys, f"{label} resolution is incomplete")
-        require(value["resolution_os"] in {"linux", "darwin"},
+        require(isinstance(value["resolution_os"], str) and value["resolution_os"] in {"linux", "darwin"},
                 f"{label} resolution operating system is invalid")
         for key in ("resolution_home", "resolution_data_local", "resolution_config",
                     "resolution_runtime", "resolution_cwd"):
@@ -110,6 +112,6 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
 def _canonical_supervisor_ref(value: object, label: str) -> dict[str, object]:
     """Validate and order a task.SupervisorRef for Go's JSON encoder."""
     _validate_supervisor_binding(value, label)
-    require(isinstance(value, dict) and all(value[key] is not None for key in value),
-            f"{label} contains null fields")
+    if not isinstance(value, dict) or not all(value[key] is not None for key in value):
+        raise AcceptanceFailure(f"{label} contains null fields")
     return {key: value[key] for key in _SUPERVISOR_JSON_ORDER if key in value}

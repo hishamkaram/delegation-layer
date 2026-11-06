@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import shlex
-from scripts.delegate_acceptance.evidence.validation import _required_keys, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _required_keys, require
+from scripts.delegate_acceptance.inspections.data import InspectionEvidence
 from scripts.delegate_acceptance.supervisor.queue_policy import (
     _PUEUE_GROUP_KEYS,
     done_result,
@@ -18,12 +20,13 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
         tasks_by_name: dict[str, str], labels_by_name: dict[str, str],
         numbers_by_name: dict[str, int], expected_results: dict[str, str],
         dispatch_attempts: set[str], expected_binding_required: bool,
-        inspection_journals: Callable[..., dict[str, dict[str, object]]],
+        inspection_journals: Callable[..., dict[str, InspectionEvidence]],
         durable_admission: Callable[..., dict[str, object] | None],
         validate_groups: Callable[..., None], validate_ordinary_row: Callable[..., None],
         validate_inspection_row: Callable[..., None]):
     tasks = status.get("tasks")
-    require(isinstance(tasks, dict), "private queue tasks object is absent")
+    if not isinstance(tasks, dict):
+        raise AcceptanceFailure("private queue tasks object is absent")
     require(dispatch_attempts, "no supervisor dispatch attempt was recorded")
     journals = inspection_journals(
         allow_failure, expected_binding_required)
@@ -42,7 +45,12 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
         require(ordinary_task_ids == dispatch_attempts,
                 "a successful dispatch attempt has no exact ordinary task response")
     historical_journals = _inspection_membership_groups(journals, status, validate_groups)
-    ordinary_labels = {value["label"] for value in ordinary.values()}
+    ordinary_labels: set[str] = set()
+    for value in ordinary.values():
+        label = value["label"]
+        if not isinstance(label, str):
+            raise AcceptanceFailure("private queue labels are not exact")
+        ordinary_labels.add(label)
     queue_journals = [journal for journal in journals.values()
                       if journal["inspection_exit_authority"]["mode"] in
                       {"queue", "guardian-unstarted"}]
@@ -78,7 +86,8 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
 
 
 def validate_group_snapshot(groups: object, expected: set[str]):
-    require(isinstance(groups, dict), "private queue groups object is absent")
+    if not isinstance(groups, dict):
+        raise AcceptanceFailure("private queue groups object is absent")
     require(set(groups) == expected, "private queue contains an unknown supervisor group")
     for name in expected:
         group = groups[name]
@@ -90,7 +99,7 @@ def validate_group_snapshot(groups: object, expected: set[str]):
                 f"private queue group {name} is malformed")
 
 
-def validate_inspection_queue_row(*, row: dict[str, object], journal: dict[str, object], allow_failure: bool,
+def validate_inspection_queue_row(*, row: dict[str, object], journal: Mapping[str, object], allow_failure: bool,
         state_parent: Path, pueue_config: Path | None, runner: Path, state_root: Path,
         terminal_required: bool = True):
     task = journal["task_id"]
@@ -101,8 +110,8 @@ def validate_inspection_queue_row(*, row: dict[str, object], journal: dict[str, 
             row.get("id") == journal["numeric_task_id"],
             f"inspection queue numeric identity mismatch for {task}")
     row_path = row.get("path")
-    require(pueue_config is not None,
-            "inspection supervisor config is unavailable")
+    if pueue_config is None:
+        raise AcceptanceFailure("inspection supervisor config is unavailable")
     # A fresh client uses the invocation directory. A client reconstructed
     # from its durable binding intentionally uses the config directory so
     # recovery cannot depend on an ambient directory that may be gone.
@@ -131,7 +140,8 @@ def validate_inspection_queue_row(*, row: dict[str, object], journal: dict[str, 
     commands = []
     for key in ("original_command", "command"):
         value = row.get(key)
-        require(isinstance(value, str), f"inspection queue row missing {key} for {task}")
+        if not isinstance(value, str):
+            raise AcceptanceFailure(f"inspection queue row missing {key} for {task}")
         try:
             commands.append(shlex.split(value))
         except ValueError:
@@ -145,7 +155,7 @@ def _ordinary_queue_admissions(
         dispatch_attempts: set[str],
         durable_admission: Callable[..., dict[str, object] | None],
         expected_results: dict[str, str],
-        journals: dict[str, dict[str, object]],
+        journals: Mapping[str, InspectionEvidence],
         labels_by_name: dict[str, str],
         numbers_by_name: dict[str, int],
         tasks_by_name: dict[str, str],
@@ -170,18 +180,23 @@ def _ordinary_queue_admissions(
                 require(all(observed[task][key] == durable[key]
                             for key in ("task_id", "label", "numeric_task_id")),
                         f"ordinary task response disagrees with durable admission for {task}")
-            ordinary[durable["task_id"]] = durable
+            durable_task = durable["task_id"]
+            if not isinstance(durable_task, str):
+                raise AcceptanceFailure("ordinary task durable identity is invalid")
+            ordinary[durable_task] = durable
     else:
         ordinary = observed
     return ordinary
 
 
 def _inspection_membership_groups(
-        journals: dict[str, dict[str, object]],
+        journals: Mapping[str, InspectionEvidence],
         status: dict[str, object],
         validate_groups: Callable[..., None],
-) -> list[dict[str, object]]:
+) -> list[InspectionEvidence]:
     groups = status.get("groups")
+    if not isinstance(groups, dict):
+        raise AcceptanceFailure("private queue groups object is absent")
     historical_journals = [history
                            for journal in journals.values()
                            for history in journal["historical_attempts"]]
@@ -215,13 +230,16 @@ def _validate_ordinary_membership(
             set(labels) <= allowed_labels and required_labels <= set(labels),
             "private queue labels are not exact")
     for key, row in tasks.items():
+        if not isinstance(row, dict):
+            raise AcceptanceFailure("private queue contains a malformed row")
         require(isinstance(key, str) and key.isdecimal() and str(int(key)) == key and
                 type(row.get("id")) is int and row["id"] == int(key),
                 "private queue task numeric identity is not exact")
     for task, admission in ordinary.items():
         row = next((candidate for candidate in rows
                     if candidate.get("label") == admission["label"]), None)
-        require(isinstance(row, dict), f"private queue lost ordinary task {task}")
+        if not isinstance(row, dict):
+            raise AcceptanceFailure(f"private queue lost ordinary task {task}")
         validate_ordinary_row(
             row, admission["label"], task,
             admission["numeric_task_id"], "default")
@@ -235,12 +253,12 @@ def _validate_ordinary_membership(
 
 def _validate_inspection_membership_rows(
         *, allow_failure: bool,
-        guardian_journals: list[dict[str, object]],
-        guardian_unlaunched_journals: list[dict[str, object]],
-        historical_guardian_journals: list[dict[str, object]],
-        historical_guardian_unlaunched_journals: list[dict[str, object]],
-        historical_queue_journals: list[dict[str, object]],
-        queue_journals: list[dict[str, object]],
+        guardian_journals: list[InspectionEvidence],
+        guardian_unlaunched_journals: list[InspectionEvidence],
+        historical_guardian_journals: list[InspectionEvidence],
+        historical_guardian_unlaunched_journals: list[InspectionEvidence],
+        historical_queue_journals: list[InspectionEvidence],
+        queue_journals: list[InspectionEvidence],
         rows: list[dict[str, object]],
         validate_inspection_row: Callable[..., None],
 ) -> None:

@@ -6,13 +6,14 @@ fixture tree and each containing tree must observe the original failure before t
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Mapping
 import contextlib
 import errno
 import io
 import os
 from pathlib import Path
 import subprocess
+from typing import IO, TypedDict, Unpack
 import sys
 import threading
 import traceback
@@ -26,6 +27,17 @@ from scripts.acceptance_tests.release_fixture import FixtureTree, open_descripto
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 # A module import, so discovery here does not collect the archive tests a second time.
 from scripts import test_verify_release_archive as archive
+
+
+class PopenOptions(TypedDict, total=False):
+    cwd: str | Path | None
+    env: Mapping[str, str] | None
+    stdin: int | IO[bytes] | None
+    stdout: int | IO[bytes] | None
+    stderr: int | IO[bytes] | None
+    shell: bool
+    close_fds: bool
+    start_new_session: bool
 
 
 def delegate_version(argv: list[str]) -> bool:
@@ -46,7 +58,7 @@ class StartFault:
         self.refused: list[list[str]] = []
         self.launched: list[subprocess.Popen[bytes]] = []
 
-    def __call__(self, argv: list[str], **options: object) -> subprocess.Popen[bytes]:
+    def __call__(self, argv: list[str], **options: Unpack[PopenOptions]) -> subprocess.Popen[bytes]:
         if self.selected(argv):
             self.refused.append(argv)
             raise self.failure
@@ -77,6 +89,7 @@ class ReleaseArchiveOwnershipTests(unittest.TestCase):
         self.assertTrue(fixture.root.is_dir(), "an unknown child Wait must retain the archive fixture")
         error = fixture.tree.unresolved
         self.assertIsInstance(error, BoundedCommandError)
+        assert isinstance(error, BoundedCommandError)
         self.assertIs(error.reason, CommandFailure.TIMEOUT)
         self.assertFalse(fixture.tree.dispose())
         self.assertEqual(open_descriptors(), self.baseline)
@@ -139,7 +152,7 @@ class PreparedCleanupFailureTests(unittest.TestCase):
         raise AssertionError("a cleanup control must not launch a child")
 
     @contextlib.contextmanager
-    def failing_dispose(self) -> Iterator[None]:
+    def failing_dispose(self) -> Generator[None]:
         """Each archive fixture tree is disposed for real, then reports ``cleanup_fault``."""
         dispose = FixtureTree.dispose
 
@@ -209,6 +222,7 @@ class PreparedCleanupFailureTests(unittest.TestCase):
         self.assertIs(error, body_fault, "a body failure must stay the primary error")
         group = error.__cause__
         self.assertIsInstance(group, BaseExceptionGroup)
+        assert isinstance(group, BaseExceptionGroup)
         self.assertEqual(len(group.exceptions), 2)
         self.assertIs(group.exceptions[0], cause)
         self.assertCleanupFault(group.exceptions[1])
@@ -298,7 +312,9 @@ class SerializationThreadClosureTests(unittest.TestCase):
 
         ``observed`` keeps each owner's unresolved fact as the method left it, before the oracle.
         """
-        fixture.verify = self.held_verify(fixture)
+        patcher = patch.object(fixture, "verify", self.held_verify(fixture))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         if early_failure is not None:
             fixture.assertTrue = Mock(side_effect=early_failure)
         fault = StartFault(lambda _argv: True, FileNotFoundError("refused fixture child"))
@@ -352,6 +368,7 @@ class SerializationThreadClosureTests(unittest.TestCase):
         self.expire_joins = True
         raised, _alive = self.run_method(fixture)
         self.assertIsInstance(raised, archive.verifier.VerificationError)
+        assert isinstance(raised, archive.verifier.VerificationError)
         self.assertEqual((raised.code, raised.stage), (CommandFailure.TIMEOUT.value, self.STAGE))
         self.assertIs(fixture.tree.unresolved, raised)
         self.assertIs(outer.unresolved, raised)
@@ -389,6 +406,7 @@ class SerializationThreadClosureTests(unittest.TestCase):
         self.join_faults.update({"release-first": first, "release-second": second})
         raised, _alive = self.run_method(fixture)
         self.assertIsInstance(raised, BaseExceptionGroup)
+        assert isinstance(raised, BaseExceptionGroup)
         self.assertEqual(raised.exceptions, (first, second))
         self.assertEqual(self.observed, (raised, raised))
         self.remove_after_closure(fixture.tree, outer)

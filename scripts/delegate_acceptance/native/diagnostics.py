@@ -9,7 +9,7 @@ from pathlib import Path
 import stat
 
 from scripts.delegate_acceptance.evidence.files import digest, read_json
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.native.constants import (
     FAILURE_DIAGNOSTICS_BYTES, FAILURE_DIAGNOSTICS_MAX_ENTRIES,
     FAILURE_DIAGNOSTICS_MAX_OMISSIONS, FAILURE_DIAGNOSTICS_TEXT_BYTES,
@@ -273,12 +273,14 @@ def _diagnostic_json_bytes(value: object) -> bytes:
 def _fit_failure_diagnostics(value: dict[str, object]) -> dict[str, object]:
     """Keep the persisted diagnostic bounded while retaining structure."""
     status = value["status"]
-    require(isinstance(status, dict), "failure diagnostic status is malformed")
+    if not (isinstance(status, dict)):
+        raise AcceptanceFailure("failure diagnostic status is malformed")
 
     def mark_truncated(reason: str) -> None:
         status["partial"] = True
         truncated = status.setdefault("truncated", [])
-        require(isinstance(truncated, list), "failure diagnostic truncation state is malformed")
+        if not (isinstance(truncated, list)):
+            raise AcceptanceFailure("failure diagnostic truncation state is malformed")
         if reason not in truncated:
             truncated.append(reason)
 
@@ -287,11 +289,11 @@ def _fit_failure_diagnostics(value: dict[str, object]) -> dict[str, object]:
 
     workspace = value.get("workspace")
     entries = workspace.get("entries") if isinstance(workspace, dict) else None
-    if isinstance(entries, dict):
+    if isinstance(workspace, dict) and isinstance(entries, dict):
         while entries and len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
             keep = max(0, len(entries) // 2)
-            workspace["entries"] = dict(list(entries.items())[:keep])
-            entries = workspace["entries"]
+            entries = dict(list(entries.items())[:keep])
+            workspace["entries"] = entries
         mark_truncated("workspace.entries")
 
     if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:

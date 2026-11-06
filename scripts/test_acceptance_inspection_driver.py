@@ -1,4 +1,5 @@
 """Deterministic checks for the real-supervisor inspection fixture oracle."""
+from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -17,6 +18,8 @@ import acceptance_provider_common as provider_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 import acceptance_supervisor_common as supervisor_common
 from acceptance_supervisor_common import digest, write_json
+from scripts.acceptance_tests.record_fixtures import object_at
+from scripts.acceptance_tests.inspection.fixtures import FixtureProcesses
 from scripts.acceptance_tests.resources import DirectoryPinOwner
 
 
@@ -33,7 +36,7 @@ class InspectionDriverTests(unittest.TestCase):
             pueue.write_bytes(b"pueue")
             pueued.write_bytes(b"pueued")
             output = root / "evidence"
-            args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
+            args = Namespace(tools=str(tools), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
 
             with patch("scripts.delegate_acceptance.paths.operations.reject_tmp"), \
@@ -49,7 +52,8 @@ class InspectionDriverTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             driver = InspectionAcceptance.__new__(InspectionAcceptance)
             driver.output = Path(temporary) / "not-created"
-            driver.ops = SimpleNamespace(closed=False)
+            driver.ops = NativeTaskOps(FixtureProcesses(), Path("/delegate"), Path("/runner"),
+                                       Path("/pueue"), Path("/base"), Path("/state"), driver.output)
 
             self.assertFalse(driver.finalize(False))
             self.assertFalse(driver.output.exists())
@@ -118,7 +122,7 @@ class InspectionDriverTests(unittest.TestCase):
                             Path("/base"), Path("/state"), Path("/evidence"))
         task = "a" * 32
         root = "b" * 32
-        response = {"task_id": task, "root_id": root, "admission": "admitted",
+        response: dict[str, object] = {"task_id": task, "root_id": root, "admission": "admitted",
                     "supervisor": {"matched": True, "numeric_task_id": 0}}
         with self.assertRaises(AcceptanceFailure):
             ops.record_admission("success", task, response)
@@ -162,7 +166,7 @@ class InspectionDriverTests(unittest.TestCase):
                 driver.pueue_base = root / "pueue"
                 driver.sentinel = b"fixture-sentinel"
                 driver.config = root / "pueue.json"
-                driver.case_records = {"behavior": "passed"}
+                driver.case_records = {"behavior": {"status": "passed"}}
                 driver.ops = Mock(closed=True)
                 driver.ops.safe_failure_shutdown.return_value = True
                 driver.ops.retain_failure_ownership.return_value = True
@@ -179,7 +183,7 @@ class InspectionDriverTests(unittest.TestCase):
                         raise failure
                     return not success or failure is not False
 
-                driver.finalize = finalize
+                self.enterContext(patch.object(driver, "finalize", side_effect=finalize))
                 argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
                         "--output", str(output)]
                 with patch.object(inspection_acceptance, "InspectionAcceptance", return_value=driver), \
@@ -264,7 +268,7 @@ class InspectionDriverTests(unittest.TestCase):
     def test_concurrent_unknown_is_not_treated_as_admitted(self):
         task = "a" * 32
         root = "b" * 32
-        unknown = {
+        unknown: dict[str, object] = {
             "task_id": task, "root_id": root, "task_record": "unknown",
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "dispatch_failed", "stage": "create-task-record",
@@ -287,7 +291,7 @@ class InspectionDriverTests(unittest.TestCase):
 
     def test_blocker_identity_state_and_argv_are_exact(self):
         blocker = " ".join(inspection_acceptance.BLOCKER_ARGV)
-        running = {"id": 7, "group": "g", "label": "l", "status": {"Running": {}},
+        running: dict[str, object] = {"id": 7, "group": "g", "label": "l", "status": {"Running": {}},
                    "command": blocker, "original_command": blocker}
         validate_blocker_row(running, 7, "g", "l", "Running")
         with self.assertRaises(AcceptanceFailure):
@@ -350,7 +354,7 @@ class InspectionDriverSetupTests(unittest.TestCase):
                 path.chmod(0o700)
 
             output = root / "output"
-            args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
+            args = Namespace(tools=str(tools), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
             private_prefix = (Path("/Users/Shared") if sys.platform == "darwin"
                               else Path.home() / ".dl-acceptance")
@@ -379,19 +383,21 @@ class InspectionDriverSetupTests(unittest.TestCase):
                 self.assertIsNotNone(driver.config)
                 self.assertIsNotNone(driver.pueue_base)
                 self.assertIsNotNone(driver.supervisor_config_digest)
-                config = Path(driver.config)
-                base = Path(driver.pueue_base)
+                if driver.config is None or driver.pueue_base is None:
+                    raise AssertionError("setup supervisor paths are absent")
+                config = driver.config
+                base = driver.pueue_base
                 self.assertEqual(supervisor_common.read_json(config),
                                  supervisor_common.config_for(base))
                 helper_config = root / "trusted-helper.json"
                 expected = driver.expected_inspection_binding(helper_config)
                 provider_common._validate_inspection_binding(expected,
                                                               "setup expected binding")
-                self.assertEqual(expected["supervisor"]["config_digest"],
+                self.assertEqual(object_at(expected, "supervisor")["config_digest"],
                                  supervisor_common.digest(config))
-                self.assertEqual(expected["supervisor"]["resolved_config_sha256"],
+                self.assertEqual(object_at(expected, "supervisor")["resolved_config_sha256"],
                                  provider_common.resolved_supervisor_config_digest(base))
-                self.assertEqual(expected["supervisor"]["endpoint"],
+                self.assertEqual(object_at(expected, "supervisor")["endpoint"],
                                  "unix:" + str(base / "run" / "p.sock"))
                 raise SetupBoundary("daemon creation boundary reached")
 
@@ -402,8 +408,8 @@ class InspectionDriverSetupTests(unittest.TestCase):
                     patch.object(inspection_acceptance, "DirectoryOwner",
                                  side_effect=lambda: DirectoryPinOwner(self)):
                 driver = inspection_acceptance.InspectionAcceptance(args)
-                driver.ops.direct = direct
-                driver.processes.start = before_daemon
+                self.enterContext(patch.object(driver.ops, "direct", side_effect=direct))
+                self.enterContext(patch.object(driver.processes, "start", side_effect=before_daemon))
                 with self.assertRaises(SetupBoundary):
                     driver.setup()
 

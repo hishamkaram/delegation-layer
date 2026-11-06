@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import unittest
+from typing import TypedDict
+from scripts.acceptance_tests.record_fixtures import array_at, object_at
 
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer, _compact
 from scripts.delegate_acceptance.workspaces.scenarios.policy import validate_capacity_lifetime_proof
@@ -13,11 +15,29 @@ from scripts.delegate_acceptance.workspaces.scenarios.policy import validate_cap
 ROOT_ID = "f" * 32
 
 
+class LifetimeFixture(TypedDict):
+    intent: dict[str, object]
+    registration: dict[str, object]
+    worker: dict[str, object]
+    worker_wait: dict[str, object]
+    termination: dict[str, object]
+    launches: list[dict[str, object]]
+
+
+class CapacityFixture(TypedDict):
+    task_ids: list[str]
+    lease_proof: dict[str, object]
+    overlap: dict[str, object]
+    closure: dict[str, object]
+    settled: list[dict[str, object]]
+    released: list[dict[str, object]]
+
+
 def _sha(index: int) -> str:
     return f"{index:064x}"
 
 
-def _lifetime_records(identity: str, index: int) -> dict[str, object]:
+def _lifetime_records(identity: str, index: int) -> LifetimeFixture:
     owner_sha = _sha(index + 1)
     registration_sha = _sha(index + 1001)
     scope_plan = "scope-plan-" + identity
@@ -61,13 +81,13 @@ def _lifetime_records(identity: str, index: int) -> dict[str, object]:
     }
 
 
-def _capacity_evidence(count: int) -> dict[str, object]:
+def _capacity_evidence(count: int) -> CapacityFixture:
     task_ids = [f"{index:032x}" for index in range(1, count + 1)]
     lease_records = []
     closure_tasks = {}
     workspace_operations = {}
-    settled = []
-    released = []
+    settled: list[dict[str, object]] = []
+    released: list[dict[str, object]] = []
     for index, task_id in enumerate(task_ids):
         lifetime = _lifetime_records(task_id, index)
         intent = lifetime["intent"]
@@ -75,6 +95,8 @@ def _capacity_evidence(count: int) -> dict[str, object]:
         worker = lifetime["worker"]
         scope_plan = intent["scope_plan"]
         scope_id = registration["scope_id"]
+        if not isinstance(scope_plan, str) or not isinstance(scope_id, str):
+            raise AssertionError("fixture scope identifiers must be strings")
         lease_records.append({
             "root_id": ROOT_ID,
             "task_id": task_id,
@@ -138,7 +160,7 @@ def _capacity_evidence(count: int) -> dict[str, object]:
     }
 
 
-def _validate(evidence: dict[str, object]) -> None:
+def _validate(evidence: CapacityFixture) -> None:
     validate_capacity_lifetime_proof(
         evidence["task_ids"], evidence["lease_proof"], evidence["overlap"],
         evidence["closure"], evidence["settled"], evidence["released"],
@@ -172,51 +194,60 @@ class CapacityProofTests(unittest.TestCase):
 
         payload = finalizer._payload("passed", "fixture", {"authorized": True})
         recorded = payload["details"]
-        recorded_proof = recorded["native_proofs"][0]
-        self.assertEqual(len(recorded_proof["lifetime_owner_proof"]["counted_tasks"]), 200)
+        recorded_proof = array_at(recorded, "native_proofs")[0]
+        self.assertEqual(len(array_at(recorded_proof, "lifetime_owner_proof", "counted_tasks")), 200)
         self.assertEqual(
-            {item["task_id"] for item in recorded_proof["shared_live_overlap"]["live_lease_members"]},
+            {object_at(item)["task_id"] for item in array_at(recorded_proof, "shared_live_overlap", "live_lease_members")},
             set(evidence["task_ids"]),
         )
-        self.assertEqual(set(recorded_proof["lifetime_closure"]["tasks"]), set(evidence["task_ids"]))
-        self.assertEqual(len(recorded_proof["lifetime_closure"]["workspace"]), 200)
+        self.assertEqual(set(object_at(recorded_proof, "lifetime_closure", "tasks")), set(evidence["task_ids"]))
+        self.assertEqual(len(object_at(recorded_proof, "lifetime_closure", "workspace")), 200)
         self.assertEqual(
-            recorded_proof["shared_live_overlap"]["started_unix_ns"], 100,
+            object_at(recorded_proof, "shared_live_overlap")["started_unix_ns"], 100,
         )
+
+    def test_unhashable_scope_values_are_reported_as_invalid_evidence(self) -> None:
+        for field in ("scope_kind", "assurance"):
+            for invalid in ([], {}):
+                evidence = _capacity_evidence(1)
+                object_at(evidence, "lease_proof", "counted_tasks", 0)[field] = invalid
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaisesRegex(RuntimeError, "omitted native scope assurance"):
+                        _validate(evidence)
 
     def test_rejects_a_missing_counted_task_owner_record(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["lease_proof"]["counted_tasks"].pop()
+        array_at(evidence, "lease_proof", "counted_tasks").pop()
         with self.assertRaisesRegex(RuntimeError, "lease proof task set is incomplete"):
             _validate(evidence)
 
     def test_rejects_a_missing_counted_task_closure(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["closure"]["tasks"].pop(evidence["task_ids"][-1])
+        object_at(evidence, "closure", "tasks").pop(evidence["task_ids"][-1])
         with self.assertRaisesRegex(RuntimeError, "closure task set is incomplete"):
             _validate(evidence)
 
     def test_rejects_an_incomplete_shared_live_lease_interval(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["overlap"]["live_lease_members"].pop()
+        array_at(evidence, "overlap", "live_lease_members").pop()
         with self.assertRaisesRegex(RuntimeError, "live lease cohort is incomplete"):
             _validate(evidence)
 
     def test_rejects_owner_proof_detached_from_native_scope_records(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["lease_proof"]["counted_tasks"][0]["scope_id_sha256"] = _sha(9999)
+        object_at(evidence, "lease_proof", "counted_tasks", 0)["scope_id_sha256"] = _sha(9999)
         with self.assertRaisesRegex(RuntimeError, "differs from its closed task proof"):
             _validate(evidence)
 
     def test_rejects_overlap_interval_that_does_not_enclose_owner_probe(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["overlap"]["ended_unix_ns"] = 250
+        object_at(evidence, "overlap")["ended_unix_ns"] = 250
         with self.assertRaisesRegex(RuntimeError, "shared live-overlap interval is incomplete"):
             _validate(evidence)
 
     def test_rejects_compacted_closure_markers_and_overbound_nesting(self) -> None:
         evidence = _capacity_evidence(1)
-        evidence["closure"]["tasks"][evidence["task_ids"][0]]["worker_wait"]["nested"] = (
+        object_at(evidence, "closure", "tasks", evidence["task_ids"][0], "worker_wait")["nested"] = (
             "<depth-limit>"
         )
         with self.assertRaisesRegex(RuntimeError, "compacted evidence"):
@@ -230,7 +261,7 @@ class CapacityProofTests(unittest.TestCase):
 
     def test_rejects_missing_per_task_owner_lock_probe(self) -> None:
         evidence = _capacity_evidence(2)
-        evidence["overlap"]["owner_lock_probe_task_ids"].pop()
+        array_at(evidence, "overlap", "owner_lock_probe_task_ids").pop()
         with self.assertRaisesRegex(RuntimeError, "owner-lock probes"):
             _validate(evidence)
 

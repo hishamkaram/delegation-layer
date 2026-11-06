@@ -37,9 +37,9 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
             pueue_version="4.0.4", pueued_version="4.0.4", **owned)
 
     def produce(self, diagnostics=None):
-        meta = {"provider_executable": "/admitted/provider", "provider_version": ""}
+        meta: dict[str, object] = {"provider_executable": "/admitted/provider", "provider_version": ""}
         for task_id in self.tasks.values():
-            started = {"provider_executable": "/actual/provider", **(diagnostics or {})}
+            started: dict[str, object] = {"provider_executable": "/actual/provider", **(diagnostics or {})}
             identity = self.bindings.record(task_id, meta, Path("/admitted/provider"),
                                              launch_evidence=(started, dict(started)))
             if task_id == self.task_id:

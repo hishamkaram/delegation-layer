@@ -1,11 +1,12 @@
 """Hermetic oracles for a native acceptance behavior cohort."""
+from argparse import Namespace
 import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import acceptance_supervisor_common as supervisor_common
 from scripts import acceptance_native as entry
@@ -42,7 +43,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                           dict(operation.numeric_ids)))
             return True
 
-        operation.ops = SimpleNamespace(
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
             root_id=root,
             tasks={"fresh": task},
             labels={"fresh": f"delegate:{root}:{task}"},
@@ -50,7 +51,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             dispatch_attempts={task},
             bind_supervisor=bind_supervisor,
             retain_failure_ownership=retain_failure_ownership,
-        )
+        ), create=True))
 
         self.assertTrue(operation.safe_shutdown())
         self.assertTrue(operation.closed)
@@ -66,12 +67,12 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.tasks = {}
         operation.numeric_ids = {}
         retained = []
-        operation.ops = SimpleNamespace(
+        self.enterContext(patch.object(operation, "ops", SimpleNamespace(
             root_id=None,
             tasks={}, labels={}, numbers={}, dispatch_attempts=set(),
             bind_supervisor=lambda *_args: None,
             retain_failure_ownership=lambda: retained.append(True) or False,
-        )
+        ), create=True))
 
         self.assertFalse(operation.safe_shutdown())
         self.assertEqual(retained, [True])
@@ -111,10 +112,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     processes.start("pueued", ["/bin/sh"], cwd,
                                     on_spawned=operation._adopt_daemon)
 
-            self.assertIs(operation.daemon, processes.entries[0])
-            self.assertEqual(operation.daemon.pid, 702)
-            operation.daemon.process.returncode = 0
-            operation.daemon.poll()
+            daemon = processes.entries[0]
+            self.assertIs(operation.daemon, daemon)
+            self.assertEqual(daemon.pid, 702)
+            child = daemon.process
+            if child is None:
+                self.fail("the adopted daemon must retain its child handle")
+            child.returncode = 0
+            daemon.poll()
 
     def test_failure_cleanup_shuts_down_daemon_adopted_before_transfer_failure(self):
         with tempfile.TemporaryDirectory(prefix="native-owner-transfer-unit-") as directory:
@@ -233,7 +238,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             sentinel = live_parent / "preexisting"
             sentinel.write_text("keep")
             delegate, runner = adjacent_runner_bundle(root)
-            args = SimpleNamespace(
+            args = Namespace(
                 provider="pi:json", mode="read-only", scenario="read-only",
                 discover_models=False, output=str(output), delegate=str(delegate),
                 runner=str(runner), pueue="/bin/sh", pueued="/bin/sh",
@@ -262,7 +267,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             output = root / "evidence"
             output.mkdir()
             home = root / "home"
-            args = SimpleNamespace(
+            args = Namespace(
                 provider="pi:json", mode="read-only", scenario="read-only",
                 discover_models=False, output=str(output), delegate="/bin/sh",
                 runner="/bin/sh", pueue="/bin/sh", pueued="/bin/sh",
@@ -297,10 +302,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.workspace = base.directory / "workspace"
             operation.owned_directories = (base, raw)
             track_directory_pins(self, operation.owned_directories)
-            operation.processes = SimpleNamespace(capture_root=raw)
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw), create=True))
             calls = []
-            operation._write_failure_diagnostics = lambda: calls.append("diagnostics") or False
-            operation.safe_shutdown = lambda: calls.append("shutdown") or False
+            operation._write_failure_diagnostics = Mock(side_effect=lambda: calls.append("diagnostics") or False)
+            operation.safe_shutdown = Mock(side_effect=lambda: calls.append("shutdown") or False)
             with patch.object(lifecycle_impl, "finalize_acceptance_artifacts", return_value=False) as finalize:
                 self.assertFalse(operation.finalize(False))
             self.assertEqual(calls, ["diagnostics", "shutdown"])
@@ -328,7 +333,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
             operation.owned_directories = (base_parent, base_token, raw_token)
             track_directory_pins(self, operation.owned_directories)
-            operation.processes = SimpleNamespace(capture_root=raw_token)
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw_token), create=True))
             (operation.base / "state").mkdir()
             (operation.base / "state" / "record").write_text("disposable")
             operation.closed = True
@@ -361,7 +366,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
             operation.owned_directories = (base_parent, base_token, raw_token)
             track_directory_pins(self, operation.owned_directories)
-            operation.processes = SimpleNamespace(capture_root=raw_token)
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw_token), create=True))
             operation.closed = False
 
             self.assertFalse(operation.finalize(False))
@@ -371,8 +376,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "retained")
             self.assertFalse(receipt["supervisor_shutdown_observed"])
 
-    @staticmethod
-    def _failure_operation(root: Path) -> tuple[object, Path, str]:
+    def _failure_operation(self, root: Path) -> tuple[gate.NativeAcceptance, Path, str]:
         operation = object.__new__(gate.NativeAcceptance)
         operation.success_candidate = None
         operation.base_parent = root / "delegation-layer-live"
@@ -396,7 +400,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         owner.create("model discovery state", operation.models_state, operation.base)
         raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
         operation.owned_directories = owner.transfer()
-        operation.processes = SimpleNamespace(capture_root=raw_token)
+        self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw_token), create=True))
         (operation.state / "tasks").mkdir()
         operation.closed = True
         operation.provider = "pi:json"
@@ -720,7 +724,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             sentinel = captures / "keep.txt"
             sentinel.write_text("pre-existing capture")
             operation.owned_directories = (base_token,)
-            operation.processes = SimpleNamespace(capture_root=None)
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=None), create=True))
             operation.closed = True
             operation.success_receipt = {"gate": "acceptance-native", "status": "passed"}
 
@@ -739,7 +743,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             task_id = "d" * 32
             (models_state / "inspections" / task_id).mkdir(parents=True)
             operation = object.__new__(gate.NativeAcceptance)
-            operation.processes = SimpleNamespace()
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(), create=True))
             operation.delegate = root / "delegate"
             operation.runner = root / "runner"
             operation.pueue = root / "pueue"
@@ -747,10 +751,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.output = root / "output"
             operation.model_discovery_task_id = None
             operation.models_root_id = None
-            operation.ops = SimpleNamespace(managed_runner=True, runner_placement=BUNDLE_RUNNER)
+            self.enterContext(patch.object(operation, "ops", SimpleNamespace(managed_runner=True, runner_placement=BUNDLE_RUNNER), create=True))
             cleanup = gate.ModelDiscoveryCleanupOps(operation)
             self.assertEqual((cleanup.managed_runner, cleanup.runner_placement), (True, BUNDLE_RUNNER))
-            status = {"tasks": {}, "groups": {}}
+            status: dict[str, object] = {"tasks": {}, "groups": {}}
             with patch.object(gate.NativeTaskOps, "failure_queue_finished", return_value=True):
                 self.assertTrue(cleanup.failure_queue_finished(status))
             self.assertEqual(cleanup.root_id, "c" * 32)
@@ -771,18 +775,18 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.delegate = root / "delegate"
             operation.runner = root / "runner"
             operation.pueue = root / "pueue"
-            operation.processes = SimpleNamespace()
+            self.enterContext(patch.object(operation, "processes", SimpleNamespace(), create=True))
             operation.tasks = {}
             operation.numeric_ids = {}
 
             def unexpected_owner(*_args):
                 raise AssertionError("ordinary cleanup owner was selected")
 
-            operation.ops = SimpleNamespace(
+            self.enterContext(patch.object(operation, "ops", SimpleNamespace(
                 root_id=None, tasks={}, labels={}, numbers={}, dispatch_attempts=set(),
                 managed_runner=True, runner_placement=BUNDLE_RUNNER,
                 bind_supervisor=unexpected_owner, retain_failure_ownership=unexpected_owner,
-            )
+            ), create=True))
             with patch.object(gate.ModelDiscoveryCleanupOps, "retain_failure_ownership",
                               return_value=True) as retain:
                 self.assertTrue(operation.safe_shutdown())

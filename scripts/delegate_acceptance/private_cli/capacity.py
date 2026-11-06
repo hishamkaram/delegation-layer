@@ -107,6 +107,8 @@ def _run_capacity_case(case: CapacityRequest):
         if case.old_layout.exists() or case.old_layout.is_symlink():
             raise RuntimeError("old package layout deletion was not verified: " + str(case.old_layout))
         _observe_upgraded_status_burst(case, evidence, receipts, responses)
+        if held.cohort is None:
+            raise RuntimeError("capacity proof has no live lease cohort")
         held.cohort.assert_live()
         case.release_gate.release()
         capacity_proof["gate_opened_after_proof"] = True
