@@ -595,10 +595,11 @@ def shutdown_terminal_daemon(pending: "SupervisorCleanup", deadline, *, capture_
     def shut_down(closure):
         require(closure.get("root_id") == pending["root_id"],
                 "terminal daemon closure changed its originally selected root")
-        if "daemon" not in pending:
+        retained = "daemon" in pending
+        if not retained:
             pending["daemon"] = private_shutdown_evidence(pending["config"])
         evidence = pending["daemon"]
-        if not private_shutdown_closed(evidence, deadline, capture_root=capture_root):
+        if not (retained and private_shutdown_closed(evidence, deadline, capture_root=capture_root)):
             shutdown_observed_supervisor(pending["client"], pending["config"], pending["env"], evidence,
                                          deadline, capture_root=capture_root)
         return closure

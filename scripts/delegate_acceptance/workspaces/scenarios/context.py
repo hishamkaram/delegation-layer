@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import subprocess
 import threading
 import time
 
@@ -257,7 +258,7 @@ class WorkspaceContext:
                     pending, [pending], capture_root=self.root_token, disposal=disposal, deadline=deadline)
 
                 daemon_closed = True
-            except (RuntimeError, OSError) as error:
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 daemon_closed = False
                 daemon_error = str(error)
         process_pending = self.processes.pending()

@@ -813,7 +813,7 @@ class PendingSupervisorCloserTests(unittest.TestCase):
             self.pending, self.ledger, capture_root=lifetime.capture_token, disposal=disposal,
             reader=None, deadline=None, closed_roots=lifetime.closed_roots)
         self.assertEqual(len(errors), 1)
-        self.assertIn("packaged default supervisor shutdown remained unverified", str(errors[0]))
+        self.assertIn("private supervisor shutdown remained unverified", str(errors[0]))
 
 
 
@@ -1156,7 +1156,7 @@ class TerminalOwnerShutdownTests(ProbeCase):
                                           failure, lifetime, receipt, False)
         self.stop.assert_called_once()
         self.assertEqual(self.daemon.call_count, 2)
-        self.assertEqual(output.getvalue().count("packaged default supervisor shutdown remained unverified"), 1)
+        self.assertEqual(output.getvalue().count("private supervisor shutdown remained unverified"), 1)
         self.assertIs(self.cleanup["owner"], original)
         self.assertEqual(lifetime.supervisor_cleanups, [self.cleanup])
         self.assertIs(written.call_args.args[2], failure)

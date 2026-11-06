@@ -239,6 +239,7 @@ class NestedOwnerCleanupTests(unittest.TestCase):
 
         self.patch("private_shutdown_evidence", target=supervisor, return_value=(27182, self.config, (1, 2)))
         self.patch("private_shutdown_closed", target=supervisor, return_value=False)
+        self.strict_shutdown = supervisor.shutdown_observed_supervisor
         self.shutdown = self.patch("shutdown_observed_supervisor", target=supervisor, side_effect=shutdown)
 
     def patch(self, name, *, target=nested_cleanup, **options):
@@ -432,6 +433,32 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         self.case.command.assert_called_once()
         self.case.native.assert_not_called()
         self.assert_retained()
+
+    def test_daemon_already_dead_on_first_attempt_cannot_pass_terminal_cleanup(self):
+        self.patch("private_shutdown_closed", target=supervisor, return_value=True)
+        self.patch("private_daemon_process_gone", target=supervisor, return_value=True)
+        self.shutdown.side_effect = self.strict_shutdown
+        with self.assertRaisesRegex(RuntimeError, "private supervisor PID disappeared before shutdown"):
+            self.close()
+        self.shutdown.assert_called_once()
+        self.case.native.assert_not_called()
+        self.assert_retained()
+
+    def test_terminal_cleanup_uses_validated_bound_client_and_environment(self):
+        client = self.fixture.base / "bound-install" / "pueue"
+        environment = {"HOME": str(self.fixture.base / "bound-home")}
+        self.selected_client.return_value = (client, environment)
+        self.shutdown.side_effect = [RuntimeError("shutdown transport failed"), None]
+        with self.assertRaisesRegex(RuntimeError, "shutdown transport failed"):
+            self.close()
+        self.assertEqual(self.shutdown.call_args.args[:3], (client, self.config, environment))
+        self.assert_retained()
+        self.selected_client.return_value = (self.fixture.base / "new-install" / "pueue", {})
+        self.close()
+        self.case.command.assert_called_once()
+        self.assertEqual(self.shutdown.call_count, 2)
+        self.assertEqual(self.shutdown.call_args.args[:3], (client, self.config, environment))
+        self.assertIn(self.state, self.lifetime.closed_roots)
 
     def test_live_unknown_or_failed_native_observation_retains_entry_without_another_stop(self):
         for observation in ({"present": True, "identity_matches": True},

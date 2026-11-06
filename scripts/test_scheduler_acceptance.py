@@ -821,15 +821,19 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         case = self.case(service)
         self.lifetime.private_config = self.state / ".supervisor" / "pueue.yml"
         self.lifetime.old_libexec = self.base / "libexec"
+        self.lifetime.old_install = self.base / "selected-install"
+        self.lifetime.delegate = self.base / "upgraded-install" / "delegate"
         events = []
         with (patch.object(service, "stop", side_effect=lambda: events.append("stop")),
               patch.object(case, "discover", side_effect=lambda: events.append("discover")),
-              patch.object(application, "shutdown_terminal_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")),
+              patch.object(application, "shutdown_terminal_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")) as shutdown,
               patch.object(service, "retire", side_effect=lambda: events.append("retire")),
               patch.object(application, "finalize_fixture", side_effect=lambda *args: events.append("finalize"))):
             application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
                                     receipt=case.receipt, failure=None)
         self.assertEqual(events, ["stop", "discover", "daemon", "retire", "finalize"])
+        self.assertEqual(shutdown.call_args.args[:2],
+                         (self.lifetime.old_install / "delegate", self.lifetime.old_libexec / "pueue"))
 
     def test_collection_uses_existing_outcome_oracle_and_exact_task_closure(self):
         case = self.case(self.service())

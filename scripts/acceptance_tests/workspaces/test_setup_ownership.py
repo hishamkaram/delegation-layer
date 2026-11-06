@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +13,7 @@ import scripts.delegate_acceptance.workspaces.scenarios.application as applicati
 import scripts.delegate_acceptance.directories.operations as directories_operations
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
+import scripts.delegate_acceptance.private_cli.root_cleanup as private_cli_root_cleanup
 import scripts.delegate_acceptance.processes.operations as processes_operations
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
@@ -444,7 +446,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         endpoint = context.private_config.parent / "run" / "pueue.sock"
         native = mock.Mock()
         native.evidence.return_value = (4242, endpoint, (1, 2))
-        native.gone.side_effect = [False, False, True]
+        native.gone.side_effect = [False, True]
         native.closed.return_value = True
         native.command.side_effect = shutdown_command
         output = self.home / "receipt.json"
@@ -512,6 +514,31 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             (cleanup["lifetime_closed"], cleanup["daemon_closed"], cleanup["authorized"]),
             (True, False, False))
         self.assertIn("transition.lock", cleanup["daemon_error"])
+
+    def test_terminal_stop_timeout_retains_the_owner_obligation_in_cleanup_evidence(self):
+        events = []
+        context, _cohort = self._daemon_context(events)
+        fault = subprocess.TimeoutExpired([str(context.delegate), "supervisor", "stop-owner"], 1)
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", return_value=closed),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", side_effect=fault) as stop,
+            mock.patch.object(private_cli_supervisor, "pueue_command") as daemon,
+            mock.patch.object(private_cli_root_cleanup, "remove_private_acceptance_root") as remove,
+        ):
+            cleanup = context.cleanup("failed")
+        stop.assert_called_once()
+        daemon.assert_not_called()
+        remove.assert_not_called()
+        self.assertEqual((cleanup["authorized"], cleanup["lifetime_closed"], cleanup["daemon_closed"]),
+                         (False, True, False))
+        self.assertEqual(cleanup["daemon_error"], str(fault))
+        self.assertEqual(cleanup["terminal_cleanup"], {
+            "state": str(context.state), "config": str(context.private_config),
+            "root_id": ROOT_ID, "owner": "unresolved",
+        })
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
 
     def test_state_renamed_after_authorized_shutdown_is_still_rechecked_and_the_root_retained(self):
         events = []

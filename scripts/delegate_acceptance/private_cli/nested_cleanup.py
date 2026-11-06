@@ -164,6 +164,8 @@ def close_root(case, state, task_ids, deadline, disposal):
         case.lifetime.supervisor_cleanups, Path(case.configuration["delegate"]), client, config, environment,
         state=state, task_ids=task_ids)
     if "owner" not in pending:
+        if client is not None:
+            pending.update(client=client, env=environment)
         observer = public_status_observer(Path(case.configuration["delegate"]), state, case.lifetime.env,
                                           capture_root=case.lifetime.capture_token)
         closure = await_observed_disposal_readiness(state, tuple(task_ids), shutdown_custody_roots(state, case.lifetime.env),

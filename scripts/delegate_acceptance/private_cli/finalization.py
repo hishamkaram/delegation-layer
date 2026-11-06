@@ -1,6 +1,7 @@
 """Fixture release, managed closure, shutdown, and exact owned-root finalization."""
 
 from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.files import path_present
 
 
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
@@ -205,7 +206,7 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime, *, disposal=None
                 )
             except BaseException as cleanup_error:
                 cleanup_errors.append(
-                    RuntimeError("packaged default supervisor shutdown remained unverified: " + str(cleanup_error))
+                    RuntimeError("private supervisor shutdown remained unverified: " + str(cleanup_error))
                 )
     return frozenset(root for root, handed_off in clean_handoffs.items() if handed_off)
 
@@ -305,6 +306,10 @@ def shutdown_primary_supervisor(
         client = cleanup_client
         if client is not None:
             try:
+                if cleanup_state is None:
+                    raise RuntimeError("private supervisor cleanup has no state root")
+                if not cleanup_task_ids and not path_present(cleanup_state / "root.json"):
+                    return
                 shutdown_remaining(deadline)
                 shutdown_terminal_private_supervisor(
                     cleanup_delegate,

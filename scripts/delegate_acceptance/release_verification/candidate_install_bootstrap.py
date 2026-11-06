@@ -248,9 +248,10 @@ def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
     facts["cleanup_failures"] = cleanup_faults
     for pending in tuple(ledger):
         try:
-            if capture is None or shutdown_pending_private_supervisor(
-                    pending, ledger, capture_root=capture, disposal=disposal) is None:
+            if capture is None:
                 cleanup_faults.append({"type": "SupervisorUnverified", "message": "no shutdown was verified"})
+            else:
+                shutdown_pending_private_supervisor(pending, ledger, capture_root=capture, disposal=disposal)
         except Exception as cleanup_error:
             cleanup_faults.append(_fault(cleanup_error))
         except BaseException as interrupted:

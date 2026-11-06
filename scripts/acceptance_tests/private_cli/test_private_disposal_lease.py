@@ -400,6 +400,67 @@ class DisposalLeaseIdentityTests(DisposalLeaseFixture):
 
 
 class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
+    def test_unattempted_setup_without_a_root_record_adds_no_terminal_obligation(self):
+        lifetime = FixtureLifetime(base=self.root, private_config=self.supervisor / "pueue.yml")
+        failure = RuntimeError("package setup failed before selecting Delegate")
+        receipt = Mock()
+        args = SimpleNamespace(scenario="setup", output=self.base / "receipt.json", pueue=Path(__file__))
+        finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+        receipt.write.assert_called_once()
+        result, evidence, error = receipt.write.call_args.args
+        self.assertEqual(result, "FAIL")
+        self.assertIs(error, failure)
+        self.assertEqual(evidence["status"], "retained")
+        self.assertEqual(evidence["pending_supervisor_count"], 0)
+        self.assertEqual(evidence["pending_terminal_roots"], [])
+        self.assertEqual(lifetime.supervisor_cleanups, [])
+
+    def test_attempted_setup_without_a_root_record_retains_its_terminal_obligation(self):
+        lifetime = FixtureLifetime(base=self.root, delegate=self.base / "delegate",
+                                   private_config=self.supervisor / "pueue.yml", attempted_task_ids=["a" * 32])
+        failure = RuntimeError("admission failed")
+        receipt = Mock()
+        args = SimpleNamespace(scenario="setup", output=self.base / "receipt.json", pueue=Path(__file__))
+        with patch.object(supervisor.commands, "run_json") as stop:
+            finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+        stop.assert_not_called()
+        self.assertEqual(receipt.write.call_args.args[1]["status"], "failed")
+        self.assertEqual(receipt.write.call_args.args[1]["pending_supervisor_count"], 1)
+        self.assertEqual(lifetime.supervisor_cleanups[0]["task_ids"], ["a" * 32])
+        self.assertIs(receipt.write.call_args.args[2], failure)
+
+    def test_root_record_without_private_config_still_stops_its_owner(self):
+        root_id = "a" * 32
+        (self.state / "root.json").write_text("{}")
+        lifetime = FixtureLifetime(base=self.root, delegate=self.base / "delegate",
+                                   private_config=self.supervisor / "pueue.yml")
+        failure = RuntimeError("setup failed after owner admission")
+        receipt = Mock()
+        args = SimpleNamespace(scenario="setup", output=self.base / "receipt.json", pueue=Path(__file__))
+        with patch.object(supervisor, "validate_managed_lifetime_closure", return_value={
+                "root_id": root_id, "tasks": {}, "inspections": {}}), \
+                patch.object(supervisor.commands, "run_json", return_value={
+                    "root_id": root_id, "supervisor_owner": {"action": "stop-owner", "state": "not_initialized"}}) as stop:
+            finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+        stop.assert_called_once()
+        self.assertEqual(stop.call_args.args[2], ["--root", str(self.state), "supervisor", "stop-owner", "--json"])
+        self.assertEqual(receipt.write.call_args.args[1]["status"], "retained")
+        self.assertEqual(lifetime.supervisor_cleanups, [])
+
+    def test_unknown_root_record_presence_is_a_reported_cleanup_fault(self):
+        for fault in (PermissionError("root record unreadable"), NotADirectoryError("state parent replaced")):
+            with self.subTest(error=type(fault).__name__):
+                lifetime = FixtureLifetime(base=self.root, private_config=self.supervisor / "pueue.yml")
+                failure = RuntimeError("setup failed")
+                receipt = Mock()
+                args = SimpleNamespace(scenario="setup", output=self.base / "receipt.json", pueue=Path(__file__))
+                with patch.object(finalization, "path_present", side_effect=fault), \
+                        patch.object(finalization, "shutdown_terminal_private_supervisor") as terminal:
+                    finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+                terminal.assert_not_called()
+                self.assertEqual(receipt.write.call_args.args[1]["status"], "failed")
+                self.assertIs(receipt.write.call_args.args[2], failure)
+
     def owned_root_lifetime(self, second):
         """Return a lifetime owning the real private root with both held states as its managed roots."""
         lifetime = FixtureLifetime(base=self.root, managed_state_roots=[(self.state, []), (second, [])])
