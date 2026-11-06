@@ -14,13 +14,15 @@ import (
 
 const maxFrameSize = 16 * 1024
 
+// BuildID echoes any historical subject data; it is never a program digest
+// computed or required by the current child. Full frame confirmation remains exact.
 type childFrame struct {
 	Kind     string   `json:"kind"`
 	Protocol int      `json:"protocol"`
 	RootID   string   `json:"root_id"`
 	Epoch    string   `json:"epoch"`
 	Attempt  uint64   `json:"attempt"`
-	BuildID  string   `json:"build_id"`
+	BuildID  string   `json:"build_id,omitempty"`
 	Host     Identity `json:"host"`
 	Child    Identity `json:"child"`
 }

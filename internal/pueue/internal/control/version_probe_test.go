@@ -9,17 +9,23 @@ import (
 	"testing"
 )
 
-func TestPublishedPrivateProbeRebindsChangedResolution(t *testing.T) {
+func TestPublishedPrivateProbeKeepsPublishedResolution(t *testing.T) {
 	fixture, original := supervisorLeaseTestBind(t)
 	environment := []string{"HOME=" + filepath.Join(canonicalTemp(t), "new-home"), "PATH=" + os.Getenv("PATH")}
 	resolution, err := resolutionContext(environment)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var versions atomic.Int64
+	var versions, statuses atomic.Int64
 	options := Options{Resolution: &resolution, Environment: environment, Observer: func(event CommandEvent) {
-		if event.Stage == "entry" && slices.Contains(event.Argv, "--version") {
+		if event.Stage != "entry" {
+			return
+		}
+		if slices.Contains(event.Argv, "--version") {
 			versions.Add(1)
+		}
+		if slices.Contains(event.Argv, "status") {
+			statuses.Add(1)
 		}
 	}}
 	client, ready, err := ProbePrivate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
@@ -27,25 +33,17 @@ func TestPublishedPrivateProbeRebindsChangedResolution(t *testing.T) {
 	if err != nil || !ready || client == nil {
 		t.Fatalf("unchanged absolute endpoint rejected after resolution change: ready=%t err=%v", ready, err)
 	}
-	if client.Binding().Endpoint != original.Binding().Endpoint || versions.Load() != 1 {
-		t.Fatalf("changed resolution did not use normal binding: endpoint=%s versions=%d", client.Binding().Endpoint, versions.Load())
+	if client.Binding() != original.Binding() || client.RuntimeBinding() != original.RuntimeBinding() || versions.Load() != 0 || statuses.Load() != 1 {
+		t.Fatalf("published resolution changed or skipped readiness: binding=%+v runtime=%+v versions=%d statuses=%d", client.Binding(), client.RuntimeBinding(), versions.Load(), statuses.Load())
 	}
 }
 
 func TestPublishedPrivateProbeKeepsPublishedPairWhenSuccessorIsStaged(t *testing.T) {
 	fixture, original := supervisorLeaseTestBind(t)
-	clientData, err := os.ReadFile(fixture.clientPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	daemonData, err := os.ReadFile(fixture.daemonPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	candidateClient := filepath.Join(canonicalTemp(t), "pueue-successor")
 	candidateDaemon := filepath.Join(canonicalTemp(t), "pueued-successor")
-	writeExecutable(t, candidateClient, string(append(clientData, []byte("\n# staged successor client\n")...)))
-	writeExecutable(t, candidateDaemon, string(append(daemonData, []byte("\n# staged successor daemon\n")...)))
+	writeExecutable(t, candidateClient, privateClientFixture+"\n# staged successor client\n")
+	writeExecutable(t, candidateDaemon, privateDaemonFixture+"\n# staged successor daemon\n")
 	if candidateClient == original.Binding().ClientExecutable || candidateDaemon == original.Binding().DaemonExecutable {
 		t.Fatal("successor fixture did not change executable paths")
 	}
@@ -75,7 +73,7 @@ func TestPublishedPrivateProbeKeepsPublishedPairWhenSuccessorIsStaged(t *testing
 	}
 }
 
-func TestPublishedPrivateProbeReusesOnlyVerifiedExecutableVersion(t *testing.T) {
+func TestPublishedPrivateProbeAllowsCompatibleInstalledUpdates(t *testing.T) {
 	for _, changed := range []string{"none", "client", "daemon"} {
 		t.Run(changed, func(t *testing.T) {
 			assertPublishedPrivateProbeVersion(t, changed)
@@ -91,13 +89,11 @@ func assertPublishedPrivateProbeVersion(t *testing.T, changed string) {
 		if changed == "daemon" {
 			path = fixture.daemonPath
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
+		source := privateClientFixture
+		if changed == "daemon" {
+			source = privateDaemonFixture
 		}
-		if err = os.WriteFile(path, append(data, []byte("\n# changed bytes\n")...), 0o700); err != nil {
-			t.Fatal(err)
-		}
+		writeExecutable(t, path, source+"\n# compatible installed update\n")
 	}
 	var versions atomic.Int64
 	var statuses atomic.Int64
@@ -114,12 +110,8 @@ func assertPublishedPrivateProbeVersion(t *testing.T, changed string) {
 	}}
 	client, ready, err := ProbePrivate(t.Context(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
 	supervisorLeaseTestSettleClient(t, client, err)
-	if changed == "none" {
-		if err != nil || !ready || statuses.Load() != 1 {
-			t.Fatalf("verified probe must observe readiness: ready=%t statuses=%d err=%v", ready, statuses.Load(), err)
-		}
-	} else if ready {
-		t.Fatalf("changed %s accepted: ready=%t err=%v", changed, ready, err)
+	if err != nil || !ready || statuses.Load() != 1 {
+		t.Fatalf("compatible installed %s update lost readiness: ready=%t statuses=%d err=%v", changed, ready, statuses.Load(), err)
 	}
 	if versions.Load() != 0 {
 		t.Fatalf("published probe repeated version discovery: %d", versions.Load())

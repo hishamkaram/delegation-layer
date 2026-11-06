@@ -12,9 +12,39 @@ import subprocess
 import threading
 import time
 import uuid
+from pathlib import Path
+from scripts.delegate_acceptance.directories.operations import _open_parent_directory
 
 
 CAPTURE_START_LOCK = threading.Lock()
+
+
+@contextmanager
+def borrow_capture_root(path, expected_identity):
+    """Borrow the driver's pinned capture child while its managed fixture lives.
+
+    FixtureLifetime remains the directory owner and waits for canonical task
+    closure before deletion. The borrower only writes captures and closes pins.
+    """
+    path = Path(path)
+    parent_fd, parent_identity = _open_parent_directory(path.parent)
+    directory_fd = -1
+    borrowed = None
+    try:
+        directory_fd = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        observed = os.fstat(directory_fd)
+        require((observed.st_dev, observed.st_ino) == tuple(expected_identity), "borrowed capture identity changed")
+        borrowed = OwnedDirectory("borrowed nested captures", path, path.parent, tuple(expected_identity),
+                                  parent_identity, parent_fd, directory_fd)
+        borrowed.assert_live()
+        yield borrowed
+    finally:
+        if borrowed is not None:
+            borrowed.consume()
+        else:
+            if directory_fd >= 0:
+                os.close(directory_fd)
+            os.close(parent_fd)
 
 
 def _assert_capture_root(capture_root):
@@ -164,9 +194,12 @@ def run_captured_command(command, env, timeout, *, capture_root, deadline=None):
         raise
 
 
-def run_captured_text_command(command, env, timeout, *, capture_root):
+def run_captured_text_command(command, env, timeout, *, capture_root, deadline=None):
     """Run one control command through the shared file-backed capture owner."""
-    captured = run_captured_command(command, env, timeout, capture_root=capture_root)
+    if deadline is None:
+        captured = run_captured_command(command, env, timeout, capture_root=capture_root)
+    else:
+        captured = run_captured_command(command, env, timeout, capture_root=capture_root, deadline=deadline)
     return subprocess.CompletedProcess(
         captured.args, captured.returncode, captured.stdout.decode("utf-8"), captured.stderr.decode("utf-8")
     )

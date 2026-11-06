@@ -36,7 +36,7 @@ func NewOperationDeadline(t *testing.T, deadline time.Time) (*taskdir.Store, *wo
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID,
 		WorkspaceID: strings.Repeat("b", 32), OperationID: guardianfixture.TaskID,
 		Kind: workspace.OperationCapture, Subject: workspace.Subject{Kind: workspace.SubjectTask, ID: strings.Repeat("c", 32), SHA256: digest},
-		Deadline: deadline.UTC().Format(time.RFC3339Nano), WorkerExecutable: "/fixture/delegate-run", WorkerSHA256: digest,
+		Deadline: deadline.UTC().Format(time.RFC3339Nano), WorkerExecutable: "/fixture/delegate-run", ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
 		Supervisor: supervisorfixture.ContinuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
 	}
 	operation, err := workspace.OpenOperation(t.Context(), store, request)

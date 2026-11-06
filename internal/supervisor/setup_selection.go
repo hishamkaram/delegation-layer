@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -64,13 +65,26 @@ func AdmissionQueueRepairRunner(selection AdmissionSelection, runtime AdmissionO
 }
 
 func AdmissionSupervisorExecutablePair(selection AdmissionSelection, root string, runtime AdmissionOptions) (string, string, error) {
-	if selection.SavedSupervisor != nil && PrivateSupervisorExecutablesAvailable(selection.SavedSupervisor.ClientExecutable, selection.SavedSupervisor.DaemonExecutable) {
-		return selection.SavedSupervisor.ClientExecutable, selection.SavedSupervisor.DaemonExecutable, nil
+	if selection.ContinuationSource != (infrastructure.SavedBindingSource{}) {
+		client, daemon, found, err := publishedContinuationSupervisorPair(root, runtime.Lookup())
+		if err != nil || found {
+			return client, daemon, err
+		}
 	}
 	if selection.SavedSupervisor != nil {
-		return ResolvePrivateSupervisorExecutables(root, runtime.Lookup())
+		return ResolveRecoveryPrivateSupervisorExecutables(root, *selection.SavedSupervisor, runtime.Lookup())
 	}
-	// Fresh admission stages the active install as successor inventory. The
-	// completed publication remains the ordinary active-generation authority.
 	return ResolveCurrentPrivateSupervisorExecutables(root, runtime.Lookup())
+}
+
+// The published generation owns the recovery candidate.
+// Its recorded installation paths remain preferred, and missing
+// paths use canonical discovery. Selection grants no native launch authority.
+func publishedContinuationSupervisorPair(root string, lookup ExecutableLookup) (string, string, bool, error) {
+	published, found, err := pueue.ReadPrivateSupervisorBinding(root)
+	if err != nil || !found {
+		return "", "", found, err
+	}
+	client, daemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, published, lookup)
+	return client, daemon, true, err
 }

@@ -22,6 +22,17 @@ func TestRecordCodecPreservesCanonicalBytes(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("migration record bytes changed:\n got: %q\nwant: %q", got, want)
 	}
+	if task.ComputeSHA256(got) != "ebc5cc7ed7ab6f0757fbd0845d940287c47710538026426895f41e4f404237d6" {
+		t.Fatal("legacy migration record digest changed")
+	}
+	history, invalid := EncodeHistory(History{SchemaVersion: task.SchemaVersion, Migrations: []Record{record}})
+	if invalid != nil {
+		t.Fatal(invalid)
+	}
+	expectedHistory := `{"schema_version":1,"migrations":[` + strings.TrimSuffix(want, "\n") + "]}\n"
+	if string(history) != expectedHistory || task.ComputeSHA256(history) != "1a4bafef1f14aa43b2c2f3f99c0678c466bedc3779b0aa0de09f20fa32ebc2dd" {
+		t.Fatal("legacy history bytes or digest changed")
+	}
 	decoded, invalid := DecodeRecord(got)
 	if invalid != nil || decoded != record {
 		t.Fatalf("canonical migration record did not round trip: record=%+v invalid=%v", decoded, invalid)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -88,9 +89,9 @@ func generationBinding(root, label string) task.SupervisorRef {
 	base := filepath.Dir(pueue.PrivateConfigPath(root))
 	return task.SupervisorRef{
 		ClientExecutable:     filepath.Join(base, "pueue"),
-		ClientSHA256:         task.ComputeSHA256([]byte("client:" + label)),
+		ClientSHA256:         strings.Repeat("a", 64),
 		DaemonExecutable:     filepath.Join(base, "pueued"),
-		DaemonSHA256:         task.ComputeSHA256([]byte("daemon:" + label)),
+		DaemonSHA256:         strings.Repeat("b", 64),
 		ResolutionOS:         "linux",
 		ResolutionHome:       filepath.Join(root, "home"),
 		ResolutionDataLocal:  filepath.Join(root, "data-local"),

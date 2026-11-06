@@ -14,7 +14,7 @@ from scripts.acceptance_tests.record_fixtures import array_at, object_at
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_locks import probe_generation_lease
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
-from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
@@ -31,7 +31,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
             self.fixture.controls.directory,
             expected_inspection_binding_required=False,
             managed_runner=True,
-            runner_placement=STATE_INSTALLED_RUNNER,
+            runner_placement=BUNDLE_RUNNER,
         )
         self.brief = self.fixture.root.directory / "brief.md"
         self.brief.write_text("finite provider fixture\n")
@@ -103,8 +103,8 @@ class ModernContentionScenarioTests(unittest.TestCase):
         self.assertTrue(self.fixture.processes.finished_naturally())
         self.assertEqual(len(object_at(result, "source")), 4)
         self.assertNotEqual(
-            object_at(result, "installations", "baseline", "delegate")["sha256"],
-            object_at(result, "installations", "candidate", "delegate")["sha256"],
+            object_at(result, "installations", "baseline", "delegate")["path"],
+            object_at(result, "installations", "candidate", "delegate")["path"],
         )
 
     def test_failed_dispatch_preserves_primary_error_and_reports_unproven_cleanup(self):
@@ -133,7 +133,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
         self.cohort.remove_closed_fifos.assert_not_called()
         self.cohort.close.assert_called_once()
 
-    def test_candidate_admission_stages_inventory_without_replacing_active_generation(self):
+    def test_candidate_admission_preserves_the_warm_baseline_installed_generation(self):
         supervisor = self.fixture.state / ".supervisor"
         daemon_before = (supervisor / "daemon.identity.json").read_bytes()
         binding_before = (supervisor / "supervisor.identity.json").read_bytes()
@@ -143,7 +143,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
         self.assertEqual(len(responses), 2)
         self.assertEqual((supervisor / "daemon.identity.json").read_bytes(), daemon_before)
         self.assertEqual((supervisor / "supervisor.identity.json").read_bytes(), binding_before)
-        controls.assert_state_supervisor_pair(self.fixture.state, self.fixture.candidate.libexec)
+        controls.assert_state_supervisor_pair(self.fixture.state, self.fixture.baseline.libexec)
 
     def test_warm_admission_rejects_a_replaced_active_generation(self):
         original = controls.dispatch_modern_task
@@ -151,7 +151,11 @@ class ModernContentionScenarioTests(unittest.TestCase):
         def dispatch(tasks, installation, fixture, name, brief):
             response = original(tasks, installation, fixture, name, brief)
             if installation is self.fixture.candidate:
-                (tasks.state / ".supervisor" / "supervisor.identity.json").write_text("replaced")
+                publication = tasks.state / ".supervisor" / "supervisor.identity.json"
+                record = json.loads(publication.read_text())
+                record["binding"]["observed_version"] = "pueue 4.0.5"
+                publication.write_text(json.dumps(record))
+                controls.assert_state_supervisor_pair(tasks.state, self.fixture.baseline.libexec)
             return response
 
         with patch.object(controls, "dispatch_modern_task", side_effect=dispatch):

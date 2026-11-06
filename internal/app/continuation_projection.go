@@ -19,7 +19,7 @@ func continuationCommandResult(observed tasklifecycle.ContinuationResult) comman
 		code = 2
 	case tasklifecycle.ContinueWorkspace:
 		return managedContinuationFailure(observed.Root, response, observed.Failure)
-	case tasklifecycle.ContinueResolveRoot, tasklifecycle.ContinueLoadPredecessor, tasklifecycle.ContinueRunner, tasklifecycle.ContinueGenerateID, tasklifecycle.ContinueSupervisor, tasklifecycle.ContinueResources:
+	case tasklifecycle.ContinueResolveRoot, tasklifecycle.ContinueLoadPredecessor, tasklifecycle.ContinueRunner, tasklifecycle.ContinueGenerateID, tasklifecycle.ContinueResources:
 	}
 	return failed(response, observed.Failure, code)
 }

@@ -41,9 +41,8 @@ class TaskRecord(TypedDict):
 
 
 def binding_record(*, provider: str, mode: str, approval: str, codex: Path,
-                   codex_version: str, codex_digest: str, delegate: Path,
-                   delegate_digest: str, runner: Path, runner_digest: str,
-                   pueue: Path, pueue_digest: str, pueued: Path, pueued_digest: str,
+                   codex_version: str, delegate: Path, runner: Path,
+                   pueue: Path, pueued: Path,
                    pueue_version: str, pueued_version: str, pueue_base: Path,
                    pueue_config: Path, config_digest: str, state: Path,
                    workspace: Path, sibling: Path, probe: Path, probe_digest: str,
@@ -52,20 +51,16 @@ def binding_record(*, provider: str, mode: str, approval: str, codex: Path,
                    driver_digest: str) -> dict[str, object]:
     """Build the public acceptance binding from the owner's observed state."""
     return {
+        "schema_version": 2, "representation": "installed-paths",
         "provider": provider,
         "mode": mode,
         "approval": approval,
         "codex": str(codex),
         "codex_version": codex_version,
-        "codex_sha256": codex_digest,
         "delegate": str(delegate),
-        "delegate_sha256": delegate_digest,
         "runner": str(runner),
-        "runner_sha256": runner_digest,
         "pueue": str(pueue),
-        "pueue_sha256": pueue_digest,
         "pueued": str(pueued),
-        "pueued_sha256": pueued_digest,
         "pueue_version": pueue_version,
         "pueued_version": pueued_version,
         "pueue_base": str(pueue_base),

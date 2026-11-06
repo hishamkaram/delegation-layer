@@ -492,7 +492,7 @@ class CheckpointApplicationTests(unittest.TestCase):
     def test_checkpoint_is_a_selectable_scenario_without_capacity_options(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "receipt.json"
-            base = ["--delegate", "d", "--runner", "r", "--pueue", "p", "--pueued", "q", "--output", str(output)]
+            base = ["--source-root", str(application.REPOSITORY), "--output", str(output)]
             self.assertEqual(application._parse_args([*base, "--scenario", "checkpoint"]).scenario, "checkpoint")
             with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
                 application._parse_args([*base, "--scenario", "checkpoint", "--parallel-tasks", "3"])

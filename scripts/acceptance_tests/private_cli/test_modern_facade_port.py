@@ -82,7 +82,7 @@ class ModernFacadePortTests(unittest.TestCase):
 
         with (
             patch.object(controls, "run_modern_binary_contention", side_effect=operation),
-            patch.object(controls, "shutdown_private_supervisor") as shutdown,
+            patch.object(controls, "shutdown_terminal_private_supervisor") as shutdown,
         ):
             result = controls.run_prepared_modern_contention(
                 self.lifetime, self.installed, self.fixture.controls.directory, self.receipt
@@ -115,7 +115,7 @@ class ModernFacadePortTests(unittest.TestCase):
 
         with (
             patch.object(controls, "run_modern_binary_contention", side_effect=fail),
-            patch.object(controls, "shutdown_private_supervisor") as shutdown,
+            patch.object(controls, "shutdown_terminal_private_supervisor") as shutdown,
         ):
             with self.assertRaisesRegex(OSError, "injected operation failure"):
                 controls.run_prepared_modern_contention(

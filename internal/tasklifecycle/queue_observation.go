@@ -61,7 +61,7 @@ func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDi
 
 func observeStashedRecovery(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation, response *Observation) (pueue.Observation, error) {
 	recovered, err := RecoverStagedSubmission(ctx, root, td, client, observation)
-	if !supervisorcore.TaskMaintenanceCompletionRefused(err) {
+	if admissionCleanupFault(err) || !supervisorcore.TaskMaintenanceCompletionRefused(err) {
 		return recovered, err
 	}
 	// No enqueue was attempted. The actual read lease revalidates canonical

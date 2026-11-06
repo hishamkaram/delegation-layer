@@ -89,7 +89,7 @@ func newSavedPrivateBindingFixture(t *testing.T, state State) *savedPrivateBindi
 		ObservationTimeout: privateTestObservationTimeout,
 		Environment:        append(os.Environ(), "PRIVATE_CONTROL_MARKER="+fixture.controlLog),
 	}
-	if fixture.saved.DaemonExecutable == "" || fixture.saved.DaemonSHA256 == "" {
+	if fixture.saved.DaemonExecutable == "" || fixture.saved.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || fixture.saved.DaemonSHA256 != "" || fixture.saved.ClientSHA256 != "" {
 		t.Fatalf("private fixture binding lacks daemon provenance: %+v", fixture.saved)
 	}
 	if err := os.WriteFile(filepath.Join(privateRoot, "test-record-kill"), nil, 0o600); err != nil {
@@ -252,82 +252,43 @@ func TestBindSavedPrivateRefusesMissingRecordedDaemon(t *testing.T) {
 	assertPrivateDaemonStartCount(t, fixture.private.stateRoot, 1)
 }
 
-// Changed installation provenance remains an allowed observation; every
-// strict mutation gate still refuses it before any queue command.
-func TestBindSavedPrivateChangedProvenanceObservesButRefusesMutations(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		path   func(*savedPrivateBindingFixture) string
-		differ func(got, saved task.SupervisorRef) bool
-	}{
-		{
-			name: "modified daemon",
-			path: func(f *savedPrivateBindingFixture) string { return f.private.daemonPath },
-			differ: func(got, saved task.SupervisorRef) bool {
-				return got.DaemonExecutable == saved.DaemonExecutable && got.DaemonSHA256 != saved.DaemonSHA256 && got.ClientSHA256 == saved.ClientSHA256
-			},
-		},
-		{
-			name: "modified client",
-			path: func(f *savedPrivateBindingFixture) string { return f.private.clientPath },
-			differ: func(got, saved task.SupervisorRef) bool {
-				return got.ClientSHA256 != saved.ClientSHA256 && got.DaemonSHA256 == saved.DaemonSHA256
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestBindSavedPrivateCompatibleInstalledUpdatePreservesCanonicalGeneration(t *testing.T) {
+	for _, role := range []string{"client", "daemon"} {
+		t.Run(role, func(t *testing.T) {
 			fixture := newSavedPrivateBindingFixture(t, StateQueued)
-			appendPrivateSupervisorFile(t, tc.path(fixture), "\n# changed after the saved binding\n")
+			path := fixture.private.clientPath
+			if role == "daemon" {
+				path = fixture.private.daemonPath
+			}
+			appendPrivateSupervisorFile(t, path, "\n# compatible installed update\n")
 			client := fixture.bindSaved(t)
-			if !tc.differ(client.Binding(), fixture.saved) || !task.SameSupervisorIdentity(client.Binding(), fixture.saved) {
-				t.Fatalf("changed provenance was not authenticated from current bytes:\n got=%+v\nsaved=%+v", client.Binding(), fixture.saved)
+			if client.Binding() != fixture.saved {
+				t.Fatalf("compatible update changed canonical generation: %+v", client.Binding())
 			}
 			observation, err := client.Reconcile(t.Context(), identityFromRecord(fixture.submission))
 			if err != nil || !observation.Matched || observation.State != StateQueued {
-				t.Fatalf("changed provenance lost its read-only observation: %+v %v", observation, err)
+				t.Fatalf("compatible update lost queue observation: %+v %v", observation, err)
 			}
-			assertSavedBindingMutationsRefused(t, fixture, client)
+			fixture.assertNoQueueMutation(t)
+			fixture.assertCompatibleInstalledStop(t, client)
+			assertPrivateDaemonStartCount(t, fixture.private.stateRoot, 1)
 		})
 	}
 }
 
-func assertSavedBindingMutationsRefused(t *testing.T, fixture *savedPrivateBindingFixture, client *Client) {
+func (f *savedPrivateBindingFixture) assertCompatibleInstalledStop(t *testing.T, client *Client) {
 	t.Helper()
-	permit := createStopPermit(t, fixture.task)
-	result, err := client.Stop(t.Context(), permit)
+	permit := createStopPermit(t, f.task)
+	result, stopErr := client.Stop(t.Context(), permit)
 	if releaseErr := permit.Release(); releaseErr != nil {
 		t.Fatal(releaseErr)
 	}
-	if !errors.Is(err, ErrBinding) || !result.Requested || result.Matched || result.Attempted || result.NumericTaskID != nil {
-		t.Fatalf("changed provenance stop = %+v %v, want ErrBinding before numeric assignment", result, err)
+	if stopErr != nil || !result.Matched || !result.Attempted || result.NumericTaskID == nil || *result.NumericTaskID != 7 {
+		t.Fatalf("compatible installed client could not control recorded row: %+v %v", result, stopErr)
 	}
-	for name, submit := range map[string]func(*taskFixture) error{
-		"submit": func(target *taskFixture) error {
-			permit, prepareErr := target.taskDir.PrepareSubmission(fixture.saved)
-			if prepareErr != nil {
-				return prepareErr
-			}
-			_, submitErr := client.Submit(t.Context(), permit, Launch{})
-			return errors.Join(submitErr, permit.Release())
-		},
-		"staged submit": func(target *taskFixture) error {
-			permit, prepareErr := target.taskDir.PrepareSubmission(fixture.saved)
-			if prepareErr != nil {
-				return prepareErr
-			}
-			_, submitErr := client.SubmitStaged(t.Context(), permit, Launch{}, func(Observation) error {
-				t.Error("refused staged submission reached its commit")
-				return nil
-			})
-			return errors.Join(submitErr, permit.Release())
-		},
-	} {
-		if submitErr := submit(newTaskFixture(t, fixture.saved)); !errors.Is(submitErr, ErrBinding) {
-			t.Fatalf("changed provenance %s error = %v, want ErrBinding", name, submitErr)
-		}
+	if mutations := f.queueMutations(t); len(mutations) != 1 || mutations["remove"] != 1 {
+		t.Fatalf("compatible update changed mutation count: %v", mutations)
 	}
-	fixture.assertNoQueueMutation(t)
-	assertPrivateDaemonStartCount(t, fixture.private.stateRoot, 1)
 }
 
 func TestBindSavedLegacyPrivateWithoutDaemonKeepsClientOnlyBinding(t *testing.T) {
@@ -352,7 +313,6 @@ func TestBindSavedExternalRefIgnoresUnavailableRecordedDaemon(t *testing.T) {
 	fake := newFakeSupervisor(t, "normal")
 	saved := fake.client.Binding()
 	saved.DaemonExecutable = filepath.Join(filepath.Dir(fake.configPath), "missing-pueued")
-	saved.DaemonSHA256 = task.ComputeSHA256([]byte("unavailable external daemon"))
 	client, err := BindSaved(t.Context(), saved, Options{ObservationTimeout: DefaultObservationTimeout, Environment: fake.environment})
 	if err != nil {
 		t.Fatalf("external saved binding required its recorded daemon: %v", errors.Join(err, client.CloseAfterPending(err)))
@@ -362,7 +322,7 @@ func TestBindSavedExternalRefIgnoresUnavailableRecordedDaemon(t *testing.T) {
 			t.Error(closeErr)
 		}
 	}()
-	if got := client.Binding(); got != fake.client.Binding() || got.DaemonExecutable != "" || got.DaemonSHA256 != "" {
+	if got := client.Binding(); got != saved || client.RuntimeBinding() != fake.client.Binding() {
 		t.Fatalf("external saved observation changed:\n got=%+v\nwant=%+v", got, fake.client.Binding())
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)

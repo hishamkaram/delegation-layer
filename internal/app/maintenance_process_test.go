@@ -36,6 +36,9 @@ func TestMain(m *testing.M) {
 	if exit, handled := execution.RunCommandOwnerMode(os.Args[1:]); handled {
 		os.Exit(exit)
 	}
+	if exit, handled := pueue.RunControlOwnerMode(os.Args[1:]); handled {
+		os.Exit(exit)
+	}
 	if exit, handled := runLifetimeLaunchGateMode(os.Args[1:], os.Stderr); handled {
 		os.Exit(exit)
 	}

@@ -8,6 +8,6 @@ import (
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
-func reconcileWorkspaceUse(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies) (resultError error) {
-	return workspacescore.ReconcileUse(ctx, store, resource, workspaceRuntimeOptions(deps))
+func reconcileWorkspaceUse(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions) (resultError error) {
+	return workspacescore.ReconcileUse(ctx, store, resource, options)
 }

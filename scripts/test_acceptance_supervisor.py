@@ -369,7 +369,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             suite = self.suite(temporary, "fail")
             stderr = io.StringIO()
-            with patch.object(hermetic_suite, "digest", return_value="test-digest"), redirect_stderr(stderr):
+            with redirect_stderr(stderr):
                 with self.assertRaises(SystemExit) as exit_result:
                     suite.run_targeted(["C07-locked-unknown"])
             self.assertEqual(exit_result.exception.code, 1)
@@ -383,7 +383,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             suite = self.suite(temporary, "pass")
             stderr, stdout = io.StringIO(), io.StringIO()
-            with patch.object(hermetic_suite, "digest", return_value="test-digest"), redirect_stderr(stderr), redirect_stdout(stdout):
+            with redirect_stderr(stderr), redirect_stdout(stdout):
                 suite.run_targeted(["C07-locked-unknown"])
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("PASS hermetic H targeted: 1 cases", stdout.getvalue())
@@ -396,7 +396,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                                      "error": "injected assertion", "traceback": "injected traceback"})
 
         suite = object.__new__(RecordedSuite)
-        suite.tools = Path(directory)
+        suite.source_root = Path(directory)
         suite.output = Path(directory)
         suite.results = []
         return suite

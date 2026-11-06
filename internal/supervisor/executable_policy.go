@@ -1,7 +1,6 @@
 package supervisor
 
 import (
-	"fmt"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -12,60 +11,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func newStateTerminalEventRunnerRecord(revision uint64, digest string) stateTerminalEventRunnerRecord {
-	return stateTerminalEventRunnerRecord{
-		SchemaVersion:          task.SchemaVersion,
-		ProtocolPath:           stateTerminalEventRunnerName,
-		ImplementationRevision: revision,
-		BuildSHA256:            digest,
-	}
-}
-
-func validateStateTerminalEventRunnerRecord(record stateTerminalEventRunnerRecord) error {
-	if record.SchemaVersion != task.SchemaVersion || record.ProtocolPath != stateTerminalEventRunnerName || record.ImplementationRevision == 0 || task.ValidateSHA256(record.BuildSHA256) != nil {
-		return fmt.Errorf("%w: invalid terminal event runner record identity", pueue.ErrConfiguration)
-	}
-	return nil
-}
-
-func IsStateRunnerPath(root, path string) bool {
-	base := filepath.Join(root, ".supervisor")
-	if filepath.Dir(path) != base {
-		return false
-	}
-	name := filepath.Base(path)
-	if name == stateRunnerName {
-		return true
-	}
-	prefix := stateRunnerName + "-"
-	if !strings.HasPrefix(name, prefix) {
-		return false
-	}
-	digest := strings.TrimPrefix(name, prefix)
-	if len(digest) != 64 {
-		return false
-	}
-	for _, value := range digest {
-		if (value < '0' || value > '9') && (value < 'a' || value > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 func ManagedRunnerBuildInfo(info *debug.BuildInfo) bool {
 	return info != nil && info.Path == managedRunnerMain
-}
-
-func stateSupervisorPairDigest(clientDigest, daemonDigest string) string {
-	return task.ComputeSHA256([]byte(clientDigest + "\n" + daemonDigest))
-}
-
-func validateStateSupervisorPairRecord(record stateSupervisorPairRecord) error {
-	if record.SchemaVersion != 1 || task.ValidateSHA256(record.PairSHA256) != nil || task.ValidateSHA256(record.ClientSHA256) != nil || task.ValidateSHA256(record.DaemonSHA256) != nil || record.PairSHA256 != stateSupervisorPairDigest(record.ClientSHA256, record.DaemonSHA256) {
-		return fmt.Errorf("%w: invalid state-root supervisor pair identity", pueue.ErrConfiguration)
-	}
-	return nil
 }
 
 func queuedRunnerCommandIdentity(rootID, label, taskPrefix string) (taskID string, inspectionWorker, matched bool) {
@@ -84,7 +31,14 @@ func validateRunnerRepairReceiptShape(root string, receipt runnerRepairReceipt) 
 		task.ValidateFreshSupervisorRef(receipt.Supervisor) != nil ||
 		!pueue.IsPrivateConfig(root, receipt.Supervisor.ConfigPath) ||
 		!filepath.IsAbs(receipt.RunnerExecutable) || filepath.Clean(receipt.RunnerExecutable) != receipt.RunnerExecutable ||
-		!IsStateRunnerPath(root, receipt.RunnerExecutable) || task.ValidateSHA256(receipt.RunnerSHA256) != nil {
+		receipt.ExecutableIdentity.Validate() != nil {
+		return task.ErrEvidenceFault
+	}
+	if receipt.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+		if receipt.RunnerSHA256 != "" || pueue.IsLegacyStateRunnerPath(root, receipt.RunnerExecutable) {
+			return task.ErrEvidenceFault
+		}
+	} else if !pueue.IsLegacyStateRunnerPath(root, receipt.RunnerExecutable) || task.ValidateSHA256(receipt.RunnerSHA256) != nil {
 		return task.ErrEvidenceFault
 	}
 	return nil

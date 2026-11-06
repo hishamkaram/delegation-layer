@@ -116,7 +116,11 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 	if err := validatePreflightPlan(plan, refreshedPlan); err != nil {
 		return launchPlan, err
 	}
-	if err := i.prepareCommand(refreshedPlan, allowRuntimeRefresh); err != nil {
+	environment, err := prepareLaunchEnvironment(i.budget.workContext, i.launchEnvironment(refreshedPlan), opts.PrepareEnvironment)
+	if err != nil {
+		return launchPlan, err
+	}
+	if err := i.prepareCommand(refreshedPlan, allowRuntimeRefresh, environment); err != nil {
 		return launchPlan, err
 	}
 	// The constructed command makes the refreshed plan authoritative. A
@@ -223,7 +227,7 @@ func (i *invocation) discard() error {
 // returned by fresh preflight. The installed executable runs directly at its
 // resolved absolute path; the OS performs any shebang handling. There is no
 // copy, view, byte verification, or fallback.
-func (i *invocation) prepareCommand(plan Plan, allowRuntimeRefresh bool) error {
+func (i *invocation) prepareCommand(plan Plan, allowRuntimeRefresh bool, environment []string) error {
 	request, meta, err := i.td.PreparedRecords()
 	if err != nil {
 		return err
@@ -242,7 +246,7 @@ func (i *invocation) prepareCommand(plan Plan, allowRuntimeRefresh bool) error {
 		return err
 	}
 	cmd := exec.Command(plan.Executable, arguments...)
-	cmd.Dir, cmd.Env = plan.Directory, i.launchEnvironment(plan)
+	cmd.Dir, cmd.Env = plan.Directory, environment
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = i.stdin, i.stdout.writer, i.stderr.writer
 	i.cmd = cmd
 	return nil

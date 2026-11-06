@@ -85,10 +85,9 @@ func TestRecoverPrivateClosesRefusedCompactEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 
-	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
-	if err != nil {
-		t.Fatalf("saved recovery did not close the refused compact endpoint: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	t.Cleanup(func() {
 		if closeErr := recovered.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -121,7 +120,7 @@ func TestConcurrentBindPrivateRepairsRefusedCompactEndpointOnce(t *testing.T) {
 	var group sync.WaitGroup
 	for index := range callers {
 		group.Go(func() {
-			client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+			client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 			if err == nil {
 				err = client.Close()
 			}
@@ -356,6 +355,9 @@ func errorText(err error) string {
 // migration may have written it.
 func bindAcceptedCompactPrivate(t *testing.T, fixture privateSupervisorTestFixture, clientPath string, options Options) *Client {
 	t.Helper()
+	if options.PrivateTerminalEventRunner == "" {
+		options.PrivateTerminalEventRunner = privateInstalledCallbackForTest(t, fixture.stateRoot)
+	}
 	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
 	if err := ensurePrivateBase(base); err != nil {
 		t.Fatal(err)
@@ -363,7 +365,7 @@ func bindAcceptedCompactPrivate(t *testing.T, fixture privateSupervisorTestFixtu
 	if err := markPrivateBootstrapPending(fixture.stateRoot); err != nil {
 		t.Fatal(err)
 	}
-	if err := createPrivateConfig(PrivateConfigPath(fixture.stateRoot), base, privateConfigYAMLWithSocket(base, filepath.Join(base, "s"))); err != nil {
+	if err := createPrivateConfig(PrivateConfigPath(fixture.stateRoot), base, privateConfigYAMLWithSocket(base, filepath.Join(base, "s"), options.PrivateTerminalEventRunner)); err != nil {
 		t.Fatal(err)
 	}
 	client := bindPrivateSetupForTest(t, fixture.stateRoot, clientPath, fixture.daemonPath, options)
@@ -378,7 +380,7 @@ func bindAcceptedCompactPrivate(t *testing.T, fixture privateSupervisorTestFixtu
 func bindMigratedCompactPrivate(t *testing.T) (refusedPrivateEndpointFixture, task.SupervisorRef) {
 	t.Helper()
 	fixture := newPrivateSupervisorTestFixture(t)
-	first := bindAcceptedCompactPrivate(t, fixture, fixture.clientPath, Options{ObservationTimeout: privateTestObservationTimeout})
+	first := bindAcceptedCompactPrivate(t, fixture, fixture.clientPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	saved := first.Binding()
 	base := filepath.Dir(saved.ConfigPath)
 	data, err := os.ReadFile(saved.ConfigPath)
@@ -392,7 +394,7 @@ func bindMigratedCompactPrivate(t *testing.T) (refusedPrivateEndpointFixture, ta
 	if err = os.WriteFile(saved.ConfigPath, changed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	migration, err := BindSavedForMigration(context.Background(), saved, Options{ObservationTimeout: privateTestObservationTimeout})
+	migration, err := BindSavedForMigrationWithClient(context.Background(), saved, "", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,10 +436,9 @@ func TestPersistedRecoveryConfigClosesRefusedCompactEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 
-	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
-	if err != nil {
-		t.Fatalf("persisted compact recovery config did not close its refused endpoint: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	t.Cleanup(func() {
 		if closeErr := recovered.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -475,7 +476,7 @@ func testDispatchedShutdownWithoutLegacyClient(t *testing.T, compact bool) {
 	}
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	base := filepath.Dir(current.Binding().ConfigPath)
 	pending := privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: privateDaemonIdentityForBinding(legacy.Binding()), Successor: privateDaemonIdentityForBinding(current.Binding())}
 	if err := publishPrivateMigrationRecord(base, pending.Legacy, pending.Successor); err != nil {

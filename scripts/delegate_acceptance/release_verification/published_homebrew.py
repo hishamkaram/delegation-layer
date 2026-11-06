@@ -7,10 +7,9 @@ import json
 import os
 import stat
 from .assets import exercise_binary_identity
-from .contract import BINARIES, MAX_BINARY, VerificationError
-from .filesystem import bounded_digest
+from .contract import InstalledExecutables, installed_executables, BINARIES, MAX_BINARY, VerificationError
 from .published_contract import (
-    ArchiveFacts, HOMEBREW_FORMULA, compare_hashes, homebrew_environment, homebrew_prefixes,
+    ArchiveFacts, HOMEBREW_FORMULA, homebrew_environment, homebrew_prefixes,
     parse_single_line, record_fact,
 )
 from .published_ports import ConsumerLayout, ConsumerPorts, tool_path
@@ -79,7 +78,7 @@ _keg_binaries = keg_binaries
 
 def verify_homebrew_consumer(
         *, ports: ConsumerPorts, receipt: dict, archive: ArchiveFacts, layout: ConsumerLayout,
-        info: dict[str, str], repo: str) -> dict[str, str]:
+        info: dict[str, str], repo: str) -> InstalledExecutables:
     """Install the published formula on a fresh macOS Homebrew and compare its four binaries."""
     if info["os"] != "Darwin":
         raise VerificationError("homebrew_requires_macos", "homebrew-observe")
@@ -106,10 +105,8 @@ def verify_homebrew_consumer(
     keg = Path(parse_single_line(run("homebrew-keg", [brew, "--prefix", spec], capture=True, timeout=30),
                                  code="homebrew_keg_invalid", stage="homebrew-observe"))
     paths = keg_binaries(keg)
-    observed = {name: bounded_digest(path, MAX_BINARY, "homebrew_binary_invalid")
-                for name, path in paths.items()}
-    compare_hashes(archive.binary_hashes(), observed, "installed_binary_hash_mismatch", "verify-binaries")
-    receipt["binaries"] = {name: {"path": str(path), "sha256": observed[name]} for name, path in paths.items()}
+    observed = installed_executables(paths)
+    receipt["binaries"] = {name: {"path": str(path)} for name, path in paths.items()}
     _exercise(run, paths, archive.package_version, receipt)
     return observed
 

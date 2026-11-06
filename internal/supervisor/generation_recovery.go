@@ -71,7 +71,7 @@ func RecoverInspectionGroupGenerationWithLock(ctx context.Context, store *taskdi
 	resolution, err := ResolveGenerationWithLock(ctx, store, supervisor.Binding())
 	if errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		// A completed group head may request retirement of a recovery alias, but
-		// it does not select the generation. RetirePrivateRecoveryBinding proves
+		// it does not select the generation. Canonical alias retirement proves
 		// the published current binding and exact private history before removal;
 		// only then can the canonical resolver be retried.
 		if cleanupErr := ClearCompletedInspectionRecovery(ctx, store, supervisor); cleanupErr != nil {
@@ -103,5 +103,5 @@ func ClearCompletedInspectionRecovery(ctx context.Context, store *taskdir.Store,
 	if !migrated || !task.SameSupervisorIdentity(head.Supervisor, supervisor.Binding()) {
 		return nil
 	}
-	return pueue.RetirePrivateRecoveryBindingContext(ctx, store.Root, supervisor.Binding())
+	return supervisor.RetirePrivateRecoveryBindingContext(ctx, store.Root, supervisor.Binding())
 }

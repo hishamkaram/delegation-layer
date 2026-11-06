@@ -33,20 +33,20 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 			finishWork()
 		}
 	}()
-	if consume != nil {
-		if err := consume(); err != nil {
-			return CommandResult{}, err
-		}
-	}
 	statusVersion := ""
 	if isJSONStatusCommand(args) {
 		statusVersion = c.runtimeBinding.ObservedVersion
 	}
 	var pending *Pending
 	if c.options.ControlOwnerExecutable == "" {
+		if consume != nil {
+			if consumeErr := consume(); consumeErr != nil {
+				return CommandResult{}, consumeErr
+			}
+		}
 		pending = startOwnedCaptured(cmd, commandID, c.options.Observer, statusVersion)
 	} else {
-		pending = startControlOwnedCaptured(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion)
+		pending = startControlOwnedCapturedWithConsume(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion, consume)
 	}
 	finishPending := finishWork
 	finishWork = nil
@@ -99,4 +99,17 @@ func (c *Client) prepareCommand(args ...string) (*exec.Cmd, error) {
 	}
 	cmd.Env = environment
 	return cmd, nil
+}
+
+func consumePreparedControlCommand(ctx context.Context, request controlOwnerRequest, consume func() error) error {
+	if err := validateControlOwnerRequest(request); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if consume != nil {
+		return consume()
+	}
+	return nil
 }

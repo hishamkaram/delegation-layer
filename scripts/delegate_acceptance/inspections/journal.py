@@ -35,6 +35,7 @@ from scripts.delegate_acceptance.workspaces.admission_evidence import (
     _inspection_request_identity,
     _validate_historical_workspace_attempt,
 )
+import os
 from scripts.delegate_acceptance.workspaces.data import InspectionIdentity, WorkspaceAdmissionAttempt
 from pathlib import Path
 
@@ -150,15 +151,16 @@ def _validate_inspection_sources(
                 f"inspection request binding changed from expected source for {task}")
     require(binding.get("worker_executable") == str(runner),
             f"inspection request worker mismatch for {task}")
-    require(binding.get("worker_sha256") == digest(runner),
-            f"inspection request worker digest mismatch for {task}")
+    require(runner.is_file() and os.access(runner, os.X_OK),
+            f"inspection request worker executable unavailable for {task}")
     supervisor = binding.get("supervisor")
     if pueue_config is None:
         raise AcceptanceFailure("inspection supervisor config is unavailable")
+    require(pueue.is_file() and os.access(pueue, os.X_OK),
+            f"inspection request supervisor executable unavailable for {task}")
     if not isinstance(supervisor, dict):
         raise AcceptanceFailure(f"inspection request supervisor binding mismatch for {task}")
     require(supervisor.get("client_executable") == str(pueue) and
-            supervisor.get("client_sha256") == digest(pueue) and
             supervisor.get("config_path") == str(pueue_config) and
             supervisor.get("config_digest") == digest(pueue_config),
             f"inspection request supervisor binding mismatch for {task}")

@@ -86,7 +86,7 @@ func (fixture refusedPrivateEndpointFixture) assertSocketRemoved(t *testing.T) {
 
 func (fixture refusedPrivateEndpointFixture) bind(t *testing.T) (*Client, error) {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err == nil {
 		t.Cleanup(func() {
 			if closeErr := client.Close(); closeErr != nil {
@@ -122,7 +122,7 @@ func TestRefusedEndpointWithoutRecordedPIDFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 	err = WithBootstrapLockContext(ctx, fixture.stateRoot, func(lockedContext context.Context) error {
-		prepared, prepareErr := PreparePrivateWithLock(lockedContext, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+		prepared, prepareErr := PreparePrivateWithLock(lockedContext, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -437,7 +437,7 @@ func TestRefusedEndpointObservationsRemainErrors(t *testing.T) {
 	if ready || !errors.Is(err, ErrBinding) || !errors.Is(err, ErrPrivateEndpointRefused) {
 		t.Fatalf("Reachable softened a refusal: ready=%t err=%v", ready, err)
 	}
-	probed, ready, err := ProbePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+	probed, ready, err := ProbePrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if probed != nil || ready || !errors.Is(err, ErrBinding) {
 		t.Fatalf("maintenance probe softened a refusal: client=%v ready=%t err=%v", probed, ready, err)
 	}
@@ -452,7 +452,7 @@ func TestMissingMigrationBindingIsNotInventedFromRefusal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 	err := WithBootstrapLockContext(ctx, fixture.stateRoot, func(lockedContext context.Context) error {
-		current, prepareErr := PreparePrivateForMigrationWithLock(lockedContext, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+		current, prepareErr := PreparePrivateForMigrationWithLock(lockedContext, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 		if prepareErr != nil {
 			return prepareErr
 		}

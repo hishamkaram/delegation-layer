@@ -64,3 +64,25 @@ class BoundedCommandError(Exception):
         super().__init__(reason.value)
         self.reason = reason
         self.exit_code = exit_code
+
+
+def command_closure_unproven(error: BaseException) -> bool:
+    """Read the existing child owner's closure verdict through wrapping exceptions."""
+    visited: set[int] = set()
+
+    def unproven(failure: BaseException) -> bool:
+        if id(failure) in visited:
+            return False
+        visited.add(id(failure))
+        if isinstance(failure, BoundedCommandError):
+            # An exact Wait result is authoritative even if cleanup also failed.
+            return failure.exit_code is None and failure.reason in (
+                CommandFailure.TERMINATION_FAILED, CommandFailure.TERMINATION_TIMEOUT)
+        if isinstance(failure, BaseExceptionGroup):
+            return any(unproven(child) for child in failure.exceptions)
+        cause = failure.__cause__
+        if cause is None and not failure.__suppress_context__:
+            cause = failure.__context__
+        return cause is not None and unproven(cause)
+
+    return unproven(error)

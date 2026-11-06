@@ -1,18 +1,16 @@
 package supervisor
 
 import (
-	"debug/buildinfo"
+	"errors"
 	"os"
-
-	"github.com/hishamkaram/delegation-layer/internal/config"
+	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func ValidateManagedOrdinaryRunnerExecutable(root, recorded, current, ownership string) error {
+func ValidateManagedOrdinaryRunnerExecutable(_ string, recorded, current, ownership string, target RunnerRepairTarget) error {
 	if ownership != task.RunnerOwnershipManaged {
 		return nil
 	}
@@ -23,54 +21,34 @@ func ValidateManagedOrdinaryRunnerExecutable(root, recorded, current, ownership 
 			return task.ErrEvidenceFault
 		}
 	}
-	return ValidateManagedTaskRunnerExecutable(root, recorded, current)
+	return validateManagedRunningRunner(recorded, current, target)
 }
 
-func ValidateManagedTaskRunnerExecutable(root, recorded, current string) error {
-	canonical, err := config.CanonicalizePath(current)
-	if err != nil {
+// Native lifetime ownership verifies the executing process. The resolver owns
+// successor role selection; recorded paths do not claim byte immutability.
+func validateManagedRunningRunner(recorded, current string, target RunnerRepairTarget) error {
+	if !filepath.IsAbs(current) || filepath.Clean(current) != current {
 		return task.ErrEvidenceFault
 	}
-	if IsStateRunnerPath(root, canonical) {
-		if CurrentManagedRunnerExecutable(root, canonical) {
-			return nil
-		}
-		return task.ErrEvidenceFault
+	if current == recorded {
+		return nil
 	}
-	recordedPath, err := config.CanonicalizePath(recorded)
-	if err != nil || canonical != recordedPath {
-		return task.ErrEvidenceFault
-	}
-	info, err := buildinfo.ReadFile(canonical)
-	if err != nil || !ManagedRunnerBuildInfo(info) {
-		return task.ErrEvidenceFault
+	if err := target.ValidateExecutable(current); err != nil {
+		return errors.Join(task.ErrEvidenceFault, err)
 	}
 	return nil
 }
 
-// ValidateProviderRunnerExecutable accepts the inspection worker pinned when
-// the task was admitted or a verified content-addressed runner installed in
-// the state root. Its content-addressed identity proves the successor is
-// managed; explicit custom ownership in either task record keeps the original
-// runner pinned. Inspection-worker upgrades retain their separate journal
-// authorization requirement.
-func ValidateProviderRunnerExecutable(root string, binding inspection.Binding, taskOwnership, current string) error {
-	canonical, err := config.CanonicalizePath(current)
-	if err != nil {
+// Inspection-worker upgrades also require their independent request journal.
+func ValidateProviderRunnerExecutable(root string, binding inspection.Binding, taskOwnership, current string, target RunnerRepairTarget) error {
+	if !filepath.IsAbs(current) || filepath.Clean(current) != current {
 		return task.ErrEvidenceFault
 	}
-	digest, err := commonprovider.FingerprintExecutable(canonical)
-	if err != nil {
-		return task.ErrEvidenceFault
-	}
-	if canonical == binding.WorkerExecutable && digest == binding.WorkerSHA256 {
+	if current == binding.WorkerExecutable {
 		return nil
 	}
-	if binding.RunnerOwnership == task.RunnerOwnershipCustom || taskOwnership == task.RunnerOwnershipCustom {
+	if !ManagedInspectionBinding(root, binding) || taskOwnership != task.RunnerOwnershipManaged {
 		return task.ErrEvidenceFault
 	}
-	if IsStateRunnerPath(root, canonical) && CurrentManagedRunnerExecutable(root, canonical) {
-		return nil
-	}
-	return task.ErrEvidenceFault
+	return validateManagedRunningRunner(binding.WorkerExecutable, current, target)
 }

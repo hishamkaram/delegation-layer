@@ -68,7 +68,7 @@ func TestInspectionSnapshotRejectsUnboundEffects(t *testing.T) {
 		change func(*InspectionDefinition)
 	}{
 		{"relative executable", func(d *InspectionDefinition) { d.Executable = "security" }},
-		{"missing hash", func(d *InspectionDefinition) { d.ExecutableSHA256 = "" }},
+		{"malformed historical hash", func(d *InspectionDefinition) { d.ExecutableSHA256 = "invalid" }},
 		{"ambient environment", func(d *InspectionDefinition) { d.Environment = nil }},
 		{"duplicate environment", func(d *InspectionDefinition) { d.Environment = []string{"LANG=C", "LANG=other"} }},
 		{"invalid argument encoding", func(d *InspectionDefinition) { d.Arguments = []string{string([]byte{255})} }},
@@ -84,6 +84,22 @@ func TestInspectionSnapshotRejectsUnboundEffects(t *testing.T) {
 				t.Fatalf("invalid effect accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestNativeHelperSnapshotUsesInstalledSelection(t *testing.T) {
+	definition := inspectionTestDefinition()
+	definition.ExecutableSHA256 = ""
+	snapshot, digest, err := definition.Snapshot()
+	if err != nil {
+		t.Fatalf("installed helper required an executable fingerprint: %v", err)
+	}
+	if snapshot.Executable != definition.Executable || snapshot.ExecutableSHA256 != "" {
+		t.Fatal("snapshot changed the installed helper selection")
+	}
+	data, err := task.MarshalCanonical(snapshot)
+	if err != nil || digest != task.ComputeSHA256(data) {
+		t.Fatalf("installed helper lost definition-data integrity: %v", err)
 	}
 }
 

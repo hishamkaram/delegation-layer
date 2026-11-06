@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from .assets import exercise_default_path, inspect_binaries
-from .contract import VerificationError
+from .contract import installed_executables, VerificationError
 from .published_contract import (
     ArchiveFacts, InstallFacts, NPM_PACKAGE, NpmFacts, PackageIdentity, SkillManifest, check_package_bytes,
-    compare_hashes, decide_latest, installed_binary_hashes, npm_environment, parse_npm_latest,
+    compare_hashes, decide_latest, npm_environment, parse_npm_latest,
     parse_npm_view, parse_pack_filename, record_fact,
 )
 from .published_files import (
@@ -91,8 +91,7 @@ def _install(
     explicit = label == "explicit"
     ledger = session.receipt if explicit else {"binaries": {}}
     paths = inspect_binaries(bin_dir, ledger)
-    installed = installed_binary_hashes(ledger["binaries"])
-    compare_hashes(archive.binary_hashes(), installed, "installed_binary_hash_mismatch", "verify-binaries")
+    installed = installed_executables(paths)
     skill = installed_skill_digests(skill_dir)
     compare_hashes(manifest.digests(), skill, "installed_skill_mismatch", "verify-skill")
     if explicit:
@@ -100,7 +99,7 @@ def _install(
         home.mkdir(mode=0o700)
         exercise_default_path(paths, bin_dir, session.receipt, archive.package_version, info, home,
                               cwd=session.layout.cwd)
-    return InstallFacts(label, spec, tuple(sorted(installed.items())), len(skill))
+    return InstallFacts(label, spec, installed, len(skill))
 
 
 def verify_npm_consumer(

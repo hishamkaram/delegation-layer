@@ -201,8 +201,11 @@ func (g *Guardian) refuseAuxiliaryUnlaunchedReplay(ctx context.Context) error {
 
 func (g *Guardian) acquireRunOwner(ctx context.Context) (Owner, error) {
 	owner, err := g.options.AcquireOwner(ctx)
+	if owner != nil {
+		g.owner = owner
+	}
 	if err != nil {
-		return nil, fmt.Errorf("acquire lifetime owner: %w", err)
+		return owner, fmt.Errorf("acquire lifetime owner: %w", releaseOwnerWithError(owner, err))
 	}
 	if owner == nil {
 		return nil, fmt.Errorf("%w: owner acquisition returned nil lease", errLifetimeGuardianInvalid)
@@ -225,4 +228,21 @@ func (g *Guardian) endRun() {
 	g.runMu.Lock()
 	g.running = false
 	g.runMu.Unlock()
+}
+
+// Concrete native owners retain their cleanup handle in an error. Other Owner
+// implementations remain owned by Guardian and use the original Release port.
+func releaseOwnerWithError(owner Owner, cause error) error {
+	if owner == nil {
+		return cause
+	}
+	retaining, ok := owner.(retainingOwner)
+	if ok {
+		return retaining.ReleaseWithError(cause)
+	}
+	return errors.Join(cause, owner.Release())
+}
+
+type retainingOwner interface {
+	ReleaseWithError(error) error
 }

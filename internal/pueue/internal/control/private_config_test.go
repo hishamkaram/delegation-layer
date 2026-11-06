@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,7 +24,7 @@ func TestBindSavedRejectsChangedLogicalSupervisor(t *testing.T) {
 	if writeErr := os.WriteFile(fake.configPath, append(data, '\n'), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if _, err := BindSaved(context.Background(), saved, Options{Environment: fake.environment}); !errors.Is(err, ErrBinding) {
+	if _, err := BindSaved(context.Background(), saved, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("saved binding accepted changed logical supervisor: %v", err)
 	}
 }
@@ -38,7 +39,7 @@ func TestBindSavedForMigrationAcceptsChangedConfigAtSameEndpoint(t *testing.T) {
 	if writeErr := os.WriteFile(fake.configPath, append(data, '\n'), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	migration, err := BindSavedForMigration(context.Background(), saved, Options{Environment: fake.environment})
+	migration, err := BindSavedForMigrationWithClient(context.Background(), saved, "", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: fake.environment})
 	if err != nil {
 		t.Fatalf("migration binding rejected compatible config drift: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestBindSavedForMigrationRejectsPrivateStatePathDriftAtSameEndpoint(t *test
 	if writeErr := os.WriteFile(configPath, []byte(changed), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if _, err := BindSavedForMigration(context.Background(), saved, Options{}); !errors.Is(err, ErrBinding) {
+	if _, err := BindSavedForMigrationWithClient(context.Background(), saved, "", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("private state path drift was accepted: %v", err)
 	}
 }
@@ -96,7 +97,7 @@ func TestBindSavedForMigrationUsesSavedEndpointAfterPrivateConfigDrift(t *testin
 	if writeErr := os.WriteFile(configPath, []byte(changed), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	migration, err := BindSavedForMigration(context.Background(), saved, Options{})
+	migration, err := BindSavedForMigrationWithClient(context.Background(), saved, "", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 	if err != nil {
 		t.Fatalf("migration binding rejected endpoint drift: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestCompactPrivateEndpointMigrationAndRecoveryUseSavedEndpoint(t *testing.T
 		t.Fatal(err)
 	}
 	configPath := PrivateConfigPath(fixture.stateRoot)
-	if err := createPrivateConfig(configPath, base, privateConfigYAMLWithSocket(base, filepath.Join(base, "s"))); err != nil {
+	if err := createPrivateConfig(configPath, base, privateConfigYAMLWithSocket(base, filepath.Join(base, "s"), privateInstalledCallbackForTest(t, fixture.stateRoot))); err != nil {
 		t.Fatal(err)
 	}
 	first := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
@@ -146,7 +147,7 @@ func TestCompactPrivateEndpointMigrationAndRecoveryUseSavedEndpoint(t *testing.T
 		t.Fatal(err)
 	}
 
-	migration, err := BindSavedForMigration(context.Background(), saved, Options{})
+	migration, err := BindSavedForMigrationWithClient(context.Background(), saved, "", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 	if err != nil {
 		t.Fatalf("compact endpoint migration failed: %v", err)
 	}
@@ -160,17 +161,16 @@ func TestCompactPrivateEndpointMigrationAndRecoveryUseSavedEndpoint(t *testing.T
 		t.Fatal(err)
 	}
 
-	recovered, err := RecoverPrivate(
+	recovery, err := AttemptPrivateRecovery(
 		context.Background(),
 		fixture.stateRoot,
 		saved,
 		fixture.clientPath,
 		fixture.daemonPath,
-		Options{ObservationTimeout: privateTestObservationTimeout},
+		Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout},
 	)
-	if err != nil {
-		t.Fatalf("compact endpoint recovery failed: %v", err)
-	}
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	defer func() {
 		if closeErr := recovered.Close(); closeErr != nil {
 			t.Fatal(closeErr)
@@ -203,7 +203,7 @@ func TestRecoverSavedWithPairUsesCurrentExecutablesAfterSavedInstallRemoval(t *t
 	}
 	removePrivateTestPath(t, filepath.Join(base, "old"))
 
-	recovered, started, err := RecoverSavedWithPair(context.Background(), saved, currentClient, currentDaemon, Options{ObservationTimeout: privateTestObservationTimeout})
+	recovered, started, err := RecoverSavedWithPair(context.Background(), stateRoot, saved, currentClient, currentDaemon, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatalf("recovery with current pair failed against the reachable legacy endpoint: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestRecoverSavedWithPairUsesCurrentExecutablesAfterSavedInstallRemoval(t *t
 		t.Fatal(waitErr)
 	}
 
-	restarted, started, err := RecoverSavedWithPair(context.Background(), saved, currentClient, currentDaemon, Options{ObservationTimeout: privateTestObservationTimeout})
+	restarted, started, err := RecoverSavedWithPair(context.Background(), stateRoot, saved, currentClient, currentDaemon, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatalf("recovery with current pair failed after the legacy install was removed: %v", err)
 	}
@@ -241,7 +241,6 @@ func TestRecoverSavedWithPairUsesCurrentExecutablesAfterSavedInstallRemoval(t *t
 	}
 }
 
-//nolint:gocyclo // This test intentionally covers the complete persisted-alias recovery transaction.
 func TestRecoverPrivateUsesPersistedLegacyBindingAfterConfigDrift(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	first := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
@@ -260,7 +259,7 @@ func TestRecoverPrivateUsesPersistedLegacyBindingAfterConfigDrift(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	legacy, started, err := RecoverSavedWithPair(context.Background(), saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
+	legacy, started, err := RecoverSavedWithPair(context.Background(), fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 	if err != nil {
 		t.Fatalf("legacy recovery failed: %v", err)
 	}
@@ -274,10 +273,9 @@ func TestRecoverPrivateUsesPersistedLegacyBindingAfterConfigDrift(t *testing.T) 
 		t.Fatalf("legacy recovery record was not published: %v", err)
 	}
 
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
-	if err != nil {
-		t.Fatalf("recovery did not use the persisted legacy binding: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	if recovered.runtimeBinding.ConfigPath != privateRecoveryConfigPath(fixture.stateRoot) {
 		t.Fatalf("recovery config path = %q, want durable legacy path", recovered.runtimeBinding.ConfigPath)
 	}
@@ -293,7 +291,7 @@ func TestRecoverPrivateUsesPersistedLegacyBindingAfterConfigDrift(t *testing.T) 
 	if err = legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err = ClearPrivateRecoveryBinding(fixture.stateRoot, saved); err != nil {
+	if err = recovered.ClearPrivateRecoveryBindingWithLock(t.Context(), fixture.stateRoot, saved); err != nil {
 		t.Fatalf("clear persisted legacy recovery binding: %v", err)
 	}
 	if _, err = os.Stat(privateRecoveryRecordPath(fixture.stateRoot)); !errors.Is(err, os.ErrNotExist) {
@@ -308,7 +306,8 @@ func TestPrivateIdentityPublicationRecoversTornPair(t *testing.T) {
 	writeExecutable(t, successorDaemon, privateDaemonFixture+"\n# successor\n")
 	successor := current.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, successorDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, successorDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	pendingData, err := task.MarshalCanonical(privateIdentityPublicationRecord{
 		SchemaVersion: task.SchemaVersion,
 		Binding:       successor,
@@ -434,13 +433,102 @@ func TestPrivateRecoveryPublicationReconcilesCommittedPairWithoutStageConfig(t *
 	}
 }
 
+func TestMissingPrivateConfigRefusesRecordedGenerationWithoutMutation(t *testing.T) {
+	for _, record := range []string{"daemon identity", "binding", "migration journal", "identity publication", "history", "unreadable binding"} {
+		t.Run(record, func(t *testing.T) {
+			root, bindings := newPrivateSuccessorTestState(t)
+			base := filepath.Join(root, privateSupervisorDirectory)
+			if err := ensurePrivateLockFile(base, privateTaskObservationLockName); err != nil {
+				t.Fatal(err)
+			}
+			seedMissingPrivateConfigGeneration(t, root, bindings, record)
+			resolution, err := CurrentResolutionContext()
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotPrivateSuccessorTestState(t, root)
+			_, _, err = ensurePrivateConfigContext(t.Context(), root, resolution, allowPrivateGenerationForTest{}, "")
+			if !errors.Is(err, ErrBinding) || !errors.Is(err, ErrPrivateSupervisorMigrationRequired) || privateRecoveryReason(err) != "state_unreadable" || errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("missing config beside %s = %v; want hard state_unreadable refusal", record, err)
+			}
+			assertPrivateTestPathMissing(t, PrivateConfigPath(root))
+			assertPrivateTestPathMissing(t, privateBootstrapRecordPath(root))
+			if !maps.Equal(before, snapshotPrivateSuccessorTestState(t, root)) {
+				t.Fatal("refused config creation changed recorded generation state")
+			}
+		})
+	}
+}
+
+func seedMissingPrivateConfigGeneration(t *testing.T, root string, bindings map[string]task.SupervisorRef, record string) {
+	t.Helper()
+	base := filepath.Join(root, privateSupervisorDirectory)
+	switch record {
+	case "daemon identity":
+		writePrivateSuccessorTestRecord(t, privateDaemonIdentityPath(base), privateDaemonIdentityForBinding(bindings["A"]))
+	case "binding":
+		writePrivateSuccessorTestRecord(t, privateSupervisorBindingPath(root), privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: bindings["A"]})
+	case "migration journal", "identity publication":
+		seedPrivateSuccessorTestBlocker(t, root, bindings, record)
+	case "history":
+		writePrivateSuccessorTestRecord(t, privateMigrationHistoryPath(base), privateMigrationHistory{SchemaVersion: task.SchemaVersion, Migrations: []privateMigrationRecord{}})
+	case "unreadable binding":
+		writePrivateSuccessorTestBytes(t, privateSupervisorBindingPath(root), []byte("{"))
+	default:
+		t.Fatalf("unknown missing-config generation fixture %q", record)
+	}
+}
+
+func TestMissingPrivateConfigAllowsFreshAndSchemaOnlyBootstrap(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "schema-only retry"}[pending], func(t *testing.T) {
+			testMissingPrivateConfigBootstrap(t, pending)
+		})
+	}
+}
+
+func testMissingPrivateConfigBootstrap(t *testing.T, pending bool) {
+	t.Helper()
+	_, root := newPrivateSupervisorTestRoots(t)
+	base := filepath.Join(root, privateSupervisorDirectory)
+	if err := ensurePrivateBase(base); err != nil {
+		t.Fatal(err)
+	}
+	var bootstrapBefore []byte
+	if pending {
+		if err := markPrivateBootstrapPending(root); err != nil {
+			t.Fatal(err)
+		}
+		bootstrapBefore = readPrivateSupervisorFile(t, privateBootstrapRecordPath(root))
+	}
+	resolution, err := CurrentResolutionContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath, configBase, err := ensurePrivateConfigContext(t.Context(), root, resolution, allowPrivateGenerationForTest{}, "")
+	if err != nil || configPath != PrivateConfigPath(root) || configBase != base {
+		t.Fatalf("fresh/retry config creation failed: path=%q base=%q err=%v", configPath, configBase, err)
+	}
+	if _, err = readPrivateConfig(configPath, base, resolution); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := readPrivateBootstrapRecord(root)
+	if err != nil || !found || record.Restart != nil {
+		t.Fatalf("config did not retain schema-only bootstrap ownership: found=%t record=%+v err=%v", found, record, err)
+	}
+	if pending {
+		assertPrivateTestFileUnchanged(t, privateBootstrapRecordPath(root), bootstrapBefore, true)
+	}
+}
+
 func TestFreshPrivateConfigRecordsBootstrapIntentBeforePublication(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	resolution, err := CurrentResolutionContext()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = ensurePrivateConfig(fixture.stateRoot, resolution); err != nil {
+	callback := privateInstalledCallbackForTest(t, fixture.stateRoot)
+	if _, _, err = ensurePrivateConfigContext(t.Context(), fixture.stateRoot, resolution, allowPrivateGenerationForTest{}, callback); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := PrivateBootstrapPending(fixture.stateRoot)
@@ -450,7 +538,7 @@ func TestFreshPrivateConfigRecordsBootstrapIntentBeforePublication(t *testing.T)
 	if !pending {
 		t.Fatal("fresh private config was published without bootstrap intent")
 	}
-	if _, err = BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout}); err != nil {
+	if _, err = BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout, PrivateTerminalEventRunner: callback, DaemonWaitOwner: privateFixtureDaemonWaitOwner(t)}); err != nil {
 		t.Fatalf("partial private bootstrap was not recoverable: %v", err)
 	}
 	pending, err = PrivateBootstrapPending(fixture.stateRoot)
@@ -464,7 +552,7 @@ func TestFreshPrivateConfigRecordsBootstrapIntentBeforePublication(t *testing.T)
 
 func TestFreshPrivateConfigUsesCompactDarwinSocketWithinNativeLimit(t *testing.T) {
 	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
-	configPath, base, err := ensurePrivateConfig(stateRoot, resolution)
+	configPath, base, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +579,7 @@ func TestFreshPrivateConfigUsesCompactDarwinSocketWithinNativeLimit(t *testing.T
 
 func TestFreshPrivateConfigRejectsUnrepresentableDarwinSocketBeforePublication(t *testing.T) {
 	stateRoot, resolution := newPrivateStateRootAtBaseLength(t, 104)
-	if _, _, err := ensurePrivateConfig(stateRoot, resolution); !errors.Is(err, errUnixSocketPathTooLong) {
+	if _, _, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{}); !errors.Is(err, errUnixSocketPathTooLong) {
 		t.Fatalf("unrepresentable socket error = %v", err)
 	}
 	if _, err := os.Stat(PrivateConfigPath(stateRoot)); !errors.Is(err, os.ErrNotExist) {
@@ -520,7 +608,7 @@ func TestExistingValidPrivateConfigRemainsByteIdentical(t *testing.T) {
 	if err := createPrivateConfig(configPath, base, source); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ensurePrivateConfig(stateRoot, resolution); err != nil {
+	if _, _, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(configPath)
@@ -557,7 +645,7 @@ func TestPendingPrivateConfigRecoversReplacementVisibleBeforeDirectoryBarrier(t 
 		t.Fatal(err)
 	}
 
-	if _, _, err = ensurePrivateConfig(stateRoot, resolution); err != nil {
+	if _, _, err = ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{}); err != nil {
 		t.Fatalf("visible replacement was not recovered: %v", err)
 	}
 	resolved, err := readPrivateConfig(configPath, base, resolution)
@@ -581,7 +669,7 @@ func TestConcurrentCompactPrivateConfigBootstrapConverges(t *testing.T) {
 			defer wait.Done()
 			<-start
 			errorsByCaller <- WithBootstrapLock(context.Background(), stateRoot, func() error {
-				_, _, err := ensurePrivateConfig(stateRoot, resolution)
+				_, _, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{})
 				return err
 			})
 		}()
@@ -613,7 +701,7 @@ func TestIncompletePrivateConfigRepairsOwnedLegacyDarwinPath(t *testing.T) {
 		t.Fatalf("legacy config validation = %v", err)
 	}
 
-	gotPath, gotBase, err := ensurePrivateConfig(stateRoot, resolution)
+	gotPath, gotBase, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{})
 	if err != nil {
 		t.Fatalf("owned incomplete config was not repaired: %v", err)
 	}
@@ -627,7 +715,7 @@ func TestIncompletePrivateConfigRepairsOwnedLegacyDarwinPath(t *testing.T) {
 	if resolved.SocketPath != filepath.Join(base, "s") {
 		t.Fatalf("repaired socket path = %q", resolved.SocketPath)
 	}
-	if _, _, err = ensurePrivateConfig(stateRoot, resolution); err != nil {
+	if _, _, err = ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{}); err != nil {
 		t.Fatalf("repaired config was not idempotent: %v", err)
 	}
 }
@@ -652,7 +740,7 @@ func TestIncompletePrivateConfigRepairRefusesAmbiguousState(t *testing.T) {
 			stateRoot, resolution, base, configPath, source := newIncompletePrivateConfig(t, test.pending, test.changed)
 			addIncompletePrivateConfigArtifact(t, stateRoot, base, test.artifact)
 
-			_, _, err := ensurePrivateConfig(stateRoot, resolution)
+			_, _, err := ensurePrivateConfigContext(t.Context(), stateRoot, resolution, allowPrivateGenerationForTest{})
 			if !errors.Is(err, errUnixSocketPathTooLong) {
 				t.Fatalf("unsafe repair was not refused: %v", err)
 			}
@@ -782,4 +870,8 @@ func newPrivateStateRootAtBaseLength(t *testing.T, targetBaseLength int) (string
 		Username: "delegate-test",
 		Cwd:      parent,
 	}
+}
+
+func privateConfigYAML(base string) string {
+	return privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"))
 }

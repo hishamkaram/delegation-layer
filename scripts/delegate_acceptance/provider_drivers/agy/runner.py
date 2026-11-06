@@ -19,7 +19,6 @@ from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifeti
 from scripts.delegate_acceptance.paths.operations import write_bytes
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.supervisor.config_policy import config_for
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.directories.finalization import finalize_acceptance_artifacts
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.provider_drivers.agy.constants import (FINALIZATION_SECONDS, L3_NATIVE_TIMEOUT, MODE, PROVIDER, TASK_BUDGET, TIMEOUT_MARKER, WATCH_SECONDS)
@@ -121,7 +120,6 @@ class NativeRun:
         self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.process_owner = DirectoryOwner()
@@ -179,9 +177,10 @@ class NativeRun:
         self.processes.run("isolation-probe", [str(self.probe), "isolate", str(self.pueue_config), str(self.pueue_base)], REPO_ROOT,
             timeout=30)
         write_json(self.output / "binding.json", {
-            "agy": str(self.agy), "agy_version": self.provider_version, "agy_sha256": self.provider_sha256,
-            "pueue": str(self.pueue), "pueue_sha256": digest(self.pueue),
-            "pueued": str(self.pueued), "pueued_sha256": digest(self.pueued),
+            "schema_version": 2, "representation": "installed-paths",
+            "agy": str(self.agy), "agy_version": self.provider_version,
+            "pueue": str(self.pueue),
+            "pueued": str(self.pueued),
             "pueue_version": self.pueue_version, "pueued_version": self.pueued_version,
             "pueue_base": str(self.pueue_base), "pueue_config": str(self.pueue_config),
             "environment_values_in_record": False,

@@ -426,7 +426,7 @@ class NativeAcceptance:
             candidate = supplemental.candidate_from_aggregate(
                 clean_absolute(aggregate, "canonical aggregate"), observation, self.delegate)
             supplemental.require_selected_binaries(candidate, {
-                "runner_sha256": self.runner, "pueue_sha256": self.pueue, "pueued_sha256": self.pueued})
+                "delegate-run": self.runner, "pueue": self.pueue, "pueued": self.pueued})
         except (EvidenceError, OSError) as error:
             raise AcceptanceFailure(f"continuation candidate is not bound: {error}") from error
         self.harness_observation = observation

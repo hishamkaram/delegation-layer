@@ -167,9 +167,6 @@ esac
             task_id: {
                 "executable": provider_executable,
                 "version": f"fixture-{position + 1}",
-                "sha256": hashlib.sha256(
-                    f"{case.case_id}:{alias}".encode()
-                ).hexdigest(),
             }
             for position, (alias, task_id) in enumerate(tasks.items())
         }
@@ -200,15 +197,8 @@ esac
             "requested_model": None, "requested_effort": None,
             "provider_executable": first_runtime["executable"],
             "provider_version": first_runtime["version"],
-            "provider_sha256": first_runtime["sha256"],
-            "delegate_sha256": hashlib.sha256(
-                (self.extract / "delegate").read_bytes()).hexdigest(),
-            "runner_sha256": hashlib.sha256(
-                (self.extract / "delegate-run").read_bytes()).hexdigest(),
-            "pueue_sha256": hashlib.sha256(
-                (self.extract / "pueue").read_bytes()).hexdigest(),
-            "pueued_sha256": hashlib.sha256(
-                (self.extract / "pueued").read_bytes()).hexdigest(),
+            "schema_version": 2, "representation": "installed-paths",
+            "installed_executables": {name: str((self.extract / name).resolve()) for name in verifier.BINARIES},
         }), encoding="utf-8")
         (case_directory / "cleanup.json").write_text(json.dumps({
             "status": "removed", "supervisor_shutdown_observed": True,
@@ -270,7 +260,7 @@ esac
         self.assertEqual(set(receipt["binaries"]), set(verifier.BINARIES))
         for name, binary in receipt["binaries"].items():
             self.assertEqual(Path(binary["path"]).resolve(), (self.extract / name).resolve())
-            self.assertEqual(binary["sha256"], hashlib.sha256((self.extract / name).read_bytes()).hexdigest())
+            self.assertNotIn("sha256", binary)
         self.assertEqual(receipt["delegate_build_identity"]["version"], "1.2.3")
         self.assertEqual(receipt["default_path_observation"]["observed_state"], "not_initialized")
         self.assertEqual(receipt["default_path_observation"]["explicit_path_overrides"], [])
@@ -516,7 +506,7 @@ esac
         first = aggregate["cases"][0]
         compact_path = Path(first["receipt_path"])
         compact = json.loads(compact_path.read_text(encoding="utf-8"))
-        compact["source_proof"]["binary_identities"]["sha256"]["delegate_sha256"] = "f" * 64
+        compact["source_proof"]["binary_identities"]["paths"]["delegate"] = str(self.root / "foreign" / "delegate")
         compact_bytes = (json.dumps(
             compact, sort_keys=True, separators=(",", ":"), allow_nan=False,
         ) + "\n").encode()
@@ -789,13 +779,13 @@ esac
         self.assertEqual(receipt["native_acceptance"]["aggregate_status"], "BLOCKED")
         self.assertFalse(self.assets.exists())
 
-    def test_native_finalizer_rejects_changed_binary_hash(self):
+    def test_native_finalizer_allows_compatible_in_place_runner_update(self):
         self.assertEqual(self.verify(), 0)
-        (self.extract / "delegate-run").write_bytes(b"replaced release binary")
+        (self.extract / "delegate-run").write_bytes(b"#!/bin/sh\nexit 0\n")
         exit_file = self.root / "acceptance.exit"
         exit_file.write_text("0\n", encoding="ascii")
         aggregate_receipt = self.write_aggregate()
-        final_receipt_path = self.root / "native-hash-mismatch.json"
+        final_receipt_path = self.root / "native-compatible-update.json"
         code = verifier.finalize_native(Namespace(
             receipt=str(final_receipt_path), archive_receipt=str(self.receipt_path),
             aggregate_receipt=str(aggregate_receipt),
@@ -803,15 +793,15 @@ esac
             acceptance_outcome="success", exit_code_file=str(exit_file),
             tag=TAG, source_revision=REVISION,
         ))
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         receipt = json.loads(final_receipt_path.read_text(encoding="utf-8"))
-        self.assertEqual(receipt["failure"]["code"], "release_binary_identity_changed")
-        self.assertTrue(self.extract.exists())
+        self.assertEqual(receipt["verdict"], "pass")
+        self.assertFalse(self.extract.exists())
 
     def test_native_finalizer_rejects_binary_path_replacement(self):
         self.assertEqual(self.verify(), 0)
         outside = self.root / "outside-binary"
-        outside.write_bytes((self.extract / "pueue").read_bytes())
+        outside.write_bytes(b"independent outside target fixture\n")
         (self.extract / "pueue").unlink()
         (self.extract / "pueue").symlink_to(outside)
         exit_file = self.root / "acceptance.exit"

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,12 +14,10 @@ import (
 )
 
 func TestPublishedPairReconcilesPathSplit(t *testing.T) {
-	for _, historical := range []bool{false, true} {
-		for _, stopped := range []bool{false, true} {
-			t.Run(reconcileTestName(historical, stopped), func(t *testing.T) {
-				testPublishedPairPathSplit(t, historical, stopped)
-			})
-		}
+	for _, stopped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "live", true: "stopped"}[stopped], func(t *testing.T) {
+			testPublishedPairPathSplit(t, stopped)
+		})
 	}
 }
 
@@ -28,7 +27,7 @@ func TestPreparePrivateMigrationPinsPublishedResolver(t *testing.T) {
 	var prepared *Client
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		var prepareErr error
-		prepared, prepareErr = PreparePrivateForMigrationWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: privateTestObservationTimeout})
+		prepared, prepareErr = PreparePrivateForMigrationWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
 		return prepareErr
 	})
 	if prepared != nil {
@@ -46,13 +45,10 @@ func TestPreparePrivateMigrationPinsPublishedResolver(t *testing.T) {
 	}
 }
 
-func testPublishedPairPathSplit(t *testing.T, historical, stopped bool) {
+func testPublishedPairPathSplit(t *testing.T, stopped bool) {
 	t.Helper()
 	fixture, original, candidate := newPrivateReconciliationFixture(t)
 	identity := privateDaemonIdentityForBinding(candidate)
-	if historical {
-		identity = privateDaemonIdentity{Executable: identity.Executable, SHA256: identity.SHA256}
-	}
 	identityPath := privateDaemonIdentityPath(filepath.Dir(original.ConfigPath))
 	writePrivateSuccessorTestRecord(t, identityPath, identity)
 	before := readPrivateSupervisorFile(t, identityPath)
@@ -76,33 +72,52 @@ func testPublishedPairPathSplit(t *testing.T, historical, stopped bool) {
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 }
 
-func TestPublishedPairRestartsExactRetainedPair(t *testing.T) {
+func TestPublishedPairRefusesUnrecordedStoppedReplacement(t *testing.T) {
 	fixture, original, candidate := newPrivateReconciliationFixture(t)
 	for _, path := range []string{original.ClientExecutable, original.DaemonExecutable, filepath.Join(filepath.Dir(original.ConfigPath), "ready")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := reconcilePrivateTestPair(t, fixture, candidate); err != nil {
-		t.Fatal(err)
+	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+	for range 2 {
+		err := reconcilePrivateTestPair(t, fixture, candidate)
+		if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) || privateRecoveryReason(err) != "predecessor_pair_unavailable" {
+			t.Fatalf("unrecorded stopped replacement = %v, want predecessor_pair_unavailable", err)
+		}
+		if after := snapshotPrivateSuccessorTestState(t, fixture.stateRoot); !reflect.DeepEqual(before, after) {
+			t.Fatal("unrecorded stopped replacement changed private state or daemon logs")
+		}
+		assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 	}
-	got, found, err := ReadPrivateSupervisorBinding(fixture.stateRoot)
-	if err != nil || !found || got != candidate {
-		t.Fatalf("exact restart publication=%+v found=%t err=%v", got, found, err)
+}
+
+func TestPublishedHistoricalPairConflictRefusesBeforeSelection(t *testing.T) {
+	fixture, published, candidate := newPrivateReconciliationFixture(t)
+	published.ExecutableIdentity = ""
+	published.ClientSHA256, published.DaemonSHA256 = strings.Repeat("a", 64), strings.Repeat("b", 64)
+	writePrivateSuccessorTestRecord(t, privateSupervisorBindingPath(fixture.stateRoot), privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: published})
+	writePrivateSuccessorTestRecord(t, privateDaemonIdentityPath(filepath.Dir(published.ConfigPath)), privateDaemonIdentityForBinding(candidate))
+	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+	selected := false
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		_, err := ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, func(context.Context) (string, string, error) {
+			selected = true
+			return candidate.ClientExecutable, candidate.DaemonExecutable, nil
+		}, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
+		return err
+	})
+	if !errors.Is(err, ErrBinding) || !errors.Is(err, ErrPrivateSupervisorMigrationRequired) || privateRecoveryReason(err) != "identity_conflict" || selected {
+		t.Fatalf("historical conflict reached replacement selection: selected=%t err=%v", selected, err)
 	}
-	identity := readPrivateDaemonIdentity(t, fixture.stateRoot)
-	if !privateDaemonIdentityMatchesBinding(identity, candidate) {
-		t.Fatalf("restart published a different launch identity: %+v", identity)
+	if after := snapshotPrivateSuccessorTestState(t, fixture.stateRoot); !reflect.DeepEqual(before, after) {
+		t.Fatal("historical conflict changed private state or daemon logs")
 	}
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
-	if err = reconcilePrivateTestPair(t, fixture, candidate); err != nil {
-		t.Fatal(err)
-	}
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 }
 
 func TestSupervisorUpgradePreservesConflictingState(t *testing.T) {
-	for _, fault := range []string{"live-missing-pair", "different-bytes", "bootstrap", "history-predecessor", "history-successor"} {
+	for _, fault := range []string{"live-missing-pair", "bootstrap", "history-predecessor", "history-successor"} {
 		t.Run(fault, func(t *testing.T) {
 			fixture, original, candidate := newPrivateReconciliationFixture(t)
 			identity := privateDaemonIdentityForBinding(candidate)
@@ -114,7 +129,7 @@ func TestSupervisorUpgradePreservesConflictingState(t *testing.T) {
 			}
 			identityPath := privateDaemonIdentityPath(filepath.Dir(original.ConfigPath))
 			writePrivateSuccessorTestRecord(t, identityPath, identity)
-			injectPrivateReconciliationFault(t, fixture, original, candidate, identity, fault)
+			injectPrivateReconciliationFault(t, fixture, original, identity, fault)
 			bindingBefore := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 			identityBefore := readPrivateSupervisorFile(t, identityPath)
 			err := reconcilePrivateTestPair(t, fixture, candidate)
@@ -128,11 +143,9 @@ func TestSupervisorUpgradePreservesConflictingState(t *testing.T) {
 	}
 }
 
-func injectPrivateReconciliationFault(t *testing.T, fixture privateSupervisorTestFixture, original, candidate task.SupervisorRef, identity privateDaemonIdentity, fault string) {
+func injectPrivateReconciliationFault(t *testing.T, fixture privateSupervisorTestFixture, original task.SupervisorRef, identity privateDaemonIdentity, fault string) {
 	t.Helper()
 	switch fault {
-	case "different-bytes":
-		writeExecutable(t, candidate.DaemonExecutable, privateDaemonFixture+"\n# changed\n")
 	case "bootstrap":
 		if err := markPrivateBootstrapPending(fixture.stateRoot); err != nil {
 			t.Fatal(err)
@@ -153,10 +166,10 @@ func TestInspectionPreservesVerifiedPredecessor(t *testing.T) {
 	if err := os.Remove(privateSupervisorBindingPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
 	}
-	if err := PublishVerifiedPrivatePredecessorWithLock(t.Context(), fixture.stateRoot, candidate); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+	if err := PublishVerifiedPrivatePredecessorWithOptionsAndLock(t.Context(), fixture.stateRoot, candidate, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("unverified predecessor accepted: %v", err)
 	}
-	if err := PublishVerifiedPrivatePredecessorWithLock(t.Context(), fixture.stateRoot, original); err != nil {
+	if err := PublishVerifiedPrivatePredecessorWithOptionsAndLock(t.Context(), fixture.stateRoot, original, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}}); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := ReadPrivateSupervisorBinding(fixture.stateRoot)
@@ -174,7 +187,7 @@ func newPrivateReconciliationFixture(t *testing.T) (privateSupervisorTestFixture
 		t.Fatal("daemon fixture readiness command missing")
 	}
 	// Install publication faults before the client can observe readiness.
-	writeExecutable(t, fixture.daemonPath, beforeReady+`
+	daemonSource := beforeReady + `
 if [ -f "$(dirname "$config")/block-identity-publication" ]; then
   mkdir "$(dirname "$config")/identity.pending.json"
 fi
@@ -182,7 +195,8 @@ if [ -f "$(dirname "$config")/block-daemon-publication" ]; then
   mv "$(dirname "$config")/daemon.identity.json" "$(dirname "$config")/daemon.identity.before-fault.json"
   mkdir "$(dirname "$config")/daemon.identity.json"
 fi
-`+readyCommand+afterReady)
+` + readyCommand + afterReady
+	writeExecutable(t, fixture.daemonPath, daemonSource)
 	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	t.Cleanup(func() {
 		if err := client.Close(); err != nil {
@@ -191,16 +205,11 @@ fi
 	})
 	original := client.Binding()
 	candidate := original
-	directory := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "retained-pair")
+	directory := filepath.Join(filepath.Dir(fixture.stateRoot), "installed-pair")
 	makePrivateTestDirectory(t, directory)
 	candidate.ClientExecutable, candidate.DaemonExecutable = filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
-	for _, pair := range [][2]string{{original.ClientExecutable, candidate.ClientExecutable}, {original.DaemonExecutable, candidate.DaemonExecutable}} {
-		data, err := os.ReadFile(pair[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeExecutable(t, pair[1], string(data))
-	}
+	writeExecutable(t, candidate.ClientExecutable, privateClientFixture)
+	writeExecutable(t, candidate.DaemonExecutable, daemonSource)
 	return fixture, original, candidate
 }
 
@@ -232,6 +241,14 @@ func interruptPrivateRestartPublication(t *testing.T, faultMarker string) (priva
 	t.Helper()
 	fixture, original, candidate := newPrivateReconciliationFixture(t)
 	base := filepath.Dir(original.ConfigPath)
+	options := privateMigrationTestOptions(fixture.stateRoot, privateTestObservationTimeout)
+	waitOwner := privateFixtureDaemonWaitOwner(t)
+	startedPID := 0
+	options.DaemonWaitOwner = daemonWaitOwnerFunc(func(root string, pid int, done <-chan struct{}) error {
+		startedPID = pid
+		return waitOwner.RegisterDaemonWait(root, pid, done)
+	})
+	client := preparePrivateCandidateForTest(t, fixture.stateRoot, candidate.ClientExecutable, candidate.DaemonExecutable, options)
 	for _, path := range []string{original.ClientExecutable, original.DaemonExecutable, filepath.Join(base, "ready")} {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
@@ -240,7 +257,20 @@ func interruptPrivateRestartPublication(t *testing.T, faultMarker string) (priva
 	if err := os.WriteFile(filepath.Join(base, faultMarker), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := reconcilePrivateTestPair(t, fixture, candidate); err == nil {
+	// Reconstruct the old binary's recovery-entry snapshot: B actually started
+	// and became ready before a crash left its exact historical restart intent.
+	if err := startDaemon(t.Context(), fixture.stateRoot, candidate.DaemonExecutable, candidate.ConfigPath, base, options); err != nil {
+		t.Fatal(err)
+	}
+	waitPrivateTransitionReadyForTest(t, fixture.stateRoot, client)
+	if pid, found, err := client.privateDaemonPID(); err != nil || !found || pid != startedPID || startedPID <= 0 {
+		t.Fatalf("ready target PID differs from actual Start: pid=%d started=%d found=%t err=%v", pid, startedPID, found, err)
+	}
+	publishTestPairRestartIntent(t, fixture.stateRoot, original, candidate)
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		return publishPrivateDaemonIdentityContext(ctx, base, candidate, options.PrivateGenerationGuard)
+	})
+	if err == nil {
 		t.Fatal("publication fault was not exercised")
 	}
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
@@ -254,17 +284,12 @@ func interruptPrivateRestartPublication(t *testing.T, faultMarker string) (priva
 func reconcilePrivateTestPair(t *testing.T, fixture privateSupervisorTestFixture, candidate task.SupervisorRef) error {
 	t.Helper()
 	return WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		return ReconcilePublishedPrivatePairWithLock(ctx, fixture.stateRoot, candidate.ClientExecutable, candidate.DaemonExecutable, Options{ObservationTimeout: privateTestObservationTimeout})
+		outcome, err := ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, func(context.Context) (string, string, error) {
+			return candidate.ClientExecutable, candidate.DaemonExecutable, nil
+		}, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+		if err != nil {
+			return err
+		}
+		return outcome.ProjectedError()
 	})
-}
-
-func reconcileTestName(historical, stopped bool) string {
-	name := "current"
-	if historical {
-		name = "historical"
-	}
-	if stopped {
-		return name + "/stopped"
-	}
-	return name + "/live"
 }

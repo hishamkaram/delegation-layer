@@ -11,12 +11,15 @@ from .summaries import TreeSummary, is_tree_summary
 from .summaries import _empty_summary as _empty_summary
 from .summaries import _summary_with_removed as _summary_with_removed
 from ..evidence.digests import sha as _digest_bytes
-from ..evidence.validation import AcceptanceFailure
-from ..tasks.runtime_metadata import _provider_runtime_identity
+from .identities import (
+    _compact_installed_paths,
+    _compact_runtime_identity,
+    _compact_provider_runtime_identities,
+    _runtime_identity_matches,
+)
 from .lifetime_closure import lifetime_closure_error
 from .production_acp import production_acp_proof_error, requires_production_acp
 import json
-import posixpath
 import re
 
 
@@ -190,45 +193,6 @@ def _source_status_matches(raw: dict[str, object], status: str) -> bool:
         "BLOCKED": normalized in {"blocked", "block"},
         "FAIL": normalized in {"fail", "failed"},
     }[status]
-
-
-def _safe_runtime_executable(value: object) -> str | None:
-    if (not isinstance(value, str) or not value or len(value) > 4096
-            or not posixpath.isabs(value) or any(ord(character) < 32 for character in value)):
-        return None
-    return value
-
-
-def _compact_runtime_identity(value: object) -> dict[str, str] | None:
-    """Project receipt keys through the canonical task diagnostic validator."""
-    if (not isinstance(value, dict) or "executable" not in value
-            or not set(value) <= {"executable", "version", "sha256"}
-            or _safe_runtime_executable(value.get("executable")) is None):
-        return None
-    try:
-        return _provider_runtime_identity({"provider_" + key: item for key, item in value.items()}, "recorded", "native receipt")
-    except AcceptanceFailure:
-        return None
-
-
-def _compact_provider_runtime_identities(
-        raw: dict[str, object]) -> dict[str, dict[str, str]] | None:
-    value = raw.get("provider_runtime_identities")
-    if not isinstance(value, dict) or not value or len(value) > 64:
-        return None
-    result: dict[str, dict[str, str]] = {}
-    for task_id, identity in value.items():
-        normalized = _compact_runtime_identity(identity)
-        if (not isinstance(task_id, str) or re.fullmatch(r"[0-9a-f]{32}", task_id) is None
-                or normalized is None):
-            return None
-        result[task_id] = normalized
-    return dict(sorted(result.items()))
-
-
-def _runtime_identity_matches(left: dict[str, str], right: dict[str, str]) -> bool:
-    return left.get("executable") == right.get("executable") and all(
-        left[key] == right[key] for key in ("version", "sha256") if left.get(key) and right.get(key))
 
 
 def _safe_proof_text(value: object, *, allow_empty: bool = False) -> str | None:
@@ -550,10 +514,17 @@ def _validate_case_sessions(proof: Mapping[str, object]) -> tuple[list[dict[str,
 def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -> tuple[dict[str, object], list[str]]:
     binaries = proof.get("binary_identities")
     if (not isinstance(binaries, dict) or not isinstance(binaries.get("state"), str)
-            or binaries.get("state") not in {"complete", "unavailable"}
-            or not isinstance(binaries.get("sha256"), dict)
-            or any(not isinstance(key, str) or not isinstance(value, str)
-                   or HEX_DIGEST.fullmatch(value) is None for key, value in binaries["sha256"].items())):
+            or binaries.get("state") not in {"complete", "unavailable"}):
+        raise EvidenceError("aggregate_case_binary_identity_invalid")
+    current = binaries.get("schema_version") == 2 and binaries.get("representation") == "installed-paths"
+    if current:
+        if ("sha256" in binaries or _compact_installed_paths(
+                binaries.get("paths"), complete=binaries["state"] == "complete") is None):
+            raise EvidenceError("aggregate_case_binary_selection_invalid")
+    elif ("schema_version" in binaries or not isinstance(binaries.get("sha256"), dict)
+          or any(not isinstance(key, str) or not isinstance(value, str)
+                 or HEX_DIGEST.fullmatch(value) is None for key, value in binaries["sha256"].items())):
+        # Existing sealed receipts retain their historical representation and cleanup authority.
         raise EvidenceError("aggregate_case_binary_identity_invalid")
     binary_task_ids = binaries.get("task_ids")
     if (not isinstance(binary_task_ids, list) or len(binary_task_ids) > 64
@@ -577,7 +548,7 @@ def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -
             or re.fullmatch(r"[0-9a-f]{32}", provider_binding["task_id"]) is None
             or binding_identity is None):
         raise EvidenceError("aggregate_case_provider_binding_invalid")
-    if binaries.get("state") == "complete" and not {
+    if not current and binaries.get("state") == "complete" and not {
             "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
     }.issubset(binaries["sha256"]):
         raise EvidenceError("aggregate_case_binary_identity_incomplete")
@@ -587,7 +558,7 @@ def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -
             or sorted(normalized_runtimes) != binary_task_ids
             or not _runtime_identity_matches(
                 normalized_runtimes.get(provider_binding["task_id"], {}), binding_identity)
-            or (binding_identity["sha256"] and "provider_sha256" in binaries["sha256"]
+            or (not current and binding_identity.get("sha256") and "provider_sha256" in binaries["sha256"]
                 and binaries["sha256"]["provider_sha256"] != binding_identity["sha256"])):
         raise EvidenceError("aggregate_case_provider_runtime_coverage_invalid")
     if case.get("binary_identities") != binaries:
@@ -702,7 +673,8 @@ def _unresolved_source_proof(row: MatrixRow, source_digest: str | None) -> dict[
             "state": "not-recorded", "values": [], "by_alias": {},
         },
         "binary_identities": {
-            "state": "unavailable", "sha256": {}, "task_ids": [],
+            "schema_version": 2, "representation": "installed-paths",
+            "state": "unavailable", "paths": {}, "task_ids": [],
             "provider_binding": None, "provider_runtime_identities": {},
         },
         "lifecycle_proof": {"state": "unresolved"},

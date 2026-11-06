@@ -29,12 +29,13 @@ const (
 )
 
 type controlOwnerRequest struct {
-	SchemaVersion int      `json:"schema_version"`
-	CommandID     string   `json:"command_id"`
-	Executable    string   `json:"executable"`
-	Arguments     []string `json:"arguments"`
-	Directory     string   `json:"directory"`
-	StatusVersion string   `json:"status_version,omitempty"`
+	SchemaVersion int                   `json:"schema_version"`
+	CommandID     string                `json:"command_id"`
+	Executable    string                `json:"executable"`
+	Arguments     []string              `json:"arguments"`
+	Directory     string                `json:"directory"`
+	StatusVersion string                `json:"status_version,omitempty"`
+	Shutdown      *controlOwnerShutdown `json:"shutdown,omitempty"`
 }
 
 type controlOwnerEvent struct {
@@ -151,10 +152,15 @@ func runControlOwner(socketFD, leaseCount int, expectedCommandID string) (result
 		resultErr = errors.Join(resultErr, closeControlLeaseFiles(leases))
 	}()
 
+	forwarded, forwardErr := controlOwnerShutdownFiles(request, leases)
+	if forwardErr != nil {
+		return reportFailure(forwardErr)
+	}
 	command := exec.Command(request.Executable, request.Arguments[1:]...)
 	command.Args = append([]string(nil), request.Arguments...)
 	command.Dir = request.Directory
 	command.Env = os.Environ()
+	command.ExtraFiles = forwarded
 	deliveryAvailable := true
 	result := runOwnedCommand(command, request.StatusVersion, func(started CommandResult) {
 		event := controlOwnerEvent{
@@ -213,7 +219,9 @@ func writeControlOwnerCompletion(connection net.Conn, result CommandResult) erro
 	return writeControlOwnerEvent(connection, event)
 }
 
-func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string) *Pending {
+// The caller owns the permit policy. This boundary prepares actual inherited
+// resources before consuming it, then attempts the external owner's Start once.
+func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error) *Pending {
 	var commandArgs []string
 	if cmd != nil {
 		commandArgs = append([]string(nil), cmd.Args...)
@@ -227,13 +235,18 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 		transport.CompletePending(pending, result)
 		return pending
 	}
-	if ctx == nil || !validExternalControlCommand(ownerExecutable, cmd) {
-		return fail(ErrConfiguration)
+	if err := validateControlOwnerStart(ctx, ownerExecutable, cmd); err != nil {
+		return fail(err)
 	}
 	transport.EmitCommand(observer, commandID, "entry", cmd, CommandResult{ExitCode: -1})
-	leases, err := duplicateControlLeaseFiles(ctx)
+	duplicates, err := duplicateControlLeaseFiles(ctx)
 	if err != nil {
 		return fail(err)
+	}
+	leases := duplicates
+	shutdown, shutdownErr := privateShutdownForwarding(ctx, duplicates)
+	if shutdownErr != nil {
+		return fail(errors.Join(shutdownErr, closeControlLeaseFiles(leases)))
 	}
 	if len(leases) > 16 {
 		return fail(errors.Join(ErrConfiguration, closeControlLeaseFiles(leases)))
@@ -246,10 +259,6 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 	owner.Dir = cmd.Dir
 	owner.Env = slices.Clone(cmd.Env)
 	owner.ExtraFiles = append([]*os.File{child}, leases...)
-	if err = owner.Start(); err != nil {
-		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
-	}
-	closeErr := errors.Join(child.Close(), closeControlLeaseFiles(leases))
 	request := controlOwnerRequest{
 		SchemaVersion: task.SchemaVersion,
 		CommandID:     commandID,
@@ -257,7 +266,15 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 		Arguments:     append([]string(nil), cmd.Args...),
 		Directory:     cmd.Dir,
 		StatusVersion: statusVersion,
+		Shutdown:      shutdown,
 	}
+	if err = consumePreparedControlCommand(ctx, request, consume); err != nil {
+		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
+	}
+	if err = owner.Start(); err != nil {
+		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))
+	}
+	closeErr := errors.Join(child.Close(), closeControlLeaseFiles(leases))
 	if err = parent.SetWriteDeadline(time.Now().Add(controlOwnerWriteTimeout)); err == nil {
 		err = writeControlFrame(parent, request, maxControlOwnerRequestBytes)
 	}
@@ -273,6 +290,26 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 	}
 	go observeControlOwner(parent, owner, pending, cmd, commandID, observer)
 	return pending
+}
+
+func validateControlOwnerStart(ctx context.Context, ownerExecutable string, cmd *exec.Cmd) error {
+	if ctx == nil || !validExternalControlCommand(ownerExecutable, cmd) {
+		return ErrConfiguration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if IsLegacyStateRunnerPath(filepath.Dir(filepath.Dir(ownerExecutable)), ownerExecutable) {
+		return errors.Join(ErrConfiguration, errors.New("historical runner copy cannot own new control commands"))
+	}
+	selected, err := canonicalExecutable(ownerExecutable)
+	if err != nil {
+		return err
+	}
+	if IsLegacyStateRunnerPath(filepath.Dir(filepath.Dir(selected)), selected) {
+		return errors.Join(ErrConfiguration, errors.New("historical runner copy cannot own new control commands"))
+	}
+	return nil
 }
 
 func validExternalControlCommand(ownerExecutable string, cmd *exec.Cmd) bool {
@@ -420,6 +457,9 @@ func inheritedControlLeaseFiles(firstFD, count int) ([]*os.File, error) {
 			return nil, errors.Join(errors.New("supervisor control owner inherited an invalid lease"), closeControlLeaseFiles(files))
 		}
 		files = append(files, file)
+		if err := markControlLeaseCloseOnExec(file); err != nil {
+			return nil, errors.Join(err, closeControlLeaseFiles(files))
+		}
 	}
 	return files, nil
 }
@@ -463,7 +503,7 @@ func validateControlOwnerRequest(request controlOwnerRequest) error {
 	if len(request.StatusVersion) > 1024 || strings.IndexByte(request.StatusVersion, 0) >= 0 {
 		return ErrConfiguration
 	}
-	return nil
+	return validateControlOwnerShutdown(request)
 }
 
 func writeControlOwnerEvent(connection net.Conn, event controlOwnerEvent) error {

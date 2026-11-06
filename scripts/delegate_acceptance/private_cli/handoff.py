@@ -11,7 +11,7 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXE
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_OBSERVATION_PHASE
 from scripts.delegate_acceptance.private_cli.noexec_state import require_unplaced_registrations
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
-from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
+from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate, DisposalLeases
 from pathlib import Path
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
@@ -22,6 +22,7 @@ from scripts.delegate_acceptance.supervisor.config_policy import config_for
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_dispatch_evidence
 from scripts.delegate_acceptance.private_cli.handoff_policy import external_handoff_closure_evidence
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
+from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 import hashlib
 import json
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort
@@ -33,7 +34,7 @@ from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
 from scripts.delegate_acceptance.private_cli.handoff_policy import require_handoff_task_binding
 from scripts.delegate_acceptance.private_cli.commands import run_json
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.queue_policy import task_row_by_label
 import uuid
 from scripts.delegate_acceptance.processes.observation import wait_until
@@ -43,6 +44,7 @@ from dataclasses import dataclass, field
 from scripts.delegate_acceptance.directories.operations import OwnedDirectory
 from scripts.delegate_acceptance.processes.operations import Process
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import ClosedRoot, SupervisorCleanup, PredecessorCleanup
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,9 @@ class HandoffCase:
     handoff_action: str
     case_label: str
     handoff_cases: dict[str, dict[str, object]]
+    disposal: DisposalLeases
+    closed_roots: dict[Path, ClosedRoot | None]
+    supervisor_cleanups: list[SupervisorCleanup | PredecessorCleanup]
     receipt_detail: str = "external_inspection_handoff"
 
 
@@ -110,6 +115,9 @@ def run_external_inspection_handoff_acceptance(
     handoff_action,
     case_label,
     handoff_cases,
+    disposal,
+    closed_roots,
+    supervisor_cleanups,
 ):
     """Prove one external inspection handoff entrypoint and its private successor."""
     return _run_handoff_case(
@@ -135,6 +143,7 @@ def run_external_inspection_handoff_acceptance(
             handoff_action=handoff_action,
             case_label=case_label,
             handoff_cases=handoff_cases,
+            supervisor_cleanups=supervisor_cleanups, disposal=disposal, closed_roots=closed_roots,
         )
     )
 
@@ -366,7 +375,7 @@ def _initial_handoff_evidence(case, external_config, external_endpoint, external
         "task_budget": EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET,
         "provider": "pi:json",
         "fixture": "fake-pi-live-fifo",
-        "provider_fixture": file_fingerprint(case.provider_fixture),
+        "provider_fixture": installed_executable_observation(case.provider_fixture),
         "source_fingerprints": {
             "acceptance_private_cli.py": file_fingerprint(REPOSITORY / "scripts" / "acceptance_private_cli.py"),
             "acceptance_supervisor_common.py": file_fingerprint(
@@ -773,13 +782,15 @@ def _start_external_task(case, evidence, resources, supervisor_control, task_com
 
 def _complete_handoff_success(case, evidence, old_task, record_evidence, supervisor_control):
     supervisor_control.shutdown_external()
-    shutdown_private_supervisor(
+    shutdown_terminal_private_supervisor(
+        case.delegate,
         case.client,
         case.private_config,
         case.env,
         state=case.state,
         task_ids=tuple(case.attempted_task_ids),
         capture_root=case.capture_root,
+        supervisor_cleanups=case.supervisor_cleanups, disposal=case.disposal, closed_roots=case.closed_roots,
     )
     evidence["supervisors"]["private"]["daemon_shutdown"] = "verified"
     evidence["cleanup"]["private_daemon"] = "verified"

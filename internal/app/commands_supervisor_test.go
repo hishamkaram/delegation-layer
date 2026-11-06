@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -35,7 +34,8 @@ func TestExplicitSupervisorConfigCannotClaimPrivateStatePath(t *testing.T) {
 }
 
 func TestLegacyPrivateBindingWithoutDaemonIdentityRequiresResolvedPair(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
+	store, _, _ := newColdSupervisorProbeTestFixture(t)
+	root := store.Root
 	bin := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -52,13 +52,14 @@ func TestLegacyPrivateBindingWithoutDaemonIdentityRequiresResolvedPair(t *testin
 		ConfigDigest:         digest,
 		ObservedVersion:      "legacy-pueue",
 	}
-	if _, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, supervisor.ExecutableLookup{InitialExecutable: initialExecutable}, openNativeSupervisorStore); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{InitialExecutable: initialExecutable}); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("legacy private binding without a resolvable executable pair was accepted: %v", err)
 	}
 }
 
 func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
+	store, _, _ := newColdSupervisorProbeTestFixture(t)
+	root := store.Root
 	digest := task.ComputeSHA256([]byte("legacy supervisor"))
 	saved := task.SupervisorRef{
 		ClientExecutable: "/tmp/pueue", ClientSHA256: digest,
@@ -66,13 +67,14 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
 		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
 	}
-	if _, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, supervisor.ExecutableLookup{}, openNativeSupervisorStore); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{}); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("partial private daemon identity was accepted: %v", err)
 	}
 }
 
 func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
-	root := filepath.Join(testsupport.CanonicalTempDir(t), "state")
+	store, _, _ := newColdSupervisorProbeTestFixture(t)
+	root := store.Root
 	bin := filepath.Join(testsupport.CanonicalTempDir(t), "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
@@ -98,7 +100,7 @@ func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
 	}
 	emptyPath := testsupport.CanonicalTempDir(t)
 	t.Setenv("PATH", emptyPath)
-	_, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, supervisor.ExecutableLookup{InitialExecutable: activeExecutable}, openNativeSupervisorStore)
+	_, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{InitialExecutable: activeExecutable})
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not resolve the active executable pair before validating saved state: %v", err)
 	}
@@ -194,17 +196,16 @@ func TestBuildContinuationArgumentsPinsResolvedRoot(t *testing.T) {
 
 func TestContinuationAdmissionUsesSavedSupervisorBinding(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	digest := strings.Repeat("a", 64)
-	saved := task.SupervisorRef{
-		ClientExecutable:     "/saved/pueue",
-		ClientSHA256:         digest,
-		ResolvedConfigSHA256: digest,
-		Endpoint:             "unix:/saved/pueue.sock",
-		ConfigPath:           filepath.Join(t.TempDir(), "pueue.yml"),
-		ConfigDigest:         digest,
-		ObservedVersion:      "saved-pueue",
-	}
-	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), supervisorAdmissionOptions(Dependencies{ResourceChecker: fixtureResources}, pueue.Options{}), root, true)
+	savedClient, options, _, _ := newOrdinarySubmissionReceiptSupervisor(t)
+	t.Cleanup(func() {
+		if closeErr := savedClient.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	saved := savedClient.Binding()
+	deps := Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "unavailable-pueue")}.withCapturedEnvironment()
+	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps), supervisorAdmissionOptions(deps, options), root, true)
+	settleSupervisorProbeTestClient(t, client, err)
 	if err != nil {
 		t.Fatal(err)
 	}

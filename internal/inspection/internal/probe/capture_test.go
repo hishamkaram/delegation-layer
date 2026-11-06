@@ -8,14 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/provider"
-	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 type nativeTestScope struct {
@@ -26,11 +23,6 @@ type nativeTestScope struct {
 }
 
 func (s nativeTestScope) Context() context.Context { return s.ctx }
-
-// BindCommand makes the same private copy as a scope without a binder.
-func (nativeTestScope) BindCommand(request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
-	return verifiedexec.NewCommandFromRequest(request)
-}
 
 func (s nativeTestScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 	if s.ctx == nil || s.ctx.Err() != nil || s.authorize == nil || cmd == nil || start == nil {
@@ -56,7 +48,7 @@ func captureDefinition(t *testing.T) provider.InspectionDefinition {
 	t.Helper()
 	info := locateTestHelper(t)
 	return provider.InspectionDefinition{
-		Revision: "native-test-v1", Executable: info.Path, ExecutableSHA256: info.SHA256,
+		Revision: "native-test-v1", Executable: info.Path,
 		Directory: "/workspace", Arguments: []string{"fixed"}, Environment: []string{"PATH=/usr/bin"}, OutputLimit: 64,
 		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"eligible":true}`), nil },
 	}
@@ -75,7 +67,9 @@ func TestNativeCaptureOwnsCommandAndMasksDiagnostics(t *testing.T) {
 				t.Fatal("command did not preserve the compiled description and finite stdin")
 			}
 			viewPath = cmd.Path
-			assertImmutableVerifiedView(t, cmd.Path, definition.Executable, definition.ExecutableSHA256)
+			if cmd.Path != definition.Executable {
+				t.Fatalf("selected installed helper changed: %q", cmd.Path)
+			}
 			_, stdoutErr := io.WriteString(cmd.Stdout, "private-native-value")
 			_, stderrErr := io.WriteString(cmd.Stderr, "discarded-private-diagnostic")
 			return errors.Join(stdoutErr, stderrErr)
@@ -86,32 +80,8 @@ func TestNativeCaptureOwnsCommandAndMasksDiagnostics(t *testing.T) {
 	if err != nil || string(data) != "private-native-value" || starts != 1 || waits != 1 || gates != 1 {
 		t.Fatalf("capture result: error=%v starts=%d waits=%d gates=%d", err, starts, waits, gates)
 	}
-	if _, statErr := os.Lstat(viewPath); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("verified view %q survived the owned command: %v", viewPath, statErr)
-	}
-}
-
-// assertImmutableVerifiedView checks that the child runs from a private view,
-// never the mutable admitted path, whose bytes are the admitted bytes and whose
-// directory is sealed read-only. Argument zero keeps the admitted path.
-func assertImmutableVerifiedView(t *testing.T, viewPath, executable, digest string) {
-	t.Helper()
-	if viewPath == "" || viewPath == executable || !strings.Contains(viewPath, "delegation-layer-verified-") {
-		t.Fatalf("verified command path %q is not a private view of %q", viewPath, executable)
-	}
-	data, err := os.ReadFile(viewPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task.ComputeSHA256(data) != digest {
-		t.Fatalf("verified view %q does not hold the admitted bytes", viewPath)
-	}
-	directory, err := os.Lstat(filepath.Dir(viewPath))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if directory.Mode().Perm()&0o222 != 0 {
-		t.Fatalf("verified view directory %q is writable: %v", filepath.Dir(viewPath), directory.Mode())
+	if _, statErr := os.Lstat(viewPath); statErr != nil {
+		t.Fatalf("installed helper disappeared: %v", statErr)
 	}
 }
 

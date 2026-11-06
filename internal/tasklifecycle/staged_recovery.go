@@ -12,6 +12,9 @@ import (
 )
 
 func RecoverStagedSubmission(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (pueue.Observation, error) {
+	if err := td.RequireTaskLaunchPermissionContext(ctx); err != nil {
+		return observation, err
+	}
 	if pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
 		controlContext, cancel := context.WithTimeout(ctx, pueue.PrivateStatusObservationTimeout)
 		repairErr := supervisorcore.EnsureAdmissionSchedulingContext(controlContext, root, client)
@@ -26,6 +29,9 @@ func RecoverStagedSubmission(ctx context.Context, root string, td *taskdir.TaskD
 			return err
 		}
 		return td.RecordSupervisorReceiptContext(ctx, *receipt)
+	}
+	if err := td.RequireTaskLaunchPermissionContext(ctx); err != nil {
+		return observation, err
 	}
 	recovered, err := client.RecoverStagedWithGate(ctx, observation.Identity, observation.NumericTaskID, supervisorcore.SubmissionGate(root), commit)
 	if err == nil || !errors.Is(err, pueue.ErrUnknown) {

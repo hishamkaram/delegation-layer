@@ -11,6 +11,7 @@ import time
 
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.evidence.files import write_json
+from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint, installed_executable_observation
 from .model import (
     MAX_COMPACT_DEPTH, MAX_COMPACT_ITEMS, MAX_COMPACT_STRING, MAX_RECEIPT_BYTES,
 )
@@ -59,20 +60,10 @@ def _compact_value(value: object, depth: int, active: set[int]) -> object:
     return result
 
 
-def file_fingerprint(path: Path) -> dict[str, object]:
-    candidate = Path(path)
-    try:
-        resolved = candidate.resolve(strict=True)
-        info = resolved.stat()
-        if not resolved.is_file():
-            raise OSError("not a regular file")
-        return {
-            "name": resolved.name,
-            "bytes": info.st_size,
-            "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
-        }
-    except OSError:
-        return {"name": candidate.name, "status": "unavailable"}
+def _tool_observation(name: str, path: Path) -> dict[str, object]:
+    if name in ("acceptance-driver", "private-fixture"):
+        return file_fingerprint(path)
+    return installed_executable_observation(path)
 
 
 class ReceiptFinalizer:
@@ -87,12 +78,12 @@ class ReceiptFinalizer:
         self.details: dict[str, object] = {}
         self.write_count = 0
         self.tool_fingerprints = {
-            name: file_fingerprint(path) for name, path in sorted(self.binaries.items())
+            name: _tool_observation(name, path) for name, path in sorted(self.binaries.items())
         }
 
     def refresh_tool_fingerprints(self) -> None:
         self.tool_fingerprints = {
-            name: file_fingerprint(path) for name, path in sorted(self.binaries.items())
+            name: _tool_observation(name, path) for name, path in sorted(self.binaries.items())
         }
 
     def set_source_manifest(self, manifest: dict[str, object]) -> None:
@@ -111,7 +102,7 @@ class ReceiptFinalizer:
             "system": platform.system(),
             "kernel": platform.release(),
             "architecture": platform.machine(),
-            "python": file_fingerprint(Path(sys.executable)),
+            "python": installed_executable_observation(Path(sys.executable)),
         }
         payload = {
             "schema_version": 1,

@@ -13,6 +13,7 @@ from scripts import acceptance_private_cli as private_cli
 from scripts.delegate_acceptance.private_cli import capacity as capacity_impl
 from scripts.delegate_acceptance.private_cli import capacity_dispatch as dispatch_impl
 from scripts.delegate_acceptance.private_cli import admission as admission_impl
+from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.acceptance_tests.private_cli.fixtures import (
     RecordingReleaseGate, _release_live_directory_tokens,
 )
@@ -48,16 +49,23 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.lock = threading.Lock()
         self.dispatched = set()
         self.observed = set()
+        self.healthy_observed = set()
         self.collected = set()
         self.restarts = 0
         self.snapshots = 0
         self.all_running = False
         self.shutdown = False
+        self.migrations = 0
+        self.migration_state = "migrated"
+        self.migration_next_action = "retry_dispatch"
         self.status_bytes = 1024 * 1024 + 1
         self.worker_counts = []
         self.evidence = {}
+        self.run_receipt = AcceptanceReceipt(self.root / "receipt.json", self.total, 2, {})
         self.client_call_log = self.root / "client-calls"
+        self.upgraded_client_call_log = self.root / "upgraded-client-calls"
         self.status_snapshot_owners = 1
+        self.upgraded_status_snapshot_owners = 1
         self.dispatch_burst_barrier = threading.Barrier(2)
         self.upgraded_liveness = "running"
         self.upgraded_error = ""
@@ -82,14 +90,16 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         # owner-lock contention, and 200 native workers are separate executable
         # tests and the mandatory private CLI acceptance gate.
         task_ids, status_bytes = self.run_upgrade()
-        self.assertEqual(self.worker_counts, [2, 2, 16, 16])
+        self.assertEqual(self.worker_counts, [2, 2, 16, 16, 16])
         self.assertEqual(task_ids, [*self.task_ids, self.restart_id])
         self.assertEqual(status_bytes, self.status_bytes)
         self.assertEqual(self.dispatched, set(range(self.total)))
         self.assertEqual(self.observed, set(self.task_ids[:16]))
+        self.assertEqual(self.healthy_observed, set(self.task_ids[:16]))
         self.assertEqual(self.collected, set(self.task_ids))
         self.assertEqual(self.snapshots, 4)
         self.assertEqual(self.restarts, 1)
+        self.assertEqual(self.migrations, 1)
         dispatch_batch = self.evidence["dispatch_batch"]
         self.assertEqual(dispatch_batch["requested_caller_concurrency"], 2)
         self.assertEqual(dispatch_batch["observed_peak_in_flight_dispatch_calls"], 2)
@@ -130,6 +140,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             "concurrent_status_call_count": 16,
             "pueue_status_snapshot_count": 1,
             "shared_status_call_count": 15,
+        })
+        self.assertEqual(self.evidence["status_after_package_removal"], {
+            "concurrent_status_call_count": 16,
+            "pueue_status_snapshot_count": 17,
         })
         receipts = list((self.root / "dispatch-responses").glob("dispatch-[0-9][0-9][0-9].json"))
         self.assertEqual(len(receipts), self.total)
@@ -215,6 +229,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             self.run_upgrade()
         self.assertFalse(self.gate.exists())
         self.assertEqual(self.collected, set())
+        self.assertEqual(self.run_receipt.details["status_coalescing"], self.evidence["status_coalescing"])
 
     def test_missing_status_snapshot_fails_acceptance(self):
         self.status_snapshot_owners = 0
@@ -222,6 +237,43 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             self.run_upgrade()
         self.assertFalse(self.gate.exists())
         self.assertEqual(self.collected, set())
+        self.assertEqual(self.run_receipt.details["status_coalescing"], self.evidence["status_coalescing"])
+
+    def test_missing_pair_without_shared_row_snapshot_fails_acceptance(self):
+        self.upgraded_status_snapshot_owners = 0
+        with self.assertRaisesRegex(RuntimeError, "compatibility probes and shared queue snapshots"):
+            self.run_upgrade()
+        self.assertFalse(self.gate.exists())
+        self.assertEqual(self.collected, set())
+        self.assertEqual(self.evidence["status_after_package_removal"], {
+            "concurrent_status_call_count": 16,
+            "pueue_status_snapshot_count": 16,
+        })
+        self.assertEqual(
+            self.run_receipt.details["status_after_package_removal"], self.evidence["status_after_package_removal"]
+        )
+
+    def test_missing_pair_with_unshared_row_snapshots_fails_acceptance(self):
+        self.upgraded_status_snapshot_owners = 16
+        with self.assertRaisesRegex(RuntimeError, "compatibility probes and shared queue snapshots"):
+            self.run_upgrade()
+        self.assertFalse(self.gate.exists())
+        self.assertEqual(self.collected, set())
+        self.assertEqual(self.evidence["status_after_package_removal"], {
+            "concurrent_status_call_count": 16,
+            "pueue_status_snapshot_count": 32,
+        })
+        self.assertEqual(
+            self.run_receipt.details["status_after_package_removal"], self.evidence["status_after_package_removal"]
+        )
+
+    def test_missing_pair_multiple_shared_row_flights_pass_acceptance(self):
+        self.upgraded_status_snapshot_owners = 2
+        self.run_upgrade()
+        self.assertEqual(self.evidence["status_after_package_removal"], {
+            "concurrent_status_call_count": 16,
+            "pueue_status_snapshot_count": 18,
+        })
 
     def test_incomplete_lifetime_owner_cohort_cannot_open_gate(self):
         self.owner_proof_count = self.total - 1
@@ -229,6 +281,26 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             self.run_upgrade()
         self.assertFalse(self.gate.exists())
         self.assertEqual(self.collected, set())
+
+    def test_blocked_migration_fails_before_shutdown(self):
+        self.migration_state = "blocked"
+        self.assert_migration_refused()
+
+    def test_unavailable_migration_fails_before_shutdown(self):
+        self.migration_state = "unavailable"
+        self.assert_migration_refused()
+
+    def test_migration_without_retry_authority_fails_before_shutdown(self):
+        self.migration_next_action = "stop_and_report"
+        self.assert_migration_refused()
+
+    def assert_migration_refused(self):
+        with self.assertRaisesRegex(RuntimeError, "migration did not authorize restart"):
+            self.run_upgrade()
+        self.assertEqual(self.migrations, 1)
+        self.assertFalse(self.shutdown)
+        self.assertEqual(self.restarts, 0)
+        self.assertEqual(self.collected, set(self.task_ids))
 
     def test_partial_dispatch_failure_retains_every_created_task_identity_once(self):
         self.failed_dispatch_index = 10
@@ -272,8 +344,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 evidence=self.evidence,
                 lease_nonce="e" * 32,
                 client_call_log=self.client_call_log,
+                upgraded_client_call_log=self.upgraded_client_call_log,
                 attempted_task_ids=self.attempted_task_ids,
                 capture_root=self.capture_root,
+                run_receipt=self.run_receipt,
             )
 
     def lease_specifications(self, state, responses, waiter_directory, nonce):
@@ -346,16 +420,23 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             response = self.dispatch(args, receipt)
         elif command == "status":
             task_id = args[3]
+            healthy = receipt is not None and receipt.name.startswith("status-before-removal-")
             upgraded = receipt is not None and receipt.name.startswith("status-after-upgrade-")
-            if upgraded:
+            if healthy or upgraded:
                 self.assertTrue(self.all_running)
                 self.assertFalse(self.gate.exists())
-                self.assertFalse(self.old_layout.exists())
+                self.assertEqual(self.old_layout.exists(), healthy)
+                if upgraded:
+                    self.assertEqual(self.healthy_observed, set(self.task_ids[:16]))
                 with self.lock:
-                    self.assertNotIn(task_id, self.observed)
-                    self.observed.add(task_id)
-                    if len(self.observed) <= self.status_snapshot_owners:
-                        with self.client_call_log.open("a") as calls:
+                    observed = self.healthy_observed if healthy else self.observed
+                    self.assertNotIn(task_id, observed)
+                    observed.add(task_id)
+                    owners = self.status_snapshot_owners if healthy else self.upgraded_status_snapshot_owners
+                    native_calls = int(len(observed) <= owners) + int(upgraded)
+                    call_log = self.client_call_log if healthy else self.upgraded_client_call_log
+                    with call_log.open("a") as calls:
+                        for _ in range(native_calls):
                             calls.write(json.dumps(
                                 {"v": 1, "phase": "managed-runner-observation", "role": "client",
                                  "argv": ["-c", "/fixture/pueue.yml", "status", "--json"]},
@@ -369,6 +450,16 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 response["error"] = self.upgraded_error
             if upgraded and self.upgraded_status:
                 response["status"] = self.upgraded_status
+        elif command == "supervisor":
+            self.assertEqual(args[3:], ["migrate", "--json"])
+            self.assertEqual(self.collected, set(self.task_ids))
+            self.assertFalse(self.old_layout.exists())
+            self.assertFalse(self.shutdown)
+            self.migrations += 1
+            response = {"supervisor_control": {
+                "state": self.migration_state, "next_action": self.migration_next_action,
+                "migration_phase": "complete",
+            }}
         else:
             self.assertEqual(command, "collect")
             self.assertTrue(self.gate.exists())
@@ -429,6 +520,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         return {"tasks": tasks}
 
     def stop(self, _client, _config, _env, **_kwargs):
+        self.assertEqual(self.migrations, 1, "migration must precede daemon shutdown")
         self.assertEqual(self.collected, set(self.task_ids))
         self.assertEqual(_kwargs["state"], self.state)
         self.assertEqual(set(_kwargs["task_ids"]), set(self.task_ids))

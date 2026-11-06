@@ -19,6 +19,7 @@ from scripts.acceptance_tests.inspection.fixtures import (
     ROOT as INSPECTION_ROOT,
     TASK as INSPECTION_TASK,
     InspectionFixture,
+    forbid_installed_content,
 )
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
@@ -26,9 +27,7 @@ from scripts.delegate_acceptance.native import (
 )
 from scripts.delegate_acceptance.supervisor.runner_layout import (
     BUNDLE_RUNNER,
-    STATE_INSTALLED_RUNNER,
     RunnerPlacement,
-    managed_state_runner,
 )
 
 
@@ -77,6 +76,9 @@ def ordinary_row(runner: Path, state: Path, task: str, supervised: bool = False)
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(forbid_installed_content())
+
     def test_lifetime_owner_lock_alone_is_not_durable_lifetime_evidence(self):
         with tempfile.TemporaryDirectory(prefix="native-lifetime-owner-lock-") as directory:
             task = Path(directory) / "task"
@@ -316,9 +318,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             task_directory.mkdir(parents=True)
             source_runner = root / "delegate-run"
             source_runner.write_bytes(b"managed runner fixture\n")
-            managed_runner = managed_state_runner(state, gate.digest(source_runner))
-            managed_runner.parent.mkdir()
-            managed_runner.write_bytes(source_runner.read_bytes())
+            managed_runner = source_runner
             source_runner.chmod(0o700)
             managed_runner.chmod(0o700)
             gate.write_json(task_directory / "meta.json", {
@@ -328,7 +328,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             ops = provider_common.NativeTaskOps(
                 NoCommands(), root / "delegate", source_runner, root / "pueue",
                 root, state, root / "output", managed_runner=True,
-                runner_placement=STATE_INSTALLED_RUNNER)
+                runner_placement=BUNDLE_RUNNER)
             command = shlex.join([
                 str(managed_runner), "--guardian", "--supervised",
                 "--root", str(state), task,
@@ -344,10 +344,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.AcceptanceFailure, "exact runner/state/task"):
                 ops.validate_ordinary_queue_row(row, fixture_text(row["label"]), task, 7, "default")
 
-            # Go names the state copy by digest; a same-bytes copy elsewhere
-            # is not the runner a managed admission executes.
+            # A stale state-root runner never replaces the selected installation.
             other = state / ".supervisor" / "delegate-run-managed"
-            other.write_bytes(source_runner.read_bytes())
+            other.parent.mkdir()
+            other.write_bytes(b"independently authored unselected fixture source")
             other.chmod(0o700)
             gate.write_json(task_directory / "meta.json", {
                 "runner_executable": str(other), "runner_ownership": "managed",
@@ -358,9 +358,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             gate.write_json(task_directory / "meta.json", {
                 "runner_executable": str(managed_runner), "runner_ownership": "managed",
             }, replace=True)
-            managed_runner.write_bytes(b"replaced runner\n")
-            with self.assertRaisesRegex(gate.AcceptanceFailure, "managed runner executable changed"):
-                ops._ordinary_runner_executable(task)
+            managed_runner.write_bytes(b"replaced runner source\n")
+            self.assertEqual(ops._ordinary_runner_executable(task), source_runner)
 
     def test_inspection_queue_accepts_fresh_and_recovered_client_directories(self):
         with tempfile.TemporaryDirectory(prefix="native-inspection-cwd-") as directory:
@@ -715,7 +714,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.assertRaises(TypeError):
                 invoke_with_invalid_arguments(operator.setitem, (ops.bindings, UNBOUND_TASK, runners["third"]), {})
 
-    def test_managed_runner_binding_compares_each_task_with_its_selected_runner(self):
+    def test_stale_state_runner_copy_cannot_replace_each_selected_installation(self):
         with tempfile.TemporaryDirectory(prefix="native-bound-managed-runner-") as directory:
             root = Path(directory)
             state = root / "state"
@@ -723,9 +722,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             managed = {}
             for task, name in ((OLD_TASK, "old"), (NEW_TASK, "new"), (UNBOUND_TASK, "new")):
                 (state / "tasks" / task).mkdir(parents=True)
-                managed[task] = managed_state_runner(state, provider_common.digest(runners[name]))
+                managed[task] = state / ".supervisor" / ("delegate-run-legacy-" + name)
                 managed[task].parent.mkdir(exist_ok=True)
-                managed[task].write_bytes(runners[name].read_bytes())
+                managed[task].write_bytes(b"independently authored stale fixture source")
                 managed[task].chmod(0o700)
                 gate.write_json(state / "tasks" / task / "meta.json", {
                     "runner_executable": str(managed[task]), "runner_ownership": "managed",
@@ -733,18 +732,19 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             ops = PreallocatedRunnerOps(
                 {OLD_TASK: runners["old"], NEW_TASK: runners["new"]},
                 runner=runners["new"], base=root, state_parent=root, state=state,
-                managed_runner=True, runner_placement=STATE_INSTALLED_RUNNER)
+                managed_runner=True, runner_placement=BUNDLE_RUNNER)
 
             for task in (OLD_TASK, NEW_TASK):
-                self.assertEqual(ops._ordinary_runner_executable(task), managed[task])
                 row = ordinary_row(managed[task], state, task, supervised=True)
-                ops.validate_ordinary_queue_row(row, fixture_text(row["label"]), task, 7, "default")
+                with self.subTest(task=task), self.assertRaisesRegex(
+                        gate.AcceptanceFailure, "managed runner executable changed"):
+                    ops.validate_ordinary_queue_row(row, fixture_text(row["label"]), task, 7, "default")
             with self.assertRaisesRegex(gate.AcceptanceFailure, "no bound expected runner"):
                 ops._ordinary_runner_executable(UNBOUND_TASK)
             swapped = PreallocatedRunnerOps(
                 {OLD_TASK: runners["new"], NEW_TASK: runners["third"]},
                 runner=runners["old"], base=root, state_parent=root, state=state,
-                managed_runner=True, runner_placement=STATE_INSTALLED_RUNNER)
+                managed_runner=True, runner_placement=BUNDLE_RUNNER)
             for task in (OLD_TASK, NEW_TASK):
                 with self.subTest(task=task):
                     with self.assertRaisesRegex(gate.AcceptanceFailure, "managed runner executable changed"):
@@ -801,8 +801,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         fixture.ops._validate_inspection_queue_row(
             fixture.inspection_row(), journal, allow_failure=False)
         fixture.ops._validate_queue_membership(fixture.status(fixture.inspection_row()), False)
-        self.assertNotEqual(provider_common.digest(fixture.ops.runner),
-                            provider_common.digest(fixture.runner))
+        self.assertNotEqual(fixture.ops.runner, fixture.runner)
 
         for bindings, message in (({INSPECTION_TASK: "new"}, "worker mismatch"),
                                   ({INSPECTION_TASK: "third"}, "worker mismatch"),

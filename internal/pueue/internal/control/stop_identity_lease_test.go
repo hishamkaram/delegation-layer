@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"golang.org/x/sys/unix"
 )
@@ -80,11 +82,10 @@ func runStopIdentityLeaseTest(t *testing.T, testCase stopIdentityLeaseTestCase) 
 }
 
 type stopIdentityLeaseTestFixture struct {
-	supervisor      *fakeSupervisor
-	stop            func(context.Context) (StopResult, error)
-	submission      *taskdir.SubmissionPermit
-	launch          Launch
-	cleanupIdentity Identity
+	supervisor *fakeSupervisor
+	stop       func(context.Context) (StopResult, error)
+	submission *taskdir.SubmissionPermit
+	launch     Launch
 }
 
 func newStopIdentityLeaseTestFixture(t *testing.T, testCase stopIdentityLeaseTestCase) stopIdentityLeaseTestFixture {
@@ -93,9 +94,13 @@ func newStopIdentityLeaseTestFixture(t *testing.T, testCase stopIdentityLeaseTes
 	writeExecutable(t, private.clientPath, stopIdentityLeaseTestScript+privateClientFixture)
 	ctx, cancel := context.WithTimeout(t.Context(), stopIdentityLeaseFixtureSetupTimeout)
 	defer cancel()
-	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{ObservationTimeout: stopIdentityLeaseFixtureSetupTimeout})
+	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: stopIdentityLeaseFixtureSetupTimeout})
 	supervisorLeaseTestSettleClient(t, client, err)
 	if err != nil {
+		t.Fatal(err)
+	}
+	client.options.SuccessfulCleanupAuthorizer = allowSuccessfulCleanupForTest
+	if _, err = requestPrivateQueueMaintenance(ctx, private.stateRoot); err != nil {
 		t.Fatal(err)
 	}
 	base := filepath.Dir(client.Binding().ConfigPath)
@@ -135,8 +140,8 @@ func newStopIdentityLeaseTestFixture(t *testing.T, testCase stopIdentityLeaseTes
 		recordStopIdentityLeaseTestReceipt(t, ctx, fake, target, identity)
 	}
 	fixture := stopIdentityLeaseTestFixture{
-		supervisor: fake, cleanupIdentity: cleanupIdentity,
-		stop: prepareStopIdentityLeaseTestCall(t, stopper, target, identity, testCase.inspection),
+		supervisor: fake,
+		stop:       prepareStopIdentityLeaseTestCall(t, stopper, target, identity, testCase.inspection),
 	}
 	prepareStopIdentityLeaseTestSubmission(t, &fixture, jobs, groups)
 	return fixture
@@ -272,18 +277,48 @@ func assertStopIdentityLeaseTestExcluded(t *testing.T, fixture stopIdentityLease
 	if !errors.Is(submitErr, context.DeadlineExceeded) || observation.Matched || observation.Pending != nil {
 		t.Fatalf("submission entered the public stop's exclusive scope: observation=%+v err=%v", observation, submitErr)
 	}
-	cleanupContext, cancelCleanup := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	cleanupErr := fixture.supervisor.client.RemoveCompletedTask(cleanupContext, fixture.cleanupIdentity)
-	cancelCleanup()
-	for _, pending := range pendingHandles(cleanupErr) {
-		waitPending(t, pending)
-	}
-	if !errors.Is(cleanupErr, context.DeadlineExceeded) {
-		t.Fatalf("completed-row cleanup entered the public stop's exclusive scope: %v", cleanupErr)
-	}
+	assertStopIdentityLeaseMaintenanceExcluded(t, fixture.supervisor.client)
 	invocations := readInvocations(t, fixture.supervisor.logPath)
 	if countCommand(invocations, "add") != 0 || stopIdentityLeaseTestCommandCount(invocations, "remove", "8") != 0 {
 		t.Fatalf("a competing mutation started before the stop settled: %v", invocations)
+	}
+}
+
+func assertStopIdentityLeaseMaintenanceExcluded(t *testing.T, client *Client) {
+	t.Helper()
+	root, private := privateStateRoot(client.Binding().ConfigPath)
+	if !private {
+		t.Fatal("stop fixture is not private")
+	}
+	base := filepath.Join(root, privateSupervisorDirectory)
+	before, err := readPrivateQueueMaintenanceRecord(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := client.options
+	defer func() { client.options = options }()
+	var commands, authorizations atomic.Int32
+	client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "entry" {
+			commands.Add(1)
+		}
+	}
+	client.options.SuccessfulCleanupAuthorizer = func(ctx context.Context, root string, binding task.SupervisorRef, jobs []Job) (PrivateQueueCleanupPlan, error) {
+		authorizations.Add(1)
+		return options.SuccessfulCleanupAuthorizer(ctx, root, binding, jobs)
+	}
+	cleanupContext, cancelCleanup := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelCleanup()
+	_, cleanupErr := startPrivateMaintenancePassContext(t, cleanupContext, client, func() {}).result(t)
+	for _, pending := range pendingHandles(cleanupErr) {
+		waitPending(t, pending)
+	}
+	if cleanupErr != nil || commands.Load() != 0 || authorizations.Load() != 0 {
+		t.Fatalf("cleanup crossed stop lease: commands=%d authorizations=%d err=%v", commands.Load(), authorizations.Load(), cleanupErr)
+	}
+	after, err := readPrivateQueueMaintenanceRecord(base)
+	if err != nil || after != before {
+		t.Fatalf("excluded cleanup changed its journal: before=%+v after=%+v err=%v", before, after, err)
 	}
 }
 
@@ -298,12 +333,7 @@ func assertStopIdentityLeaseTestReleased(t *testing.T, fixture stopIdentityLease
 	if err != nil || !observation.Matched || observation.NumericTaskID != 9 {
 		t.Fatalf("submission permit was consumed or lock retained after stop completion: observation=%+v err=%v", observation, err)
 	}
-	if cleanupErr := fixture.supervisor.client.RemoveCompletedTask(ctx, fixture.cleanupIdentity); cleanupErr != nil {
-		for _, pending := range pendingHandles(cleanupErr) {
-			waitPending(t, pending)
-		}
-		t.Fatalf("cleanup could not enter after stop completion: %v", cleanupErr)
-	}
+	startPrivateMaintenancePassContext(t, ctx, fixture.supervisor.client, func() {}).requireCompleted(t)
 	invocations := readInvocations(t, fixture.supervisor.logPath)
 	if countCommand(invocations, "add") != 1 || stopIdentityLeaseTestCommandCount(invocations, action, "7") != 1 || stopIdentityLeaseTestCommandCount(invocations, "remove", "8") != 1 {
 		t.Fatalf("stop or competing mutations were lost or repeated: %v", invocations)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -70,7 +71,7 @@ func TestPrivateGenericRetirementKeepsSameGenerationHistoryGuard(t *testing.T) {
 	persistPreparedPrivateLegacyAlias(t, fixture)
 	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.legacy.Binding())
+		return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	})
 	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("generic retirement bypassed completed history: %v", err)
@@ -78,27 +79,18 @@ func TestPrivateGenericRetirementKeepsSameGenerationHistoryGuard(t *testing.T) {
 	assertPreparedPrivateObservationUnchanged(t, fixture, before)
 }
 
-// PM-W3: the migration owner can withdraw only its exact pre-stop Legacy
-// intent when the explicit writer selects Legacy. No reader deletes intent.
-func TestPrivateLegacyWriterWithdrawsPreparedIntent(t *testing.T) {
+// A writer selecting the predecessor cannot withdraw an accepted successor.
+func TestPrivateLegacyWriterPreservesPreparedIntent(t *testing.T) {
 	for _, busy := range []bool{true, false} {
 		t.Run(map[bool]string{true: "busy", false: "drained"}[busy], func(t *testing.T) {
 			fixture := newBusyPreparedPrivateObservation(t)
 			writePreparedPrivateQueue(t, fixture, busy)
-			aliasBefore := snapshotPrivateTestFiles(t, []string{privateRecoveryRecordPath(fixture.stateRoot), privateRecoveryConfigPath(fixture.stateRoot)})
-			err := migratePreparedPrivateWriter(t, fixture, fixture.legacy)
-			if busy {
-				if !errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
-					t.Errorf("prepared legacy writer did not authorize active queue: %v", err)
-				}
-				assertPreparedPrivateAliasFilesUnchanged(t, fixture, aliasBefore)
-			} else {
-				if err != nil {
-					t.Errorf("prepared legacy intent could not be withdrawn: %v", err)
-				}
-				assertPreparedPrivateAliasRetired(t, fixture)
+			before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+			if err := migratePreparedPrivateWriter(t, fixture, fixture.legacy); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+				t.Errorf("predecessor selection changed accepted target: %v", err)
 			}
-			assertPreparedPrivateIntentAbsent(t, fixture)
+			assertPreparedPrivateObservationUnchanged(t, fixture, before)
+			assertBusyPreparedPrivateObservation(t, fixture)
 			assertPreparedPrivatePublishedLegacy(t, fixture)
 			assertPreparedPrivateNoHistory(t, fixture)
 			assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
@@ -176,16 +168,6 @@ func persistPreparedPrivateLegacyAlias(t *testing.T, fixture preparedPrivateObse
 	})
 }
 
-func assertPreparedPrivateAliasFilesUnchanged(t *testing.T, fixture preparedPrivateObservationFixture, before map[string][]byte) {
-	t.Helper()
-	after := snapshotPrivateTestFiles(t, []string{privateRecoveryRecordPath(fixture.stateRoot), privateRecoveryConfigPath(fixture.stateRoot)})
-	for path, want := range before {
-		if string(after[path]) != string(want) {
-			t.Errorf("Busy withdrawal changed recovery alias %s", filepath.Base(path))
-		}
-	}
-}
-
 func writePreparedPrivateQueue(t *testing.T, fixture preparedPrivateObservationFixture, busy bool) {
 	t.Helper()
 	data := []byte(`{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":0}}}`)
@@ -217,4 +199,58 @@ func assertPreparedPrivateAliasRetired(t *testing.T, fixture preparedPrivateObse
 	if complete, err := PrivateSupervisorMigrationComplete(fixture.stateRoot, fixture.legacy.Binding()); err != nil || !complete {
 		t.Errorf("retired same-generation migration did not complete: complete=%t err=%v", complete, err)
 	}
+}
+
+func TestPreparedPrivateMigrationRetargetRequiresGenerationGrant(t *testing.T) {
+	for _, deny := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing", true: "revoked"}[deny], func(t *testing.T) {
+			fixture := newGenerationGuardFixture(t)
+			if err := publishPrivateMigrationState(fixture.base, fixture.record); err != nil {
+				t.Fatal(err)
+			}
+			predecessor := fixture.client.Binding()
+			identity := privateDaemonIdentityForBinding(predecessor)
+			selected := predecessor
+			selected.DaemonExecutable += "-selected"
+			fixture.client.binding, fixture.client.runtimeBinding = selected, selected
+			fixture.client.options.PrivateGenerationGuard = nil
+			want := ErrInfrastructureOwnerRequired
+			if deny {
+				want = errors.New("generation grant revoked")
+				fixture.client.options.PrivateGenerationGuard = generationGuardFunc(func(context.Context, string, func() error) error { return want })
+			}
+			before := snapshotPrivateSuccessorTestState(t, fixture.root)
+			err := WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
+				return fixture.client.resumePrivateMigration(ctx, fixture.root, fixture.base, predecessor, true, identity, true, privateDaemonIdentityForBinding(selected), privateDaemonIdentityForBinding(selected), fixture.record)
+			})
+			if !errors.Is(err, want) {
+				t.Fatalf("retarget ignored generation authority: %v", err)
+			}
+			if after := snapshotPrivateSuccessorTestState(t, fixture.root); !reflect.DeepEqual(before, after) {
+				t.Fatal("unauthorized retarget changed durable state")
+			}
+		})
+	}
+}
+
+func TestRetargetedPrivateMigrationBusyPreservesSavedPredecessorReaders(t *testing.T) {
+	fixture := newBusyPreparedPrivateObservation(t)
+	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(filepath.Dir(fixture.stateRoot), "selected-C"))
+	selected := preparePrivateCandidateForTest(t, fixture.stateRoot, clientPath, daemonPath, fixture.successor.options)
+	if err := migratePreparedPrivateWriter(t, fixture, selected); !errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
+		t.Fatalf("retarget did not preserve active-work refusal: %v", err)
+	}
+	fixture.successor = selected
+	assertBusyPreparedPrivateObservation(t, fixture)
+	assertPreparedPrivatePublishedLegacy(t, fixture)
+	before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
+	for _, reader := range preparedPrivateObservationReaders() {
+		binding, err := readPreparedPrivateGeneration(t, fixture, fixture.legacy, reader)
+		if err != nil || binding != fixture.legacy.Binding() {
+			t.Errorf("saved predecessor unavailable through %s after retarget: binding=%+v err=%v", reader.name, binding, err)
+		}
+	}
+	assertPreparedPrivateObservationUnchanged(t, fixture, before)
+	assertPreparedPrivateObservationIncomplete(t, fixture)
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 }

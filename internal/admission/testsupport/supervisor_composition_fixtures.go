@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
@@ -41,10 +43,18 @@ func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskd
 	clientPath := filepath.Join(bundle, "pueue")
 	daemonPath := filepath.Join(bundle, "pueued")
 	WriteTerminalEventInspectionSupervisorExecutables(t, clientPath, daemonPath)
+	callbackPath := filepath.Join(bundle, "delegate-run")
+	// Component consumers call the real Record APIs directly. The fake daemon
+	// never executes this selected callback; native callback execution is unproved.
+	supervisorfixture.WriteExecutable(t, callbackPath, `#!/bin/sh
+printf '%s\n' 'component fixture must not execute its terminal callback' >&2
+exit 64
+`)
 	var statusCalls atomic.Int32
 	var unfilteredStatusCalls atomic.Int32
 	options := pueue.Options{
 		ObservationTimeout:              inspection.AdmissionTimeout,
+		PrivateTerminalEventRunner:      supervisorfixture.CanonicalPath(t, callbackPath),
 		SuccessfulCleanupAuthorizer:     cleanup.AuthorizeSuccessfulCleanup,
 		PrivateTerminalEvidencePreparer: cleanup.PrepareTerminalEvidence,
 		PrivateMaintenanceLauncher:      launcher,
@@ -61,16 +71,7 @@ func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskd
 			}
 		},
 	}
-	bootstrap, err := pueue.BindPrivate(t.Context(), clientPath, daemonPath, store.Root, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
-	SettleSupervisorProbeTestClient(t, client, err)
-	if closeErr := bootstrap.Close(); closeErr != nil {
-		t.Fatal(closeErr)
-	}
+	client, err := prepareTerminalEventInspectionSupervisor(t, store, clientPath, daemonPath, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +82,106 @@ func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskd
 			t.Fatal(removeErr)
 		}
 	}
+	return client, &statusCalls, &unfilteredStatusCalls
+}
+
+// This setup token permits synchronous publication for one fixture root. It
+// never grants daemon Start or Wait and is revoked before the warm client exists.
+type terminalEventGenerationSetup struct {
+	root   string
+	mu     sync.Mutex
+	active bool
+}
+
+func (g *terminalEventGenerationSetup) GuardPrivateGenerationCommit(ctx context.Context, root string, commit func() error) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if root != g.root || commit == nil {
+		return task.ErrIdentityMismatch
+	}
+	if !g.active {
+		return pueue.ErrInfrastructureOwnerRequired
+	}
+	return commit()
+}
+
+func (g *terminalEventGenerationSetup) revoke() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.active = false
+}
+
+func prepareTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store, clientPath, daemonPath string, options pueue.Options) (*pueue.Client, error) {
+	t.Helper()
+	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), options)
+	defer cancelControl()
+	setup := &terminalEventGenerationSetup{root: store.Root, active: true}
+	setupErr := func() (resultErr error) {
+		var bootstrap, prepared *pueue.Client
+		defer func() {
+			resultErr = settleTerminalEventSetupClient(t, bootstrap, resultErr)
+			resultErr = settleTerminalEventSetupClient(t, prepared, resultErr)
+			setup.revoke()
+		}()
+		setupOptions := options
+		setupOptions.PrivateGenerationGuard = setup
+		setupOptions.WaitForPendingClose = true
+		bootstrap, resultErr = pueue.BindPrivate(control, clientPath, daemonPath, store.Root, setupOptions)
+		if resultErr != nil {
+			return resultErr
+		}
+		if bootstrap == nil {
+			return pueue.ErrConfiguration
+		}
+		ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
+		prepared, resultErr = supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, setupOptions)
+		if resultErr == nil && prepared == nil {
+			return pueue.ErrConfiguration
+		}
+		return resultErr
+	}()
+	if setupErr != nil {
+		return nil, setupErr
+	}
+	var client *pueue.Client
 	t.Cleanup(func() {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
-	return client, &statusCalls, &unfilteredStatusCalls
+	client, err := supervisorcore.ProbePrivateAdmissionSupervisor(control, store, "", "", options)
+	if err != nil {
+		return nil, settleTerminalEventSetupClient(t, client, err)
+	}
+	if client == nil {
+		return nil, pueue.ErrConfiguration
+	}
+	return client, nil
+}
+
+func settleTerminalEventSetupClient(t *testing.T, client *pueue.Client, err error) error {
+	t.Helper()
+	closeErr := client.Close()
+	if closeErr != nil {
+		t.Errorf("close terminal-event setup client: %v", closeErr)
+	}
+	err = errors.Join(err, closeErr)
+	seen := make(map[*pueue.Pending]bool)
+	task.AnyErrorNode(err, func(cause error) bool {
+		var inFlight *pueue.InFlightError
+		if errors.As(cause, &inFlight) && inFlight != nil && inFlight.Pending != nil && !seen[inFlight.Pending] {
+			seen[inFlight.Pending] = true
+			<-inFlight.Pending.Done()
+		}
+		return false
+	})
+	return err
 }
 
 func NewTerminalInspectionCleanupSupervisor(t *testing.T, store *taskdir.Store, evidence supervisorcore.InspectionEvidence) (*pueue.Client, string, string) {

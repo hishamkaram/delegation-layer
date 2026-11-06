@@ -185,7 +185,7 @@ func TestScheduledPrivateMaintenanceCoalescesRequestsAcrossClientsWithoutWaiting
 	scenario := newPrivateTerminalTriggerScenario(t, "cross-client-maintenance", true)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	second, err := BindPrivate(ctx, scenario.fixture.clientPath, scenario.fixture.daemonPath,
-		scenario.fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+		scenario.fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	cancel()
 	supervisorLeaseTestSettleClient(t, second, err)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestScheduledPrivateMaintenanceResumesTimedOutCommandAndDrainsWaitingReques
 	scenario.client.options.ObservationTimeout = 50 * time.Millisecond
 	bindContext, cancelBind := context.WithTimeout(t.Context(), 10*time.Second)
 	second, err := BindPrivate(bindContext, scenario.fixture.clientPath, scenario.fixture.daemonPath,
-		scenario.fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+		scenario.fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
 	cancelBind()
 	supervisorLeaseTestSettleClient(t, second, err)
 	if err != nil {
@@ -491,7 +491,7 @@ func TestScheduledPrivateMaintenanceUsesRequestedScope(t *testing.T) {
 		request func(context.Context, string) error
 		wantIDs []int64
 	}{
-		{name: "inspection", request: RequestPrivateInspectionQueueMaintenance, wantIDs: []int64{0}},
+		{name: "inspection", request: RequestPrivateCandidateQueueMaintenance, wantIDs: []int64{0}},
 		{name: "full", request: RequestPrivateQueueMaintenance, wantIDs: []int64{0, 1, 2}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

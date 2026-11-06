@@ -155,6 +155,7 @@ func expectedCurrentClaudeStreamAnswer(t *testing.T, stdout string) string {
 // original rejection, then runs the public recheck command twice. The derived
 // answer is the current target's: every accepted root answer, framed.
 func TestHistoricalClaudeStreamRechecksRecoverCurrentAnswerThroughProductionStores(t *testing.T) {
+	t.Parallel()
 	registry := NativeCatalog().Registry()
 	sources := providerRecheckSources(t, registry)
 	for _, source := range sources {
@@ -242,8 +243,10 @@ func sealProviderRecheckTask(t *testing.T, registry predicate.Registry, source p
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeStore := piConsumerCloser(t, "store", store)
 	taskID := strings.Repeat("f", 32)
 	td := createProviderRecheckTask(t, store, taskID, source)
+	closeTask := piConsumerCloser(t, "task", td)
 	session, err := claude.FreshSessionID(store.RootID, taskID)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +273,8 @@ func sealProviderRecheckTask(t *testing.T, registry predicate.Registry, source p
 		t.Fatalf("source outcome=%+v cleanup=%v err=%v", outcome, cleanupErr, collectErr)
 	}
 	root := store.Root
-	closeAppTestTask(t, store, td)
+	closeTask()
+	closeStore()
 	return root, taskID, outcome
 }
 

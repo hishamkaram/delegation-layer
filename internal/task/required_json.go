@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// Protocol fields without omitempty are mandatory, including zero-valued
+// Protocol fields without an omission option are mandatory, including zero-valued
 // observations. Check the wire shape before encoding/json can turn absence or
 // null into a zero value. Canonical names also eliminate struct-field aliases.
 func validateRequiredFields(data []byte, target any) error {
@@ -21,7 +21,8 @@ func validateRequiredFields(data []byte, target any) error {
 }
 
 func validateJSONType(data []byte, typ reflect.Type) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+	trimmed := bytes.TrimSpace(data)
+	if bytes.Equal(trimmed, []byte("null")) {
 		return errors.New("null protocol field rejected")
 	}
 	if typ.Kind() == reflect.Pointer {
@@ -29,6 +30,13 @@ func validateJSONType(data []byte, typ reflect.Type) error {
 	}
 	if typ.Kind() == reflect.Struct {
 		return validateJSONObject(data, typ)
+	}
+	// encoding/json represents []byte as a base64 string. Validate that
+	// representation through its typed decoder; ordinary slice/array shape and
+	// the historical numeric byte-array alternative retain their checks below.
+	if typ == reflect.TypeFor[[]byte]() && len(trimmed) > 0 && trimmed[0] == '"' {
+		var decoded []byte
+		return json.Unmarshal(trimmed, &decoded)
 	}
 	if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
 		var entries []json.RawMessage
@@ -75,8 +83,10 @@ func validateJSONField(fields map[string]json.RawMessage, field reflect.StructFi
 	}
 	value, present := fields[name]
 	if !present {
-		if field.Tag.Get("json") == name+",omitempty" {
-			return nil
+		for _, option := range tag[1:] {
+			if option == "omitempty" || option == "omitzero" {
+				return nil
+			}
 		}
 		return fmt.Errorf("missing required JSON field %q", name)
 	}

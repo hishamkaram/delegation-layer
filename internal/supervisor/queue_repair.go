@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -22,38 +20,25 @@ func repairQueuedRunnerCommandsToTarget(ctx context.Context, store *taskdir.Stor
 	return supervisor.ReplaceQueuedRunnerCommands(ctx, replacements)
 }
 
-func prepareQueuedRunnerRepairTarget(store *taskdir.Store, runnerExecutable string) (string, error) {
-	target, err := PlanQueuedRunnerRepairTarget(store, runnerExecutable)
-	if err != nil {
-		return "", err
-	}
-	installed, err := InstallStateRunner(store.Root, target.source)
-	if err != nil {
-		return "", err
-	}
-	if installed != target.executable {
-		return "", fmt.Errorf("%w: runner changed while repair target was installed", pueue.ErrConfiguration)
-	}
-	return installed, nil
-}
-
-func PlanQueuedRunnerRepairTarget(store *taskdir.Store, runnerExecutable string) (RunnerRepairTarget, error) {
-	if store == nil {
-		return RunnerRepairTarget{}, task.ErrInvalidPermit
-	}
+func PlanQueuedRunnerRepairTarget(runnerExecutable string) (RunnerRepairTarget, error) {
 	runner, err := ResolveRunner(runnerExecutable, "")
 	if err != nil {
 		return RunnerRepairTarget{}, err
 	}
-	digest, err := stateExecutableSourceDigest(runner)
-	if err != nil {
-		return RunnerRepairTarget{}, err
+	if pueue.IsLegacyStateRunnerPath(filepath.Dir(filepath.Dir(runner)), runner) {
+		return RunnerRepairTarget{}, fmt.Errorf("%w: historical runner copy is not an installed role", pueue.ErrConfiguration)
 	}
-	return RunnerRepairTarget{
-		source:     runner,
-		executable: filepath.Join(store.Root, ".supervisor", stateRunnerName+"-"+digest),
-		sha256:     digest,
-	}, nil
+	return RunnerRepairTarget{executable: runner}, nil
+}
+
+// ValidateExecutable checks the resolver's selected installed path and current
+// executable metadata. Ownership and immutable command identity are separate.
+func (target RunnerRepairTarget) ValidateExecutable(path string) error {
+	if target.executable == "" || path != target.executable {
+		return task.ErrIdentityMismatch
+	}
+	_, err := ResolveRunner(path, "")
+	return err
 }
 
 func collectQueuedRunnerCommandReplacements(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, targetRunner string) ([]pueue.RunnerCommandReplacement, error) {
@@ -79,7 +64,7 @@ func collectQueuedRunnerCommandReplacements(ctx context.Context, store *taskdir.
 	if len(replacements) == 0 {
 		return nil, nil
 	}
-	previousRunners, err := managedStateRunnerPaths(store.Root)
+	previousRunners, err := recordedRepairRunnerPaths(ctx, store)
 	if err != nil {
 		return nil, err
 	}
@@ -140,18 +125,14 @@ func RecordManagedRunnerMigration(ctx context.Context, root string, td *taskdir.
 	if meta == nil || meta.RunnerOwnership != "" || meta.RunnerExecutable == "" {
 		return nil
 	}
-	migrated, err := td.HasManagedRunnerMigration()
+	migrated, err := td.HasManagedRunnerMigrationContext(ctx)
 	if err != nil || migrated {
 		return err
 	}
 	if !managedRunnerExecutable(root, meta.RunnerExecutable, "") {
 		return task.ErrIdentityMismatch
 	}
-	digest, err := commonprovider.FingerprintExecutable(meta.RunnerExecutable)
-	if err != nil {
-		return err
-	}
-	return td.RecordManagedRunnerMigrationContext(ctx, digest)
+	return td.RecordManagedRunnerMigrationContext(ctx)
 }
 
 func authorizeQueuedInspectionRunnerUpgrades(ctx context.Context, store *taskdir.Store, replacements []pueue.RunnerCommandReplacement) error {
@@ -159,7 +140,11 @@ func authorizeQueuedInspectionRunnerUpgrades(ctx context.Context, store *taskdir
 		if !replacement.Inspection {
 			continue
 		}
-		if err := AuthorizeQueuedInspectionRunnerUpgrade(ctx, store, replacement); err != nil {
+		target, err := PlanQueuedRunnerRepairTarget(replacement.NewRunner)
+		if err != nil {
+			return err
+		}
+		if err := AuthorizeQueuedInspectionRunnerUpgrade(ctx, store, replacement, target); err != nil {
 			return err
 		}
 	}
@@ -177,37 +162,7 @@ func prepareQueuedRunnerCommandForJob(ctx context.Context, store *taskdir.Store,
 	if inspectionWorker {
 		return PrepareQueuedInspectionRunnerCommand(ctx, store, supervisor, job, taskID)
 	}
-	return prepareQueuedRunnerCommand(store, supervisor, job, taskID)
-}
-
-func managedStateRunnerPaths(root string) ([]string, error) {
-	base := filepath.Join(root, ".supervisor")
-	entries, err := os.ReadDir(base)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	paths := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		path := filepath.Join(base, entry.Name())
-		if !IsStateRunnerPath(root, path) {
-			continue
-		}
-		want := strings.TrimPrefix(entry.Name(), stateRunnerName+"-")
-		got, digestErr := protectedStateExecutableDigest(path)
-		if errors.Is(digestErr, os.ErrNotExist) {
-			continue
-		}
-		if digestErr != nil {
-			return nil, digestErr
-		}
-		if got == want {
-			paths = append(paths, path)
-		}
-	}
-	return paths, nil
+	return prepareQueuedRunnerCommandContext(ctx, store, supervisor, job, taskID)
 }
 
 // ensurePrivateQueuedRunnerRepair performs the queue-wide migration at most
@@ -219,7 +174,7 @@ func EnsurePrivateQueuedRunnerRepair(store *taskdir.Store, supervisor *pueue.Cli
 	if store == nil || supervisor == nil || !pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
 		return nil
 	}
-	target, err := PlanQueuedRunnerRepairTarget(store, runnerExecutable)
+	target, err := PlanQueuedRunnerRepairTarget(runnerExecutable)
 	if err != nil {
 		return err
 	}
@@ -267,12 +222,8 @@ func repairPrivateQueuedRunnerTransition(ctx context.Context, store *taskdir.Sto
 	if err != nil || complete {
 		return err
 	}
-	installed, err := prepareQueuedRunnerRepairTarget(store, target.source)
-	if err != nil {
+	if err = target.ValidateExecutable(target.executable); err != nil {
 		return err
-	}
-	if installed != target.executable {
-		return fmt.Errorf("%w: runner changed while repair target was installed", pueue.ErrConfiguration)
 	}
 	if err = repairQueuedRunnerCommandsToTarget(ctx, store, supervisor, target.executable); err != nil {
 		return err
@@ -284,16 +235,15 @@ func newRunnerRepairReceipt(store *taskdir.Store, supervisor *pueue.Client, targ
 	if store == nil || supervisor == nil || !pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
 		return runnerRepairReceipt{}, "", task.ErrInvalidPermit
 	}
-	if target.source == "" || !filepath.IsAbs(target.executable) || filepath.Clean(target.executable) != target.executable ||
-		!IsStateRunnerPath(store.Root, target.executable) || task.ValidateSHA256(target.sha256) != nil {
-		return runnerRepairReceipt{}, "", pueue.ErrConfiguration
+	if err := target.ValidateExecutable(target.executable); err != nil {
+		return runnerRepairReceipt{}, "", err
 	}
 	receipt := runnerRepairReceipt{
-		SchemaVersion:    task.SchemaVersion,
-		Revision:         runnerRepairReceiptRevision,
-		Supervisor:       supervisor.RuntimeBinding(),
-		RunnerExecutable: target.executable,
-		RunnerSHA256:     target.sha256,
+		SchemaVersion:      task.SchemaVersion,
+		Revision:           runnerRepairReceiptRevision,
+		Supervisor:         supervisor.RuntimeBinding(),
+		RunnerExecutable:   target.executable,
+		ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
 	}
 	if err := validateRunnerRepairReceiptShape(store.Root, receipt); err != nil {
 		return runnerRepairReceipt{}, "", err
@@ -305,20 +255,6 @@ func newRunnerRepairReceipt(store *taskdir.Store, supervisor *pueue.Client, targ
 	return receipt, "r-" + task.ComputeSHA256(data)[:48] + ".json", nil
 }
 
-func validateRunnerRepairReceipt(root string, receipt runnerRepairReceipt) error {
-	if err := validateRunnerRepairReceiptShape(root, receipt); err != nil {
-		return err
-	}
-	digest, err := protectedStateExecutableDigest(receipt.RunnerExecutable)
-	if err != nil {
-		return err
-	}
-	if digest != receipt.RunnerSHA256 {
-		return task.ErrEvidenceFault
-	}
-	return nil
-}
-
 func runnerRepairReceiptCurrent(ctx context.Context, store *taskdir.Store, name string, want runnerRepairReceipt) (current bool, resultErr error) {
 	if store == nil {
 		return false, task.ErrInvalidPermit
@@ -326,7 +262,10 @@ func runnerRepairReceiptCurrent(ctx context.Context, store *taskdir.Store, name 
 	if err := validateRunnerRepairReceiptShape(store.Root, want); err != nil {
 		return false, err
 	}
-	directory, err := store.OpenRunnerRepairContext(ctx, true)
+	directory, err := store.OpenRunnerRepairContext(ctx, false)
+	if task.RecordAbsent(err) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -337,7 +276,7 @@ func runnerRepairReceiptCurrent(ctx context.Context, store *taskdir.Store, name 
 	} else if err != nil {
 		return false, err
 	}
-	if err = validateRunnerRepairReceipt(store.Root, got); err != nil {
+	if err = validateRunnerRepairReceiptShape(store.Root, got); err != nil {
 		return false, err
 	}
 	if got != want {
@@ -350,7 +289,7 @@ func publishRunnerRepairReceipt(ctx context.Context, store *taskdir.Store, name 
 	if store == nil {
 		return task.ErrInvalidPermit
 	}
-	if err := validateRunnerRepairReceipt(store.Root, receipt); err != nil {
+	if err := validateRunnerRepairReceiptShape(store.Root, receipt); err != nil {
 		return err
 	}
 	directory, err := store.OpenRunnerRepairContext(ctx, true)

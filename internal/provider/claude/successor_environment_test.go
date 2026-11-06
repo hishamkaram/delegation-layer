@@ -111,7 +111,7 @@ func requireCallerLaunch(t *testing.T, label string, candidate commonprovider.Pr
 	if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Environment, admitted.Plan.Environment) {
 		t.Fatalf("%s inspection and launch environments differ", label)
 	}
-	if admitted.Plan.Executable != caller.cli || admitted.Plan.ExecutableSHA256 != fixtureSHA256(t, caller.cli) || candidate.Inspection.Executable != caller.cli {
+	if admitted.Plan.Executable != caller.cli || admitted.Plan.ExecutableSHA256 != "" || candidate.Inspection.Executable != caller.cli {
 		t.Fatalf("%s executable %q want the caller's %q", label, admitted.Plan.Executable, caller.cli)
 	}
 	for _, want := range []string{"HOME=" + caller.home, "TMPDIR=" + caller.temporary} {

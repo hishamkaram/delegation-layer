@@ -21,13 +21,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 type historicalSupervisorFixture struct {
+	component         *componentSupervisorFixture
 	root              string
 	store             *taskdir.Store
 	td                *taskdir.TaskDir
@@ -50,15 +50,17 @@ type historicalSupervisorFixture struct {
 	daemonStartLog    string
 	readyPath         string
 	options           pueue.Options
+	controlOwner      string
 }
 
 type historicalPrivateDaemonIdentity struct {
-	Executable           string `json:"executable"`
-	SHA256               string `json:"sha256"`
-	ConfigPath           string `json:"config_path,omitempty"`
-	ConfigDigest         string `json:"config_digest,omitempty"`
-	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
-	Endpoint             string `json:"endpoint,omitempty"`
+	Executable           string                  `json:"executable"`
+	SHA256               string                  `json:"sha256,omitempty"`
+	ExecutableIdentity   task.ExecutableIdentity `json:"executable_identity,omitempty"`
+	ConfigPath           string                  `json:"config_path,omitempty"`
+	ConfigDigest         string                  `json:"config_digest,omitempty"`
+	ResolvedConfigSHA256 string                  `json:"resolved_config_sha256,omitempty"`
+	Endpoint             string                  `json:"endpoint,omitempty"`
 }
 
 type historicalPrivateMigrationRecord struct {
@@ -89,6 +91,7 @@ type historicalSupervisorOperation struct {
 }
 
 func TestHistoricalSupervisorRecoveryUsesCompletedSuccessor(t *testing.T) {
+	t.Parallel()
 	for _, operation := range historicalSupervisorOperations() {
 		for _, stopped := range []bool{false, true} {
 			runHistoricalSupervisorScenario(t, operation, stopped)
@@ -107,9 +110,17 @@ func historicalSupervisorOperations() []historicalSupervisorOperation {
 func runHistoricalSupervisorScenario(t *testing.T, operation historicalSupervisorOperation, stopped bool) {
 	t.Helper()
 	t.Run(operation.name+"/"+historicalSupervisorStateName(stopped), func(t *testing.T) {
+		t.Parallel()
 		fixture := newHistoricalSupervisorFixture(t, stopped)
+		var queued historicalQueuedRunner
+		if operation.name == "status-reconciliation" {
+			queued = prepareHistoricalQueuedRunner(t, fixture)
+		}
 		code, _, _ := operation.run(t, fixture)
 		assertHistoricalSupervisorOperation(t, fixture, operation, code, stopped)
+		if operation.name == "status-reconciliation" {
+			assertHistoricalQueuedRepair(t, fixture, queued, stopped)
+		}
 	})
 }
 
@@ -131,7 +142,8 @@ func assertHistoricalSupervisorOperation(t *testing.T, fixture *historicalSuperv
 }
 
 func runHistoricalStatusReconciliation(t *testing.T, fixture *historicalSupervisorFixture) (int, []byte, []byte) {
-	code, stdout, stderr, response := runHistoricalSupervisorCommand(t, fixture, []string{"status", fixture.req.TaskID, "--root", fixture.root, "--json"})
+	deps := withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component)
+	code, stdout, stderr, response := runHistoricalSupervisorCommandWithDependencies(t, []string{"status", fixture.req.TaskID, "--root", fixture.root, "--json"}, deps)
 	if response.Admission != task.AdmissionAdmitted.String() || response.Liveness != task.LivenessRunning.String() || !historicalSupervisorResponseMatches(response.Supervisor, 7) {
 		t.Fatalf("status lost the historical admission: %+v", response)
 	}
@@ -139,7 +151,8 @@ func runHistoricalStatusReconciliation(t *testing.T, fixture *historicalSupervis
 }
 
 func runHistoricalCancelStop(t *testing.T, fixture *historicalSupervisorFixture) (int, []byte, []byte) {
-	code, stdout, stderr, response := runHistoricalSupervisorCommand(t, fixture, []string{"cancel", fixture.req.TaskID, "--root", fixture.root, "--json"})
+	deps := withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component)
+	code, stdout, stderr, response := runHistoricalSupervisorCommandWithDependencies(t, []string{"cancel", fixture.req.TaskID, "--root", fixture.root, "--json"}, deps)
 	if response.Stop == nil || !response.Stop.Matched || !response.Stop.Attempted || response.Stop.Action != "kill" || response.Stop.Acknowledged == nil || !*response.Stop.Acknowledged || response.Stop.NumericTaskID == nil || *response.Stop.NumericTaskID != 7 {
 		t.Fatalf("cancel did not control the historical queue row: %+v", response)
 	}
@@ -148,15 +161,20 @@ func runHistoricalCancelStop(t *testing.T, fixture *historicalSupervisorFixture)
 
 func runHistoricalSupervisorCommand(t *testing.T, fixture *historicalSupervisorFixture, args []string) (int, []byte, []byte, Response) {
 	t.Helper()
+	return runHistoricalSupervisorCommandWithDependencies(t, args, fixture.dependencies())
+}
+
+func runHistoricalSupervisorCommandWithDependencies(t *testing.T, args []string, deps Dependencies) (int, []byte, []byte, Response) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, fixture.dependencies())
+	code := Run(args, &stdout, &stderr, deps)
 	stdoutBytes := append([]byte(nil), stdout.Bytes()...)
 	stderrBytes := append([]byte(nil), stderr.Bytes()...)
 	return code, stdoutBytes, stderrBytes, decodeHistoricalResponse(t, stdoutBytes, stderrBytes, code)
 }
 
 func runHistoricalRunnerReconciliation(t *testing.T, fixture *historicalSupervisorFixture) (int, []byte, []byte) {
-	deps := fixture.dependencies()
+	deps := withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component)
 	deps.PrepareProfile = func(request task.TaskRecord) (PreparedProfile, error) {
 		return appTestExecutionProfile(&request, fixture.provider, nil), nil
 	}
@@ -175,11 +193,12 @@ func runHistoricalRunnerReconciliation(t *testing.T, fixture *historicalSupervis
 }
 
 func TestHistoricalSupervisorRecoveryRejectsUnrelatedBinding(t *testing.T) {
+	t.Parallel()
 	fixture := newHistoricalSupervisorFixture(t, false)
 	unrelated := fixture.predecessor
 	unrelated.Endpoint = "unix:" + filepath.Join(fixture.root, ".supervisor", "run", "unrelated.sock")
 
-	client, err := supervisor.NewClient(t.Context(), fixture.root, unrelated, fixture.options, true, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB}, openNativeSupervisorStore)
+	client, err := supervisor.RecoverPrivateClient(t.Context(), fixture.store, unrelated, fixture.options, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB})
 	if client != nil {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -196,12 +215,14 @@ func TestHistoricalSupervisorRecoveryRejectsUnrelatedBinding(t *testing.T) {
 }
 
 func TestCompletedPrivateMigrationRecoversPendingInspectionEdgeWithoutGenerationDemotion(t *testing.T) {
+	t.Parallel()
 	scenario := newHistoricalInspectionMigrationScenario(t)
 	fixture := scenario.fixture
 	recovery := prepareHistoricalInspectionRecovery(t, scenario)
 	rebound := assertHistoricalInspectionRecoverySelectsSuccessor(t, scenario, recovery.deps)
 
-	admitted, err := preparePrivateAdmissionSupervisor(recovery.deps, fixture.store, fixture.options)
+	listenSupervisorProbeTestEndpoint(t, fixture.successor.Endpoint)
+	admitted, err := preparePrivateAdmissionSupervisor(recovery.deps, fixture.store, recovery.deps.SupervisorOptions)
 	if err != nil {
 		supervisor.CloseMaintenance(admitted, err)
 		t.Fatalf("fresh admission did not select completed successor B: %v", err)
@@ -229,17 +250,20 @@ func prepareHistoricalInspectionRecovery(t *testing.T, scenario *historicalInspe
 	fixture := scenario.fixture
 	legacyGroup := scenario.legacyGroup
 	successorGroup := scenario.successorGroup
+	beforeWaits := len(fixture.component.daemonWaits())
 	// This is the crash point: private A→B is complete, while the exact group
 	// edge is durable but CompleteGroupMigration has not run.
 	err := pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
 		if prepareErr := inspection.PrepareGroupMigration(t.Context(), fixture.store, legacyGroup, successorGroup); prepareErr != nil {
 			return prepareErr
 		}
-		if publishErr := pueue.PublishPrivateSupervisorBindingIfAbsent(fixture.root, fixture.predecessor); publishErr != nil {
-			return publishErr
+		published, found, readErr := pueue.ReadPrivateSupervisorBinding(fixture.root)
+		if readErr != nil || !found || published != fixture.predecessor {
+			return errors.Join(pueue.ErrBinding, readErr)
 		}
 		return fixture.current.MigratePrivateSupervisorWithLock(t.Context(), fixture.root)
 	})
+	fixture.component.ownDaemonClients(fixture.current, beforeWaits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,6 +426,7 @@ func readHistoricalSupervisorBytes(t *testing.T, path string) []byte {
 }
 
 func TestHistoricalCancelRecoversBeforeMutationWhenSavedEndpointStopped(t *testing.T) {
+	t.Parallel()
 	fixture := newHistoricalSupervisorFixture(t, true)
 	pidPath := filepath.Join(fixture.root, ".supervisor", "run", "pueue.pid")
 	writeRunnerFixture(t, fixture.clientA, historicalSupervisorClientScript("A", fixture.readyPath, pidPath, fixture.statusPath, fixture.commandLog))
@@ -417,8 +442,8 @@ func TestHistoricalCancelRecoversBeforeMutationWhenSavedEndpointStopped(t *testi
 		t.Fatal(err)
 	}
 	log := string(commands)
-	if strings.Count(log, "A status\n") != 1 || strings.Contains(log, "A kill\n") || strings.Contains(log, "A remove\n") {
-		t.Fatalf("cancel did not limit predecessor A to one readiness probe: %q", log)
+	if strings.Contains(log, "A ") {
+		t.Fatalf("cancel contacted predecessor A after successor publication: %q", log)
 	}
 	if got := strings.Count(log, "B kill\n"); got != 1 {
 		t.Fatalf("cancel sent successor mutation %d times, want exactly once: %q", got, log)
@@ -440,9 +465,12 @@ func newHistoricalSupervisorFixture(t *testing.T, stopped bool) *historicalSuper
 
 func newHistoricalSupervisorFixturePaths(t *testing.T) *historicalSupervisorFixture {
 	t.Helper()
-	base := testsupport.CanonicalTempDir(t)
+	owner := newComponentSupervisorFixture(t, componentPersistentDaemon)
+	base := owner.base
 	return &historicalSupervisorFixture{
-		root:           filepath.Join(base, "state"),
+		component:      owner,
+		root:           owner.root,
+		controlOwner:   canonicalAppTestExecutable(t),
 		statusPath:     filepath.Join(base, "status.json"),
 		commandLog:     filepath.Join(base, "commands.log"),
 		daemonStartLog: filepath.Join(base, "daemon-starts.log"),
@@ -502,28 +530,46 @@ func newHistoricalSupervisorOptions() pueue.Options {
 	}
 }
 
-func prepareHistoricalSupervisorTask(t *testing.T, fixture *historicalSupervisorFixture, workspace string) {
+func bindHistoricalSupervisorFixture(t *testing.T, fixture *historicalSupervisorFixture) {
 	t.Helper()
 	store, err := taskdir.InitStore(fixture.root)
+	fixture.component.ownStore(t, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.store = store
-	t.Cleanup(func() { fixture.close(t) })
-
-	legacy, err := pueue.BindPrivate(t.Context(), fixture.clientA, fixture.daemonA, fixture.root, fixture.options)
+	// Retain this exact root's publication owner for later prepared journals.
+	// Start remains confined to component.bindPrivate's scoped options.
+	fixture.options.PrivateGenerationGuard = fixture.component
+	fixture.options.WaitForPendingClose = true
+	// Preserve the owned namespace in failure output before the first Start.
+	t.Logf("historical supervisor fixture root=%s", fixture.root)
+	legacy, err := fixture.component.bindPrivate(t.Context(), fixture.clientA, fixture.daemonA, fixture.options)
+	fixture.current, fixture.predecessorClient = legacy, legacy
 	if err != nil {
 		t.Fatalf("bind predecessor supervisor: %v", err)
 	}
-	fixture.current = legacy
-	fixture.predecessorClient = legacy
 	fixture.predecessor = legacy.Binding()
+	// Complete staged-task fixtures need the existing runtime capability
+	// receipt before observation snapshots and prepared-migration fences.
+	control, cancelControl := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancelControl()
+	if err = supervisor.EnsureAdmissionSchedulingContext(control, fixture.root, legacy); err != nil {
+		t.Fatal(err)
+	}
+}
 
+func prepareHistoricalSupervisorTask(t *testing.T, fixture *historicalSupervisorFixture, workspace string) {
+	t.Helper()
+	bindHistoricalSupervisorFixture(t, fixture)
+	store := fixture.store
 	brief := []byte("historical supervisor recovery")
 	request := newHistoricalSupervisorTaskRecord(store.RootID, workspace, brief)
 	profile := appTestExecutionProfile(&request, fixture.provider, nil)
 	meta := tasklifecycle.NewMeta(request, profile, fixture.predecessor, fixture.runner, task.RunnerOwnershipCustom, "historical-supervisor-test")
-	fixture.td, err = store.CreateTask(request.TaskID, &request, brief, &meta)
+	td, err := store.CreateTask(request.TaskID, &request, brief, &meta)
+	fixture.td = td
+	fixture.component.ownTask(fixture.td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,16 +635,29 @@ func recordHistoricalSupervisorAdmission(t *testing.T, fixture *historicalSuperv
 
 func completeHistoricalSupervisorFixtureMigration(t *testing.T, fixture *historicalSupervisorFixture, legacyDir string, stopped bool) {
 	t.Helper()
-	successor, err := pueue.BindPrivate(t.Context(), fixture.clientB, fixture.daemonB, fixture.root, fixture.options)
+	previous := fixture.component.daemonWaits()
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	var successor *pueue.Client
+	err := pueue.WithBootstrapLockContext(ctx, fixture.root, func(locked context.Context) error {
+		var prepareErr error
+		successor, prepareErr = pueue.PreparePrivateForMigrationWithLock(locked, fixture.clientB, fixture.daemonB, fixture.root, fixture.component.setupOptions(fixture.options))
+		fixture.current = successor
+		fixture.component.ownClient(successor, prepareErr)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		fixture.successor = successor.Binding()
+		migrationErr := successor.MigratePrivateSupervisorWithLock(locked, fixture.root)
+		fixture.component.ownClient(successor, migrationErr)
+		return migrationErr
+	})
+	fixture.component.ownDaemonClients(successor, len(previous))
 	if err != nil {
-		t.Fatalf("bind successor supervisor: %v", err)
-	}
-	fixture.current = successor
-	fixture.successor = successor.Binding()
-	if err = pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
-		return successor.MigratePrivateSupervisorWithLock(t.Context(), fixture.root)
-	}); err != nil {
 		t.Fatalf("complete explicit predecessor-to-successor migration: %v", err)
+	}
+	if err = awaitComponentDaemons(ctx, previous); err != nil {
+		t.Fatal(err)
 	}
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, 7)
 	if err = os.RemoveAll(legacyDir); err != nil {
@@ -645,45 +704,37 @@ func historicalConsumeSubmissionPermit(permit *taskdir.SubmissionPermit) (task.S
 }
 
 func (f *historicalSupervisorFixture) dependencies() Dependencies {
+	// The task's custom runner is separate from the installed control owner.
+	// Keep the original daemon client's cleanup options scoped to its creator.
+	options := f.options
+	options.DaemonStartGuard = nil
+	options.DaemonWaitOwner = nil
+	options.PrivateGenerationGuard = nil
+	options.ControlOwnerExecutable = f.controlOwner
 	return Dependencies{
 		ResourceChecker:             fixtureResources,
 		PredicateRegistry:           predicate.Default,
-		SupervisorOptions:           f.options,
+		SupervisorOptions:           options,
 		InitialSupervisorExecutable: f.clientB,
 		RunnerExecutable:            f.runner,
 	}
 }
 
-func (f *historicalSupervisorFixture) close(t *testing.T) {
-	t.Helper()
-	if f.current != nil {
-		if _, err := os.Stat(f.readyPath); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(f.options))
-			if shutdownErr := f.current.Shutdown(ctx); shutdownErr != nil {
-				t.Error(shutdownErr)
-			} else if waitErr := f.current.WaitUnavailable(ctx); waitErr != nil {
-				t.Error(waitErr)
-			}
-			cancel()
-		}
-		if err := f.current.Close(); err != nil {
-			t.Error(err)
-		}
+func TestHistoricalSupervisorDependenciesExcludeSetupAuthority(t *testing.T) {
+	owner := &componentSupervisorFixture{}
+	fixture := historicalSupervisorFixture{
+		runner:       "/custom/task-runner",
+		controlOwner: "/installed/control-owner",
+		options: pueue.Options{
+			DaemonStartGuard: owner, DaemonWaitOwner: owner, PrivateGenerationGuard: owner,
+		},
 	}
-	if f.predecessorClient != nil {
-		if err := f.predecessorClient.Close(); err != nil {
-			t.Error(err)
-		}
+	deps := fixture.dependencies()
+	if deps.SupervisorOptions.DaemonStartGuard != nil || deps.SupervisorOptions.DaemonWaitOwner != nil || deps.SupervisorOptions.PrivateGenerationGuard != nil || deps.ownerRouting != nil {
+		t.Fatal("historical setup authority escaped into public command dependencies")
 	}
-	if f.td != nil {
-		if err := f.td.Close(); err != nil {
-			t.Error(err)
-		}
-	}
-	if f.store != nil {
-		if err := f.store.Close(); err != nil {
-			t.Error(err)
-		}
+	if deps.RunnerExecutable != fixture.runner || deps.SupervisorOptions.ControlOwnerExecutable != fixture.controlOwner {
+		t.Fatal("removing setup authority changed task or control executable selection")
 	}
 }
 
@@ -811,14 +862,15 @@ func assertHistoricalActiveDaemon(t *testing.T, fixture *historicalSupervisorFix
 	base := filepath.Join(fixture.root, ".supervisor")
 	var daemon historicalPrivateDaemonIdentity
 	readHistoricalRecord(t, filepath.Join(base, "daemon.identity.json"), &daemon)
-	if daemon.Executable != fixture.successor.DaemonExecutable || daemon.SHA256 != fixture.successor.DaemonSHA256 {
-		t.Fatalf("active daemon provenance is not successor B: %+v want executable=%q sha=%q", daemon, fixture.successor.DaemonExecutable, fixture.successor.DaemonSHA256)
+	if daemon.ExecutableIdentity != fixture.successor.ExecutableIdentity || daemon.Executable != fixture.successor.DaemonExecutable || daemon.SHA256 != fixture.successor.DaemonSHA256 {
+		t.Fatalf("active daemon provenance is not successor B: %+v want identity=%q executable=%q sha=%q", daemon, fixture.successor.ExecutableIdentity, fixture.successor.DaemonExecutable, fixture.successor.DaemonSHA256)
 	}
 }
 
 func assertHistoricalDaemonIdentity(t *testing.T, label string, got historicalPrivateDaemonIdentity, want task.SupervisorRef) {
 	t.Helper()
 	wantIdentity := historicalPrivateDaemonIdentity{
+		ExecutableIdentity:   want.ExecutableIdentity,
 		Executable:           want.DaemonExecutable,
 		SHA256:               want.DaemonSHA256,
 		ConfigPath:           want.ConfigPath,
@@ -919,6 +971,7 @@ cleanup() {
   rm -f '%s' '%s'
   if [ -n "$child" ]; then
     kill "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
   fi
   exit 0
 }

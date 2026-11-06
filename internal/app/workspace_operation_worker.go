@@ -12,7 +12,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -81,7 +80,7 @@ func runLoadedWorkspaceWorker(parsed runnerArguments, store *taskdir.Store, oper
 	}
 	var candidate workspace.OperationResult
 	stopper := &workspaceBudgetStopper{operation: operation, lifetime: child.Lifetime()}
-	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: child.Lifetime()}, func(scope execution.PreflightScope) error {
+	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: child.Lifetime(), PrepareEnvironment: operationalEnvironmentPreparation(store)}, func(scope execution.PreflightScope) error {
 		var actionErr error
 		candidate, actionErr = runWorkspaceAction(scope, store, operation, environment)
 		return actionErr
@@ -179,12 +178,8 @@ func validateWorkspaceWorker(ctx context.Context, operation *workspace.Operation
 	if err != nil {
 		return err
 	}
-	digest, err := commonprovider.FingerprintExecutable(current)
-	if err != nil {
-		return err
-	}
 	request := operation.Request()
-	if current != request.WorkerExecutable || digest != request.WorkerSHA256 || !time.Now().Before(operation.Deadline()) {
+	if current != request.WorkerExecutable || !time.Now().Before(operation.Deadline()) {
 		return task.ErrIdentityMismatch
 	}
 	_, err = operation.Receipt(ctx)
@@ -212,7 +207,10 @@ func (s *workspaceBudgetStopper) PrepareBudget(deadline time.Time) (execution.Bu
 
 // workspaceCommandRunner borrows the existing scope; Git never starts, waits,
 // signals, or creates a second deadline owner.
-type workspaceCommandRunner struct{ scope execution.PreflightScope }
+type workspaceCommandRunner struct {
+	scope       execution.PreflightScope
+	environment []string
+}
 
 func (r workspaceCommandRunner) Run(ctx context.Context, command *exec.Cmd) error {
 	if ctx == nil {
@@ -224,5 +222,16 @@ func (r workspaceCommandRunner) Run(ctx context.Context, command *exec.Cmd) erro
 	if command == nil || !filepath.IsAbs(command.Dir) {
 		return task.ErrIdentityMismatch
 	}
+	// Git and verification have already resolved their selected PATH. This
+	// overlay rechecks the root before Start; it does not repeat that lookup.
+	selected := command.Env
+	if selected == nil && r.environment != nil {
+		selected = execution.InheritedCommandEnvironment(r.environment, command.Dir)
+	}
+	environment, err := r.scope.PrepareEnvironment(selected)
+	if err != nil {
+		return err
+	}
+	command.Env = environment
 	return execution.RunScopedCommand(r.scope, command, execution.CommandHooks{})
 }

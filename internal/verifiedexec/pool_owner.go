@@ -159,3 +159,22 @@ func (p *Pool) ReleasePending(ns Namespace) (bool, error) {
 	}
 	return true, nil
 }
+
+func unsealTemporaryDirectory(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return nil
+		}
+		return os.Chmod(currentPath, 0o700)
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}

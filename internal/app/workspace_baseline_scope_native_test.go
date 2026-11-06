@@ -51,6 +51,8 @@ func newNativeBaselineTask(t *testing.T) *nativeBaselineTask {
 		t.Fatal(err)
 	}
 	req, meta := *request, *metadata
+	meta.SupervisorConfig.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	meta.SupervisorConfig.ClientSHA256, meta.SupervisorConfig.DaemonSHA256 = "", ""
 	req.TaskID, meta.TaskID = resource.Request().TaskID, resource.Request().TaskID
 	req.CanonicalCwd = registration.CanonicalCwd
 	admission := workspace.Subject{Kind: workspace.SubjectAdmission, ID: req.TaskID, SHA256: req.BriefSHA256}
@@ -72,10 +74,6 @@ func newNativeBaselineTask(t *testing.T) *nativeBaselineTask {
 	if err != nil {
 		t.Fatal(err)
 	}
-	providerBytes, err := os.ReadFile(meta.ProviderExecutable)
-	if err != nil {
-		t.Fatal(err)
-	}
 	td, err := lineage.store.CreateTask(req.TaskID, &req, []byte("brief"), &meta)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +84,7 @@ func newNativeBaselineTask(t *testing.T) *nativeBaselineTask {
 		lineage: lineage, resource: resource, registration: registration, td: td,
 		turn: nativeTurn{request: req, reservation: reservation, subject: subject},
 		profile: PreparedProfile{
-			Plan:            execution.Plan{Executable: meta.ProviderExecutable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Arguments: []string{"turn.txt", baselineOddPath}, Directory: req.CanonicalCwd, Predicate: meta.Predicate},
+			Plan:            execution.Plan{Executable: meta.ProviderExecutable, Arguments: []string{"turn.txt", baselineOddPath}, Directory: req.CanonicalCwd, Predicate: meta.Predicate},
 			ObservedVersion: meta.ProviderVersion, Effective: meta.EffectiveConfig,
 		},
 	}
@@ -114,6 +112,9 @@ func prepareBaselineBudgetReceipt(t *testing.T, td *taskdir.TaskDir, supervisor 
 		SpecSHA256: submission.SpecSHA256, MetaSHA256: submission.MetaSHA256, NumericTaskID: 7, Label: submission.Label,
 		ConfigPath: ref.ConfigPath, ConfigDigest: ref.ConfigDigest, Endpoint: ref.Endpoint, ObservedVersion: ref.ObservedVersion,
 		ClientExecutable: ref.ClientExecutable, ClientSHA256: ref.ClientSHA256, ResolvedConfigSHA256: ref.ResolvedConfigSHA256,
+		ExecutableIdentity: ref.ExecutableIdentity, DaemonExecutable: ref.DaemonExecutable, DaemonSHA256: ref.DaemonSHA256,
+		ResolutionOS: ref.ResolutionOS, ResolutionHome: ref.ResolutionHome, ResolutionDataLocal: ref.ResolutionDataLocal,
+		ResolutionConfig: ref.ResolutionConfig, ResolutionRuntime: ref.ResolutionRuntime, ResolutionUsername: ref.ResolutionUsername, ResolutionCwd: ref.ResolutionCwd,
 	}); err != nil {
 		t.Fatal(err)
 	}

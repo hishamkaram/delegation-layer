@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -33,14 +32,9 @@ func NewQueuedInspectionUpgradeFixture(t *testing.T) QueuedInspectionUpgradeFixt
 	supervisor, logPath := supervisorfixture.NewBlockingSupervisor(t, store.RootID)
 	oldSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
 	supervisorfixture.WriteExecutable(t, oldSource, "old inspection worker")
-	oldRunner, err := supervisorcore.InstallStateRunner(store.Root, oldSource)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, err := commonprovider.FingerprintExecutable(oldRunner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldRunner := oldSource
+	// This is historical executable identity data, never a fixture byte hash.
+	digest := strings.Repeat("b", 64)
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: strings.Repeat("a", 64),
 		HelperExecutable: "/usr/bin/true", HelperSHA256: strings.Repeat("a", 64),
@@ -67,10 +61,7 @@ func NewQueuedInspectionUpgradeFixture(t *testing.T) QueuedInspectionUpgradeFixt
 	}
 	newSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
 	supervisorfixture.WriteExecutable(t, newSource, "new inspection worker")
-	replacement.NewRunner, err = supervisorcore.InstallStateRunner(store.Root, newSource)
-	if err != nil {
-		t.Fatal(err)
-	}
+	replacement.NewRunner = newSource
 	return QueuedInspectionUpgradeFixture{
 		Store: store, Supervisor: supervisor, Request: request,
 		Binding: binding, Replacement: replacement, OldRunner: oldRunner, LogPath: logPath,

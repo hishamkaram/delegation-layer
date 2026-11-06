@@ -272,7 +272,7 @@ func TestAwaitInspectionObservationRejectsPendingFromAnotherIdentityOrGeneration
 				candidate.TaskID = strings.Repeat("c", 32)
 			} else {
 				successor := *fake.client
-				successor.runtimeBinding.ClientSHA256 = strings.Repeat("c", 64)
+				successor.runtimeBinding.ClientExecutable += "-different"
 				client = &successor
 			}
 			observation, err := client.AwaitInspectionObservation(t.Context(), candidate, pending)
@@ -294,13 +294,7 @@ func TestAwaitInspectionObservationRejectsGenerationReplacementAfterCompletion(t
 	writeInspectionStatus(t, fake, identity, target, StateEnded)
 	pending := completedPendingInspectionObservation(t, fake, identity)
 
-	executable, err := os.ReadFile(fake.executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(fake.executable, append(executable, '\n'), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	appendPrivateSupervisorFile(t, fake.configPath, "\n ")
 	observation, err := fake.client.AwaitInspectionObservation(t.Context(), identity, pending)
 	if !errors.Is(err, ErrBinding) || observation.Matched {
 		t.Fatalf("completed observation crossed a generation replacement: observation=%+v err=%v", observation, err)

@@ -56,9 +56,13 @@ def _provider_runtime_identity(evidence: object, phase: str,
             f"{label} {phase} version exceeds the terminal evidence bound")
     require(not any(unicodedata.category(character) == "Cc" for character in version),
             f"{label} {phase} version contains control characters")
-    if not (_optional_hex_digest(sha256)):
+    if not _optional_hex_digest(sha256):
         raise AcceptanceFailure(f"{label} {phase} digest is invalid")
-    return {"executable": executable, "version": version, "sha256": sha256}
+    identity = {"executable": executable, "version": version}
+    if "provider_sha256" in evidence:
+        # Historical diagnostics are decoded only; no new digest is synthesized or compared.
+        identity["sha256"] = sha256
+    return identity
 
 
 def validate_provider_runtime_metadata(
@@ -95,6 +99,6 @@ def validate_provider_runtime_metadata(
     started, exited = launch_evidence
     started_identity = _provider_runtime_identity(started, "started", label)
     exit_identity = _provider_runtime_identity(exited, "exit", label)
-    require(started_identity == exit_identity,
+    require(all(started_identity.get(key) == exit_identity.get(key) for key in ("executable", "version")),
             f"{label} started and exit runtime identities differ")
     return started_identity

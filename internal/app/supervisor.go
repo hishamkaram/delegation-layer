@@ -117,14 +117,10 @@ func openPrivateMigrationStore(ctx context.Context, stateRoot string, store **ta
 }
 
 func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
-	response := newResponse("supervisor")
-	response.SupervisorControl = &SupervisorControlResponse{
-		Action:             a.SupervisorAction,
-		State:              "unknown",
-		LegacyReachability: "unknown",
-		ActiveWork:         "unknown",
-		NextAction:         "stop_and_report",
+	if a.SupervisorAction == "stop-owner" {
+		return supervisorOwnerStop(a, deps)
 	}
+	response := newSupervisorCommandResponse(a.SupervisorAction)
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root is unavailable", 1)
@@ -173,6 +169,18 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 	}
 	resolution, err := supervisorcore.ResolveGeneration(controlContext, store, seed.Supervisor)
 	if err != nil {
+		if seed.Supervisor.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+			response.SupervisorControl.NextAction = "stop_and_report"
+		}
+		if seed.Supervisor.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 && errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
+			resumePending, phaseErr := privateSupervisorMigrationResumePending(ctx, root)
+			if phaseErr != nil {
+				return failedSupervisorCause(response, "supervisor migration journal could not be resolved", errors.Join(err, phaseErr), 1)
+			}
+			if resumePending {
+				response.SupervisorControl.NextAction = "run_supervisor_migrate"
+			}
+		}
 		return failedSupervisorCause(response, "supervisor migration journal could not be resolved", err, 1)
 	}
 	active := resolution.GroupHead
@@ -208,15 +216,21 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	if err != nil {
 		return failedSupervisor(response, "private supervisor identity could not be inspected", 1)
 	}
-	daemonDrift, err := privateSupervisorDaemonDrift(root, deps)
-	if err != nil {
-		return failedSupervisor(response, "private supervisor identity could not be inspected", 1)
-	}
-	drift := logicalDrift || daemonDrift
 	ready, readyErr := current.Reachable(ctx)
 	if readyErr != nil || !ready {
 		cleanupCause = readyErr
-		return privateStatusUnavailable(response, drift, readyErr)
+		if readyErr == nil {
+			saved, found, savedErr := pueue.ReadPrivateSupervisorBinding(root)
+			if savedErr != nil {
+				return failedSupervisorCause(response, "private supervisor identity could not be inspected", savedErr, 1)
+			}
+			if found && saved.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+				response.SupervisorControl.State = "legacy_present"
+				response.SupervisorControl.NextAction = "run_supervisor_migrate"
+				return legacySupervisorWorkStatus(ctx, root, options, response, saved, current.Binding().ClientExecutable)
+			}
+		}
+		return privateStatusUnavailable(response, logicalDrift, false, readyErr)
 	}
 	response.SupervisorControl.State = supervisorStatusState(logicalDrift, true)
 	response.SupervisorControl.LegacyReachability = "ready"
@@ -233,20 +247,25 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	} else {
 		response.SupervisorControl.NextAction = "none"
 	}
-	if daemonDrift && !logicalDrift {
-		response.SupervisorControl.MigrationPhase = "adopted"
-	}
 	return commandResult{response: response, code: 0}
 }
 
 // privateStatusUnavailable presents a failed or negative readiness probe.
 // Status only observes a refusal; dispatch or migrate owns its closure.
-func privateStatusUnavailable(response Response, drift bool, readyErr error) commandResult {
+func privateStatusUnavailable(response Response, drift, historical bool, readyErr error) commandResult {
 	response.SupervisorControl.State = supervisorStatusState(drift, false)
 	response.SupervisorControl.LegacyReachability = "unreachable"
 	response.SupervisorControl.ActiveWork = "unknown"
 	response.SupervisorControl.NextAction = "run_supervisor_migrate"
 	switch {
+	case readyErr == nil && historical:
+		response.SupervisorControl.ReasonCode = "historical_target_not_ready"
+		response.SupervisorControl.NextAction = "stop_and_report"
+		cause := &pueue.PrivateRecoveryError{
+			ReasonCode: "historical_target_not_ready",
+			Err:        errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, pueue.ErrHistoricalTargetNotReady),
+		}
+		return commandResult{response: response, code: 1, err: publicSupervisorError("The historical supervisor is unreachable.", cause)}
 	case errors.Is(readyErr, pueue.ErrPrivateEndpointRefused):
 		return commandResult{response: response, code: 1, err: &supervisorPublicError{message: "private supervisor is unreachable", cause: readyErr}}
 	case readyErr != nil:
@@ -289,14 +308,6 @@ func supervisorLegacyStatus(ctx context.Context, root string, deps Dependencies,
 		currentReady, currentErr = current.Reachable(ctx)
 		cleanupCause = currentErr
 	}
-	daemonDrift := false
-	if currentMatches {
-		var daemonErr error
-		daemonDrift, daemonErr = privateSupervisorDaemonDrift(root, deps)
-		if daemonErr != nil {
-			return failedSupervisor(response, "private supervisor identity could not be inspected", 1)
-		}
-	}
 	if currentMatches && currentReady {
 		snapshot, snapshotErr := current.Snapshot(ctx)
 		if snapshotErr != nil {
@@ -305,10 +316,13 @@ func supervisorLegacyStatus(ctx context.Context, root string, deps Dependencies,
 		}
 		response.SupervisorControl.ActiveWork = legacyActiveWork(snapshot)
 	}
-	if result, done := legacySupervisorStateResult(response, legacy, migrated, currentMatches, currentReady, currentErr, daemonDrift); done {
+	if result, done := legacySupervisorStateResult(response, legacy, migrated, currentMatches, currentReady, currentErr); done {
 		return result
 	}
 	if currentMatches {
+		if legacy.Supervisor.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+			return legacySupervisorWorkStatus(ctx, root, options, response, legacy.Supervisor, current.Binding().ClientExecutable)
+		}
 		response.SupervisorControl.LegacyReachability = "unreachable"
 		return commandResult{response: response, code: 1, err: errors.New("legacy supervisor requires managed migration")}
 	}
@@ -316,10 +330,10 @@ func supervisorLegacyStatus(ctx context.Context, root string, deps Dependencies,
 	if current != nil {
 		fallbackClient = current.Binding().ClientExecutable
 	}
-	return legacySupervisorWorkStatus(ctx, options, response, legacy, fallbackClient)
+	return legacySupervisorWorkStatus(ctx, root, options, response, legacy.Supervisor, fallbackClient)
 }
 
-func legacySupervisorStateResult(response Response, legacy inspection.GroupRequestRecord, migrated, currentMatches, currentReady bool, currentErr error, daemonDrift bool) (commandResult, bool) {
+func legacySupervisorStateResult(response Response, legacy inspection.GroupRequestRecord, migrated, currentMatches, currentReady bool, currentErr error) (commandResult, bool) {
 	if currentMatches && currentErr != nil {
 		response.SupervisorControl.State = "unavailable"
 		response.SupervisorControl.LegacyReachability = "incompatible"
@@ -332,21 +346,14 @@ func legacySupervisorStateResult(response Response, legacy inspection.GroupReque
 		}
 		return commandResult{response: response, code: 1, err: err}, true
 	}
-	if currentMatches && currentReady && daemonDrift {
-		response.SupervisorControl.State = "ready"
-		response.SupervisorControl.LegacyReachability = "ready"
-		response.SupervisorControl.MigrationPhase = "adopted"
-		response.SupervisorControl.NextAction = "none"
-		return commandResult{response: response, code: 0}, true
-	}
-	if migrated && currentMatches && currentReady && !daemonDrift {
+	if migrated && currentMatches && currentReady {
 		response.SupervisorControl.State = "migrated"
 		response.SupervisorControl.LegacyReachability = "completed"
 		response.SupervisorControl.MigrationPhase = "complete"
 		response.SupervisorControl.NextAction = "none"
 		return commandResult{response: response, code: 0}, true
 	}
-	if currentReady && !daemonDrift {
+	if currentReady {
 		response.SupervisorControl.State = "ready"
 		response.SupervisorControl.LegacyReachability = "ready"
 		response.SupervisorControl.NextAction = "none"
@@ -360,21 +367,18 @@ func legacySupervisorStateResult(response Response, legacy inspection.GroupReque
 	} else {
 		response.SupervisorControl.State = "legacy_present"
 		response.SupervisorControl.NextAction = "run_supervisor_migrate"
-		if daemonDrift {
-			response.SupervisorControl.MigrationPhase = "pending"
-		}
 	}
 	return commandResult{}, false
 }
 
-func legacySupervisorWorkStatus(ctx context.Context, options pueue.Options, response Response, legacy inspection.GroupRequestRecord, fallbackClient string) (result commandResult) {
-	clientOwner, err := supervisorcore.AcquireClient(pueue.BindSavedForMigrationWithClient(ctx, legacy.Supervisor, fallbackClient, options))
+func legacySupervisorWorkStatus(ctx context.Context, root string, options pueue.Options, response Response, legacy task.SupervisorRef, fallbackClient string) (result commandResult) {
+	clientOwner, err := supervisorcore.AcquireClient(pueue.BindSavedForMigrationWithClient(ctx, legacy, fallbackClient, options))
 	cleanupCause := err
 	defer func() {
 		if cleanupErr := clientOwner.CloseAfterPending(cleanupCause); cleanupErr != nil {
 			// Supervisor JSON is a stable control surface. Keep cleanup details,
 			// including temporary config paths, out of it.
-			result.err = errSupervisorCleanup
+			result.err = &supervisorPublicError{message: errSupervisorCleanup.Error(), cause: errors.Join(errSupervisorCleanup, result.err, cleanupErr)}
 			result.code = 1
 			result.response.setError(result.err)
 		}
@@ -391,6 +395,17 @@ func legacySupervisorWorkStatus(ctx context.Context, options pueue.Options, resp
 		return commandResult{response: response, code: 1, err: errors.New("legacy supervisor could not be verified")}
 	}
 	if !ready {
+		if legacy.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+			resumePending, phaseErr := privateSupervisorMigrationResumePending(ctx, root)
+			if phaseErr != nil {
+				cleanupCause = phaseErr
+				response.SupervisorControl.NextAction = "stop_and_report"
+				return failedSupervisorCause(response, "private supervisor migration state could not be inspected", phaseErr, 1)
+			}
+			if !resumePending {
+				return privateStatusUnavailable(response, true, true, nil)
+			}
+		}
 		response.SupervisorControl.LegacyReachability = "unreachable"
 		return commandResult{response: response, code: 1, err: errors.New("legacy supervisor requires managed migration")}
 	}
@@ -409,12 +424,26 @@ func legacySupervisorWorkStatus(ctx context.Context, options pueue.Options, resp
 	return commandResult{response: response, code: 0}
 }
 
-func privateSupervisorDaemonDrift(root string, deps Dependencies) (bool, error) {
-	_, daemonExecutable, err := resolveCurrentPrivateSupervisorExecutables(root, deps)
-	if err != nil {
+// The migration owner retains all replay authority. Status only reads its
+// canonical phase facts under a shared bootstrap lease that excludes writers.
+func privateSupervisorMigrationResumePending(ctx context.Context, root string) (bool, error) {
+	if ctx == nil {
+		return false, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	return pueue.PrivateDaemonIdentityDrift(root, daemonExecutable)
+	var resumePending bool
+	err := pueue.WithSupervisorLeaseContext(ctx, root, func(context.Context) error {
+		pending, pendingErr := pueue.PrivateSupervisorMigrationPending(root)
+		if pendingErr != nil || !pending {
+			return pendingErr
+		}
+		retargetable, readErr := pueue.PrivateMigrationRetargetableWithLock(root)
+		resumePending = readErr == nil && !retargetable
+		return readErr
+	})
+	return resumePending && err == nil, err
 }
 
 func supervisorControlOptions(deps Dependencies) pueue.Options {
@@ -433,12 +462,8 @@ func currentPrivateSupervisor(ctx context.Context, root string, deps Dependencie
 	return pueue.Bind(ctx, clientExecutable, pueue.PrivateConfigPath(root), options)
 }
 
-func prepareCurrentPrivateSupervisor(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
-	clientExecutable, daemonExecutable, err := resolveCurrentPrivateSupervisorExecutables(root, deps)
-	if err != nil {
-		return nil, err
-	}
-	clientExecutable, daemonExecutable, err = supervisorcore.InstallStateSupervisorPairPaths(ctx, root, clientExecutable, daemonExecutable)
+func prepareCurrentPrivateSupervisor(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := migrationSupervisorPair(root, lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -464,16 +489,18 @@ func supervisorMigrate(root string, deps Dependencies, response Response) (resul
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root could not be opened", 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	defer func() { closeObservationStore(&result, store) }()
 	response.RootID = store.RootID
-	state, err := inspectSupervisorMigration(controlContext, root, deps, options, store)
-	if state.current != nil {
-		defer supervisorcore.CloseMaintenance(state.current, err)
+	initialized, err := supervisorMigrationInitialized(controlContext, store)
+	if err != nil {
+		return supervisorMigrationFailure(response, err)
 	}
-	if err == nil && state.notInitialized {
+	if !initialized {
 		return notInitializedSupervisor(response)
 	}
-	return finishSupervisorMigration(response, state, err)
+	runtime := supervisorcore.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
+	_, report, err := runtime.MigrateOwn(controlContext, store)
+	return finishRoutedSupervisorMigration(response, report, err)
 }
 
 func notInitializedSupervisor(response Response) commandResult {
@@ -484,30 +511,43 @@ func notInitializedSupervisor(response Response) commandResult {
 	return commandResult{response: response, code: 0}
 }
 
-func inspectSupervisorMigration(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
+func inspectSupervisorMigration(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
 	state.activeWork = "none"
-	present, err := privateSupervisorStatePresent(root)
+	initialized, err := supervisorMigrationInitialized(ctx, store)
 	if err != nil {
-		return state, fmt.Errorf("private supervisor state could not be inspected: %w", err)
+		return state, err
 	}
-	if !present {
-		_, _, groupErr := inspection.ReadGroupHead(ctx, store)
-		if task.RecordAbsent(groupErr) {
-			state.notInitialized = true
-			return state, nil
-		}
-		if groupErr != nil {
-			return state, fmt.Errorf("inspection supervisor journal could not be inspected: %w", groupErr)
-		}
+	if !initialized {
+		state.notInitialized = true
+		return state, nil
 	}
 	observationTimeout := options.ObservationTimeout
 	if observationTimeout <= 0 {
 		observationTimeout = pueue.DefaultObservationTimeout
 	}
 	resultErr = pueue.WithBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
-		return inspectSupervisorMigrationLocked(lockedContext, root, deps, options, store, observationTimeout, &state)
+		return inspectSupervisorMigrationLocked(lockedContext, root, lookup, options, store, observationTimeout, &state)
 	})
 	return state, resultErr
+}
+
+// The command and fixed host share this observational preflight. Root and
+// inspection journals remain authoritative; no lock or preparation crosses RPC.
+func supervisorMigrationInitialized(ctx context.Context, store *taskdir.Store) (bool, error) {
+	present, err := privateSupervisorStatePresent(store.Root)
+	if err != nil {
+		return false, fmt.Errorf("private supervisor state could not be inspected: %w", err)
+	}
+	if !present {
+		_, _, groupErr := inspection.ReadGroupHead(ctx, store)
+		if task.RecordAbsent(groupErr) {
+			return false, nil
+		}
+		if groupErr != nil {
+			return false, fmt.Errorf("inspection supervisor journal could not be inspected: %w", groupErr)
+		}
+	}
+	return true, nil
 }
 
 func privateSupervisorStatePresent(root string) (bool, error) {
@@ -524,13 +564,13 @@ func privateSupervisorStatePresent(root string) (bool, error) {
 	return err == nil, nil
 }
 
-func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
-	if err := supervisorcore.ReconcilePublishedSupervisorWithLock(ctx, store, options, true); err != nil {
+func inspectSupervisorMigrationLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
+	if err := supervisorcore.ReconcilePublishedSupervisorWithLock(ctx, store, options, lookup, true); err != nil {
 		return err
 	}
 	legacy, _, journalErr := inspection.ReadGroupHead(ctx, store)
 	if errors.Is(journalErr, os.ErrNotExist) {
-		if err := inspectSupervisorWithoutGroup(ctx, root, deps, options, state); err != nil || state.notInitialized {
+		if err := inspectSupervisorWithoutGroup(ctx, root, lookup, options, state); err != nil || state.notInitialized {
 			return err
 		}
 		return verifyCommittedPrivateSupervisor(root, state.current)
@@ -542,9 +582,9 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 	var current *pueue.Client
 	var err error
 	if state.externalInspectionGroup {
-		current, err = prepareInspectionHandoffSupervisor(ctx, root, deps, options)
+		current, err = prepareInspectionHandoffSupervisor(ctx, root, lookup, options)
 	} else {
-		current, err = prepareInspectionMigrationSupervisorWithLock(ctx, store, deps, options)
+		current, err = prepareInspectionMigrationSupervisorWithLock(ctx, store, lookup, options)
 	}
 	state.current = current
 	if err != nil {
@@ -577,7 +617,7 @@ func verifyCommittedPrivateSupervisor(root string, current *pueue.Client) error 
 	return nil
 }
 
-func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Dependencies, options pueue.Options, state *supervisorMigrationState) error {
+func inspectSupervisorWithoutGroup(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, state *supervisorMigrationState) error {
 	state.noInspectionGroup = true
 	if _, err := os.Stat(pueue.PrivateConfigPath(root)); errors.Is(err, os.ErrNotExist) {
 		state.notInitialized = true
@@ -585,7 +625,7 @@ func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Depend
 	} else if err != nil {
 		return fmt.Errorf("private supervisor state could not be inspected: %w", err)
 	}
-	current, err := supervisorMigrateWithoutInspectionGroupLocked(ctx, root, deps, options)
+	current, err := supervisorMigrateWithoutInspectionGroupLocked(ctx, root, lookup, options)
 	if err != nil {
 		state.current = current
 		return err
@@ -632,8 +672,8 @@ func supervisorMigrationFailure(response Response, err error) commandResult {
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }
 
-func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
-	current, err := prepareCurrentPrivateSupervisor(ctx, root, deps, options)
+func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+	current, err := prepareCurrentPrivateSupervisor(ctx, root, lookup, options)
 	if err != nil {
 		return nil, err
 	}

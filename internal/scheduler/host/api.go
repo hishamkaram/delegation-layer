@@ -21,9 +21,10 @@ const (
 )
 
 var (
-	ErrPending      = errors.New("scheduler host operation pending")
-	ErrIncompatible = errors.New("scheduler host build or protocol incompatible")
-	ErrIdentity     = errors.New("scheduler host identity changed")
+	ErrCleanupUnresolved = errors.New("scheduler child cleanup unresolved")
+	ErrPending           = errors.New("scheduler host operation pending")
+	ErrIncompatible      = errors.New("scheduler host protocol or definition incompatible")
+	ErrIdentity          = errors.New("scheduler host identity changed")
 )
 
 // Config is an explicit, retained launch context. Environment must be nonnil;
@@ -35,14 +36,12 @@ type Config struct {
 	Args        []string
 	Environment []string
 	Directory   string
-	BuildID     string
 }
 
 // Query consumes an already opened passive reader. Neither Observe nor Stop
 // initializes a root, creates directories, migrates or starts infrastructure.
 type Query struct {
-	Store   *taskdir.ReadOnlyStore
-	BuildID string
+	Store *taskdir.ReadOnlyStore
 }
 
 type Identity struct {
@@ -77,14 +76,13 @@ type StopResult struct {
 // held E lease. RunChild completes live confirmation before invoking Run.
 type ChildConfig struct {
 	RootID      string
-	BuildID     string
 	ReadFD      int
 	WriteFD     int
 	BeforeReady func(context.Context) error
 }
 
-func CheckCompatible(status Status, buildID string) error {
-	if status.Protocol != ProtocolVersion || status.BuildID != buildID {
+func CheckCompatible(status Status) error {
+	if status.Protocol != ProtocolVersion {
 		return ErrIncompatible
 	}
 	return nil

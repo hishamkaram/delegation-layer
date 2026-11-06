@@ -12,19 +12,27 @@ import (
 )
 
 func ObserveTimeoutContinuation(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog) (*ContinuationOffer, error) {
+	return ObserveTimeoutContinuationContext(context.Background(), root, td, req, meta, catalog)
+}
+
+func ObserveTimeoutContinuationContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog) (*ContinuationOffer, error) {
 	records, err := ReadTimeoutRecords(td)
 	if err != nil {
 		return nil, err
 	}
-	return ObserveTimeoutContinuationWithRecords(root, td, req, meta, records, catalog)
+	return ObserveTimeoutContinuationWithRecordsContext(ctx, root, td, req, meta, records, catalog)
 }
 
 func ObserveTimeoutContinuationWithRecords(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog) (*ContinuationOffer, error) {
+	return ObserveTimeoutContinuationWithRecordsContext(context.Background(), root, td, req, meta, records, catalog)
+}
+
+func ObserveTimeoutContinuationWithRecordsContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog) (*ContinuationOffer, error) {
 	runnerReleased, err := td.RunnerLeaseReleased()
 	if err != nil {
 		return nil, err
 	}
-	return ObserveTimeoutContinuationWithRunner(root, td, req, meta, records, catalog, runnerReleased)
+	return ObserveTimeoutContinuationWithRunnerContext(ctx, root, td, req, meta, records, catalog, runnerReleased)
 }
 
 // ObserveTimeoutContinuationWithRunner observes the automatic continuation
@@ -35,17 +43,21 @@ func ObserveTimeoutContinuationWithRecords(root string, td *taskdir.TaskDir, req
 // a derived offer reads the validated user stop that suppresses automatic
 // resume guidance.
 func ObserveTimeoutContinuationWithRunner(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
+	return ObserveTimeoutContinuationWithRunnerContext(context.Background(), root, td, req, meta, records, catalog, runnerReleased)
+}
+
+func ObserveTimeoutContinuationWithRunnerContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
 	var offer *ContinuationOffer
 	var err error
 	if HasTerminatedBudgetStop(records) {
-		offer, err = observeBudgetContinuation(root, td, req, meta, records, catalog, runnerReleased)
+		offer, err = observeBudgetContinuation(ctx, root, td, req, meta, records, catalog, runnerReleased)
 	} else {
-		offer, err = observeInterruptedContinuation(root, td, req, meta, catalog, runnerReleased)
+		offer, err = observeInterruptedContinuation(ctx, root, td, req, meta, catalog, runnerReleased)
 	}
 	if err != nil || offer == nil {
 		return nil, err
 	}
-	cancelled, err := td.UserStopRequestedContext(context.Background())
+	cancelled, err := td.UserStopRequestedContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +67,7 @@ func ObserveTimeoutContinuationWithRunner(root string, td *taskdir.TaskDir, req 
 	return withUserCancellation(*offer), nil
 }
 
-func observeBudgetContinuation(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
+func observeBudgetContinuation(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
 	if req == nil || !HasTerminatedBudgetStop(records) {
 		return nil, nil
 	}
@@ -63,7 +75,7 @@ func observeBudgetContinuation(root string, td *taskdir.TaskDir, req *task.TaskR
 	if err != nil {
 		return nil, err
 	}
-	launch, err := observeContinuationLaunch(root, td, meta)
+	launch, err := observeContinuationLaunch(ctx, root, td, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +98,11 @@ func observedSessionSource(td *taskdir.TaskDir, req *task.TaskRecord) (Continuat
 // outcome. The closure's validated termination cause classifies it, so the
 // result never depends on a derived stop annotation or an earlier status
 // poll. Queue state is never evidence. A held runner lease may still seal.
-func observeInterruptedContinuation(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
+func observeInterruptedContinuation(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
 	if req == nil || !runnerReleased {
 		return nil, nil
 	}
-	proof, closed, err := closureInterruption(td)
+	proof, closed, err := closureInterruption(ctx, td)
 	if err != nil || !closed {
 		return nil, err
 	}
@@ -98,7 +110,7 @@ func observeInterruptedContinuation(root string, td *taskdir.TaskDir, req *task.
 	if err != nil {
 		return nil, err
 	}
-	launch, err := observeContinuationLaunch(root, td, meta)
+	launch, err := observeContinuationLaunch(ctx, root, td, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -114,11 +126,11 @@ func closureContinuationCause(proof guardian.ClosureProof) ContinuationCause {
 	return ContinuationInterrupted
 }
 
-func observeContinuationLaunch(root string, td *taskdir.TaskDir, meta *task.MetaRecord) (continuationLaunch, error) {
+func observeContinuationLaunch(ctx context.Context, root string, td *taskdir.TaskDir, meta *task.MetaRecord) (continuationLaunch, error) {
 	if meta == nil {
 		return continuationLaunch{}, nil
 	}
-	ownership, err := supervisorcore.RunnerOwnershipForTask(root, td, meta)
+	ownership, err := supervisorcore.RunnerOwnershipForTaskContext(ctx, root, td, meta)
 	if err != nil {
 		return continuationLaunch{}, err
 	}

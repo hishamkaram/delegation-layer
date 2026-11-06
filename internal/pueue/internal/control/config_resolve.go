@@ -221,14 +221,27 @@ func resolveRemaining(c *Config, r ResolutionContext, data, runtimeDir string) (
 		}
 		*p.target = v
 	}
-	limit, ok := unixSocketPathLimit(r.OS)
-	if !ok {
-		return ResolvedConfig{}, fmt.Errorf("%w: unsupported platform", ErrConfiguration)
-	}
-	if len(result.SocketPath) > limit {
-		return ResolvedConfig{}, fmt.Errorf("%w: %w", ErrConfiguration, errUnixSocketPathTooLong)
+	if err := ValidateUnixSocketPathBytes(r.OS, len(result.SocketPath)); err != nil {
+		return ResolvedConfig{}, err
 	}
 	return result, nil
+}
+
+// ValidateUnixSocketPathBytes shares the native pathname bound with other
+// Delegate-owned Unix endpoints. It checks byte length only; the caller owns
+// pathname validity, filesystem identity and native bind errors.
+func ValidateUnixSocketPathBytes(goos string, pathBytes int) error {
+	if pathBytes < 0 {
+		return fmt.Errorf("%w: negative Unix socket pathname size", ErrConfiguration)
+	}
+	limit, ok := unixSocketPathLimit(goos)
+	if !ok {
+		return fmt.Errorf("%w: unsupported platform", ErrConfiguration)
+	}
+	if pathBytes > limit {
+		return fmt.Errorf("%w: %w", ErrConfiguration, errUnixSocketPathTooLong)
+	}
+	return nil
 }
 
 func unixSocketPathLimit(goos string) (int, bool) {

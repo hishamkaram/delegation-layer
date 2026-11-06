@@ -10,11 +10,17 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
-func RecordTaskCapture(store *taskdir.Store, request task.TaskRecord) (resultErr error) {
+func RecordTaskCapture(store *taskdir.Store, request task.TaskRecord) error {
+	return RecordTaskCaptureContext(context.Background(), store, request)
+}
+
+// RecordTaskCaptureContext uses the caller's bounded context while binding the canonical saved request to its capture obligation. The journal
+// owns the write and completes accepted staging barriers before returning.
+func RecordTaskCaptureContext(parent context.Context, store *taskdir.Store, request task.TaskRecord) (resultErr error) {
 	if request.Workspace == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), workspace.DefaultBudget)
+	ctx, cancel := context.WithTimeout(parent, workspace.DefaultBudget)
 	defer cancel()
 	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
 	if err != nil {

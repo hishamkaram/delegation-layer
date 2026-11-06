@@ -5,6 +5,8 @@
 Read the [product boundary](agents/_data/product-boundary.md) before proposing
 a design, guarantee or restriction. Delegate owns task lifecycle and evidence;
 users and providers own their CLI installations, settings and accounts.
+The [installed-executable rule](agents/_data/product-boundary.md#installed-executables)
+also applies to Delegate, Pueue, fixtures and contributor tools.
 
 See [what Delegate provides](README.md#what-it-provides) for product purpose and
 current capabilities, and [architecture](docs/architecture.md) for implementation

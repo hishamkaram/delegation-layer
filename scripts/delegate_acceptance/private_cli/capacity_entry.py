@@ -5,7 +5,7 @@ from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
 from scripts.delegate_acceptance.private_cli.wrapper_policy import compact_sequence_evidence
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.wrapper_policy import require_no_startup_control_calls
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_observed_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_records
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_command_counts
 
@@ -47,7 +47,7 @@ def run_capacity_scenario(
         env=lifetime.env,
         old_layout=lifetime.base / "old",
         old_layout_owned=lifetime.old_layout_owned,
-        client=initial.initial_pair_directory / "pueue",
+        client=lifetime.upgraded_libexec / "pueue",
         config=lifetime.private_config,
         parallel_tasks=args.parallel_tasks,
         dispatch_workers=dispatch_workers,
@@ -55,6 +55,7 @@ def run_capacity_scenario(
         evidence=acceptance_evidence,
         lease_nonce=lease_nonce,
         client_call_log=lifetime.base / "old-client-starts-calls",
+        upgraded_client_call_log=lifetime.base / "upgraded-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
         capture_root=lifetime.capture_token,
         run_receipt=run_receipt,
@@ -62,14 +63,16 @@ def run_capacity_scenario(
     # The upgrade probe has already removed every old-layout token;
     # never present those consumed handles to the final rollback.
     lifetime.old_layout_owned = ()
-    shutdown_observed_private_supervisor(
-        initial.initial_pair_directory / "pueue",
+    shutdown_terminal_private_supervisor(
+        delegate,
+        lifetime.upgraded_libexec / "pueue",
         lifetime.private_config,
         lifetime.env,
         state=fixture.state,
         task_ids=tuple(lifetime.attempted_task_ids),
         capture_root=lifetime.capture_token,
         observe=lifetime.primary_observer,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     record_capacity_scenario(
         acceptance_evidence=acceptance_evidence, args=args, dispatch_workers=dispatch_workers, initial=initial,
@@ -96,6 +99,7 @@ def record_capacity_scenario(
             "capacity_proof": acceptance_evidence["capacity_proof"],
             "dispatch_batch": acceptance_evidence["dispatch_batch"],
             "status_coalescing": acceptance_evidence["status_coalescing"],
+            "status_after_package_removal": acceptance_evidence["status_after_package_removal"],
             "capacity_proof_receipt": "capacity-proof.json",
             "dispatch_batch_receipt": "dispatch-batch.json",
             "status_coalescing_receipt": "status-coalescing.json",
@@ -115,10 +119,11 @@ def record_capacity_scenario(
                     else "private model discovery completed without changing ordinary supervisor ownership"
                 ),
                 "task completion survived removal of the original package layout",
-                "dispatch restarted the private supervisor after package removal",
+                "explicit migration selected the current installed pair before dispatch restarted the private supervisor",
                 "all requested fixture tasks retained live provider leases and lifetime-owner locks with bound native-scope registrations while Running",
                 "dispatch caller concurrency and burst metrics were recorded separately from capacity proof",
-                "sixteen concurrent public status calls coalesced into fewer authoritative queue snapshots",
+                "sixteen concurrent public status calls shared queue snapshots while the selected installed pair was available",
+                "sixteen concurrent public status calls retained compatibility probes and shared row observations after package removal",
             ],
         }
     )

@@ -16,6 +16,7 @@ import (
 // provider session can safely be handed to a successor.
 
 func TestPredecessorTerminatedReleasesRebootClosedContinuation(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot})
 	requireRebootClosedPreconditions(t, fixture)
 	requireRebootSuccessorBusy(t, fixture)
@@ -44,6 +45,7 @@ func TestPredecessorTerminatedAcceptsRebootClosedFirstTurn(t *testing.T) {
 }
 
 func TestResolvePredecessorAcceptsRebootClosedContinuation(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot})
 	requireRebootClosedPreconditions(t, fixture)
 	request, options := rebootContinuationAdmission(t, fixture)
@@ -63,6 +65,7 @@ func TestResolvePredecessorAcceptsRebootClosedContinuation(t *testing.T) {
 // The controls below share the Ended queue row and must stay refused: the queue
 // alone, an open lifetime journal, or a live runner lease is not a handoff.
 func TestPredecessorTerminatedRefusesRebootWithoutClosedLifetime(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		setup rebootSetup
@@ -92,6 +95,7 @@ func TestPredecessorTerminatedRefusesRebootWithoutClosedLifetime(t *testing.T) {
 // requested PriorSession. That recorded input is the session reference, bound
 // to the immediate predecessor rather than the inherited ancestor.
 func TestContinuationPriorUsesRecordedInputWhenRebootPredecessorHasNoIdentity(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), stage: rebootLifetimeClosedPreviousBoot})
 	requireRebootClosedLifetime(t, fixture.td)
 	requireRebootNoProviderPublication(t, fixture)
@@ -116,6 +120,7 @@ func TestContinuationPriorUsesRecordedInputWhenRebootPredecessorHasNoIdentity(t 
 }
 
 func TestContinuationPriorRefusesFreshPredecessorWithoutIdentity(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{stage: rebootLifetimeClosedPreviousBoot})
 	prior, err := tasklifecycle.ContinuationPrior(fixture.td, &fixture.req)
 	if !errors.Is(err, os.ErrNotExist) || prior != nil {
@@ -126,6 +131,7 @@ func TestContinuationPriorRefusesFreshPredecessorWithoutIdentity(t *testing.T) {
 // Only genuine absence of provider.ref.json permits recorded input. Every
 // present-but-invalid record or missing prepared dependency stays a refusal.
 func TestContinuationPriorNeverFallsBackFromInvalidIdentity(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		damage func(*testing.T, *rebootFixture)

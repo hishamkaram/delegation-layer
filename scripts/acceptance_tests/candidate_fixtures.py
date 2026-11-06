@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
     BOOTSTRAP_OUTCOME, BOOTSTRAP_SHUTDOWN, BOOTSTRAP_TERMINATION_CAUSE,
@@ -11,7 +13,7 @@ from scripts.delegate_acceptance.release_verification.candidate_manifest import 
     ArtifactEntry, BuildInputs, CandidateLocator, CandidateManifest,
     SourceIdentity, Toolchains, encode_manifest, expected_inventory,
 )
-from scripts.delegate_acceptance.release_verification.contract import BinaryDigests
+from scripts.delegate_acceptance.release_verification.contract import InstalledExecutables
 
 
 VERSION = "0.1.37"
@@ -19,7 +21,7 @@ COMMIT = "a" * 40
 TREE = "b" * 40
 BASE = "c" * 40
 REPOSITORY = "hishamkaram/delegation-layer"
-NATIVE_BINARIES = BinaryDigests(delegate="4" * 64, delegate_run="5" * 64, pueue="6" * 64, pueued="7" * 64)
+NATIVE_BINARIES = InstalledExecutables(*(Path("/candidate") / name for name in ("delegate", "delegate-run", "pueue", "pueued")))
 BOOTSTRAP_ROOT_ID = "1" * 32
 BOOTSTRAP_TASK_ID = "2" * 32
 
@@ -46,7 +48,7 @@ def locator_for(value: CandidateManifest) -> CandidateLocator:
                             manifest_sha256=sha(encode_manifest(value)))
 
 
-def bootstrap(binaries: BinaryDigests = NATIVE_BINARIES) -> BootstrapObservation:
+def bootstrap(binaries: InstalledExecutables = NATIVE_BINARIES) -> BootstrapObservation:
     """The closed installed fixture turn an accepted install of ``binaries`` records."""
     return BootstrapObservation(
         root_id=BOOTSTRAP_ROOT_ID, task_id=BOOTSTRAP_TASK_ID, binaries=binaries, outcome=BOOTSTRAP_OUTCOME,

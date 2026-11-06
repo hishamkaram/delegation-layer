@@ -20,13 +20,14 @@ type semanticallyChangedPrivateMigrationFixture struct {
 }
 
 type completedPrivateSuccessorTestFixture struct {
-	base       string
-	stateRoot  string
-	clientPath string
-	daemonPath string
-	saved      task.SupervisorRef
-	successor  task.SupervisorRef
-	options    Options
+	setCleanupClient func(*Client)
+	base             string
+	stateRoot        string
+	clientPath       string
+	daemonPath       string
+	saved            task.SupervisorRef
+	successor        task.SupervisorRef
+	options          Options
 }
 
 type completedPrivateLegacyTestFixture struct {

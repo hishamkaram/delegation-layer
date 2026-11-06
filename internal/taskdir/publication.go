@@ -2,6 +2,7 @@ package taskdir
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,11 @@ import (
 )
 
 func (td *TaskDir) withCollectionCheck(check func() error, fn func() (*task.OutcomeRecord, error, error)) (out *task.OutcomeRecord, cleanupErr, resultErr error) {
-	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
+	return td.withCollectionCheckContext(context.Background(), check, fn)
+}
+
+func (td *TaskDir) withCollectionCheckContext(ctx context.Context, check func() error, fn func() (*task.OutcomeRecord, error, error)) (out *task.OutcomeRecord, cleanupErr, resultErr error) {
+	if err := td.store.maintLock.LockSHNonblockingContext(ctx); err != nil {
 		return nil, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
@@ -22,7 +27,7 @@ func (td *TaskDir) withCollectionCheck(check func() error, fn func() (*task.Outc
 			return nil, nil, err
 		}
 	}
-	if err := td.runLock.LockEXNonblocking(); err != nil {
+	if err := td.runLock.LockEXNonblockingContext(ctx); err != nil {
 		return nil, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.runLock.Unlock()) }()
@@ -102,8 +107,16 @@ func (td *TaskDir) acknowledgeRecord(name string) error {
 // Collect only publishes the registered pure predicate's decision after validating
 // the complete immutable evidence set. It can never acquire Start authority.
 func (td *TaskDir) Collect(predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
-	return td.withCollectionCheck(func() error {
-		_, meta, _, _, err := td.loadAndValidatePreparedSet()
+	return td.CollectContext(context.Background(), predicate)
+}
+
+func (td *TaskDir) CollectContext(ctx context.Context, predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	return td.withCollectionCheckContext(ctx, func() error {
+		_, meta, _, _, err := td.loadAndValidatePreparedSetContext(ctx)
 		if err != nil {
 			return err
 		}
@@ -120,7 +133,7 @@ func (td *TaskDir) Collect(predicate task.PredicateRef) (*task.OutcomeRecord, er
 			}
 		}
 		return task.ErrNoSeal
-	}, func() (*task.OutcomeRecord, error, error) { return td.collectOwned(predicate) })
+	}, func() (*task.OutcomeRecord, error, error) { return td.collectOwnedContext(ctx, predicate) })
 }
 
 // Finalize retains the consumed runner's maintenance/run lease through pure
@@ -138,7 +151,11 @@ func (td *TaskDir) Finalize(predicate task.PredicateRef) (*task.OutcomeRecord, e
 }
 
 func (td *TaskDir) collectOwned(predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
-	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSet()
+	return td.collectOwnedContext(context.Background(), predicate)
+}
+
+func (td *TaskDir) collectOwnedContext(ctx context.Context, predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
+	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -173,10 +190,14 @@ func (td *TaskDir) collectOwned(predicate task.PredicateRef) (*task.OutcomeRecor
 	if err != nil {
 		return nil, nil, err
 	}
-	return td.evaluateAndPublish(interpreter, seal, spec, metaHash)
+	return td.evaluateAndPublishContext(ctx, interpreter, seal, spec, metaHash)
 }
 
 func (td *TaskDir) publishCandidate(candidate *task.OutcomeRecord, reader io.Reader) (*task.OutcomeRecord, error, error) {
+	return td.publishCandidateContext(context.Background(), candidate, reader)
+}
+
+func (td *TaskDir) publishCandidateContext(ctx context.Context, candidate *task.OutcomeRecord, reader io.Reader) (*task.OutcomeRecord, error, error) {
 	if err := task.ValidateOutcomeRecord(candidate); err != nil {
 		return nil, nil, err
 	}
@@ -184,16 +205,16 @@ func (td *TaskDir) publishCandidate(candidate *task.OutcomeRecord, reader io.Rea
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = td.ensurePayload(candidate.Payload, reader); err != nil {
+	if err = td.ensurePayloadContext(ctx, candidate.Payload, reader); err != nil {
 		return nil, nil, err
 	}
-	return td.commitOutcome(candidate, data)
+	return td.commitOutcomeContext(context.WithoutCancel(ctx), candidate, data)
 }
 
-func (td *TaskDir) commitOutcome(candidate *task.OutcomeRecord, data []byte) (*task.OutcomeRecord, error, error) {
-	committed, cleanupErr, err := td.store.stageAndCommit(td.Dir, "outcome.json", data, td.store.faultInjector)
+func (td *TaskDir) commitOutcomeContext(ctx context.Context, candidate *task.OutcomeRecord, data []byte) (*task.OutcomeRecord, error, error) {
+	committed, cleanupErr, err := td.store.stageReaderContext(ctx, td.Dir, "outcome.json", bytes.NewReader(data), td.store.faultInjector)
 	if errors.Is(err, os.ErrExist) {
-		_, meta, spec, metaHash, readErr := td.loadAndValidatePreparedSet()
+		_, meta, spec, metaHash, readErr := td.loadAndValidatePreparedSetContext(ctx)
 		if readErr != nil {
 			return nil, nil, readErr
 		}
@@ -219,14 +240,14 @@ func (td *TaskDir) commitOutcome(candidate *task.OutcomeRecord, data []byte) (*t
 	return candidate, cleanupErr, nil
 }
 
-func (td *TaskDir) ensurePayload(descriptor task.PayloadDescriptor, reader io.Reader) error {
+func (td *TaskDir) ensurePayloadContext(ctx context.Context, descriptor task.PayloadDescriptor, reader io.Reader) error {
 	path := filepath.Join(td.Dir, descriptor.Basename)
 	exists, err := td.store.exists(path)
 	if err != nil {
 		return fmt.Errorf("%w: %w", task.ErrInvariantFault, err)
 	}
 	if !exists {
-		_, cleanupErr, stageErr := td.store.stageReader(td.Dir, descriptor.Basename, reader, td.store.faultInjector)
+		_, cleanupErr, stageErr := td.store.stageReaderContext(ctx, td.Dir, descriptor.Basename, reader, td.store.faultInjector)
 		if stageErr != nil && !errors.Is(stageErr, os.ErrExist) {
 			return stageErr
 		}

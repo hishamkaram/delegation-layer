@@ -7,7 +7,7 @@ import (
 
 func TestPrivateProcessUnavailableUsesExactIncarnation(t *testing.T) {
 	observation := privateProcessObservation{Present: true, StartToken: "native:10"}
-	client := &Client{options: Options{processObserver: func(pid int) (privateProcessObservation, error) {
+	client := &Client{options: Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, processObserver: func(pid int) (privateProcessObservation, error) {
 		if pid != 42 {
 			t.Fatalf("observed PID %d, want 42", pid)
 		}

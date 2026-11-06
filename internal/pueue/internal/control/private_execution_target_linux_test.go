@@ -49,7 +49,7 @@ func TestObservePrivateExecutionTargetLinuxRejectsUnboundPeer(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		fixture.recordPID(t, os.Getppid())
 		fixture.listen(t)
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, ErrBinding, "not the recorded process")
 	})
 	t.Run("start token changes across the connection", func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestObservePrivateExecutionTargetLinuxRejectsUnboundPeer(t *testing.T) {
 		fixture.recordPID(t, os.Getpid())
 		fixture.listen(t)
 		var observations atomic.Int64
-		options := Options{processObserver: func(int) (privateProcessObservation, error) {
+		options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, processObserver: func(int) (privateProcessObservation, error) {
 			return privateProcessObservation{Present: true, StartToken: "fixture:" + strconv.FormatInt(observations.Add(1), 10)}, nil
 		}}
 		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, options)
@@ -67,7 +67,7 @@ func TestObservePrivateExecutionTargetLinuxRejectsUnboundPeer(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		fixture.recordPID(t, os.Getpid())
 		fixture.listen(t)
-		options := Options{processObserver: func(int) (privateProcessObservation, error) {
+		options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, processObserver: func(int) (privateProcessObservation, error) {
 			return privateProcessObservation{}, nil
 		}}
 		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, options)
@@ -81,14 +81,14 @@ func TestObservePrivateExecutionTargetLinuxDeadEndpointIsUnknown(t *testing.T) {
 		fixture.recordPID(t, os.Getpid())
 		fixture.leaveRefusedSocket(t)
 		before := snapshotExecutionTargetTree(t, fixture.stateRoot)
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, syscall.ECONNREFUSED, "")
 		assertExecutionTargetTreeUnchanged(t, fixture.stateRoot, before)
 	})
 	t.Run("missing socket", func(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		fixture.recordPID(t, os.Getpid())
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, os.ErrNotExist, "")
 	})
 }

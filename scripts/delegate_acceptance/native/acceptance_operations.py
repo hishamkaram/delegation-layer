@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import digest, write_json
+from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.validation import _task_identity, require
 from scripts.delegate_acceptance.native.fixtures import shell_append_continuation_command, shell_digest_command
 from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER
@@ -54,13 +54,15 @@ def write_binding(owner, task_id: str, provider_identity: dict[str, str]) -> Non
             "runtime binding was already persisted")
     recorded_identity = acceptance._provider_bindings.identity_for(task_id)
     require(_task_identity(task_id) and
-            set(provider_identity) == {"executable", "version", "sha256"} and
+            {"executable", "version"} <= set(provider_identity) <= {"executable", "version", "sha256"} and
             recorded_identity is not None and
             dict(recorded_identity) == provider_identity,
             "first admitted provider identity is unavailable")
     args = getattr(acceptance, "args", None)
     budget = case_task_budget(acceptance.provider)
     write_json(binding, {
+        "schema_version": 2,
+        "representation": "installed-paths",
         "provider": acceptance.provider,
         "mode": acceptance.mode,
         "scenario": acceptance.scenario,
@@ -73,12 +75,13 @@ def write_binding(owner, task_id: str, provider_identity: dict[str, str]) -> Non
         "provider_identity_scope": "first-admitted-task",
         "provider_task_id": task_id,
         "provider_executable": provider_identity["executable"],
-        "provider_sha256": provider_identity["sha256"],
         "provider_version": provider_identity["version"],
-        "delegate_sha256": digest(acceptance.delegate),
-        "runner_sha256": digest(acceptance.runner),
-        "pueue_sha256": digest(acceptance.pueue),
-        "pueued_sha256": digest(acceptance.pueued),
+        "installed_executables": {
+            "delegate": str(acceptance.delegate.resolve()),
+            "delegate-run": str(acceptance.runner.resolve()),
+            "pueue": str(acceptance.pueue.resolve()),
+            "pueued": str(acceptance.pueued.resolve()),
+        },
         "pueue_version": acceptance.pueue_version,
         "pueued_version": acceptance.pueued_version,
         "credentials_in_receipt": False,

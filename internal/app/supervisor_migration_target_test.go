@@ -34,13 +34,6 @@ func TestExplicitMigrationBusyPreservesSelectedInspectionSuccessor(t *testing.T)
 		if selected != scenario.successorGroup.Supervisor {
 			t.Fatalf("busy migration selected a different proposal: %+v", selected)
 		}
-		retargetable, retargetErr := pueue.PrivateMigrationRetargetableWithLock(fixture.root)
-		if retargetErr != nil {
-			return retargetErr
-		}
-		if !retargetable {
-			t.Fatal("busy migration advanced beyond prepared intent")
-		}
 		return nil
 	})
 	if err != nil {

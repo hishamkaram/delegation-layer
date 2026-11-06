@@ -27,7 +27,6 @@ from .model import (
 )
 from .source import (
     ENTRYPOINT_PATH, _assert_source_untouched, _git_executable, _install_workspace_fixture,
-    _require_executable,
     _prepare_source, _write_briefs, build_source_manifest,
 )
 from .lifecycle import _run_success
@@ -54,7 +53,7 @@ class WorkspaceLayout:
 
 
 def _create_layout(
-    owner: DirectoryOwner, root_token: OwnedDirectory, binaries: dict[str, Path],
+    owner: DirectoryOwner, root_token: OwnedDirectory, source_root: Path,
 ) -> WorkspaceLayout:
     base = root_token.directory
     state = owner.create("managed workspace state", base / "state", base).directory
@@ -65,10 +64,9 @@ def _create_layout(
     home_dir = owner.create("private CLI home", base / "home", base).directory
     package_root = owner.create("private package root", base / "package", base).directory
     install, _canonical_bin, libexec = private_cli_installation.install_package_layout(
-        owner, binaries["delegate"], binaries["runner"], package_root, False,
+        owner, source_root, package_root, False,
     )
-    private_cli_installation.install_fixture(binaries["pueue"], libexec / "pueue")
-    private_cli_installation.install_fixture(binaries["pueued"], libexec / "pueued")
+    private_cli_installation.install_supervisor_pair(libexec)
     gate_path = base / "fixture-gate"
     fixture_session_marker = base / "native-fixture-session.json"
     lease_nonce = uuid.uuid4().hex
@@ -114,7 +112,6 @@ def _workspace_environment(layout: WorkspaceLayout) -> dict[str, str]:
 
 def _make_context(
     args: argparse.Namespace,
-    binaries: dict[str, Path],
 ) -> tuple[WorkspaceContext, dict[str, Path]]:
     owner = DirectoryOwner()
     home = Path.home().resolve(strict=True)
@@ -125,7 +122,7 @@ def _make_context(
     root_token = owner.adopt_created("managed workspace acceptance root", base_path, home)
     processes: Processes | None = None
     try:
-        layout = _create_layout(owner, root_token, binaries)
+        layout = _create_layout(owner, root_token, args.source_root)
         environment = _workspace_environment(layout)
         processes = Processes(
             layout.base,
@@ -134,7 +131,7 @@ def _make_context(
             environment_keys_only=True,
         )
         return _make_context_unchecked(
-            args, binaries, owner, root_token,
+            args, owner, root_token,
             layout=layout, environment=environment, processes=processes,
         )
     except BaseException as error:
@@ -143,7 +140,6 @@ def _make_context(
 
 def _make_context_unchecked(
     args: argparse.Namespace,
-    binaries: dict[str, Path],
     owner: DirectoryOwner,
     root_token: OwnedDirectory,
     *,
@@ -153,15 +149,12 @@ def _make_context_unchecked(
 ) -> tuple[WorkspaceContext, dict[str, Path]]:
     git_path = _git_executable()
     binaries_for_receipt = {
-        "delegate": binaries["delegate"],
-        "runner": binaries["runner"],
-        "pueue": binaries["pueue"],
-        "pueued": binaries["pueued"],
+        "delegate": layout.install / "delegate",
+        "runner": layout.install / "delegate-run",
+        "pueue": layout.libexec / "pueue",
+        "pueued": layout.libexec / "pueued",
         "git": git_path,
         "fixture": layout.provider_bin / "pi",
-        # The copies the private CLI actually executes, beside the supplied builds above.
-        "installed-delegate": layout.install / "delegate",
-        "installed-runner": layout.install / "delegate-run",
     }
     context = WorkspaceContext(
         owner=owner,
@@ -261,16 +254,19 @@ def _run(args: argparse.Namespace, finalizer: ReceiptFinalizer, context: Workspa
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=DRIVER_DESCRIPTION)
-    parser.add_argument("--delegate", type=Path, required=True)
-    parser.add_argument("--runner", type=Path, required=True)
-    parser.add_argument("--pueue", type=Path, required=True)
-    parser.add_argument("--pueued", type=Path, required=True)
+    parser.add_argument("--source-root", type=Path, default=REPOSITORY,
+                        help="checkout to build into the owned installation; Pueue uses its verified pinned archive")
+    for retired in ("delegate", "runner", "pueue", "pueued"):
+        parser.add_argument("--" + retired, type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--scenario", choices=("lifecycle", "lineage", "checkpoint", "capacity"), default="lifecycle")
     parser.add_argument("--parallel-tasks", type=int, default=DEFAULT_CAPACITY_TASKS)
     parser.add_argument("--dispatch-workers", type=int, default=DEFAULT_DISPATCH_WORKERS)
     parser.add_argument("--workspace-budget", default=DEFAULT_WORKSPACE_BUDGET)
     args = parser.parse_args(argv)
+    if any(getattr(args, name) is not None for name in ("delegate", "runner", "pueue", "pueued")):
+        parser.error("installed binary inputs are retired; use --source-root for an owned candidate "
+                     "with independently archive-installed Pueue")
     if args.parallel_tasks <= 0:
         parser.error("--parallel-tasks must be positive")
     if args.dispatch_workers <= 0:
@@ -294,10 +290,6 @@ def _new_finalizer(args: argparse.Namespace, invocation: list[str]) -> ReceiptFi
         {
             "acceptance-driver": ENTRYPOINT_PATH,
             "private-fixture": Path(REPOSITORY / "scripts" / "acceptance_private_cli.py"),
-            "delegate": args.delegate,
-            "runner": args.runner,
-            "pueue": args.pueue,
-            "pueued": args.pueued,
         },
     )
 
@@ -310,13 +302,8 @@ def _execute_scenario(
     verdict = "failed"
     reason = "acceptance did not reach a verdict"
     try:
-        binaries = {
-            "delegate": _require_executable(args.delegate, "delegate"),
-            "runner": _require_executable(args.runner, "runner"),
-            "pueue": _require_executable(args.pueue, "pueue"),
-            "pueued": _require_executable(args.pueued, "pueued"),
-        }
-        context, receipt_binaries = _make_context(args, binaries)
+        private_cli_installation.require_source_root(args.source_root)
+        context, receipt_binaries = _make_context(args)
         finalizer.binaries.update(receipt_binaries)
         finalizer.refresh_tool_fingerprints()
         verdict, reason = _run(args, finalizer, context)

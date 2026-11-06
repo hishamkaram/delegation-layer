@@ -14,7 +14,6 @@ from scripts.delegate_acceptance.private_cli.configuration import COLLECT_WATCH
 from pathlib import Path
 from scripts.delegate_acceptance.private_cli.configuration import TASK_BUDGET
 from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_supervisor_pair
-from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
 from scripts.delegate_acceptance.private_cli.installation import install_adjacent_package
 import json
 import platform
@@ -23,8 +22,7 @@ from scripts.delegate_acceptance.private_cli.supervisor import private_shutdown_
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.commands import run_json
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
-from scripts.delegate_acceptance.supervisor.runner_layout import managed_state_runner
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_pending_private_supervisor
 import shutil
 import uuid
 
@@ -38,13 +36,13 @@ class InstalledDefaults:
 
     ``delegate`` is the installed entry the caller resolved and executes;
     ``supervisor_directory`` holds the supervisor pair the installation ships;
-    ``digests`` are the expected (name, SHA-256) of the four installed binaries.
+    ``executables`` are the selected (name, path) of the four installed binaries.
     The isolated ``env`` HOME selects ``state``; ``workspace`` is the task cwd.
     """
 
     delegate: Path
     supervisor_directory: Path
-    digests: tuple[tuple[str, str], ...]
+    executables: tuple[tuple[str, Path], ...]
     env: dict[str, str]
     state: Path
     workspace: Path
@@ -55,8 +53,8 @@ class InstalledDefaults:
     def config(self):
         return self.state / ".supervisor" / "pueue.yml"
 
-    def digest(self, name):
-        return dict(self.digests)[name]
+    def executable(self, name):
+        return dict(self.executables)[name]
 
 
 @dataclass(frozen=True)
@@ -73,7 +71,7 @@ class AdmittedTask:
 class InstalledBootstrap:
     """The committed and closed fixture turn of one installed default, by observed identity.
 
-    The digests are those of the executed delegate, the runner the task recorded and
+    The paths are those of the executed delegate, the runner the task recorded and
     the supervisor pair its state root selected; ``worker_result``,
     ``termination_cause`` and ``scope_empty`` come from the task's own lifetime closure.
     The core returns this only after the daemon exited and its endpoint closed.
@@ -81,10 +79,10 @@ class InstalledBootstrap:
 
     root_id: str
     task_id: str
-    delegate_sha256: str
-    runner_sha256: str
-    client_sha256: str
-    daemon_sha256: str
+    delegate: Path
+    runner: Path
+    client: Path
+    daemon: Path
     outcome: str
     worker_result: str
     termination_cause: str
@@ -128,6 +126,7 @@ def register_installed_default(installed, supervisor_cleanups, managed_state_roo
     if installed.state.exists() or installed.config.exists():
         raise RuntimeError("packaged default state was not fresh")
     cleanup = {
+        "delegate": installed.delegate,
         "client": installed.supervisor_directory / "pueue",
         "config": installed.config,
         "env": installed.env,
@@ -168,7 +167,7 @@ def dispatch_installed_default(installed, cleanup, *, capture_root, run_receipt=
         raise RuntimeError("packaged default dispatch did not create its private config")
     pair = assert_state_supervisor_pair(installed.state, installed.supervisor_directory)
     for name in ("pueue", "pueued"):
-        if file_fingerprint(pair / name).get("sha256") != installed.digest(name):
+        if (pair / name).resolve() != installed.executable(name).resolve():
             raise RuntimeError("packaged default state root selected an unexpected supervisor member " + name)
     return AdmittedTask(root_id=root_id, task_id=task_id, commands=commands, pair=pair)
 
@@ -190,7 +189,7 @@ def require_task_closure(closure, admitted):
 def collect_installed_default(installed, admitted, *, capture_root, run_receipt=None):
     """Observe and collect the admitted task, check its runner, then await its own closure.
 
-    Returns the observed runner digest after the collected verdict was committed.
+    Returns the observed installed runner path after the collected verdict was committed.
     """
     if run_receipt is not None:
         run_receipt.phase("packaged_default_observation")
@@ -217,14 +216,11 @@ def collect_installed_default(installed, admitted, *, capture_root, run_receipt=
         raise RuntimeError("packaged default collect did not publish success")
     _require_task_identity(outcome, admitted, "packaged default collect published a different task")
     meta = json.loads((installed.state / "tasks" / admitted.task_id / "meta.json").read_text())
-    runner_digest = installed.digest("delegate-run")
-    expected_runner = managed_state_runner(installed.state, runner_digest)
+    expected_runner = installed.executable("delegate-run").resolve(strict=True)
     if meta.get("runner_executable") != str(expected_runner):
         raise RuntimeError("packaged default dispatch did not resolve its adjacent runner")
-    if file_fingerprint(expected_runner).get("sha256") != runner_digest:
-        raise RuntimeError("packaged default managed runner changed identity")
     require_task_closure(await_managed_lifetime_closure(installed.state, (admitted.task_id,)), admitted)
-    return runner_digest
+    return expected_runner
 
 
 def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, *, capture_root, disposal=None):
@@ -233,16 +229,10 @@ def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups
     A final-disposal caller passes its ``disposal`` owner, which then keeps the state root's lease held
     after the shutdown; without one the shutdown holds the transition lease only while it runs.
     """
-    closure = shutdown_private_supervisor(
-        admitted.pair / "pueue",
-        installed.config,
-        installed.env,
-        state=installed.state,
-        task_ids=(admitted.task_id,),
-        capture_root=capture_root,
-        disposal=disposal,
-    )
-    supervisor_cleanups.remove(cleanup)
+    if "owner" not in cleanup:
+        cleanup["client"] = admitted.pair / "pueue"
+    closure = shutdown_pending_private_supervisor(
+        cleanup, supervisor_cleanups, capture_root=capture_root, disposal=disposal)
     return require_task_closure(closure, admitted)
 
 
@@ -256,7 +246,7 @@ def prove_installed_default_bootstrap(installed, *, supervisor_cleanups, capture
     """
     cleanup = register_installed_default(installed, supervisor_cleanups)
     admitted = dispatch_installed_default(installed, cleanup, capture_root=capture_root)
-    runner_digest = collect_installed_default(installed, admitted, capture_root=capture_root)
+    runner = collect_installed_default(installed, admitted, capture_root=capture_root)
     task = shutdown_installed_default(
         installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root, disposal=disposal)
     wait = task.get("worker_wait") or {}
@@ -264,10 +254,10 @@ def prove_installed_default_bootstrap(installed, *, supervisor_cleanups, capture
     return InstalledBootstrap(
         root_id=admitted.root_id,
         task_id=admitted.task_id,
-        delegate_sha256=file_fingerprint(installed.delegate).get("sha256", ""),
-        runner_sha256=runner_digest,
-        client_sha256=file_fingerprint(admitted.pair / "pueue").get("sha256", ""),
-        daemon_sha256=file_fingerprint(admitted.pair / "pueued").get("sha256", ""),
+        delegate=installed.delegate.resolve(),
+        runner=runner,
+        client=(admitted.pair / "pueue").resolve(),
+        daemon=(admitted.pair / "pueued").resolve(),
         outcome="committed",
         worker_result=wait.get("result", ""),
         termination_cause=termination.get("cause", ""),
@@ -290,6 +280,7 @@ def verify_packaged_default_path(
     managed_state_roots=None,
     *,
     capture_root,
+    disposal,
 ):
     """Prove an adjacent release bundle bootstraps through only public defaults."""
     if run_receipt is not None:
@@ -318,7 +309,8 @@ def verify_packaged_default_path(
     if run_receipt is not None:
         run_receipt.increment("collected_task_count")
         run_receipt.phase("packaged_default_shutdown")
-    shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root)
+    shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root,
+                               disposal=disposal)
     pueue_snapshot(
         primary_client,
         primary_config,
@@ -354,8 +346,9 @@ def _observe_packaged_queue(installed, admitted, *, capture_root, run_receipt):
 def _packaged_default_evidence(package):
     return {
         "layout": "adjacent-release-binaries",
-        "binary_fingerprints": {
-            name: file_fingerprint(package / name) for name in ("delegate", "delegate-run", "pueue", "pueued")
+        "installed_executables": {
+            "schema_version": 1, "representation": "installed-paths",
+            "paths": {name: str((package / name).resolve()) for name in INSTALLED_BINARIES},
         },
         "global_path_overrides": [],
         "ambient_pueue_on_path": False,
@@ -364,7 +357,7 @@ def _packaged_default_evidence(package):
         "clean_shutdown": True,
         "coexisted_with_test_owned_daemon": True,
         "proved": [
-            "copied adjacent release binaries retained source identities",
+            "selected adjacent installed executables in place",
             "isolated HOME resolved the default state root",
             "dispatch status and collect used no root runner or supervisor override",
             "fresh bootstrap coexisted with a distinct test-owned private daemon",
@@ -378,7 +371,7 @@ def _packaged_default_evidence(package):
 
 
 def prepare_packaged_default(*, base, brief, owner, provider_bin, response_directory, sources):
-    """Copy the adjacent package and create its isolated HOME and workspace; PATH holds no pueue."""
+    """Select the adjacent installation and create its isolated HOME and workspace; PATH holds no pueue."""
     package = install_adjacent_package(owner, sources, base / "packaged-default")
     private_home = owner.create("packaged default home", base / "h", base).directory
     workspace = owner.create("packaged default workspace", base / "packaged-workspace", base).directory
@@ -388,7 +381,7 @@ def prepare_packaged_default(*, base, brief, owner, provider_bin, response_direc
     installed = InstalledDefaults(
         delegate=package / "delegate",
         supervisor_directory=package,
-        digests=tuple((name, file_fingerprint(sources[name]).get("sha256", "")) for name in INSTALLED_BINARIES),
+        executables=tuple((name, (package / name).resolve()) for name in INSTALLED_BINARIES),
         env=env,
         state=isolated_default_state_path(private_home),
         workspace=workspace,

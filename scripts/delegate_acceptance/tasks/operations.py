@@ -9,7 +9,7 @@ import os
 import time
 from copy import deepcopy
 from datetime import datetime
-from scripts.delegate_acceptance.evidence.files import digest, write_json
+from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.records import (
     _read_control_record,
     _state_root_identity,
@@ -43,7 +43,6 @@ from scripts.delegate_acceptance.supervisor.runner_layout import (
     BUNDLE_RUNNER,
     RUNNER_PLACEMENTS,
     RunnerPlacement,
-    managed_state_runner,
 )
 from scripts.delegate_acceptance.supervisor.queue_policy import (
     canonical_queue,
@@ -98,8 +97,6 @@ class NativeTaskOps:
                 "expected inspection binding mode is invalid")
         require(type(managed_runner) is bool, "managed runner mode is invalid")
         require(runner_placement in RUNNER_PLACEMENTS, "runner placement is invalid")
-        require(managed_runner or runner_placement == BUNDLE_RUNNER,
-                "only a managed admission installs a state runner")
         self.expected_inspection_binding_required = expected_inspection_binding_required
         self.managed_runner = managed_runner
         self.runner_placement: RunnerPlacement = runner_placement
@@ -130,22 +127,8 @@ class NativeTaskOps:
         return self.runner
 
     def _queued_runner(self, task: str) -> Path:
-        """Return the runner path every queue row and inspection binding executes.
-
-        The supervisor placement, never whichever file exists, selects the
-        path. A custom admission or a managed admission through an external
-        supervisor queues the expected bundle runner itself. A managed
-        admission through the private state-rooted supervisor queues the
-        immutable state copy Go installs for the expected runner's digest.
-        """
-        expected = self._expected_runner(task)
-        if self.runner_placement == BUNDLE_RUNNER:
-            return expected
-        expected_digest = digest(expected)
-        queued = managed_state_runner(self.state, expected_digest)
-        require(queued.is_file() and not queued.is_symlink() and digest(queued) == expected_digest,
-                f"managed runner executable changed for {task}")
-        return queued
+        """Return this task's selected installed runner, never a state-root copy."""
+        return self._expected_runner(task)
 
     def _ordinary_runner_executable(self, task: str) -> Path:
         if not self.managed_runner:

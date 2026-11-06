@@ -204,8 +204,8 @@ func TestReleaseSweepsLegacyIdentityTwinWithoutChangingMarker(t *testing.T) {
 func checkStageCleanupFault(t *testing.T, point poolPoint) {
 	t.Helper()
 	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "stage-fault")
-	rig.seedView("a", plainRequest(entry, digest))
+	entry, digest := plainEntry(t, rig.dir, "stage-fault", "0000000000000000000000000000000000000000000000000000000000000019")
+	rig.seedView("a", entry, digest)
 	stage := filepath.Join(rig.pool.root, poolIdentityStagePrefix+strings.Repeat("d", identityStageNonceLen))
 	if err := createExclusive(stage, canonicalMarker(t, rig.id)); err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import shutil
+import stat
 import sys
 import unittest
 from unittest.mock import patch
@@ -22,7 +23,7 @@ from scripts.delegate_acceptance.release_verification.candidate_install_contract
     CHANNEL_NPM, CHANNEL_SHELL, BootstrapTarget, RequestRecord,
 )
 from scripts.delegate_acceptance.release_verification import published_contract
-from scripts.delegate_acceptance.release_verification.contract import BINARIES, VerificationError, parse_binary_digests
+from scripts.delegate_acceptance.release_verification.contract import BINARIES, VerificationError, installed_executables
 
 
 SHELL = (CHANNEL_SHELL,)
@@ -47,7 +48,7 @@ class ShellInstallTests(support.CandidateCase):
         facts = self.verify(self.request(), channels=SHELL)
         (install,) = facts.installs
         self.assertEqual(install.requests, self.served(facts))
-        self.assertEqual(dict(install.binaries), {n: support.sha256(self.binaries[n]) for n in BINARIES})
+        self.assertEqual(install.binaries.as_mapping(), {n: (self.layout.root / "shell" / "bin" / n).resolve() for n in BINARIES})
         self.assertEqual(install.delegate_version, self.tag[1:])
         self.assertEqual(install.default_state, ("absent", "not_initialized", "absent"))
         self.assertEqual({role for role, _ in facts.candidate_files}, {"archive", "checksums"})
@@ -73,9 +74,10 @@ class ShellInstallTests(support.CandidateCase):
         self.assertEqual([line.split("\t")[0] for line in self.requests_log()], ["served", "served"])
         self.assertFalse((self.layout.root / "shell" / "bin" / "delegate").exists())
 
-    def test_binary_content_not_matching_expected_hash_is_refused(self):
+    def test_compatible_executable_update_is_allowed(self):
         changed = {**self.binaries, "pueue": b"#!/bin/sh\nprintf 'pueue 9.9.9\\n'\n"}
-        self.assertRefused("installed_binary_hash_mismatch", self.request(binaries=changed))
+        facts = self.verify(self.request(binaries=changed), channels=SHELL)
+        self.assertEqual(facts.installs[0].bootstrap.outcome, "committed")
 
     def test_archive_missing_a_binary_installs_nothing(self):
         partial = {name: data for name, data in self.binaries.items() if name != "pueued"}
@@ -141,7 +143,7 @@ class ShellBootstrapGateTests(support.CandidateCase):
         self.probe = support.RecordingProbe(observe)
         facts = self.verify(request, channels=SHELL)
         bin_dir = self.layout.root / "shell" / "bin"
-        expected = parse_binary_digests(request.binary_hashes(), "test")
+        expected = installed_executables({name: (bin_dir / name).resolve() for name in BINARIES})
         self.assertEqual(self.probe.targets, [BootstrapTarget(
             command_directory=bin_dir, delegate=(bin_dir / "delegate").resolve(), supervisor_directory=bin_dir,
             binaries=expected)])
@@ -151,14 +153,14 @@ class ShellBootstrapGateTests(support.CandidateCase):
         self.assertEqual(facts.to_record()["installs"][0]["bootstrap"], fx.bootstrap(expected).to_record())
         self.finish_workspace()
 
-    def test_a_hash_mismatch_refuses_before_the_probe(self):
-        changed = {**self.binaries, "pueued": b"#!/bin/sh\nprintf 'pueued 9.9.9\\n'\n"}
-        self.assertRefused("installed_binary_hash_mismatch", self.request(binaries=changed))
+    def test_incompatible_delegate_protocol_refuses_before_the_probe(self):
+        changed = {**self.binaries, "delegate": b"#!/bin/sh\nexit 9\n"}
+        self.assertRefused("command_failed", self.request(binaries=changed))
         self.assertEqual(self.probe.targets, [])
 
     def test_a_decoy_pair_turn_fails_although_version_catalog_hashes_and_fresh_status_pass(self):
         self.probe = support.RecordingProbe(lambda target: fx.bootstrap(
-            replace(target.binaries, pueue="0" * 64, pueued="1" * 64)))
+            replace(target.binaries, pueue=self.root / "foreign" / "pueue", pueued=self.root / "foreign" / "pueued")))
         self.assertRefused("install_bootstrap_mismatch", self.request())
         self.assertEqual(len(self.probe.targets), 1)
         self.assertTrue(self.default_path_children())
@@ -170,7 +172,7 @@ class ShellBootstrapGateTests(support.CandidateCase):
                 self.probe = support.RecordingProbe(
                     lambda target, field=field, value=value: replace(fx.bootstrap(target.binaries), **{field: value}))
                 self.assertRefused("install_bootstrap_mismatch", self.request())
-        self.probe = support.RecordingProbe(lambda target: fx.bootstrap(replace(target.binaries, delegate_run="0" * 64)))
+        self.probe = support.RecordingProbe(lambda target: fx.bootstrap(replace(target.binaries, delegate_run=self.root / "foreign" / "delegate-run")))
         self.assertRefused("install_bootstrap_mismatch", self.request())
 
     def test_the_real_probe_refuses_the_version_only_delegate_and_retains_its_root(self):
@@ -191,7 +193,18 @@ class ShellBootstrapGateTests(support.CandidateCase):
         # The test's own proof: the shell stand-in exited 8 without a child and no supervisor config exists.
         dispatch = json.loads((root / "r" / "packaged-dispatch.json").read_text(encoding="utf-8"))
         self.assertEqual(dispatch["exit_code"], 8)
-        self.assertEqual(self.binaries["delegate"], (self.layout.root / "shell" / "bin" / "delegate").read_bytes())
+        self.assertEqual(dispatch["failure_class"], "nonzero_exit")
+        self.assertEqual((dispatch["stdout_bytes"], dispatch["stderr_bytes"]), (0, 0))
+        arguments = dispatch["arguments"]
+        self.assertEqual(arguments[0], "dispatch")
+        self.assertEqual(arguments[arguments.index("--id") + 1], pending["task_ids"][0])
+        selected = self.layout.root / "shell" / "bin" / "delegate"
+        metadata = selected.lstat()
+        self.assertTrue(stat.S_ISREG(metadata.st_mode))
+        self.assertTrue(metadata.st_mode & 0o111)
+        self.assertEqual(metadata.st_size, len(self.binaries["delegate"]))
+        self.assertEqual(Path(facts["delegate"]).resolve(strict=True), selected.resolve(strict=True))
+        self.assertEqual(self.probe.targets[0].delegate, selected.resolve(strict=True))
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertFalse(self.tree.dispose())
         self.tree.remove_retained()
@@ -205,7 +218,8 @@ class NpmInstallTests(support.PackedCandidateCase):
         shell, npm = facts.installs
         self.assertEqual(shell.skill_files, 0)
         self.assertEqual(npm.skill_files, len(support.checkout_skill_digests()))
-        self.assertEqual(shell.binaries, npm.binaries)
+        self.assertNotEqual(shell.binaries, npm.binaries)
+        self.assertEqual(set(shell.binaries.as_mapping()), set(npm.binaries.as_mapping()))
         for item in facts.installs:
             self.assertEqual(len(item.requests), 2)
             self.assertEqual({r.outcome for r in item.requests}, {"served"})
@@ -247,12 +261,12 @@ class NpmInstallTests(support.PackedCandidateCase):
         self.assertEqual(caught.exception.code, "npm_pack_skill_mismatch")
         self.assertEqual(self.recording.calls, [])
 
-    def test_wrong_expected_binary_hash_is_refused_for_the_npm_install(self):
-        request = self.request()
-        wrong = tuple((name, "0" * 64 if name == "delegate" else digest) for name, digest in request.binaries)
+    def test_wrong_selected_installation_is_refused_for_the_npm_install(self):
+        self.probe = support.RecordingProbe(lambda target: fx.bootstrap(replace(
+            target.binaries, delegate=self.root / "foreign" / "delegate")))
         with self.assertRaises(VerificationError) as caught:
-            self.verify(replace(request, binaries=wrong), channels=(CHANNEL_NPM,))
-        self.assertEqual(caught.exception.code, "installed_binary_hash_mismatch")
+            self.verify(self.request(), channels=(CHANNEL_NPM,))
+        self.assertEqual(caught.exception.code, "install_bootstrap_mismatch")
 
     def test_missing_npm_is_explicit(self):
         self.recording.missing = frozenset({"npm"})

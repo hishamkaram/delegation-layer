@@ -12,11 +12,9 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func PreparePrivateAdmissionSupervisor(lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
-	controlContext, cancel := ControlContext(options)
-	defer cancel()
-	return PreparePrivateAdmissionSupervisorContext(controlContext, lookup, store, options)
-}
+// ErrSupervisorSelectionChanged refuses a replacement of an accepted resolved
+// native path. Canonical published generations are selected beforehand.
+var ErrSupervisorSelectionChanged = errors.New("private supervisor executable selection differs from accepted bootstrap")
 
 func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	if ctx == nil {
@@ -70,7 +68,7 @@ func PreparePrivateAdmissionTransition(ctx context.Context, lookup ExecutableLoo
 	if err = pueue.EnsurePrivateTaskObservationWithBootstrapLock(store.Root); err != nil {
 		return nil, err
 	}
-	if err = ReconcilePublishedSupervisorWithLock(ctx, store, options, false); err != nil {
+	if err = ReconcilePublishedSupervisorWithLock(ctx, store, options, lookup, false); err != nil {
 		return nil, err
 	}
 	supervisor, ready, err := repairLivePrivateAdmissionTransition(ctx, store, options, configExisted)

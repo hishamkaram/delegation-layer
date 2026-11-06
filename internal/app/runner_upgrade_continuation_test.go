@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -80,10 +81,8 @@ func TestBuildContinuationArgumentsRefreshesContentAddressedRunner(t *testing.T)
 	root := supervisorfixture.CanonicalTempDir(t)
 	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "saved runner")
-	runner, err := supervisor.InstallStateRunner(root, source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("a", 64))
+	writeRunnerFixture(t, runner, "historical owned runner fixture")
 	meta := &task.MetaRecord{RunnerExecutable: runner}
 	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{ResourceChecker: fixtureResources}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil)
 	if err != nil {

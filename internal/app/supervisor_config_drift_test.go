@@ -30,9 +30,13 @@ func newPublishedConfigDriftFixture(t *testing.T) *historicalSupervisorFixture {
 	writeRunnerStashedStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, 7)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	original := readSupervisorProbeTestFile(t, configPath)
-	// The fixture's shutdown uses the predecessor client, which refuses the
-	// drifted config; restore its bytes first. Cleanups run in reverse order.
+	predecessorWaits := fixture.component.daemonWaits()
+	// A live predecessor needs its original config for supported shutdown.
+	// A completed predecessor Wait leaves the successor's config authoritative.
 	t.Cleanup(func() {
+		if componentDaemonsClosed(predecessorWaits) {
+			return
+		}
 		if err := os.WriteFile(configPath, original, 0o600); err != nil {
 			t.Error(err)
 		}
@@ -68,10 +72,13 @@ func publishedPairIdentityFiles(t *testing.T, root string) map[string][]byte {
 // is blocked by the queue authorizer, keeping the row and the published
 // identities; after the row drains the same command commits the successor.
 func TestExplicitMigrationOwnsPublishedConfigDrift(t *testing.T) {
+	t.Parallel()
 	fixture := newPublishedConfigDriftFixture(t)
+	predecessorWaits := fixture.component.daemonWaits()
+	deps := withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component)
 	identities := publishedPairIdentityFiles(t, fixture.root)
 	status := readSupervisorProbeTestFile(t, fixture.statusPath)
-	blocked := supervisorMigrate(fixture.root, fixture.dependencies(), newSupervisorTestResponse())
+	blocked := supervisorMigrate(fixture.root, deps, newSupervisorTestResponse())
 	control := blocked.response.SupervisorControl
 	if blocked.code != 1 || control.State != "blocked" || control.ActiveWork != "present" || control.NextAction != "wait_for_legacy_work" || !errors.Is(blocked.err, pueue.ErrPrivateSupervisorMigrationBusy) {
 		t.Fatalf("config drift with a stashed row: code=%d control=%+v err=%v", blocked.code, control, blocked.err)
@@ -83,11 +90,16 @@ func TestExplicitMigrationOwnsPublishedConfigDrift(t *testing.T) {
 	if err := os.WriteFile(fixture.statusPath, []byte(drained), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	migrated := supervisorMigrate(fixture.root, fixture.dependencies(), newSupervisorTestResponse())
+	migrated := supervisorMigrate(fixture.root, deps, newSupervisorTestResponse())
 	if migrated.code != 0 || migrated.err != nil || migrated.response.SupervisorControl.State != "migrated" {
 		t.Fatalf("drained config-drift migration: code=%d control=%+v err=%v", migrated.code, migrated.response.SupervisorControl, migrated.err)
 	}
 	assertConfigDriftSuccessor(t, fixture)
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	if err := awaitComponentDaemons(ctx, predecessorWaits); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A blocked migration keeps the published binding and identities, the exact
@@ -118,8 +130,7 @@ func assertConfigDriftSuccessor(t *testing.T, fixture *historicalSupervisorFixtu
 		t.Fatalf("successor not published: found=%t err=%v", found, err)
 	}
 	config := readSupervisorProbeTestFile(t, successor.ConfigPath)
-	clientB := readSupervisorProbeTestFile(t, fixture.clientB)
-	if successor == fixture.predecessor || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.ClientSHA256 != task.ComputeSHA256(clientB) {
+	if successor == fixture.predecessor || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.ClientExecutable != fixture.clientB || successor.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || successor.ClientSHA256 != "" || successor.DaemonSHA256 != "" {
 		t.Fatalf("successor does not bind the drifted config and installed client: %+v", successor)
 	}
 }
@@ -130,7 +141,6 @@ func TestPublishedConfigDriftKeepsStrictRefusalOutsideMigration(t *testing.T) {
 	fixture := newPublishedConfigDriftFixture(t)
 	identities := publishedPairIdentityFiles(t, fixture.root)
 	want := "published private supervisor pair cannot be recovered"
-	saved := supervisor.ReconcileSaved(t.Context(), fixture.root, fixture.options, openNativeSupervisorStore)
 	var admitted *pueue.Client
 	admission := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
 		var prepareErr error
@@ -140,7 +150,7 @@ func TestPublishedConfigDriftKeepsStrictRefusalOutsideMigration(t *testing.T) {
 	if admitted != nil {
 		t.Fatalf("admission bound a drifted published pair: %+v", admitted.Binding())
 	}
-	for name, err := range map[string]error{"saved reconcile": saved, "admission": admission} {
+	for name, err := range map[string]error{"admission": admission} {
 		if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) || !errors.Is(err, pueue.ErrBinding) || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s lost its strict refusal: %v", name, err)
 		}
@@ -175,7 +185,13 @@ func assertConfigDriftPublicConsumers(t *testing.T, fixture *historicalSuperviso
 // Status reports the exact receipted stashed row through the alias.
 func assertConfigDriftStatusObserved(t *testing.T, fixture *historicalSupervisorFixture) {
 	t.Helper()
-	code, stdout, _, status := runHistoricalSupervisorCommand(t, fixture, []string{"status", fixture.req.TaskID, "--root", fixture.root, "--json"})
+	previousObserver := fixture.options.Observer
+	commands := observePhaseStatusCommands(fixture)
+	defer func() { fixture.options.Observer = previousObserver }()
+	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = fixture.clientA
+	deps = withSupervisorProbeRouting(t, deps, fixture.component)
+	code, stdout, _, status := runHistoricalSupervisorCommandWithDependencies(t, []string{"status", fixture.req.TaskID, "--root", fixture.root, "--json"}, deps)
 	t.Logf("status exit=%d json=%s", code, stdout)
 	row := status.Supervisor
 	if code != 0 || status.TaskID != fixture.req.TaskID || status.Admission != task.AdmissionAdmitted.String() || status.Liveness != task.LivenessRunning.String() || status.Error != "" {
@@ -184,6 +200,7 @@ func assertConfigDriftStatusObserved(t *testing.T, fixture *historicalSupervisor
 	if !historicalSupervisorResponseMatches(row, 7) || row.State != "stashed" {
 		t.Fatalf("status did not match the receipted stashed row: json=%s", stdout)
 	}
+	assertObservationPhaseNoMutation(t, commands())
 }
 
 func assertConfigDriftDispatchRefused(t *testing.T, fixture *historicalSupervisorFixture) {
@@ -212,6 +229,8 @@ type configDriftDispatch struct {
 func runConfigDriftDispatch(t *testing.T, fixture *historicalSupervisorFixture) (int, configDriftDispatch) {
 	t.Helper()
 	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = fixture.clientA
+	deps = withSupervisorProbeRouting(t, deps, fixture.component)
 	provider := preflightFixture{root: fixture.root, cwd: testsupport.CanonicalTempDir(t)}
 	deps.Catalog = preflightFixtureCatalog(t, provider.candidate)
 	deps.RunnerExecutable = canonicalAppTestExecutable(t)

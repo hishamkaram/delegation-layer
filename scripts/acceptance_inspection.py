@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import secrets
 import shlex
-import shutil
 import sys
 import time
 
@@ -16,6 +16,8 @@ from acceptance_provider_common import (
     supervisor_binding,
     verify_collected_outcome, write_bytes, write_json,
 )
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, command_closure_unproven
+from scripts.delegate_acceptance.processes.operations import run_bounded_command
 from scripts.delegate_acceptance.tasks.contracts import TaskCommand
 
 from acceptance_supervisor_common import (
@@ -23,6 +25,43 @@ from acceptance_supervisor_common import (
     failure_cleanup_deadline, finalize_acceptance_artifacts, inherited_environment,
     read_json, rollback_owned_directories, sha, wait_for_failure_cleanup,
 )
+
+
+REPO = Path(__file__).resolve().parents[1]
+FIXTURE_BUILD_TIMEOUT_SECONDS = 900
+MAX_FIXTURE_BUILD_OUTPUT = 1024 * 1024
+FIXTURE_COMMANDS = (
+    ("delegate", "./internal/testutil/inspectionfixture/cmd/delegate"),
+    ("delegate-run", "./internal/testutil/inspectionfixture/cmd/delegate-run"),
+    ("inspection-helper", "./internal/testutil/inspectionfixture/cmd/inspection-helper"),
+    ("provider", "./internal/testutil/fakeprovider/cmd/provider"),
+)
+
+
+def build_inspection_tools(source_root: Path, destination: Path) -> None:
+    """Build the four exact fixture commands into the caller's owned installation."""
+    source = Path(source_root).resolve(strict=True)
+    require((source / "go.mod").is_file() and all(
+        (source / package.removeprefix("./") / "main.go").is_file()
+        for _name, package in FIXTURE_COMMANDS),
+        "--source-root must contain go.mod and all four inspection fixture commands")
+    require(all(not (destination / name).exists() and not (destination / name).is_symlink()
+                for name, _package in FIXTURE_COMMANDS), "inspection fixture installation is occupied")
+    environment = inherited_environment()
+    environment.update(GOTOOLCHAIN="local", CGO_ENABLED="0")
+    for name, package in FIXTURE_COMMANDS:
+        target = destination / name
+        try:
+            result = run_bounded_command(
+                ["go", "build", "-buildvcs=false", "-o", str(target), package], environment,
+                cwd=source, timeout=FIXTURE_BUILD_TIMEOUT_SECONDS, max_output=MAX_FIXTURE_BUILD_OUTPUT,
+                capture=True, capture_stderr=True)
+        except BoundedCommandError as error:
+            raise AcceptanceFailure("inspection fixture build failed: " + error.reason.value) from error
+        require(result.exit_code == 0,
+                "inspection fixture build failed with exit " + str(result.exit_code))
+        require(not target.is_symlink() and target.is_file() and os.access(target, os.X_OK),
+                "inspection fixture build did not install executable: " + name)
 
 
 def _command_exit(command: TaskCommand) -> int:
@@ -86,7 +125,7 @@ def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Pat
     definition = {
         "revision": "inspection-fixture-v1",
         "executable": str(helper),
-        "executable_sha256": digest(helper),
+        "executable_sha256": "",
         "arguments": [str(helper_config)],
         "directory": str(workspace),
         "environment": [key + "=" + environment[key] for key in sorted(environment)],
@@ -96,9 +135,8 @@ def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Pat
         "definition_revision": "inspection-fixture-v1",
         "definition_sha256": sha(canonical_go_json(definition)),
         "helper_executable": str(helper),
-        "helper_sha256": digest(helper),
         "worker_executable": str(runner),
-        "worker_sha256": digest(runner),
+        "executable_identity": "installed-path-v1",
         "runner_ownership": "custom",
         "worker_exit_proof": "guardian-wait-v1",
         "environment": [key + "=" + environment[key] for key in sorted(environment)],
@@ -322,16 +360,24 @@ class InspectionAcceptance:
             self.raw_process_captures_token = _token_for_directory(
                 constructor_tokens, self.output / "processes")
             self.pueue_directories: tuple[OwnedDirectory, ...] = ()
-        except BaseException:
-            if constructor_transferred:
+        except BaseException as error:
+            retain_installation = command_closure_unproven(error)
+            if retain_installation:
+                self._constructor_ownership.release()
+            elif constructor_transferred:
                 rollback_owned_directories(constructor_tokens)
             else:
                 self._constructor_ownership.rollback()
             self._pueue_ownership.rollback()
+            if retain_installation:
+                raise AcceptanceFailure(
+                    "inspection fixture build closure unproven; retained " + str(self.output) + ": " + str(error)) from error
             raise
 
     def _initialize(self, args: argparse.Namespace):
-        self.tools = Path(args.tools).resolve(strict=True)
+        require(getattr(args, "tools", None) is None,
+                "--tools is retired; select the fixture checkout with --source-root")
+        self.source_root = Path(getattr(args, "source_root", REPO)).resolve(strict=True)
         self.pueue = Path(args.pueue).resolve(strict=True)
         self.pueued = Path(args.pueued).resolve(strict=True)
         self.output = Path(args.output).absolute()
@@ -348,10 +394,7 @@ class InspectionAcceptance:
         self._constructor_ownership.create(
             "case evidence", self.output / "cases", self.output, mode=0o700)
         self.cases = self.output / "cases"
-        for name in ("delegate", "delegate-run", "provider", "inspection-helper"):
-            target = self.bindir / name
-            shutil.copyfile(self.tools / name, target)
-            target.chmod(0o700)
+        build_inspection_tools(self.source_root, self.bindir)
         self.delegate = self.bindir / "delegate"
         self.runner = self.bindir / "delegate-run"
         self.provider = self.bindir / "provider"
@@ -425,7 +468,7 @@ class InspectionAcceptance:
         })
         write_json(self.bindir / "provider-fixture.json", {
             "schema_version": 1, "provider_executable": str(self.provider),
-            "provider_sha256": digest(self.provider), "provider_config": str(provider_config),
+            "provider_config": str(provider_config),
             "provider_config_sha256": digest(provider_config), "supervisor_executable": str(self.pueue),
             "events_directory": str(self.events),
             "environment": [key + "=" + value for key, value in sorted(self.environment.items())],
@@ -437,7 +480,7 @@ class InspectionAcceptance:
                                    "eligible": True})
         write_json(self.bindir / "inspection-fixture.json", {
             "schema_version": 1, "helper_executable": str(self.helper),
-            "helper_sha256": digest(self.helper), "helper_config": str(helper_config),
+            "helper_config": str(helper_config),
             "helper_config_sha256": digest(helper_config),
             "environment": [key + "=" + value for key, value in sorted(self.environment.items())],
         }, replace=(self.bindir / "inspection-fixture.json").exists())
@@ -489,7 +532,7 @@ class InspectionAcceptance:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             rows = [row for row in self.queue_rows().values()
-                    if isinstance(row, dict) and row.get("label") == label]
+                    if row.get("label") == label]
             require(len(rows) <= 1, "duplicate bounded blocker label")
             if rows:
                 row = rows[0]
@@ -643,7 +686,7 @@ class InspectionAcceptance:
                 return False
             try:
                 rows = [row for row in self.queue_rows().values()
-                        if isinstance(row, dict) and row.get("label") == label]
+                        if row.get("label") == label]
                 require(len(rows) == 1, "bounded blocker disappeared during failure cleanup")
                 row = rows[0]
                 if row_state(row) != "Done":
@@ -741,7 +784,9 @@ class InspectionAcceptance:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("tools", "pueue", "pueued", "output"):
+    parser.add_argument("--source-root", default=str(REPO), help="checkout containing the inspection fixture source")
+    parser.add_argument("--tools", help="retired; use --source-root instead")
+    for name in ("pueue", "pueued", "output"):
         parser.add_argument("--" + name, required=True)
     try:
         InspectionAcceptance(parser.parse_args()).run()

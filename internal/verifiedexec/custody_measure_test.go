@@ -11,9 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -79,32 +77,4 @@ func cString(raw []byte) string {
 		return string(raw[:end])
 	}
 	return string(raw)
-}
-
-// openDescriptors counts this process's open descriptors, excluding the one the
-// listing itself uses.
-func openDescriptors() (int, error) {
-	entries, err := os.ReadDir("/dev/fd")
-	if err != nil {
-		return 0, err
-	}
-	return len(entries) - 1, nil
-}
-
-// childResources is what the kernel reported for one waited child.
-type childResources struct {
-	CPU         time.Duration
-	MaxRSSBytes int64
-}
-
-func resourcesOf(state *os.ProcessState) (childResources, bool) {
-	rusage, ok := state.SysUsage().(*syscall.Rusage)
-	if !ok {
-		return childResources{}, false
-	}
-	rss := rusage.Maxrss
-	if runtime.GOOS == "linux" {
-		rss *= 1024 // Linux reports kilobytes; Darwin reports bytes.
-	}
-	return childResources{CPU: state.UserTime() + state.SystemTime(), MaxRSSBytes: rss}, true
 }

@@ -26,7 +26,7 @@ TASK = "b" * 32
 from scripts.delegate_acceptance.tasks import operations as task_operations
 from scripts.delegate_acceptance.processes import operations as process_operations
 from scripts.delegate_acceptance.tasks.contracts import TaskCommand
-from .fixtures import InspectionFixture
+from .fixtures import InspectionFixture, forbid_installed_content
 
 
 class ScriptedProcesses:
@@ -63,6 +63,7 @@ class ScriptedDaemon:
 
 class InspectionHarnessTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(forbid_installed_content())
         self.fixture = InspectionFixture(self)
 
     def test_inspection_expectation_rejects_late_and_conflicting_registration(self):
@@ -199,10 +200,10 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "binding"):
             self.fixture.ops._validate_queue_membership(self.fixture.status(self.fixture.inspection_row()), False)
 
-    def test_expected_native_helper_digest_cannot_be_blanked(self):
+    def test_expected_inspection_definition_digest_cannot_be_replaced(self):
         directory = self.fixture.inspection_records()
         request = read_json(directory / "request.json")
-        request["binding"]["helper_sha256"] = ""
+        request["binding"]["definition_sha256"] = "c" * 64
         write_json(directory / "request.json", request, replace=True)
         self.fixture.refresh_request_links(directory)
 
@@ -261,6 +262,9 @@ class InspectionHarnessTests(unittest.TestCase):
             self.fixture.runner, supervisor)
 
         self.assertEqual(binding["definition_revision"], "inspection-fixture-v1")
+        self.assertEqual(binding["executable_identity"], "installed-path-v1")
+        self.assertNotIn("helper_sha256", binding)
+        self.assertNotIn("worker_sha256", binding)
         self.assertEqual(binding["helper_executable"], str(helper.resolve()))
         self.assertEqual(binding["worker_executable"], str(self.fixture.runner.resolve()))
         self.assertEqual(binding["supervisor"], supervisor)

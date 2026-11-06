@@ -17,7 +17,7 @@ func TestPendingPrivateMigrationResumesPersistedPID(t *testing.T) {
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	var err error
 	base := filepath.Dir(current.Binding().ConfigPath)
 	pending := privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: privateDaemonIdentityForBinding(legacy.Binding()), Successor: privateDaemonIdentityForBinding(current.Binding())}
@@ -52,7 +52,7 @@ func TestPendingPrivateMigrationAfterDispatchedShutdownWaitsForRecordedPID(t *te
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	base := filepath.Dir(current.Binding().ConfigPath)
 	pending := privateMigrationRecord{
 		SchemaVersion: task.SchemaVersion,
@@ -155,7 +155,7 @@ func setupPrivateMigrationRetry(t *testing.T, fixture privateSupervisorTestFixtu
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "retry-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# retry successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	return legacy, current, nextPath
 }
 

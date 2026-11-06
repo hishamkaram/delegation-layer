@@ -1,15 +1,69 @@
 """Private CLI installation boundary."""
 
-from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
 import os
-import shutil
+from pathlib import Path
+import sys
+
+from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
+from scripts.delegate_acceptance.processes.observation import inherited_environment
+from scripts.delegate_acceptance.processes.operations import run_bounded_command
 
 
-def install_fixture(source, destination):
-    if not source.is_file() or not os.access(source, os.X_OK):
-        raise RuntimeError("required executable is missing: " + str(source))
-    shutil.copyfile(source, destination)
-    destination.chmod(0o700)
+INSTALL_TIMEOUT_SECONDS = 900
+MAX_INSTALL_OUTPUT = 1024 * 1024
+
+
+def require_source_root(source_root: Path) -> Path:
+    """Select the caller's checkout, including its current uncommitted source."""
+    try:
+        source = source_root.resolve(strict=True)
+        required = ("go.mod", "cmd/delegate/main.go", "cmd/delegate-run/main.go")
+        if not source.is_dir() or any(not (source / name).is_file() for name in required):
+            raise RuntimeError("candidate source root must contain go.mod and both Delegate commands")
+    except OSError as error:
+        raise RuntimeError("candidate source root is unavailable: " + str(source_root)) from error
+    return source
+
+
+def _install_command(arguments: list[str], *, cwd: Path) -> None:
+    environment = inherited_environment()
+    environment.update({"GOTOOLCHAIN": "local", "CGO_ENABLED": "0"})
+    try:
+        result = run_bounded_command(
+            arguments, environment, cwd=cwd, timeout=INSTALL_TIMEOUT_SECONDS,
+            capture=True, capture_stderr=True, max_output=MAX_INSTALL_OUTPUT,
+        )
+    except BoundedCommandError as error:
+        raise RuntimeError("candidate installation failed: " + error.reason.value) from error
+    if result.exit_code:
+        # Compiler/download output can contain private paths or inherited settings.
+        raise RuntimeError("candidate installation command failed with exit " + str(result.exit_code))
+
+
+def build_candidate_pair(source_root: Path, destination: Path) -> None:
+    """Build directly into an owned installation; never read installed program contents."""
+    source = require_source_root(source_root)
+    for name in ("delegate", "delegate-run"):
+        target = destination / name
+        if target.exists() or target.is_symlink():
+            raise RuntimeError("candidate installation destination is occupied: " + str(target))
+    for name in ("delegate", "delegate-run"):
+        _install_command(
+            ["go", "build", "-buildvcs=false", "-ldflags", "-X main.version=dev",
+             "-o", str(destination / name), "./cmd/" + name], cwd=source,
+        )
+        target = destination / name
+        if target.is_symlink() or not target.is_file() or not os.access(target, os.X_OK):
+            raise RuntimeError("candidate build did not install executable: " + name)
+
+
+def install_supervisor_pair(destination: Path) -> None:
+    """Install the independently verified original archive through its one pin owner."""
+    _install_command(
+        [sys.executable, str(REPOSITORY / "scripts/fetch_pueue_assets.py"), "--host", str(destination)],
+        cwd=REPOSITORY,
+    )
 
 
 def package_layout(root, symlinked):
@@ -20,7 +74,7 @@ def package_layout(root, symlinked):
     return root / "bin", cellar / "bin", cellar / "libexec"
 
 
-def install_package_layout(owner, delegate, runner, root, symlinked):
+def install_package_layout(owner, source_root, root, symlinked):
     if not symlinked:
         install = owner.create("package install", root / "install", root).directory
         canonical_bin = install
@@ -32,8 +86,7 @@ def install_package_layout(owner, delegate, runner, root, symlinked):
         canonical_bin = owner.create("package bin", version / "bin", version).directory
         libexec = owner.create("package libexec", version / "libexec", version).directory
         install = owner.create("package install links", root / "bin", root).directory
-    install_fixture(delegate, canonical_bin / "delegate")
-    install_fixture(runner, canonical_bin / "delegate-run")
+    build_candidate_pair(source_root, canonical_bin)
     if not symlinked:
         return install, install, libexec
     for name in ("delegate", "delegate-run"):
@@ -42,18 +95,22 @@ def install_package_layout(owner, delegate, runner, root, symlinked):
     return install, canonical_bin, libexec
 
 
+def install_adjacent_candidate(owner, source_root, root):
+    """Own one independent adjacent installation for the public-default-path proof."""
+    directory = owner.create("adjacent candidate installation", root, root.parent).directory
+    build_candidate_pair(source_root, directory)
+    install_supervisor_pair(directory)
+    return {name: directory / name for name in ("delegate", "delegate-run", "pueue", "pueued")}
+
+
 def install_adjacent_package(owner, sources, root):
-    """Copy the four release binaries into one archive-style install directory."""
-    install = owner.create("packaged default install", root, root.parent).directory
-    for name in ("delegate", "delegate-run", "pueue", "pueued"):
-        install_fixture(sources[name], install / name)
-        copied = install / name
-        source_fingerprint = file_fingerprint(sources[name])
-        copied_fingerprint = file_fingerprint(copied)
-        if (
-            copied.is_symlink()
-            or copied_fingerprint.get("bytes") != source_fingerprint.get("bytes")
-            or copied_fingerprint.get("sha256") != source_fingerprint.get("sha256")
-        ):
-            raise RuntimeError("packaged binary copy changed identity: " + name)
-    return install
+    """Select the existing adjacent installation in place; the caller retains its owner."""
+    names = ("delegate", "delegate-run", "pueue", "pueued")
+    if set(sources) != set(names):
+        raise RuntimeError("packaged installation must select all four roles")
+    selected = {name: sources[name].resolve(strict=True) for name in names}
+    directory = selected["delegate"].parent
+    for name, path in selected.items():
+        if path != directory / name or not path.is_file() or not os.access(path, os.X_OK):
+            raise RuntimeError("packaged installation is not an adjacent executable layout: " + name)
+    return directory

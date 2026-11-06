@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -10,12 +11,13 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-// supervisorStatusGate withholds one completed `status --json` result at its
-// Pending.Done publication. The supervisor command stays unfinished until the
-// test releases it; cleanup always releases and joins the held observer.
+// supervisorStatusGate holds observation after a successful status command
+// Start. Its existing owner keeps Wait custody while the caller has Pending;
+// cleanup releases and joins the observer before closing the clients.
 type supervisorStatusGate struct {
 	hold     int
 	held     chan struct{}
@@ -45,7 +47,7 @@ func newSupervisorStatusGate(t *testing.T, hold int) *supervisorStatusGate {
 }
 
 func (g *supervisorStatusGate) observe(event pueue.CommandEvent) {
-	if event.Stage != "completed" || !historicalCommandSequence(event.Argv, "status", "--json") {
+	if event.Stage != "started" || !historicalCommandSequence(event.Argv, "status", "--json") {
 		return
 	}
 	g.mu.Lock()
@@ -99,6 +101,10 @@ func requireInterruptedWithPendingSupervisor(t *testing.T, fixture *rebootFixtur
 // lifetime independently proves the interruption.
 func TestCollectInterruptionCoexistsWithPendingSupervisorCommand(t *testing.T) {
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
+	// Only the observer client transfers pending work; gate cleanup releases
+	// and joins it before the original component owner closes its clients.
+	fixture.options.WaitForPendingClose = false
+	prepareWarmPendingSupervisor(t, fixture)
 	permit, err := fixture.td.PrepareStop("budget", "budget", time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
@@ -109,8 +115,8 @@ func TestCollectInterruptionCoexistsWithPendingSupervisorCommand(t *testing.T) {
 	if err = permit.Release(); err != nil {
 		t.Fatal(err)
 	}
-	// The client probe reads status first; the second read is the task
-	// observation.
+	// Watched collect probes saved-client readiness first, then observes the
+	// task. Hold the second status; readiness faults are a separate contract.
 	gate := newSupervisorStatusGate(t, 2)
 	fixture.options.Observer = gate.observe
 
@@ -131,10 +137,13 @@ func TestCollectInterruptionCoexistsWithPendingSupervisorCommand(t *testing.T) {
 // reports the in-flight command beside the durable interruption offer.
 func TestStatusInterruptionCoexistsWithPendingSupervisorCommand(t *testing.T) {
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
+	// Only the observer client transfers pending work; gate cleanup releases
+	// and joins it before the original component owner closes its clients.
+	fixture.options.WaitForPendingClose = false
+	prepareWarmPendingSupervisor(t, fixture)
 	synctest.Test(t, func(t *testing.T) {
-		// The binding probe reads status first; the second read is the task
-		// observation.
-		gate := newSupervisorStatusGate(t, 2)
+		// The proven warm preparation performs no status command.
+		gate := newSupervisorStatusGate(t, 1)
 		fixture.options.Observer = gate.observe
 
 		code, response := runRebootStatusJSON(t, fixture)
@@ -144,4 +153,31 @@ func TestStatusInterruptionCoexistsWithPendingSupervisorCommand(t *testing.T) {
 		}
 		requireInterruptedWithPendingSupervisor(t, fixture, response)
 	})
+}
+
+// This setup proves the endpoint-only preparation before the observer can hold
+// a command. Its listener cleanup runs before the component's daemon cleanup.
+func prepareWarmPendingSupervisor(t *testing.T, fixture *rebootFixture) {
+	t.Helper()
+	listenSupervisorProbeTestEndpoint(t, fixture.predecessor.Endpoint)
+	before, err := os.ReadFile(fixture.commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, probeErr := supervisorcore.ProbePrivateAdmissionSupervisor(t.Context(), fixture.store, "", "", fixture.dependencies().SupervisorOptions)
+	if client != nil {
+		if closeErr := client.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+	if probeErr != nil || client == nil {
+		t.Fatalf("pending observation requires a warm supervisor: client=%v err=%v", client, probeErr)
+	}
+	after, err := os.ReadFile(fixture.commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("warm preparation issued a control command: before=%q after=%q", before, after)
+	}
 }

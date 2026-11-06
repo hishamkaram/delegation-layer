@@ -11,7 +11,6 @@ import (
 	"time"
 
 	testsupportcore "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -26,11 +25,8 @@ func TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd(t *testing.T) {
 	request := workspaceCleanupRecoveryRequest(t, fixture, workspace.OperationForget)
 	request.Supervisor = supervisor.Binding()
 	request.WorkerExecutable = executablePath(t)
-	digest, err := commonprovider.FingerprintExecutable(request.WorkerExecutable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.WorkerSHA256 = digest
+	request.WorkerSHA256 = ""
+	request.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
 	operation := testsupport.OpenSelectionOperation(t, fixture, request)
 	intent, err := fixture.Resource.ForgetIntent(t.Context())
 	if err != nil {

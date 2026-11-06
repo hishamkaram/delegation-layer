@@ -12,12 +12,25 @@ import (
 // this caller performs external work. It does not replace the durable usage
 // reservation, which survives caller death through task closure and capture.
 // Helpers use their own operation guardian lease and never acquire this lease.
+// A nonnil lease returned on error is cleanup-only and must remain reachable
+// with its original Store until explicit Release proves closure.
 func (r *Resource) AcquireUseOwner(ctx context.Context) (*taskdir.LifetimeOwnerLease, error) {
 	return r.control.AcquireLifetimeOwner(ctx)
 }
 
 func (r *Resource) TryAcquireUseOwner(ctx context.Context) (*taskdir.LifetimeOwnerLease, error) {
 	return r.control.TryAcquireLifetimeOwnerContext(ctx)
+}
+
+// TryAcquireExistingUseOwner probes only an existing use-owner inode. This
+// custody evidence never grants permission from a free or absent lease. Any
+// nonnil result, including on error, must be released before closing Resource
+// or its borrowed Store; the canonical control owner retains failure details.
+func (r *Resource) TryAcquireExistingUseOwner(ctx context.Context) (*taskdir.LifetimeOwnerLease, bool, error) {
+	if r == nil {
+		return nil, false, os.ErrInvalid
+	}
+	return r.control.TryAcquireExistingLifetimeOwnerContext(ctx)
 }
 
 // StateRoot returns the root whose pinned store owns this resource journal.

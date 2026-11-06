@@ -7,15 +7,25 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func ReconcileSubmitted(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, options SupervisorOptions) (result SubmissionResult) {
+	return ReconcileSubmittedContext(context.Background(), root, td, req, meta, submit, options)
+}
+
+func ReconcileSubmittedContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, options SupervisorOptions) (result SubmissionResult) {
 	supervisorOptions := supervisorcore.OptionsWithEnvironment(options.Options, meta.Environment)
-	client, err := supervisorcore.NewClient(context.Background(), root, submit.Supervisor, supervisorOptions, true, options.Lookup, options.OpenStore)
+	source, err := supervisorcore.NewSavedBindingSource(req.RootID, infrastructure.SavedBindingTaskSubmission, td.TaskID, "", submit.Supervisor)
 	if err != nil {
 		return submissionFailure(SubmissionClient, err)
+	}
+	options.Options = supervisorOptions
+	client, err := options.savedClient(ctx, root, submit.Supervisor, source)
+	if err != nil {
+		return submissionFailure(SubmissionClient, supervisorcore.ClosePrivateAdmissionTransition(client, err))
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, result.Err()) }()
 	_, _, spec, metaHash, hashErr := td.PreparedIdentity()
@@ -26,10 +36,10 @@ func ReconcileSubmitted(root string, td *taskdir.TaskDir, req *task.TaskRecord, 
 	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
 		return submissionFailure(SubmissionRecords, receiptErr)
 	}
-	observation, reconcileErr := client.Reconcile(context.Background(), TaskIdentity(req, meta, spec, metaHash, receipt))
+	observation, reconcileErr := client.Reconcile(ctx, TaskIdentity(req, meta, spec, metaHash, receipt))
 	if observation.Matched && observation.State == pueue.StateStashed {
 		var recoverErr error
-		observation, recoverErr = RecoverStagedSubmission(context.Background(), root, td, client, observation)
+		observation, recoverErr = RecoverStagedSubmission(ctx, root, td, client, observation)
 		reconcileErr = errors.Join(reconcileErr, recoverErr)
 	}
 	response := &result.Observation

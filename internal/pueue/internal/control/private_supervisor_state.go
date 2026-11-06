@@ -14,36 +14,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// PrivateDaemonIdentityDrift reports whether the launch provenance persisted
-// by a private state root differs from the daemon executable that the current
-// installation would launch. It is read-only; migration remains the only
-// operation allowed to stop a reachable supervisor or replace its record.
-func PrivateDaemonIdentityDrift(stateRoot, daemonExecutable string) (bool, error) {
-	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
-		return false, ErrConfiguration
-	}
-	resolved, err := canonicalExecutable(daemonExecutable)
-	if err != nil {
-		return false, err
-	}
-	digest, err := hashExecutable(resolved)
-	if err != nil {
-		return false, err
-	}
-	identity, found, err := loadPrivateDaemonIdentity(filepath.Join(stateRoot, privateSupervisorDirectory))
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return false, nil
-	}
-	return identity.Executable != resolved || identity.SHA256 != digest, nil
-}
-
 // PrivateSupervisorLogicalDrift reports whether the persisted private
 // supervisor configuration or endpoint differs from the binding currently
 // resolved by the installation. It does not compare executable provenance;
-// that is the separate daemon identity drift handled by migration.
+// explicit generation changes remain owned by migration.
 func PrivateSupervisorLogicalDrift(stateRoot string, binding task.SupervisorRef) (bool, error) {
 	if !IsPrivateConfig(stateRoot, binding.ConfigPath) {
 		return false, ErrConfiguration
@@ -77,7 +51,10 @@ func PrivateSupervisorMigrationPending(stateRoot string) (bool, error) {
 		return false, ErrConfiguration
 	}
 	_, found, err := loadPrivateMigrationRecord(filepath.Join(stateRoot, privateSupervisorDirectory))
-	return found, err
+	if err != nil {
+		return false, privateRecoveryFailure("state_unreadable", err)
+	}
+	return found, nil
 }
 
 // PrivateSupervisorMigrationComplete reports whether the published generation
@@ -121,6 +98,8 @@ type privateGenerationFacts struct {
 	aliasPublicationErr error
 	settled             bool
 	transitionErr       error
+	// Raw read owner; transitionErr retains its existing derived priority.
+	identityPublicationReadErr error
 }
 
 func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error) {
@@ -135,6 +114,7 @@ func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error
 	facts.aliasPublishing, facts.aliasPublicationErr = privateRecoveryObservationConflict(stateRoot, facts.aliasPresent)
 	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
 	_, publishing, publicationErr := readPrivateIdentityPublication(stateRoot)
+	facts.identityPublicationReadErr = publicationErr
 	facts.settled = !bootstrapPending && !publishing
 	facts.transitionErr = bootstrapErr
 	if bootstrapErr == nil && !bootstrapPending {
@@ -158,35 +138,6 @@ func privateRecoveryObservationConflict(stateRoot string, aliasPresent bool) (bo
 	return false, nil
 }
 
-// RefreshPrivateSupervisorBinding updates only daemon launch provenance from
-// the state-root record. The logical config and endpoint identity remain
-// unchanged so a continuation can reopen its retained inspection generation.
-func RefreshPrivateSupervisorBinding(stateRoot string, binding task.SupervisorRef) (task.SupervisorRef, error) {
-	if !IsPrivateConfig(stateRoot, binding.ConfigPath) {
-		return binding, nil
-	}
-	if err := validatePrivateSupervisorRef(binding); err != nil {
-		return task.SupervisorRef{}, err
-	}
-	activeLegacy, err := PrivateRecoveryBindingMatches(stateRoot, binding)
-	if err != nil {
-		return task.SupervisorRef{}, err
-	}
-	if activeLegacy {
-		return binding, nil
-	}
-	identity, found, err := loadPrivateDaemonIdentity(filepath.Join(stateRoot, privateSupervisorDirectory))
-	if err != nil {
-		return task.SupervisorRef{}, err
-	}
-	if !found {
-		return binding, nil
-	}
-	binding.DaemonExecutable = identity.Executable
-	binding.DaemonSHA256 = identity.SHA256
-	return binding, nil
-}
-
 // StartPrivate starts the private daemon only when the bound endpoint is not
 // already serving. It is intended for callers that prepared a client before
 // migration and now hold the bootstrap lock.
@@ -196,6 +147,9 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 	}
 	if !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
 		return ErrConfiguration
+	}
+	if err := refusePendingPrivateRestart(stateRoot); err != nil {
+		return err
 	}
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return err
@@ -214,16 +168,14 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 			return identityErr
 		}
 		if !daemonFound {
-			if publishErr := publishPrivateDaemonIdentity(filepath.Dir(c.binding.ConfigPath), c.Binding()); publishErr != nil {
-				return publishErr
-			}
+			return publishPrivateDaemonIdentityContext(ctx, filepath.Dir(c.binding.ConfigPath), c.Binding(), c.options.PrivateGenerationGuard)
 		}
 		return clearPrivateBootstrapPending(stateRoot)
 	}
 	if err := c.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return err
 	}
-	return c.startPrivate(ctx)
+	return c.startPrivate(ctx, stateRoot)
 }
 
 // PreparePrivateWithLock binds the current private supervisor without starting
@@ -240,7 +192,23 @@ func PreparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecuta
 // WithBootstrapLock for stateRoot and must inspect the legacy endpoint before
 // starting the successor.
 func PreparePrivateForMigrationWithLock(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options) (client *Client, resultErr error) {
-	return preparePrivateWithLock(ctx, clientExecutable, daemonExecutable, stateRoot, options, true)
+	client, err := preparePrivateWithLock(ctx, clientExecutable, daemonExecutable, stateRoot, options, true)
+	if err != nil {
+		return client, err
+	}
+	prepared, err := preparePrivateInstalledCallback(ctx, stateRoot, client)
+	if err != nil {
+		if prepared != nil && prepared != client {
+			err = errors.Join(err, prepared.CloseAfterPending(err))
+		}
+		return nil, errors.Join(err, client.CloseAfterPending(err))
+	}
+	if prepared != client {
+		if closeErr := client.Close(); closeErr != nil {
+			return nil, errors.Join(closeErr, prepared.Close())
+		}
+	}
+	return prepared, nil
 }
 
 // PreparePublishedPrivateWithLock reopens the exact completed generation
@@ -310,6 +278,15 @@ func readPublishedPrivateHead(stateRoot string) (publishedPrivateHead, error) {
 func preparePublishedPrivatePair(ctx context.Context, published task.SupervisorRef, options Options) (client *Client, pairErr, resultErr error) {
 	client, err := openPublishedPrivatePair(published, options)
 	if err != nil {
+		if errors.Is(err, errSavedSupervisorExecutableUnavailable) {
+			missing, statErr := PrivateSupervisorPairMissing(published)
+			if statErr != nil {
+				return nil, nil, errors.Join(err, statErr)
+			}
+			if missing {
+				return nil, err, nil
+			}
+		}
 		return nil, nil, err
 	}
 	if err = verifyPublishedPrivatePair(ctx, client, published); err != nil {
@@ -318,6 +295,9 @@ func preparePublishedPrivatePair(ctx context.Context, published task.SupervisorR
 		}
 		return nil, err, nil
 	}
+	// This strict preparation may restart the generation. Retain the same
+	// optional construction qualification as Bind for its later shutdown owner.
+	qualifyPrivateClientConstruction(client)
 	return client, nil, nil
 }
 
@@ -326,6 +306,11 @@ func openPublishedPrivatePair(published task.SupervisorRef, options Options) (*C
 	if err != nil {
 		return nil, privatePublishedRecoveryError(err)
 	}
+	selected, err := selectRecoveryClient(published, options.RuntimeClientExecutable)
+	if err != nil {
+		return nil, privatePublishedRecoveryError(err)
+	}
+	options.RuntimeClientExecutable = selected
 	client, err := NewClient(published, options)
 	if err != nil {
 		return nil, privatePublishedRecoveryError(err)
@@ -393,6 +378,13 @@ func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, 
 	if err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)
 	}
+	restart, err := PrivatePairRestartPending(stateRoot)
+	if err != nil {
+		return 0, privateRecoveryFailure("state_unreadable", err)
+	}
+	if restart {
+		return PublishedPairIncomplete, nil
+	}
 	if !head.found {
 		return PublishedPairNotPublished, nil
 	}
@@ -422,9 +414,8 @@ func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, 
 
 // observePublishedPrivatePair is the availability form of
 // verifyPublishedPrivatePair. Config-only drift does not stop verification:
-// the daemon's real bytes are still checked against the published target, and
-// the drift is a fact only after both executable proofs and the context
-// checks succeed. Any other difference is ErrBinding.
+// the selected daemon must still be a canonical executable file. Drift is a
+// fact only after both metadata checks and the context check succeed.
 func observePublishedPrivatePair(ctx context.Context, client *Client, published task.SupervisorRef) (PublishedPairAvailability, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -436,15 +427,17 @@ func observePublishedPrivatePair(ctx context.Context, client *Client, published 
 	if comparison == bindingChanged {
 		return 0, ErrBinding
 	}
-	if err = attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
+	daemon, err := selectRecoveryDaemon(published, filepath.Join(filepath.Dir(client.runtimeBinding.ClientExecutable), "pueued"))
+	if err != nil {
+		return 0, err
+	}
+	if err = attachPrivateDaemon(client, daemon); err != nil {
 		return 0, err
 	}
 	if err = ctx.Err(); err != nil {
 		return 0, err
 	}
-	if daemon := client.Binding(); daemon.DaemonExecutable != published.DaemonExecutable || daemon.DaemonSHA256 != published.DaemonSHA256 {
-		return 0, ErrBinding
-	}
+
 	if comparison == bindingConfigChanged {
 		return PublishedPairConfigChanged, nil
 	}
@@ -468,7 +461,11 @@ func verifyPublishedPrivatePair(ctx context.Context, client *Client, published t
 	if err := client.verify(ctx); err != nil {
 		return err
 	}
-	if err := attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
+	daemon, err := selectRecoveryDaemon(published, filepath.Join(filepath.Dir(client.runtimeBinding.ClientExecutable), "pueued"))
+	if err != nil {
+		return err
+	}
+	if err = attachPrivateDaemon(client, daemon); err != nil {
 		return err
 	}
 	if client.Binding() != published {
@@ -527,14 +524,42 @@ func preparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecuta
 	return preparePrivateClient(bootstrapContext, stateRoot, options, resolution, clientPath, daemonPath, base, migrationOnly, true)
 }
 
-func (c *Client) startPrivate(ctx context.Context) error {
+// validatePrivateGenerationLaunch guards publication of a new private process.
+// Live historical generations remain readable. A stopped historical generation
+// cannot be started to inspect its queue before migration authorization.
+func (c *Client) validatePrivateGenerationLaunch(stateRoot string) error {
+	if c.binding.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+		return privateRecoveryFailure("historical_target_not_ready", ErrHistoricalTargetNotReady)
+	}
+	resolution, err := c.resolution()
+	if err != nil {
+		return err
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	resolved, err := readPrivateConfig(c.runtimeBinding.ConfigPath, base, resolution)
+	if err != nil {
+		return err
+	}
+	if resolved.Daemon.Callback != nil && !privateTerminalEventsConfiguredForBinding(base, resolved.Daemon.Callback, c.binding) {
+		return fmt.Errorf("%w: new generation requires an installed callback in its accepted config; run_supervisor_migrate after legacy work finishes", ErrPrivateSupervisorMigrationRequired)
+	}
+	return nil
+}
+
+func (c *Client) startPrivate(ctx context.Context, stateRoot string) error {
+	if err := c.validatePrivateGenerationLaunch(stateRoot); err != nil {
+		return err
+	}
 	if err := c.verifyBinding(); err != nil {
 		return err
 	}
-	if c.runtimeBinding.DaemonExecutable == "" || c.runtimeBinding.DaemonSHA256 == "" {
+	if c.runtimeBinding.DaemonExecutable == "" {
 		return ErrBinding
 	}
-	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	private := IsPrivateConfig(stateRoot, c.binding.ConfigPath)
+	if !private && c.binding.ConfigPath != privateRecoveryConfigPath(stateRoot) {
+		return ErrConfiguration
+	}
 	base := filepath.Dir(c.binding.ConfigPath)
 	if private {
 		_, identityFound, err := loadPrivateDaemonIdentity(base)
@@ -542,7 +567,9 @@ func (c *Client) startPrivate(ctx context.Context) error {
 			return err
 		}
 		if !identityFound {
-			if err := markPrivateBootstrapPending(stateRoot); err != nil {
+			if err := guardPrivateGeneration(ctx, stateRoot, c.options.PrivateGenerationGuard, func() error {
+				return markPrivateBootstrapPending(stateRoot)
+			}); err != nil {
 				return err
 			}
 		}
@@ -550,17 +577,14 @@ func (c *Client) startPrivate(ctx context.Context) error {
 	if err := c.WaitUnavailable(ctx); err != nil {
 		return err
 	}
-	if err := startDaemon(c.runtimeBinding.DaemonExecutable, c.runtimeBinding.DaemonSHA256, c.binding.ConfigPath, base, c.options); err != nil {
+	if err := startDaemon(ctx, stateRoot, c.runtimeBinding.DaemonExecutable, c.binding.ConfigPath, base, c.options); err != nil {
 		return err
 	}
 	if err := waitReady(ctx, c, c.options.ObservationTimeout); err != nil {
 		return fmt.Errorf("%w: private pueued did not become ready after migration: %w", ErrBinding, err)
 	}
-	if err := publishPrivateDaemonIdentity(base, c.Binding()); err != nil {
+	if err := publishPrivateDaemonIdentityContext(ctx, base, c.Binding(), c.options.PrivateGenerationGuard); err != nil {
 		return err
-	}
-	if private {
-		return clearPrivateBootstrapPending(stateRoot)
 	}
 	return nil
 }
@@ -596,6 +620,15 @@ func bindPrivateTransitionClient(ctx context.Context, clientPath, daemonPath, co
 	if err = attachPrivateDaemon(client, daemonPath); err != nil {
 		return nil, PrivateEndpointObservation{}, errors.Join(err, client.Close())
 	}
+	if root, private := privateStateRoot(configPath); private {
+		published, found, readErr := loadPrivateSupervisorBinding(root)
+		if readErr != nil {
+			return nil, PrivateEndpointObservation{}, errors.Join(readErr, client.Close())
+		}
+		if found && task.SameSupervisorIdentity(published, client.runtimeBinding) {
+			client.binding = published
+		}
+	}
 	_, observation, err := privateClientObserveSnapshot(ctx, client, cleanupSuccessful)
 	if err != nil {
 		return nil, PrivateEndpointObservation{}, errors.Join(err, client.CloseAfterPending(err))
@@ -620,7 +653,7 @@ func (c *Client) cleanupStatusOverflow(ctx context.Context, err error, allowed, 
 	if !allowed || cleaned || !errors.Is(err, errStatusControlLimit) || !isPrivateClient(c) {
 		return false, nil
 	}
-	if cleanErr := c.cleanSuccessfulTasks(ctx, false); cleanErr != nil {
+	if cleanErr := c.cleanSuccessfulTasks(ctx); cleanErr != nil {
 		return false, cleanErr
 	}
 	return true, nil
@@ -709,14 +742,14 @@ func validatePrivateSupervisorRef(ref task.SupervisorRef) error {
 	if err := task.ValidateFreshSupervisorRef(ref); err != nil {
 		return err
 	}
+	if ref.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+		return nil
+	}
 	if (ref.DaemonExecutable == "") != (ref.DaemonSHA256 == "") {
 		return errors.New("incomplete saved private supervisor daemon identity")
 	}
-	if ref.DaemonExecutable == "" {
-		return nil
-	}
-	if err := task.ValidateSHA256(ref.DaemonSHA256); err != nil {
-		return err
+	if ref.DaemonExecutable != "" {
+		return task.ValidateSHA256(ref.DaemonSHA256)
 	}
 	return nil
 }
@@ -729,13 +762,12 @@ func attachPrivateDaemon(client *Client, daemonPath string) error {
 	if err != nil {
 		return errors.Join(ErrBinding, err)
 	}
-	digest, err := hashExecutable(resolved)
-	if err != nil {
-		return errors.Join(ErrBinding, err)
-	}
-	client.binding.DaemonExecutable = resolved
-	client.binding.DaemonSHA256 = digest
+	initializing := client.binding == client.runtimeBinding
+	client.runtimeBinding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	client.runtimeBinding.ClientSHA256, client.runtimeBinding.DaemonSHA256 = "", ""
 	client.runtimeBinding.DaemonExecutable = resolved
-	client.runtimeBinding.DaemonSHA256 = digest
+	if initializing {
+		client.binding = client.runtimeBinding
+	}
 	return nil
 }

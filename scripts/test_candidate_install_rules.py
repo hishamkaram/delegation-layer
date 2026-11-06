@@ -25,7 +25,7 @@ def request(**changes) -> rules.CandidateInstallRequest:
     values = {
         "tag": "v1.2.3", "repo": support.REPO, "installer": Path("/abs/install.sh"),
         "files": rules.CandidateFiles(Path("/abs/a.tar.gz"), Path("/abs/checksums.txt")),
-        "binaries": (), "skill": (),
+        "skill": (),
     }
     values.update(changes)
     return rules.CandidateInstallRequest(**values)
@@ -121,6 +121,79 @@ class ShimTests(unittest.TestCase):
         self.assertEqual(mode(self.shim.log_path), 0o600)
         with self.assertRaises(FileExistsError):
             prepare_shim(self.root, {})
+
+
+class InstalledSelectionTests(unittest.TestCase):
+    """Selection proof reads metadata, retains native outcomes, and permits compatible updates."""
+
+    def setUp(self):
+        import tempfile
+        self.temporary = tempfile.TemporaryDirectory(prefix="installed-selection-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+
+    def installation(self, directory):
+        from scripts.delegate_acceptance.release_verification.contract import BINARIES, installed_executables
+        directory.mkdir()
+        paths = {}
+        for name in BINARIES:
+            path = directory / name
+            path.write_text("fixture installation source\n", encoding="utf-8")
+            path.chmod(0o700)
+            paths[name] = path
+        return installed_executables(paths)
+
+    def test_metadata_inventory_does_not_read_executable_contents(self):
+        from unittest.mock import patch
+        from scripts.delegate_acceptance.release_verification.assets import inspect_binaries
+        selected = self.installation(self.root / "install")
+        receipt = {"binaries": {}}
+        with patch.object(Path, "open", side_effect=AssertionError("executable contents read")):
+            self.assertEqual(inspect_binaries(self.root / "install", receipt), selected.as_mapping())
+        self.assertTrue(all(set(value) == {"path"} for value in receipt["binaries"].values()))
+
+    def test_bootstrap_refuses_foreign_selection_and_failed_protocol_outcome(self):
+        from dataclasses import replace
+        from scripts.acceptance_tests import candidate_fixtures as fx
+        selected = self.installation(self.root / "install")
+        other = self.installation(self.root / "foreign")
+        observed = fx.bootstrap(selected)
+        self.assertIs(rules.require_bootstrap(observed, selected), observed)
+        for foreign in (replace(observed, binaries=other), replace(observed, worker_result="protocol-error")):
+            with self.subTest(foreign=foreign), self.assertRaises(VerificationError):
+                rules.require_bootstrap(foreign, selected)
+        self.assertEqual(observed.to_record()["binaries"], selected.to_record())
+
+    def test_compatible_in_place_update_does_not_change_selection(self):
+        from scripts.delegate_acceptance.release_verification.assets import inspect_binaries
+        selected = self.installation(self.root / "install")
+        selected.pueue.write_text("compatible installation update\n", encoding="utf-8")
+        self.assertEqual(inspect_binaries(self.root / "install", {"binaries": {}}), selected.as_mapping())
+
+    def test_missing_nonexecutable_and_outside_roles_are_refused(self):
+        from scripts.delegate_acceptance.release_verification.assets import inspect_binaries
+        selected = self.installation(self.root / "install")
+        selected.pueue.chmod(0o600)
+        with self.assertRaises(VerificationError):
+            inspect_binaries(self.root / "install", {"binaries": {}})
+        selected.pueue.unlink()
+        with self.assertRaises(VerificationError):
+            inspect_binaries(self.root / "install", {"binaries": {}})
+        outside = self.root / "outside"
+        outside.write_text("outside installation\n", encoding="utf-8")
+        outside.chmod(0o700)
+        selected.pueue.symlink_to(outside)
+        with self.assertRaises(VerificationError):
+            inspect_binaries(self.root / "install", {"binaries": {}})
+
+    def test_role_inventory_is_exact_and_paths_are_absolute(self):
+        from scripts.delegate_acceptance.release_verification.contract import installed_executables
+        selected = self.installation(self.root / "install")
+        for paths in ({name: path for name, path in selected.as_mapping().items() if name != "pueue"},
+                      {**selected.as_mapping(), "extra": self.root / "extra"},
+                      {**selected.as_mapping(), "pueue": Path("relative")}):
+            with self.subTest(paths=paths), self.assertRaises(VerificationError):
+                installed_executables(paths)
 
 
 if __name__ == "__main__":

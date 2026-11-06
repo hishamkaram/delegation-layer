@@ -120,6 +120,7 @@ class PrivateResourceRetryTests(unittest.TestCase):
             client=self.root / "pueue", config=self.root / "pueue.yml",
             parallel_tasks=200, dispatch_workers=4, response_directory=self.receipts,
             evidence=self.evidence, lease_nonce="c" * 32, client_call_log=self.root / "calls",
+            upgraded_client_call_log=self.root / "upgraded-calls",
             attempted_task_ids=[], capture_root=capture_root, run_receipt=None,
         )
         self.reset_observations()

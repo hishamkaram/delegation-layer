@@ -14,6 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -38,6 +39,12 @@ type runnerArguments struct {
 // RunRunner executes one saved task from the supervisor's exact root/task
 // command. It shares the public runtime and never accepts a provider argv.
 func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	if handled, err := infrastructure.RunOwnerMode(context.Background(), args, infrastructureEntryHost{}); handled {
+		if err != nil {
+			return writeCLIError(stderr, publicSupervisorError("Infrastructure owner unavailable.", err), 1)
+		}
+		return 0
+	}
 	if code, handled := execution.RunCommandOwnerMode(args); handled {
 		return code
 	}
@@ -304,7 +311,8 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 	runResult := execution.Run(td, permit, profile.Plan, execution.Options{
 		Protocol: protocol, Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
 		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(), InheritedEnvironment: deps.Environment,
-		Identity: identityObserver, Hooks: deps.ExecutionHooks,
+		PrepareEnvironment: operationalEnvironmentPreparation(store),
+		Identity:           identityObserver, Hooks: deps.ExecutionHooks,
 	})
 	if runResult.Outcome != nil {
 		response.Outcome = runResult.Outcome
@@ -395,7 +403,7 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
 	supervisorContext, cancelSupervisor := tasklifecycle.SupervisorContextForRunner(req, taskSupervisorOptions)
 	defer cancelSupervisor()
-	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, taskSupervisorOptions, deps.supervisorLookup())
+	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, observationSupervisorOptions(taskSupervisorOptions, deps.supervisorLookup(), deps.infrastructureRouting()))
 	defer func() { supervisor.CloseMaintenance(client, result.err) }()
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
@@ -410,11 +418,11 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	return runProvider(response, store, td, req, profile, client, lifetimeChild, deps)
 }
 
-func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, lookup supervisor.ExecutableLookup) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options tasklifecycle.SupervisorOptions) (*pueue.Client, pueue.Observation, error) {
 	if parsed.Supervised {
-		return resumeSupervisedRunner(ctx, response, td, supervisorOptions)
+		return resumeSupervisedRunner(ctx, response, td, options)
 	}
-	return reconcileRunner(ctx, root, response, td, req, meta, supervisorOptions, lookup)
+	return reconcileRunner(ctx, root, response, td, req, meta, options)
 }
 
 func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {

@@ -4,6 +4,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
@@ -49,6 +50,9 @@ const (
 // DispatchResult preserves primary observations and later closure faults in
 // execution order. It is not a second task state or an authorization cache.
 type DispatchResult struct {
+	// StoreCleanup owns the Store retained behind a failed lease release or Close.
+	StoreCleanup *taskdir.Store
+
 	Root, RootID, TaskID, Provider string
 	Team                           *task.TeamContext
 	Record                         TaskRecordPresence

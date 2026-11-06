@@ -17,7 +17,6 @@ from scripts.delegate_acceptance.evidence.validation import require
 from scripts.delegate_acceptance.tasks.runtime_metadata import runtime_capability_sha
 from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.provider_drivers.claude.constants import (
     CLAUDE_XDG_DIRECTORY,
@@ -130,7 +129,6 @@ def expected_claude_inspection_binding(
         "helper_executable": str(executable),
         "helper_sha256": "",
         "worker_executable": str(runner),
-        "worker_sha256": digest(runner),
         "runner_ownership": "custom",
         "environment": values,
         "environment_recorded": True,

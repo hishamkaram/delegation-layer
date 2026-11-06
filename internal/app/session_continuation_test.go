@@ -47,7 +47,7 @@ func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
 			}
 			rewriteAppProviderExecutable(t, td, tc.executable)
 			profile := appTestExecutionProfile(req, tc.executable, tc.arguments)
-			result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+			result := runProvider(newResponse("dispatch"), store, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 				return profile, nil
 			}})
 			if result.code != 0 || result.err != nil {
@@ -214,7 +214,7 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{})); err != nil {
+	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{}, nil)); err != nil {
 		t.Fatalf("terminal predecessor was not released: %v", err)
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
@@ -475,7 +475,7 @@ func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
 		}
 	}()
 	prepareAppPublishedTimeoutEvidence(t, td)
-	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{})); !errors.Is(err, task.ErrSessionBusy) {
+	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{}, nil)); !errors.Is(err, task.ErrSessionBusy) {
 		t.Fatalf("active first-turn runner was eligible for continuation: %v", err)
 	}
 }
@@ -536,7 +536,7 @@ func TestRunProviderUnknownOutcomeRetainsContinuation(t *testing.T) {
 	profile.Identity = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 		return nil, errInjectedIdentity
 	}
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), store, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedIdentity) || result.response.Outcome != nil {
@@ -644,7 +644,7 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 	releaseErr := errors.New("release durability failed")
 	store.SetFaultInjector(&releaseOnlyFailureInjector{err: releaseErr})
 	profile := appTestExecutionProfile(req, "/usr/bin/printf", []string{"answer\n"})
-	result := runProvider(newResponse("dispatch"), nil, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), store, td, req, profile, nil, nil, Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, releaseErr) {
@@ -700,12 +700,8 @@ func appTestExecutionProfile(req *task.TaskRecord, executable string, arguments 
 	if err == nil {
 		executable = canonical
 	}
-	providerBytes, err := os.ReadFile(executable)
-	if err != nil {
-		providerBytes = nil
-	}
 	return PreparedProfile{
-		Plan:            execution.Plan{Executable: executable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Arguments: arguments, Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: executable, Arguments: arguments, Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("app-test"))},
 	}

@@ -17,6 +17,9 @@ func (s *service) childEvent(ctx context.Context, event childEvent) {
 		}
 		return
 	}
+	if s.permanentChildFault(event) {
+		return
+	}
 	expected := s.binding(event.frame.Kind)
 	if event.frame != expected {
 		s.degrade("child_identity_fault")
@@ -42,11 +45,34 @@ func (s *service) childEvent(ctx context.Context, event childEvent) {
 		}
 		s.readyAt = s.clock.Now()
 		s.status.State, s.status.LastError = "ready", ""
-	case "incompatible":
-		s.degrade("incompatible_definition")
 	default:
 		s.degrade("child_protocol_fault")
 	}
+}
+
+// The host alone applies terminal policy. Both the live reader and the final
+// reader drain authenticate the same immutable binding before degrading.
+func (s *service) permanentChildFault(event childEvent) bool {
+	if event.err != nil {
+		return false
+	}
+	var code string
+	switch event.frame.Kind {
+	case "incompatible":
+		code = "incompatible_definition"
+	case "cleanup_unresolved":
+		code = "cleanup_unresolved"
+	default:
+		return false
+	}
+	if s.status.StopAccepted {
+		return true
+	}
+	if event.frame != s.binding(event.frame.Kind) {
+		code = "child_identity_fault"
+	}
+	s.degrade(code)
+	return true
 }
 
 func (s *service) degrade(code string) {
@@ -59,25 +85,9 @@ func (s *service) degrade(code string) {
 }
 
 func (s *service) exited(waitErr error) {
-	// Wait may beat the reader's last incompatibility frame. Join the reader
+	// Wait may beat the reader's last terminal frame. Join the reader
 	// and drain all its bounded messages before deciding whether to restart.
-	joined := false
-	for !joined {
-		select {
-		case <-s.child.control.done:
-			joined = true
-		case event := <-s.child.control.events:
-			if event.err == nil && event.frame == s.binding("incompatible") {
-				s.degrade("incompatible_definition")
-			}
-		}
-	}
-	for len(s.child.control.events) > 0 {
-		event := <-s.child.control.events
-		if event.err == nil && event.frame == s.binding("incompatible") {
-			s.degrade("incompatible_definition")
-		}
-	}
+	s.joinChildReader()
 	closeErr := s.child.control.close()
 	s.child = nil
 	if s.readiness != nil {
@@ -87,7 +97,7 @@ func (s *service) exited(waitErr error) {
 	if closeErr != nil {
 		s.degrade("child_channel_close_failed")
 	}
-	if s.permanent {
+	if s.permanent || s.status.StopAccepted {
 		return
 	}
 	healthy := time.Duration(0)
@@ -194,4 +204,24 @@ func (s *service) close(ctx context.Context) (closeErr error) {
 	s.cancelServer()
 	closeErr = errors.Join(closeErr, s.endpoint.close(), <-s.serverDone)
 	return closeErr
+}
+
+func (s *service) joinChildReader() {
+	joined := false
+	for !joined {
+		select {
+		case <-s.child.control.done:
+			joined = true
+		case event := <-s.child.control.events:
+			s.permanentChildFault(event)
+		}
+	}
+	s.drainChildFrames()
+}
+
+func (s *service) drainChildFrames() {
+	for len(s.child.control.events) > 0 {
+		event := <-s.child.control.events
+		s.permanentChildFault(event)
+	}
 }

@@ -84,7 +84,7 @@ func (fixture executionTargetFixture) leaveRefusedSocket(t *testing.T) {
 // commandCountingOptions counts every supervisor command the observer would
 // start through the client's canonical command path.
 func commandCountingOptions(commands *atomic.Int64) Options {
-	return Options{Observer: func(CommandEvent) { commands.Add(1) }}
+	return Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Observer: func(CommandEvent) { commands.Add(1) }}
 }
 
 func snapshotExecutionTargetTree(t *testing.T, root string) map[string]string {
@@ -99,7 +99,7 @@ func snapshotExecutionTargetTree(t *testing.T, root string) map[string]string {
 			return err
 		}
 		value := fmt.Sprintf("%v %d %d", info.Mode(), info.Size(), info.ModTime().UnixNano())
-		if info.Mode().IsRegular() {
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr
@@ -173,14 +173,14 @@ func TestObservePrivateExecutionTargetColdRootIsAbsent(t *testing.T) {
 }
 
 func TestObservePrivateExecutionTargetRejectsInvalidCalls(t *testing.T) {
-	target, err := ObservePrivateExecutionTarget(context.Background(), "relative/state", Options{})
+	target, err := ObservePrivateExecutionTarget(context.Background(), "relative/state", Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 	assertExecutionTargetUnknown(t, target, err, ErrConfiguration, "")
 	var nilContext context.Context
-	target, err = ObservePrivateExecutionTarget(nilContext, canonicalTemp(t), Options{})
+	target, err = ObservePrivateExecutionTarget(nilContext, canonicalTemp(t), Options{DaemonStartGuard: allowDaemonStartForTest{}})
 	assertExecutionTargetUnknown(t, target, err, context.Canceled, "")
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	target, err = ObservePrivateExecutionTarget(cancelled, canonicalTemp(t), Options{})
+	target, err = ObservePrivateExecutionTarget(cancelled, canonicalTemp(t), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 	assertExecutionTargetUnknown(t, target, err, context.Canceled, "")
 }
 
@@ -190,7 +190,7 @@ func TestObservePrivateExecutionTargetKeepsUnprovenStateUnknown(t *testing.T) {
 	t.Run("directory without publication", func(t *testing.T) {
 		_, stateRoot := newPrivateSupervisorTestRoots(t)
 		makePrivateTestDirectory(t, filepath.Join(stateRoot, privateSupervisorDirectory))
-		target, err := ObservePrivateExecutionTarget(context.Background(), stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, ErrBinding, "not published")
 	})
 	t.Run("malformed publication", func(t *testing.T) {
@@ -200,7 +200,7 @@ func TestObservePrivateExecutionTargetKeepsUnprovenStateUnknown(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := snapshotExecutionTargetTree(t, fixture.stateRoot)
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, ErrBinding, "")
 		assertExecutionTargetTreeUnchanged(t, fixture.stateRoot, before)
 	})
@@ -209,13 +209,13 @@ func TestObservePrivateExecutionTargetKeepsUnprovenStateUnknown(t *testing.T) {
 		if err := markPrivateBootstrapPending(fixture.stateRoot); err != nil {
 			t.Fatal(err)
 		}
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, ErrBinding, "transition is pending")
 	})
 	t.Run("config changed after publication", func(t *testing.T) {
 		fixture := newExecutionTargetFixture(t)
 		appendPrivateSupervisorFile(t, fixture.configPath, "\n# changed\n")
-		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{})
+		target, err := ObservePrivateExecutionTarget(context.Background(), fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}})
 		assertExecutionTargetUnknown(t, target, err, ErrBinding, "")
 	})
 }

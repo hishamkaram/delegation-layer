@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -20,9 +19,14 @@ import (
 )
 
 func TestPrivateSubmissionGateRejectsCapturedGenerationAfterPublishedSuccessor(t *testing.T) {
-	fixture := newHistoricalSupervisorFixture(t, false)
-	generationA := fixture.predecessor
-	generationB := fixture.successor
+	// These gate checks consume completed canonical record DATA. They do not
+	// require a persistent daemon or a newly executed migration.
+	store := newBareInspectionStore(t)
+	generationA := supervisorGenerationTestBinding(store.Root, "A", true)
+	generationB := supervisorGenerationTestBinding(store.Root, "B", true)
+	writeSupervisorGenerationTestPrivateGeneration(t, store, generationB)
+	writeSupervisorGenerationTestHistory(t, store, generationA, generationB)
+	fixture := &historicalSupervisorFixture{root: store.Root, predecessor: generationA, successor: generationB}
 	assertHistoricalActiveSupervisor(t, fixture)
 	assertHistoricalMigrationComplete(t, fixture)
 
@@ -48,20 +52,15 @@ func TestPrivateSubmissionGateRejectsCapturedGenerationAfterPublishedSuccessor(t
 }
 
 func TestPrivateSubmissionGateRejectsIncompleteStagedCapabilityEvidence(t *testing.T) {
-	store, deps, _ := newSupervisorProbeTestFixture(t)
-	supervisor, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
-	settleSupervisorProbeTestClient(t, supervisor, err)
-	if err != nil || supervisor == nil {
-		t.Fatalf("initial private admission failed: client=%v err=%v", supervisor, err)
-	}
-	binding := supervisor.Binding()
-	if closeErr := supervisor.Close(); closeErr != nil {
+	f := newPublicContinuationFixture(t)
+	store, binding := f.owner.store, f.client.Binding()
+	if closeErr := f.client.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
 	path := privateOrdinarySchedulingTestPath(store.Root)
 	data := readActiveGenerationFile(t, path)
 	var record map[string]json.RawMessage
-	if err = task.DecodeStrict(data, &record); err != nil {
+	if err := task.DecodeStrict(data, &record); err != nil {
 		t.Fatal(err)
 	}
 	capability, err := task.MarshalCanonical(pueue.StagedLaunchCapability{AddStashed: true})
@@ -84,7 +83,8 @@ func TestPrivateSubmissionGateRejectsIncompleteStagedCapabilityEvidence(t *testi
 }
 
 func TestPrivateAdmissionUsesPublishedGenerationWithStagedSuccessor(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -96,11 +96,13 @@ func TestPrivateAdmissionUsesPublishedGenerationWithStagedSuccessor(t *testing.T
 		t.Fatal(closeErr)
 	}
 
-	candidate, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
+	candidate := installedGenerationCandidate(t, store, active)
 	if candidate == active {
 		t.Fatal("successor fixture did not change executable provenance")
 	}
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	deps.InitialSupervisorExecutable = candidate.ClientExecutable
+	deps = withSupervisorProbeRouting(t, deps, owner)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	clearActiveGenerationSupervisorCommands(t, filepath.Dir(active.ConfigPath))
 
 	for range 4 {
@@ -126,7 +128,8 @@ func TestPrivateAdmissionUsesPublishedGenerationWithStagedSuccessor(t *testing.T
 }
 
 func TestPrivateAdmissionRepairsStagedReceiptAgainstPublishedGeneration(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -137,9 +140,9 @@ func TestPrivateAdmissionRepairsStagedReceiptAgainstPublishedGeneration(t *testi
 		t.Fatal(closeErr)
 	}
 	activeReceipt := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root))
-	candidate, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
+	candidate := installedGenerationCandidate(t, store, active)
 	writeActiveGenerationSchedulingReceipt(t, store.Root, candidate)
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	clearActiveGenerationSupervisorCommands(t, filepath.Dir(active.ConfigPath))
 
 	admitted, admissionErr := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
@@ -172,7 +175,8 @@ func TestPrivateAdmissionRepairsStagedReceiptAgainstPublishedGeneration(t *testi
 }
 
 func TestPrivateAdmissionConcurrentStaleReceiptElectsOneRepairOwner(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -182,10 +186,10 @@ func TestPrivateAdmissionConcurrentStaleReceiptElectsOneRepairOwner(t *testing.T
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	candidate, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
+	candidate := installedGenerationCandidate(t, store, active)
 	activeReceipt := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root))
 	writeActiveGenerationSchedulingReceipt(t, store.Root, candidate)
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	base := filepath.Dir(active.ConfigPath)
 	clearActiveGenerationSupervisorCommands(t, base)
 
@@ -212,7 +216,8 @@ func TestPrivateAdmissionConcurrentStaleReceiptElectsOneRepairOwner(t *testing.T
 }
 
 func TestPrivateAdmissionMalformedSchedulingReceiptIsNotOverwritten(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -222,12 +227,11 @@ func TestPrivateAdmissionMalformedSchedulingReceiptIsNotOverwritten(t *testing.T
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	_, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
 	malformed := []byte(`{"schema_version":`)
 	if err = os.WriteFile(privateOrdinarySchedulingTestPath(store.Root), malformed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	clearActiveGenerationSupervisorCommands(t, filepath.Dir(active.ConfigPath))
 
 	admitted, admissionErr := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
@@ -248,7 +252,8 @@ func TestPrivateAdmissionMalformedSchedulingReceiptIsNotOverwritten(t *testing.T
 }
 
 func TestPrivateAdmissionRepairsValidIncompleteSchedulingReceipt(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -259,9 +264,8 @@ func TestPrivateAdmissionRepairsValidIncompleteSchedulingReceipt(t *testing.T) {
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	_, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
 	writeIncompleteActiveGenerationSchedulingReceipt(t, store.Root, active)
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	base := filepath.Dir(active.ConfigPath)
 	clearActiveGenerationSupervisorCommands(t, base)
 
@@ -281,7 +285,8 @@ func TestPrivateAdmissionRepairsValidIncompleteSchedulingReceipt(t *testing.T) {
 }
 
 func TestPrivateAdmissionUpgradesCapabilitylessGenerationReceiptOnce(t *testing.T) {
-	store, deps, _ := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -322,7 +327,8 @@ func TestPrivateAdmissionUpgradesCapabilitylessGenerationReceiptOnce(t *testing.
 }
 
 func TestPrivateStatusRepairUpgradesCapabilitylessGenerationReceipt(t *testing.T) {
-	store, deps, _ := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	supervisor, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, supervisor, err)
 	if err != nil || supervisor == nil {
@@ -359,7 +365,8 @@ func TestPrivateStatusRepairUpgradesCapabilitylessGenerationReceipt(t *testing.T
 }
 
 func TestPrivateAdmissionRestartsExactStoppedPublishedGeneration(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -370,8 +377,7 @@ func TestPrivateAdmissionRestartsExactStoppedPublishedGeneration(t *testing.T) {
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	_, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
 	stopActiveGenerationEndpoint(t, active)
 
 	admitted, admissionErr := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
@@ -389,8 +395,18 @@ func TestPrivateAdmissionRestartsExactStoppedPublishedGeneration(t *testing.T) {
 	}
 }
 
-func TestPrivateAdmissionRefusesUnavailablePublishedPairWithStagedSuccessor(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+func TestPrivateAdmissionRefusesUnavailablePublishedPair(t *testing.T) {
+	for _, missingRole := range []string{"client", "daemon"} {
+		t.Run(missingRole+" missing", func(t *testing.T) {
+			testPrivateAdmissionUnavailablePublishedRole(t, missingRole)
+		})
+	}
+}
+
+func testPrivateAdmissionUnavailablePublishedRole(t *testing.T, missingRole string) {
+	t.Helper()
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -401,10 +417,13 @@ func TestPrivateAdmissionRefusesUnavailablePublishedPairWithStagedSuccessor(t *t
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	_, pairFiles := stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
-	activeFiles := snapshotPublishedGenerationFiles(t, store.Root, pairFiles)
-	stopActiveGenerationEndpoint(t, active)
-	if err = os.Remove(active.ClientExecutable); err != nil {
+	activeFiles := snapshotPublishedGenerationFiles(t, store.Root)
+	stopOwnedActiveGenerationEndpoint(t, owner, active, deps.SupervisorOptions)
+	missingPath := active.ClientExecutable
+	if missingRole == "daemon" {
+		missingPath = active.DaemonExecutable
+	}
+	if err = os.Remove(missingPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -423,31 +442,62 @@ func TestPrivateAdmissionRefusesUnavailablePublishedPairWithStagedSuccessor(t *t
 	}
 }
 
+// The component daemon is finite. Join its actual Wait before closing its
+// independently owned IPC listener and clearing stopped-fixture DATA markers.
+// This models a stopped component; it is not a native Pueue shutdown proof.
+func stopOwnedActiveGenerationEndpoint(t *testing.T, owner *componentSupervisorFixture, binding task.SupervisorRef, options pueue.Options) {
+	t.Helper()
+	ctx, cancel := supervisorcore.ControlContextWithParent(t.Context(), options)
+	defer cancel()
+	waits := owner.daemonWaits()
+	if len(waits) != 1 {
+		t.Fatalf("fixture daemon Wait count = %d, want one actual Start", len(waits))
+	}
+	if err := awaitComponentDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	path := strings.TrimPrefix(binding.Endpoint, "unix:")
+	for _, endpoint := range owner.endpoints {
+		if endpoint.listener == nil || endpoint.listener.Addr().Network() != "unix" || endpoint.listener.Addr().String() != path {
+			continue
+		}
+		closeErr := endpoint.listener.Close()
+		var waitErr error
+		select {
+		case <-endpoint.done:
+		case <-ctx.Done():
+			waitErr = ctx.Err()
+		}
+		if err := errors.Join(closeErr, waitErr); err != nil {
+			t.Fatal(err)
+		}
+		// The listener has retired its owned socket. Only readiness and PID
+		// DATA can remain for the existing stopped-component state helper.
+		stopActiveGenerationEndpoint(t, binding)
+		return
+	}
+	t.Fatal("active generation has no matching owned Unix listener")
+}
+
 func TestPrivateAdmissionWithoutPublishedGenerationBootstrapsStagedPair(t *testing.T) {
-	store, deps, clientPath, daemonPath := newFreshStagedGenerationFixture(t)
+	store, deps, clientPath, daemonPath, owner := newFreshStagedGenerationFixture(t)
 	base := filepath.Join(store.Root, ".supervisor")
 	if _, err := os.Stat(filepath.Join(base, "supervisor.identity.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fresh fixture unexpectedly has a published generation: %v", err)
 	}
 
-	admitted, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
-	settleSupervisorProbeTestClient(t, admitted, err)
+	// Explicit canonical component setup, not public routing or native placement.
+	before := len(owner.daemonWaits())
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	admitted, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(ctx, deps.supervisorLookup(), store, owner.setupOptions(deps.SupervisorOptions))
+	owner.ownClient(admitted, err)
+	owner.ownDaemonClients(admitted, before)
 	if err != nil || admitted == nil {
 		t.Fatalf("fresh staged-pair admission failed: client=%v err=%v", admitted, err)
 	}
-	if !strings.Contains(admitted.Binding().ClientExecutable, "pueue-pair-") {
-		t.Fatalf("fresh admission did not bootstrap the staged state-root pair: %s", admitted.Binding().ClientExecutable)
-	}
-	wantClientSHA, err := commonprovider.FingerprintExecutable(clientPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantDaemonSHA, err := commonprovider.FingerprintExecutable(daemonPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if admitted.Binding().ClientSHA256 != wantClientSHA || admitted.Binding().DaemonSHA256 != wantDaemonSHA {
-		t.Fatalf("fresh admission used the wrong staged pair: binding=%+v", admitted.Binding())
+	if admitted.Binding().ClientExecutable != clientPath || admitted.Binding().DaemonExecutable != daemonPath || admitted.Binding().ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || admitted.Binding().ClientSHA256 != "" || admitted.Binding().DaemonSHA256 != "" {
+		t.Fatalf("fresh generation did not use selected installed roles: %+v", admitted.Binding())
 	}
 	complete, err := pueue.PrivateSupervisorMigrationComplete(store.Root, admitted.Binding())
 	if err != nil || !complete {
@@ -459,80 +509,30 @@ func TestPrivateAdmissionWithoutPublishedGenerationBootstrapsStagedPair(t *testi
 	}
 }
 
-func stagePublishedGenerationSuccessor(t *testing.T, root string, active task.SupervisorRef, templateClient, templateDaemon string) (task.SupervisorRef, []string) {
+func installedGenerationCandidate(t *testing.T, store *taskdir.Store, active task.SupervisorRef) task.SupervisorRef {
 	t.Helper()
-	sourceDirectory := testsupport.CanonicalTempDir(t)
-	clientSource := filepath.Join(sourceDirectory, "pueue-b")
-	daemonSource := filepath.Join(sourceDirectory, "pueued-b")
-	copyActiveGenerationExecutable(t, templateClient, clientSource, "# staged successor client")
-	copyActiveGenerationExecutable(t, templateDaemon, daemonSource, "# staged successor daemon")
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	if err := supervisorcore.PrepareStateSupervisorPair(ctx, root, clientSource, daemonSource); err != nil {
-		t.Fatalf("stage successor supervisor pair: %v", err)
-	}
-	base := filepath.Join(root, ".supervisor")
-	client, daemon, found, err := supervisorcore.ResolveStateSupervisorPair(base)
-	if err != nil || !found {
-		t.Fatalf("resolve staged successor pair: client=%s daemon=%s found=%t err=%v", client, daemon, found, err)
-	}
-	clientSHA, err := commonprovider.FingerprintExecutable(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	daemonSHA, err := commonprovider.FingerprintExecutable(daemon)
-	if err != nil {
-		t.Fatal(err)
-	}
+	directory := testsupport.CanonicalTempDir(t)
+	client, daemon := filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
+	writeSupervisorProbeExecutables(t, store.RootID, client, daemon)
 	candidate := active
-	candidate.ClientExecutable = client
-	candidate.ClientSHA256 = clientSHA
-	candidate.DaemonExecutable = daemon
-	candidate.DaemonSHA256 = daemonSHA
-	pairDirectory := filepath.Dir(client)
-	return candidate, []string{
-		filepath.Join(base, "pueue-pair.json"),
-		filepath.Join(pairDirectory, "pueue"),
-		filepath.Join(pairDirectory, "pueued"),
-	}
+	candidate.ClientExecutable, candidate.DaemonExecutable = client, daemon
+	candidate.ClientSHA256, candidate.DaemonSHA256 = "", ""
+	candidate.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	return candidate
 }
 
-func newFreshStagedGenerationFixture(t *testing.T) (*taskdir.Store, Dependencies, string, string) {
+func newFreshStagedGenerationFixture(t *testing.T) (*taskdir.Store, Dependencies, string, string, *componentSupervisorFixture) {
 	t.Helper()
-	templateStore, templateDeps, templateClient := newSupervisorProbeTestFixture(t)
-	root := filepath.Join(testsupport.CanonicalTempDir(t), "state")
-	store, err := taskdir.InitStore(root)
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	store, err := taskdir.InitStore(owner.root)
+	owner.ownStore(t, store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	sourceDirectory := testsupport.CanonicalTempDir(t)
-	clientPath := filepath.Join(sourceDirectory, "pueue-b")
-	daemonPath := filepath.Join(sourceDirectory, "pueued-b")
-	copyActiveGenerationExecutable(t, templateClient.Binding().ClientExecutable, clientPath, templateStore.RootID+" -> "+store.RootID)
-	copyActiveGenerationExecutable(t, templateClient.Binding().DaemonExecutable, daemonPath, templateStore.RootID+" -> "+store.RootID)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	if err = supervisorcore.PrepareStateSupervisorPair(ctx, root, clientPath, daemonPath); err != nil {
-		t.Fatalf("stage fresh successor pair: %v", err)
-	}
-	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: templateDeps.SupervisorOptions}, clientPath, daemonPath
-}
-
-func copyActiveGenerationExecutable(t *testing.T, source, destination, marker string) {
-	t.Helper()
-	data, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = append(data, []byte("\n# "+marker+"\n")...)
-	if err = os.WriteFile(destination, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	directory := filepath.Join(owner.base, "installed")
+	client, daemon := filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
+	writeSupervisorProbeExecutables(t, store.RootID, client, daemon)
+	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: client}, client, daemon, owner
 }
 
 func writeActiveGenerationSchedulingReceipt(t *testing.T, root string, binding task.SupervisorRef) {
@@ -559,12 +559,13 @@ func writeActiveGenerationSchedulingReceipt(t *testing.T, root string, binding t
 
 func writeIncompleteActiveGenerationSchedulingReceipt(t *testing.T, root string, binding task.SupervisorRef) {
 	t.Helper()
+	// Frozen historical receipt DATA, never derived from a program.
 	data, err := task.MarshalCanonical(map[string]any{
 		"schema_version": task.SchemaVersion,
 		"revision":       "unlimited-v2",
 		"supervisor": map[string]string{
 			"executable": binding.DaemonExecutable,
-			"sha256":     binding.DaemonSHA256,
+			"sha256":     strings.Repeat("a", 64),
 		},
 	})
 	if err != nil {
@@ -616,13 +617,13 @@ func privateOrdinarySchedulingTestPath(root string) string {
 	return filepath.Join(root, ".supervisor", "ordinary-scheduling.json")
 }
 
-func snapshotPublishedGenerationFiles(t *testing.T, root string, pairFiles []string) map[string][]byte {
+func snapshotPublishedGenerationFiles(t *testing.T, root string) map[string][]byte {
 	t.Helper()
 	base := filepath.Join(root, ".supervisor")
-	paths := append([]string{
+	paths := []string{
 		filepath.Join(base, "supervisor.identity.json"),
 		filepath.Join(base, "daemon.identity.json"),
-	}, pairFiles...)
+	}
 	snapshot := make(map[string][]byte, len(paths))
 	for _, path := range paths {
 		snapshot[path] = readActiveGenerationFile(t, path)
@@ -711,4 +712,77 @@ func bindingOfActiveGenerationClient(client *pueue.Client) task.SupervisorRef {
 		return task.SupervisorRef{}
 	}
 	return client.Binding()
+}
+
+func TestPrivateSubmissionGateAcceptsCompatibleTransportForPublishedGeneration(t *testing.T) {
+	f := newPublicContinuationFixture(t)
+	published := f.client.Binding()
+	runtime := f.expectedRuntime(f.clientD, f.daemonD)
+	before := snapshotPublishedGenerationFiles(t, f.owner.root)
+	if err := writePrivateSchedulingFixture(f.owner.root, runtime, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := checkPrivateSubmissionGate(t, f.owner.root, runtime)
+	if err != nil || authorization.StagedLaunchCapability == nil || !authorization.StagedLaunchCapability.AddStashed || !authorization.StagedLaunchCapability.EnqueueByID {
+		t.Fatalf("compatible transport was treated as the published daemon generation: %+v %v", authorization, err)
+	}
+	assertPublishedGenerationFilesUnchanged(t, before)
+	if got, found, readErr := pueue.ReadPrivateSupervisorBinding(f.owner.root); readErr != nil || !found || got != published {
+		t.Fatalf("gate changed canonical generation: found=%t binding=%+v error=%v", found, got, readErr)
+	}
+}
+
+func checkPrivateSubmissionGate(t *testing.T, root string, runtime task.SupervisorRef) (pueue.SubmissionAuthorization, error) {
+	t.Helper()
+	var authorization pueue.SubmissionAuthorization
+	err := pueue.WithSupervisorLeaseContext(t.Context(), root, func(ctx context.Context) error {
+		var gateErr error
+		authorization, gateErr = supervisorcore.SubmissionGate(root)(ctx, runtime)
+		return gateErr
+	})
+	return authorization, err
+}
+
+func TestPrivateSubmissionGateCompatibleTransportPreservesIdentityGuards(t *testing.T) {
+	for _, changed := range []string{"config", "resolved config", "endpoint", "canonical daemon", "mixed identity", "runtime receipt"} {
+		t.Run(changed, func(t *testing.T) {
+			f := newPublicContinuationFixture(t)
+			runtime := f.expectedRuntime(f.clientD, f.daemonD)
+			mutateCompatibleSubmissionEvidence(t, f, &runtime, changed)
+			receipt := runtime
+			if changed == "runtime receipt" {
+				receipt = f.expectedRuntime(f.clientC, f.daemonC)
+			}
+			if err := writePrivateSchedulingFixture(f.owner.root, receipt, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotPublishedGenerationFiles(t, f.owner.root)
+			authorization, err := checkPrivateSubmissionGate(t, f.owner.root, runtime)
+			if !errors.Is(err, pueue.ErrBinding) || authorization.StagedLaunchCapability != nil {
+				t.Fatalf("compatible transport bypassed %s identity evidence: %+v %v", changed, authorization, err)
+			}
+			assertPublishedGenerationFilesUnchanged(t, before)
+			f.assertNoContinuationWork(t, "")
+		})
+	}
+}
+
+func mutateCompatibleSubmissionEvidence(t *testing.T, f *publicContinuationFixture, runtime *task.SupervisorRef, changed string) {
+	t.Helper()
+	switch changed {
+	case "config":
+		runtime.ConfigDigest = task.ComputeSHA256([]byte("foreign config data"))
+	case "resolved config":
+		runtime.ResolvedConfigSHA256 = task.ComputeSHA256([]byte("foreign resolved config data"))
+	case "endpoint":
+		runtime.Endpoint = "unix:" + filepath.Join(f.owner.root, ".supervisor", "foreign.socket")
+	case "canonical daemon":
+		writeConflictingLaunchWitness(t, f.owner.root, f.client.Binding())
+	case "mixed identity":
+		// Literal historical DATA combined with an installed-path marker is
+		// invalid; it is never derived from installed executable contents.
+		runtime.DaemonSHA256 = strings.Repeat("a", 64)
+	case "runtime receipt":
+		// The caller records C's capability while presenting runtime D.
+	}
 }

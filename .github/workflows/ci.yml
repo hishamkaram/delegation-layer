@@ -1,4 +1,5 @@
 name: CI
+run-name: ${{ github.workflow }}
 
 on:
   push:
@@ -386,6 +387,90 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  independent-startup-component:
+    name: Native infrastructure component (${{ matrix.os }})
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '.go-version'
+          cache: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned repository tools
+        run: make tools
+      - name: Prove native infrastructure components only
+        shell: bash
+        env:
+          DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group
+        run: |
+          mkdir -p bin/independent-startup-proof
+          make acceptance-independent-startup 2>&1 | tee bin/independent-startup-proof/native.log
+      - name: Retain bounded native component output
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: independent-startup-component-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            bin/independent-startup-proof/native.log
+          retention-days: 7
+          if-no-files-found: error
+
+  nested-survival:
+    name: Nested survival (${{ matrix.os }})
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '.go-version'
+          cache: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned tools and supervisor
+        run: |
+          make tools
+          ./scripts/install-test-supervisor.sh
+      - name: Prove warm controls and cold nested survival
+        env:
+          DELEGATE_NESTED_EXPECTED_BACKEND: process-group
+        run: make acceptance-nested-survival
+      - name: Retain allowlisted nested survival receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nested-survival-${{ matrix.os }}-${{ github.run_attempt }}
+          path: bin/nested-survival.*/receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
   development-candidate:
     name: Distribution build
     needs: changes
@@ -471,10 +556,10 @@ jobs:
     name: Distribution install (${{ matrix.os }}, ${{ matrix.channel }})
     needs: development-candidate
     if: >-
-      ${{ (github.event_name == 'pull_request' &&
+      ${{ ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch') }}
+      (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch')) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:

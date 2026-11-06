@@ -115,6 +115,20 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         elif closure_path.exists():
             closure_path.unlink()
 
+    def test_inspection_binding_observes_installed_paths_without_program_reads(self):
+        original_read = Path.read_bytes
+
+        def read_data(path):
+            self.assertNotIn(path, (self.runner, self.pueue),
+                             "installed executable contents were read")
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", read_data):
+            binding = self.inspection_binding()
+        self.assertEqual(binding["executable_identity"], "installed-path-v1")
+        self.assertNotIn("worker_sha256", binding)
+        self.assertNotIn("helper_sha256", binding)
+
     def inspection_request(self, task_record: dict[str, object], operation_id: str | None) -> dict[str, object]:
         request = {
             "schema_version": 1,
@@ -140,9 +154,8 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
                 "runtime-capability-v1" if concurrent else "inspection-v1"),
             "definition_sha256": "1" * 64,
             "helper_executable": str(self.base / "helper"),
-            "helper_sha256": "2" * 64,
             "worker_executable": str(self.runner),
-            "worker_sha256": provider_common.sha(self.runner.read_bytes()),
+            "executable_identity": "installed-path-v1",
             "supervisor": provider_common.supervisor_binding(
                 self.pueue, config, config.parent,
                 provider_common.sha(config.read_bytes()), "pueue fixture"),
@@ -789,13 +802,12 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         (ordinary / "task.json").write_bytes(provider_common._canonical_task_bytes(task))
         (ordinary / "brief.md").write_bytes(b"x")
 
-        binding = {
+        binding: dict[str, object] = {
             "definition_revision": "inspection-v1",
             "definition_sha256": "1" * 64,
             "helper_executable": str(self.base / "helper"),
-            "helper_sha256": "2" * 64,
             "worker_executable": str(self.runner),
-            "worker_sha256": provider_common.sha(self.runner.read_bytes()),
+            "executable_identity": "installed-path-v1",
             "supervisor": provider_common.supervisor_binding(
                 self.pueue, self.config, self.config.parent,
                 provider_common.sha(self.config.read_bytes()), "pueue fixture"),

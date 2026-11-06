@@ -3,9 +3,9 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +14,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -165,20 +164,10 @@ func TestModelDiscoveryUsesStateRootManagedExecutables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !supervisor.IsStateRunnerPath(root, args.Runner) || queueRepairRunner != args.Runner || !supervisor.CurrentManagedRunnerExecutable(root, args.Runner) || args.runnerOwnership != task.RunnerOwnershipManaged {
+	if args.Runner != runner || queueRepairRunner != args.Runner || args.runnerOwnership != task.RunnerOwnershipManaged {
 		t.Fatalf("model discovery executable paths or ownership are not durable and managed: runner=%q repair=%q ownership=%q", args.Runner, queueRepairRunner, args.runnerOwnership)
 	}
-	stateClient, stateDaemon, found, err := supervisor.ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
-	if err != nil || !found {
-		t.Fatalf("model discovery did not persist its supervisor pair: found=%t err=%v", found, err)
-	}
-	for _, executable := range []struct {
-		path string
-		want string
-	}{{path: stateClient, want: "client"}, {path: stateDaemon, want: "daemon"}} {
-		data, readErr := os.ReadFile(executable.path)
-		if readErr != nil || !strings.HasSuffix(string(data), executable.want) {
-			t.Fatalf("model discovery supervisor executable %q = %q err=%v", executable.path, data, readErr)
-		}
+	if _, err = os.Lstat(filepath.Join(root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("model discovery created executable inventory: %v", err)
 	}
 }

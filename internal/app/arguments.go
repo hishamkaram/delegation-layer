@@ -191,7 +191,7 @@ func parseSupervisorAction(rest []string) (string, []string, error) {
 		remaining := append(append([]string(nil), rest[:i]...), rest[i+1:]...)
 		return rest[i], remaining, nil
 	}
-	return "", nil, errors.New("supervisor requires status or migrate")
+	return "", nil, errors.New("supervisor requires status, migrate or stop-owner")
 }
 
 func separateCommand(args []string) (string, []string, error) {
@@ -374,8 +374,8 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 }
 
 func (a *Arguments) validateSupervisor(positional []string) error {
-	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" {
-		return errors.New("supervisor requires status or migrate")
+	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" && a.SupervisorAction != "stop-owner" {
+		return errors.New("supervisor requires status, migrate or stop-owner")
 	}
 	if a.supervisorPueueConfigSet || a.supervisorRunnerSet {
 		return errors.New("supervisor does not accept --pueue-config or --runner")

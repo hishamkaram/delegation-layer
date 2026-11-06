@@ -163,9 +163,9 @@ class InstalledProviderEvidenceTests(unittest.TestCase):
                     if "provider_version" not in identity:
                         validate_launch(kind, directory, meta, {
                             **seal, "provider_version": "", "provider_sha256": ""})
+                    validate_launch(kind, directory, meta, {**seal, "provider_sha256": "3" * 64})
                     for field, value in (("provider_version", None), ("provider_sha256", None),
                                          ("provider_version", "different"),
-                                         ("provider_sha256", "3" * 64),
                                          ("provider_sha256", "not-a-digest"),
                                          ("provider_executable", "relative/provider"),
                                          ("provider_executable", "/different/provider")):
@@ -196,13 +196,13 @@ class InstalledProviderSetupTests(unittest.TestCase):
         }
         for kind, module in (("claude", claude_runtime), ("codex", codex_runtime)):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
-                runner = Path(tmp) / "runner"
+                runner = Path(tmp).resolve(strict=True) / "runner"
                 runner.write_bytes(b"owned worker")
                 arguments: InspectionArguments = {"pueue": Path("/owned/pueue"), "config": Path("/owned/pueue.yml"),
                              "base": Path("/owned/base"), "config_digest": "a" * 64,
                              "workspace": Path("/"), "runner": runner,
                              "environment": {"LANG": "C"}, "pueue_version": "pueue fixture"}
-                with patch.object(module, "supervisor_binding", return_value={"client_sha256": "b" * 64}):
+                with patch.object(module, "supervisor_binding", return_value={"client_executable": "/owned/pueue"}):
                     if kind == "claude":
                         binding = claude_runtime.expected_claude_inspection_binding(
                             executable=Path("/installed/provider"), **arguments)
@@ -210,8 +210,9 @@ class InstalledProviderSetupTests(unittest.TestCase):
                         binding = codex_runtime.expected_codex_inspection_binding(
                             provider=Path("/installed/provider"), **arguments)
                 self.assertEqual(binding["definition_sha256"], golden[kind])
-                self.assertEqual(binding["worker_sha256"], sha(b"owned worker"))
-                self.assertEqual(object_at(binding, "supervisor")["client_sha256"], "b" * 64)
+                self.assertNotIn("worker_sha256", binding)
+                self.assertEqual(binding["worker_executable"], str(runner))
+                self.assertEqual(object_at(binding, "supervisor")["client_executable"], "/owned/pueue")
                 self.assertEqual(binding["helper_sha256"], "")
 
     def test_agy_constructor_never_hashes_provider(self):
@@ -229,10 +230,10 @@ class InstalledProviderSetupTests(unittest.TestCase):
                     patch.object(agy_runner, "selected_tools", return_value=root / "probe"), \
                     patch.object(agy_runner, "require_discovery"), \
                     patch.object(agy_runner, "ProcessBook"), \
-                    patch.object(agy_runner, "digest", side_effect=AssertionError("provider hash")):
+                    patch.object(Path, "open", side_effect=AssertionError("provider contents read")):
                 owner = agy_runner.NativeRun(args, prepared, root / "output")
             self.assertEqual(owner.provider_version, "")
-            self.assertEqual(owner.provider_sha256, "")
+            self.assertFalse(hasattr(owner, "provider_sha256"))
 
     def test_claude_and_codex_discovery_never_hash_provider(self):
         for kind, module, owner_type in (
@@ -248,7 +249,7 @@ class InstalledProviderSetupTests(unittest.TestCase):
                         patch.object(module, "digest", side_effect=AssertionError("provider hash")):
                     owner._initialize_tools(args)
                 self.assertEqual(owner.provider_version, "")
-                self.assertEqual(owner.provider_sha256, "")
+                self.assertFalse(hasattr(owner, "provider_sha256"))
 
     def test_codex_setup_observes_only_supervisor_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,7 +259,6 @@ class InstalledProviderSetupTests(unittest.TestCase):
             owner.pueue_base = root
             owner.pueue_config = root / "pueue.yml"
             owner.pueue_config.write_text("config")
-            owner.provider_sha256 = ""
             owner.runner, owner.workspace, owner.environment = root / "runner", root, {}
             calls = []
             def direct(name, argv, **kwargs):
@@ -308,7 +308,7 @@ class InstalledProviderSetupTests(unittest.TestCase):
             owner.output = root
             owner.agy, owner.pueue, owner.pueued = root / "agy", root / "pueue", root / "pueued"
             owner.probe = root / "probe"
-            owner.provider_version, owner.provider_sha256 = "", ""
+            owner.provider_version = ""
             for path in (owner.pueue, owner.pueued):
                 path.write_bytes(b"owned supervisor")
             ownership = Mock()
@@ -330,6 +330,64 @@ class InstalledProviderSetupTests(unittest.TestCase):
             self.assertEqual(calls, ["pueue-version", "pueued-version", "isolation-probe"])
             self.assertEqual(owner.pueue_version, "pueue fixture")
             self.assertEqual(owner.pueued_version, "pueue fixture")
+
+
+class SupervisorInstalledSelectionTests(unittest.TestCase):
+    def test_current_binding_never_reads_executable_bytes_and_keeps_config_identity(self):
+        from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
+        from scripts.delegate_acceptance.supervisor.binding import _validate_supervisor_binding
+        with tempfile.TemporaryDirectory(prefix="supervisor-selection-") as tmp:
+            root = Path(tmp).resolve()
+            executable = root / "pueue"
+            executable.write_text("installed fixture\n", encoding="utf-8")
+            config = root / "pueue.yml"
+            config.write_text("configuration fixture\n", encoding="utf-8")
+            config_digest = sha(config.read_bytes())
+            with patch.object(Path, "open", side_effect=AssertionError("executable contents read")):
+                binding = supervisor_binding(executable, config, root, config_digest, "pueue fixture")
+            self.assertNotIn("client_sha256", binding)
+            self.assertEqual(binding["client_executable"], str(executable))
+            self.assertEqual(binding["config_digest"], config_digest)
+            _validate_supervisor_binding(binding, "installed supervisor")
+            executable.write_text("compatible installed update\n", encoding="utf-8")
+            self.assertEqual(supervisor_binding(executable, config, root, config_digest, "pueue fixture"), binding)
+            _validate_supervisor_binding({**binding, "daemon_executable": str(root / "pueued")}, "daemon selection")
+            with self.assertRaises(AcceptanceFailure):
+                _validate_supervisor_binding({**binding, "config_digest": "invalid"}, "config integrity")
+
+    def test_historical_executable_diagnostics_are_decoded_without_current_hashing(self):
+        from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
+        from scripts.delegate_acceptance.supervisor.binding import _validate_supervisor_binding
+        binding = supervisor_binding(Path("/installed/pueue"), Path("/owned/pueue.yml"),
+                                     Path("/owned"), "a" * 64, "pueue fixture")
+        historical = {**binding, "client_sha256": "b" * 64,
+                      "daemon_executable": "/installed/pueued", "daemon_sha256": "c" * 64}
+        historical.pop("executable_identity", None)
+        _validate_supervisor_binding(historical, "historical supervisor")
+        for field in ("client_sha256", "daemon_sha256"):
+            with self.subTest(field=field), self.assertRaises(AcceptanceFailure):
+                _validate_supervisor_binding({**historical, field: "invalid"}, "historical shape")
+
+
+    def test_current_supervisor_binding_explicitly_marks_installed_selection(self):
+        from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
+        binding = supervisor_binding(Path("/installed/pueue"), Path("/owned/pueue.yml"),
+                                     Path("/owned"), "a" * 64, "pueue fixture")
+        self.assertEqual(binding.get("executable_identity"), "installed-path-v1")
+
+    def test_operational_supervisor_marker_distinguishes_truncated_legacy(self):
+        from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
+        from scripts.delegate_acceptance.supervisor.binding import _validate_supervisor_binding
+        current = supervisor_binding(Path("/installed/pueue"), Path("/owned/pueue.yml"),
+                                     Path("/owned"), "a" * 64, "pueue fixture")
+        truncated = {key: value for key, value in current.items() if key != "executable_identity"}
+        with self.assertRaisesRegex(AcceptanceFailure, "historical client_sha256"):
+            _validate_supervisor_binding(truncated, "truncated historical supervisor")
+        for changed in ({**current, "executable_identity": "future-path-v9"},
+                        {**current, "client_sha256": "b" * 64},
+                        {**current, "daemon_executable": "/installed/pueued", "daemon_sha256": "c" * 64}):
+            with self.subTest(changed=changed), self.assertRaises(AcceptanceFailure):
+                _validate_supervisor_binding(changed, "invalid supervisor identity")
 
 
 if __name__ == "__main__":

@@ -1,79 +1,181 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
-	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"golang.org/x/sys/unix"
 )
 
-func authorizeAppWorkspaceRemoval(t *testing.T, resource *workspace.Resource) {
+var errCheckpointAdmissionProbe = errors.New("checkpoint admission probe completed")
+
+type checkpointAdmissionProbe struct {
+	store *taskdir.Store
+}
+
+func (*checkpointAdmissionProbe) ManagedRunner() (string, error) {
+	return "", errCheckpointAdmissionProbe
+}
+
+func (*checkpointAdmissionProbe) PrepareManaged(context.Context, *taskdir.Store, string) (string, *pueue.Client, error) {
+	return "", nil, errCheckpointAdmissionProbe
+}
+
+func (*checkpointAdmissionProbe) OpenSaved(context.Context, *taskdir.Store, task.SupervisorRef, infrastructure.SavedBindingSource) (*pueue.Client, error) {
+	return nil, errCheckpointAdmissionProbe
+}
+
+type workspaceAdmissionUnlockFault struct {
+	taskdir.BaseFaultInjector
+	cause error
+}
+
+func (*workspaceAdmissionUnlockFault) OnLockFileBarrier(string) error      { return nil }
+func (*workspaceAdmissionUnlockFault) OnLockParentDirBarrier(string) error { return nil }
+func (f *workspaceAdmissionUnlockFault) OnFlock(path string, operation int) error {
+	if filepath.Base(path) == ".lifetime-owner.lock" && operation&unix.LOCK_UN != 0 {
+		return f.cause
+	}
+	return nil
+}
+
+var _ workspaces.OperationRuntime = (*checkpointAdmissionProbe)(nil)
+
+func TestWorkspaceRecoveryDoesNotHideFaultJoinedWithBusy(t *testing.T) {
+	fault := errors.New("injected failed use-owner maintenance release")
+	for _, test := range []struct {
+		name, kind string
+		fault      error
+	}{{"wake", "wake", fault}, {"guardian", "guardian", fault}, {"wake-deadline", "wake", context.DeadlineExceeded}, {"guardian-deadline", "guardian", context.DeadlineExceeded}} {
+		t.Run(test.name, func(t *testing.T) { testWorkspaceBusyCleanup(t, test.kind, test.fault) })
+	}
+}
+
+func testWorkspaceBusyCleanup(t *testing.T, kind string, fault error) {
 	t.Helper()
-	if err := resource.RecordRelease(t.Context(), workspace.ReleaseRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, OperationID: strings.Repeat("d", 32), Discard: true}); err != nil {
+	store, resource, use := newManagedTaskUse(t)
+	holdWorkspaceOtherUseOwner(t, store, resource.Request().WorkspaceID)
+	injector := &workspaceBusyReleaseFault{cause: fault}
+	store.SetFaultInjector(injector)
+	var retained *workspaceCommandCleanupError
+	t.Cleanup(func() {
+		store.SetFaultInjector(nil)
+		if retained != nil {
+			if cleanupErr := retained.Cleanup(); cleanupErr != nil {
+				t.Error(cleanupErr)
+			}
+		}
+	})
+	var resultErr error
+	if kind == "wake" {
+		resultErr = wakeManagedTaskWorkspace(t.Context(), store, use.td, []string{})
+	} else {
+		resultErr = reconcileWorkspaceAfterGuardian(store, runnerArguments{TaskID: use.td.TaskID}, Dependencies{Environment: []string{}})
+	}
+	if !errors.As(resultErr, &retained) || retained.RetainedStore() != store {
+		t.Fatalf("failed unwind lost its exact resource/Store cleanup owner: %v", resultErr)
+	}
+	partial := requireWorkspaceLifetimeFault(t, store, resultErr, fault, injector.unlocks)
+	store.SetFaultInjector(nil)
+	if cleanupErr := retained.Cleanup(); cleanupErr != nil {
+		t.Fatal(cleanupErr)
+	}
+	if partial.Lease().CleanupPending() || retained.RetainedStore() != nil {
+		t.Fatal("explicit child-first cleanup left owned native handles")
+	}
+	if workspaces.PendingError(errors.Join(workspace.ErrPending, resultErr)) || workspaceViewRetryable(resultErr) {
+		t.Fatal("resolved historical cleanup fault became pending")
+	}
+}
+
+func requireWorkspaceLifetimeFault(t *testing.T, store *taskdir.Store, resultErr, fault error, unlocks int) *taskdir.LifetimeOwnerCleanupError {
+	t.Helper()
+	if !errors.Is(resultErr, task.ErrLockBusy) || !errors.Is(resultErr, fault) || workspaces.PendingError(resultErr) || workspaceViewRetryable(resultErr) {
+		t.Fatalf("fault joined with native owner contention was hidden: %v", resultErr)
+	}
+	if workspaces.PendingError(errors.Join(workspace.ErrPending, resultErr)) {
+		t.Fatalf("pending marker hid a typed cleanup fault: %v", resultErr)
+	}
+	if unlocks != 1 {
+		t.Fatalf("failed unwind retried implicitly: %d unlocks", unlocks)
+	}
+	var partial *taskdir.LifetimeOwnerCleanupError
+	if !errors.As(resultErr, &partial) || !partial.Lease().RetainsStore(store) {
+		t.Fatalf("lost the exact partial lifetime owner: %v", resultErr)
+	}
+	if _, pinErr := store.PinRootContext(t.Context()); pinErr != nil {
+		t.Fatalf("borrowed Store closed behind partial owner: %v", pinErr)
+	}
+	return partial
+}
+
+func holdWorkspaceOtherUseOwner(t *testing.T, store *taskdir.Store, workspaceID string) {
+	t.Helper()
+	other, err := taskdir.OpenStore(store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := &workspaceCommandResources{store: other, ownsStore: true}
+	t.Cleanup(func() {
+		if closeErr := resources.close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	resource, err := workspace.LoadResource(t.Context(), other, workspaceID)
+	resources.resource = resource
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := resource.AcquireUseOwner(t.Context())
+	resources.useOwner = owner
+	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestUnprovisionedWorkspaceRemovalRequiresNoGit(t *testing.T) {
-	_, resource := testsupport.NewResource(t)
-	authorizeAppWorkspaceRemoval(t, resource)
-	// A zero Git has no executable runner. Any Git command would fail.
-	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); err != nil {
-		t.Fatalf("source-absent cleanup required Git: %v", err)
-	}
+type workspaceBusyReleaseFault struct {
+	taskdir.BaseFaultInjector
+	cause   error
+	armed   bool
+	unlocks int
 }
 
-func TestSourceOnlyWorkspaceRemovalDoesNotAdoptFilesystem(t *testing.T) {
-	_, resource := testsupport.NewResource(t)
-	request := resource.Request()
-	source := workspace.Source{Root: request.SourceCwd, CommonDir: filepath.Join(request.SourceCwd, ".git"), GitDir: filepath.Join(request.SourceCwd, ".git"), BaseOID: strings.Repeat("e", 40), ObjectFormat: "sha1", RelativeCwd: "."}
-	if err := resource.RecordSource(t.Context(), source); err != nil {
+func (*workspaceBusyReleaseFault) OnLockFileBarrier(string) error      { return nil }
+func (*workspaceBusyReleaseFault) OnLockParentDirBarrier(string) error { return nil }
+func (f *workspaceBusyReleaseFault) OnFlock(path string, operation int) error {
+	if filepath.Base(path) == ".lifetime-owner.lock" && operation&unix.LOCK_EX != 0 {
+		f.armed = true
+	}
+	if f.armed && filepath.Base(path) == ".maintenance.lock" && operation&unix.LOCK_UN != 0 {
+		f.unlocks++
+		return f.cause
+	}
+	return nil
+}
+
+func appCleanupLifetimeLease(t *testing.T, store *taskdir.Store) *taskdir.LifetimeOwnerLease {
+	t.Helper()
+	control, err := store.OpenInfrastructureContext(t.Context(), true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	authorizeAppWorkspaceRemoval(t, resource)
-	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); err != nil {
-		t.Fatalf("pre-anchor cleanup performed native Git work: %v", err)
-	}
-}
-
-func TestWorkspaceRemovalRequiresLeadAuthorization(t *testing.T) {
-	_, resource := testsupport.NewResource(t)
-	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); !workspace.OperationAbsent(err) {
-		t.Fatalf("cleanup accepted missing release authority: %v", err)
-	}
-}
-
-func TestUnprovisionedRemovalRejectsContradictoryAnchor(t *testing.T) {
-	_, resource := testsupport.NewResource(t)
-	authorizeAppWorkspaceRemoval(t, resource)
-	if err := resource.RecordAnchor(t.Context(), workspace.AnchorRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, Path: filepath.Join(resource.Request().Container, resource.Request().WorkspaceID), Identity: workspace.DirectoryIdentity{Inode: 1}}); err != nil {
+	lease, err := control.AcquireLifetimeOwner(t.Context())
+	t.Cleanup(func() {
+		store.SetFaultInjector(nil)
+		if closeErr := errors.Join(lease.Release(), control.Close()); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); !errors.Is(err, workspace.ErrIdentity) {
-		t.Fatalf("source-absent cleanup ignored contradictory later facts: %v", err)
-	}
-}
-
-func TestWorkspaceSourceRetryRejectsSurvivingAnchor(t *testing.T) {
-	_, resource := testsupport.NewResource(t)
-	request := resource.Request()
-	if err := resource.RecordAnchor(t.Context(), workspace.AnchorRecord{
-		SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID,
-		Path:     filepath.Join(request.Container, request.WorkspaceID),
-		Identity: workspace.DirectoryIdentity{Inode: 1},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// A surviving anchor proves selection already happened. No new Git
-	// resolution is allowed, even if the requested branch has since moved.
-	if _, err := resolveManagedSource(t.Context(), resource, workspace.Git{}); !errors.Is(err, workspace.ErrIdentity) {
-		t.Fatalf("source-absent retry did not reject its later anchor before Git: %v", err)
-	}
-	if _, err := resource.Source(t.Context()); !workspace.OperationAbsent(err) {
-		t.Fatalf("source-absent retry published another selection: %v", err)
-	}
+	return lease
 }

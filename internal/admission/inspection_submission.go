@@ -19,11 +19,13 @@ func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Op
 	if err != nil {
 		return inspectionSubmissionState{}, err
 	}
+	if err = operation.CheckLaunchPermission(ctx); err != nil {
+		return inspectionSubmissionState{}, err
+	}
 	record := operation.Request()
-	// The worker executable is part of the immutable inspection binding. It was
-	// fingerprinted before the durable claim, so revalidate the exact path and
-	// bytes immediately before handing the launch to the supervisor. A changed
-	// worker consumes the create-once claim but can never reach an external add.
+	// The recorded worker path and any canonical managed-successor authorization
+	// are checked before handing the create-once launch to the supervisor.
+	// Installed executable contents remain owned by the user installation.
 	if err = supervisorcore.ValidateInspectionRunner(operation, runner); err != nil {
 		return inspectionSubmissionState{}, err
 	}
@@ -32,7 +34,10 @@ func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Op
 	var observation pueue.InspectionObservation
 	var submitErr error
 	commit := func(observation pueue.InspectionObservation) error {
-		return operation.RecordReceiptContext(ctx, observation.Job.ID)
+		if err := operation.RecordReceiptContext(ctx, observation.Job.ID); err != nil {
+			return err
+		}
+		return operation.CheckLaunchPermission(ctx)
 	}
 	if ConcurrentInspection(root, record.Binding) && record.Group == "default" {
 		observation, submitErr = supervisor.SubmitConcurrentInspectionStagedWithGate(ctx, permit, identity, launch, supervisorcore.SubmissionGate(root), commit)

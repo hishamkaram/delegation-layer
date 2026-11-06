@@ -12,10 +12,18 @@ import (
 )
 
 func SubmitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, runner string, permit *taskdir.SubmissionPermit) SubmissionResult {
+	return SubmitWithClientContext(context.Background(), td, req, meta, client, runner, permit)
+}
+
+func SubmitWithClientContext(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, runner string, permit *taskdir.SubmissionPermit) SubmissionResult {
 	result := SubmissionResult{Stage: SubmissionObservation}
+	if err := td.RequireTaskLaunchPermissionContext(ctx); err != nil {
+		result.Failure = err
+		return result
+	}
 	response := &result.Observation
 	root := filepath.Clean(filepath.Dir(filepath.Dir(td.Dir)))
-	ownership, err := supervisorcore.RunnerOwnershipForTask(root, td, meta)
+	ownership, err := supervisorcore.RunnerOwnershipForTaskContext(ctx, root, td, meta)
 	if err != nil {
 		result.Failure = err
 		return result
@@ -25,9 +33,9 @@ func SubmitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.Meta
 		if receiptErr != nil {
 			return receiptErr
 		}
-		return td.RecordSupervisorReceipt(*receipt)
+		return td.RecordSupervisorReceiptContext(ctx, *receipt)
 	}
-	observation, err := client.SubmitStagedWithGate(context.Background(), permit, pueue.Launch{
+	observation, err := client.SubmitStagedWithGate(ctx, permit, pueue.Launch{
 		RunnerExecutable: runner,
 		RootPath:         root,
 		Supervised:       ownership == task.RunnerOwnershipManaged,

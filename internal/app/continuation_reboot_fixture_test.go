@@ -98,17 +98,8 @@ func newRebootFixture(t *testing.T, setup rebootSetup) *rebootFixture {
 
 func prepareRebootPredecessorTask(t *testing.T, fixture *historicalSupervisorFixture, workspace string, setup rebootSetup) {
 	t.Helper()
-	store, err := taskdir.InitStore(fixture.root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.store = store
-	t.Cleanup(func() { fixture.close(t) })
-	bound, err := pueue.BindPrivate(t.Context(), fixture.clientA, fixture.daemonA, fixture.root, fixture.options)
-	if err != nil {
-		t.Fatalf("bind predecessor supervisor: %v", err)
-	}
-	fixture.current, fixture.predecessorClient, fixture.predecessor = bound, bound, bound.Binding()
+	bindHistoricalSupervisorFixture(t, fixture)
+	store := fixture.store
 	brief := []byte("reboot continuation predecessor")
 	request := newHistoricalSupervisorTaskRecord(store.RootID, workspace, brief)
 	request.PriorSession = setup.prior
@@ -117,7 +108,10 @@ func prepareRebootPredecessorTask(t *testing.T, fixture *historicalSupervisorFix
 	if setup.launchEnvironment {
 		meta.Environment, meta.EnvironmentRecorded = []string{"LANG=C"}, true
 	}
-	if fixture.td, err = store.CreateTask(request.TaskID, &request, brief, &meta); err != nil {
+	td, err := store.CreateTask(request.TaskID, &request, brief, &meta)
+	fixture.td = td
+	fixture.component.ownTask(td)
+	if err != nil {
 		t.Fatal(err)
 	}
 	persistedRequest, persistedMeta, err := fixture.td.PreparedRecords()

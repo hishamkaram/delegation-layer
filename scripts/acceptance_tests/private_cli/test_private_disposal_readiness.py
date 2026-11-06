@@ -24,7 +24,7 @@ from scripts.delegate_acceptance.lifetime.identity import ordinary_lifetime_owne
 from scripts.delegate_acceptance.private_cli import capture
 from scripts.delegate_acceptance.private_cli import disposal_observer
 from scripts.delegate_acceptance.private_cli import finalization
-from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime, SupervisorCleanup
 from scripts.delegate_acceptance.private_cli import leases
 from scripts.delegate_acceptance.private_cli import noexec_state
 from scripts.delegate_acceptance.private_cli import root_cleanup
@@ -294,7 +294,8 @@ class LeasedShutdownTests(DisposalFixture):
         pool = self.pool(self.state / ".custody", owners=("owner",))
         config = self.state / ".supervisor" / "pueue.yml"
         config.write_text("shared: {}\n")
-        pending = {"client": "client", "config": config, "env": {}, "state": self.state, "task_ids": ()}
+        pending: SupervisorCleanup = {"delegate": Path("delegate"), "client": Path("client"), "config": config,
+                                      "env": {}, "state": self.state, "task_ids": []}
         ledger = [pending]
         with self.native_edges([_closure((pool, POOL_ID))]), patch.object(supervisor.time, "monotonic",
                                                                          side_effect=[0, 31]):
@@ -302,7 +303,11 @@ class LeasedShutdownTests(DisposalFixture):
                 supervisor.shutdown_pending_private_supervisor(pending, ledger, capture_root=None)
         self.assertEqual(ledger, [pending])
         config.unlink()
-        self.assertIsNone(supervisor.shutdown_pending_private_supervisor(pending, ledger, capture_root=None))
+        with self.native_edges([_closure((pool, POOL_ID))]), patch.object(supervisor.time, "monotonic",
+                                                                         side_effect=[0, 31]):
+            with self.assertRaisesRegex(RuntimeError, "custody release remained pending"):
+                supervisor.shutdown_pending_private_supervisor(pending, ledger, capture_root=None)
+        self.assertEqual(ledger, [pending])
 
 
 class CustodyViewsTests(DisposalFixture):
@@ -861,7 +866,8 @@ class PrimaryFinalizationTests(ObservedReadinessFixture):
         errors = []
         args = unittest.mock.Mock(scenario="capacity")
         with patch.object(finalization, "PRIMARY_FINALIZATION_SECONDS", budget):
-            _binding, ready, deadline = finalization.release_fixture_workers(args, errors, lifetime, False)
+            _binding, ready, deadline, preparation_failed = finalization.release_fixture_workers(args, errors, lifetime, False)
+        self.assertFalse(preparation_failed)
         return ready, deadline, errors
 
     def test_failed_finalization_reaches_public_recovery_before_refusing_intent_only_closure(self):
@@ -881,17 +887,20 @@ class PrimaryFinalizationTests(ObservedReadinessFixture):
         lifetime = self.lifetime(None)
         args = unittest.mock.Mock(pueue=Path(__file__))
         errors = []
-        with patch.object(finalization, "shutdown_private_supervisor") as shutdown:
+        with patch.object(finalization, "shutdown_terminal_private_supervisor") as shutdown:
             finalization.shutdown_primary_supervisor(
                 args, errors, None, lifetime, True, False, predecessor_roots=frozenset(),
                 deadline=time.monotonic() - 1)
             shutdown.assert_not_called()
             self.assertRegex(str(errors[0]), "shutdown remained unverified: .*expired")
             errors.clear()
+            started = time.monotonic()
+            deadline = started + 20
             finalization.shutdown_primary_supervisor(
                 args, errors, None, lifetime, True, False, predecessor_roots=frozenset(),
-                deadline=time.monotonic() + 20)
-        timeout = shutdown.call_args.kwargs["timeout"]
+                deadline=deadline)
+        self.assertEqual(shutdown.call_args.kwargs["deadline"], deadline)
+        timeout = shutdown.call_args.kwargs["deadline"] - started
         self.assertTrue(0 < timeout <= 20)
         self.assertEqual(errors, [])
 

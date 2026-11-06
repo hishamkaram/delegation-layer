@@ -16,13 +16,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	external, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 	operation := newInspectionPollTestOperation(t, store, external)
@@ -47,7 +46,7 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 	if before.response.SupervisorControl.ActiveWork != "unknown" || before.response.SupervisorControl.LegacyReachability != "not_managed" {
 		t.Fatalf("external status claimed an observation: %+v", before.response.SupervisorControl)
 	}
-	migrated := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, deps)
+	migrated := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, withSupervisorProbeRouting(t, deps, owner))
 	assertHandoffSupervisorResult(t, migrated, "migrated", "retry_dispatch")
 	if migrated.response.SupervisorControl.ActiveWork != "unknown" || migrated.response.SupervisorControl.LegacyReachability != "not_managed" {
 		t.Fatalf("routing handoff claimed empty queues: %+v", migrated.response.SupervisorControl)
@@ -66,7 +65,7 @@ func TestExternalInspectionHandoffPublicConsumersPreserveActiveWork(t *testing.T
 }
 
 func TestExternalInspectionHandoffRetryKeepsPublishedTarget(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 	successor := supervisorcore.InspectionGroup(store.RootID, current.Binding())
@@ -75,11 +74,12 @@ func TestExternalInspectionHandoffRetryKeepsPublishedTarget(t *testing.T) {
 	if err := inspection.PrepareGroupMigration(t.Context(), store, legacy, successor); err != nil {
 		t.Fatal(err)
 	}
-	staged, _ := stagePublishedGenerationSuccessor(t, store.Root, current.Binding(), current.Binding().ClientExecutable, current.Binding().DaemonExecutable)
+	staged := installedGenerationCandidate(t, store, current.Binding())
 	if staged == current.Binding() {
 		t.Fatal("fixture did not stage a different installation")
 	}
-	result := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, deps)
+	deps.InitialSupervisorExecutable = staged.ClientExecutable
+	result := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, withSupervisorProbeRouting(t, deps, owner))
 	assertHandoffSupervisorResult(t, result, "migrated", "retry_dispatch")
 	assertExternalHandoffHead(t, store, legacy, current.Binding())
 	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
@@ -91,18 +91,14 @@ func TestExternalInspectionHandoffRetryKeepsPublishedTarget(t *testing.T) {
 }
 
 func TestExternalInspectionHandoffCreatesPrivateSupervisorForExternalOnlyRoot(t *testing.T) {
-	templateStore, deps, template := newSupervisorProbeTestFixture(t)
-	store := newBareInspectionStore(t)
+	store, deps, owner := newColdSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
-	bundle := testsupport.CanonicalTempDir(t)
-	for _, source := range []string{template.Binding().ClientExecutable, template.Binding().DaemonExecutable} {
-		data := readSupervisorProbeTestFile(t, source)
-		data = []byte(strings.ReplaceAll(string(data), templateStore.RootID, store.RootID))
-		writeRunnerFixture(t, filepath.Join(bundle, filepath.Base(source)), string(data))
-	}
-	deps.InitialSupervisorExecutable = filepath.Join(bundle, "pueue")
 	privateBase := filepath.Join(store.Root, ".supervisor")
+	if len(owner.daemonWaits()) != 0 {
+		t.Fatal("cold target already started a daemon")
+	}
 	if _, err := os.Stat(privateBase); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("external-only fixture already contains private state: %v", err)
 	}
@@ -127,7 +123,7 @@ func TestExternalInspectionHandoffCreatesPrivateSupervisorForExternalOnlyRoot(t 
 }
 
 func TestExternalInspectionHandoffPreservesOrdinaryTasksAndLateAdmission(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	external, legacy, _ := newExternalInspectionHandoffFixture(t, store)
 	operation := newInspectionPollTestOperation(t, store, external)
 	startExternalHandoffInspection(t, operation)
@@ -136,7 +132,7 @@ func TestExternalInspectionHandoffPreservesOrdinaryTasksAndLateAdmission(t *test
 	created := createExternalHandoffTask(t, store, request, external.Binding())
 	metaPath := filepath.Join(created.Dir, "meta.json")
 	metaBefore := readSupervisorProbeTestFile(t, metaPath)
-	result := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, deps)
+	result := supervisorCommand(Arguments{Root: store.Root, SupervisorAction: "migrate"}, withSupervisorProbeRouting(t, deps, owner))
 	assertHandoffSupervisorResult(t, result, "migrated", "retry_dispatch")
 	assertExternalHandoffHead(t, store, legacy, current.Binding())
 
@@ -157,7 +153,7 @@ func TestExternalInspectionHandoffAdoptsLegacyPrivateOwner(t *testing.T) {
 	store, _, current := newSupervisorProbeTestFixture(t)
 	_, legacy, _ := newExternalInspectionHandoffFixture(t, store)
 	base := filepath.Dir(current.Binding().ConfigPath)
-	identity := historicalPrivateDaemonIdentity{Executable: current.Binding().DaemonExecutable, SHA256: current.Binding().DaemonSHA256}
+	identity := historicalPrivateDaemonIdentityFor(current.Binding())
 	identityBytes, err := task.MarshalCanonical(identity)
 	if err != nil {
 		t.Fatal(err)
@@ -210,7 +206,7 @@ func TestExternalInspectionHandoffPreservesCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, canceled := range []context.Context{nil, ctx} {
-		if _, err := prepareInspectionHandoffSupervisor(canceled, "", Dependencies{ResourceChecker: fixtureResources}, pueue.Options{}); !errors.Is(err, context.Canceled) {
+		if _, err := prepareInspectionHandoffSupervisor(canceled, "", (Dependencies{ResourceChecker: fixtureResources}).supervisorLookup(), pueue.Options{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("prepare error = %v", err)
 		}
 		if err := supervisorcore.HandoffExternalInspectionGroup(canceled, nil, nil, inspection.GroupRequestRecord{}, inspection.GroupRequestRecord{}); !errors.Is(err, context.Canceled) {

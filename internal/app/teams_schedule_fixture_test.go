@@ -49,6 +49,7 @@ type teamsScheduleFixture struct {
 func newTeamsScheduleFixture(t *testing.T) *teamsScheduleFixture {
 	t.Helper()
 	a := scheduleCreateArgs(t)
+	a.Root = supervisorfixture.CanonicalTempDir(t)
 	a.Auto, a.ScheduleID, a.ScheduleTimezone, a.ScheduleTimezoneSet = false, scheduleTestID, "UTC", true
 	a.TeamScope, a.TeamID, a.MemberID = "user", "review", "primary"
 	state, err := taskdir.InitStore(a.Root)
@@ -156,9 +157,10 @@ func (f *teamsScheduleFixture) reopen(t *testing.T) {
 }
 
 func (f *teamsScheduleFixture) tasks() schedulerTasks {
+	deps := f.deps.normalized()
 	return schedulerTasks{
 		root: f.state.Root, rootID: f.state.RootID,
-		arguments: Arguments{Runner: f.deps.RunnerExecutable, PueueConfig: f.pueueConfig}, dependencies: f.deps.normalized(),
+		arguments: Arguments{Runner: f.deps.RunnerExecutable, PueueConfig: f.pueueConfig}, dependencies: deps, routing: deps.infrastructureRouting(),
 	}
 }
 
@@ -174,6 +176,7 @@ func (f *teamsScheduleFixture) persistTasks(t *testing.T) {
 	deps := f.deps
 	deps.InitialSupervisorExecutable, deps.SupervisorOptions, deps.Environment = client.Binding().ClientExecutable, options, options.Environment
 	deps.SupervisorOptions.WaitForPendingClose, deps.PublisherVersion = true, "teams-schedule-test"
+	deps.SupervisorOptions.ControlOwnerExecutable = canonicalAppTestExecutable(t)
 	paths := supervisorfixture.CanonicalTempDir(t)
 	deps.RunnerExecutable = filepath.Join(paths, "runner")
 	writeRunnerFixture(t, deps.RunnerExecutable, "#!/bin/sh\nexit 98\n")

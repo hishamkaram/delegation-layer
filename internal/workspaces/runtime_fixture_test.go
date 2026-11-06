@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -23,6 +24,6 @@ func (unavailableOperationRuntime) PrepareManaged(context.Context, *taskdir.Stor
 	return "", nil, errOperationFixtureRuntimeUnavailable
 }
 
-func (unavailableOperationRuntime) OpenSaved(context.Context, string, task.SupervisorRef) (*pueue.Client, error) {
+func (unavailableOperationRuntime) OpenSaved(context.Context, *taskdir.Store, task.SupervisorRef, infrastructure.SavedBindingSource) (*pueue.Client, error) {
 	return nil, errOperationFixtureRuntimeUnavailable
 }

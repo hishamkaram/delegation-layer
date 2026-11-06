@@ -60,7 +60,7 @@ func assertWorkspaceStagedCommand(t *testing.T, fake *fakeSupervisor, launch Lau
 	if separator < 0 || !slices.Equal(adds[0][separator+1:], expected) {
 		t.Fatalf("workspace runner mode lost in staged add: %+v", adds[0])
 	}
-	if got := stagedInspectionCommand(launch, identity); got != escapedCommand(expected...) {
+	if got := escapedCommand(inspectionWorkerArguments(launch, identity)...); got != escapedCommand(expected...) {
 		t.Fatalf("staged reconciliation expects a different command: %q", got)
 	}
 }

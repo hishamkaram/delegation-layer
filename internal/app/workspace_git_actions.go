@@ -24,7 +24,7 @@ func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, op
 	if environment == nil {
 		return candidate, fmt.Errorf("%w: workspace worker launch environment was not captured", task.ErrEvidenceFault)
 	}
-	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}, Environment: slices.Clone(environment)}
+	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope, environment: slices.Clone(environment)}, Environment: slices.Clone(environment)}
 	// Ordinary checkpoints and removals have no workspace resource to load.
 	if request.Kind == workspace.OperationCheckpoint || request.Kind == workspace.OperationCheckpointRemove {
 		return candidate, runCheckpointAction(scope.Context(), store, operation, git)

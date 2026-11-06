@@ -50,7 +50,7 @@ func newNativePrivateSupervisorFixture(t *testing.T) nativePrivateSupervisorFixt
 // a test may remove the PID record before cleanup runs.
 func (fixture nativePrivateSupervisorFixture) bind(t *testing.T) (*Client, error) {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{ObservationTimeout: nativePrivateObservationTimeout})
+	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: nativePrivateObservationTimeout})
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +222,7 @@ func TestPrivateSupervisorNativeEndpointObservations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := NewClient(direct.Binding(), Options{ObservationTimeout: nativePrivateObservationTimeout, ControlOwnerExecutable: os.Args[0]})
+	owner, err := NewClient(direct.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: nativePrivateObservationTimeout, ControlOwnerExecutable: os.Args[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,9 +311,11 @@ func (fixture nativePrivateSupervisorFixture) labelQueryClient(t *testing.T, pat
 		t.Fatal(err)
 	}
 	options := Options{
-		ObservationTimeout: nativePrivateObservationTimeout,
-		Environment:        []string{"PATH=/usr/bin:/bin", "LANG=C"},
-		Observer:           recorder.observe,
+		PrivateGenerationGuard: allowPrivateGenerationForTest{},
+		DaemonStartGuard:       allowDaemonStartForTest{},
+		ObservationTimeout:     nativePrivateObservationTimeout,
+		Environment:            []string{"PATH=/usr/bin:/bin", "LANG=C"},
+		Observer:               recorder.observe,
 	}
 	if path == "owner" {
 		options.ControlOwnerExecutable = os.Args[0]
@@ -343,8 +345,9 @@ func (fixture nativePrivateSupervisorFixture) labelQueryClient(t *testing.T, pat
 	return client
 }
 
-// addNativeStashedRow adds one stashed row through the canonical staged add
-// under the supervisor and queue identity leases. The row is never enqueued.
+// addNativeStashedRow sets up foreign, never-enqueued rows for label queries.
+// It preserves the selected command owner and CLI I/O without claiming
+// Delegate admission or adding an admission role.
 func addNativeStashedRow(ctx context.Context, t *testing.T, client *Client, label string) int64 {
 	t.Helper()
 	var id int64
@@ -425,7 +428,7 @@ func TestPrivateSupervisorNativeLabelQuery(t *testing.T) {
 			recorder := &nativeCommandRecorder{}
 			client := fixture.labelQueryClient(t, path, recorder)
 			binding := client.Binding()
-			t.Logf("%s binding: version=%s client_sha256=%s daemon_sha256=%s", path, binding.ObservedVersion, binding.ClientSHA256, binding.DaemonSHA256)
+			t.Logf("%s binding: version=%s executable_identity=%s client=%s daemon=%s", path, binding.ObservedVersion, binding.ExecutableIdentity, binding.ClientExecutable, binding.DaemonExecutable)
 			ctx, cancel := context.WithTimeout(context.Background(), nativeLabelQueryTimeout)
 			defer cancel()
 
@@ -471,27 +474,28 @@ func assertForeignRowAtSavedID(ctx context.Context, t *testing.T, client *Client
 	if index < 0 || unfiltered.Jobs[index].Label == nil || *unfiltered.Jobs[index].Label != foreign || unfiltered.Jobs[index].State != StateStashed {
 		t.Fatalf("%s saved ID %d is not occupied by the stashed foreign row", path, savedID)
 	}
-	assertNativeCleanupKeepsRows(ctx, t, client, recorder, path, saved, existing[0], want)
+	assertNativeCleanupKeepsRows(ctx, t, client, path, want)
 }
 
-// assertNativeCleanupKeepsRows runs the canonical completed-task cleanup
-// attempt against real Pueue. The saved identity whose label has no row is a
-// clean logical absence; the known stashed row is not ended and stays unknown.
-// Neither attempt removes a row or issues an unfiltered status scan.
-func assertNativeCleanupKeepsRows(ctx context.Context, t *testing.T, client *Client, recorder *nativeCommandRecorder, path string, saved Identity, known int64, want []int64) {
+// assertNativeCleanupKeepsRows runs the live maintenance path against the
+// native queue. Its duplicate and foreign rows are all stashed, so the real
+// terminal-only test policy grants no removal authority.
+func assertNativeCleanupKeepsRows(ctx context.Context, t *testing.T, client *Client, path string, want []int64) {
 	t.Helper()
-	saved.SpecSHA256, saved.MetaSHA256 = strings.Repeat("c", 64), strings.Repeat("d", 64)
-	disposition, err := client.AttemptCompletedTaskCleanup(ctx, saved)
-	argv, exitCode := recorder.lastStatus(t)
-	t.Logf("%s cleanup of saved ID %d: disposition=%d err=%v argv=%q exit=%d", path, *saved.NumericTaskID, disposition, err, argv, exitCode)
-	if disposition != CompletedTaskLogicalLabelAbsent || err != nil || !slices.Equal(argv, []string{"status", "--json", "label=" + saved.Label()}) {
-		t.Fatalf("%s cleanup of an absent label = %d, %v from %q", path, disposition, err, argv)
+	worker, err := client.WithObservationTimeout(nativePrivateObservationTimeout)
+	if err != nil {
+		t.Fatal(err)
 	}
-	identity := Identity{RootID: strings.Repeat("a", 32), TaskID: strings.Repeat("1", 32), SpecSHA256: saved.SpecSHA256, MetaSHA256: saved.MetaSHA256, NumericTaskID: &known}
-	disposition, err = client.AttemptCompletedTaskCleanup(ctx, identity)
-	t.Logf("%s cleanup of duplicated stashed label: disposition=%d unknown=%t", path, disposition, errors.Is(err, ErrUnknown))
-	if disposition != 0 || !errors.Is(err, ErrUnknown) {
-		t.Fatalf("%s cleanup of a duplicated stashed label = %d, %v", path, disposition, err)
+	worker.options.SuccessfulCleanupAuthorizer = allowSuccessfulCleanupForTest
+	var removals int
+	worker.options.Observer = func(event CommandEvent) {
+		if event.Stage == "entry" && slices.Contains(event.Argv, "remove") {
+			removals++
+		}
+	}
+	startPrivateMaintenancePassContext(t, ctx, worker, func() {}).requireCompleted(t)
+	if removals != 0 {
+		t.Fatalf("%s cleanup attempted %d removals of stashed rows", path, removals)
 	}
 	if got := nativeJobIDs(nativeStatusQuery(ctx, t, client)); !slices.Equal(got, want) {
 		t.Fatalf("%s cleanup changed the queue: IDs %v, want %v", path, got, want)

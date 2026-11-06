@@ -30,6 +30,24 @@ func (facts privateGenerationFacts) publishedReady(binding task.SupervisorRef) (
 	return facts.publishedFound && task.SameSupervisorIdentity(facts.published, binding), facts.publishedErr
 }
 
+// runtimeRefused is an early positive-mismatch observation, not admission
+// authority. Required read faults survive even when a missing or unsettled
+// dependency prevents publishedReady from reaching them. Alias/migration
+// policy remains with its existing retirement and submission owners.
+func (facts privateGenerationFacts) runtimeRefused(runtime task.SupervisorRef) (bool, error) {
+	if err := errors.Join(facts.publishedErr, facts.identityErr, facts.transitionErr, facts.identityPublicationReadErr); err != nil {
+		return false, err
+	}
+	ready, err := facts.publishedReady(facts.published)
+	if err != nil {
+		return false, err
+	}
+	if ready {
+		return !task.SameSupervisorIdentity(facts.published, runtime), nil
+	}
+	return facts.settled && facts.identityFound && facts.publishedFound, nil
+}
+
 func (facts privateGenerationFacts) complete(binding task.SupervisorRef, allowRecoveryAlias bool) (bool, error) {
 	if facts.migrationErr != nil || facts.migrationPresent {
 		return false, facts.migrationErr
@@ -68,7 +86,7 @@ func (facts privateGenerationFacts) phaseFor(binding task.SupervisorRef, purpose
 	if err != nil || !ready || !privateFullGenerationMatches(facts.published, binding) {
 		return privateGenerationUnavailable, err
 	}
-	if facts.migrationPresent && (!privateMigrationMayRetarget(facts.migration) || !privateDaemonIdentityMatchesBinding(facts.migration.Legacy, binding)) {
+	if facts.migrationPresent && (!privateMigrationPrepared(facts.migration) || !privateDaemonIdentityMatchesBinding(facts.migration.Legacy, binding)) {
 		return privateGenerationUnavailable, nil
 	}
 	aliasMatches, aliasErr := facts.observableAliasMatches(binding, purpose)

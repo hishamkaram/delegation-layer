@@ -209,7 +209,7 @@ func TestInspectionGraceUsesDurableProofAfterQueueRemoval(t *testing.T) {
 	writeInspectionPollTestNoMatchStatus(t, filepath.Join(filepath.Dir(logPath), "status.json"), operation)
 	client := newInspectionPollTestClient(t, bound, logPath, nil)
 
-	facts, err := awaitCompletedInspectionObservation(operation, client, inspection.ErrAdmissionExpired)
+	facts, err := awaitCompletedInspectionObservation(t.Context(), operation, client, inspection.ErrAdmissionExpired)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("grace observation ignored durable proof: facts=%s err=%v", facts, err)
 	}

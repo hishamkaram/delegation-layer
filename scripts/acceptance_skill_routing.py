@@ -457,13 +457,6 @@ def routing_hook_arguments(harness, workspace):
     return args
 
 
-def executable_digest(path):
-    try:
-        return digest(path) if path.is_file() else None
-    except OSError:
-        return None
-
-
 def _candidate_environment(run, ownership, env, delegate_bin, *, state_root, explicit_root) -> Path:
     # Resolve once, BEFORE PATH contains our shim. Programmatic callers must
     # meet the same isolation boundary as callers supplying --delegate-bin.
@@ -531,7 +524,7 @@ def _prepare_routing_fixture(run, owner, case, delegate_bin, *, state_root, owne
         (private_path / name).symlink_to(Path(path).resolve())
     write_json(fixture / "runtime.json", {
         "delegate": str(delegate_bin), "path": str(private_path),
-        "delegate_sha256": digest(delegate_bin), "state_root": str(state_root),
+        "state_root": str(state_root),
         "case": case["name"],
         "scenario": case.get("fixture_scenario"),
         "provider": case.get("provider") if isinstance(case.get("provider"), str) else None,
@@ -636,7 +629,6 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
         if delegate_bin is not None:
             delegate_bin = Path(delegate_bin).resolve()
             receipt["delegate_executable"] = str(delegate_bin)
-            receipt["delegate_sha256"] = executable_digest(delegate_bin)
     except BaseException:
         ownership.rollback()
         raise
@@ -648,7 +640,7 @@ def run_case(*, output, harness, model, case, repetition, mode="live", budget=18
             return receipt
         delegate_bin = _candidate_environment(run, ownership, env, delegate_bin,
             state_root=state, explicit_root=case.get("root_mode") == "explicit")
-        receipt.update(delegate_executable=str(delegate_bin), delegate_sha256=executable_digest(delegate_bin))
+        receipt.update(delegate_executable=str(delegate_bin))
         executable = shutil.which(harness)
         if not executable:
             raise FileNotFoundError("initiating harness missing")
@@ -697,8 +689,8 @@ def summarize(*, output, cases, repetitions, harness, mode="live", model=None, b
                         or receipt.get("mode") != mode or receipt.get("model_requested") != model
                         or receipt.get("routing_context", False) != routing_context
                         or receipt.get("fixture_scenario") != (case.get("fixture_scenario") if mode == "routing" else None)
-                        or (delegate_bin is not None and (receipt.get("delegate_executable") != str(Path(delegate_bin).resolve())
-                            or receipt.get("delegate_sha256") != executable_digest(Path(delegate_bin))))
+                        or (delegate_bin is not None
+                            and receipt.get("delegate_executable") != str(Path(delegate_bin).resolve()))
                         or receipt.get("candidate") != candidate_digests()
                         or receipt.get("budget_seconds") != budget):
                     raise ValueError(f"receipt selection mismatch: {run}")

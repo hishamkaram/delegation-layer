@@ -2,11 +2,14 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol, TypedDict, TYPE_CHECKING
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capture import run_captured_text_command
+from scripts.delegate_acceptance.private_cli import commands
+from scripts.delegate_acceptance.evidence.files import path_present
+from scripts.delegate_acceptance.evidence.validation import require, _hex_digest, _task_identity
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_DISPATCH_WORKERS
 from scripts.delegate_acceptance.private_cli.environment import phase_environment
 from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition_until
@@ -21,12 +24,18 @@ import stat
 import threading
 import time
 
+if TYPE_CHECKING:
+    from scripts.delegate_acceptance.private_cli.fixture_lifetime import ClosedRoot, SupervisorCleanup
 
-def pueue_snapshot(client, config, env, metrics=None, phase=None, *, capture_root):
+
+def pueue_snapshot(client, config, env, metrics=None, phase=None, *, capture_root, deadline=None):
     command_env = phase_environment(env, phase) if phase is not None else env
-    result = run_captured_text_command(
-        [str(client), "--config", str(config), "status", "--json"], command_env, 10, capture_root=capture_root
-    )
+    command = [str(client), "--config", str(config), "status", "--json"]
+    if deadline is None:
+        result = run_captured_text_command(command, command_env, 10, capture_root=capture_root)
+    else:
+        result = run_captured_text_command(command, command_env, None, capture_root=capture_root,
+                                           deadline=min(deadline, time.monotonic() + 10))
     if result.returncode != 0:
         raise RuntimeError("isolated pueue status failed: " + result.stderr[-1000:])
     if metrics is not None:
@@ -294,17 +303,23 @@ def authorize_managed_lifetime_closure(state, task_ids=()):
     return validate_managed_lifetime_closure(Path(state), task_ids)
 
 
+def read_managed_closure(state, task_ids, reader=None):
+    """Use the explicitly bound canonical reader; default consumers stay strict."""
+    return (authorize_managed_lifetime_closure(state, task_ids) if reader is None
+            else reader(Path(state), tuple(task_ids)))
+
+
 def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
     """Wait for naturally exiting managed workers before supervisor shutdown."""
     return await_managed_lifetime_closure_until(state, task_ids, time.monotonic() + timeout)
 
 
-def await_managed_lifetime_closure_until(state, task_ids, deadline):
+def await_managed_lifetime_closure_until(state, task_ids, deadline, *, reader=None):
     """Wait for the canonical closure until one caller-owned monotonic deadline."""
     last_error = None
     while True:
         try:
-            return authorize_managed_lifetime_closure(state, task_ids)
+            return read_managed_closure(state, task_ids, reader)
         except AcceptanceFailure as error:
             last_error = error
         if time.monotonic() >= deadline:
@@ -342,14 +357,14 @@ def require_custody_release_budget(pending, deadline):
                            + describe_pending_custody(pending))
 
 
-def disposal_ready_now(state, task_ids, owned_roots):
+def disposal_ready_now(state, task_ids, owned_roots, *, reader=None):
     """Return the closure when it validates and its recorded pools hold no views; otherwise None.
 
     Only an incomplete closure reads as not ready. A concrete pool identity or
     storage fault raises, so the caller retains instead of observing.
     """
     try:
-        closure = authorize_managed_lifetime_closure(state, task_ids)
+        closure = read_managed_closure(state, task_ids, reader)
     except AcceptanceFailure:
         return None
     return None if custody_release_pending(closure, owned_roots) else closure
@@ -386,7 +401,7 @@ def sweep_disposal_observer(task_ids, deadline, observe):
             raise
 
 
-def await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe):
+def await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe, *, reader=None):
     """Outside every lease, await closure and custody release with at most one public observer sweep.
 
     Already-ready scopes run no observation. Otherwise one sweep of the
@@ -394,18 +409,18 @@ def await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, ob
     next-observer turn; the canonical closure and recorded pools are then
     reread under the same deadline. The observer outcome is never authority.
     """
-    closure = disposal_ready_now(state, task_ids, owned_roots)
+    closure = disposal_ready_now(state, task_ids, owned_roots, reader=reader)
     if closure is not None:
         return closure
     observed_roots = sweep_disposal_observer(tuple(task_ids), deadline, observe)
-    closure = await_managed_lifetime_closure_until(state, task_ids, deadline)
+    closure = await_managed_lifetime_closure_until(state, task_ids, deadline, reader=reader)
     if not observed_roots <= {closure["root_id"]}:
         raise RuntimeError("disposal status observation reported a different root than the canonical closure")
     await_custody_release(closure, owned_roots, deadline)
     return closure
 
 
-def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, observe=None, *, disposal=None):
+def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, observe=None, *, disposal=None, reader=None):
     """Run action(closure) under the transition lease once closure and custody release hold.
 
     Closure is authorized and custody release awaited outside the lease, then
@@ -421,23 +436,23 @@ def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, obse
     root is released first, while other roots the owner already shut down stay
     held.
     """
-    if disposal is not None and disposal.holds(state) and disposal_ready_now(state, task_ids, owned_roots) is None:
+    if disposal is not None and disposal.holds(state) and disposal_ready_now(state, task_ids, owned_roots, reader=reader) is None:
         disposal.release(state)
     if observe is None:
-        closure = authorize_managed_lifetime_closure(state, task_ids)
+        closure = read_managed_closure(state, task_ids, reader)
         await_custody_release(closure, owned_roots, deadline)
     else:
-        closure = await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe)
+        closure = await_observed_disposal_readiness(state, task_ids, owned_roots, deadline, observe, reader=reader)
     while True:
         if disposal is None:
             with private_fixture_transition_until(Path(state), deadline):
-                closure = authorize_managed_lifetime_closure(state, task_ids)
+                closure = read_managed_closure(state, task_ids, reader)
                 pending = custody_release_pending(closure, owned_roots)
                 if not pending:
                     return action(closure)
         else:
             disposal.hold(Path(state), deadline)
-            closure = authorize_managed_lifetime_closure(state, task_ids)
+            closure = read_managed_closure(state, task_ids, reader)
             pending = custody_release_pending(closure, owned_roots)
             if not pending:
                 return action(closure)
@@ -446,7 +461,7 @@ def run_when_disposal_ready(state, task_ids, owned_roots, deadline, action, obse
         await_custody_release(closure, owned_roots, deadline)
 
 
-def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root, disposal=None):
+def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root, disposal=None, reader=None):
     """Authorize closure and custody release, then shut down and observe PID and endpoint disappearance.
 
     The caller must not hold the transition lease. Returns the closure that
@@ -455,12 +470,12 @@ def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_
     """
     return shutdown_observed_private_supervisor(
         client, config, env, timeout, state=state, task_ids=task_ids, capture_root=capture_root, observe=None,
-        disposal=disposal,
+        disposal=disposal, reader=reader,
     )
 
 
 def shutdown_observed_private_supervisor(
-    client, config, env, timeout=30, *, state, task_ids, capture_root, observe, disposal=None
+    client, config, env, timeout=30, *, state, task_ids, capture_root, observe, disposal=None, reader=None
 ):
     """Run shutdown_private_supervisor with an optional caller-bound public observer of ``task_ids``.
 
@@ -477,28 +492,192 @@ def shutdown_observed_private_supervisor(
         return closure
 
     return run_when_disposal_ready(
-        state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down, observe, disposal=disposal
+        state, task_ids, shutdown_custody_roots(state, env), deadline, shut_down, observe, disposal=disposal, reader=reader
     )
 
 
-def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root, disposal=None):
-    """Shut down one ordinary supervisor ledger entry, then drop it from the ledger.
+class SelectedOwnerProcess(TypedDict):
+    pid: int
+    start_token: str
 
-    Returns the authorizing closure, or None while the entry's config does not
-    exist: the entry stays pending because absence alone proves no daemon closure.
-    A failed shutdown raises and keeps the entry.
-    """
-    if not pending["config"].is_file():
+
+class SelectedOwnerStartup(TypedDict):
+    sequence: int
+    epoch: str
+    intent_sha256: str
+
+
+class SelectedOwnerSubject(TypedDict):
+    startup: SelectedOwnerStartup
+    process: SelectedOwnerProcess
+
+
+def selected_owner_subject(response, root_id, config, *, allow_legacy_daemon=False) -> SelectedOwnerSubject | None:
+    """Validate one public stop result; serving release alone never proves process exit."""
+    require(isinstance(response, dict) and not response.get("error") and response.get("root_id") == root_id,
+            "owner stop failed or changed the selected root")
+    owner = response.get("supervisor_owner")
+    require(isinstance(owner, dict) and owner.get("action") == "stop-owner", "owner stop omitted its result")
+    if owner.get("state") == "not_initialized":
+        require(allow_legacy_daemon or not path_present(config),
+                "owner not initialized but private daemon config remains; retain root")
         return None
-    closure = shutdown_private_supervisor(
-        pending["client"],
-        pending["config"],
-        pending["env"],
-        state=pending["state"],
-        task_ids=tuple(pending.get("task_ids", ())),
-        capture_root=capture_root,
-        disposal=disposal,
-    )
+    require(owner.get("state") == "serving_released",
+            "selected owner serving release was not proven: " + str(owner.get("state")))
+    startup = owner.get("startup")
+    if not isinstance(startup, dict):
+        raise AcceptanceFailure("owner stop omitted its validated startup identity")
+    sequence, epoch, intent = startup.get("sequence"), startup.get("epoch"), startup.get("intent_sha256")
+    if not (type(sequence) is int and sequence > 0 and isinstance(epoch, str) and _task_identity(epoch)
+            and isinstance(intent, str) and _hex_digest(intent)):
+        raise AcceptanceFailure("owner stop omitted its validated startup identity")
+    process = owner.get("process")
+    if not isinstance(process, dict):
+        raise AcceptanceFailure("owner stop omitted its selected process identity")
+    pid, start_token = process.get("pid"), process.get("start_token")
+    if not (type(pid) is int and pid > 0 and isinstance(start_token, str) and start_token and "\x00" not in start_token):
+        raise AcceptanceFailure("owner stop omitted its selected process identity")
+    return {"startup": {"sequence": sequence, "epoch": epoch, "intent_sha256": intent},
+            "process": {"pid": pid, "start_token": start_token}}
+
+
+def close_private_root(pending: "SupervisorCleanup", *, capture_root, disposal, deadline,
+                       stop_owner: Callable[[float], dict[str, object]],
+                       owner_absent: Callable[[SelectedOwnerProcess, float], None], reader=None,
+                       observe=None, allow_legacy_daemon=False):
+    """Close the original selected owner and daemon owned by this terminal entry.
+
+    The caller stops further admission. The entry records its first validated
+    owner before daemon I/O and never reselects it, including after a successor
+    appears. An absent key is unattempted; unresolved preserves an uncertain
+    stop attempt, and a present None records validated legacy absence.
+    Completed root closure belongs to the finalizer's existing closed_roots.
+    """
+    selected = pending.get("owner")
+    if isinstance(selected, str):
+        raise AcceptanceFailure("stop outcome unknown for terminal root " + str(pending["state"]) + "; retain original owner obligation")
+    state, task_ids = pending["state"], tuple(pending["task_ids"])
+    config, env = pending["config"], pending["env"]
+    owned_roots = shutdown_custody_roots(state, env)
+    if disposal is not None and disposal.holds(state) and (
+            "owner" not in pending or disposal_ready_now(state, task_ids, owned_roots, reader=reader) is None):
+        disposal.release(state)
+    if observe is None or "owner" in pending:
+        closure = read_managed_closure(state, task_ids, reader)
+        await_custody_release(closure, owned_roots, deadline)
+    else:
+        closure = await_observed_disposal_readiness(
+            state, task_ids, owned_roots, deadline, observe, reader=reader)
+    root_id = closure.get("root_id")
+    if not isinstance(root_id, str) or not _task_identity(root_id):
+        raise AcceptanceFailure("terminal root cleanup omitted its canonical root identity")
+    if "owner" not in pending:
+        pending["root_id"] = root_id
+        pending["owner"] = "unresolved"
+        selected = selected_owner_subject(stop_owner(deadline), root_id, config,
+                                           allow_legacy_daemon=allow_legacy_daemon)
+        pending["owner"] = selected
+    require(pending.get("root_id") == root_id, "terminal cleanup changed its originally selected root")
+    if path_present(config) or "daemon" in pending:
+        closure = shutdown_terminal_daemon(pending, deadline, capture_root=capture_root,
+                                           disposal=disposal, reader=reader)
+    if selected is not None:
+        owner_absent(selected["process"], deadline)
+    if disposal is not None and path_present(Path(state) / ".supervisor"):
+        disposal.hold(state, deadline)
+    return closure
+
+
+def shutdown_terminal_daemon(pending: "SupervisorCleanup", deadline, *, capture_root, disposal, reader):
+    """Retain native daemon identity, then close or passively reobserve it under the same lease."""
+    shutdown_remaining(deadline)
+
+    def shut_down(closure):
+        require(closure.get("root_id") == pending["root_id"],
+                "terminal daemon closure changed its originally selected root")
+        retained = "daemon" in pending
+        if not retained:
+            pending["daemon"] = private_shutdown_evidence(pending["config"])
+        evidence = pending["daemon"]
+        if not (retained and private_shutdown_closed(evidence, deadline, capture_root=capture_root)):
+            shutdown_observed_supervisor(pending["client"], pending["config"], pending["env"], evidence,
+                                         deadline, capture_root=capture_root)
+        return closure
+
+    return run_when_disposal_ready(
+        pending["state"], tuple(pending["task_ids"]), shutdown_custody_roots(pending["state"], pending["env"]),
+        deadline, shut_down, disposal=disposal, reader=reader)
+
+
+def await_private_owner_absence(process: SelectedOwnerProcess, deadline: float, *, capture_root) -> None:
+    """Conservatively observe this validated PID only; reuse and zombies cannot prove absence."""
+    while True:
+        shutdown_remaining(deadline)
+        if private_daemon_process_gone(process["pid"], deadline, capture_root=capture_root):
+            return
+        time.sleep(min(0.02, shutdown_remaining(deadline)))
+
+
+def terminal_cleanup_evidence(pending: "SupervisorCleanup") -> dict[str, object]:
+    """Project only owned resource identities; never expose the control environment."""
+    record: dict[str, object] = {"state": str(pending["state"]), "config": str(pending["config"])}
+    if "root_id" in pending:
+        record["root_id"] = pending["root_id"]
+    if "owner" in pending:
+        record["owner"] = pending["owner"]
+    if "daemon" in pending:
+        pid, endpoint, identity = pending["daemon"]
+        record["daemon"] = {"pid": pid, "endpoint": str(endpoint), "socket_identity": list(identity)}
+    return record
+
+
+def register_terminal_private_root(supervisor_cleanups, delegate, client, config, env, *, state, task_ids) -> "SupervisorCleanup":
+    """Keep a terminal root's partial selection in the existing ordinary cleanup ledger."""
+    for pending in supervisor_cleanups:
+        if "predecessor" not in pending and pending["state"] == state:
+            require(pending.get("delegate") == delegate, "terminal cleanup changed its selected installed Delegate")
+            return pending
+    pending: SupervisorCleanup = {"delegate": delegate, "client": client, "config": config, "env": env,
+                                  "state": state, "task_ids": list(task_ids)}
+    supervisor_cleanups.append(pending)
+    return pending
+
+
+def shutdown_terminal_private_supervisor(delegate, client, config, env, timeout=30, *, state, task_ids=(),
+                                         capture_root, supervisor_cleanups, disposal=None, reader=None, deadline=None,
+                                         observe=None, closed_roots: "dict[Path, ClosedRoot | None] | None" = None):
+    """Register terminal ownership before any I/O, then use the one ordinary-entry closer."""
+    pending = register_terminal_private_root(supervisor_cleanups, delegate, client, config, env,
+                                             state=state, task_ids=task_ids)
+    if deadline is None:
+        deadline = time.monotonic() + timeout
+    return shutdown_pending_private_supervisor(
+        pending, supervisor_cleanups, capture_root=capture_root, disposal=disposal, reader=reader,
+        deadline=deadline, observe=observe, closed_roots=closed_roots)
+
+
+def shutdown_pending_private_supervisor(pending: "SupervisorCleanup", supervisor_cleanups, *, capture_root,
+                                        disposal=None, reader=None, deadline=None, observe=None,
+                                        closed_roots: "dict[Path, ClosedRoot | None] | None" = None):
+    """Drop an ordinary entry only after its daemon and original selected owner both close."""
+    delegate = pending.get("delegate")
+    if delegate is None:
+        raise RuntimeError("terminal root cleanup has no selected installed Delegate")
+    if deadline is None:
+        deadline = time.monotonic() + 30
+    state, env = pending["state"], pending["env"]
+    closure = close_private_root(
+        pending, capture_root=capture_root, disposal=disposal, deadline=deadline, reader=reader,
+        observe=observe, allow_legacy_daemon=True,
+        stop_owner=lambda until: commands.run_json(
+            delegate, env, ["--root", str(state), "supervisor", "stop-owner", "--json"], expected=(0, 1, 3),
+            timeout=None, deadline=until, capture_root=capture_root, phase="supervisor-owner-shutdown"),
+        owner_absent=lambda process, until: await_private_owner_absence(process, until, capture_root=capture_root))
+    if closed_roots is not None:
+        if disposal is None:
+            raise AcceptanceFailure("terminal root closure requires the finalizer disposal owner")
+        closed_roots[Path(state)] = ({"closure": closure, "disposal": disposal.require_held(state)}
+                                     if disposal.holds(state) else None)
     supervisor_cleanups.remove(pending)
     return closure
 
@@ -507,11 +686,18 @@ PREDECESSOR_SHUT_DOWN = "shut_down"
 PREDECESSOR_ALREADY_CLOSED = "already_closed"
 
 
+def private_shutdown_closed(evidence, deadline, *, capture_root):
+    """Observe only the captured PID and native endpoint; missing metadata grants nothing."""
+    pid, endpoint, identity = evidence
+    return private_daemon_process_gone(
+        pid, deadline, capture_root=capture_root
+    ) and private_shutdown_endpoint_closed(endpoint, identity, deadline)
+
+
 def predecessor_closed(target, deadline, *, capture_root):
     """Observe that the captured PID exited and the captured endpoint closed; send nothing."""
-    return private_daemon_process_gone(
-        target.pid, deadline, capture_root=capture_root
-    ) and private_shutdown_endpoint_closed(target.endpoint, target.socket_identity, deadline)
+    return private_shutdown_closed((target.pid, target.endpoint, target.socket_identity), deadline,
+                                    capture_root=capture_root)
 
 
 def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids=(), capture_root, disposal=None):

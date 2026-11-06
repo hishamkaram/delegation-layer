@@ -5,8 +5,6 @@
 package inspectionfixture
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -45,12 +43,11 @@ var (
 	ErrHelperOutput  = errors.New("inspection fixture helper output unavailable")
 )
 
-// Config is the sibling inspection-fixture.json record. All paths and
-// digests are authenticated before a candidate is returned.
+// Config is the sibling inspection-fixture.json record. Configuration digests
+// and executable metadata are validated before a candidate is returned.
 type Config struct {
 	SchemaVersion      int      `json:"schema_version"`
 	HelperExecutable   string   `json:"helper_executable"`
-	HelperSHA256       string   `json:"helper_sha256"`
 	HelperConfig       string   `json:"helper_config"`
 	HelperConfigSHA256 string   `json:"helper_config_sha256"`
 	Environment        []string `json:"environment"`
@@ -82,7 +79,7 @@ type loadedHelperConfig struct {
 }
 
 func loadConfig(path string) (loadedConfig, error) {
-	data, err := readCanonicalRegular(path, task.MaxControlRecordSize, false)
+	data, err := readCanonicalRegular(path, task.MaxControlRecordSize)
 	if err != nil {
 		return loadedConfig{}, ErrInvalidConfig
 	}
@@ -114,7 +111,7 @@ func LoadConfig(path string) (Config, error) {
 }
 
 func loadHelperConfig(path string) (loadedHelperConfig, error) {
-	data, err := readCanonicalRegular(path, task.MaxControlRecordSize, false)
+	data, err := readCanonicalRegular(path, task.MaxControlRecordSize)
 	if err != nil {
 		return loadedHelperConfig{}, ErrInvalidHelper
 	}
@@ -139,7 +136,7 @@ func LoadHelperConfig(path string) (HelperConfig, error) {
 }
 
 func validateConfig(cfg Config) error {
-	if cfg.SchemaVersion != SchemaVersion || task.ValidateSHA256(cfg.HelperSHA256) != nil || task.ValidateSHA256(cfg.HelperConfigSHA256) != nil {
+	if cfg.SchemaVersion != SchemaVersion || task.ValidateSHA256(cfg.HelperConfigSHA256) != nil {
 		return ErrInvalidConfig
 	}
 	if err := validateEnvironment(cfg.Environment); err != nil {
@@ -151,10 +148,7 @@ func validateConfig(cfg Config) error {
 	if err := validateExistingFile(cfg.HelperConfig, false); err != nil {
 		return err
 	}
-	digest, err := hashRegular(cfg.HelperExecutable)
-	if err != nil || digest != cfg.HelperSHA256 {
-		return ErrInvalidConfig
-	}
+
 	return nil
 }
 
@@ -236,8 +230,8 @@ func validateCleanAbsolute(path string) error {
 	return nil
 }
 
-func readCanonicalRegular(path string, limit int64, executable bool) ([]byte, error) {
-	if err := validateExistingFile(path, executable); err != nil {
+func readCanonicalRegular(path string, limit int64) ([]byte, error) {
+	if err := validateExistingFile(path, false); err != nil {
 		return nil, err
 	}
 	file, err := os.Open(path)
@@ -253,15 +247,6 @@ func readCanonicalRegular(path string, limit int64, executable bool) ([]byte, er
 		return nil, closeErr
 	}
 	return data, nil
-}
-
-func hashRegular(path string) (string, error) {
-	data, err := readCanonicalRegular(path, task.MaxControlRecordSize*64, false)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:]), nil
 }
 
 func writeAll(writer io.Writer, data []byte) error {

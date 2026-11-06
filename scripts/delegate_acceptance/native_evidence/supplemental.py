@@ -22,7 +22,6 @@ import platform
 import re
 from typing import Mapping, TypedDict
 
-from ..evidence.files import digest
 from ..native.constants import PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO
 from ..release_verification.contract import VerificationError
 from ..release_verification.source import observe_harness, source_seeds
@@ -44,7 +43,7 @@ from .proof import _cleanup_observation
 from .validation import validate_aggregate_receipt, validate_case_proof
 
 
-CANDIDATE_BINARIES = ("delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256")
+CANDIDATE_BINARIES = ("delegate", "delegate-run", "pueue", "pueued")
 # NativeTaskOps writes one attempt record per admitted command, named for that command.
 CONTINUE_ATTEMPT_NAME = "resume-continue-attempt.json"
 DISPATCH_ATTEMPT_NAME = "resume-dispatch-attempt.json"
@@ -137,32 +136,34 @@ def candidate_from_aggregate(receipt: Path, harness: Mapping[str, object], deleg
         task_ids.update(recorded_tasks)
         if case["status"] != "PASS":
             raise EvidenceError("canonical_aggregate_not_passed")
-        checksums = identities.get("sha256")
-        if identities["state"] != "complete" or not isinstance(checksums, dict):
+        paths = identities.get("paths")
+        if not isinstance(paths, dict) or set(paths) != set(CANDIDATE_BINARIES):
+            raise EvidenceError("canonical_candidate_selection_incomplete")
+        if identities["state"] != "complete":
             raise EvidenceError("canonical_candidate_binaries_incomplete")
-        hashes: dict[str, str] = {}
+        selected: dict[str, str] = {}
         for key in CANDIDATE_BINARIES:
-            checksum = checksums.get(key)
-            if not isinstance(checksum, str):
+            installed_path = paths.get(key)
+            if not isinstance(installed_path, str):
                 raise EvidenceError("canonical_candidate_binaries_incomplete")
-            hashes[key] = checksum
-        if binaries is not None and hashes != binaries:
+            selected[key] = installed_path
+        if binaries is not None and selected != binaries:
             raise EvidenceError("canonical_candidate_binaries_inconsistent")
-        binaries = hashes
+        binaries = selected
     if binaries is None:
         raise EvidenceError("canonical_candidate_binaries_unavailable")
-    if digest(delegate) != binaries["delegate_sha256"]:
+    if delegate.resolve(strict=True) != Path(binaries["delegate"]).resolve(strict=True):
         raise EvidenceError("candidate_delegate_mismatch")
     return Candidate(dict(harness), aggregate_sha256, binaries, frozenset(task_ids))
 
 
 def require_selected_binaries(candidate: Candidate, selected: Mapping[str, Path]) -> None:
-    """Refuse a run whose resolved runtime binaries are not the candidate's (``*_sha256`` keys)."""
+    """Refuse a run whose resolved installed paths are not the candidate selection."""
     if not set(selected) <= set(CANDIDATE_BINARIES):
         raise EvidenceError("candidate_binary_selection_invalid")
     for key, path in selected.items():
-        if digest(path) != candidate.binaries[key]:
-            raise EvidenceError("candidate_" + key.removesuffix("_sha256") + "_mismatch")
+        if path.resolve(strict=True) != Path(candidate.binaries[key]).resolve(strict=False):
+            raise EvidenceError("candidate_" + key + "_mismatch")
 
 
 def _require_producer_observations(source: dict[str, object], candidate: Candidate) -> None:
@@ -191,7 +192,7 @@ def _continue_attempt(directory: Path, tasks: dict[str, str]) -> str:
     attempt, data = _read_json(directory / CONTINUE_ATTEMPT_NAME, MAX_RECEIPT_BYTES)
     if not isinstance(attempt, dict):
         raise EvidenceError("supplemental_continue_binding_invalid")
-    response = attempt.get("response") if isinstance(attempt, dict) else None
+    response = attempt.get("response")
     if (not isinstance(response, dict) or attempt.get("task_id") != tasks["resume"]
             or response.get("command") != "continue" or response.get("admission") != "admitted"
             or response.get("task_id") != tasks["resume"]
@@ -230,12 +231,12 @@ def _validate_continue_case(root: Path, definition: CaseDefinition, candidate: C
     reference["binary_identities"] = observation.proof["binary_identities"]
     proof = validate_case_proof(reference, compact)
     binaries = proof["binary_identities"]
-    if not isinstance(binaries, dict) or not isinstance(binaries.get("sha256"), dict):
+    if not isinstance(binaries, dict) or not isinstance(binaries.get("paths"), dict):
         raise EvidenceError("supplemental_binary_mismatch")
     if proof["source_receipt_sha256"] != observation.source_digest:
         raise EvidenceError("supplemental_source_binding_invalid")
     if (binaries["task_ids"] != sorted(tasks.values())
-            or {key: binaries["sha256"].get(key) for key in CANDIDATE_BINARIES} != dict(candidate.binaries)):
+            or binaries.get("paths") != dict(candidate.binaries)):
         raise EvidenceError("supplemental_binary_mismatch")
     excluded.update(tasks.values())
     return {"case_id": definition.case_id, "command": "continue", "tasks": tasks,
@@ -276,7 +277,7 @@ def validate_pi_control(directory: Path, candidate: Candidate, excluded: set[str
     binding, binding_data = _read_json(directory / "binding.json", MAX_RECEIPT_BYTES)
     if (not isinstance(binding, dict) or binding.get("provider") != "pi:json"
             or binding.get("scenario") != PI_SESSION_MISS_SCENARIO
-            or {key: binding.get(key) for key in CANDIDATE_BINARIES} != dict(candidate.binaries)):
+            or binding.get("installed_executables") != dict(candidate.binaries)):
         raise EvidenceError("pi_control_binary_mismatch")
     cleanup_ok, _, cleanup_error = _cleanup_observation(directory, "PASS")
     if not cleanup_ok:

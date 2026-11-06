@@ -1,6 +1,7 @@
 package tasklifecycle
 
 import (
+	"context"
 	"errors"
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -8,6 +9,10 @@ import (
 )
 
 func LoadContinuationInput(root string, a DispatchRequest, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
+	return LoadContinuationInputContext(context.Background(), root, a, options)
+}
+
+func LoadContinuationInputContext(ctx context.Context, root string, a DispatchRequest, options DispatchOptions) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
 	store, err := options.openStore(root, false)
 	if err != nil {
 		return nil, nil, nil, err
@@ -21,7 +26,7 @@ func LoadContinuationInput(root string, a DispatchRequest, options DispatchOptio
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	ownership, err := supervisorcore.RunnerOwnershipForTask(root, td, meta)
+	ownership, err := supervisorcore.RunnerOwnershipForTaskContext(ctx, root, td, meta)
 	if err != nil {
 		return nil, nil, nil, err
 	}

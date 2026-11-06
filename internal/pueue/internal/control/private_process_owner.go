@@ -8,18 +8,20 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-func startDaemon(executable, expectedSHA256, configPath, base string, options Options) error {
-	digest, err := hashExecutable(executable)
-	if err != nil {
-		return fmt.Errorf("%w: verify private pueued identity before start: %w", ErrBinding, err)
+func startDaemon(ctx context.Context, operationRoot, executable, configPath, base string, options Options) error {
+	if err := refusePendingPrivateRestart(operationRoot); err != nil {
+		return err
 	}
-	if digest != expectedSHA256 {
-		return fmt.Errorf("%w: private pueued identity changed before start", ErrBinding)
+	selected, err := canonicalExecutable(executable)
+	if err != nil || selected != executable {
+		return errors.Join(ErrBinding, err)
 	}
 	cmd := exec.Command(executable, "-c", configPath)
 	cmd.Dir = base
@@ -29,18 +31,81 @@ func startDaemon(executable, expectedSHA256, configPath, base string, options Op
 	if err = configurePrivateDaemonCommand(cmd); err != nil {
 		return fmt.Errorf("%w: prepare private pueued launch: %w", ErrBinding, err)
 	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("%w: start private pueued: %w", ErrBinding, err)
+	done, guardErr := guardedDaemonStart(ctx, operationRoot, configPath, cmd, options.DaemonStartGuard)
+	if done == nil {
+		return guardErr
 	}
-	// The spawning process owns exactly one waiter. Release does not reap a
-	// Unix child; an unreaped daemon can keep migration waiting on a zombie.
-	// Waiting asynchronously preserves the daemon lifetime beyond this caller.
+	if options.DaemonWaitOwner != nil {
+		return errors.Join(guardErr, options.DaemonWaitOwner.RegisterDaemonWait(operationRoot, cmd.Process.Pid, done))
+	}
+	return guardErr
+}
+
+// guardedDaemonStart owns callback lifetime and the sole Wait after successful Start.
+func guardedDaemonStart(ctx context.Context, operationRoot, configPath string, cmd *exec.Cmd, guard DaemonStartGuard) (<-chan struct{}, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(operationRoot) || filepath.Clean(operationRoot) != operationRoot {
+		return nil, ErrConfiguration
+	}
+	if _, private := privateStateRoot(configPath); private && !IsPrivateConfig(operationRoot, configPath) {
+		return nil, ErrConfiguration
+	}
+	if filepath.Base(configPath) == privateRecoveryConfigName && configPath != privateRecoveryConfigPath(operationRoot) {
+		return nil, ErrConfiguration
+	}
+	if guard == nil {
+		return nil, ErrInfrastructureOwnerRequired
+	}
+	var mu sync.Mutex
+	called, active := false, true
+	var done <-chan struct{}
+	var startErr, contractErr error
+	start := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !active || called {
+			contractErr = ErrInfrastructureOwnerRequired
+			return ErrInfrastructureOwnerRequired
+		}
+		called = true
+		startErr = ctx.Err()
+		if startErr == nil {
+			if err := cmd.Start(); err != nil {
+				startErr = fmt.Errorf("%w: start private pueued: %w", ErrBinding, err)
+			} else {
+				// A guard may report a post-Start fault; it cannot delay reaping.
+				done = startDaemonWait(cmd)
+			}
+		}
+		return startErr
+	}
+	guardErr := guard.GuardDaemonStart(ctx, operationRoot, start)
+	mu.Lock()
+	defer mu.Unlock()
+	active = false
+	if !called {
+		return nil, errors.Join(guardErr, ErrInfrastructureOwnerRequired)
+	}
+	return done, errors.Join(guardErr, startErr, contractErr)
+}
+
+// Called immediately after successful Start, this owner launches the sole Wait.
+// Completion denotes Wait's return; diagnostic log I/O cannot delay it.
+func startDaemonWait(cmd *exec.Cmd) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Printf("private daemon exited: %v", err)
+		waitErr := cmd.Wait()
+		close(done)
+		if waitErr != nil {
+			log.Printf("private daemon exited: %v", waitErr)
 		}
 	}()
-	return nil
+	return done
 }
 
 func waitReady(ctx context.Context, client *Client, timeout time.Duration) error {
@@ -96,7 +161,7 @@ func (l *bootstrapLock) duplicateForControlOwner() (*os.File, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.file == nil {
+	if l.closed || l.retired || l.file == nil {
 		return nil, os.ErrClosed
 	}
 	duplicate, err := duplicateCloseOnExec(l.file, "delegate-supervisor-generation-lease")
@@ -162,31 +227,6 @@ func acquireSupervisorLockMode(ctx context.Context, path string, mode int, creat
 	}
 }
 
-func retainBootstrapLock(lock **bootstrapLock, pending []*Pending, report func(error)) {
-	if lock == nil || *lock == nil || len(pending) == 0 {
-		return
-	}
-	retained := *lock
-	*lock = nil
-	go func() {
-		for _, handle := range pending {
-			if handle != nil {
-				<-handle.Done()
-			}
-		}
-		if err := closeBootstrapLock(retained); err != nil && report != nil {
-			report(err)
-		}
-	}()
-}
-
-func finishPrivateBootstrap(lock **bootstrapLock, resultErr *error) {
-	retainBootstrapLock(lock, pendingHandles(*resultErr), func(err error) {
-		log.Printf("delegate: retained supervisor lock cleanup failed: %v", err)
-	})
-	*resultErr = errors.Join(*resultErr, closeBootstrapLock(*lock))
-}
-
 func closeBootstrapLock(lock *bootstrapLock) error {
 	if lock == nil || lock.file == nil {
 		return nil
@@ -196,13 +236,14 @@ func closeBootstrapLock(lock *bootstrapLock) error {
 	if lock.closed {
 		return nil
 	}
+	lock.retired = true
 	var unlockErr error
 	if !lock.transferred {
 		unlockErr = unix.Flock(int(lock.file.Fd()), unix.LOCK_UN)
 	}
 	closeErr := lock.file.Close()
-	if closeErr == nil {
-		lock.closed = true
-	}
+	// os.File.Close retires the Go handle even when native release reports an
+	// error. Preserve the fault; a second attempt cannot retry native custody.
+	lock.closed = true
 	return errors.Join(unlockErr, closeErr)
 }

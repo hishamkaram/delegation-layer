@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import subprocess
 import threading
 import time
 
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import SupervisorCleanup
 import scripts.delegate_acceptance.private_cli.root_cleanup as private_cli_root_cleanup
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
 from scripts.delegate_acceptance.directories.operations import (
     DirectoryOwner, OwnedDirectory, release_owned_directories,
 )
@@ -93,6 +96,12 @@ class AcceptanceSetupFailure(RuntimeError):
         }
 
     def _process_refusal(self, paths: list[str]) -> dict[str, object] | None:
+        if command_closure_unproven(self.cause):
+            return {
+                "authorized": False,
+                "decision": "setup-installation-closure-unproven",
+                "retained_owned_directories": paths,
+            }
         if self.processes is None:
             return None
         try:
@@ -240,19 +249,16 @@ class WorkspaceContext:
                 lifetime_error = str(error)
         elif not self.attempted_task_ids:
             lifetime_closed = True
-        if lifetime_closed and self.private_config.exists():
+        pending: SupervisorCleanup | None = None
+        if lifetime_closed and managed_state_roots:
+            pending = {"delegate": self.delegate, "client": self.pueue, "config": self.private_config,
+                       "env": self.environment, "state": self.state, "task_ids": list(self.task_ids)}
             try:
-                private_cli_supervisor.shutdown_private_supervisor(
-                    self.pueue,
-                    self.private_config,
-                    self.environment,
-                    state=self.state,
-                    task_ids=tuple(self.task_ids),
-                    capture_root=self.root_token,
-                    disposal=disposal,
-                )
+                private_cli_supervisor.shutdown_pending_private_supervisor(
+                    pending, [pending], capture_root=self.root_token, disposal=disposal, deadline=deadline)
+
                 daemon_closed = True
-            except (RuntimeError, OSError) as error:
+            except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 daemon_closed = False
                 daemon_error = str(error)
         process_pending = self.processes.pending()
@@ -271,6 +277,8 @@ class WorkspaceContext:
             "pending_processes": process_pending,
             "cohort_closure": cohort_evidence,
         }
+        if pending is not None and "owner" in pending:
+            result["terminal_cleanup"] = private_cli_supervisor.terminal_cleanup_evidence(pending)
         if lifetime_error:
             result["lifetime_error"] = lifetime_error
         if daemon_error:

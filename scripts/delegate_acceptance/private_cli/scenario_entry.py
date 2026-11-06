@@ -5,6 +5,7 @@ import uuid
 
 from scripts.delegate_acceptance.directories.operations import rollback_owned_directories
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
+from scripts.delegate_acceptance.private_cli import supervisor
 
 from scripts.delegate_acceptance.private_cli.wrapper_policy import compact_sequence_evidence
 from scripts.delegate_acceptance.private_cli.fixtures import install_pi_fixture
@@ -46,10 +47,17 @@ def run_recovery_scenario(lease_nonce, lifetime, response_directory, run_receipt
         attempted_task_ids=lifetime.attempted_task_ids,
         remove_old_package=remove_old_package,
         real_client=fixture.pueue_binary,
-        real_daemon=fixture.pueued_binary,
         supervisor_cleanups=lifetime.supervisor_cleanups,
         capture_root=lifetime.capture_token,
         fixture_base=lifetime.base,
+        source_root=fixture.source_root,
+    )
+    supervisor.shutdown_terminal_private_supervisor(
+        fixture.upgraded_install / "delegate", lifetime.upgraded_libexec / "pueue",
+        lifetime.private_config, lifetime.env,
+        state=fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal,
+        reader=lifetime.closure_reader, closed_roots=lifetime.closed_roots, observe=lifetime.primary_observer,
     )
     run_receipt.stage("supervisor-upgrade-recovery-proved")
 
@@ -72,6 +80,7 @@ def run_stop_scenario(lease_nonce, lifetime, response_directory, run_receipt, fi
         run_receipt=run_receipt,
         attempted_task_ids=lifetime.attempted_task_ids,
         capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
     )
     wrapper_calls = wrapper_call_records(
         lifetime.base / "old-client-starts-calls", "client", "old"
@@ -147,9 +156,9 @@ def run_noexec_state_scenario(lease_nonce, lifetime, response_directory, run_rec
         checks=[
             "the state root lived beneath a caller-provided noexec parent and refused direct execution",
             "the execution temporary root stayed executable and was captured in the task environment",
-            "the external inspection and the external task each recorded their own custody placement",
-            "each recorded pool is canonical, beneath the execution temporary root and outside the state root",
-            "each pool identity marker matched its registration after canonical lifetime closure",
+            "the external inspection and task recorded lifetime registrations without custody placement",
+            "their registrations matched the canonical task identities and external supervisor binding",
+            "both lifetimes had canonical closure before the external supervisor was shut down",
             "the external task committed its outcome while its state root was noexec",
         ],
     )
@@ -177,6 +186,7 @@ def run_external_cases(
         lifetime.managed_state_roots.append((case_state, case_task_ids))
         lifetime.handoff_cleanup_bindings.append(
             {
+                "delegate": lifetime.old_install / "delegate",
                 "client": lifetime.old_libexec / "pueue",
                 "config": case_private_config,
                 "env": lifetime.env,
@@ -211,6 +221,7 @@ def run_external_cases(
             handoff_action=handoff_action,
             case_label=case_label,
             handoff_cases=handoff_cases,
+            supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
         )
         handoff_cases[case_label] = handoff
         lifetime.attempted_task_ids.extend(case_task_ids)

@@ -32,13 +32,9 @@ func TestSupervisorOptionsForCandidateKeepOrdinaryTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := commonprovider.FingerprintExecutable(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
 	candidate := commonprovider.ProfileCandidate{Inspection: &commonprovider.InspectionDefinition{
 		Revision: commonprovider.RuntimeInspectionRevision, Executable: executable,
-		ExecutableSHA256: digest, Arguments: []string{"--version"}, Directory: workspace,
+		Arguments: []string{"--version"}, Directory: workspace,
 		Environment: []string{}, OutputLimit: commonprovider.MaxInspectionOutput,
 		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 	}}

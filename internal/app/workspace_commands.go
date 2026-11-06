@@ -23,7 +23,8 @@ func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, store.Close) }()
+	resources := &workspaceCommandResources{store: store, ownsStore: true}
+	defer func() { mergeCommandClose(&result, func() error { return resources.closeAfter(result.err) }) }()
 	response.RootID = store.RootID
 	if a.WorkspaceAction == "list" {
 		return listManagedWorkspaces(a, store, response)
@@ -32,50 +33,58 @@ func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 2)
 	}
-	observationBudget := budget
-	if a.WorkspaceAction == "status" {
-		observationBudget = a.Watch
-		if observationBudget == 0 {
-			observationBudget = time.Second
-		}
-	}
+	observationBudget := workspaceObservationBudget(a.WorkspaceAction, a.Watch, budget)
 	ctx, cancel := context.WithTimeout(context.Background(), observationBudget)
 	defer cancel()
+	options := workspaceRuntimeOptions(deps)
 	resource, err := workspace.LoadResource(ctx, store, a.WorkspaceID)
+	resources.resource = resource
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, resource.Close) }()
 	if a.WorkspaceBudget == "" {
 		budget = time.Duration(resource.Request().BudgetNanos)
 	}
 	if a.WorkspaceAction != "status" {
-		if err = workspaceRuntimeOptions(deps).ValidateGitEnvironment(); err != nil {
+		if err = options.ValidateGitEnvironment(); err != nil {
 			return failed(response, err, 2)
 		}
 	}
 	owner, err := resource.TryAcquireUseOwner(ctx)
-	if errors.Is(err, task.ErrLockBusy) {
+	resources.useOwner = owner
+	if owner != nil && err != nil {
+		return failed(response, err, 1)
+	}
+	if errors.Is(err, task.ErrLockBusy) && workspaceViewRetryable(err) {
 		return workspaceCommandActionResponse(ctx, store, resource, a.WorkspaceAction, a.Discard, workspacescore.RequestedAction(a.WorkspaceOperationID), response, workspace.ErrBusy)
 	}
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	defer func() { mergeCommandClose(&result, owner.Release) }()
-	ack, actionErr := runWorkspaceCommandAction(ctx, a, store, resource, deps, budget)
+	ack, actionErr := runWorkspaceCommandAction(ctx, a, store, resource, options, budget)
 	return workspaceCommandActionResponse(ctx, store, resource, a.WorkspaceAction, a.Discard, ack, response, actionErr)
 }
 
-func runWorkspaceCommandAction(ctx context.Context, a Arguments, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, budget time.Duration) (workspacescore.ActionAcknowledgement, error) {
+func workspaceObservationBudget(action string, watch, operationBudget time.Duration) time.Duration {
+	if action != "status" {
+		return operationBudget
+	}
+	if watch == 0 {
+		return time.Second
+	}
+	return watch
+}
+
+func runWorkspaceCommandAction(ctx context.Context, a Arguments, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions, budget time.Duration) (workspacescore.ActionAcknowledgement, error) {
 	switch a.WorkspaceAction {
 	case "status":
-		return workspacescore.RequestedAction(a.WorkspaceOperationID), watchManagedWorkspace(ctx, store, resource, deps, a)
+		return workspacescore.RequestedAction(a.WorkspaceOperationID), watchManagedWorkspace(ctx, store, resource, options, a)
 	case "exec":
-		return beginWorkspaceVerification(ctx, store, resource, deps, a.ExecArguments, budget)
+		return beginWorkspaceVerification(ctx, store, resource, options, a.ExecArguments, budget)
 	case "release":
-		return beginWorkspaceRelease(ctx, store, resource, deps, a.Discard, budget)
+		return beginWorkspaceRelease(ctx, store, resource, options, a.Discard, budget)
 	case "forget":
-		return beginWorkspaceForget(ctx, store, resource, deps, budget)
+		return beginWorkspaceForget(ctx, store, resource, options, budget)
 	default:
 		return workspacescore.ActionAcknowledgement{}, task.ErrInvalidPermit
 	}
@@ -125,6 +134,12 @@ func expiredWorkspaceView(ctx context.Context, err error) bool {
 // Only this observer's expired view is retryable. An identity or storage fault
 // joined with a deadline remains a failure rather than being hidden as pending.
 func workspaceViewRetryable(err error) bool {
+	var lifetimeCleanup *taskdir.LifetimeOwnerCleanupError
+	var admissionCleanup *workspacescore.AdmissionCleanupError
+	var commandCleanup *workspaceCommandCleanupError
+	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) || errors.As(err, &commandCleanup) {
+		return false
+	}
 	return task.AllErrorCauses(err, func(cause error) bool {
 		return errors.Is(cause, context.DeadlineExceeded) || errors.Is(cause, task.ErrLockBusy)
 	})
@@ -165,13 +180,13 @@ func listManagedWorkspaces(a Arguments, store *taskdir.Store, response Response)
 	return commandResult{response: response}
 }
 
-func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, a Arguments) (resultErr error) {
+func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions, a Arguments) (resultErr error) {
 	defer func() { resultErr = workspacescore.PendingAtDeadline(ctx, resultErr) }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := observeManagedWorkspace(ctx, store, resource, deps, a.WorkspaceOperationID)
+		err := observeManagedWorkspace(ctx, store, resource, options, a.WorkspaceOperationID)
 		if err == nil || !errors.Is(err, workspace.ErrPending) || !workspacescore.PendingError(err) || a.Watch == 0 {
 			return err
 		}
@@ -181,8 +196,8 @@ func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *
 	}
 }
 
-func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, operationID string) (resultErr error) {
-	useErr := reconcileWorkspaceUse(ctx, store, resource, deps)
+func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions, operationID string) (resultErr error) {
+	useErr := reconcileWorkspaceUse(ctx, store, resource, options)
 	if useErr != nil && (!errors.Is(useErr, workspace.ErrPending) || !workspacescore.PendingError(useErr)) {
 		return useErr
 	}
@@ -200,6 +215,6 @@ func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource
 	return errors.Join(useErr, workspacescore.OperationOutcome(ctx, store, operation))
 }
 
-func beginWorkspaceVerification(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, arguments []string, budget time.Duration) (ack workspacescore.ActionAcknowledgement, resultErr error) {
-	return workspacescore.BeginVerification(ctx, store, resource, workspaceRuntimeOptions(deps), arguments, budget)
+func beginWorkspaceVerification(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions, arguments []string, budget time.Duration) (ack workspacescore.ActionAcknowledgement, resultErr error) {
+	return workspacescore.BeginVerification(ctx, store, resource, options, arguments, budget)
 }

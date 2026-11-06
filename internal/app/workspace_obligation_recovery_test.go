@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -23,7 +22,7 @@ func TestWorkspaceVerificationRecoversObligationAfterReservationCrash(t *testing
 	}
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps); !errors.Is(err, workspace.ErrPending) {
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps)); !errors.Is(err, workspace.ErrPending) {
 		t.Fatalf("interrupted verification recovery = %v, want pending original operation", err)
 	}
 	obligation, err := fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence)
@@ -55,11 +54,8 @@ func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspace
 	request.Arguments = []string{"/fixture/verify"}
 	request.Supervisor = supervisor.Binding()
 	request.WorkerExecutable = executablePath(t)
-	digest, err := commonprovider.FingerprintExecutable(request.WorkerExecutable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.WorkerSHA256 = digest
+	request.WorkerSHA256 = ""
+	request.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
 	operation, err := workspace.OpenOperation(t.Context(), fixture.Store, request)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +106,7 @@ func verifyWorkspaceVerificationRecoveryBinding(t *testing.T, foreign bool) {
 	workspacefixture.RecoveryUseOwner(t, fixture)
 	var commands atomic.Int32
 	deps := Dependencies{ResourceChecker: fixtureResources, SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
-	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps)
+	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps))
 	if (!errors.Is(err, task.ErrEvidenceFault) && !errors.Is(err, task.ErrIdentityMismatch)) || commands.Load() != 0 {
 		t.Fatalf("invalid verification binding reached scheduling: commands=%d err=%v", commands.Load(), err)
 	}
@@ -125,7 +121,7 @@ func TestWorkspaceObligationRecoveryRejectsUnknownAuthorization(t *testing.T) {
 	}
 	fixture.Restart(t)
 	workspacefixture.RecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources})); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unknown authorization = %v, want evidence fault", err)
 	}
 	if _, err = fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence); !workspace.OperationAbsent(err) {

@@ -21,7 +21,7 @@ from scripts.delegate_acceptance.private_cli import upgrade as upgrade_impl
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime, PredecessorCleanup, SupervisorCleanup
 from scripts.delegate_acceptance.processes.observation import wait_until
 from test_acceptance_private_shutdown import ManagedLifetimeFixture
-from test_acceptance_private_shutdown import TASK_ID
+from test_acceptance_private_shutdown import TASK_ID, ROOT_ID
 from test_acceptance_private_shutdown import write_record
 
 
@@ -119,7 +119,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.client.write_text("fixture client", encoding="utf-8")
         self.lifetime = FixtureLifetime(
             base=self.base, base_token=self.capture_root, capture_token=self.capture_root, env={},
-            private_config=self.config,
+            private_config=self.config, delegate=self.directory / "delegate",
             managed_state_roots=[(self.state, [TASK_ID])], attempted_task_ids=[TASK_ID],
         )
         self.calls = []
@@ -156,11 +156,12 @@ class PredecessorShutdownTests(unittest.TestCase):
             self.addCleanup(target.backup_handle.close)
             return target
 
-        with patch.object(upgrade_impl, "install_fixture"), \
+        with patch.object(upgrade_impl, "install_supervisor_pair"), \
+                patch.object(upgrade_impl, "install_package_layout", return_value=(self.base / "pending-package/install", self.base / "pending-package/install", self.base / "pending-package/libexec")), \
                 patch.object(upgrade_impl, "capture_predecessor_shutdown_target", side_effect=capture):
             staged = upgrade_impl.stage_pending_package(
                 attempted_task_ids=[TASK_ID], base=self.base, config=self.config, env={}, package_owner=owner,
-                real_client=self.client, real_daemon=self.directory / "pueued", state=self.state,
+                real_client=self.client, source_root=self.directory, state=self.state,
                 supervisor_cleanups=self.lifetime.supervisor_cleanups,
             )
         return owner, staged
@@ -168,7 +169,9 @@ class PredecessorShutdownTests(unittest.TestCase):
     def finalize(self, failure, pueue_command):
         receipt = RecordingReceipt()
         args = FinalizerArguments(self.client, self.base / "receipt.json")
-        with patch.object(supervisor_impl, "pueue_command", side_effect=pueue_command):
+        with patch.object(supervisor_impl, "pueue_command", side_effect=pueue_command), patch.object(
+                supervisor_impl.commands, "run_json", return_value={"root_id": ROOT_ID, "supervisor_owner": {
+                    "action": "stop-owner", "state": "not_initialized"}}):
             finalization_impl.finalize_fixture(args, failure, self.lifetime, receipt, False)
         return receipt.written
 
@@ -272,10 +275,11 @@ class PredecessorShutdownTests(unittest.TestCase):
         finalization_impl.release_pending_predecessor(pending, self.lifetime.supervisor_cleanups)
         self.assertEqual(self.lifetime.supervisor_cleanups, [])
         self.assertTrue(predecessor_entry(pending)["predecessor"].backup_handle.closed)
-        with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+        with patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, _ = self.finalize(RuntimeError("original"), self.pueue_command)
         primary.assert_called_once()
-        self.assertEqual(primary.call_args.args[1], self.config)
+        self.assertEqual(primary.call_args.args[0], self.lifetime.delegate)
+        self.assertEqual(primary.call_args.args[2], self.config)
         self.assertEqual((result, cleanup["pending_supervisor_count"]), ("FAIL", 0))
 
     def test_successful_release_close_fault_keeps_ledger_entry(self):
@@ -391,7 +395,7 @@ class PredecessorShutdownTests(unittest.TestCase):
             return wait_until(predicate, 0, description)
 
         with patch.object(leases_impl, "wait_until", side_effect=expired), \
-                patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+                patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, self.pueue_command)
         self.assertEqual(self.calls, [])
         primary.assert_not_called()
@@ -414,7 +418,7 @@ class PredecessorShutdownTests(unittest.TestCase):
             return result
 
         failure = RuntimeError("original")
-        with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+        with patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, replace_during_command)
         self.assertEqual(self.calls, [(self.backup, ["shutdown"])])
         primary.assert_not_called()
@@ -441,7 +445,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         pending = self.lifetime.supervisor_cleanups[-1]
         self.stop_daemon()
         failure = RuntimeError("original")
-        with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+        with patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, self.pueue_command)
         self.assertEqual(self.calls, [])
         primary.assert_not_called()
@@ -455,7 +459,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.publish_successor()
         private_cli.os.pwrite(predecessor_entry(pending)["predecessor"].backup_handle.fileno(), b"#", 0)
         failure = RuntimeError("original")
-        with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+        with patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, self.successor_command)
         self.assertEqual(self.calls, [])
         primary.assert_not_called()
@@ -513,7 +517,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.publish_successor()
         failure = RuntimeError("original")
         with patch.object(finalization_impl, "shutdown_predecessor_supervisor") as predecessor, \
-                patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+                patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, self.successor_command)
         predecessor.assert_called_once()
         primary.assert_not_called()
@@ -535,7 +539,7 @@ class PredecessorShutdownTests(unittest.TestCase):
         pending = self.lifetime.supervisor_cleanups[-1]
         real_handle, _ = self.inject_close_fault(pending)
         failure = RuntimeError("original")
-        with patch.object(finalization_impl, "shutdown_private_supervisor") as primary:
+        with patch.object(finalization_impl, "shutdown_terminal_private_supervisor") as primary:
             result, cleanup, error = self.finalize(failure, pueue_command)
         primary.assert_not_called()
         self.assertEqual(len(self.lifetime.supervisor_cleanups), 1)
@@ -569,7 +573,12 @@ class PredecessorShutdownTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertIsNone(self.successor.poll())
         self.assertEqual((result, error), ("FAIL", failure))
-        self.assertEqual((cleanup["status"], cleanup["pending_supervisor_count"]), ("failed", 0))
+        self.assertEqual((cleanup["status"], cleanup["pending_supervisor_count"]), ("failed", 1))
+        pending = self.lifetime.supervisor_cleanups[0]
+        self.assertNotIn("predecessor", pending)
+        self.assertEqual(pending.get("root_id"), ROOT_ID)
+        self.assertIn("owner", pending)
+        self.assertIsNone(pending.get("owner"))
         self.assertTrue(self.base.is_dir())
 
 

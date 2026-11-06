@@ -36,7 +36,9 @@ func admissionUsesPrivateSupervisor(a Arguments, deps Dependencies, root string)
 }
 
 func preparePrivateAdmissionSupervisor(deps Dependencies, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
-	return supervisorcore.PreparePrivateAdmissionSupervisor(deps.supervisorLookup(), store, options)
+	ctx, cancel := supervisorcore.ControlContext(options)
+	defer cancel()
+	return (supervisorcore.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}).PreparePrivateAdmission(ctx, store)
 }
 
 func inspectLegacyEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job) (resultErr error) {

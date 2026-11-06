@@ -10,6 +10,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+var (
+	ErrHistoricalTargetUnsupported = errors.New("unsupported historical private supervisor target")
+	ErrHistoricalTargetNotReady    = errors.New("historical private supervisor target is current but not ready")
+)
+
 // PrivateRecoveryError retains the cause while giving callers a bounded,
 // path-free explanation of a private-supervisor recovery decision.
 type PrivateRecoveryError struct {
@@ -32,9 +37,31 @@ func PrivatePairRestartPending(root string) (bool, error) {
 	return found && record.Restart != nil, err
 }
 
+func refusePendingPrivateRestart(root string) error {
+	pending, err := PrivatePairRestartPending(root)
+	if err != nil {
+		return privateRecoveryFailure("state_unreadable", err)
+	}
+	if pending {
+		return privateRecoveryFailure("transition_pending", ErrBinding)
+	}
+	return nil
+}
+
+func validatePrivateRestartPublication(root string, binding task.SupervisorRef) error {
+	record, _, err := readPrivateBootstrapRecord(root)
+	if err != nil {
+		return privateRecoveryFailure("state_unreadable", err)
+	}
+	if record.Restart != nil && record.Restart.Target != binding {
+		return privateRecoveryFailure("identity_conflict", ErrBinding)
+	}
+	return nil
+}
+
 // PrivateMigrationTargetsWithLock verifies that an application journal names
 // the same successor as the private migration owner. The caller holds the
-// bootstrap lock; a staged installation cannot retarget a pending group edge.
+// bootstrap lock; only the migration owner may replace a reversible target.
 func PrivateMigrationTargetsWithLock(root string, target task.SupervisorRef) (bool, error) {
 	if !IsPrivateConfig(root, target.ConfigPath) {
 		return false, ErrConfiguration
@@ -47,30 +74,46 @@ func PrivateMigrationTargetsWithLock(root string, target task.SupervisorRef) (bo
 		return false, err
 	}
 	return privateMigrationIdentityMatchesCurrent(record.Successor,
-		privateDaemonIdentity{Executable: target.DaemonExecutable, SHA256: target.DaemonSHA256},
+		privateDaemonIdentityForBinding(target),
 		privateDaemonIdentityForBinding(target)), nil
 }
 
-func privateMigrationMayRetarget(record privateMigrationRecord) bool {
+func privateMigrationPrepared(record privateMigrationRecord) bool {
 	return !record.LegacyShutdownRequested && !record.LegacyShutdownDispatched && !record.LegacyStopped
 }
 
-// PrivateMigrationRetargetableWithLock exposes the migration owner's exact
-// point of no return. Only the private migration protocol changes the journal.
+func privateMigrationRetargetable(record privateMigrationRecord) bool {
+	return privateMigrationPrepared(record) && record.LegacyPID == 0 && record.LegacyProcessStart == "" &&
+		privateLogicalIdentityPresent(record.Legacy) && privateLogicalIdentityPresent(record.Successor)
+}
+
+// PrivateMigrationRetargetableWithLock observes whether a journal has never
+// authorized shutdown. The caller retains the bootstrap lock; the migration
+// owner revalidates the predecessor and replacement before committing.
 func PrivateMigrationRetargetableWithLock(root string) (bool, error) {
-	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+	if !IsPrivateConfig(root, PrivateConfigPath(root)) {
 		return false, ErrConfiguration
 	}
 	record, found, err := loadPrivateMigrationRecord(filepath.Join(root, privateSupervisorDirectory))
-	return found && privateMigrationMayRetarget(record), err
+	return found && privateMigrationRetargetable(record), err
 }
 
-// PrepareRecordedPrivateMigrationWithLock verifies the recorded pair using its
-// recorded resolver even if the operator's current HOME/XDG context changed.
+// PrepareRecordedPrivateMigrationWithLock opens a full target supplied by the
+// canonical accepted-record owner. A present private journal must select it
+// exactly. Preparation never converts its callback or selects a fallback.
 func PrepareRecordedPrivateMigrationWithLock(ctx context.Context, root string, target task.SupervisorRef, options Options) (*Client, error) {
-	matches, err := PrivateMigrationTargetsWithLock(root, target)
-	if err != nil || !matches {
-		return nil, privateRecoveryFailure("transition_pending", errors.Join(err, ErrBinding))
+	if !IsPrivateConfig(root, target.ConfigPath) {
+		return nil, ErrConfiguration
+	}
+	if err := validatePrivateSupervisorRef(target); err != nil {
+		return nil, err
+	}
+	pending, found, err := loadPrivateMigrationRecord(filepath.Join(root, privateSupervisorDirectory))
+	if err != nil {
+		return nil, err
+	}
+	if found && !privateDaemonIdentityMatchesBinding(pending.Successor, target) {
+		return nil, privateRecoveryFailure("transition_pending", ErrBinding)
 	}
 	return prepareExactPublishedPair(ctx, target, options)
 }
@@ -91,31 +134,6 @@ const (
 	// cannot be restarted in place.
 	PublishedPairLiveUnavailable
 )
-
-// ReconcilePublishedPrivatePairWithLock is the error projection of
-// ReconcilePublishedPrivatePairAttemptWithLock. Each deferral keeps its
-// existing reason code.
-func ReconcilePublishedPrivatePairWithLock(ctx context.Context, stateRoot, exactClient, exactDaemon string, options Options) error {
-	outcome, err := reconcilePublishedPrivatePair(ctx, stateRoot, exactClient, exactDaemon, options)
-	if err != nil {
-		return err
-	}
-	return outcome.ProjectedError()
-}
-
-// ReconcilePublishedPrivatePairAttemptWithLock repairs only executable
-// locations of the published generation. The caller holds the bootstrap lock
-// and proves the candidate is the protected, content-addressed pair for its
-// recorded hashes, with no pending application-owned inspection transition.
-// It never selects a different binary generation or stops a live daemon. Any
-// read, close, or release fault returns the zero outcome with its error.
-func ReconcilePublishedPrivatePairAttemptWithLock(ctx context.Context, stateRoot, exactClient, exactDaemon string, options Options) (PublishedPairReconciliation, error) {
-	outcome, err := reconcilePublishedPrivatePair(ctx, stateRoot, exactClient, exactDaemon, options)
-	if err != nil {
-		return 0, err
-	}
-	return outcome, nil
-}
 
 // ProjectedError is the legacy error for a deferral outcome, keeping each
 // existing reason code. A reconciled or zero outcome projects to nil.
@@ -141,7 +159,10 @@ func settlePublishedPairReconciliation(outcome PublishedPairReconciliation, err,
 	return 0, errors.Join(err, outcome.ProjectedError(), closeErr)
 }
 
-func reconcilePublishedPrivatePair(ctx context.Context, stateRoot, exactClient, exactDaemon string, options Options) (PublishedPairReconciliation, error) {
+// ReconcilePublishedPrivatePairAttemptWithLock settles recorded restart intent
+// before selecting an installed pair for binding-only repair. The caller holds
+// the bootstrap lock. This attempt never starts or stops a daemon.
+func ReconcilePublishedPrivatePairAttemptWithLock(ctx context.Context, stateRoot string, selectPair CompatiblePairSelector, options Options) (PublishedPairReconciliation, error) {
 	if ctx == nil {
 		return 0, context.Canceled
 	}
@@ -151,9 +172,16 @@ func reconcilePublishedPrivatePair(ctx context.Context, stateRoot, exactClient, 
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)
 	}
+	bootstrap, _, err := readPrivateBootstrapRecord(stateRoot)
+	if err != nil {
+		return 0, privateRecoveryFailure("state_unreadable", err)
+	}
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)
 	if err != nil {
 		return 0, err
+	}
+	if bootstrap.Restart != nil {
+		return resumePrivatePairRestart(ctx, stateRoot, published, *bootstrap.Restart, options)
 	}
 	if !found {
 		return PublishedPairReconciled, nil
@@ -165,32 +193,28 @@ func reconcilePublishedPrivatePair(ctx context.Context, stateRoot, exactClient, 
 	if !found {
 		return PublishedPairReconciled, nil // Missing provenance belongs to the existing bootstrap owner.
 	}
-	bootstrap, _, err := readPrivateBootstrapRecord(stateRoot)
-	if err != nil {
-		return 0, privateRecoveryFailure("state_unreadable", err)
-	}
-	if bootstrap.Restart != nil {
-		if bootstrap.Restart.Target.ClientExecutable != exactClient || bootstrap.Restart.Target.DaemonExecutable != exactDaemon {
-			return 0, privateRecoveryFailure("identity_conflict", ErrBinding)
-		}
-		return resumePrivatePairRestart(ctx, stateRoot, published, *bootstrap.Restart, options)
-	}
-	return reconcilePrivatePairWithWitness(ctx, stateRoot, published, identity, exactClient, exactDaemon, options)
+	return reconcilePrivatePairWithWitness(ctx, stateRoot, published, identity, selectPair, options)
 }
 
-func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, published task.SupervisorRef, identity privateDaemonIdentity, exactClient, exactDaemon string, options Options) (outcome PublishedPairReconciliation, resultErr error) {
+func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, published task.SupervisorRef, identity privateDaemonIdentity, selectPair CompatiblePairSelector, options Options) (outcome PublishedPairReconciliation, resultErr error) {
 	missing, err := PrivateSupervisorPairMissing(published)
 	if err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)
 	}
 	coherent := privateDaemonIdentityMatchesBinding(identity, published)
-	if coherent && !missing {
-		return PublishedPairReconciled, nil
+	if coherent {
+		if !missing {
+			return PublishedPairReconciled, nil
+		}
+	} else if published.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+		return 0, privateRecoveryFailure("identity_conflict", ErrBinding)
 	}
-	candidate := published
-	candidate.ClientExecutable, candidate.DaemonExecutable = exactClient, exactDaemon
-	if outcome, err = privatePairReconciliationAllowed(ctx, stateRoot, published, candidate); err != nil || outcome != PublishedPairReconciled {
+	if outcome, err = privatePairReconciliationAllowed(ctx, stateRoot, published); err != nil || outcome != PublishedPairReconciled {
 		return outcome, err
+	}
+	candidate, allowed, err := selectPrivateReconciliationCandidate(ctx, stateRoot, published, selectPair)
+	if err != nil || allowed != PublishedPairReconciled {
+		return allowed, err
 	}
 	if !coherent && !privateDaemonIdentityMatchesBinding(identity, candidate) {
 		return 0, privateRecoveryFailure("identity_conflict", ErrBinding)
@@ -205,7 +229,7 @@ func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, publ
 	if !coherent {
 		// The launch witness already names this exact pair. Only the erroneous
 		// binding changes; daemon provenance and task records remain untouched.
-		return reconciledOutcome(replaceReconciledPrivateBinding(stateRoot, published, candidate))
+		return reconciledOutcome(replaceReconciledPrivateBindingContext(ctx, stateRoot, published, candidate, options.PrivateGenerationGuard))
 	}
 	observation, err := client.availableForTransition(ctx, false)
 	if err != nil {
@@ -214,19 +238,24 @@ func reconcilePrivatePairWithWitness(ctx context.Context, stateRoot string, publ
 	if observation.ready() {
 		return PublishedPairLiveUnavailable, nil
 	}
-	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
-		return 0, err
+	return 0, privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+}
+
+func selectPrivateReconciliationCandidate(ctx context.Context, root string, published task.SupervisorRef, selectPair CompatiblePairSelector) (task.SupervisorRef, PublishedPairReconciliation, error) {
+	if published.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+		return task.SupervisorRef{}, 0, privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
 	}
-	// Record the exact target only after both endpoint and process absence are
-	// proven. A crash can then resume this target without relaunching it.
-	if err = client.WaitUnavailable(ctx); err != nil {
-		return 0, privateRecoveryFailure("observation_failed", err)
+	if selectPair == nil {
+		return task.SupervisorRef{}, 0, ErrConfiguration
 	}
-	intent := privatePairRestartIntent{Predecessor: published, Target: candidate}
-	if err = publishPrivatePairRestartIntent(stateRoot, intent); err != nil {
-		return 0, err
+	client, daemon, err := selectPair(ctx)
+	if err != nil {
+		return task.SupervisorRef{}, 0, err
 	}
-	return reconciledOutcome(finishPrivatePairRestart(ctx, stateRoot, client))
+	candidate := published
+	candidate.ClientExecutable, candidate.DaemonExecutable = client, daemon
+	allowed, err := privatePairHistoryUnreferenced(ctx, root, candidate)
+	return candidate, allowed, err
 }
 
 func reconciledOutcome(err error) (PublishedPairReconciliation, error) {
@@ -258,22 +287,6 @@ func validatePrivatePairRestartIntent(root string, intent privatePairRestartInte
 		return ErrBinding
 	}
 	return nil
-}
-
-func publishPrivatePairRestartIntent(root string, intent privatePairRestartIntent) error {
-	if err := validatePrivatePairRestartIntent(root, intent); err != nil {
-		return err
-	}
-	data, err := task.MarshalCanonical(privateBootstrapRecord{SchemaVersion: task.SchemaVersion, Restart: &intent})
-	if err != nil {
-		return err
-	}
-	writeErr := publishPrivateRecord(filepath.Join(root, privateSupervisorDirectory), privateBootstrapRecordPath(root), data)
-	winner, found, readErr := readPrivateBootstrapRecord(root)
-	if readErr != nil || !found || winner.Restart == nil || *winner.Restart != intent {
-		return privateRecoveryFailure("state_unreadable", errors.Join(writeErr, readErr, ErrBinding))
-	}
-	return syncPrivateDirectory(filepath.Join(root, privateSupervisorDirectory))
 }
 
 func resumePrivatePairRestart(ctx context.Context, root string, published task.SupervisorRef, intent privatePairRestartIntent, options Options) (outcome PublishedPairReconciliation, resultErr error) {
@@ -309,24 +322,14 @@ func resumePrivatePairRestart(ctx context.Context, root string, published task.S
 	defer func() {
 		outcome, resultErr = settlePublishedPairReconciliation(outcome, resultErr, client.CloseAfterPending(resultErr))
 	}()
-	return reconciledOutcome(finishPrivatePairRestart(ctx, root, client))
-}
-
-func finishPrivatePairRestart(ctx context.Context, root string, client *Client) error {
 	observation, err := client.availableForTransition(ctx, false)
 	if err != nil {
-		return privateRecoveryFailure("observation_failed", err)
+		return 0, privateRecoveryFailure("observation_failed", err)
 	}
 	if !observation.ready() {
-		if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
-			return err
-		}
-		return client.startPrivate(ctx)
+		return PublishedPairTransitionPending, nil
 	}
-	if err = publishPrivateDaemonIdentity(filepath.Join(root, privateSupervisorDirectory), client.Binding()); err != nil {
-		return err
-	}
-	return clearPrivateBootstrapPending(root)
+	return reconciledOutcome(publishPrivateDaemonIdentityContext(ctx, filepath.Join(root, privateSupervisorDirectory), client.Binding(), client.options.PrivateGenerationGuard))
 }
 
 // PrivateSupervisorPairMissing is the canonical missing-pair fact: a recorded
@@ -350,7 +353,7 @@ func PrivateSupervisorPairMissing(binding task.SupervisorRef) (bool, error) {
 // privatePairReconciliationAllowed returns PublishedPairReconciled when the
 // repair may proceed and PublishedPairTransitionPending when a readable
 // transition owns the generation.
-func privatePairReconciliationAllowed(ctx context.Context, root string, published, candidate task.SupervisorRef) (PublishedPairReconciliation, error) {
+func privatePairReconciliationAllowed(ctx context.Context, root string, published task.SupervisorRef) (PublishedPairReconciliation, error) {
 	pending, err := privateRecoveryTransitionPending(root)
 	if err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)
@@ -362,10 +365,10 @@ func privatePairReconciliationAllowed(ctx context.Context, root string, publishe
 	if pending || recovery {
 		return PublishedPairTransitionPending, nil
 	}
-	return privatePairHistoryUnreferenced(ctx, root, published, candidate)
+	return privatePairHistoryUnreferenced(ctx, root, published)
 }
 
-func privatePairHistoryUnreferenced(ctx context.Context, root string, published, candidate task.SupervisorRef) (PublishedPairReconciliation, error) {
+func privatePairHistoryUnreferenced(ctx context.Context, root string, bindings ...task.SupervisorRef) (PublishedPairReconciliation, error) {
 	history, _, err := loadPrivateMigrationHistory(filepath.Join(root, privateSupervisorDirectory))
 	if err != nil {
 		return 0, privateRecoveryFailure("state_unreadable", err)
@@ -374,7 +377,7 @@ func privatePairHistoryUnreferenced(ctx context.Context, root string, published,
 		if err = ctx.Err(); err != nil {
 			return 0, err
 		}
-		for _, binding := range []task.SupervisorRef{published, candidate} {
+		for _, binding := range bindings {
 			if privateDaemonIdentityMatchesBinding(edge.Legacy, binding) || privateDaemonIdentityMatchesBinding(edge.Successor, binding) {
 				return PublishedPairTransitionPending, nil
 			}
@@ -388,6 +391,18 @@ func prepareExactPublishedPair(ctx context.Context, candidate task.SupervisorRef
 	if err != nil {
 		return nil, err
 	}
+	if isLegacyStateSupervisorClient(candidate) {
+		return prepareCurrentHistoricalPrivateTarget(ctx, candidate, options)
+	}
+	selected, err := canonicalExecutable(candidate.ClientExecutable)
+	if err != nil || selected != candidate.ClientExecutable {
+		return nil, errors.Join(ErrBinding, err)
+	}
+	daemon, err := canonicalExecutable(candidate.DaemonExecutable)
+	if err != nil || daemon != candidate.DaemonExecutable {
+		return nil, errors.Join(ErrBinding, err)
+	}
+	options.RuntimeClientExecutable = selected
 	client, err := NewClient(candidate, options)
 	if err != nil {
 		return nil, err
@@ -395,6 +410,7 @@ func prepareExactPublishedPair(ctx context.Context, candidate task.SupervisorRef
 	if err = verifyPublishedPrivatePair(ctx, client, candidate); err != nil {
 		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
+	qualifyPrivateClientConstruction(client)
 	return client, nil
 }
 
@@ -423,10 +439,16 @@ func replaceReconciledPrivateBinding(root string, before, candidate task.Supervi
 // predecessor only when its daemon provenance agrees. It never substitutes a
 // prepared successor. Missing provenance retains the original bootstrap path.
 func PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string, predecessor task.SupervisorRef) error {
+	return PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx, root, predecessor, Options{})
+}
+
+// PublishVerifiedPrivatePredecessorWithOptionsAndLock uses resident publication
+// authority only if adoption must create a missing logical binding.
+func PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx context.Context, root string, predecessor task.SupervisorRef, options Options) error {
 	if _, found, err := loadPrivateSupervisorBinding(root); err != nil {
 		return err
 	} else if found {
-		return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor)
+		return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor, options.PrivateGenerationGuard)
 	}
 	identity, found, err := loadPrivateDaemonIdentity(filepath.Join(root, privateSupervisorDirectory))
 	if err != nil {
@@ -438,5 +460,55 @@ func PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string,
 	if !privateDaemonIdentityMatchesBinding(identity, predecessor) {
 		return privateRecoveryFailure("identity_conflict", fmt.Errorf("%w: inspection predecessor does not match daemon provenance", ErrBinding))
 	}
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, root, predecessor, options.PrivateGenerationGuard)
+}
+
+// PublishVerifiedPrivatePredecessorWithLock uses the authority that constructed
+// this client. Existing equivalent predecessors remain observational reads.
+func (c *Client) PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string, predecessor task.SupervisorRef) error {
+	if c == nil {
+		return ErrConfiguration
+	}
+	return PublishVerifiedPrivatePredecessorWithOptionsAndLock(ctx, root, predecessor, c.options)
+}
+
+// A historical copied target can only be reused as the exact already-current
+// complete generation. Installed transport supplies the actual protocol proof;
+// this branch never grants a start or reconstructs historical client fields.
+func prepareCurrentHistoricalPrivateTarget(ctx context.Context, target task.SupervisorRef, options Options) (*Client, error) {
+	root := filepath.Dir(filepath.Dir(target.ConfigPath))
+	published, found, err := loadPrivateSupervisorBinding(root)
+	if err != nil {
+		return nil, err
+	}
+	if !found || published != target {
+		return nil, ErrHistoricalTargetUnsupported
+	}
+	complete, err := PrivateSupervisorMigrationComplete(root, target)
+	if err != nil {
+		return nil, err
+	}
+	if !complete {
+		return nil, ErrHistoricalTargetUnsupported
+	}
+	selected, err := selectRecoveryClient(target, options.RuntimeClientExecutable)
+	if err != nil {
+		return nil, err
+	}
+	options.RuntimeClientExecutable = selected
+	client, err := NewClient(target, options)
+	if err != nil {
+		return nil, err
+	}
+	daemon, err := selectRecoveryDaemon(target, filepath.Join(filepath.Dir(selected), "pueued"))
+	if err == nil {
+		err = attachPrivateDaemon(client, daemon)
+	}
+	if err == nil {
+		err = client.Ready(ctx)
+	}
+	if err != nil {
+		return nil, errors.Join(ErrHistoricalTargetNotReady, err, client.CloseAfterPending(err))
+	}
+	return client, nil
 }

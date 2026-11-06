@@ -50,7 +50,7 @@ func TestPrivateHistoricalRetirementPreservesCorruptHistory(t *testing.T) {
 			}
 			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 				if consumer == "generic" {
-					return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.successor.Binding())
+					return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.successor.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 				}
 				return fixture.successor.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 			})
@@ -87,7 +87,7 @@ func assertHistoricalPrivateRetirementConsumer(t *testing.T, changedLogical, bus
 	}
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		if consumer == "generic" {
-			return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.successor.Binding())
+			return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.successor.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 		}
 		return fixture.successor.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 	})
@@ -228,16 +228,15 @@ func assertPrivateBusyTargetAuthority(t *testing.T, ctx context.Context, fixture
 	recorded := fixture.successor.Binding()
 	firstProposal := recorded
 	firstProposal.DaemonExecutable += "-earlier"
-	firstProposal.DaemonSHA256 = task.ComputeSHA256([]byte("earlier prepared daemon"))
 	for _, proposal := range []task.SupervisorRef{firstProposal, recorded} {
 		matches, err := PrivateMigrationTargetsWithLock(fixture.stateRoot, proposal)
 		if err != nil || matches != (proposal == recorded) {
 			t.Errorf("private intent lost unique recorded target: recorded=%t matches=%t err=%v", proposal == recorded, matches, err)
 		}
 	}
-	retargetable, err := PrivateMigrationRetargetableWithLock(fixture.stateRoot)
-	if err != nil || !retargetable {
-		t.Errorf("Busy intent lost pre-stop retarget authority: retargetable=%t err=%v", retargetable, err)
+	pendingTarget, err := PrivateMigrationTargetsWithLock(fixture.stateRoot, recorded)
+	if err != nil || !pendingTarget {
+		t.Errorf("Busy intent lost fixed recorded target: pendingTarget=%t err=%v", pendingTarget, err)
 	}
 	client, err := PrepareRecordedPrivateMigrationWithLock(ctx, fixture.stateRoot, recorded, fixture.successor.options)
 	if err != nil {
@@ -327,7 +326,7 @@ func TestPrivateOrphanWithoutHistoryCannotUseQuiescentAuthorization(t *testing.T
 			}
 			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 				if consumer == "generic" {
-					return RetirePrivateRecoveryBindingContext(ctx, fixture.stateRoot, fixture.legacy.Binding())
+					return RetirePrivateRecoveryBindingWithOptionsContext(ctx, fixture.stateRoot, fixture.legacy.Binding(), Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 				}
 				return fixture.legacy.MigratePrivateSupervisorWithLock(ctx, fixture.stateRoot)
 			})

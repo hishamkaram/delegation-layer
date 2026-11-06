@@ -8,5 +8,5 @@ if ! pueue_path=$(command -v pueue) || ! pueued_path=$(command -v pueued); then
 fi
 evidence_root=$(python3 -c 'from pathlib import Path; import secrets; import sys; parent = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".local/state"; print(parent / "delegation-layer-evidence" / ("inspection-" + secrets.token_hex(12)))')
 exec python3 "$repo_root/scripts/acceptance_inspection.py" \
-    --tools "$repo_root/bin/inspection-fixture" --pueue "$pueue_path" --pueued "$pueued_path" \
+    --source-root "$repo_root" --pueue "$pueue_path" --pueued "$pueued_path" \
     --output "$evidence_root" "$@"

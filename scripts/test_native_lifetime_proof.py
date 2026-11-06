@@ -12,6 +12,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import native_lifetime_proof as proof
+from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.native_lifetime_proof import (
     MAX_RECEIPT_BYTES,
     native_go_architecture,
@@ -36,7 +37,7 @@ def fixture_receipt(host_os: str, backend: str, assurance_name: str) -> dict[str
         else "prepared child terminated; command Wait consumed once; scope empty and destroyed"
     )
     primitive: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "host_os": host_os,
         "host_kernel": "Linux 6.8.0" if host_os == "linux" else "Darwin 25.0.0",
         "architecture": "amd64" if host_os == "linux" else "arm64",
@@ -54,7 +55,7 @@ def fixture_receipt(host_os: str, backend: str, assurance_name: str) -> dict[str
         },
         "binary": {
             "name": "lifetime.test",
-            "sha256": "6" * 64,
+            "path": "/installed/lifetime.test",
             "size_bytes": 1024,
             "go_version": "go1.27.2",
         },
@@ -69,7 +70,7 @@ def fixture_receipt(host_os: str, backend: str, assurance_name: str) -> dict[str
         else "cgroup_proof_limited_to_recorded_kernel_and_exercised_primitive",
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "claim_class": "native-lifetime",
         "primitive_receipt": primitive,
         "assurance_receipt": {
@@ -91,6 +92,74 @@ def fixture_receipt(host_os: str, backend: str, assurance_name: str) -> dict[str
 
 
 class NativeLifetimeProofTests(unittest.TestCase):
+    def test_accepts_installed_path_metadata_without_program_digest(self) -> None:
+        receipt = fixture_receipt("linux", "process-group", "cooperative")
+        receipt["schema_version"] = 2
+        primitive = object_at(receipt, "primitive_receipt")
+        primitive["schema_version"] = 2
+        primitive["binary"] = {
+            "name": "lifetime.test", "path": "/installed/lifetime.test",
+            "size_bytes": 1024, "go_version": "go1.27.3",
+        }
+        object_at(receipt, "assurance_receipt")["primitive_receipt_sha256"] = hashlib.sha256(
+            canonical_go_json(primitive, newline=False)).hexdigest()
+        self.assertEqual(validate_receipt(receipt, "linux", "amd64", expected_source()), [])
+
+    def test_primitive_data_digest_matches_go_unicode_and_html_encoding(self) -> None:
+        primitive = {"binary": {
+            "name": "lifetime.test", "path": "/installed/café<&>/lifetime.test",
+            "size_bytes": 1, "go_version": "go1.27.3",
+        }}
+        # Same independent byte fixture as TestNativeProofInstalledBinaryJSONParity.
+        encoded = ('{"binary":{"name":"lifetime.test",'
+                   '"path":"/installed/café\\u003c\\u0026\\u003e/lifetime.test",'
+                   '"size_bytes":1,"go_version":"go1.27.3"}}').encode("utf-8")
+        self.assertEqual(proof._primitive_digest(primitive), hashlib.sha256(encoded).hexdigest())
+
+    def test_installed_binary_metadata_refuses_malformed_or_legacy_hash_shapes(self) -> None:
+        for changes in (
+                {"path": "relative/lifetime.test"},
+                {"path": "/installed/../lifetime.test"},
+                {"path": "/installed/\x00/lifetime.test"},
+                {"path": "/installed/another-name"},
+                {"path": None}, {"path": []},
+                {"sha256": "a" * 64},
+                {"size_bytes": True}, {"size_bytes": 0},
+                {"size_bytes": -1}, {"size_bytes": 1 << 63},
+        ):
+            with self.subTest(changes=changes):
+                receipt = fixture_receipt("linux", "process-group", "cooperative")
+                object_at(receipt, "primitive_receipt", "binary").update(changes)
+                self.assertTrue(validate_receipt(receipt, "linux", "amd64", expected_source()))
+
+    def test_unencodable_primitive_returns_validation_error(self) -> None:
+        receipt = fixture_receipt("linux", "process-group", "cooperative")
+        object_at(receipt, "primitive_receipt", "binary")["path"] = "/installed/\ud800/lifetime.test"
+        self.assertIn("primitive receipt cannot be canonically encoded",
+                      validate_receipt(receipt, "linux", "amd64", expected_source()))
+
+    def test_binary_size_metadata_has_no_obsolete_content_read_budget(self) -> None:
+        receipt = fixture_receipt("linux", "process-group", "cooperative")
+        primitive = object_at(receipt, "primitive_receipt")
+        object_at(primitive, "binary")["size_bytes"] = 512 * 1024 * 1024
+        object_at(receipt, "assurance_receipt")["primitive_receipt_sha256"] = hashlib.sha256(
+            canonical_go_json(primitive, newline=False)).hexdigest()
+        self.assertEqual(validate_receipt(receipt, "linux", "amd64", expected_source()), [])
+
+    def test_old_program_hash_proof_schema_is_explicitly_refused(self) -> None:
+        receipt = fixture_receipt("linux", "process-group", "cooperative")
+        receipt["schema_version"] = 1
+        primitive = object_at(receipt, "primitive_receipt")
+        primitive["schema_version"] = 1
+        del object_at(primitive, "binary")["path"]
+        object_at(primitive, "binary")["sha256"] = "a" * 64  # Historical receipt data only.
+        object_at(receipt, "assurance_receipt")["primitive_receipt_sha256"] = hashlib.sha256(
+            canonical_go_json(primitive, newline=False)).hexdigest()
+        errors = validate_receipt(receipt, "linux", "amd64", expected_source())
+        self.assertIn("receipt schema or claim class is invalid", errors)
+        self.assertIn("primitive proof verdict is invalid", errors)
+        self.assertIn("test binary identity is incomplete", errors)
+
     def test_json_containers_in_primitive_verdict_return_validation_errors(self) -> None:
         for verdict in ([], {}):
             with self.subTest(verdict=verdict):

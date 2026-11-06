@@ -16,6 +16,6 @@ func fillInteraction(response *Response, td *taskdir.TaskDir) error {
 	return err
 }
 
-func observationSupervisorOptions(options pueue.Options, lookup supervisorcore.ExecutableLookup) tasklifecycle.SupervisorOptions {
-	return tasklifecycle.SupervisorOptions{Options: options, Lookup: lookup, OpenStore: openNativeSupervisorStore}
+func observationSupervisorOptions(options pueue.Options, lookup supervisorcore.ExecutableLookup, routing supervisorcore.OwnerRouting) tasklifecycle.SupervisorOptions {
+	return tasklifecycle.SupervisorOptions{Options: options, Lookup: lookup, Routing: routing, OpenStore: openNativeSupervisorStore}
 }

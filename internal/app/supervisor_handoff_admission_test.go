@@ -1,15 +1,12 @@
 package app
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -35,7 +32,8 @@ func TestAdmissionConsumersAutoHandoffExternalInspectionJournal(t *testing.T) {
 }
 
 func TestAdmissionHandoffUsesPublishedPrivateOwnerWhenWarm(t *testing.T) {
-	store, deps, initial := newSupervisorProbeTestFixture(t)
+	store, deps, initial, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	prepared, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	if err != nil || prepared == nil {
 		t.Fatalf("initial private admission failed: client=%v err=%v", prepared, err)
@@ -71,25 +69,20 @@ func TestAdmissionHandoffUsesPublishedPrivateOwnerWhenWarm(t *testing.T) {
 }
 
 func TestAdmissionHandoffBootstrapsExternalOnlyRoot(t *testing.T) {
-	templateStore, templateDeps, template := newSupervisorProbeTestFixture(t)
-	store := newBareInspectionStore(t)
+	store, deps, owner := newColdSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 
-	bundle := testsupport.CanonicalTempDir(t)
-	for _, source := range []string{template.Binding().ClientExecutable, template.Binding().DaemonExecutable} {
-		data := readSupervisorProbeTestFile(t, source)
-		data = []byte(strings.ReplaceAll(string(data), templateStore.RootID, store.RootID))
-		writeRunnerFixture(t, filepath.Join(bundle, filepath.Base(source)), string(data))
-	}
-	deps := templateDeps
-	deps.InitialSupervisorExecutable = filepath.Join(bundle, "pueue")
 	privateBase := filepath.Join(store.Root, ".supervisor")
+	if len(owner.daemonWaits()) != 0 {
+		t.Fatal("cold target already started a daemon")
+	}
 	if _, err := os.Stat(privateBase); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("external-only fixture already contains private state: %v", err)
 	}
 
-	admitted, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	admitted, err := supervisorcore.PrepareAdmissionSupervisorContext(t.Context(), supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	if err != nil || admitted == nil {
 		t.Fatalf("external-only dispatch admission failed: client=%v err=%v", admitted, err)
 	}
@@ -110,11 +103,13 @@ func TestAdmissionHandoffBootstrapsExternalOnlyRoot(t *testing.T) {
 		t.Fatalf("external-only private owner is incomplete: complete=%t err=%v", complete, err)
 	}
 	assertExternalHandoffHead(t, store, legacy, published)
+	assertSupervisorProbeTestDaemonStartCount(t, privateBase, 1)
 	assertSupervisorProbeTestFile(t, externalLog, externalCalls)
 }
 
 func TestAdmissionHandoffRefusesPrivateInspectionMigration(t *testing.T) {
-	store, deps, _ := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	prepared, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	if err != nil || prepared == nil {
 		t.Fatalf("initial private admission failed: client=%v err=%v", prepared, err)
@@ -129,7 +124,14 @@ func TestAdmissionHandoffRefusesPrivateInspectionMigration(t *testing.T) {
 	legacy.Endpoint = "unix:" + filepath.Join(store.Root, ".supervisor", "run", "private-legacy.sock")
 	openHistoricalInspectionGroup(t, store, legacy)
 
-	_, err = supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	admitted, err := supervisorcore.PrepareAdmissionSupervisorContext(t.Context(), supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	if admitted != nil {
+		t.Cleanup(func() {
+			if closeErr := admitted.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		})
+	}
 	if err == nil {
 		t.Fatal("private inspection migration was admitted automatically")
 	}
@@ -143,7 +145,8 @@ func TestAdmissionHandoffRefusesPrivateInspectionMigration(t *testing.T) {
 }
 
 func TestAdmissionHandoffConcurrentCallersElectOneOwner(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 
@@ -163,7 +166,7 @@ func TestAdmissionHandoffConcurrentCallersElectOneOwner(t *testing.T) {
 
 func runExternalHandoffDispatchAdmission(t *testing.T, store *taskdir.Store, deps Dependencies, _ task.SupervisorRef) {
 	t.Helper()
-	admitted, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	admitted, err := supervisorcore.PrepareAdmissionSupervisorContext(t.Context(), supervisorAdmissionSelection(Arguments{}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	if err != nil || admitted == nil {
 		t.Fatalf("dispatch admission failed to hand off the external journal: client=%v err=%v", admitted, err)
 	}
@@ -190,7 +193,8 @@ func runExternalHandoffModelsAdmission(t *testing.T, store *taskdir.Store, deps 
 
 func newAdmissionExternalHandoffFixture(t *testing.T) (*taskdir.Store, Dependencies, task.SupervisorRef, inspection.GroupRequestRecord, string, []byte, []byte) {
 	t.Helper()
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	requestPath := filepath.Join(store.Root, "inspection-group", "request.json")
 	return store, deps, current.Binding(), legacy, externalLog, readSupervisorProbeTestFile(t, externalLog), readSupervisorProbeTestFile(t, requestPath)
@@ -201,7 +205,5 @@ func assertAdmissionExternalHandoff(t *testing.T, store *taskdir.Store, legacy i
 	assertExternalHandoffHead(t, store, legacy, current)
 	assertSupervisorProbeTestFile(t, externalLog, externalBefore)
 	requestPath := filepath.Join(store.Root, "inspection-group", "request.json")
-	if got := readSupervisorProbeTestFile(t, requestPath); !bytes.Equal(got, requestBefore) {
-		t.Fatalf("external inspection request changed: got=%q want=%q", got, requestBefore)
-	}
+	assertSupervisorProbeTestFile(t, requestPath, requestBefore)
 }

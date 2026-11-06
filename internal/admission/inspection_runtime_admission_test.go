@@ -266,10 +266,7 @@ func TestSubmitInspectionOnceRetainsInFlightSupervisorCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workerSHA, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	workerSHA := strings.Repeat("b", 64)
 	digest := strings.Repeat("a", 64)
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: digest,
@@ -316,10 +313,7 @@ func TestSubmitInspectionOnceRejectsWorkerChangedAfterClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	digest := strings.Repeat("b", 64)
 	definitionDigest := strings.Repeat("a", 64)
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: definitionDigest,

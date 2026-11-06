@@ -12,8 +12,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-const privateManagedRunnerPrefix = "delegate-run-"
-
 // ReplaceQueuedRunnerCommands updates matching queued private tasks. Pueue's
 // editor locks each task while the exact command comparison and replacement
 // run, and running tasks are never stopped or rewritten. Already-current
@@ -118,23 +116,19 @@ func validateRunnerCommandReplacement(c *Client, replacement RunnerCommandReplac
 	if !IsPrivateConfig(replacement.RootPath, c.binding.ConfigPath) || replacement.Label != expectedLabel {
 		return ErrBinding
 	}
-	if !filepath.IsAbs(replacement.OldRunner) || filepath.Clean(replacement.OldRunner) != replacement.OldRunner || strings.IndexByte(replacement.OldRunner, 0) >= 0 {
+	if !validPreviousRunnerPath(replacement.OldRunner) {
 		return ErrConfiguration
 	}
 	for _, runner := range replacement.PreviousManagedRunners {
-		if !isPrivateManagedRunnerPath(replacement.RootPath, runner) {
+		if !validPreviousRunnerPath(runner) {
 			return ErrConfiguration
 		}
 	}
 	return validateLaunch(Launch{RunnerExecutable: replacement.NewRunner, RootPath: replacement.RootPath}, replacement.RootID)
 }
 
-func isPrivateManagedRunnerPath(root, runner string) bool {
-	if !filepath.IsAbs(runner) || filepath.Clean(runner) != runner || filepath.Dir(runner) != filepath.Join(root, ".supervisor") {
-		return false
-	}
-	digest := strings.TrimPrefix(filepath.Base(runner), privateManagedRunnerPrefix)
-	return digest != filepath.Base(runner) && task.ValidateSHA256(digest) == nil
+func validPreviousRunnerPath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && strings.IndexByte(path, 0) < 0
 }
 
 func runnerCommandGroupMatches(job Job, replacement RunnerCommandReplacement) bool {
@@ -294,6 +288,9 @@ func (c *Client) replaceQueuedRunnerCommand(ctx context.Context, numericID int64
 	if err := c.verify(ctx); err != nil {
 		return err
 	}
+	if c.options.ControlOwnerExecutable != "" {
+		return c.replaceManagedRunnerCommand(ctx, numericID, expected, replacement)
+	}
 	configPath, err := privateEditConfig(filepath.Dir(c.runtimeBinding.ConfigPath), c.runtimeBinding.ConfigPath, c.runtimeBinding.ConfigDigest)
 	if err != nil {
 		return err
@@ -305,6 +302,36 @@ func (c *Client) replaceQueuedRunnerCommand(ctx context.Context, numericID int64
 		c.options.Environment, strconv.FormatInt(numericID, 10), expected, replacement,
 		"/bin/sh -c "+quoteShell(editorScript),
 	)
+	if _, err = editClient.command(ctx, nil, "edit", strconv.FormatInt(numericID, 10)); err != nil {
+		return fmt.Errorf("%w: edit queued runner command: %w", ErrBinding, err)
+	}
+	return nil
+}
+
+// Managed repair retains the existing exact row/command and pinned-parent
+// checks. The native generation owner retains the CLI through its sole Wait.
+func (c *Client) replaceManagedRunnerCommand(ctx context.Context, numericID int64, expected, replacement string) error {
+	root, private := privateStateRoot(c.runtimeBinding.ConfigPath)
+	if !private {
+		return ErrConfiguration
+	}
+	parent, err := canonicalRepairParent(root)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(c.runtimeBinding.ConfigPath) != parent.Path {
+		return ErrBinding
+	}
+	configPath, err := privateRepairConfig(parent.Path, c.runtimeBinding.ConfigPath, c.runtimeBinding.ConfigDigest, c.options.ControlOwnerExecutable)
+	if err != nil {
+		return err
+	}
+	editClient := *c
+	editClient.runtimeBinding.ConfigPath = configPath
+	editClient.options = c.options
+	environment := runnerEditEnvironment(c.options.Environment, strconv.FormatInt(numericID, 10), expected, replacement, repairEditorToken)
+	environment = setEnvironment(environment, repairRootEnv, root)
+	editClient.options.Environment = repairActuatorEnvironment(environment, &parent)
 	if _, err = editClient.command(ctx, nil, "edit", strconv.FormatInt(numericID, 10)); err != nil {
 		return fmt.Errorf("%w: edit queued runner command: %w", ErrBinding, err)
 	}

@@ -10,5 +10,5 @@ func supervisorAdmissionSelection(a Arguments, deps Dependencies) supervisorcore
 }
 
 func supervisorAdmissionOptions(deps Dependencies, control pueue.Options) supervisorcore.AdmissionOptions {
-	return supervisorcore.AdmissionOptions{RunnerExecutable: deps.RunnerExecutable, InitialExecutable: deps.InitialSupervisorExecutable, Environment: deps.Environment, Control: control, OpenStore: openNativeSupervisorStore}
+	return supervisorcore.AdmissionOptions{RunnerExecutable: deps.RunnerExecutable, InitialExecutable: deps.InitialSupervisorExecutable, Environment: deps.Environment, Control: control, Routing: deps.infrastructureRouting(), OpenStore: openNativeSupervisorStore}
 }

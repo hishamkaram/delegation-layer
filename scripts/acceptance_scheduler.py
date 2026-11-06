@@ -1,9 +1,10 @@
-"""Run native scheduler acceptance; Root supplies the current CLI/runner builds.
+"""Run native scheduler acceptance with an owned CLI/runner source installation.
 
 Usage: python3 scripts/acceptance_scheduler.py --scenario all --output FRESH_DIRECTORY
 The successive case covers three actual UTC ticks, failure and restart within
 five minutes; overlap/stop covers two ticks within four minutes.
-The controlled pi fixture performs no AI requests. See --help for binary paths.
+The controlled pi fixture performs no AI requests. See --help for --source-root
+and selected native supervisor paths.
 """
 
 from pathlib import Path

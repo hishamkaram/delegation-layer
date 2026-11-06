@@ -24,6 +24,8 @@ from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLifetime
 from scripts.delegate_acceptance.private_cli.fixture_records import FixtureInstallation
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
+from scripts.delegate_acceptance.supervisor.config_policy import config_for
+from scripts.delegate_acceptance.supervisor.configuration import supervisor_binding
 from scripts.delegate_acceptance.private_cli.scheduler_occurrences import (
     MINUTE_NS, Occurrence, read_occurrences, require_occurrences, timestamp_ns,
 )
@@ -408,18 +410,26 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         case.fixture.old_daemon_marker.touch()
         supervisor = self.state / ".supervisor"
         supervisor.mkdir()
-        client, daemon = b"finite client fixture", b"finite daemon fixture"
-        client_digest, daemon_digest = hashlib.sha256(client).hexdigest(), hashlib.sha256(daemon).hexdigest()
-        pair_digest = hashlib.sha256((client_digest + "\n" + daemon_digest).encode()).hexdigest()
-        pair = supervisor / ("pueue-pair-" + pair_digest)
-        pair.mkdir()
-        for name, content in (("pueue", client), ("pueued", daemon)):
-            (pair / name).write_bytes(content)
-            (self.lifetime.old_libexec / name).write_bytes(content)
-        (supervisor / "pueue-pair.json").write_text(json.dumps({
-            "schema_version": 1, "client_sha256": client_digest, "daemon_sha256": daemon_digest,
-            "pair_sha256": pair_digest,
+        for name in ("pueue", "pueued"):
+            installed = self.lifetime.old_libexec / name
+            installed.write_text("#!/bin/sh\nexit 0\n")
+            installed.chmod(0o700)
+        config = supervisor / "pueue.yml"
+        config_data = json.dumps(config_for(supervisor)).encode()
+        config.write_bytes(config_data)
+        binding = supervisor_binding(
+            self.lifetime.old_libexec / "pueue", config, supervisor,
+            hashlib.sha256(config_data).hexdigest(), "pueue 4.0.4",
+        )
+        binding["daemon_executable"] = str(self.lifetime.old_libexec / "pueued")
+        (supervisor / "supervisor.identity.json").write_text(json.dumps({
+            "schema_version": 1, "binding": binding,
         }))
+        daemon_identity = {field: binding[field] for field in (
+            "config_path", "config_digest", "resolved_config_sha256", "endpoint",
+        )}
+        daemon_identity.update(executable=binding["daemon_executable"], executable_identity="installed-path-v1")
+        (supervisor / "daemon.identity.json").write_text(json.dumps(daemon_identity))
         # Shape observed in service-linux-final-1/003-status: no task_record.
         response = {"schema_version": 1, "command": "status", "root_id": ROOT_ID, "task_id": FIRST_ID,
                     "admission": "admitted", "liveness": "running", "publication": "unknown",
@@ -471,9 +481,9 @@ class SchedulerAcceptanceTests(unittest.TestCase):
 
     def test_admitted_status_does_not_bypass_canonical_supervisor_pair_validation(self):
         case, row, response = self.admitted_case()
-        (self.state / ".supervisor" / "pueue-pair.json").write_text("{}\n")
+        (self.state / ".supervisor" / "supervisor.identity.json").write_text("{}\n")
         with patch.object(case, "command", return_value=response):
-            with self.assertRaisesRegex(RuntimeError, "invalid identity"):
+            with self.assertRaisesRegex(RuntimeError, "state-root supervisor binding has an unsupported representation"):
                 case.await_admitted(row)
 
     def test_systemd_degraded_manager_still_starts_owned_transient_service(self):
@@ -797,7 +807,7 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         service = self.service()
         case = self.case(service)
         with (patch.object(service, "stop"), patch.object(case, "discover", side_effect=RuntimeError("unreadable store")),
-              patch.object(application, "shutdown_private_supervisor") as shutdown,
+              patch.object(application, "shutdown_terminal_private_supervisor") as shutdown,
               patch.object(application, "finalize_fixture") as finalize):
             with self.assertRaisesRegex(RuntimeError, "fixture retained"):
                 application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
@@ -811,15 +821,19 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         case = self.case(service)
         self.lifetime.private_config = self.state / ".supervisor" / "pueue.yml"
         self.lifetime.old_libexec = self.base / "libexec"
+        self.lifetime.old_install = self.base / "selected-install"
+        self.lifetime.delegate = self.base / "upgraded-install" / "delegate"
         events = []
         with (patch.object(service, "stop", side_effect=lambda: events.append("stop")),
               patch.object(case, "discover", side_effect=lambda: events.append("discover")),
-              patch.object(application, "shutdown_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")),
+              patch.object(application, "shutdown_terminal_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")) as shutdown,
               patch.object(service, "retire", side_effect=lambda: events.append("retire")),
               patch.object(application, "finalize_fixture", side_effect=lambda *args: events.append("finalize"))):
             application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
                                     receipt=case.receipt, failure=None)
         self.assertEqual(events, ["stop", "discover", "daemon", "retire", "finalize"])
+        self.assertEqual(shutdown.call_args.args[:2],
+                         (self.lifetime.old_install / "delegate", self.lifetime.old_libexec / "pueue"))
 
     def test_collection_uses_existing_outcome_oracle_and_exact_task_closure(self):
         case = self.case(self.service())
@@ -864,10 +878,9 @@ class SchedulerAcceptanceTests(unittest.TestCase):
             application.output_directory(self.parent, self.lifetime.old_layout_ownership)
         self.assertEqual(marker.read_text(), "existing data")
 
-    def test_default_paths_use_repository_binaries_without_building(self):
+    def test_default_source_and_supervisor_paths_are_repository_selections(self):
         selected = application.parse_arguments([])
-        self.assertEqual(selected.delegate, application.REPOSITORY / "bin" / "delegate")
-        self.assertEqual(selected.runner, application.REPOSITORY / "bin" / "delegate-run")
+        self.assertEqual(selected.source_root, application.REPOSITORY)
         self.assertEqual(selected.pueue, application.REPOSITORY / "bin" / "test-supervisor" / "pueue")
         self.assertEqual(selected.pueued, application.REPOSITORY / "bin" / "test-supervisor" / "pueued")
         self.assertIsNone(selected.output)

@@ -77,14 +77,18 @@ func TestPreparedMigrationRefusesCompletedTaskRemovalFromHeldClient(t *testing.T
 	for _, removal := range preparedPrivateRemovalTasks {
 		t.Run(removal.name, func(t *testing.T) {
 			fixture := newBusyPreparedPrivateObservation(t)
-			identity := removal.write(t, fixture.stateRoot)
+			removal.write(t, fixture.stateRoot)
+			commands, authorizations := prepareRefusedCleanupObservation(t, fixture.legacy, fixture.stateRoot)
 			before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
-			err := fixture.legacy.RemoveCompletedTask(t.Context(), identity)
+			_, err := startPrivateMaintenancePass(t, fixture.legacy, func() {}).result(t)
 			if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 				t.Errorf("held client removed a completed task during prepared migration: %v", err)
 			}
 			if _, statErr := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Errorf("prepared migration permitted a remove command: %v", statErr)
+			}
+			if commands.Load() != 0 || authorizations.Load() != 0 {
+				t.Errorf("prepared migration reached cleanup: commands=%d authorizations=%d", commands.Load(), authorizations.Load())
 			}
 			assertPreparedPrivateObservationUnchanged(t, fixture, before)
 		})
@@ -134,43 +138,80 @@ func TestPreparedMigrationRefusesCompletedTaskRemovalThroughRecoveryAlias(t *tes
 			if client.RuntimeBinding().ConfigPath != privateRecoveryConfigPath(fixture.stateRoot) {
 				t.Fatal("fixture did not exercise the retained recovery alias")
 			}
-			identity := removal.write(t, fixture.stateRoot)
+			removal.write(t, fixture.stateRoot)
+			commands, authorizations := prepareRefusedCleanupObservation(t, client, fixture.stateRoot)
 			before := snapshotPrivateSuccessorTestState(t, fixture.stateRoot)
-			if err = client.RemoveCompletedTask(t.Context(), identity); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+			if _, err = startPrivateMaintenancePass(t, client, func() {}).result(t); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
 				t.Errorf("alias cleanup did not defer incomplete migration: %v", err)
+			}
+			if commands.Load() != 0 || authorizations.Load() != 0 {
+				t.Errorf("prepared alias reached cleanup: commands=%d authorizations=%d", commands.Load(), authorizations.Load())
 			}
 			assertPreparedPrivateObservationUnchanged(t, fixture, before)
 		})
 	}
 }
 
+func prepareRefusedCleanupObservation(t *testing.T, client *Client, root string) (*atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	if err := ensurePrivateLockFile(filepath.Join(root, privateSupervisorDirectory), privateQueueMaintenanceLockName); err != nil {
+		t.Fatal(err)
+	}
+	var commands, authorizations atomic.Int32
+	client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "entry" {
+			commands.Add(1)
+		}
+	}
+	client.options.SuccessfulCleanupAuthorizer = func(ctx context.Context, root string, binding task.SupervisorRef, jobs []Job) (PrivateQueueCleanupPlan, error) {
+		authorizations.Add(1)
+		return allowSuccessfulCleanupForTest(ctx, root, binding, jobs)
+	}
+	return &commands, &authorizations
+}
+
 func TestCompletedSuccessorAllowsCleanupThroughRecoveredPair(t *testing.T) {
 	for _, compatible := range []bool{false, true} {
 		t.Run(map[bool]string{false: "published-pair", true: "compatible-pair"}[compatible], func(t *testing.T) {
-			fixture := newCompletedPrivateSuccessorTestFixture(t, true)
-			clientPath, daemonPath := fixture.clientPath, fixture.daemonPath
-			if compatible {
-				clientPath, daemonPath = installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
-				removePrivateTestPath(t, filepath.Join(fixture.base, "completed"))
-			}
-			client, err := RecoverPrivate(t.Context(), fixture.stateRoot, fixture.saved, clientPath, daemonPath, fixture.options)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if closeErr := client.Close(); closeErr != nil {
-					t.Error(closeErr)
-				}
-			})
-			identity := writeCompletedPrivateRemovalTask(t, fixture.stateRoot)
-			if err = client.RemoveCompletedTask(t.Context(), identity); err != nil {
-				t.Fatalf("completed successor cleanup through recovered pair: %v", err)
-			}
-			path := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")
-			if got := strings.TrimSpace(string(readPrivateSupervisorFile(t, path))); got != "42" {
-				t.Errorf("cleanup removed task %q, want 42", got)
-			}
+			checkCompletedSuccessorCleanupThroughRecoveredPair(t, compatible)
 		})
+	}
+}
+
+func checkCompletedSuccessorCleanupThroughRecoveredPair(t *testing.T, compatible bool) {
+	t.Helper()
+	fixture := newCompletedPrivateSuccessorTestFixture(t, true)
+	clientPath, daemonPath := fixture.clientPath, fixture.daemonPath
+	if compatible {
+		clientPath, daemonPath = installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
+		removePrivateTestPath(t, filepath.Join(fixture.base, "completed"))
+	}
+	recovery, err := AttemptPrivateRecovery(t.Context(), fixture.stateRoot, fixture.saved, clientPath, daemonPath, fixture.options)
+	client := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
+	fixture.setCleanupClient(client)
+	beforeRuntime := client.RuntimeBinding()
+	beforePublication := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
+	writeCompletedPrivateRemovalTask(t, fixture.stateRoot)
+	var authorizations atomic.Int32
+	client.options.SuccessfulCleanupAuthorizer = func(ctx context.Context, root string, binding task.SupervisorRef, jobs []Job) (PrivateQueueCleanupPlan, error) {
+		authorizations.Add(1)
+		if root != fixture.stateRoot || binding != fixture.successor {
+			t.Error("cleanup authorization lost the published successor binding")
+			return PrivateQueueCleanupPlan{}, ErrBinding
+		}
+		return allowSuccessfulCleanupForTest(ctx, root, binding, jobs)
+	}
+	startPrivateMaintenancePass(t, client, func() {}).requireCompleted(t)
+	if authorizations.Load() != 1 || client.Binding() != fixture.saved || client.RuntimeBinding() != beforeRuntime {
+		t.Fatal("maintenance changed saved/runtime provenance or repeated authorization")
+	}
+	if after := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot)); string(after) != string(beforePublication) {
+		t.Fatal("maintenance republished runtime provenance as generation identity")
+	}
+	path := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")
+	if got := strings.TrimSpace(string(readPrivateSupervisorFile(t, path))); got != "42" {
+		t.Errorf("cleanup removed task %q, want 42", got)
 	}
 }
 

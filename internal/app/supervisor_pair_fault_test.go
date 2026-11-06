@@ -11,6 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -78,9 +79,9 @@ func dispatchPairFault(t *testing.T, name string, run func(context.Context) (*pu
 	return err
 }
 
-func migratePairFault(t *testing.T, name, root string, deps Dependencies) commandResult {
+func migratePairFault(t *testing.T, name, root string, deps Dependencies, owner *componentSupervisorFixture) commandResult {
 	t.Helper()
-	result := supervisorMigrate(root, deps, newSupervisorTestResponse())
+	result := supervisorMigrate(root, withSupervisorProbeRouting(t, deps, owner), newSupervisorTestResponse())
 	var output bytes.Buffer
 	if err := writeJSONResponse(&output, "supervisor", &result.response, result.err); err != nil {
 		t.Fatal(err)
@@ -88,39 +89,6 @@ func migratePairFault(t *testing.T, name, root string, deps Dependencies) comman
 	control := result.response.SupervisorControl
 	t.Logf("%s migrate: exit=%d err=%t reason=%q state=%q next_action=%q", name, result.code, result.err != nil, control.ReasonCode, control.State, control.NextAction)
 	return result
-}
-
-func appendPairFaultBytes(t *testing.T, path string) {
-	t.Helper()
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = file.WriteString("\n# corrupted present member\n"); err != nil {
-		t.Fatal(errors.Join(err, file.Close()))
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestAdmissionRefusesCorruptPresentPublishedPair pairs the permitted
-// observation of a complete published generation whose present client bytes
-// changed with refused repair: admission reports migration-required and no
-// record, binding, or daemon start changes.
-func TestAdmissionRefusesCorruptPresentPublishedPair(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
-	binding := current.Binding()
-	base := filepath.Dir(binding.ConfigPath)
-	appendPairFaultBytes(t, binding.ClientExecutable)
-	before := capturePairFaultWitness(t, base)
-	err := dispatchPairFault(t, "corrupt present", func(ctx context.Context) (*pueue.Client, error) {
-		return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
-	}, store.Root)
-	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("corrupt present published pair was admitted: %v", err)
-	}
-	assertPairFaultWitness(t, base, before)
 }
 
 // TestAdmissionReportsUnreadablePairRecords refuses repair while a generation
@@ -145,16 +113,23 @@ func TestAdmissionReportsUnreadablePairRecords(t *testing.T) {
 	}
 }
 
-// writePairRestartIntent records a restart from the published pair to its
-// retained copy and returns the retained client path.
+// writePairRestartIntent records a restart to a missing selected installation
+// and returns that installation's client path.
 func writePairRestartIntent(t *testing.T, root string, original task.SupervisorRef) string {
 	t.Helper()
-	client, daemon, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), root, original.ClientExecutable, original.DaemonExecutable)
-	if err != nil {
-		t.Fatal(err)
-	}
+	client := filepath.Join(testsupport.CanonicalTempDir(t), "missing-accepted", "pueue")
 	target := original
-	target.ClientExecutable, target.DaemonExecutable = client, daemon
+	target.ClientExecutable, target.DaemonExecutable = client, filepath.Join(filepath.Dir(client), "pueued")
+	target.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	target.ClientSHA256, target.DaemonSHA256 = "", ""
+	writePairRestartIntentTo(t, original, target)
+	return client
+}
+
+// writePairRestartIntentTo seeds the exact predecessor and target of a
+// historical restart without launching or publishing the target.
+func writePairRestartIntentTo(t *testing.T, original, target task.SupervisorRef) {
+	t.Helper()
 	record := struct {
 		SchemaVersion int `json:"schema_version"`
 		Restart       struct {
@@ -170,14 +145,13 @@ func writePairRestartIntent(t *testing.T, root string, original task.SupervisorR
 	if err = os.WriteFile(filepath.Join(filepath.Dir(original.ConfigPath), "bootstrap.pending"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return client
 }
 
 // TestExplicitMigrationReportsUnreadableRecordBesideRestartIntent keeps an
 // unreadable migration record visible beside a recorded restart intent. It is
 // never a clean transition deferral, and no restart or record change occurs.
 func TestExplicitMigrationReportsUnreadableRecordBesideRestartIntent(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
+	store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 	original := current.Binding()
 	base := filepath.Dir(original.ConfigPath)
 	writePairRestartIntent(t, store.Root, original)
@@ -185,33 +159,84 @@ func TestExplicitMigrationReportsUnreadableRecordBesideRestartIntent(t *testing.
 		t.Fatal(err)
 	}
 	before := capturePairFaultWitness(t, base)
-	result := migratePairFault(t, "restart intent with unreadable migration record", store.Root, deps)
+	result := migratePairFault(t, "restart intent with unreadable migration record", store.Root, deps, owner)
 	if result.err == nil || result.response.SupervisorControl.ReasonCode != "state_unreadable" {
 		t.Fatalf("unreadable migration record was suppressed: %+v %v", result.response.SupervisorControl, result.err)
 	}
 	assertPairFaultWitness(t, base, before)
 }
 
-// TestCorruptPresentPublishedPairMigrationOutcome records the explicit
-// migration consumer for a complete generation whose present client bytes
-// changed.
-func TestCorruptPresentPublishedPairMigrationOutcome(t *testing.T) {
-	store, deps, current := newSupervisorProbeTestFixture(t)
-	binding := current.Binding()
-	appendPairFaultBytes(t, binding.ClientExecutable)
-	result := migratePairFault(t, "corrupt present", store.Root, deps)
-	if result.err == nil || !errors.Is(result.err, pueue.ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("corrupt present published pair migrated: %+v %v", result.response.SupervisorControl, result.err)
+// TestPendingHistoricalRestartStopsPublicConsumersBeforePairSelection keeps
+// an installed but never-started B authoritative after A's supported shutdown.
+// The future C transport exists, but its missing daemon must not be resolved.
+func TestPendingHistoricalRestartStopsPublicConsumersBeforePairSelection(t *testing.T) {
+	fixture := newHistoricalSupervisorFixturePaths(t)
+	prepareHistoricalSupervisorExecutables(t, fixture)
+	fixture.options = newHistoricalSupervisorOptions()
+	bindHistoricalSupervisorFixture(t, fixture)
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	waits := fixture.component.daemonWaits()
+	if len(waits) != 1 {
+		t.Fatalf("predecessor daemon Wait count = %d, want one actual Start", len(waits))
+	}
+	if err := fixture.component.stopDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitComponentDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	target := fixture.predecessor
+	target.ClientExecutable, target.DaemonExecutable = fixture.clientB, fixture.daemonB
+	writePairRestartIntentTo(t, fixture.predecessor, target)
+	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = filepath.Join(testsupport.CanonicalTempDir(t), "installation-c", "pueue")
+	pid := filepath.Join(fixture.root, ".supervisor", "run", "pueue.pid")
+	writeRunnerFixture(t, deps.InitialSupervisorExecutable, historicalSupervisorClientScript("C", fixture.readyPath, pid, fixture.statusPath, fixture.commandLog))
+	base := filepath.Dir(fixture.predecessor.ConfigPath)
+	before := capturePairFaultWitness(t, base)
+	configBefore := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)
+	startsBefore := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
+	if string(startsBefore) != "A\n" {
+		t.Fatalf("historical restart fixture started a target: %q", startsBefore)
+	}
+	consumers := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{name: "explicit migration", run: func(t *testing.T) {
+			result := migratePairFault(t, "present nonready historical restart", fixture.root, deps, fixture.component)
+			if result.code != 1 || result.err == nil || result.response.SupervisorControl.ReasonCode != "transition_pending" {
+				t.Fatalf("migration displaced pending historical restart: code=%d control=%+v err=%v", result.code, result.response.SupervisorControl, result.err)
+			}
+		}},
+		{name: "admission", run: func(t *testing.T) {
+			err := dispatchPairFault(t, "present nonready historical restart", func(ctx context.Context) (*pueue.Client, error) {
+				return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), fixture.store, fixture.options)
+			}, fixture.root)
+			if pairFaultReason(err) != "transition_pending" {
+				t.Fatalf("admission displaced pending historical restart: %v", err)
+			}
+		}},
+	}
+	for _, consumer := range consumers {
+		t.Run(consumer.name, func(t *testing.T) {
+			consumer.run(t)
+			assertPairFaultWitness(t, base, before)
+			if after := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath); !bytes.Equal(after, configBefore) {
+				t.Fatal("pending historical restart changed config bytes")
+			}
+			if after := readSupervisorProbeTestFile(t, fixture.daemonStartLog); !bytes.Equal(after, startsBefore) {
+				t.Fatalf("pending historical restart started another daemon: %q", after)
+			}
+		})
 	}
 }
 
-// removePublishedDaemonBehindRetainedPair installs the retained pair and then
-// removes the published daemon while its endpoint stays live.
+// removePublishedDaemonBehindRetainedPair removes the selected installed
+// daemon while its published endpoint stays live.
 func removePublishedDaemonBehindRetainedPair(t *testing.T, root string, original task.SupervisorRef) {
 	t.Helper()
-	if _, _, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), root, original.ClientExecutable, original.DaemonExecutable); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(original.DaemonExecutable); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +251,9 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 		store, deps, current := newSupervisorProbeTestFixture(t)
 		base := filepath.Dir(current.Binding().ConfigPath)
 		removePublishedDaemonBehindRetainedPair(t, store.Root, current.Binding())
+		installed := filepath.Join(testsupport.CanonicalTempDir(t), "installation-c")
+		deps.InitialSupervisorExecutable = filepath.Join(installed, "pueue")
+		writeSupervisorProbeExecutables(t, store.RootID, deps.InitialSupervisorExecutable, filepath.Join(installed, "pueued"))
 		before := capturePairFaultWitness(t, base)
 		err := dispatchPairFault(t, "live missing member", func(ctx context.Context) (*pueue.Client, error) {
 			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
@@ -236,10 +264,13 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 		assertPairFaultWitness(t, base, before)
 	})
 	t.Run("explicit migration", func(t *testing.T) {
-		store, deps, current := newSupervisorProbeTestFixture(t)
+		store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 		base := filepath.Dir(current.Binding().ConfigPath)
 		removePublishedDaemonBehindRetainedPair(t, store.Root, current.Binding())
-		result := migratePairFault(t, "live missing member", store.Root, deps)
+		installed := filepath.Join(testsupport.CanonicalTempDir(t), "installation-c")
+		deps.InitialSupervisorExecutable = filepath.Join(installed, "pueue")
+		writeSupervisorProbeExecutables(t, store.RootID, deps.InitialSupervisorExecutable, filepath.Join(installed, "pueued"))
+		result := migratePairFault(t, "live missing member", store.Root, deps, owner)
 		if result.response.SupervisorControl.ReasonCode == "published_pair_unavailable_live" {
 			t.Fatalf("explicit migration stopped at the live endpoint: %+v %v", result.response.SupervisorControl, result.err)
 		}
@@ -249,13 +280,10 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 	})
 }
 
-// writeConflictingLaunchWitness installs the retained pair and records a
-// launch witness that names neither the published nor the retained daemon.
+// writeConflictingLaunchWitness records a launch witness that names a daemon
+// outside the published installation.
 func writeConflictingLaunchWitness(t *testing.T, root string, original task.SupervisorRef) {
 	t.Helper()
-	if _, _, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), root, original.ClientExecutable, original.DaemonExecutable); err != nil {
-		t.Fatal(err)
-	}
 	witness := historicalPrivateDaemonIdentityFor(original)
 	witness.Executable += "-elsewhere"
 	data, err := task.MarshalCanonical(witness)
@@ -285,11 +313,11 @@ func TestPairIdentityConflictStopsEveryConsumer(t *testing.T) {
 		assertPairFaultWitness(t, base, before)
 	})
 	t.Run("explicit migration", func(t *testing.T) {
-		store, deps, current := newSupervisorProbeTestFixture(t)
+		store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 		base := filepath.Dir(current.Binding().ConfigPath)
 		writeConflictingLaunchWitness(t, store.Root, current.Binding())
 		before := capturePairFaultWitness(t, base)
-		result := migratePairFault(t, "identity conflict", store.Root, deps)
+		result := migratePairFault(t, "identity conflict", store.Root, deps, owner)
 		if result.err == nil || result.response.SupervisorControl.ReasonCode != "identity_conflict" {
 			t.Fatalf("explicit migration absorbed an identity conflict: %+v %v", result.response.SupervisorControl, result.err)
 		}

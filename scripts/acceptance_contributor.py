@@ -8,7 +8,6 @@ import argparse
 import json
 from pathlib import Path
 import secrets
-import shutil
 import sys
 import tempfile
 import time
@@ -27,6 +26,11 @@ from scripts.acceptance_provider_common import (
     verify_collected_outcome as shared_verify_collected_outcome,
     wait_runner_done as shared_wait_runner_done,
 )
+
+from scripts.delegate_acceptance.hermetic.installation import (
+    REPOSITORY, build_source_command, require_source_root,
+)
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
 
 
 PROVIDER = "synthetic:contributor-proof"
@@ -84,15 +88,16 @@ def verify_case_evidence(case, directory, answer, session_id):
 
 
 class ContributorAcceptance:
-    def __init__(self, tools, pueue, pueued, output):
-        self.tools = Path(tools).resolve(strict=True)
+    def __init__(self, source_root, pueue, pueued, output):
+        self.source_root = require_source_root(source_root)
         self.pueue = Path(pueue).resolve(strict=True)
         self.pueued = Path(pueued).resolve(strict=True)
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True)
         ownership = DirectoryOwner()
         try:
-            allocated = Path(tempfile.mkdtemp(prefix="dc-", dir="/tmp"))
+            temporary_parent = Path("/tmp").resolve(strict=True)
+            allocated = Path(tempfile.mkdtemp(prefix="dc-", dir=temporary_parent))
             self.base = ownership.adopt_created(
                 "contributor private state", allocated, allocated.parent).directory.resolve()
             self.root = ownership.create("contributor task state", self.base / "task-state", self.base).directory
@@ -106,7 +111,15 @@ class ContributorAcceptance:
             environment["DELEGATE_TEST_PUEUE"] = str(self.pueue)
             environment["DELEGATE_CONTRIBUTOR_RUNTIME"] = str(self.runtime)
             self.processes = Processes(self.output / "processes", environment, owner=ownership)
-        except BaseException:
+            self.delegate = build_source_command(self.source_root, "contributor_delegate", self.bindir / "delegate")
+            self.runner = build_source_command(self.source_root, "contributor_runner", self.bindir / "delegate-run")
+            self.provider = build_source_command(self.source_root, "contributor_provider", self.bindir / "provider")
+        except BaseException as error:
+            if command_closure_unproven(error):
+                ownership.release()
+                raise RuntimeError(
+                    "fixture installation closure unproven; retained " + str(self.base)
+                    + " and " + str(self.output / "processes")) from error
             ownership.rollback()
             raise
         self.owned_directories = ownership.transfer()
@@ -121,13 +134,6 @@ class ContributorAcceptance:
         (self.queue / "aliases.yml").chmod(0o600)
         self.config = self.queue / "p.yml"
         write_json(self.config, config_for(self.queue))
-        for name in ("delegate", "delegate-run", "provider"):
-            shutil.copyfile(self.tools / name, self.bindir / name)
-            (self.bindir / name).chmod(0o700)
-            require(digest(self.tools / name) == digest(self.bindir / name), "binary copy changed")
-        self.delegate = self.bindir / "delegate"
-        self.runner = self.bindir / "delegate-run"
-        self.provider = self.bindir / "provider"
         for name, binary in (("pueue", self.pueue), ("pueued", self.pueued)):
             process = self.processes.run(name + "-version", [binary, "--version"], self.base)
             require((process.directory / "stdout").read_text().strip() == name + " 4.0.4", "wrong supervisor version")
@@ -135,7 +141,9 @@ class ContributorAcceptance:
         require([p["id"] for p in discovery["providers"]] == [PROVIDER], "test catalog differs from declared contributor")
         write_json(self.output / "binding.json", {
             "base": str(self.base), "provider": PROVIDER, "discovery": discovery,
-            "binaries": {str(p): digest(p) for p in (self.delegate, self.runner, self.provider, self.pueue, self.pueued)},
+            "executables": {"delegate": str(self.delegate), "runner": str(self.runner),
+                            "provider": str(self.provider), "pueue": str(self.pueue), "pueued": str(self.pueued)},
+            "source_root": str(self.source_root),
             "driver_sha256": digest(__file__), "config_sha256": digest(self.config),
             "native_ai_turns": 0,
         })
@@ -419,12 +427,15 @@ class ContributorAcceptance:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tools", required=True)
+    parser.add_argument("--source-root", default=str(REPOSITORY))
+    parser.add_argument("--tools", help="retired; use --source-root to build owned fixtures")
     parser.add_argument("--pueue", required=True)
     parser.add_argument("--pueued", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    ContributorAcceptance(args.tools, args.pueue, args.pueued, args.output).run()
+    if args.tools is not None:
+        parser.error("--tools is retired; use --source-root to build owned fixture installations")
+    ContributorAcceptance(args.source_root, args.pueue, args.pueued, args.output).run()
 
 
 if __name__ == "__main__":

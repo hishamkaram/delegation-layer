@@ -25,3 +25,24 @@ func AllErrorCauses(err error, leaf func(error) bool) bool {
 	}
 	return leaf(err)
 }
+
+// AnyErrorNode reports whether a node in the error tree matches the predicate.
+// Wrappers are visited before their causes because wrappers can retain owners.
+// Nil errors never match; a successful match stops traversal.
+func AnyErrorNode(err error, match func(error) bool) bool {
+	if err == nil {
+		return false
+	}
+	if match(err) {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if AnyErrorNode(cause, match) {
+				return true
+			}
+		}
+		return false
+	}
+	return AnyErrorNode(errors.Unwrap(err), match)
+}

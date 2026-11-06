@@ -124,7 +124,7 @@ func TestNilPlanSuppliedSelectionResolvesInterpreterAndChildEnvironment(t *testi
 	selection := []string{"PATH=" + binDir, marker(selectedMarker)}
 	_, got := runEnvironmentProbe(t, func(meta *task.MetaRecord, plan *Plan) {
 		meta.ProviderExecutable = script
-		plan.Executable, plan.ExecutableSHA256, plan.Arguments, plan.Environment = script, task.ComputeSHA256(content), nil, nil
+		plan.Executable, plan.Arguments, plan.Environment = script, nil, nil
 	}, Options{InheritedEnvironment: selection})
 	if want := fmt.Sprintf("marker=%s path=%s\n", selectedMarker, binDir); got != want {
 		t.Fatalf("script observed %q, want %q", got, want)

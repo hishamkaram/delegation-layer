@@ -202,20 +202,20 @@ func privateSupervisorSuccessorConnected(ctx context.Context, stateRoot string, 
 	if err != nil || !found {
 		return false, err
 	}
-	cursor := saved
+	cursor := privateDaemonIdentityForBinding(saved)
 	for _, migration := range history.Migrations {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if privateLogicalIdentityMatchesBinding(migration.Legacy, cursor) {
-			cursor = privateSupervisorBindingForIdentity(cursor, migration.Successor)
+		if privateLogicalIdentityMatchesBinding(migration.Legacy, task.SupervisorRef{ConfigPath: cursor.ConfigPath, ConfigDigest: cursor.ConfigDigest, ResolvedConfigSHA256: cursor.ResolvedConfigSHA256, Endpoint: cursor.Endpoint}) {
+			cursor = migration.Successor
 		}
 	}
 	// Logical identity connects predecessor edges, but the completed endpoint
 	// must match the final history successor's complete daemon and logical
 	// provenance. A same-logical successor with different launch provenance is
 	// a different generation and cannot authorize recovery alias retirement.
-	return privateDaemonIdentityForBinding(cursor) == privateDaemonIdentityForBinding(current), ctx.Err()
+	return cursor == privateDaemonIdentityForBinding(current), ctx.Err()
 }
 
 // privateCompletedSuccessorHistoryContains proves that the exact completed

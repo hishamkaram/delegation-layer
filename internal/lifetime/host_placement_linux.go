@@ -12,7 +12,7 @@ import (
 func checkNativeHostPlacement(ctx context.Context) error {
 	data, err := os.ReadFile(procSelfCgroupPath)
 	if err != nil {
-		return fmt.Errorf("inspect scheduler host cgroup: %w", err)
+		return fmt.Errorf("inspect current process cgroup: %w", err)
 	}
 	if err = ctx.Err(); err != nil {
 		return err
@@ -22,7 +22,7 @@ func checkNativeHostPlacement(ctx context.Context) error {
 
 func checkHostCgroupMembership(data []byte) error {
 	if len(data) == 0 {
-		return fmt.Errorf("%w: scheduler host cgroup observation is empty", ErrUnverifiableLaunch)
+		return fmt.Errorf("%w: current process cgroup observation is empty", ErrUnverifiableLaunch)
 	}
 	hasV2 := false
 	for _, line := range strings.Split(string(data), "\n") {
@@ -37,11 +37,11 @@ func checkHostCgroupMembership(data []byte) error {
 	}
 	path, err := parseCgroupV2Path(data)
 	if err != nil {
-		return fmt.Errorf("inspect scheduler host cgroup: %w", err)
+		return fmt.Errorf("inspect current process cgroup: %w", err)
 	}
 	for _, component := range strings.Split(path, "/") {
 		if validateCgroupPlanName(component) == nil {
-			return hostContainedError()
+			return ErrTaskContained
 		}
 	}
 	return nil

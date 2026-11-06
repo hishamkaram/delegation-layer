@@ -2,18 +2,21 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
-func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (configPath, base string, resultErr error) {
+func ensurePrivateConfigContext(ctx context.Context, stateRoot string, resolution ResolutionContext, guard PrivateGenerationGuard, callbackRunner ...string) (configPath, base string, resultErr error) {
 	base = filepath.Join(stateRoot, privateSupervisorDirectory)
 	if err := ensurePrivateBase(base); err != nil {
 		return "", "", err
@@ -26,14 +29,14 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 		return "", "", err
 	}
 	if _, err := os.Stat(configPath); err == nil {
-		if err = validateExistingPrivateConfig(stateRoot, configPath, base, resolution); err != nil {
+		if err = validateExistingPrivateConfig(ctx, stateRoot, configPath, base, resolution, guard); err != nil {
 			return "", "", err
 		}
 		return configPath, base, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", "", fmt.Errorf("%w: inspect private supervisor config: %w", ErrConfiguration, err)
 	}
-	configSource, err := privateConfigYAMLForResolution(base, resolution)
+	configSource, err := privateConfigYAMLForResolution(base, resolution, callbackRunner...)
 	if err != nil {
 		return "", "", err
 	}
@@ -41,10 +44,19 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 	// Record bootstrap intent before exposing the config. If the process dies
 	// after this point, the next private bind can distinguish its own partial
 	// bootstrap from an unowned config-only state root.
-	if err := markPrivateBootstrapPending(stateRoot); err != nil {
-		return "", "", err
-	}
-	if err := createPrivateConfig(configPath, base, configSource); err != nil {
+	if err := guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		absent, err := incompletePrivateConfigGenerationAbsent(stateRoot, base)
+		if err != nil {
+			return privateRecoveryFailure("state_unreadable", errors.Join(ErrBinding, err))
+		}
+		if !absent {
+			return privateRecoveryFailure("state_unreadable", ErrBinding)
+		}
+		if err := markPrivateBootstrapPending(stateRoot); err != nil {
+			return err
+		}
+		return createPrivateConfig(configPath, base, configSource)
+	}); err != nil {
 		return "", "", err
 	}
 	if err := validatePrivateConfig(configPath, base, resolution); err != nil {
@@ -53,9 +65,9 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 	return configPath, base, nil
 }
 
-func validateExistingPrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext) error {
+func validateExistingPrivateConfig(ctx context.Context, stateRoot, configPath, base string, resolution ResolutionContext, guard PrivateGenerationGuard) error {
 	if validateErr := validatePrivateConfig(configPath, base, resolution); validateErr != nil {
-		repaired, repairErr := repairIncompletePrivateConfig(stateRoot, configPath, base, resolution, validateErr)
+		repaired, repairErr := repairIncompletePrivateConfig(ctx, stateRoot, configPath, base, resolution, validateErr, guard)
 		if repairErr != nil {
 			return repairErr
 		}
@@ -75,7 +87,7 @@ func validateExistingPrivateConfig(stateRoot, configPath, base string, resolutio
 	return syncPrivateDirectory(base)
 }
 
-func repairIncompletePrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext, validationErr error) (bool, error) {
+func repairIncompletePrivateConfig(ctx context.Context, stateRoot, configPath, base string, resolution ResolutionContext, validationErr error, guard PrivateGenerationGuard) (bool, error) {
 	if !errors.Is(validationErr, errUnixSocketPathTooLong) {
 		return false, nil
 	}
@@ -87,31 +99,41 @@ func repairIncompletePrivateConfig(stateRoot, configPath, base string, resolutio
 	if err != nil {
 		return false, err
 	}
-	if !bytes.Equal(current, []byte(privateConfigYAML(base))) {
+	config, parseErr := ParseConfig(current)
+	if parseErr != nil {
+		return false, parseErr
+	}
+	callbackRunner := []string{""}
+	if config.Daemon.Callback != nil {
+		runner, configured := privateTerminalCallbackRunner(base, config.Daemon.Callback)
+		if !configured {
+			return false, nil
+		}
+		callbackRunner[0] = runner
+	}
+	if !bytes.Equal(current, []byte(privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"), callbackRunner...))) {
 		return false, nil
 	}
-	authorized, err := incompletePrivateConfigRepairAuthorized(stateRoot, base)
-	if err != nil || !authorized {
-		return false, err
-	}
-	replacement, err := privateConfigYAMLForResolution(base, resolution)
-	if err != nil {
-		return false, err
-	}
-	if bytes.Equal(current, []byte(replacement)) {
-		return false, nil
-	}
-	if err = replacePrivateRecordAtomic(
-		base,
-		configPath,
-		".private-config-",
-		"incomplete private supervisor config",
-		[]byte(replacement),
-		true,
-	); err != nil {
-		return false, err
-	}
-	return true, nil
+	repaired := false
+	err = guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		authorized, authorizationErr := incompletePrivateConfigRepairAuthorized(stateRoot, base)
+		if authorizationErr != nil || !authorized {
+			return authorizationErr
+		}
+		replacement, replacementErr := privateConfigYAMLForResolution(base, resolution, callbackRunner...)
+		if replacementErr != nil {
+			return replacementErr
+		}
+		if bytes.Equal(current, []byte(replacement)) {
+			return nil
+		}
+		if replaceErr := replacePrivateRecordAtomic(base, configPath, ".private-config-", "incomplete private supervisor config", []byte(replacement), true); replaceErr != nil {
+			return replaceErr
+		}
+		repaired = true
+		return nil
+	})
+	return repaired, err
 }
 
 func incompletePrivateConfigRepairAuthorized(stateRoot, base string) (bool, error) {
@@ -409,11 +431,15 @@ func validatePrivateConfig(configPath, base string, resolution ResolutionContext
 	return nil
 }
 
-func privateConfigYAML(base string) string {
-	return privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"))
-}
-
-func privateConfigYAMLForResolution(base string, resolution ResolutionContext) (string, error) {
+func privateConfigYAMLForResolution(base string, resolution ResolutionContext, callbackRunner ...string) (string, error) {
+	if len(callbackRunner) > 1 {
+		return "", ErrConfiguration
+	}
+	if len(callbackRunner) == 1 && callbackRunner[0] != "" {
+		if _, err := privateInstalledTerminalEventCallback(filepath.Dir(base), callbackRunner[0]); err != nil {
+			return "", err
+		}
+	}
 	limit, ok := unixSocketPathLimit(resolution.OS)
 	if !ok {
 		return "", fmt.Errorf("%w: unsupported platform", ErrConfiguration)
@@ -422,7 +448,7 @@ func privateConfigYAMLForResolution(base string, resolution ResolutionContext) (
 	if len(socketPath) > limit {
 		socketPath = privateCompactSocketPath(base)
 	}
-	data := privateConfigYAMLWithSocket(base, socketPath)
+	data := privateConfigYAMLWithSocket(base, socketPath, callbackRunner...)
 	if _, err := resolvePrivateConfigSource([]byte(data), base, resolution); err != nil {
 		return "", err
 	}
@@ -436,11 +462,18 @@ func privateCompactSocketPath(base string) string {
 	return filepath.Join(base, "s")
 }
 
-func privateConfigYAMLWithSocket(base, socketPath string) string {
+func privateConfigYAMLWithSocket(base, socketPath string, callbackRunner ...string) string {
 	quote := strconv.Quote
 	data := filepath.Join(base, "data")
 	runtimeDirectory := filepath.Join(base, "run")
-	return strings.Join([]string{
+	callback := privateTerminalEventCallback(base)
+	if len(callbackRunner) > 0 {
+		callback = ""
+		if callbackRunner[0] != "" {
+			callback = privateTerminalEventCallbackForRunner(filepath.Dir(base), callbackRunner[0])
+		}
+	}
+	lines := []string{
 		"client:",
 		"  show_confirmation_questions: false",
 		"shared:",
@@ -453,11 +486,288 @@ func privateConfigYAMLWithSocket(base, socketPath string) string {
 		"  pid_path: " + quote(filepath.Join(runtimeDirectory, "pueue.pid")),
 		"  shared_secret_path: " + quote(filepath.Join(data, "shared_secret")),
 		"daemon:",
-		"  callback: " + quote(privateTerminalEventCallback(base)),
+		"  callback: " + quote(callback),
 		"  shell_command:",
 		"    - \"/bin/sh\"",
 		"    - \"-c\"",
 		"    - \"{{ pueue_command_string }}\"",
 		"",
-	}, "\n")
+	}
+	if callback == "" {
+		lines = slices.DeleteFunc(lines, func(line string) bool { return strings.HasPrefix(line, "  callback:") })
+	}
+	return strings.Join(lines, "\n")
+}
+
+// privateInstalledCallbackConfig edits the one owned callback row, retaining
+// every other byte of the managed config. Nonstandard source is never guessed.
+func privateInstalledCallbackConfig(data []byte, base, runner string) ([]byte, bool, error) {
+	if runner == "" {
+		return data, false, nil
+	}
+	callback, err := privateInstalledTerminalEventCallback(filepath.Dir(base), runner)
+	if err != nil {
+		return nil, false, err
+	}
+	config, err := ParseConfig(data)
+	if err != nil {
+		return nil, false, err
+	}
+	if config.Daemon.Callback != nil && *config.Daemon.Callback == callback {
+		return data, false, nil
+	}
+	source := string(data)
+	replacement := "  callback: " + strconv.Quote(callback)
+	if config.Daemon.Callback == nil {
+		const daemonHeader = "\ndaemon:\n"
+		if strings.Count(source, daemonHeader) != 1 {
+			return nil, false, fmt.Errorf("%w: managed daemon callback section is unavailable", ErrPrivateSupervisorMigrationRequired)
+		}
+		source = strings.Replace(source, daemonHeader, daemonHeader+replacement+"\n", 1)
+	} else {
+		if !privateTerminalEventsConfigured(base, config.Daemon.Callback) {
+			return nil, false, fmt.Errorf("%w: private callback is outside the supported terminal protocol", ErrPrivateSupervisorMigrationRequired)
+		}
+		previous := "  callback: " + strconv.Quote(*config.Daemon.Callback)
+		if strings.Count(source, "\n"+previous+"\n") != 1 {
+			return nil, false, fmt.Errorf("%w: managed callback source is unavailable", ErrPrivateSupervisorMigrationRequired)
+		}
+		source = strings.Replace(source, "\n"+previous+"\n", "\n"+replacement+"\n", 1)
+	}
+	if _, err = ParseConfig([]byte(source)); err != nil {
+		return nil, false, err
+	}
+	return []byte(source), true, nil
+}
+
+// Explicit migration owns this config transition before any target is
+// accepted. The existing recovery alias retains the exact predecessor bytes;
+// interrupted preparation therefore resumes through the normal alias path.
+func preparePrivateInstalledCallback(ctx context.Context, root string, candidate *Client) (*Client, error) {
+	if candidate == nil {
+		return nil, ErrConfiguration
+	}
+	if pending, err := PrivateSupervisorMigrationPending(root); err != nil || pending {
+		return candidate, err
+	}
+	data, err := readRegular(candidate.binding.ConfigPath, MaxControlBytes)
+	if err != nil {
+		return nil, err
+	}
+	base := filepath.Join(root, privateSupervisorDirectory)
+	replacement, changed, err := privateInstalledCallbackConfig(data, base, candidate.options.PrivateTerminalEventRunner)
+	if err != nil {
+		return candidate, err
+	}
+	if !changed {
+		// A previous config rename may have committed before its directory
+		// barrier failed. Its durable predecessor alias owns that retry.
+		if syncErr := syncPreparedPrivateCallback(root, base); syncErr != nil {
+			return nil, syncErr
+		}
+		return candidate, nil
+	}
+	published, found, err := loadPrivateSupervisorBinding(root)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: complete canonical predecessor is required for callback migration", ErrPrivateSupervisorMigrationRequired)
+	}
+	return candidate.preparePrivateCallbackTransition(ctx, root, published, data, replacement)
+}
+
+func (c *Client) preparePrivateCallbackTransition(ctx context.Context, root string, published task.SupervisorRef, data, replacement []byte) (_ *Client, resultErr error) {
+	options := c.options
+	options.RuntimeClientExecutable = c.runtimeBinding.ClientExecutable
+	previous, err := BindSaved(ctx, published, options)
+	recoveryOwned, stopRecoveryOnFailure := false, false
+	if previous != nil {
+		defer func() {
+			if resultErr != nil && stopRecoveryOnFailure {
+				resultErr = errors.Join(resultErr, previous.StopRecovered(ctx, options.ObservationTimeout, resultErr))
+			}
+			resultErr = errors.Join(resultErr, previous.CloseAfterPending(resultErr))
+		}()
+	}
+	if err != nil {
+		return nil, err
+	}
+	recovered, started, err := c.recoverStoppedPrivateCallback(ctx, root, published, previous)
+	if err != nil {
+		return nil, err
+	}
+	if recovered != previous {
+		closeErr := previous.CloseAfterPending(nil)
+		previous, recoveryOwned = recovered, started
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	if err = c.authorizePrivateMigrationQueue(ctx, root, previous); err != nil {
+		return nil, err
+	}
+	stopRecoveryOnFailure = recoveryOwned
+	if err = previous.PersistPrivateRecoveryBindingContext(ctx, root); err != nil {
+		return nil, err
+	}
+	if recoveryOwned {
+		// A later config rename invalidates the primary transport. Preserve the
+		// recovery owner's stop path through its already-persisted exact alias.
+		transport, bindErr := c.bindPreparedPrivateCallbackAlias(ctx, root, published)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		closeErr := previous.CloseAfterPending(nil)
+		previous = transport
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	if err = c.replacePrivateInstalledCallback(ctx, root, data, replacement); err != nil {
+		return nil, err
+	}
+	return c.bindPrivateInstalledCallback(ctx)
+}
+
+func (c *Client) bindPreparedPrivateCallbackAlias(ctx context.Context, root string, published task.SupervisorRef) (*Client, error) {
+	alias, present, err := readPrivateRecoveryBinding(root)
+	if err != nil || !present {
+		return nil, errors.Join(ErrBinding, err)
+	}
+	return bindPrivateRecoveryTransport(ctx, alias, published, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+}
+
+// Offline state can refuse recovery, never authorize migration writes. Only
+// the live queue check after the existing recovery owner returns does that.
+func (c *Client) recoverStoppedPrivateCallback(ctx context.Context, root string, published task.SupervisorRef, previous *Client) (*Client, bool, error) {
+	if published.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+		return previous, false, nil
+	}
+	facts, err := loadPrivateGenerationFacts(root)
+	if err != nil {
+		return nil, false, err
+	}
+	complete, err := facts.complete(published, facts.aliasPresent && facts.alias.matches(published))
+	if err != nil || !complete || facts.aliasPublishing || facts.aliasPublicationErr != nil {
+		return previous, false, errors.Join(err, facts.aliasPublicationErr)
+	}
+	if err = refusePendingPrivateRestart(root); err != nil {
+		return nil, false, err
+	}
+	missing, err := PrivateSupervisorPairMissing(published)
+	if err != nil || !missing {
+		return previous, false, err
+	}
+	observation, err := previous.availableForTransition(ctx, true)
+	if err != nil || observation.ready() {
+		return previous, false, err
+	}
+	if err = previous.requireStoppedPrivateCallback(observation); err != nil {
+		return nil, false, err
+	}
+	if err = c.checkStoppedPrivateCallbackRestore(ctx, root, published, previous); err != nil {
+		return nil, false, err
+	}
+	return RecoverSavedWithPair(ctx, root, published, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+}
+
+func (c *Client) requireStoppedPrivateCallback(observation PrivateEndpointObservation) error {
+	if observation.State() != PrivateEndpointAbsent && observation.State() != PrivateEndpointRefused {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+	}
+	pid, recorded, err := c.privateDaemonPID()
+	if err != nil {
+		return privateRecoveryFailure("predecessor_pair_unavailable", err)
+	}
+	if !recorded {
+		if observation.State() == PrivateEndpointAbsent {
+			return nil
+		}
+		return privateRecoveryFailure("predecessor_pair_unavailable", observation.projectedError())
+	}
+	_, present, err := c.privateProcessIdentity(pid)
+	if err != nil || present {
+		return privateRecoveryFailure("predecessor_pair_unavailable", errors.Join(ErrBinding, err))
+	}
+	return nil
+}
+
+func (c *Client) checkStoppedPrivateCallbackRestore(ctx context.Context, root string, published task.SupervisorRef, previous *Client) error {
+	pin, err := readControlRootPin(ctx, root)
+	if err != nil {
+		return err
+	}
+	resolution, err := previous.resolution()
+	if err != nil {
+		return err
+	}
+	restore, err := ObservePrivateRestore(ctx, pin, published, resolution)
+	if err != nil {
+		return err
+	}
+	if restore.Presence() != PrivateRestorePresent {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrPrivateRestoreLayout)
+	}
+	if _, err = c.authorizePrivateMigrationJobs(ctx, root, published, restore.Snapshot().Jobs); err != nil {
+		if task.AllErrorCauses(err, func(leaf error) bool { return errors.Is(leaf, ErrPrivateSupervisorMigrationBusy) }) &&
+			!task.AnyErrorNode(err, func(node error) bool {
+				_, retained := node.(interface{ RetainsResidentCleanup() })
+				return retained
+			}) {
+			// A stopped raw queue cannot finish work. Do not retain Busy as a
+			// leaf, project wait_for_legacy_work, or publish a recovery alias.
+			return privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+		}
+		return err
+	}
+	rechecked, err := ObservePrivateRestore(ctx, pin, published, resolution)
+	if err != nil {
+		return err
+	}
+	if rechecked.Presence() != PrivateRestorePresent || rechecked.Source() != restore.Source() {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrPrivateRestoreLayout)
+	}
+	observation, err := previous.availableForTransition(ctx, true)
+	if err != nil {
+		return err
+	}
+	return previous.requireStoppedPrivateCallback(observation)
+}
+
+func (c *Client) bindPrivateInstalledCallback(ctx context.Context) (*Client, error) {
+	prepared, err := Bind(ctx, c.runtimeBinding.ClientExecutable, c.binding.ConfigPath, c.options)
+	if err == nil {
+		err = attachPrivateDaemon(prepared, c.runtimeBinding.DaemonExecutable)
+	}
+	if err != nil {
+		return nil, errors.Join(err, prepared.CloseAfterPending(err))
+	}
+	return prepared, nil
+}
+
+func syncPreparedPrivateCallback(root, base string) error {
+	if _, present, err := readPrivateRecoveryBinding(root); err != nil {
+		return err
+	} else if present {
+		return syncPrivateDirectory(base)
+	}
+	return nil
+}
+
+func (c *Client) replacePrivateInstalledCallback(ctx context.Context, root string, expected, replacement []byte) error {
+	base := filepath.Join(root, privateSupervisorDirectory)
+	return guardPrivateGeneration(ctx, root, c.options.PrivateGenerationGuard, func() error {
+		current, err := readRegular(c.binding.ConfigPath, MaxControlBytes)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(current, expected) {
+			return fmt.Errorf("%w: private config changed during callback preparation", ErrBinding)
+		}
+		if _, present, err := loadPrivateMigrationRecord(base); err != nil || present {
+			return errors.Join(ErrPrivateSupervisorMigrationRequired, err)
+		}
+		return replacePrivateRecordAtomic(base, c.binding.ConfigPath, ".private-config-", "private callback migration config", replacement, true)
+	})
 }

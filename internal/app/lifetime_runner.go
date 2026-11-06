@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -105,18 +106,14 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	if err != nil {
 		return err
 	}
-	deps = deps.normalized()
+	deps = deps.withCapturedEnvironment().normalized()
 	store, err := openStore(canonicalRoot, deps.storeDependencies(), false)
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	defer func() { resultErr = closeGuardianStoreAfterCleanup(store, resultErr) }()
 
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	executable, err = filepath.EvalSymlinks(executable)
+	executable, err := lifetimeWorkerExecutable()
 	if err != nil {
 		return err
 	}
@@ -145,6 +142,12 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, state.closeOwner()) }()
+	environmentContext, finishEnvironment := context.WithDeadline(context.Background(), state.deadline)
+	err = prepareLifetimeWorkerEnvironment(environmentContext, store, worker, deps.Environment)
+	finishEnvironment()
+	if err != nil {
+		return err
+	}
 
 	var inheritedCloseErr error
 	lifetimeOwner, err := guardian.New(guardian.Options{
@@ -181,6 +184,13 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	return errors.Join(guardianErr, inheritedCloseErr)
 }
 
+func closeGuardianStoreAfterCleanup(store *taskdir.Store, cause error) error {
+	if cleanupRetainsStore(cause, store) {
+		return cause
+	}
+	return errors.Join(cause, store.Close())
+}
+
 func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state lifetimeGuardianRunState, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
 	guardianErr := lifetimeOwner.Run(context.Background())
 	if state.closure != nil {
@@ -201,11 +211,38 @@ func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state 
 	if parsed.Inspection {
 		return guardianErr
 	}
-	if wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps); wakeErr != nil && (!errors.Is(wakeErr, workspace.ErrPending) || !workspacescore.PendingError(wakeErr)) {
+	wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps)
+	if cleanupRetainsStore(wakeErr, store) {
+		return errors.Join(guardianErr, wakeErr)
+	}
+	if wakeErr != nil && (!errors.Is(wakeErr, workspace.ErrPending) || !workspacescore.PendingError(wakeErr)) {
 		// Capture remains recoverable without rewriting the provider result.
 		log.Printf("delegate: workspace capture deferred: %v", wakeErr)
 	}
 	return guardianErr
+}
+
+// The worker receives the captured scope and its owning root before guardian
+// configuration adds the guardian's own finite process-scope marker.
+func prepareLifetimeWorkerEnvironment(ctx context.Context, store *taskdir.Store, worker *exec.Cmd, captured []string) error {
+	if worker == nil {
+		return task.ErrIdentityMismatch
+	}
+	selected := execution.InheritedCommandEnvironment(captured, worker.Dir)
+	environment, err := operationalEnvironment(ctx, store, selected)
+	if err != nil {
+		return err
+	}
+	worker.Env = environment
+	return nil
+}
+
+func lifetimeWorkerExecutable() (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(executable)
 }
 
 func newLifetimeWorkerCommand(executable, canonicalRoot string, parsed runnerArguments) (*exec.Cmd, error) {

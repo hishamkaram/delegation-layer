@@ -51,7 +51,8 @@ func (o Observation) Receipt() (*task.SupervisorReceipt, error) {
 		Endpoint: o.Binding.Endpoint, ObservedVersion: o.Binding.ObservedVersion,
 		ClientExecutable: o.Binding.ClientExecutable, ClientSHA256: o.Binding.ClientSHA256,
 		DaemonExecutable: o.Binding.DaemonExecutable, DaemonSHA256: o.Binding.DaemonSHA256,
-		ResolutionOS: o.Binding.ResolutionOS, ResolutionHome: o.Binding.ResolutionHome,
+		ExecutableIdentity: o.Binding.ExecutableIdentity,
+		ResolutionOS:       o.Binding.ResolutionOS, ResolutionHome: o.Binding.ResolutionHome,
 		ResolutionDataLocal: o.Binding.ResolutionDataLocal, ResolutionConfig: o.Binding.ResolutionConfig,
 		ResolutionRuntime: o.Binding.ResolutionRuntime, ResolutionUsername: o.Binding.ResolutionUsername,
 		ResolutionCwd:        o.Binding.ResolutionCwd,
@@ -72,6 +73,9 @@ func (c *Client) Submit(ctx context.Context, permit *taskdir.SubmissionPermit, l
 func (c *Client) SubmitWithGate(ctx context.Context, permit *taskdir.SubmissionPermit, launch Launch, gate SubmissionGate) (Observation, error) {
 	if c == nil {
 		return Observation{}, ErrConfiguration
+	}
+	if c.options.ControlOwnerExecutable != "" {
+		return Observation{}, ErrManagedAdmissionUnsupported
 	}
 	controlContext, cancel, err := c.privateControlContext(ctx)
 	if err != nil {

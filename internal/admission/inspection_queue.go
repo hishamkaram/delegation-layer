@@ -112,5 +112,5 @@ func recoverStagedInspectionObservation(ctx context.Context, operation *inspecti
 		}
 		return nil
 	}
-	return supervisorcore.RecoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, receiptCommit, receiptMatches, commit)
+	return supervisorcore.RecoverStagedAuxiliaryObservationChecked(ctx, supervisor, root, observation, receiptCommit, receiptMatches, commit, operation.CheckLaunchPermission)
 }

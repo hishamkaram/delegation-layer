@@ -11,12 +11,18 @@ import (
 )
 
 func IsPureCollectionPendingError(err error) bool {
+	if admissionCleanupFault(err) {
+		return false
+	}
 	return task.AllErrorCauses(err, func(candidate error) bool {
 		return errors.Is(candidate, task.ErrNoSeal) || errors.Is(candidate, task.ErrLockBusy)
 	})
 }
 
 func IsPureSupervisorUncertaintyError(err error) bool {
+	if admissionCleanupFault(err) {
+		return false
+	}
 	return task.AllErrorCauses(err, func(candidate error) bool {
 		return errors.Is(candidate, pueue.ErrUnknown) || errors.Is(candidate, pueue.ErrInFlight)
 	})

@@ -10,7 +10,7 @@ from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.private_cli.contention_controls import ModernFixture, install_contention_client
 from scripts.delegate_acceptance.private_cli.contention_policy import ModernInstallation
-from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 from scripts.acceptance_tests.private_cli.modern_application_fixture import migration_response, publish_pair
 
@@ -73,9 +73,9 @@ class ModernControlFixture:
         )
         delegate.chmod(0o700)
         runner = directory / "delegate-run"
-        runner.write_text(role + " finite runner fingerprint; never executed\n")
+        runner.write_text(role + " original finite runner source; never executed\n")
         runner.chmod(0o700)
-        (libexec / "pueued").write_text(role + " finite daemon fingerprint; never executed\n")
+        (libexec / "pueued").write_text(role + " original finite daemon source; never executed\n")
         (libexec / "pueued").chmod(0o700)
         install_contention_client(libexec / "pueue", Path("/usr/bin/true"), self.controls)
         return ModernInstallation(delegate, runner, libexec)
@@ -105,7 +105,7 @@ class ModernControlFixture:
             self.processes, self.baseline.delegate, self.baseline.runner, self.baseline.libexec / "pueue",
             self.root.directory, self.state, self.controls.directory,
             expected_inspection_binding_required=False, managed_runner=True,
-            runner_placement=STATE_INSTALLED_RUNNER,
+            runner_placement=BUNDLE_RUNNER,
         )
 
     def modern_input(self):

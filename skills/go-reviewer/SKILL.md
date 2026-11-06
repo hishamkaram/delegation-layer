@@ -9,6 +9,9 @@ Use for independent review of a bounded change or correction. Stay read-only.
 Read the [review dimensions](../../agents/_data/maintainability-contract.md#review-dimensions)
 and [test discipline](../../agents/_data/code-quality-floor.md#3-testing-and-verification-discipline).
 Load provider, lifecycle or native rules only when the change touches them.
+For executable selection or contributor proof, enforce the
+[installed-executable rule](../../agents/_data/product-boundary.md#installed-executables);
+do not require executable byte identity or preserve abandoned machinery.
 
 ## Inputs
 

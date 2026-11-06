@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -181,6 +182,12 @@ func submitWorkspaceRemoval(ctx context.Context, store *taskdir.Store, resource 
 // attempt. The unique unfinished helper owns recovery; once all helpers close,
 // a successful candidate takes precedence over a closed failed attempt.
 func latestWorkspaceOperation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, kind string, subject workspace.Subject) (latest *workspace.Operation, resultErr error) {
+	return latestWorkspaceOperationWithClosure(ctx, store, resource, kind, subject, OperationClosed)
+}
+
+type workspaceActionClosureReader func(context.Context, *workspace.Operation) (guardian.ClosureProof, error)
+
+func latestWorkspaceOperationWithClosure(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, kind string, subject workspace.Subject, readClosure workspaceActionClosureReader) (latest *workspace.Operation, resultErr error) {
 	ids, err := resource.OperationIDs(ctx)
 	if err != nil {
 		return nil, err
@@ -193,7 +200,7 @@ func latestWorkspaceOperation(ctx context.Context, store *taskdir.Store, resourc
 	}()
 	var latestRank workspaceActionOperationState
 	for _, id := range ids {
-		operation, rank, loadErr := readWorkspaceActionOperation(ctx, store, resource, id, kind, subject)
+		operation, rank, loadErr := readWorkspaceActionOperationWithClosure(ctx, store, resource, id, kind, subject, readClosure)
 		if loadErr != nil {
 			return latest, loadErr
 		}
@@ -226,7 +233,7 @@ func selectWorkspaceActionOperation(previous, current *workspace.Operation, prev
 	return current, currentState, nil
 }
 
-func readWorkspaceActionOperation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, id, kind string, subject workspace.Subject) (*workspace.Operation, workspaceActionOperationState, error) {
+func readWorkspaceActionOperationWithClosure(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, id, kind string, subject workspace.Subject, readClosure workspaceActionClosureReader) (*workspace.Operation, workspaceActionOperationState, error) {
 	operation, err := workspace.LoadOperation(ctx, store, id)
 	if err != nil {
 		return nil, 0, err
@@ -238,7 +245,7 @@ func readWorkspaceActionOperation(ctx context.Context, store *taskdir.Store, res
 	if request.Kind != kind {
 		return nil, 0, operation.Close()
 	}
-	rank, err := workspaceActionOperationRank(ctx, operation)
+	rank, err := workspaceActionOperationRankWithClosure(ctx, operation, readClosure)
 	if err != nil {
 		return nil, 0, errors.Join(err, operation.Close())
 	}
@@ -249,7 +256,11 @@ func readWorkspaceActionOperation(ctx context.Context, store *taskdir.Store, res
 // checkpoint helper ranks as a success only with the strict checkpoint
 // closure qualification, never from a successful result alone.
 func workspaceActionOperationRank(ctx context.Context, operation *workspace.Operation) (workspaceActionOperationState, error) {
-	proof, err := OperationClosed(ctx, operation)
+	return workspaceActionOperationRankWithClosure(ctx, operation, OperationClosed)
+}
+
+func workspaceActionOperationRankWithClosure(ctx context.Context, operation *workspace.Operation, readClosure workspaceActionClosureReader) (workspaceActionOperationState, error) {
+	proof, err := readClosure(ctx, operation)
 	if err != nil {
 		if PendingError(err) {
 			return workspaceActionUnfinished, nil

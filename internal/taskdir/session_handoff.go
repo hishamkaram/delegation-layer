@@ -22,13 +22,22 @@ import (
 // Each family is optional here: a malformed family must not invalidate a
 // release proven by the other family or by the outcome. Explicit release
 // writers read their family strictly instead.
-func (td *TaskDir) matchesHandoffProof(digest string) bool {
-	budget, err := td.budgetHandoffDigests()
-	if err == nil && slices.Contains(budget, digest) {
-		return true
+func (td *TaskDir) matchesHandoffProofContext(ctx context.Context, digest string) (bool, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return false, err
 	}
-	closure, err := td.lifetimeClosureHandoffDigests()
-	return err == nil && slices.Contains(closure, digest)
+	budget, err := td.budgetHandoffDigests()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
+	}
+	if err == nil && slices.Contains(budget, digest) {
+		return true, nil
+	}
+	closure, err := td.lifetimeClosureHandoffDigestsContext(ctx)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
+	}
+	return err == nil && slices.Contains(closure, digest), nil
 }
 
 // budgetHandoffDigests returns every terminated budget-stop observation digest
@@ -55,8 +64,8 @@ func (td *TaskDir) budgetHandoffDigests() ([]string, error) {
 // lifetimeClosureHandoffDigests returns the canonical closure witnesses in
 // release preference order: empty-scope termination, then worker completion.
 // An open lifetime has no witness. task.ResolveLifetimeClosure owns closure.
-func (td *TaskDir) lifetimeClosureHandoffDigests() ([]string, error) {
-	evidence, err := LoadLifetimeEvidenceContext(context.Background(), td)
+func (td *TaskDir) lifetimeClosureHandoffDigestsContext(ctx context.Context) ([]string, error) {
+	evidence, err := LoadLifetimeEvidenceContext(ctx, td)
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +109,18 @@ func (td *TaskDir) timeoutEvidenceDigest() (string, error) {
 // writer proves closure only: publication eligibility is the caller's admission
 // policy, and a stored release must stay valid after a late outcome.
 func (td *TaskDir) ReleaseSessionAfterLifetimeClosure(provider, conversation string) error {
-	digests, err := td.lifetimeClosureHandoffDigests()
+	return td.ReleaseSessionAfterLifetimeClosureContext(context.Background(), provider, conversation)
+}
+
+func (td *TaskDir) ReleaseSessionAfterLifetimeClosureContext(ctx context.Context, provider, conversation string) error {
+	digests, err := td.lifetimeClosureHandoffDigestsContext(ctx)
 	if err != nil {
 		return err
 	}
 	if len(digests) == 0 {
 		return fmt.Errorf("%w: native lifetime is not closed", task.ErrSessionBusy)
 	}
-	return td.ReleaseSession(provider, conversation, digests[0])
+	return td.ReleaseSessionContext(ctx, provider, conversation, digests[0])
 }
 
 // handoffWitnessRecord is every record family that can prove a session handoff.

@@ -357,6 +357,9 @@ func (c *Client) submitInspection(ctx context.Context, permit InspectionSubmissi
 	if c == nil {
 		return InspectionObservation{Identity: identity}, ErrConfiguration
 	}
+	if c.options.ControlOwnerExecutable != "" {
+		return InspectionObservation{Identity: identity}, ErrManagedAdmissionUnsupported
+	}
 	controlContext, cancel, err := c.privateControlContext(ctx)
 	if err != nil {
 		return InspectionObservation{Identity: identity}, err

@@ -27,7 +27,6 @@ from scripts.delegate_acceptance.native import continuation_scope as scope
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native_evidence import supplemental
 from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
-from scripts.delegate_acceptance.evidence.files import digest
 
 
 FRESH, RESUME, MISS, ROOT = "1" * 32, "2" * 32, "3" * 32, "f" * 32
@@ -550,8 +549,8 @@ class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
         self.aggregate = self.root / "native-acceptance-aggregate.json"
 
     def candidate(self, **overrides) -> supplemental.Candidate:
-        binaries = {"delegate_sha256": digest(self.delegate), "runner_sha256": digest(self.runner),
-                    "pueue_sha256": digest(Path("/bin/sh")), "pueued_sha256": digest(Path("/bin/sh")),
+        binaries = {"delegate": str(self.delegate.resolve()), "delegate-run": str(self.runner.resolve()),
+                    "pueue": str(Path("/bin/sh").resolve()), "pueued": str(Path("/bin/sh").resolve()),
                     **overrides}
         return supplemental.Candidate(self.COMMITTED, self.AGGREGATE_SHA256, binaries, frozenset())
 
@@ -606,9 +605,9 @@ class AcceptanceEnvironmentOwnershipTests(unittest.TestCase):
                                    "canonical_aggregate_not_passed"),
             "wrong revision": ({'candidate': EvidenceError("aggregate_source_revision_mismatch")},
                                "aggregate_source_revision_mismatch"),
-            "missing aggregate": ({'candidate': FileNotFoundError(str(self.aggregate))}, "not bound"),
-            "other runner": ({'candidate': self.candidate(runner_sha256="9" * 64)}, "candidate_runner_mismatch"),
-            "other pueued": ({'candidate': self.candidate(pueued_sha256="9" * 64)}, "candidate_pueued_mismatch"),
+            "missing aggregate": ({"candidate": FileNotFoundError(str(self.aggregate))}, "not bound"),
+            "other runner": ({"candidate": self.candidate(**{"delegate-run": str(self.root / "foreign-runner")})}, "candidate_delegate-run_mismatch"),
+            "other pueued": ({"candidate": self.candidate(pueued=str(self.root / "foreign-pueued"))}, "candidate_pueued_mismatch"),
         }
         for label, (options, message) in refusals.items():
             with self.subTest(label), patch.object(gate, "Processes") as processes:

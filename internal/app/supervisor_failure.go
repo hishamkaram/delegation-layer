@@ -76,6 +76,8 @@ func supervisorFailureDetail(reason string) string {
 		return "The published executables are unavailable while their daemon is live; run supervisor migrate with the same root."
 	case "predecessor_pair_unavailable":
 		return "The exact predecessor executable pair is unavailable; use supervisor migrate with the same root."
+	case "historical_target_not_ready":
+		return "The historical supervisor is not ready. Automatic migration of a stopped historical generation is unavailable; state was preserved."
 	case "active_work":
 		return "Wait for queued or running work before migrating."
 	case "observation_failed":

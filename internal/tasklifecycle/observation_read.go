@@ -23,10 +23,14 @@ func ReadTimeoutRecords(td *taskdir.TaskDir) ([]taskdir.StopRecord, error) {
 // A nil outcome deliberately retains the claim because there is no durable
 // evidence that permits a successor to continue the conversation.
 func ReleaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outcome *task.OutcomeRecord) error {
+	return ReleaseContinuationSessionContext(context.Background(), td, req, outcome)
+}
+
+func ReleaseContinuationSessionContext(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, outcome *task.OutcomeRecord) error {
 	if td == nil || req == nil || req.PriorSession == nil || outcome == nil {
 		return nil
 	}
-	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
+	return td.ReleaseSessionContext(ctx, req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 }
 
 func WaitForCollection(deadline time.Time) bool {

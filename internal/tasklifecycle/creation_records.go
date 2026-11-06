@@ -2,6 +2,7 @@ package tasklifecycle
 
 import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 type CreationStage uint8
@@ -28,6 +29,7 @@ const (
 type CreationResult struct {
 	Capability *admissioncore.CapabilityEvidence
 	TaskRecord CreationRecordObservation
+	Supervisor *task.SupervisorRef // Exact binding persisted in newly created metadata.
 	Submission *SubmissionResult
 	Stage      CreationStage
 	Failure    error

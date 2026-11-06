@@ -2,20 +2,22 @@ package workspaces
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
-
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
-// Admission owns one workspace resource and its use lease through dispatch.
+// Admission owns one workspace resource and its use lease through dispatch
+// or a resource admission check. Binding and reservation fields are task-only.
 // Only this package mutates the reservation and helper binding.
 type Admission struct {
-	resource    *workspace.Resource
-	owner       *taskdir.LifetimeOwnerLease
-	reservation workspace.Reservation
-	binding     *task.WorkspaceBinding
-	operationID string
-	existing    bool
+	resource     *workspace.Resource
+	childOwners  []*taskdir.LifetimeOwnerLease
+	owner        *taskdir.LifetimeOwnerLease
+	reservation  workspace.Reservation
+	binding      *task.WorkspaceBinding
+	operationID  string
+	storeCleanup error
+	existing     bool
 }
 
 type dispatchIdentity struct {

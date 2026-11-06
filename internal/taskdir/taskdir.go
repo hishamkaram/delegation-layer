@@ -117,16 +117,23 @@ func (td *TaskDir) RunnerLeaseReleased() (released bool, resultErr error) {
 }
 
 func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
+	return s.CreateTaskContext(context.Background(), id, req, brief, meta)
+}
+
+func (s *Store) CreateTaskContext(ctx context.Context, id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	reqData, metaData, err := s.validateCreateInput(id, req, brief, meta)
 	if err != nil {
 		return nil, annotateTaskCreationError("validating task creation", err)
 	}
-	if err = s.maintLock.LockSHNonblocking(); err != nil {
+	if err = s.maintLock.LockSHNonblockingContext(ctx); err != nil {
 		return nil, annotateTaskCreationError("acquiring task maintenance", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
 	dir := filepath.Join(s.Root, "tasks", id)
-	if err = s.mkdir(dir, s.faultInjector); err != nil {
+	if err = s.mkdirContext(ctx, dir, s.faultInjector); err != nil {
 		return nil, annotateTaskCreationError("creating task directory", err)
 	}
 	createLocks, err := s.allowInitialLocks(dir)
@@ -137,11 +144,11 @@ func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *
 	if err != nil {
 		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
 	}
-	if err = td.admissionLock.LockEXNonblocking(); err != nil {
+	if err = td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
 		closeTaskQuietly(td)
 		return nil, annotateTaskCreationError("acquiring task admission", err)
 	}
-	err = td.prepareSet(brief, reqData, metaData)
+	err = td.prepareSetContext(ctx, brief, reqData, metaData)
 	err = errors.Join(err, td.admissionLock.Unlock())
 	if err != nil {
 		closeTaskQuietly(td)
@@ -196,7 +203,7 @@ func (s *Store) validateCreateInput(id string, req *task.TaskRecord, brief []byt
 	return reqData, metaData, nil
 }
 
-func (td *TaskDir) prepareSet(brief, reqData, metaData []byte) error {
+func (td *TaskDir) prepareSetContext(ctx context.Context, brief, reqData, metaData []byte) error {
 	guarded := false
 	for _, name := range []string{"submit.json", "provider.start"} {
 		found, err := td.store.exists(filepath.Join(td.Dir, name))
@@ -222,12 +229,12 @@ func (td *TaskDir) prepareSet(brief, reqData, metaData []byte) error {
 		if record.exists {
 			continue
 		}
-		_, cleanupErr, err := td.store.stageAndCommit(td.Dir, record.name, record.data, td.store.faultInjector)
+		_, cleanupErr, err := td.store.stageReaderContext(ctx, td.Dir, record.name, bytes.NewReader(record.data), td.store.faultInjector)
 		if err = errors.Join(err, cleanupErr); err != nil {
 			return err
 		}
 	}
-	_, _, _, _, err := td.loadAndValidatePreparedSet()
+	_, _, _, _, err := td.loadAndValidatePreparedSetContext(ctx)
 	return err
 }
 
@@ -418,10 +425,17 @@ func (td *TaskDir) PreparedRecords() (*task.TaskRecord, *task.MetaRecord, error)
 }
 
 func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *SubmissionPermit, resultErr error) {
-	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
+	return td.PrepareSubmissionContext(context.Background(), supervisor)
+}
+
+func (td *TaskDir) PrepareSubmissionContext(ctx context.Context, supervisor task.SupervisorRef) (_ *SubmissionPermit, resultErr error) {
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
-	if err := td.admissionLock.LockEXNonblocking(); err != nil {
+	if err := td.store.maintLock.LockSHNonblockingContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := td.admissionLock.LockEXNonblockingContext(ctx); err != nil {
 		return nil, errors.Join(err, td.store.maintLock.Unlock())
 	}
 	success := false
@@ -430,7 +444,7 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 			resultErr = errors.Join(resultErr, td.admissionLock.Unlock(), td.store.maintLock.Unlock())
 		}
 	}()
-	req, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
+	req, meta, specHash, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +458,7 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 	if exists {
 		return nil, task.ErrAlreadySubmitted
 	}
-	if err = td.requireTaskLaunchPermissionContext(context.Background()); err != nil {
+	if err = td.requireTaskLaunchPermissionContext(ctx); err != nil {
 		return nil, err
 	}
 	if err = td.validateExecutionDirectories(req); err != nil {
@@ -454,7 +468,12 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 	if err = task.ValidateSubmitRecord(&rec); err != nil {
 		return nil, err
 	}
-	if err = td.commitRecord("submit.json", rec); err != nil {
+	data, marshalErr := marshalControlRecord(rec)
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	_, cleanupErr, commitErr := td.store.stageReaderContext(ctx, td.Dir, "submit.json", bytes.NewReader(data), td.store.faultInjector)
+	if err = errors.Join(commitErr, cleanupErr); err != nil {
 		return nil, err
 	}
 	lease := newAdmissionLease(td.admissionLock, td.store.maintLock)

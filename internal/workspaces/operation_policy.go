@@ -10,10 +10,16 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
 func PendingError(err error) bool {
+	var lifetimeCleanup *taskdir.LifetimeOwnerCleanupError
+	var admissionCleanup *AdmissionCleanupError
+	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) {
+		return false
+	}
 	if !errors.Is(err, workspace.ErrPending) && !errors.Is(err, workspace.ErrBusy) {
 		return false
 	}
@@ -107,7 +113,9 @@ func validateWorkspaceOperationSpec(request workspace.OperationRequest, spec Ope
 // gate. Its launch refusal is pending until the next canonical closure read;
 // it must neither fail a completed helper nor authorize another enqueue.
 func LaunchPermissionError(err error) error {
-	if errors.Is(err, task.ErrTerminalTask) || errors.Is(err, task.ErrLifetimeUnlaunched) {
+	if task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, task.ErrTerminalTask) || errors.Is(cause, task.ErrLifetimeUnlaunched)
+	}) {
 		return workspace.ErrPending
 	}
 	return err

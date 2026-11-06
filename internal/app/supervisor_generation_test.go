@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
@@ -123,12 +124,33 @@ func writeSupervisorGenerationTestPrivateGeneration(t *testing.T, store *taskdir
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := pueue.PublishPrivateSupervisorBindingIfAbsent(store.Root, binding); err != nil {
+	publication, err := task.MarshalCanonical(struct {
+		SchemaVersion int                `json:"schema_version"`
+		Binding       task.SupervisorRef `json:"binding"`
+	}{task.SchemaVersion, binding})
+	if err != nil {
 		t.Fatal(err)
+	}
+	// Historical canonical DATA fixture, no native publication permission.
+	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(context.Context) error {
+		file, openErr := os.OpenFile(filepath.Join(base, "supervisor.identity.json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if openErr != nil {
+			return openErr
+		}
+		_, writeErr := file.Write(publication)
+		return errors.Join(writeErr, file.Close())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil || !found || got != binding {
+		t.Fatalf("historical binding readback differs: found=%t err=%v", found, err)
 	}
 	identity := historicalPrivateDaemonIdentity{
 		Executable:           binding.DaemonExecutable,
 		SHA256:               binding.DaemonSHA256,
+		ExecutableIdentity:   binding.ExecutableIdentity,
 		ConfigPath:           binding.ConfigPath,
 		ConfigDigest:         binding.ConfigDigest,
 		ResolvedConfigSHA256: binding.ResolvedConfigSHA256,
@@ -178,9 +200,9 @@ func supervisorGenerationTestBinding(root, label string, private bool) task.Supe
 	}
 	return task.SupervisorRef{
 		ClientExecutable:     filepath.Join(base, "pueue"),
-		ClientSHA256:         task.ComputeSHA256([]byte("client:" + label)),
+		ClientSHA256:         strings.Repeat("a", 64),
 		DaemonExecutable:     filepath.Join(base, "pueued"),
-		DaemonSHA256:         task.ComputeSHA256([]byte("daemon:" + label)),
+		DaemonSHA256:         strings.Repeat("b", 64),
 		ResolutionOS:         "linux",
 		ResolutionHome:       filepath.Join(root, "home"),
 		ResolutionDataLocal:  filepath.Join(root, "data-local"),
@@ -199,6 +221,7 @@ func historicalPrivateDaemonIdentityFor(binding task.SupervisorRef) historicalPr
 	return historicalPrivateDaemonIdentity{
 		Executable:           binding.DaemonExecutable,
 		SHA256:               binding.DaemonSHA256,
+		ExecutableIdentity:   binding.ExecutableIdentity,
 		ConfigPath:           binding.ConfigPath,
 		ConfigDigest:         binding.ConfigDigest,
 		ResolvedConfigSHA256: binding.ResolvedConfigSHA256,

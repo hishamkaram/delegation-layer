@@ -85,7 +85,7 @@ func SubmissionGate(stateRoot string) pueue.SubmissionGate {
 		if !pueue.IsPrivateConfig(stateRoot, binding.ConfigPath) {
 			return pueue.SubmissionAuthorization{}, nil
 		}
-		complete, err := pueue.PrivateSupervisorMigrationComplete(stateRoot, binding)
+		complete, err := submissionGenerationComplete(stateRoot, binding)
 		if err != nil {
 			return pueue.SubmissionAuthorization{}, err
 		}
@@ -101,6 +101,24 @@ func SubmissionGate(stateRoot string) pueue.SubmissionGate {
 		}
 		return authorization, nil
 	}
+}
+
+// The published generation owns daemon provenance and completion. A verified
+// installed transport may differ while controlling the same exact config and
+// endpoint. The caller keeps its shared generation lease through this read and
+// the separate full-runtime scheduling receipt check.
+func submissionGenerationComplete(stateRoot string, runtime task.SupervisorRef) (bool, error) {
+	if err := task.ValidateFreshSupervisorRef(runtime); err != nil {
+		return false, errors.Join(pueue.ErrBinding, err)
+	}
+	published, found, err := pueue.ReadPrivateSupervisorBinding(stateRoot)
+	if err != nil || !found {
+		return false, err
+	}
+	if !task.SameSupervisorIdentity(published, runtime) {
+		return false, nil
+	}
+	return pueue.PrivateSupervisorMigrationComplete(stateRoot, published)
 }
 
 // OrdinarySchedulingConfiguredGroups checks the receipt and observed default group.

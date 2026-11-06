@@ -34,7 +34,7 @@ func TestWorkspaceMissingInspectionRecoveryRetainsAdmission(t *testing.T) {
 
 	// Enter through actual app composition: admission must fence this expired
 	// inspection before the workspace coordinator can commit its abort.
-	if err = reconcileWorkspaceUse(ctx, fixture.Store, fixture.Resource, Dependencies{ResourceChecker: fixtureResources}); err != nil {
+	if err = reconcileWorkspaceUse(ctx, fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources})); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = operation.ReadLifetimeUnlaunchedContext(ctx); err != nil {

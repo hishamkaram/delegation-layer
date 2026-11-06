@@ -84,14 +84,8 @@ func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
 func TestRuntimeCapabilityDigestSeparatesContractFromExecutableIdentity(t *testing.T) {
 	root := t.TempDir()
 	firstPath := writeRuntimeCLI(t, root, "--sandbox --output")
-	secondPath := filepath.Join(root, "provider-cli-next")
-	data, err := os.ReadFile(firstPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(secondPath, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	secondDirectory := t.TempDir()
+	secondPath := writeRuntimeCLI(t, secondDirectory, "--sandbox --output")
 	first := runtimeDefinition(t, root, firstPath, []string{"--sandbox", "--output"})
 	second := runtimeDefinition(t, root, secondPath, []string{"--sandbox", "--output"})
 	firstDigest, err := provider.RuntimeCapabilityDigest(first)

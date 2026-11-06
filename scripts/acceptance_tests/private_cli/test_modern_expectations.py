@@ -12,9 +12,7 @@ from scripts.delegate_acceptance.private_cli import contention_controls as contr
 from scripts.delegate_acceptance.private_cli.contention_policy import (
     migration_expectation, require_control_response, require_migration_response,
 )
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.records import parse_json_output
-from scripts.delegate_acceptance.supervisor.runner_layout import managed_state_runner
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 
 
@@ -41,11 +39,7 @@ class ModernMigrationExpectationTests(unittest.TestCase):
             directory = tasks.state / "tasks" / tasks.tasks[name]
             if not directory.exists():
                 self.fixture.owner.create("candidate task", directory, directory.parent)
-            # Go installs each original runner once under its own digest.
-            runner = managed_state_runner(tasks.state, digest(installation.runner))
-            if not runner.exists():
-                runner.parent.mkdir(exist_ok=True)
-                runner.write_bytes(installation.runner.read_bytes())
+            runner = installation.runner.resolve(strict=True)
             (directory / "meta.json").write_text(json.dumps({"runner_ownership": "managed", "runner_executable": str(runner)}))
 
         def wait_for_original_runner(_name, task_id):
@@ -192,9 +186,9 @@ class ModernMigrationFactPolicyTests(unittest.TestCase):
         self.assertEqual(migration_expectation(prepared, active=True), changed)
         self.assertEqual(migration_expectation(prepared, active=False), final)
 
-    def test_same_bytes_at_another_daemon_path_still_require_provenance_change(self):
+    def test_another_installed_daemon_path_requires_an_explicit_transition(self):
         facts = self.facts(self.fixture.baseline)
-        facts["writer"]["executable"] += "-different-path"
+        facts["writer"]["executable"] = "/another-installation/pueued"
         self.assertEqual(migration_expectation(facts, active=True).case, "active_provenance_change")
 
     def test_rejects_postshutdown_or_mismatched_prepared_intent_and_old_writer_retarget(self):

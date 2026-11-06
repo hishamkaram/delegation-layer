@@ -74,7 +74,7 @@ func NewMain(executable string) *Main {
 // requested, so this function does not make fixture files part of recovery.
 func NewDependencies() app.Dependencies { return NewMain("").Dependencies() }
 
-// NewDependenciesForExecutable is useful to scoped tests and copied wrappers.
+// NewDependenciesForExecutable is useful to scoped tests and installed wrappers.
 func NewDependenciesForExecutable(executable string) app.Dependencies {
 	return NewMain(executable).Dependencies()
 }
@@ -96,12 +96,12 @@ func (m *Main) RunRunner(args []string, stdout, stderr io.Writer) int {
 	return m.run(func() int { return app.RunRunner(args, stdout, stderr, m.deps) }, stderr)
 }
 
-// Run is the convenience entry point for a copied delegate wrapper.
+// Run is the convenience entry point for an installed delegate wrapper.
 func Run(args []string, stdout, stderr io.Writer) int {
 	return NewMain("").RunDelegate(args, stdout, stderr)
 }
 
-// RunRunner is the convenience entry point for a copied delegate-run wrapper.
+// RunRunner is the convenience entry point for an installed delegate-run wrapper.
 func RunRunner(args []string, stdout, stderr io.Writer) int {
 	return NewMain("").RunRunner(args, stdout, stderr)
 }
@@ -141,20 +141,13 @@ func (m *Main) prepareProfile(request task.TaskRecord) (app.PreparedProfile, err
 	if err != nil {
 		return app.PreparedProfile{}, err
 	}
-	providerExecutable, err := canonicalFileReference(loaded.Config.ProviderExecutable)
+	providerExecutable, err := canonicalExecutable(loaded.Config.ProviderExecutable)
 	if err != nil {
 		return app.PreparedProfile{}, err
 	}
 	providerConfig, err := canonicalFileReference(loaded.Config.ProviderConfig)
 	if err != nil {
 		return app.PreparedProfile{}, err
-	}
-	providerDigest, err := hashRegular(providerExecutable)
-	if err != nil {
-		return app.PreparedProfile{}, err
-	}
-	if providerDigest != loaded.Config.ProviderSHA256 {
-		return app.PreparedProfile{}, errors.New("supervisor provider executable digest mismatch")
 	}
 	configData, err := readRegular(providerConfig, maxConfigBytes)
 	if err != nil {
@@ -172,7 +165,7 @@ func (m *Main) prepareProfile(request task.TaskRecord) (app.PreparedProfile, err
 	}
 	predicateRef := fakeprovider.Predicate().Reference()
 	plan := execution.Plan{
-		Executable: providerExecutable, ExecutableSHA256: providerDigest,
+		Executable:  providerExecutable,
 		Arguments:   append([]string{providerConfig}, providerConfigValue.Argv...),
 		Directory:   request.CanonicalCwd,
 		Environment: cloneStrings(loaded.Config.Environment),

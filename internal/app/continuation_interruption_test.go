@@ -20,7 +20,7 @@ import (
 func rebootDependencies(t *testing.T, fixture *rebootFixture) Dependencies {
 	t.Helper()
 	deps := fixtureContinuationDependencies(t, nil, fixture.clientA)
-	deps.SupervisorOptions, deps.RunnerExecutable = fixture.options, fixture.runner
+	deps.SupervisorOptions, deps.RunnerExecutable = fixture.dependencies().SupervisorOptions, fixture.runner
 	return deps
 }
 
@@ -75,6 +75,7 @@ func requireInterruptedExitCodes(t *testing.T, fixture *rebootFixture, source, n
 }
 
 func TestStatusAndCollectReportRebootInterruption(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		identity bool
@@ -94,6 +95,7 @@ func TestStatusAndCollectReportRebootInterruption(t *testing.T) {
 }
 
 func TestStatusAndCollectKeepPendingWithoutClosedReleasedLifetime(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		setup rebootSetup
@@ -120,6 +122,7 @@ func TestStatusAndCollectKeepPendingWithoutClosedReleasedLifetime(t *testing.T) 
 }
 
 func TestUserCancellationSuppressesAutomaticRebootContinuation(t *testing.T) {
+	t.Parallel()
 	t.Run("interrupted", func(t *testing.T) {
 		fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
 		recordRebootStop(t, fixture, strings.Repeat("c", 32), "user")
@@ -148,6 +151,7 @@ func TestUserCancellationSuppressesAutomaticRebootContinuation(t *testing.T) {
 }
 
 func TestUnreadableCancellationIsReportedNotHidden(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
 	id := strings.Repeat("c", 32)
 	recordRebootStop(t, fixture, id, "user")
@@ -162,6 +166,7 @@ func TestUnreadableCancellationIsReportedNotHidden(t *testing.T) {
 }
 
 func TestCommittedOutcomeWinsOverClosedLifetime(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		stage rebootLifetimeStage
@@ -191,6 +196,7 @@ func TestCommittedOutcomeWinsOverClosedLifetime(t *testing.T) {
 // A fresh predecessor without provider identity fails at the session stage
 // with the continuation family code, and creates no successor.
 func TestContinueReportsMissingSessionAsContinuationUnavailable(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
 	result := continueTask(Arguments{Root: fixture.root, TaskID: fixture.req.TaskID}, rebootDependencies(t, fixture))
 	if result.code != 2 || !errors.Is(result.err, os.ErrNotExist) {

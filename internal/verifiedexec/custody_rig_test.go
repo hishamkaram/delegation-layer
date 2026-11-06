@@ -72,15 +72,15 @@ type legacyView struct{ temporaryDir string }
 
 // seedView models the historical disk layout without any production producer.
 // It creates hard links to test-owned image bytes and a sealed owner view.
-func (r *poolRig) seedView(owner string, request CommandRequest) legacyView {
+func (r *poolRig) seedView(owner, original, imageID string) legacyView {
 	r.t.Helper()
-	content, err := os.ReadFile(request.Executable)
-	if err != nil {
-		r.t.Fatal(err)
+	source, err := os.Lstat(original)
+	if err != nil || !source.Mode().IsRegular() {
+		r.t.Fatalf("legacy fixture original is not a regular data file: %s: %v", original, err)
 	}
-	image := r.pool.imagePath(request.SHA256)
+	image := r.pool.imagePath(imageID)
 	if _, err = os.Lstat(image); errors.Is(err, os.ErrNotExist) {
-		if err = os.WriteFile(image, content, 0o500); err != nil {
+		if err = os.WriteFile(image, []byte("historical pool fixture data\n"), 0o500); err != nil {
 			r.t.Fatal(err)
 		}
 	} else if err != nil {
@@ -231,16 +231,25 @@ func (r *poolRig) requireViewsLinkImages(owner, original string) []string {
 	return files
 }
 
-// imageOf returns the image named by the digest of file's own bytes and the
-// file's own info.
+// imageOf finds the historical image by inode metadata without reading its data.
 func (r *poolRig) imageOf(file string) (image, view os.FileInfo) {
 	r.t.Helper()
-	digest := fileDigest(r.t, file)
-	image, imageErr := os.Lstat(r.pool.imagePath(digest))
-	view, viewErr := os.Lstat(file)
-	if err := errors.Join(imageErr, viewErr); err != nil {
-		r.t.Fatalf("view file %s has no image: %v", file, err)
+	var err error
+	view, err = os.Lstat(file)
+	if err != nil {
+		r.t.Fatal(err)
 	}
+	for _, name := range r.images() {
+		candidate, statErr := os.Lstat(r.pool.imagePath(name))
+		if statErr != nil {
+			r.t.Fatal(statErr)
+		}
+		if os.SameFile(candidate, view) {
+			return candidate, view
+		}
+	}
+	r.t.Fatalf("view file %s has no linked historical image", file)
+
 	return image, view
 }
 
@@ -260,14 +269,16 @@ func viewEntries(root string) ([]string, error) {
 	return files, err
 }
 
-// plainEntry writes an owned executable that is not a script, so binding it
-// publishes exactly one image. It is never run.
-func plainEntry(t *testing.T, dir, name string) (path, digest string) {
+// plainEntry creates non-program data beside a literal historical image name.
+// The image ID is fixture record data, never derived from executable contents.
+func plainEntry(t *testing.T, dir, name, imageID string) (path, digest string) {
 	t.Helper()
-	path = filepath.Join(dir, "fixture-"+name, "entry.bin")
-	return path, writeExecutable(t, path, []byte("\x7fCUSTODY-FIXTURE "+name+"\n"))
-}
-
-func plainRequest(path, digest string) CommandRequest {
-	return CommandRequest{Executable: path, SHA256: digest}
+	path = filepath.Join(dir, "fixture-"+name, "entry.data")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("original fixture data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, imageID
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -12,16 +13,19 @@ import scripts.delegate_acceptance.workspaces.scenarios.application as applicati
 import scripts.delegate_acceptance.directories.operations as directories_operations
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
+import scripts.delegate_acceptance.private_cli.root_cleanup as private_cli_root_cleanup
 import scripts.delegate_acceptance.processes.operations as processes_operations
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.processes.operations import Processes
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.workspaces.scenarios.context import (
     MANAGED_LIFETIME_CLOSURE_TIMEOUT, AcceptanceSetupFailure,
 )
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
 
 TASK_ID = "0123456789abcdef0123456789abcdef"
+ROOT_ID = "a" * 32
 
 
 class SupervisorClock:
@@ -143,13 +147,12 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         context.processes.start("git-init", self._argv(), context.source).wait(0)
 
     def _make(self, *, layout=None, prepare=None):
-        binaries = dict.fromkeys(("delegate", "runner", "pueue", "pueued"), Path("/binary"))
         with (
             mock.patch.object(application, "_create_layout", side_effect=layout or self._layout),
             mock.patch.object(application, "_prepare_source",
                               side_effect=prepare or self._run_git),
         ):
-            return application._make_context(mock.Mock(workspace_budget="5m"), binaries)
+            return application._make_context(mock.Mock(workspace_budget="5m", source_root=Path("/source")))
 
     def _setup_failure(self, **options):
         with self.assertRaises(AcceptanceSetupFailure) as raised:
@@ -243,6 +246,24 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         failure = self._setup_failure(layout=mock.Mock(side_effect=RuntimeError("layout refused")))
         self.assertIsNone(failure.processes)
         self._assert_exact_root_removed(failure)
+
+    def _assert_unproven_installation_retains(self, reason):
+        bounded = BoundedCommandError(reason)
+        wrapped = RuntimeError("installation failed")
+        wrapped.__cause__ = bounded
+        failure = self._setup_failure(layout=mock.Mock(side_effect=wrapped))
+        self.assertIsNone(failure.processes)
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "setup-installation-closure-unproven"))
+        self.assertTrue(failure.root_token.directory.exists())
+        self._assert_pinned_then_released(failure)
+
+    def test_unproven_installation_child_closure_retains_the_setup_root_without_a_registry(self):
+        self._assert_unproven_installation_retains(CommandFailure.TERMINATION_TIMEOUT)
+
+    def test_failed_installation_child_termination_retains_the_setup_root_without_a_registry(self):
+        self._assert_unproven_installation_retains(CommandFailure.TERMINATION_FAILED)
 
     def test_empty_registry_failure_removes_the_exact_root(self):
         failure = self._setup_failure(prepare=mock.Mock(side_effect=RuntimeError("layout refused")))
@@ -436,6 +457,8 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
             mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", native.closed),
             mock.patch.object(private_cli_supervisor, "pueue_command", native.command),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value={
+                "root_id": ROOT_ID, "supervisor_owner": {"action": "stop-owner", "state": "not_initialized"}}),
         ):
             result = application._finalize_run(
                 ReceiptFinalizer(output, [], {}), context, None, "failed", "original reason")
@@ -451,12 +474,12 @@ class SetupProcessOwnershipTests(unittest.TestCase):
     def test_worker_closing_after_gate_release_still_shuts_down_the_private_daemon(self):
         events = []
         context, cohort = self._daemon_context(events)
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [AcceptanceFailure("worker still closing"), closed, closed, closed])
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed, closed, closed])
         # Closure is awaited, authorized before the lease, rechecked read-only under it, then shut down.
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
-                                  "closure-checked", "closure-checked", "closure-checked", "shutdown"])
+                                  "closure-checked", "closure-checked", "closure-checked", "closure-checked", "shutdown"])
         cohort.remove_closed_fifos.assert_not_called()
         self.assertEqual((context.gates, context.cohorts), ([], []))
         self.assertEqual(len(self.clock.sleeps), 1)
@@ -478,10 +501,10 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         events = []
         context, _cohort = self._daemon_context(events, lifecycle_locks=False)
         supervisor_entries = sorted(path.name for path in context.private_config.parent.iterdir())
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [closed, closed])
-        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked"])
+            context, events, [closed, closed, closed])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked", "closure-checked"])
         native.command.assert_not_called()
         self.assertFalse((context.private_config.parent / "transition.lock").exists())
         # The refused root is left exactly as found, without even the optional election lock.
@@ -492,6 +515,67 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             (True, False, False))
         self.assertIn("transition.lock", cleanup["daemon_error"])
 
+    def test_terminal_stop_timeout_retains_the_owner_obligation_in_cleanup_evidence(self):
+        events = []
+        context, _cohort = self._daemon_context(events)
+        fault = subprocess.TimeoutExpired([str(context.delegate), "supervisor", "stop-owner"], 1)
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", return_value=closed),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", side_effect=fault) as stop,
+            mock.patch.object(private_cli_supervisor, "pueue_command") as daemon,
+            mock.patch.object(private_cli_root_cleanup, "remove_private_acceptance_root") as remove,
+        ):
+            cleanup = context.cleanup("failed")
+        stop.assert_called_once()
+        daemon.assert_not_called()
+        remove.assert_not_called()
+        self.assertEqual((cleanup["authorized"], cleanup["lifetime_closed"], cleanup["daemon_closed"]),
+                         (False, True, False))
+        self.assertEqual(cleanup["daemon_error"], str(fault))
+        self.assertEqual(cleanup["terminal_cleanup"], {
+            "state": str(context.state), "config": str(context.private_config),
+            "root_id": ROOT_ID, "owner": "unresolved",
+        })
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+
+    def test_owner_absence_timeout_preserves_selected_owner_and_daemon_in_receipt(self):
+        context, _cohort = self._daemon_context([])
+        context.environment["TEST_PRIVATE"] = "do-not-publish"
+        subject = {"startup": {"sequence": 1, "epoch": "b" * 32, "intent_sha256": "c" * 64},
+                   "process": {"pid": 31415, "start_token": "selected-owner-start"}}
+        reply = {"root_id": ROOT_ID, "supervisor_owner": {
+            "action": "stop-owner", "state": "serving_released", **subject}}
+        endpoint = context.private_config.parent / "run" / "pueue.sock"
+        fault = subprocess.TimeoutExpired(["native-owner-observation"], 1)
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
+        output = self.home / "receipt.json"
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", return_value=closed),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value=reply) as stop,
+            mock.patch.object(private_cli_supervisor, "private_shutdown_evidence", return_value=(4242, endpoint, (1, 2))),
+            mock.patch.object(private_cli_supervisor, "shutdown_observed_supervisor") as daemon,
+            mock.patch.object(private_cli_supervisor, "await_private_owner_absence", side_effect=fault),
+            mock.patch.object(private_cli_root_cleanup, "remove_private_acceptance_root") as remove,
+        ):
+            result = application._finalize_run(
+                ReceiptFinalizer(output, [], {}), context, None, "failed", "original reason")
+        self.assertEqual(result, ("failed", "original reason"))
+        stop.assert_called_once()
+        daemon.assert_called_once()
+        remove.assert_not_called()
+        receipt = json.loads(output.read_text())
+        cleanup = receipt["cleanup"]
+        self.assertEqual(cleanup["terminal_cleanup"], {
+            "state": str(context.state), "config": str(context.private_config), "root_id": ROOT_ID,
+            "owner": subject, "daemon": {"pid": 4242, "endpoint": str(endpoint), "socket_identity": [1, 2]},
+        })
+        self.assertFalse(cleanup["authorized"])
+        self.assertEqual(cleanup["daemon_error"], str(fault))
+        self.assertNotIn("env", cleanup["terminal_cleanup"])
+        self.assertNotIn("do-not-publish", output.read_text())
+
     def test_state_renamed_after_authorized_shutdown_is_still_rechecked_and_the_root_retained(self):
         events = []
         context, _cohort = self._daemon_context(events)
@@ -499,7 +583,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         # Runs before the fixture releases its pins, which require the state at its owned path.
         self.addCleanup(lambda: moved.rename(context.state) if moved.is_dir() else None)
         canonical_validate = private_cli_supervisor.validate_managed_lifetime_closure
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
 
         def validate(state, task_ids):
             events.append("closure-checked")
@@ -511,7 +595,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             context.state.rename(moved)
 
         native = mock.Mock()
-        native.gone.side_effect = [False, True]
+        native.gone.side_effect = [False, False, True]
         with (
             mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", side_effect=validate),
             mock.patch.object(private_cli_supervisor, "private_shutdown_evidence",
@@ -519,22 +603,24 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
             mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", return_value=True),
             mock.patch.object(private_cli_supervisor, "pueue_command", side_effect=shutdown_then_rename),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value={
+                "root_id": ROOT_ID, "supervisor_owner": {"action": "stop-owner", "state": "not_initialized"}}),
         ):
             cleanup = context.cleanup("passed")
         self.assertEqual((cleanup["daemon_closed"], cleanup["authorized"], cleanup["decision"]),
                          (True, False, "cleanup-failed-evidence-retained"))
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked", "closure-checked",
-                                  "closure-checked", "shutdown", "closure-checked"])
+                                  "closure-checked", "closure-checked", "shutdown", "closure-checked"])
         self.assertTrue(context.root_token.directory.is_dir() and moved.is_dir())
 
     def test_closure_without_a_private_config_is_awaited_and_no_shutdown_is_called(self):
         events = []
         context, _cohort = self._daemon_context(events, private_config=False)
-        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         cleanup, native = self._finalize_failed_with_closure(
-            context, events, [AcceptanceFailure("worker still closing"), closed])
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed])
         self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
-                                  "closure-checked"])
+                                  "closure-checked", "closure-checked"])
         self.assertEqual(len(self.clock.sleeps), 1)
         native.evidence.assert_not_called()
         native.command.assert_not_called()
@@ -611,16 +697,13 @@ class SetupProcessOwnershipTests(unittest.TestCase):
 
     def _main(self, *, run=None, **options):
         output = Path(tempfile.mkdtemp(dir=self.home)) / "receipt.json"
-        binary = Path(application.__file__)
-        arguments = ["--delegate", str(binary), "--runner", str(binary), "--pueue", str(binary),
-                     "--pueued", str(binary), "--output", str(output)]
+        arguments = ["--output", str(output)]
         passed = ("passed", "managed workspace fixture acceptance passed")
         with (
             mock.patch.object(application, "_create_layout", side_effect=options.get("layout") or self._layout),
             mock.patch.object(application, "_prepare_source",
                               side_effect=options.get("prepare") or self._run_git),
             mock.patch.object(application, "_run", side_effect=run or (lambda *_arguments: passed)),
-            mock.patch.object(application, "_require_executable", return_value=binary),
             mock.patch.object(application.sys.stdout, "write"),
         ):
             code = application.main(arguments)

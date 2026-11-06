@@ -16,8 +16,8 @@ func (c *Client) Ready(ctx context.Context) error {
 }
 
 // readyCommand validates the binding immediately before the status probe.
-// Version discovery belongs to Bind; unchanged executable bytes do not need a
-// second version subprocess before the actual status command.
+// Version discovery belongs to Bind. Every control validates selected
+// executable metadata and configuration before the actual protocol command.
 func (c *Client) readyCommand(ctx context.Context) (CommandResult, error) {
 	return c.statusAfterVerifiedVersion(ctx)
 }

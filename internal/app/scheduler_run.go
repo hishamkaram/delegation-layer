@@ -54,11 +54,7 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		if err != nil {
 			return failed(response, err, 1)
 		}
-		self, selfErr := schedulerExecutable()
-		if selfErr != nil {
-			return failed(response, selfErr, 1)
-		}
-		foreground, err = hostLease.AnnounceForeground(ctx, store, self.SHA256)
+		foreground, err = hostLease.AnnounceForeground(ctx, store)
 		if err != nil {
 			return failed(response, err, 1)
 		}
@@ -74,12 +70,8 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		return schedulerRuntime(runCtx, root, store.RootID, schedules, a, deps, stderr)
 	}
 	if a.schedulerResident {
-		self, selfErr := schedulerExecutable()
-		if selfErr != nil {
-			return failed(response, selfErr, 1)
-		}
 		err = host.RunChild(ctx, host.ChildConfig{
-			RootID: store.RootID, BuildID: self.SHA256,
+			RootID: store.RootID,
 			ReadFD: a.schedulerHostReadFD, WriteFD: a.schedulerHostWriteFD,
 			BeforeReady: func(checkCtx context.Context) error { return checkSchedulerDefinitions(checkCtx, schedules) },
 		}, run)
@@ -109,14 +101,14 @@ func closeSchedulerRuntimeOwners(ctx context.Context, schedules contract.Store, 
 
 func schedulerRuntime(ctx context.Context, root, rootID string, schedules contract.Store, a Arguments, deps Dependencies, stderr io.Writer) (resultErr error) {
 	deps.SupervisorOptions.WaitForPendingClose = true
-	deps = deps.withCapturedEnvironment()
+	deps = deps.withCapturedEnvironmentContext(ctx)
 	wakes, err := pulse.New()
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, wakes.Close()) }()
 	wakes.Start()
-	tasks := schedulerTasks{root: root, rootID: rootID, arguments: a, dependencies: deps}
+	tasks := schedulerTasks{root: root, rootID: rootID, arguments: a, dependencies: deps, routing: deps.infrastructureRouting()}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var reportMu sync.Mutex
@@ -136,7 +128,14 @@ func schedulerRuntime(ctx context.Context, root, rootID string, schedules contra
 		},
 	})
 	err = errors.Join(err, reportErr)
-	if a.schedulerResident && (errors.Is(err, task.ErrUnsupportedSchema) || errors.Is(err, task.ErrInvariantFault)) {
+	return schedulerRuntimeError(err, a.schedulerResident)
+}
+
+func schedulerRuntimeError(err error, resident bool) error {
+	if resident && errors.Is(err, schedulerruntime.ErrTaskCleanupUnresolved) {
+		return fmt.Errorf("%w: scheduler task cleanup remains unresolved: %w", host.ErrCleanupUnresolved, err)
+	}
+	if resident && (errors.Is(err, task.ErrUnsupportedSchema) || errors.Is(err, task.ErrInvariantFault)) {
 		return fmt.Errorf("%w: scheduler storage validation failed: %w", host.ErrIncompatible, err)
 	}
 	return err

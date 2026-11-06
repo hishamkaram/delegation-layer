@@ -471,7 +471,7 @@ func TestOrdinaryPrivateGuardianHandsCustodyToLaunchedOwner(t *testing.T) {
 	requireTaskMaintenanceFullWake(t, store.Root, before)
 
 	owner := terminalEventMaintenanceDependencies(nil, nil)
-	if err := supervisorcore.RunQueueMaintenance(launches.launches[0].root, owner.SupervisorOptions, owner.supervisorLookup()); err != nil {
+	if err := runQueueMaintenance(runnerArguments{Root: launches.launches[0].root}, owner); err != nil {
 		t.Fatal(err)
 	}
 	if custodyTestPending(t, registration) {

@@ -36,14 +36,15 @@ from ..directories.journal import directory_identity_record
 from ..directories.operations import DirectoryOwner, OwnedDirectory, release_owned_directories
 from ..private_cli.fixtures import install_pi_fixture
 from ..private_cli.leases import DisposalLeases
+from ..private_cli.fixture_lifetime import SupervisorCleanup
 from ..private_cli.packaged_defaults import (
     INSTALLED_BINARIES, InstalledBootstrap, InstalledDefaults, isolated_default_state_path,
     prove_installed_default_bootstrap,
 )
 from ..private_cli.root_cleanup import remove_private_acceptance_root
-from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor
+from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor, terminal_cleanup_evidence
 from .candidate_install_contract import BOOTSTRAP_SHUTDOWN, BootstrapObservation, BootstrapTarget
-from .contract import BinaryDigests, VerificationError
+from .contract import InstalledExecutables, VerificationError
 
 
 STAGE = "candidate-bootstrap"
@@ -78,7 +79,7 @@ class InstalledBootstrapProbe:
         facts: dict[str, object] = {"status": "partial", "parent": str(self.parent), "root": str(root)}
         self.receipt["candidate_install"]["bootstrap"] = facts
         self.locations["bootstrap_root"] = root
-        ledger: list[dict] = []
+        ledger: list[SupervisorCleanup] = []
         token = None
         capture = None
         observation = None
@@ -113,8 +114,8 @@ class InstalledBootstrapProbe:
 def _observation(result: InstalledBootstrap) -> BootstrapObservation:
     return BootstrapObservation(
         root_id=result.root_id, task_id=result.task_id,
-        binaries=BinaryDigests(delegate=result.delegate_sha256, delegate_run=result.runner_sha256,
-                               pueue=result.client_sha256, pueued=result.daemon_sha256),
+        binaries=InstalledExecutables(delegate=result.delegate, delegate_run=result.runner,
+                                       pueue=result.client, pueued=result.daemon),
         outcome=result.outcome, worker_result=result.worker_result,
         termination_cause=result.termination_cause, scope_empty=result.scope_empty,
         shutdown=BOOTSTRAP_SHUTDOWN)
@@ -197,7 +198,7 @@ def _release_unconsumed(entries: tuple[OwnedDirectory, ...], facts: dict[str, ob
 
 
 def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: BootstrapTarget,
-         ledger: list[dict], facts: dict[str, object],
+         ledger: list[SupervisorCleanup], facts: dict[str, object],
          disposal: DisposalLeases) -> tuple[Path, InstalledBootstrap]:
     """Run the shared core for one installed root; return its state root with the closed turn."""
     home, providers, workspace, responses = (
@@ -213,10 +214,10 @@ def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: 
     facts.update({"path": env["PATH"], "delegate": found, "supervisor_directory": str(target.supervisor_directory)})
     if found is None or Path(found).resolve() != target.delegate:
         raise VerificationError("candidate_bootstrap_delegate_mismatch", STAGE)
-    digests = target.binaries.as_mapping()
+    paths = target.binaries.as_mapping()
     installed = InstalledDefaults(
         delegate=Path(found), supervisor_directory=target.supervisor_directory,
-        digests=tuple((name, digests[name]) for name in INSTALLED_BINARIES), env=env,
+        executables=tuple((name, paths[name]) for name in INSTALLED_BINARIES), env=env,
         state=isolated_default_state_path(home), workspace=workspace, brief=brief, response_directory=responses)
     facts["state"] = str(installed.state)
     closed = prove_installed_default_bootstrap(
@@ -232,7 +233,7 @@ def _fault(error: BaseException) -> dict[str, object]:
 
 
 def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
-                      ledger: list[dict], facts: dict[str, object],
+                      ledger: list[SupervisorCleanup], facts: dict[str, object],
                       disposal: DisposalLeases) -> VerificationError | None:
     """Record the original fault and shut down each pending supervisor once; the root's disposal is the caller's.
 
@@ -247,9 +248,10 @@ def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
     facts["cleanup_failures"] = cleanup_faults
     for pending in tuple(ledger):
         try:
-            if capture is None or shutdown_pending_private_supervisor(
-                    pending, ledger, capture_root=capture, disposal=disposal) is None:
+            if capture is None:
                 cleanup_faults.append({"type": "SupervisorUnverified", "message": "no shutdown was verified"})
+            else:
+                shutdown_pending_private_supervisor(pending, ledger, capture_root=capture, disposal=disposal)
         except Exception as cleanup_error:
             cleanup_faults.append(_fault(cleanup_error))
         except BaseException as interrupted:
@@ -266,7 +268,7 @@ def _retained_failure(primary: Exception, *, capture: OwnedDirectory | None,
     return VerificationError("candidate_bootstrap_failed", STAGE)
 
 
-def _publish_unresolved(ledger: list[dict], facts: dict[str, object]) -> list[dict[str, object]]:
+def _publish_unresolved(ledger: list[SupervisorCleanup], facts: dict[str, object]) -> list[dict[str, object]]:
     """Record every pending supervisor, then keep each one after an attempted dispatch, with its evidence.
 
     The local ledger stays authoritative. Its entries are copied into the private facts before any
@@ -281,7 +283,8 @@ def _publish_unresolved(ledger: list[dict], facts: dict[str, object]) -> list[di
     facts["unresolved_ownership"] = records
     unresolved: list[dict[str, object]] = []
     for entry, record in zip(pending, records):
-        if entry["task_ids"] or entry["config"].exists():
+        record.update(terminal_cleanup_evidence(entry))
+        if entry["task_ids"] or entry["config"].exists() or "owner" in entry:
             _add_shutdown_evidence(record, entry["config"])
             unresolved.append(record)
     facts["unresolved_ownership"] = unresolved

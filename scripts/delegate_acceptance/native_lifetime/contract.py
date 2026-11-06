@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
+from pathlib import Path
 from typing import Mapping
+
+from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
+from scripts.delegate_acceptance.paths.policy import _raw_clean_absolute_path
+
+
+RECEIPT_SCHEMA_VERSION = 2
 
 
 MAX_STAGE_LENGTH = 128
@@ -50,8 +57,7 @@ def _digest(value: object) -> bool:
 
 
 def _primitive_digest(value: Mapping[str, object]) -> str:
-    encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    return hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(canonical_go_json(value, newline=False)).hexdigest()
 
 
 def _bounded_text(value: object, maximum: int) -> bool:
@@ -93,7 +99,7 @@ def _validate_envelope(envelope: Mapping[str, object]) -> list[str]:
         },
     ):
         errors.append("receipt envelope fields are incomplete or unexpected")
-    if type(envelope.get("schema_version")) is not int or envelope.get("schema_version") != 1 or envelope.get("claim_class") != "native-lifetime":
+    if type(envelope.get("schema_version")) is not int or envelope.get("schema_version") != RECEIPT_SCHEMA_VERSION or envelope.get("claim_class") != "native-lifetime":
         errors.append("receipt schema or claim class is invalid")
     if envelope.get("verdict") != "passed":
         errors.append("native lifetime proof verdict is not passed")
@@ -173,7 +179,7 @@ def _validate_primitive(
     }
     if (backend, assurance_name) not in expected_pairs.get(expected_os, set()):
         errors.append("receipt backend and assurance do not match the native backend matrix")
-    if (type(primitive.get("schema_version")) is not int or primitive.get("schema_version") != 1
+    if (type(primitive.get("schema_version")) is not int or primitive.get("schema_version") != RECEIPT_SCHEMA_VERSION
             or not isinstance(primitive.get("verdict"), str)
             or primitive.get("verdict") not in {"passed", "failed"}):
         errors.append("primitive proof verdict is invalid")
@@ -212,16 +218,19 @@ def _validate_source(
 
 def _validate_binary(binary: Mapping[str, object] | None) -> list[str]:
     errors: list[str] = []
-    if binary is None or not _has_exact_keys(binary, {"name", "sha256", "size_bytes", "go_version"}):
+    if binary is None or not _has_exact_keys(binary, {"name", "path", "size_bytes", "go_version"}):
         errors.append("test binary identity is incomplete")
     else:
         name = _text(binary, "name")
         go_version = _text(binary, "go_version")
         size = binary.get("size_bytes")
+        path = _text(binary, "path")
         if name is None or not name or "/" in name or "\\" in name:
             errors.append("test binary name is invalid")
-        if not _digest(binary.get("sha256")) or type(size) is not int or size <= 0 or size > 256 * 1024 * 1024:
-            errors.append("test binary fingerprint is invalid")
+        if path is None or "\x00" in path or not _raw_clean_absolute_path(path) or Path(path).name != name:
+            errors.append("test binary installed path is invalid")
+        if type(size) is not int or not 0 < size <= (1 << 63) - 1:
+            errors.append("test binary size metadata is invalid")
         if go_version is None or not go_version.startswith("go") or len(go_version) > 32:
             errors.append("test binary Go version is invalid")
 
@@ -236,8 +245,13 @@ def _validate_assurance(
     assurance_name = _text(primitive, "assurance")
     if type(assurance.get("schema_version")) is not int or assurance.get("schema_version") != 1 or assurance.get("assurance") != assurance_name:
         errors.append("assurance receipt does not match the selected backend")
-    if assurance.get("primitive_receipt_sha256") != _primitive_digest(primitive):
-        errors.append("assurance receipt does not bind the primitive receipt")
+    try:
+        primitive_digest = _primitive_digest(primitive)
+    except AcceptanceFailure:
+        errors.append("primitive receipt cannot be canonically encoded")
+    else:
+        if assurance.get("primitive_receipt_sha256") != primitive_digest:
+            errors.append("assurance receipt does not bind the primitive receipt")
     if assurance.get("owner") != "native proof test process":
         errors.append("assurance receipt owner is missing")
     if assurance.get("lease") != "test invocation owns the created scope until cleanup":

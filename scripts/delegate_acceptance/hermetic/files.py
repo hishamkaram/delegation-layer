@@ -1,10 +1,8 @@
 """Fixture input files and executable observations."""
 
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.hermetic.contract import require_true
 import os
-import shutil
 import uuid
 
 
@@ -35,19 +33,6 @@ def canonical_executable(path):
     require_true(path.is_file() and os.access(path, os.X_OK),
                  "acceptance executable is not executable: " + str(path))
     return path
-
-
-def copy_executable(source, destination):
-    source = canonical_executable(source)
-    destination = Path(destination)
-    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
-    destination.chmod(0o700)
-    require_true(digest(source) == digest(destination),
-                 "copied executable digest changed: " + str(destination))
-    require_true(destination.resolve(strict=True) == destination,
-                 "copied executable is not canonical: " + str(destination))
-    return destination
 
 
 def task_id():

@@ -90,11 +90,6 @@ func loadPrivateMigrationRecord(base string) (record privateMigrationRecord, fou
 	return record, true, nil
 }
 
-func publishPrivateMigrationRecord(base string, legacy, successor privateDaemonIdentity) error {
-	record := privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: legacy, Successor: successor}
-	return publishPrivateMigrationState(base, record)
-}
-
 // publishPrivateMigrationState preserves progress when resuming a journal.
 // Other publishers retain their create-once equality checks.
 func publishPrivateMigrationState(base string, record privateMigrationRecord) error {
@@ -120,6 +115,9 @@ func clearPrivateMigrationRecord(base string, expected privateMigrationRecord) e
 }
 
 func replacePrivateMigrationRecord(base string, expected, replacement privateMigrationRecord) error {
+	if expected.Legacy != replacement.Legacy || expected.Successor != replacement.Successor {
+		return fmt.Errorf("%w: accepted private migration identities are immutable", ErrPrivateSupervisorMigrationRequired)
+	}
 	current, found, err := loadPrivateMigrationRecord(base)
 	if err != nil {
 		return err
@@ -127,6 +125,28 @@ func replacePrivateMigrationRecord(base string, expected, replacement privateMig
 	if !found || current != expected {
 		return fmt.Errorf("%w: private migration journal changed", ErrBinding)
 	}
+	data, err := marshalPrivateMigrationRecord(replacement)
+	if err != nil {
+		return err
+	}
+	return replacePrivateRecord(base, privateMigrationRecordPath(base), data)
+}
+
+// replacePreparedPrivateMigrationSuccessor changes only the reversible target.
+// Phase updates continue through the immutable-identity writer above.
+func replacePreparedPrivateMigrationSuccessor(base string, expected privateMigrationRecord, successor privateDaemonIdentity) error {
+	if !privateMigrationRetargetable(expected) || successor == expected.Legacy || !privateLogicalIdentityPresent(successor) {
+		return fmt.Errorf("%w: private migration cannot replace its accepted successor", ErrPrivateSupervisorMigrationRequired)
+	}
+	current, found, err := loadPrivateMigrationRecord(base)
+	if err != nil {
+		return err
+	}
+	if !found || current != expected {
+		return fmt.Errorf("%w: private migration journal changed", ErrBinding)
+	}
+	replacement := expected
+	replacement.Successor = successor
 	data, err := marshalPrivateMigrationRecord(replacement)
 	if err != nil {
 		return err
@@ -333,6 +353,9 @@ func readPrivateIdentityPublication(stateRoot string) (privateIdentityPublicatio
 }
 
 func publishPrivateIdentityPublication(stateRoot string, pending privateIdentityPublicationRecord) error {
+	if err := validatePrivateRestartPublication(stateRoot, pending.Binding); err != nil {
+		return err
+	}
 	pendingPath := privateIdentityPublicationPath(stateRoot)
 	bindingData, err := task.MarshalCanonical(privateSupervisorBindingRecord{
 		SchemaVersion: task.SchemaVersion,
@@ -372,6 +395,9 @@ func publishPrivateDaemonIdentity(base string, binding task.SupervisorRef) error
 	if !private {
 		return publishDaemonOnlyIdentity(base, identity)
 	}
+	if err := validatePrivateRestartPublication(stateRoot, binding); err != nil {
+		return err
+	}
 	data, err := task.MarshalCanonical(identity)
 	if err != nil {
 		return fmt.Errorf("%w: marshal private daemon identity: %w", ErrConfiguration, err)
@@ -406,7 +432,10 @@ func publishPrivateDaemonIdentity(base string, binding task.SupervisorRef) error
 }
 
 func publishDaemonOnlyIdentity(base string, identity privateDaemonIdentity) error {
-	data, err := task.MarshalCanonical(privateDaemonIdentity{Executable: identity.Executable, SHA256: identity.SHA256})
+	if err := validatePrivateDaemonIdentity(identity); err != nil {
+		return fmt.Errorf("%w: validate private daemon identity: %w", ErrConfiguration, err)
+	}
+	data, err := task.MarshalCanonical(identity)
 	if err != nil {
 		return fmt.Errorf("%w: marshal private daemon identity: %w", ErrConfiguration, err)
 	}

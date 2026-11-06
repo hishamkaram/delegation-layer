@@ -331,6 +331,23 @@ func (s *processGroupScope) refreshLaunchRefsWithMode(ctx context.Context, launc
 	return s.mergeLaunchRefs(launchRefs), nil
 }
 
+// WithoutProcessScopeMarker returns an owned snapshot with only this package's
+// exact reserved key removed. Nil stays nil; explicit empty stays nonnil. It
+// reads no ambient environment and attests no process identity or authority.
+func WithoutProcessScopeMarker(environment []string) []string {
+	if environment == nil {
+		return nil
+	}
+	result := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != processScopeMarkerEnvironment {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 func configureProcessScopeEnvironment(cmd *exec.Cmd, identifier string) error {
 	if cmd == nil {
 		return fmt.Errorf("%w: nil command", ErrInvalidRef)
@@ -343,14 +360,7 @@ func configureProcessScopeEnvironment(cmd *exec.Cmd, identifier string) error {
 	if environment == nil {
 		environment = os.Environ()
 	}
-	configured := make([]string, 0, len(environment)+1)
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, prefix) {
-			continue
-		}
-		configured = append(configured, entry)
-	}
-	cmd.Env = append(configured, prefix+identifier)
+	cmd.Env = append(WithoutProcessScopeMarker(environment), prefix+identifier)
 	return nil
 }
 

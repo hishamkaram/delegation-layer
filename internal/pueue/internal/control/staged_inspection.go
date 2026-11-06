@@ -148,10 +148,6 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 	return observation, nil
 }
 
-func stagedInspectionCommand(launch Launch, identity InspectionIdentity) string {
-	return escapedCommand(inspectionWorkerArguments(launch, identity)...)
-}
-
 func (c *Client) requireStagedLaunchCapability(ctx context.Context, authorization SubmissionAuthorization) error {
 	if authorization.StagedLaunchCapability == nil {
 		_, err := c.stagedLaunchCapabilityLocked(ctx)

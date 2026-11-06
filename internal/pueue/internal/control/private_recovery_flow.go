@@ -33,19 +33,6 @@ func (r PrivateRecovery) PairUnavailable() bool { return r.pairUnavailable }
 // Cause returns the diagnostic error behind PairUnavailable, or nil.
 func (r PrivateRecovery) Cause() error { return r.cause }
 
-// RecoverPrivate is the compatibility projection of AttemptPrivateRecovery:
-// an unavailable pair returns its existing migration-required cause.
-func RecoverPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
-	recovery, err := AttemptPrivateRecovery(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
-	if err != nil {
-		return nil, err
-	}
-	if recovery.pairUnavailable {
-		return nil, recovery.cause
-	}
-	return recovery.client, nil
-}
-
 // AttemptPrivateRecovery reopens a saved private task through the state-rooted
 // supervisor. It first adopts a live, completed successor proven to own the
 // saved generation; a stopped endpoint is restarted only from that exact
@@ -55,32 +42,20 @@ func RecoverPrivate(ctx context.Context, stateRoot string, saved task.Supervisor
 // generation actually used for control. Every operational fault is returned
 // as the error, never as PairUnavailable.
 func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (PrivateRecovery, error) {
-	if !IsPrivateConfig(stateRoot, saved.ConfigPath) {
-		return PrivateRecovery{}, fmt.Errorf("%w: supervisor config is not private to the state root", ErrConfiguration)
-	}
-	if err := validatePrivateSupervisorRef(saved); err != nil {
-		return PrivateRecovery{}, fmt.Errorf("%w: %w", ErrBinding, err)
-	}
-	bootstrapContext, cancel, options, err := privateBootstrapOptions(ctx, options)
+	bootstrapContext, cancel, probe, err := prepareSavedPrivateProbe(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
 	if err != nil {
 		return PrivateRecovery{}, err
 	}
 	defer cancel()
-	options, err = optionsForSavedBinding(saved, options)
-	if err != nil {
-		return PrivateRecovery{}, err
+	if probe.client != nil {
+		return PrivateRecovery{client: probe.client}, nil
 	}
-	// Validate the exact saved config before any endpoint or client probe. In
-	// particular, an absent saved config must remain ErrBinding rather than
-	// becoming Bind's ErrConfiguration after a probe has already run.
-	if err = validateSavedPrivateConfig(stateRoot, saved, options); err != nil {
-		return PrivateRecovery{}, err
-	}
-	if probed, probeErr := probeSavedPrivate(bootstrapContext, stateRoot, saved, clientExecutable, daemonExecutable, options); probeErr != nil || probed != nil {
-		return PrivateRecovery{client: probed}, probeErr
-	}
+	options = probe.options
 	var recovery PrivateRecovery
 	if err = WithBootstrapLockContext(bootstrapContext, stateRoot, func(lockedContext context.Context) error {
+		if validationErr := validateSavedPrivateConfig(lockedContext, stateRoot, saved, options); validationErr != nil {
+			return validationErr
+		}
 		// A pending explicit repair may have preserved the old config under a
 		// root-owned alias. Reopen that exact endpoint first so its queued work
 		// remains recoverable; this is the only recovery exception to the
@@ -98,12 +73,12 @@ func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.Su
 	return recovery, nil
 }
 
-func validateSavedPrivateConfig(stateRoot string, saved task.SupervisorRef, options Options) error {
+func validateSavedPrivateConfig(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options) error {
 	resolution, err := privateResolution(options)
 	if err != nil {
 		return err
 	}
-	_, _, err = privateBindingConfig(stateRoot, filepath.Join(stateRoot, privateSupervisorDirectory), resolution, &saved)
+	_, _, err = privateBindingConfig(ctx, stateRoot, filepath.Join(stateRoot, privateSupervisorDirectory), resolution, &saved, options)
 	return err
 }
 
@@ -115,6 +90,10 @@ func probeSavedPrivate(ctx context.Context, stateRoot string, saved task.Supervi
 		}
 		return found && privateFullGenerationMatches(client.Binding(), current), nil
 	})
+	return finishSavedPrivateProbe(saved, probed, ready, err)
+}
+
+func finishSavedPrivateProbe(saved task.SupervisorRef, probed *Client, ready bool, err error) (*Client, error) {
 	if err != nil {
 		return nil, bindingProbeError(err)
 	}
@@ -235,23 +214,24 @@ func recoverLegacyPrivateGeneration(ctx context.Context, stateRoot string, saved
 	if err != nil {
 		return nil, fmt.Errorf("%w: read legacy private supervisor identity: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
-	if !found || saved.DaemonExecutable == "" || saved.DaemonSHA256 == "" || !privateDaemonIdentityMatchesBinding(identity, saved) {
+	if !found || saved.DaemonExecutable == "" || !privateDaemonIdentityMatchesBinding(identity, saved) {
 		return nil, fmt.Errorf("%w: legacy private supervisor generation cannot be proven from saved identity", ErrPrivateSupervisorMigrationRequired)
 	}
 
-	// A missing completed binding is recoverable only through the exact saved
-	// pair. The caller's pair is intentionally ignored in this branch.
-	client, observation, err := bindPrivateTransitionClient(ctx, saved.ClientExecutable, saved.DaemonExecutable, saved.ConfigPath, options, false)
+	client, err := BindSaved(ctx, saved, options)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reopen exact legacy private supervisor pair: %w", ErrPrivateSupervisorMigrationRequired, err)
+		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if !privateFullGenerationMatches(client.Binding(), saved) {
-		return nil, failPrivateTransitionClient(client, observation,
-			fmt.Errorf("%w: exact legacy private supervisor generation changed", ErrPrivateSupervisorMigrationRequired))
+	observation, err := client.availableForTransition(ctx, false)
+	if err != nil {
+		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if !observation.ready() {
+		if launchErr := client.validatePrivateGenerationLaunch(stateRoot); launchErr != nil {
+			return nil, errors.Join(launchErr, client.CloseAfterPending(launchErr))
+		}
 		if err = client.closeRefusedPrivateEndpoint(ctx, observation); err == nil {
-			err = client.startPrivate(ctx)
+			err = client.startPrivate(ctx, stateRoot)
 		}
 		if err != nil {
 			return nil, errors.Join(
@@ -284,8 +264,8 @@ func privateRecoveryTransitionPending(stateRoot string) (bool, error) {
 // starts the exact recorded daemon pair long enough to inspect and migrate its
 // queue. The returned bool is true only when this call started that daemon;
 // callers may shut down only that recovery-owned endpoint.
-func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, bool, error) {
-	return RecoverSavedWithPair(ctx, saved, "", "", options)
+func RecoverSaved(ctx context.Context, operationRoot string, saved task.SupervisorRef, options Options) (*Client, bool, error) {
+	return RecoverSavedWithPair(ctx, operationRoot, saved, "", "", options)
 }
 
 // RecoverSavedWithPair is the migration form of RecoverSaved. It uses the
@@ -293,17 +273,21 @@ func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options
 // falls back to a caller-supplied verified pair when an upgrade removed them.
 // The durable binding remains the saved supervisor; the pair only supplies the
 // executable implementation used to inspect or restart that same endpoint.
-func RecoverSavedWithPair(ctx context.Context, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, error) {
+func RecoverSavedWithPair(ctx context.Context, operationRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, error) {
 	if err := validateSavedSupervisorRef(saved); err != nil {
 		return nil, false, fmt.Errorf("%w: %w", ErrBinding, err)
 	}
-	stateRoot, private := privateStateRoot(saved.ConfigPath)
+	_, private := privateStateRoot(saved.ConfigPath)
+	stateRoot := operationRoot
+	if private && !IsPrivateConfig(operationRoot, saved.ConfigPath) {
+		return nil, false, ErrConfiguration
+	}
 	if private {
-		resolvedClient, resolveErr := selectRecoveryExecutable(saved.ClientExecutable, clientExecutable)
+		resolvedClient, resolveErr := selectRecoveryClient(saved, clientExecutable)
 		if resolveErr != nil {
 			return nil, false, resolveErr
 		}
-		resolvedDaemon, _, resolveErr := selectRecoveryDaemon(saved, daemonExecutable)
+		resolvedDaemon, resolveErr := selectRecoveryDaemon(saved, daemonExecutable)
 		if resolveErr != nil {
 			return nil, false, resolveErr
 		}
@@ -323,31 +307,28 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 	if err != nil {
 		return nil, false, err
 	}
-	clientExecutable, err = selectRecoveryExecutable(saved.ClientExecutable, clientExecutable)
+	clientExecutable, err = selectRecoveryClient(saved, clientExecutable)
 	if err != nil {
 		return nil, false, err
 	}
 	client, err := bindSavedForMigrationWithClient(ctx, saved, clientExecutable, options)
 	if err != nil {
-		return nil, false, err
+		return nil, false, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if private {
 		// Keep the verified predecessor daemon identity on the recovered client
 		// even when its endpoint is already reachable. Migration must prove that
 		// the process it shuts down is the saved supervisor before waiting for
 		// the endpoint and process to disappear.
-		daemon, digest, daemonErr := selectRecoveryDaemon(saved, daemonExecutable)
+		daemon, daemonErr := selectRecoveryDaemon(saved, daemonExecutable)
 		if daemonErr != nil {
 			return nil, false, errors.Join(daemonErr, client.Close())
 		}
 		client.runtimeBinding.DaemonExecutable = daemon
-		client.runtimeBinding.DaemonSHA256 = digest
+		client.runtimeBinding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+		client.runtimeBinding.ClientSHA256, client.runtimeBinding.DaemonSHA256 = "", ""
 	}
-	observation, err := client.availableForTransition(ctx, true)
-	if err == nil && !private {
-		// External supervisors keep their original refused-endpoint failure.
-		err = observation.projectedError()
-	}
+	observation, err := client.observeSavedRecoveryEndpoint(ctx, private)
 	if err != nil {
 		return nil, false, errors.Join(err, client.CloseAfterPending(err))
 	}
@@ -355,16 +336,22 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 		return client, false, nil
 	}
 
-	daemon, digest, err := selectRecoveryDaemon(saved, daemonExecutable)
+	if private {
+		if launchErr := client.validatePrivateGenerationLaunch(stateRoot); launchErr != nil {
+			return nil, false, errors.Join(launchErr, client.CloseAfterPending(launchErr))
+		}
+	}
+	daemon, err := selectRecoveryDaemon(saved, daemonExecutable)
 	if err != nil {
 		return nil, false, failPrivateTransitionClient(client, observation, err)
 	}
 	client.runtimeBinding.DaemonExecutable = daemon
-	client.runtimeBinding.DaemonSHA256 = digest
+	client.runtimeBinding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	client.runtimeBinding.ClientSHA256, client.runtimeBinding.DaemonSHA256 = "", ""
 	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return nil, false, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if err = startDaemon(daemon, digest, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
+	if err = startDaemon(ctx, stateRoot, daemon, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
 		return nil, false, errors.Join(err, client.Close())
 	}
 	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
@@ -373,13 +360,24 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 		// leave a durable private recovery alias for the next bootstrap.
 		combinedErr := err
 		if private {
-			aliasErr := client.PersistPrivateRecoveryBinding(stateRoot)
+			aliasErr := client.PersistPrivateRecoveryBindingContext(ctx, stateRoot)
 			combinedErr = errors.Join(combinedErr, aliasErr)
 		}
 		return nil, true, errors.Join(combinedErr, client.CloseAfterPending(combinedErr))
 	}
 	return client, true, nil
 }
+
+func (c *Client) observeSavedRecoveryEndpoint(ctx context.Context, private bool) (PrivateEndpointObservation, error) {
+	observation, err := c.availableForTransition(ctx, true)
+	if err == nil && !private {
+		// External supervisors keep their original refused-endpoint failure.
+		err = observation.projectedError()
+	}
+	return observation, err
+}
+
+var errSavedSupervisorExecutableUnavailable = errors.New("saved supervisor executable is unavailable")
 
 func selectRecoveryExecutable(saved, fallback string) (string, error) {
 	if saved != "" {
@@ -390,37 +388,43 @@ func selectRecoveryExecutable(saved, fallback string) (string, error) {
 		}
 	}
 	if fallback == "" {
-		return "", fmt.Errorf("%w: saved supervisor executable is unavailable", ErrBinding)
+		return "", fmt.Errorf("%w: %w", ErrBinding, errSavedSupervisorExecutableUnavailable)
 	}
 	return fallback, nil
 }
 
-func selectRecoveryDaemon(saved task.SupervisorRef, fallback string) (string, string, error) {
-	if saved.DaemonExecutable != "" {
+func selectRecoveryClient(saved task.SupervisorRef, fallback string) (string, error) {
+	if fallback != "" && isLegacySupervisorClientPath(filepath.Dir(filepath.Dir(saved.ConfigPath)), fallback) {
+		return "", fmt.Errorf("%w: historical executable copy is not installed transport", ErrBinding)
+	}
+	if isLegacyStateSupervisorClient(saved) {
+		if fallback == "" {
+			return "", fmt.Errorf("%w: historical supervisor copy requires an installed client", ErrBinding)
+		}
+		return canonicalExecutable(fallback)
+	}
+	return selectRecoveryExecutable(saved.ClientExecutable, fallback)
+}
+
+func selectRecoveryDaemon(saved task.SupervisorRef, fallback string) (string, error) {
+	if fallback != "" && isLegacySupervisorClientPath(filepath.Dir(filepath.Dir(saved.ConfigPath)), filepath.Join(filepath.Dir(fallback), "pueue")) {
+		return "", fmt.Errorf("%w: historical executable copy is not installed transport", ErrBinding)
+	}
+	if !isLegacyStateSupervisorClient(saved) && saved.DaemonExecutable != "" {
 		if _, err := os.Stat(saved.DaemonExecutable); err == nil {
-			resolved, digest, savedErr := savedDaemon(saved)
-			if savedErr == nil {
-				return resolved, digest, nil
-			}
-			if fallback == "" {
-				return "", "", savedErr
-			}
+			return savedDaemon(saved)
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", "", fmt.Errorf("%w: inspect saved supervisor daemon: %w", ErrBinding, err)
+			return "", fmt.Errorf("%w: inspect saved supervisor daemon: %w", ErrBinding, err)
 		}
 	}
 	if fallback == "" {
-		return savedDaemon(saved)
+		return "", fmt.Errorf("%w: installed supervisor daemon is unavailable", ErrBinding)
 	}
 	resolved, err := canonicalExecutable(fallback)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: fallback supervisor daemon is unavailable: %w", ErrBinding, err)
+		return "", fmt.Errorf("%w: installed supervisor daemon is unavailable: %w", ErrBinding, err)
 	}
-	digest, err := hashExecutable(resolved)
-	if err != nil {
-		return "", "", fmt.Errorf("%w: hash fallback supervisor daemon: %w", ErrBinding, err)
-	}
-	return resolved, digest, nil
+	return resolved, nil
 }
 
 // StopRecovered gracefully stops a supervisor that the caller started through
@@ -440,6 +444,7 @@ func bindSavedMigrationClient(ctx context.Context, saved task.SupervisorRef, cur
 		return nil, ErrBinding
 	}
 	if task.SameSupervisorIdentity(runtimeBinding, saved) {
+		current.binding = saved
 		return current, nil
 	}
 	if runtimeBinding.Endpoint == saved.Endpoint {
@@ -530,6 +535,9 @@ func bindSavedEndpointMigration(ctx context.Context, saved task.SupervisorRef, c
 	}
 	migration.binding = saved
 	migration.cleanup = cleanup
+	if constructionErr := recordPrivateClientConstruction(migration, stateRoot); constructionErr != nil {
+		return nil, errors.Join(constructionErr, migration.CloseAfterPending(constructionErr))
+	}
 	return migration, nil
 }
 
@@ -690,21 +698,14 @@ func validateSavedSupervisorRef(saved task.SupervisorRef) error {
 	return nil
 }
 
-func savedDaemon(saved task.SupervisorRef) (string, string, error) {
+func savedDaemon(saved task.SupervisorRef) (string, error) {
 	path := saved.DaemonExecutable
 	if path == "" {
 		path = filepath.Join(filepath.Dir(saved.ClientExecutable), "pueued")
 	}
 	resolved, err := canonicalExecutable(path)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: saved supervisor daemon is unavailable: %w", ErrBinding, err)
+		return "", fmt.Errorf("%w: saved supervisor daemon is unavailable: %w", ErrBinding, err)
 	}
-	digest, err := hashExecutable(resolved)
-	if err != nil {
-		return "", "", fmt.Errorf("%w: hash saved supervisor daemon: %w", ErrBinding, err)
-	}
-	if saved.DaemonSHA256 != "" && saved.DaemonSHA256 != digest {
-		return "", "", fmt.Errorf("%w: saved supervisor daemon identity changed", ErrBinding)
-	}
-	return resolved, digest, nil
+	return resolved, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 const (
@@ -71,37 +73,45 @@ func initOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputU
 		runner:    filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run"),
 	}
 	// The supervisor captures its command environment when bound, so it is
-	// created before the provider-only HOME and PATH replace the caller's.
+	// created before the provider-only HOME and PATH snapshot is selected.
 	var options pueue.Options
 	fixture.supervisor, options, _, fixture.commandLog = newOrdinarySubmissionReceiptSupervisor(t)
+	options.ControlOwnerExecutable = canonicalAppTestExecutable(t)
 	t.Cleanup(func() {
 		if err := fixture.supervisor.Close(); err != nil {
 			t.Error(err)
 		}
 	})
 	writeRunnerFixture(t, fixture.runner, "#!/bin/sh\nexit 0\n")
-	installOutputUpgradeProvider(t, testCase.executable())
+	environment := installOutputUpgradeProvider(t, testCase.executable())
 	fixture.deps = Dependencies{
 		ResourceChecker:             fixtureResources,
 		Catalog:                     testCase.catalog(t),
 		SupervisorOptions:           options,
 		InitialSupervisorExecutable: fixture.supervisor.Binding().ClientExecutable,
 		RunnerExecutable:            fixture.runner,
-		Environment:                 os.Environ(),
+		Environment:                 environment,
 	}
 	return fixture
 }
 
 // installOutputUpgradeProvider places an inert provider CLI as the only PATH
-// entry so the production preparation resolves a stable executable identity.
-func installOutputUpgradeProvider(t *testing.T, executable string) {
+// entry in a captured environment so production preparation resolves a stable
+// executable identity without changing the process environment.
+func installOutputUpgradeProvider(t *testing.T, executable string) []string {
 	t.Helper()
 	home := testsupport.CanonicalTempDir(t)
 	if err := os.WriteFile(filepath.Join(home, executable), []byte("fixture"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("HOME", home)
-	t.Setenv("PATH", home)
+	environment := slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		return strings.HasPrefix(entry, "HOME=") || strings.HasPrefix(entry, "PATH=")
+	})
+	environment = append(environment, "HOME="+home, "PATH="+home)
+	if err := task.ValidateEnvironment(environment); err != nil {
+		t.Fatalf("provider fixture environment: %v", err)
+	}
+	return environment
 }
 
 func (f *outputUpgradeFixture) createPredecessor(t *testing.T) {
@@ -127,6 +137,10 @@ func (f *outputUpgradeFixture) createPredecessor(t *testing.T) {
 	}
 	meta := tasklifecycle.NewMeta(request, profile, f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	f.meta = meta
+	expected := filepath.Join(verifiedexec.EnvironmentValue(f.deps.Environment, "PATH"), f.testCase.executable())
+	if meta.ProviderExecutable != expected {
+		t.Fatalf("predecessor executable %q, want fixture-owned %q", meta.ProviderExecutable, expected)
+	}
 	td, err := store.CreateTask(outputUpgradePredecessorID, &request, brief, &meta)
 	if err != nil {
 		t.Fatal(err)

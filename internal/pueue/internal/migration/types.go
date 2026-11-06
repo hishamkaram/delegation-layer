@@ -1,14 +1,17 @@
 package migration
 
+import "github.com/hishamkaram/delegation-layer/internal/task"
+
 // DaemonIdentity is the immutable executable and logical endpoint identity
 // saved while a private supervisor generation changes.
 type DaemonIdentity struct {
-	Executable           string `json:"executable"`
-	SHA256               string `json:"sha256"`
-	ConfigPath           string `json:"config_path,omitempty"`
-	ConfigDigest         string `json:"config_digest,omitempty"`
-	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
-	Endpoint             string `json:"endpoint,omitempty"`
+	Executable           string                  `json:"executable"`
+	SHA256               string                  `json:"sha256,omitempty"`
+	ExecutableIdentity   task.ExecutableIdentity `json:"executable_identity,omitempty"`
+	ConfigPath           string                  `json:"config_path,omitempty"`
+	ConfigDigest         string                  `json:"config_digest,omitempty"`
+	ResolvedConfigSHA256 string                  `json:"resolved_config_sha256,omitempty"`
+	Endpoint             string                  `json:"endpoint,omitempty"`
 }
 
 type Record struct {

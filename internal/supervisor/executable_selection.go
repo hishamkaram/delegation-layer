@@ -6,35 +6,48 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"runtime/debug"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
-func DiscoverControlOwnerExecutable() string {
+// DiscoverControlOwnerExecutable selects the trusted default role. A selected
+// explicit path remains nonempty on failure so the command owner can report it;
+// optional default discovery declines only a missing installation or old copy.
+func DiscoverControlOwnerExecutable(configuredRole string) string {
+	if configuredRole != "" {
+		if selected, err := ResolveRunner(configuredRole, ""); err == nil {
+			return selected
+		}
+		return configuredRole
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	self = canonicalExecutablePath(self)
-	candidate := self
-	base := filepath.Base(self)
-	if base != stateRunnerName && !strings.HasPrefix(base, stateRunnerName+"-") {
-		candidate = managedRunnerFromExecutable(self)
-	}
-	if !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+	image, _ := debug.ReadBuildInfo()
+	return discoverControlOwnerForImage(canonicalExecutablePath(self), image)
+}
+
+func discoverControlOwnerForImage(self string, image *debug.BuildInfo) string {
+	if pueue.IsLegacyStateRunnerPath(filepath.Dir(filepath.Dir(self)), self) {
 		return ""
 	}
-	resolved, err := filepath.EvalSymlinks(candidate)
-	if err != nil || resolved != candidate {
+	candidate := managedRunnerFromExecutable(self)
+	if ManagedRunnerBuildInfo(image) {
+		candidate = self
+	}
+	selected, err := ResolveRunner(candidate, "")
+	if err == nil {
+		return selected
+	}
+	if errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
-	info, err := os.Stat(candidate)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return ""
-	}
+	// A malformed or inaccessible selected role must not enable direct launch.
+	// Control rechecks metadata before duplication and permit consumption.
 	return candidate
 }
 
@@ -45,6 +58,17 @@ func DiscoverControlOwnerExecutable() string {
 type ExecutableLookup struct {
 	InitialExecutable string
 	Environment       []string
+	// Resident composition owns this immutable input from its accepted startup
+	// artifacts. Canonical bootstrap and explicit migration consume it under target locks;
+	// recorded generations and migration phases retain their existing owner.
+	// The zero value leaves standalone selection unchanged. This is not native
+	// launch authority.
+	AcceptedBootstrapPair BootstrapPair
+}
+
+type BootstrapPair struct {
+	Client string
+	Daemon string
 }
 
 func (lookup ExecutableLookup) lookPath(name string) (string, error) {
@@ -73,37 +97,29 @@ func ResolveInitialExecutable(lookup ExecutableLookup) (string, error) {
 	return path, nil
 }
 
-func resolveBundledExecutable(initialSupervisorExecutable string, name string) (string, error) {
-	directory, err := bundledSupervisorDirectory(initialSupervisorExecutable)
-	if err != nil {
-		return "", err
-	}
-	return resolveSupervisorExecutable(filepath.Join(directory, name), name)
-}
-
 func resolveBundledExecutables(lookup ExecutableLookup) (client, daemon string, resultErr error) {
 	return resolveBundledExecutablesWithPath(lookup, true)
 }
 
 func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) (client, daemon string, resultErr error) {
+	if lookup.AcceptedBootstrapPair != (BootstrapPair{}) {
+		return resolveAcceptedSupervisorPair(lookup.AcceptedBootstrapPair)
+	}
 	directory, err := bundledSupervisorDirectory(lookup.InitialExecutable)
 	if err != nil {
 		return "", "", err
-	}
-	client, daemon, found, statePairErr := ResolveStateSupervisorPair(directory)
-	if found {
-		return client, daemon, statePairErr
 	}
 	client, daemon, clientErr := resolveSupervisorPair(directory)
 	if clientErr == nil {
 		return client, daemon, nil
 	}
+	clientErr = classifyUnavailableBundledPair(clientErr)
 	if lookup.InitialExecutable != "" || bundledSupervisorPairHasEntry(directory) {
 		return "", "", clientErr
 	}
 	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
 	if found {
-		return client, daemon, libexecErr
+		return client, daemon, classifyUnavailableBundledPair(libexecErr)
 	}
 	if !allowPath {
 		return "", "", clientErr
@@ -111,6 +127,9 @@ func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) 
 
 	pathClient, pathErr := lookup.lookPath("pueue")
 	if pathErr != nil {
+		if !errors.Is(pathErr, exec.ErrNotFound) && !errors.Is(pathErr, os.ErrNotExist) {
+			return "", "", errors.Join(clientErr, pathErr)
+		}
 		return "", "", clientErr
 	}
 	client, err = resolveSupervisorExecutable(pathClient, "pueue")
@@ -124,34 +143,13 @@ func resolveBundledExecutablesWithPath(lookup ExecutableLookup, allowPath bool) 
 	return client, daemon, nil
 }
 
-func ResolvePrivateSupervisorExecutables(root string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
-	stateClient, stateDaemon, found, stateErr := ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
-	if stateErr != nil {
-		return "", "", stateErr
-	}
-	if found {
-		return stateClient, stateDaemon, nil
-	}
+// ResolvePrivateSupervisorExecutables selects installed fixed roles in place.
+// The state root owns bindings and configuration, never executable inventories.
+func ResolvePrivateSupervisorExecutables(_ string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
 	return resolveBundledExecutables(lookup)
 }
 
-// resolveCurrentPrivateSupervisorExecutables selects the pair shipped by the
-// active installation for successor inventory and explicit migration work. It
-// does not select the ordinary active generation: pueue's completed published
-// binding remains authoritative until canonical migration publishes a
-// replacement, while a fresh root may bootstrap the staged pair.
-func ResolveCurrentPrivateSupervisorExecutables(root string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
-	client, daemon, bundledErr := resolveBundledExecutablesWithPath(lookup, false)
-	if bundledErr == nil {
-		return client, daemon, nil
-	}
-	stateClient, stateDaemon, found, stateErr := ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
-	if stateErr != nil {
-		return "", "", errors.Join(bundledErr, stateErr)
-	}
-	if found {
-		return stateClient, stateDaemon, nil
-	}
+func ResolveCurrentPrivateSupervisorExecutables(_ string, lookup ExecutableLookup) (client, daemon string, resultErr error) {
 	return resolveBundledExecutables(lookup)
 }
 
@@ -208,7 +206,7 @@ func canonicalExecutablePath(path string) string {
 }
 
 func managedRunnerFromExecutable(self string) string {
-	return filepath.Join(filepath.Dir(canonicalExecutablePath(self)), "delegate-run")
+	return filepath.Join(filepath.Dir(canonicalExecutablePath(self)), managedRunnerName)
 }
 
 func resolveSupervisorExecutable(candidate, name string) (string, error) {
@@ -244,22 +242,47 @@ func ResolveRunner(raw string, runnerExecutable string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if resolved != raw {
-		return "", pueue.ErrConfiguration
-	}
-	info, err := os.Stat(raw)
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", pueue.ErrConfiguration
 	}
-	return raw, nil
+	return resolved, nil
 }
 
 func ResolveTaskRunner(raw string, runnerExecutable string, meta *task.MetaRecord) (string, error) {
-	if raw == "" && meta != nil && meta.RunnerExecutable != "" {
-		raw = meta.RunnerExecutable
+	if raw != "" || meta == nil || meta.RunnerExecutable == "" {
+		return ResolveRunner(raw, runnerExecutable)
 	}
-	return ResolveRunner(raw, runnerExecutable)
+	recorded := meta.RunnerExecutable
+	root := filepath.Dir(filepath.Dir(recorded))
+	if meta.RunnerOwnership != task.RunnerOwnershipCustom && pueue.IsLegacyStateRunnerPath(root, recorded) {
+		return ResolveRunner("", runnerExecutable)
+	}
+	selected, err := ResolveRunner(recorded, "")
+	if err == nil || !errors.Is(err, os.ErrNotExist) || meta.RunnerOwnership != task.RunnerOwnershipManaged {
+		return selected, err
+	}
+	return ResolveRunner("", runnerExecutable)
+}
+
+// The accepted context stores resolved native paths. Re-observation may refuse
+// their replacement by an alias, but must never select a sibling client instead.
+func resolveAcceptedSupervisorPair(accepted BootstrapPair) (string, string, error) {
+	for _, path := range []string{accepted.Client, accepted.Daemon} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+			return "", "", pueue.ErrConfiguration
+		}
+	}
+	client, clientErr := resolveSupervisorExecutable(accepted.Client, "pueue")
+	daemon, daemonErr := resolveSupervisorExecutable(accepted.Daemon, "pueued")
+	if err := errors.Join(clientErr, daemonErr); err != nil {
+		return "", "", err
+	}
+	if client != accepted.Client || daemon != accepted.Daemon {
+		return "", "", errors.Join(pueue.ErrConfiguration, ErrSupervisorSelectionChanged)
+	}
+	return client, daemon, nil
 }

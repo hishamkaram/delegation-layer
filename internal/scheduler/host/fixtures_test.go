@@ -19,7 +19,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/goroutinecheck"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"github.com/jonboulle/clockwork"
 	"golang.org/x/sys/unix"
 )
@@ -49,16 +48,12 @@ func fixtureConfig(store *taskdir.Store) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	build, err := verifiedexec.Fingerprint(executable)
-	if err != nil {
-		return Config{}, err
-	}
 	directory, err := os.Getwd()
 	if err != nil {
 		return Config{}, err
 	}
 	environment := append(os.Environ(), "DL_HOST_ROOT="+store.Root)
-	return Config{Store: store, Executable: executable, Args: []string{"--host-fixture-child"}, Environment: environment, Directory: directory, BuildID: build}, nil
+	return Config{Store: store, Executable: executable, Args: []string{"--host-fixture-child"}, Environment: environment, Directory: directory}, nil
 }
 
 func fixtureChild() (exit int) {
@@ -83,11 +78,7 @@ func fixtureChild() (exit int) {
 			exit = 93
 		}
 	}()
-	config, err := fixtureConfig(store)
-	if err != nil {
-		return 94
-	}
-	child := ChildConfig{RootID: store.RootID, BuildID: config.BuildID}
+	child := ChildConfig{RootID: store.RootID}
 	for _, arg := range os.Args[1:] {
 		if strings.HasPrefix(arg, ChildReadFDFlag+"=") {
 			child.ReadFD, err = strconv.Atoi(strings.TrimPrefix(arg, ChildReadFDFlag+"="))
@@ -150,6 +141,10 @@ func fixtureRuntime(ctx context.Context) error {
 		}
 	}
 	switch os.Getenv("DL_HOST_MODE") {
+	case "runtime_cleanup":
+		return errors.Join(ErrCleanupUnresolved, errors.New("fixture retained cleanup owner"))
+	case "runtime_cleanup_incompatible":
+		return errors.Join(ErrCleanupUnresolved, fmt.Errorf("fixture joined invariant: %w", ErrIncompatible))
 	case "runtime_permanent":
 		return fmt.Errorf("fixture runtime invariant: %w", ErrIncompatible)
 	case "crash":
@@ -230,7 +225,7 @@ func queryFor(t *testing.T, config Config) Query {
 			t.Error(closeErr)
 		}
 	})
-	return Query{Store: reader, BuildID: config.BuildID}
+	return Query{Store: reader}
 }
 
 func testConfig(t *testing.T, mode string) Config {
@@ -282,8 +277,8 @@ func runLocalHost(t *testing.T, config Config, clock clockwork.Clock) <-chan err
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	joined := make(chan struct{})
-	go func() { defer close(joined); done <- serve(ctx, config, clock) }()
 	t.Cleanup(func() { cancel(); receive(t, joined) })
+	go func() { defer close(joined); done <- serve(ctx, config, clock) }()
 	return done
 }
 

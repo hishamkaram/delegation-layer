@@ -19,6 +19,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+func continuationSupervisorOptions(deps Dependencies) supervisorcore.ContinuationOptions {
+	return supervisorcore.ContinuationOptions{
+		Options: deps.SupervisorOptions, InitialExecutable: deps.InitialSupervisorExecutable, Environment: deps.Environment,
+		OpenStore: func(ctx context.Context, root string) (*taskdir.Store, error) {
+			return openStoreContext(ctx, root, deps.storeDependencies(), false)
+		},
+	}
+}
+
 func TestLegacyActiveWorkIncludesUnsafeJobStates(t *testing.T) {
 	if got := legacyActiveWork(pueue.QueueSnapshot{Jobs: []pueue.Job{{Group: "default", State: pueue.StateRunning}}}); got != "present" {
 		t.Fatalf("running ordinary work was not reported: %q", got)
@@ -80,7 +89,6 @@ func TestLegacySupervisorStatusFailsClosedOnReadinessError(t *testing.T) {
 		true,
 		false,
 		errors.New("readiness failed"),
-		false,
 	)
 	if !done {
 		t.Fatal("readiness failure was not handled")
@@ -107,7 +115,6 @@ func TestLegacySupervisorStatusKeepsHealthySupervisorAtNoAction(t *testing.T) {
 		true,
 		true,
 		nil,
-		false,
 	)
 	if !done || result.code != 0 {
 		t.Fatalf("healthy supervisor status was not complete: done=%v result=%+v", done, result)
@@ -115,28 +122,6 @@ func TestLegacySupervisorStatusKeepsHealthySupervisorAtNoAction(t *testing.T) {
 	control := result.response.SupervisorControl
 	if control.State != "ready" || control.LegacyReachability != "ready" || control.NextAction != "none" {
 		t.Fatalf("healthy supervisor status requested migration: %+v", control)
-	}
-}
-
-func TestLegacySupervisorStatusAdoptsLiveProvenanceDrift(t *testing.T) {
-	response := newResponse("supervisor")
-	response.SupervisorControl = &SupervisorControlResponse{}
-
-	result, done := legacySupervisorStateResult(
-		response,
-		inspection.GroupRequestRecord{},
-		false,
-		true,
-		true,
-		nil,
-		true,
-	)
-	if !done || result.code != 0 {
-		t.Fatalf("live provenance drift was not adopted: done=%v result=%+v", done, result)
-	}
-	control := result.response.SupervisorControl
-	if control.State != "ready" || control.LegacyReachability != "ready" || control.MigrationPhase != "adopted" || control.NextAction != "none" {
-		t.Fatalf("live provenance drift requested an unnecessary migration: %+v", control)
 	}
 }
 
@@ -151,7 +136,6 @@ func TestLegacySupervisorStatusReportsCompletedLegacyAfterMigration(t *testing.T
 		true,
 		true,
 		nil,
-		false,
 	)
 	if !done || result.code != 0 {
 		t.Fatalf("completed migration status was not complete: done=%v result=%+v", done, result)

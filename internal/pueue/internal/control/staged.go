@@ -11,6 +11,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+var ErrManagedAdmissionUnsupported = errors.New("managed admission requires staged submission")
+
 // SubmissionCommit is application-owned durable acceptance for one exact
 // staged ordinary submission. Pueue invokes it while the verified supervisor
 // generation lease is held and before the row is made schedulable.

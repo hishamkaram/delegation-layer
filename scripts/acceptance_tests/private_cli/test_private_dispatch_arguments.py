@@ -1,7 +1,6 @@
 """Implementation methods for PrivateDispatchArgumentsTests; collected once by the acceptance_tests discovery."""
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -15,12 +14,14 @@ from scripts.delegate_acceptance.private_cli import finalization as finalization
 from scripts.delegate_acceptance.private_cli import scenario_entry as scenario_entry_impl
 from scripts.delegate_acceptance.private_cli import initial as initial_impl
 from scripts.delegate_acceptance.private_cli import capacity_entry as capacity_entry_impl
+from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
 from scripts.delegate_acceptance.processes import operations as process_owner_impl
 from scripts import acceptance_supervisor_common as common
 from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.acceptance_tests.private_cli.fixtures import (
     _release_live_directory_tokens,
+    materialize_candidate_pair, materialize_supervisor_pair,
 )
 
 
@@ -60,6 +61,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-args-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve(strict=True)
+        self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=materialize_candidate_pair))
+        self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
         self.sources = {}
         for name in ("delegate", "runner", "pueue", "pueued"):
             source = self.root / name
@@ -126,7 +129,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
     def arguments(self, total, workers, output=None, scenario="capacity"):
         output = output or (self.root / "receipt.json")
         args = ["acceptance_private_cli.py"]
-        for name in ("delegate", "runner", "pueue", "pueued"):
+        for name in ("pueue", "pueued"):
             args.extend(["--" + name, str(self.sources[name])])
         args.extend(["--output", str(output), "--parallel-tasks", str(total)])
         if scenario != private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
@@ -567,7 +570,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             closure_calls.append((state, tuple(task_ids)))
             return {}
 
-        def record_shutdown(client, config, _env, *, state, task_ids, **_kwargs):
+        def record_shutdown(_delegate, client, config, _env, *, state, task_ids, **_kwargs):
             shutdown_calls.append((client, config, state, tuple(task_ids)))
 
         arguments = self.arguments(
@@ -592,7 +595,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 finalization_impl, "await_managed_lifetime_closure_until", side_effect=record_closure,
             ))
             stack.enter_context(patch.object(
-                finalization_impl, "shutdown_private_supervisor", side_effect=record_shutdown,
+                finalization_impl, "shutdown_terminal_private_supervisor", side_effect=record_shutdown,
             ))
             stack.enter_context(redirect_stdout(io.StringIO()))
             error = None
@@ -725,8 +728,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             stack.enter_context(patch.object(
                 application_impl, "DirectoryOwner", side_effect=tracked_owner,
             ))
-            shutdown = stack.enter_context(patch.object(capacity_entry_impl, "shutdown_observed_private_supervisor"))
-            stack.enter_context(patch.object(finalization_impl, "shutdown_private_supervisor", shutdown))
+            shutdown = stack.enter_context(patch.object(capacity_entry_impl, "shutdown_terminal_private_supervisor"))
+            stack.enter_context(patch.object(finalization_impl, "shutdown_terminal_private_supervisor", shutdown))
             stack.enter_context(patch.object(
                 finalization_impl, "remove_private_acceptance_root",
                 side_effect=remove_root,
@@ -795,7 +798,7 @@ def _current_scenario_callbacks(base, cleanup_failure, old_libexec, pending_old_
             (supervisor / "pueue.yml").write_text("fixture config\n")
             (supervisor / "daemon.identity.json").write_text(json.dumps({
                 "executable": str(old_libexec / "pueued"),
-                "sha256": hashlib.sha256((old_libexec / "pueued").read_bytes()).hexdigest(),
+                "executable_identity": "installed-path-v1",
             }))
             (base / "old-daemon-starts").write_text("started\n")
             return {"task_id": task_id, "root_id": "b" * 32,
@@ -825,7 +828,9 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
         self.assertEqual(release_gate.path, base / "blocker-gate")
         self.assertGreaterEqual(release_gate.descriptor, 0, "gate opened before concurrency proof")
         self.assertEqual(waiter_directory, base / "provider-waiters")
+        self.assertEqual(_kwargs["client"], private_cli.package_layout(base / "upgraded", True)[2] / "pueue")
         self.assertEqual(client_call_log, base / "old-client-starts-calls")
+        self.assertEqual(_kwargs["upgraded_client_call_log"], base / "upgraded-client-starts-calls")
         requested_workers = dispatch_workers
         old_layout_entries = tuple(old_layout_owned)
         evidence.update({
@@ -855,6 +860,10 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
                 "concurrent_status_call_count": 16,
                 "pueue_status_snapshot_count": 1,
                 "shared_status_call_count": 15,
+            },
+            "status_after_package_removal": {
+                "concurrent_status_call_count": 16,
+                "pueue_status_snapshot_count": 17,
             },
         })
         if upgrade_failure:

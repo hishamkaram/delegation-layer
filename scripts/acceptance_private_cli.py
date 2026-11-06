@@ -152,7 +152,7 @@ from scripts.delegate_acceptance.private_cli.handoff_cleanup import (
     cleanup_external_handoff_cohorts as cleanup_external_handoff_cohorts,
 )
 from scripts.delegate_acceptance.private_cli.upgrade import (
-    seed_historical_private_paths as seed_historical_private_paths,
+    observe_installed_package as observe_installed_package,
 )
 
 

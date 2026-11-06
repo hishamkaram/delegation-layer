@@ -27,13 +27,12 @@ from scripts.delegate_acceptance.private_cli.scheduler_default import (
     bind_default_fixture, delete_default_schedule, run_fresh_default,
 )
 from scripts.delegate_acceptance.private_cli.scheduler_service import SchedulerService
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_terminal_private_supervisor
 
 
 @dataclass(frozen=True)
 class SchedulerArguments:
-    delegate: Path
-    runner: Path
+    source_root: Path
     pueue: Path
     pueued: Path
     output: Path | None
@@ -41,15 +40,16 @@ class SchedulerArguments:
     hosting: str = "managed-host"
     # prepare_fixture consumes the same installation options as the existing
     # private CLI cases. Scheduler acceptance never selects a legacy upgrade.
-    upgraded_delegate: None = None
-    upgraded_runner: None = None
+    upgraded_source_root: None = None
     noexec_state_parent: None = None
 
 
 def parse_arguments(argv: list[str] | None = None) -> SchedulerArguments:
     parser = argparse.ArgumentParser(description="Native scheduler acceptance with real minute ticks and a finite pi fixture.")
-    parser.add_argument("--delegate", type=Path, default=REPOSITORY / "bin" / "delegate")
-    parser.add_argument("--runner", type=Path, default=REPOSITORY / "bin" / "delegate-run")
+    parser.add_argument("--source-root", type=Path, default=REPOSITORY,
+                        help="checkout to build directly into the owned scheduler fixture installation")
+    for retired in ("delegate", "runner"):
+        parser.add_argument("--" + retired, type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--pueue", type=Path, default=REPOSITORY / "bin" / "test-supervisor" / "pueue")
     parser.add_argument("--pueued", type=Path, default=REPOSITORY / "bin" / "test-supervisor" / "pueued")
     parser.add_argument("--output", type=Path, help="fresh private output directory; default: a new directory under HOME")
@@ -59,9 +59,11 @@ def parse_arguments(argv: list[str] | None = None) -> SchedulerArguments:
     )
     parser.add_argument("--hosting", choices=("managed-host", "service"), default="managed-host")
     args = parser.parse_args(argv)
+    if args.delegate is not None or args.runner is not None:
+        parser.error("installed binary inputs are retired; use --source-root to build the owned scheduler installation")
     if args.scenario == "fresh-default" and args.hosting != "managed-host":
         parser.error("fresh-default requires --hosting managed-host")
-    return SchedulerArguments(args.delegate, args.runner, args.pueue, args.pueued, args.output,
+    return SchedulerArguments(args.source_root, args.pueue, args.pueued, args.output,
                               scenario=args.scenario, hosting=args.hosting)
 
 
@@ -145,9 +147,11 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
             if lifetime.private_config is None or lifetime.old_libexec is None:
                 raise RuntimeError("scheduler fixture lost its private supervisor cleanup binding")
             receipt.phase("canonical_cleanup")
-            shutdown_private_supervisor(
+            shutdown_terminal_private_supervisor(
+                case.delegate,
                 lifetime.old_libexec / "pueue", lifetime.private_config, lifetime.env,
                 state=case.fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
+                supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal, closed_roots=lifetime.closed_roots,
             )
             retire_case_services(case)
         except BaseException as cleanup_error:
@@ -162,9 +166,9 @@ def run_case(args: SchedulerArguments, output: Path, name: str) -> None:
         raise AcceptanceBlocked("fresh-default-requires-managed-host")
     selected = replace(args, output=output / (name + ".json"), scenario=name)
     receipt = AcceptanceReceipt(selected.output, 3 if name == "successive" else 1, 1,
-                                {"delegate": args.delegate, "delegate-run": args.runner,
-                                 "pueue": args.pueue, "pueued": args.pueued})
+                                {"pueue": args.pueue, "pueued": args.pueued})
     receipt.add_details(scenario="scheduler-" + name, acceptance_scope="native fixture; no AI account", hosting=args.hosting)
+    receipt.add_details(candidate_sources={"baseline": str(args.source_root)})
     lifetime = FixtureLifetime()
     case = None
     failure = None

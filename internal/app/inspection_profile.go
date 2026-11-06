@@ -11,7 +11,7 @@ import (
 )
 
 func prepareMatchedProfileForRunner(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable, runnerOwnership string) (profile PreparedProfile, resultErr error) {
-	return admissionProfiles(deps).ForRunner(root, req, meta, store, currentExecutable, runnerOwnership)
+	return admissionProfiles(deps).ForRunner(root, req, meta, store, currentExecutable, runnerOwnership, deps.RunnerExecutable)
 }
 
 func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {

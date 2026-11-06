@@ -102,17 +102,6 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 	}
 }
 
-// fixtureSHA256 fingerprints a fixture executable the way static preparation
-// does, without running it.
-func fixtureSHA256(t *testing.T, path string) string {
-	t.Helper()
-	info, err := commonprovider.LocateCLIPath(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.SHA256
-}
-
 func TestExistingAndSuccessorUseProvidedEnvironmentWhenNoneIsRecorded(t *testing.T) {
 	fixture := newSuccessorFixture(t, Mode)
 	ambientHome := os.Getenv("HOME")
@@ -190,7 +179,7 @@ func requireRecordedLaunchWithProvidedExecutable(t *testing.T, label string, can
 	if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Environment, recorded) {
 		t.Fatalf("%s did not launch with the recorded environment", label)
 	}
-	if candidate.Inspection.Executable != providedCLI || candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
+	if candidate.Inspection.Executable != providedCLI || candidate.Inspection.ExecutableSHA256 != "" {
 		t.Fatalf("%s executable %q want the provided scope's %q", label, candidate.Inspection.Executable, providedCLI)
 	}
 	for _, entry := range candidate.Inspection.Environment {

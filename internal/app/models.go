@@ -175,8 +175,15 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 	if err != nil {
 		return catalog, admission.WithStage("open-state", err)
 	}
-	defer func() { resultErr = joinCloseFailure(resultErr, "close-state", store.Close()) }()
+	defer func() { resultErr = closeModelDiscoveryStore(resultErr, store) }()
 	return discoverModelsInStore(a, deps, store, cwd, registration.Description.SupportedModes[0])
+}
+
+func closeModelDiscoveryStore(cause error, store *taskdir.Store) error {
+	if cleanupRetainsStore(cause, store) {
+		return cause
+	}
+	return joinCloseFailure(cause, "close-state", store.Close())
 }
 
 // joinCloseFailure keeps the primary failure first so its stage owns the

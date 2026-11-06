@@ -109,9 +109,9 @@ func (c outputUpgradeCase) requestedConfig() task.TaskConfig {
 func (c outputUpgradeCase) predecessorProfile(t *testing.T, f *outputUpgradeFixture) PreparedProfile {
 	t.Helper()
 	if c.provider == openCodeProvider {
-		return openCodeHistoricalRunProfile(t, f.deps.Catalog, f.request, c.revision, c.source)
+		return openCodeHistoricalRunProfile(t, f.deps.Catalog, f.request, c.revision, c.source, f.deps.Environment)
 	}
-	fresh, err := f.deps.Catalog.Candidate(f.request, os.Environ())
+	fresh, err := f.deps.Catalog.Candidate(f.request, f.deps.Environment)
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
 	}
@@ -121,7 +121,7 @@ func (c outputUpgradeCase) predecessorProfile(t *testing.T, f *outputUpgradeFixt
 	}
 	seed := tasklifecycle.NewMeta(f.request, freshProfile, f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = c.source
-	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, os.Environ())
+	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, f.deps.Environment)
 	if err != nil {
 		t.Fatalf("stored-predicate candidate: %v", err)
 	}
@@ -378,6 +378,7 @@ func TestContinuationSuccessorsReceiveCurrentOutputPredicate(t *testing.T) {
 	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeCases(t)) {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(testCase.name+"/"+entry.name, func(t *testing.T) {
+				t.Parallel()
 				runOutputUpgradeScenario(t, testCase, entry)
 			})
 		}
@@ -392,6 +393,7 @@ func TestContinuationOfCurrentPredicatePublishesItsCurrentAnswer(t *testing.T) {
 	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeControlCases(t)) {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(testCase.name+"/"+entry.name, func(t *testing.T) {
+				t.Parallel()
 				runOutputUpgradeScenario(t, testCase, entry)
 			})
 		}

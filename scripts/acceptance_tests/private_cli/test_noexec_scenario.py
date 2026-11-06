@@ -13,7 +13,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.resources import DirectoryPinOwner
-from scripts.acceptance_tests.private_cli.fixtures import ready_path
+from scripts.acceptance_tests.private_cli.fixtures import (
+    materialize_candidate_pair, materialize_supervisor_pair, ready_path,
+)
+from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import application, handoff as handoff_impl
 from scripts.delegate_acceptance.private_cli import fixture_setup, scenario_entry
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
@@ -60,10 +63,13 @@ class FixtureCase(unittest.TestCase):
             self.binaries[name] = binary
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 1, 1, {})
         self.lifetime = FixtureLifetime(DirectoryPinOwner(self), DirectoryPinOwner(self))
+        self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=materialize_candidate_pair))
+        self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
 
     def arguments(self, scenario, parent):
         return SimpleNamespace(
             scenario=scenario, noexec_state_parent=parent, upgraded_delegate=None, upgraded_runner=None,
+            source_root=installation.REPOSITORY, upgraded_source_root=None,
             **self.binaries,
         )
 
@@ -207,7 +213,7 @@ class NoexecScenarioEntryTests(FixtureCase):
     def test_main_dispatches_the_scenario_through_the_one_fixture_owner_and_finalizer(self):
         output = self.root / "dispatch" / "receipt.json"
         argv = [
-            "acceptance-private-cli", "--delegate", "/b/delegate", "--runner", "/b/delegate-run",
+            "acceptance-private-cli",
             "--pueue", "/b/pueue", "--pueued", "/b/pueued", "--output", str(output),
             "--scenario", EXTERNAL_NOEXEC_STATE_SCENARIO, "--parallel-tasks", "1",
             "--noexec-state-parent", str(self.parent),
@@ -249,7 +255,9 @@ class NoexecCaseFlowTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-noexec-case-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        owner = DirectoryPinOwner(self)
+        self.lifetime = FixtureLifetime(DirectoryPinOwner(self))
+        self.addCleanup(self.lifetime.disposal.release_all)
+        owner = self.lifetime.ownership
         self.external_root = owner.create("external", self.root / "external-supervisor", self.root)
         self.process_root = owner.create("processes", self.root / "external-supervisor-processes", self.root)
         self.capture_root = owner.create("capture", self.root / "capture", self.root)
@@ -339,6 +347,8 @@ class NoexecCaseFlowTests(unittest.TestCase):
                 client_call_log=self.root / "old-client-starts-calls",
                 handoff_action=EXTERNAL_NOEXEC_STATE_SCENARIO, case_label=EXTERNAL_NOEXEC_STATE_SCENARIO,
                 handoff_cases=self.cases,
+                disposal=self.lifetime.disposal, closed_roots=self.lifetime.closed_roots,
+                supervisor_cleanups=self.lifetime.supervisor_cleanups,
             )
 
     def test_success_proves_unplaced_registrations_after_closure_and_before_collection(self):

@@ -612,8 +612,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             root = Path(directory).resolve()
             discovered = root / "pueue"
             selected = root / "selected-pueue"
-            discovered.write_text("pueue 4.0.4\n")
-            selected.write_bytes(discovered.read_bytes())
+            source = "pueue 4.0.4\n"
+            discovered.write_text(source)
+            selected.write_text(source)
             discovered.chmod(0o700)
             selected.chmod(0o700)
             environment = {"PATH": str(root)}

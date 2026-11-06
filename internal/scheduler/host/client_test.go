@@ -52,7 +52,7 @@ func epochFixture(t *testing.T, config Config, endpoint *endpoint) epochRecord {
 	}
 	return epochRecord{
 		Protocol: ProtocolVersion, RootID: config.Store.RootID, Sequence: 1,
-		Epoch: "0123456789abcdef0123456789abcdef", BuildID: config.BuildID, Host: identity(ref), UID: os.Geteuid(), Endpoint: endpoint.path,
+		Epoch: "0123456789abcdef0123456789abcdef", Host: identity(ref), UID: os.Geteuid(), Endpoint: endpoint.path,
 	}
 }
 
@@ -81,7 +81,7 @@ func TestHostMalformedAuthenticatedEndpointIsUnreachableNotStopped(t *testing.T)
 		}
 		var request wireRequest
 		readErr := readFrame(bufio.NewReader(conn), &request)
-		response := wireResponse{Status: statusWire(Status{State: "ready", Epoch: "different", Protocol: ProtocolVersion, BuildID: config.BuildID, Host: epoch.Host})}
+		response := wireResponse{Status: statusWire(Status{State: "ready", Epoch: "different", Protocol: ProtocolVersion, Host: epoch.Host})}
 		done <- errors.Join(readErr, writeFrame(conn, response), conn.Close())
 	}()
 	query := queryFor(t, config)

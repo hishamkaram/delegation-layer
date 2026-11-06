@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -27,14 +26,11 @@ func ValidateInspectionRunner(operation *inspection.Operation, runner string) er
 	if runner != binding.WorkerExecutable {
 		return task.ErrIdentityMismatch
 	}
-	digest, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil || digest != binding.WorkerSHA256 {
-		return task.ErrEvidenceFault
-	}
+
 	return nil
 }
 
-func prepareQueuedRunnerCommand(store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
+func prepareQueuedRunnerCommandContext(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return pueue.RunnerCommandReplacement{}, false, task.ErrIdentityMismatch
 	}
@@ -43,7 +39,7 @@ func prepareQueuedRunnerCommand(store *taskdir.Store, supervisor *pueue.Client, 
 		return pueue.RunnerCommandReplacement{}, false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	return queuedRunnerCommandReplacement(store, supervisor, job, taskID, td)
+	return queuedRunnerCommandReplacementContext(ctx, store, supervisor, job, taskID, td)
 }
 
 func PrepareQueuedInspectionRunnerCommand(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string) (_ pueue.RunnerCommandReplacement, eligible bool, resultErr error) {
@@ -109,12 +105,12 @@ func queuedInspectionWorkerUpgradeEligible(ctx context.Context, root string, ope
 	return true, nil
 }
 
-func AuthorizeQueuedInspectionRunnerUpgrade(ctx context.Context, store *taskdir.Store, replacement pueue.RunnerCommandReplacement) (resultErr error) {
+func AuthorizeQueuedInspectionRunnerUpgrade(ctx context.Context, store *taskdir.Store, replacement pueue.RunnerCommandReplacement, target RunnerRepairTarget) (resultErr error) {
 	if store == nil || !replacement.Inspection || replacement.RootID != store.RootID || replacement.RootPath != store.Root {
 		return task.ErrIdentityMismatch
 	}
-	if !CurrentManagedRunnerExecutable(store.Root, replacement.NewRunner) {
-		return task.ErrEvidenceFault
+	if err := target.ValidateExecutable(replacement.NewRunner); err != nil {
+		return err
 	}
 	operation, err := inspection.LoadOperationContext(ctx, store, replacement.TaskID)
 	if err != nil {
@@ -149,7 +145,7 @@ func authorizeInspectionManagedWorker(ctx context.Context, root string, operatio
 	return operation.AuthorizeManagedWorkerUpgradeContext(ctx)
 }
 
-func queuedRunnerCommandReplacement(store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string, td *taskdir.TaskDir) (pueue.RunnerCommandReplacement, bool, error) {
+func queuedRunnerCommandReplacementContext(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, taskID string, td *taskdir.TaskDir) (pueue.RunnerCommandReplacement, bool, error) {
 	req, meta, err := td.PreparedRecords()
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
@@ -168,7 +164,7 @@ func queuedRunnerCommandReplacement(store *taskdir.Store, supervisor *pueue.Clie
 	if meta.RunnerExecutable == "" {
 		return pueue.RunnerCommandReplacement{}, false, task.ErrEvidenceFault
 	}
-	ownership, err := RunnerOwnershipForTask(store.Root, td, meta)
+	ownership, err := RunnerOwnershipForTaskContext(ctx, store.Root, td, meta)
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
 	}
@@ -185,8 +181,7 @@ func queuedRunnerCommandReplacement(store *taskdir.Store, supervisor *pueue.Clie
 	}, true, nil
 }
 
-// queuedWorkspaceOperation preserves a helper's immutable content-addressed
-// runner. Package upgrades do not remove that state-owned executable. This queue
+// queuedWorkspaceOperation preserves a helper's immutable recorded runner. This queue
 // transition cannot replace or relabel it as a provider inspection.
 func queuedWorkspaceOperation(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, id string) (owned bool, resultErr error) {
 	operation, err := workspace.LoadOperation(ctx, store, id)

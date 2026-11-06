@@ -3,15 +3,51 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+// Receipt replay remains historical evidence. Check current execution
+// permission separately, after its transaction returns and directly before
+// the canonical queue callback enqueues. The caller already owns outer RootSH.
+func RecoverStagedAuxiliaryObservationChecked(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit, check func(context.Context) error) (pueue.InspectionObservation, error) {
+	if ctx == nil {
+		return observation, context.Canceled
+	}
+	if check == nil || receiptCommit == nil {
+		return observation, fmt.Errorf("%w: auxiliary recovery requires current launch permission", task.ErrInvalidPermit)
+	}
+	if err := check(ctx); err != nil {
+		return observation, err
+	}
+	checkedCommit := func(current pueue.InspectionObservation) error {
+		if err := receiptCommit(current); err != nil {
+			return err
+		}
+		if err := check(ctx); err != nil {
+			return auxiliaryLaunchPermissionError{cause: err}
+		}
+		return nil
+	}
+	return recoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, checkedCommit, receiptMatches, commit)
+}
+
+type auxiliaryLaunchPermissionError struct{ cause error }
+
+func (auxiliaryLaunchPermissionError) Error() string   { return "auxiliary launch permission refused" }
+func (e auxiliaryLaunchPermissionError) Unwrap() error { return e.cause }
 
 // recoverStagedAuxiliaryObservation owns the scheduling receipt/enqueue race
 // for both inspections and workspace helpers. Each journal supplies exact
 // receipt publication and verification; this function never grants a new add.
-func RecoverStagedAuxiliaryObservation(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
+func recoverStagedAuxiliaryObservation(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
 	recovered, recoverErr := supervisor.RecoverInspectionStagedWithGate(ctx, observation.Identity, observation.Job.ID, SubmissionGate(root), receiptCommit)
+	var permissionErr auxiliaryLaunchPermissionError
+	if errors.As(recoverErr, &permissionErr) {
+		return recovered, recoverErr
+	}
 	if recoverErr == nil || PendingInspectionCommand(recoverErr) != nil || !errors.Is(recoverErr, pueue.ErrUnknown) {
 		return recovered, recoverErr
 	}

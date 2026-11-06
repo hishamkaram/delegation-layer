@@ -80,17 +80,52 @@ func makePrivateTestDirectory(t *testing.T, path string) {
 
 func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest})
+	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest, PrivateTerminalEventRunner: privateInstalledCallbackForTest(t, stateRoot), DaemonWaitOwner: privateFixtureDaemonWaitOwner(t)})
+	t.Cleanup(func() {
+		if closeErr := client.CloseAfterPending(err); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client
 }
 
+// These component daemons do not execute callbacks. The original authored
+// installed role qualifies callback metadata; an unexpected invocation fails.
+func privateInstalledCallbackForTest(t *testing.T, stateRoot string) string {
+	t.Helper()
+	path := filepath.Join(filepath.Dir(stateRoot), "delegate-run-terminal-fixture")
+	writeExecutable(t, path, "#!/bin/sh\nprintf 'unexpected component callback execution\\n' >&2\nexit 97\n")
+	return path
+}
+
+func privateFixtureDaemonWaitOwner(t *testing.T) DaemonWaitOwner {
+	t.Helper()
+	return daemonWaitOwnerFunc(func(_ string, _ int, done <-chan struct{}) error {
+		t.Cleanup(func() {
+			// The authored setup daemon exits after publishing readiness. Join
+			// its actual Wait before the fixture's existing path cleanup runs.
+			<-done
+		})
+		return nil
+	})
+}
+
 // bindPrivateSetupForTest separates filesystem/bootstrap setup from the short
 // observation deadlines exercised by fault tests.
 func bindPrivateSetupForTest(t *testing.T, stateRoot, clientPath, daemonPath string, options Options) *Client {
 	t.Helper()
+	if options.PrivateTerminalEventRunner == "" {
+		options.PrivateTerminalEventRunner = privateInstalledCallbackForTest(t, stateRoot)
+	}
+	if options.DaemonWaitOwner == nil {
+		options.DaemonWaitOwner = privateFixtureDaemonWaitOwner(t)
+	}
+	if options.PrivateGenerationGuard == nil {
+		options.PrivateGenerationGuard = allowPrivateGenerationForTest{}
+	}
 	if options.processObserver == nil {
 		options.processObserver = privateTestProcessObserver(stateRoot)
 	}
@@ -101,6 +136,31 @@ func bindPrivateSetupForTest(t *testing.T, stateRoot, clientPath, daemonPath str
 		t.Fatal(err)
 	}
 	client.options = options
+	return client
+}
+
+func preparePrivateCandidateForTest(t *testing.T, stateRoot, clientPath, daemonPath string, options Options) *Client {
+	t.Helper()
+	if options.PrivateGenerationGuard == nil {
+		options.PrivateGenerationGuard = allowPrivateGenerationForTest{}
+	}
+	if options.processObserver == nil {
+		options.processObserver = privateTestProcessObserver(stateRoot)
+	}
+	var client *Client
+	err := WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		var prepareErr error
+		client, prepareErr = PreparePrivateForMigrationWithLock(ctx, clientPath, daemonPath, stateRoot, options)
+		return prepareErr
+	})
+	t.Cleanup(func() {
+		if closeErr := client.CloseAfterPending(err); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return client
 }
 
@@ -128,6 +188,8 @@ func privateTestProcessObserver(stateRoot string) func(int) (privateProcessObser
 
 func privateMigrationTestOptions(stateRoot string, timeout time.Duration) Options {
 	return Options{
+		PrivateGenerationGuard:     allowPrivateGenerationForTest{},
+		DaemonStartGuard:           allowDaemonStartForTest{},
 		ObservationTimeout:         timeout,
 		PrivateMigrationAuthorizer: allowPrivateMigrationForTest,
 		processObserver:            privateTestProcessObserver(stateRoot),
@@ -160,17 +222,33 @@ func removePrivateTestDaemonState(t *testing.T, stateRoot string) {
 	removePrivateTestPID(t, stateRoot)
 }
 
+func assertPrivateRecoverySucceeded(t *testing.T, recovery PrivateRecovery, err error) {
+	t.Helper()
+	if err != nil || recovery.PairUnavailable() || recovery.Client() == nil || recovery.Cause() != nil {
+		t.Fatalf("private recovery did not succeed: result=%+v err=%v", recovery, err)
+	}
+}
+
+func assertPrivateRecoveryHasNoResult(t *testing.T, recovery PrivateRecovery) {
+	t.Helper()
+	if recovery.PairUnavailable() || recovery.Client() != nil || recovery.Cause() != nil {
+		t.Fatalf("operational failure returned a private recovery result: %+v", recovery)
+	}
+}
+
 func recoverPrivateForTest(t *testing.T, stateRoot string, saved task.SupervisorRef, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{ObservationTimeout: DefaultObservationTimeout})
-	if err != nil {
-		t.Fatalf("private supervisor recovery failed: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout})
+	client := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	return client
 }
 
 func readPrivateSupervisorFile(t *testing.T, path string) []byte {
 	t.Helper()
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("executable contents are not fixture evidence: %s", path)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +258,9 @@ func readPrivateSupervisorFile(t *testing.T, path string) []byte {
 
 func snapshotPrivateTestFile(t *testing.T, path string) ([]byte, bool) {
 	t.Helper()
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("executable contents are not fixture evidence: %s", path)
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false
@@ -223,7 +304,7 @@ func readPrivateDaemonIdentity(t *testing.T, stateRoot string) privateDaemonIden
 func assertPrivateDaemonIdentityMatchesBinding(t *testing.T, stateRoot string, binding task.SupervisorRef) {
 	t.Helper()
 	identity := readPrivateDaemonIdentity(t, stateRoot)
-	if identity.Executable != binding.DaemonExecutable || identity.SHA256 != binding.DaemonSHA256 {
+	if identity != privateDaemonIdentityForBinding(binding) {
 		t.Fatalf("private daemon identity does not match binding: identity=%+v binding=%+v", identity, binding)
 	}
 }
@@ -231,10 +312,9 @@ func assertPrivateDaemonIdentityMatchesBinding(t *testing.T, stateRoot string, b
 func assertPrivateDaemonIdentityMatchesPair(t *testing.T, stateRoot, daemonPath string) {
 	t.Helper()
 	wantExecutable := canonicalPrivateTestExecutable(t, daemonPath)
-	wantSHA256 := hashPrivateTestExecutable(t, daemonPath)
 	got := readPrivateDaemonIdentity(t, stateRoot)
-	if got.Executable != wantExecutable || got.SHA256 != wantSHA256 {
-		t.Fatalf("private daemon identity does not match launched pair: got=%+v want executable=%q sha256=%q", got, wantExecutable, wantSHA256)
+	if got.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || got.Executable != wantExecutable || got.SHA256 != "" || !privateLogicalIdentityPresent(got) {
+		t.Fatalf("private daemon identity does not match launched pair: got=%+v want installed executable=%q", got, wantExecutable)
 	}
 }
 
@@ -307,11 +387,10 @@ func canonicalPrivateTestExecutable(t *testing.T, path string) string {
 	return resolved
 }
 
-func hashPrivateTestExecutable(t *testing.T, path string) string {
-	t.Helper()
-	digest, err := hashExecutable(canonicalPrivateTestExecutable(t, path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return digest
+// allowPrivateGenerationForTest supplies explicit resident publication authority
+// to fixture setup. Production options never receive a default grant.
+type allowPrivateGenerationForTest struct{}
+
+func (allowPrivateGenerationForTest) GuardPrivateGenerationCommit(_ context.Context, _ string, commit func() error) error {
+	return commit()
 }

@@ -15,9 +15,8 @@ from scripts.delegate_acceptance.private_cli.fixture_lifetime import FixtureLife
 
 def invocation(output):
     return [
-        "acceptance-private-cli", "--delegate", "/baseline/delegate",
-        "--runner", "/baseline/delegate-run", "--upgraded-delegate", "/candidate/delegate",
-        "--upgraded-runner", "/candidate/delegate-run", "--pueue", "/fixture/pueue",
+        "acceptance-private-cli", "--source-root", "/baseline",
+        "--upgraded-source-root", "/candidate", "--pueue", "/fixture/pueue",
         "--pueued", "/fixture/pueued", "--parallel-tasks", "2",
         "--scenario", MODERN_CONTENTION_SCENARIO, "--output", str(output),
     ]
@@ -34,8 +33,8 @@ class ModernEntryTests(unittest.TestCase):
             self.assertEqual(workers, 2)
             self.assertFalse(receipt.output.exists())
 
-    def test_partial_candidate_inputs_fail_before_fixture_setup(self):
-        for missing in ("--upgraded-delegate", "--upgraded-runner"):
+    def test_missing_candidate_source_fails_before_fixture_setup(self):
+        for missing in ("--upgraded-source-root",):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary:
                 argv = invocation(Path(temporary) / "receipt.json")
                 offset = argv.index(missing)

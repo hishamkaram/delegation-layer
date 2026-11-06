@@ -19,6 +19,7 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		fmt.Fprintf(&output, "team scope=%s id=%s member=%s revision=%d\n", selected.Target.Team.Scope, selected.Target.Team.TeamID, selected.Target.MemberID, selected.TeamRevision)
 	}
 	writeHumanSupervisor(&output, response.SupervisorControl)
+	writeHumanSupervisorOwner(&output, response.SupervisorOwner)
 	writeHumanContinuation(&output, response.Continuation)
 	writeHumanPayload(&output, response.Payload)
 	writeHumanOutputDiagnostics(&output, response.Diagnostics)

@@ -99,18 +99,19 @@ func reconcileManagedCheckpointUse(ctx context.Context, store *taskdir.Store, or
 	if err != nil {
 		return false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
+	held := &Admission{resource: resource}
+	defer func() { resultErr = errors.Join(resultErr, held.closeAfter(store, resultErr)) }()
 	if selected, selectErr := checkpointReservationActive(ctx, resource, original); selectErr != nil || !selected {
 		return false, selectErr
 	}
 	owner, err := resource.TryAcquireUseOwner(ctx)
+	held.owner = owner
 	if useOwnerContended(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	if selected, selectErr := checkpointReservationActive(ctx, resource, original); selectErr != nil || !selected {
 		return false, selectErr
 	}
@@ -140,6 +141,10 @@ func checkpointReservationActive(ctx context.Context, resource *workspace.Resour
 // useOwnerContended reports a lease refusal whose every cause is another
 // live owner; a joined concrete fault is not contention.
 func useOwnerContended(err error) bool {
+	var cleanup *taskdir.LifetimeOwnerCleanupError
+	if errors.As(err, &cleanup) {
+		return false
+	}
 	return task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) })
 }
 

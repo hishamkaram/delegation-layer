@@ -19,11 +19,13 @@ from pathlib import Path
 
 _OPERATION_REQUEST_REQUIRED_KEYS = {
     "schema_version", "root_id", "operation_id", "workspace_id", "kind", "subject",
-    "deadline", "worker_executable", "worker_sha256", "supervisor",
+    "deadline", "worker_executable", "supervisor",
 }
 
 
-_OPERATION_REQUEST_OPTIONAL_KEYS = {"arguments", "discard", "checkpoint"}
+_OPERATION_REQUEST_OPTIONAL_KEYS = {
+    "arguments", "discard", "checkpoint", "worker_sha256", "executable_identity",
+}
 
 
 _OPERATION_SUBJECT_KEYS = {"kind", "id", "sha256"}
@@ -219,8 +221,15 @@ def _canonical_operation_request_bytes(
     _canonical_timestamp(deadline_value, label + " deadline")
     worker = value.get("worker_executable")
     require(_raw_clean_absolute_path(worker), f"{label} worker_executable is invalid")
-    worker_sha256 = value.get("worker_sha256")
-    require(_hex_digest(worker_sha256), f"{label} worker_sha256 is invalid")
+    identity = value.get("executable_identity", "")
+    require(identity in ("", "installed-path-v1"),
+            f"{label} executable_identity is invalid")
+    worker_sha256 = value.get("worker_sha256", "")
+    if identity == "installed-path-v1":
+        require(isinstance(worker_sha256, str) and worker_sha256 == "",
+                f"{label} installed worker carries a legacy digest")
+    else:
+        require(_hex_digest(worker_sha256), f"{label} worker_sha256 is invalid")
     supervisor = _canonical_supervisor_ref(value.get("supervisor"), label + " supervisor")
 
     arguments = value.get("arguments")
@@ -251,9 +260,12 @@ def _canonical_operation_request_bytes(
         "subject": subject,
         "deadline": deadline_value,
         "worker_executable": worker,
-        "worker_sha256": worker_sha256,
-        "supervisor": supervisor,
     }
+    if worker_sha256:
+        canonical["worker_sha256"] = worker_sha256
+    if identity:
+        canonical["executable_identity"] = identity
+    canonical["supervisor"] = supervisor
     if arguments:
         canonical["arguments"] = arguments
     if discard:

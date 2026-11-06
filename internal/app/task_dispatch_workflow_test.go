@@ -129,7 +129,10 @@ func continuationProfilePortCatalog(t *testing.T, current commonprovider.Prepare
 }
 
 func TestWorkspaceRuntimeConstructorSealsConfigurationAndPreservesStage(t *testing.T) {
-	configuration := supervisorcore.AdmissionOptions{RunnerExecutable: "relative-runner"}
+	configuration := supervisorcore.AdmissionOptions{
+		RunnerExecutable:  "relative-runner",
+		InitialExecutable: filepath.Join(t.TempDir(), "missing-installation", "pueue"),
+	}
 	var runtime workspaces.OperationRuntime = admissioncore.NewWorkspaceRuntime(configuration)
 	configuration.RunnerExecutable = filepath.Join(t.TempDir(), "later-runner")
 	if _, err := runtime.ManagedRunner(); !errors.Is(err, pueue.ErrConfiguration) {
@@ -137,9 +140,9 @@ func TestWorkspaceRuntimeConstructorSealsConfigurationAndPreservesStage(t *testi
 	}
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	runner, client, err := runtime.PrepareManaged(context.Background(), store, "unused")
+	runner, client, err := runtime.PrepareManaged(context.Background(), store, canonicalAppTestExecutable(t))
 	var stage *admissioncore.StageError
-	if runner != "" || client != nil || !errors.Is(err, pueue.ErrConfiguration) || !errors.As(err, &stage) || stage.Stage() != "resolve-runner" {
+	if runner != "" || client != nil || !errors.Is(err, pueue.ErrConfiguration) || !errors.Is(err, os.ErrNotExist) || !errors.As(err, &stage) || stage.Stage() != "prepare-supervisor-executables" {
 		t.Fatalf("runtime changed canonical preparation failure: %q/%v/%v", runner, client, err)
 	}
 }

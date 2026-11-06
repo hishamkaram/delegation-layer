@@ -58,16 +58,9 @@ func TestFreshBindingDetectsConfigDrift(t *testing.T) {
 	}
 }
 
-func TestFreshBindingDetectsExecutableDrift(t *testing.T) {
+func TestFreshBindingDetectsUnavailableInstalledExecutable(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
-	file, err := os.OpenFile(fake.executable, os.O_APPEND|os.O_WRONLY, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.WriteString("\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
+	if err := os.Chmod(fake.executable, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fake.client.Reconcile(context.Background(), testIdentity()); !errors.Is(err, ErrBinding) {
@@ -155,13 +148,14 @@ func testIdentity() Identity {
 func TestNewClientRequiresEverySavedBindingComponent(t *testing.T) {
 	base := validBindingForTest()
 	cases := map[string]func(*task.SupervisorRef){
-		"client executable": func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
-		"client digest":     func(ref *task.SupervisorRef) { ref.ClientSHA256 = "" },
-		"resolved digest":   func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
-		"config path":       func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
-		"config digest":     func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
-		"endpoint":          func(ref *task.SupervisorRef) { ref.Endpoint = "" },
-		"version":           func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
+		"client executable":           func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
+		"unknown executable identity": func(ref *task.SupervisorRef) { ref.ExecutableIdentity = "unknown" },
+		"mixed executable identity":   func(ref *task.SupervisorRef) { ref.ClientSHA256 = strings.Repeat("a", 64) },
+		"resolved digest":             func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
+		"config path":                 func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
+		"config digest":               func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
+		"endpoint":                    func(ref *task.SupervisorRef) { ref.Endpoint = "" },
+		"version":                     func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

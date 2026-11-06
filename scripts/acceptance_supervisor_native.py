@@ -21,6 +21,11 @@ from acceptance_provider_common import AcceptanceFailure
 from scripts.acceptance_supervisor_native_cleanup import ProofGatedTaskOps, QueueCheck, no_shutdown_authority
 from acceptance_supervisor_yaml import YAMLChecks
 
+from scripts.delegate_acceptance.hermetic.installation import (
+    REPOSITORY, build_source_command, require_source_root,
+)
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
+
 
 COMMAND_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 EVENT_FILE_RE = re.compile(r"^event-(\d{6})\.json$")
@@ -92,8 +97,8 @@ def validate_execution_event_sequence(names):
 
 
 class NativeSuite:
-    def __init__(self, tools, pueue, pueued, output):
-        self.tools = Path(tools).resolve(strict=True)
+    def __init__(self, source_root, pueue, pueued, output):
+        self.source_root = require_source_root(source_root)
         self.pueue, self.pueued = Path(pueue).resolve(strict=True), Path(pueued).resolve(strict=True)
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True)
@@ -120,7 +125,16 @@ class NativeSuite:
                 ownership.create(label, path, self.base)
             self.processes = Processes(
                 self.output / "processes", owner=ownership)
-        except BaseException:
+            self.delegate = build_source_command(self.source_root, "harness_delegate", self.bindir / "delegate")
+            self.runner = build_source_command(self.source_root, "harness_runner", self.bindir / "delegate-run")
+            self.provider = build_source_command(self.source_root, "fake_provider", self.bindir / "provider ' ; literal")
+            self.probe = build_source_command(self.source_root, "harness_probe", self.bindir / "harnessprobe")
+        except BaseException as error:
+            if command_closure_unproven(error):
+                ownership.release()
+                raise RuntimeError(
+                    "fixture installation closure unproven; retained " + str(self.base)
+                    + " and " + str(self.output / "processes")) from error
             ownership.rollback()
             raise
         self.owned_directories = ownership.transfer()
@@ -141,9 +155,6 @@ class NativeSuite:
         write_json(self.config_path, self.config)
         self.config_hash = digest(self.config_path)
         self.root = self.base / "task state ' ; literal"
-        self.delegate = self.copy_binary("delegate", "delegate")
-        self.runner = self.copy_binary("delegate-run", "delegate-run")
-        self.provider = self.copy_binary("provider", "provider ' ; literal")
         self.brief = self.base / "brief.md"
         self.answer = "Exact brief: 'quoted' \"double\"\n$(touch DO_NOT_CREATE) ; <&> | literal\n"
         self.brief.write_text(self.answer)
@@ -160,7 +171,7 @@ class NativeSuite:
         self.profile = self.bindir / "provider-fixture.json"
         write_json(self.profile, {
             "schema_version": 1, "provider_executable": str(self.provider),
-            "provider_sha256": digest(self.provider), "provider_config": str(self.provider_config),
+            "provider_config": str(self.provider_config),
             "provider_config_sha256": digest(self.provider_config),
             "supervisor_executable": str(self.pueue), "events_directory": str(self.base / "events"),
             "environment": [key + "=" + value for key, value in sorted(inherited_environment().items())],
@@ -169,27 +180,22 @@ class NativeSuite:
         write_json(self.output / "binding.json", {
             "private_base": str(self.base), "task_id": self.task_id,
             "config_path": str(self.config_path), "config_sha256": self.config_hash,
-            "binaries": {str(p): digest(p) for p in (self.pueue, self.pueued, self.delegate, self.runner, self.provider, self.tools / "harnessprobe")},
+            "executables": {"pueue": str(self.pueue), "pueued": str(self.pueued),
+                            "delegate": str(self.delegate), "runner": str(self.runner),
+                            "provider": str(self.provider), "harnessprobe": str(self.probe)},
+            "source_root": str(self.source_root),
             "platform": platform.platform(), "architecture": platform.machine(),
             "driver_sha256": digest(__file__), "fixtures_sha256": digest(self.profile),
             "supervisor": "4.0.4", "K": 0, "M": 0,
         })
-        probe = self.processes.run("private-isolation", [self.tools / "harnessprobe", "isolate", self.config_path, self.base], self.base)
+        probe = self.processes.run("private-isolation", [self.probe, "isolate", self.config_path, self.base], self.base)
         write_json(self.output / "resolved-isolation.json", probe.json())
-        self.parity = YAMLChecks(self.output / "yaml", self.processes, self.tools / "harnessprobe", self.base, self.config).run()
+        self.parity = YAMLChecks(self.output / "yaml", self.processes, self.probe, self.base, self.config).run()
         for name, binary in (("pueue", self.pueue), ("pueued", self.pueued)):
             proc = self.processes.run(name + "-version", [binary, "-c", self.config_path, "--version"], self.base)
             require((proc.directory / "stdout").read_bytes() == (name + " 4.0.4\n").encode(), "unsupported native " + name)
             self.processes.run(name + "-help", [binary, "-c", self.config_path, "--help"], self.base)
         self.case_ids.append("I01")
-
-    def copy_binary(self, source, target):
-        original, copied = self.tools / source, self.bindir / target
-        require(original.is_file(), "missing compiled acceptance executable: " + str(original))
-        shutil.copyfile(original, copied)
-        copied.chmod(0o700)
-        require(digest(original) == digest(copied), "copied executable mismatch")
-        return copied
 
     def client(self, name, operation, expected=0, config=None):
         require(operation in (["status", "--json"], ["shutdown"]), "native client operation is not observational")
@@ -775,12 +781,15 @@ class NativeSuite:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tools", required=True)
+    parser.add_argument("--source-root", default=str(REPOSITORY))
+    parser.add_argument("--tools", help="retired; use --source-root to build owned fixtures")
     parser.add_argument("--pueue", required=True)
     parser.add_argument("--pueued", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
-    NativeSuite(args.tools, args.pueue, args.pueued, args.output).run()
+    if args.tools is not None:
+        parser.error("--tools is retired; use --source-root to build owned fixture installations")
+    NativeSuite(args.source_root, args.pueue, args.pueued, args.output).run()
     print("PASS I01 I02 I03 I04 I05: actual private pueue/pueued 4.0.4; A=S=E=1, K=M=0; natural shutdown", flush=True)
 
 

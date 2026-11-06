@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -106,29 +107,55 @@ func TestDecodeInspectionFactsKeepsStrictRuntimeMembers(t *testing.T) {
 	}
 }
 
-// TestProviderExecutableClassifiesHelperByBothIdentityFields proves a
-// definition is the provider CLI only when its top-level path and digest both
-// match the runtime probe; anything else is a native helper whose digest is
-// required.
-func TestProviderExecutableClassifiesHelperByBothIdentityFields(t *testing.T) {
-	definition, err := NewRuntimeInspectionDefinition(CLIInfo{Path: "/usr/bin/provider"}, "/workspace", []string{"LANG=C"}, RuntimeCapability{HelpArgs: []string{"exec"}})
+// Fresh installed roles have no executable digest. A native projection can use
+// its own helper, while a runtime-only definition must retain the provider role.
+func TestProviderExecutableClassifiesInstalledRolesWithoutDigests(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		executable string
+		native     bool
+		provider   bool
+		refused    bool
+	}{
+		{name: "provider runtime", executable: "/usr/bin/provider", provider: true},
+		{name: "provider native projection", executable: "/usr/bin/provider", native: true, provider: true},
+		{name: "installed native helper", executable: "/usr/bin/security", native: true},
+		{name: "runtime-only helper conflict", executable: "/usr/bin/security", refused: true},
+		{name: "relative helper refused", executable: "security", native: true, refused: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			definition, err := NewRuntimeInspectionDefinition(CLIInfo{Path: "/usr/bin/provider"}, "/workspace", []string{"LANG=C"}, RuntimeCapability{HelpArgs: []string{"exec"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			definition.Executable = testCase.executable
+			if testCase.native {
+				definition.Arguments = []string{"--native"}
+				definition.Project = func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"ok":true}`), nil }
+			}
+			if definition.ProviderExecutable() != testCase.provider {
+				t.Fatalf("installed executable %q provider role=%t, want %t", definition.Executable, definition.ProviderExecutable(), testCase.provider)
+			}
+			if testCase.refused {
+				_, _, err = definition.Snapshot()
+				if !errors.Is(err, ErrProfileUnavailable) {
+					t.Fatalf("invalid installed role error=%v, want %v", err, ErrProfileUnavailable)
+				}
+				return
+			}
+			assertInstalledRoleSnapshot(t, definition, testCase.provider)
+		})
+	}
+}
+
+func assertInstalledRoleSnapshot(t *testing.T, definition InspectionDefinition, wantProvider bool) {
+	t.Helper()
+	snapshot, _, err := definition.Snapshot()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("installed role without executable digest was refused: %v", err)
 	}
-	if !definition.ProviderExecutable() {
-		t.Fatal("runtime-only provider definition was classified as a helper")
-	}
-	definition.Arguments = []string{"--native"}
-	definition.Project = func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"ok":true}`), nil }
-	definition.ExecutableSHA256 = strings.Repeat("b", 64)
-	if definition.ProviderExecutable() {
-		t.Fatal("same path with a different digest was classified as the provider")
-	}
-	if _, _, err = definition.Snapshot(); err != nil {
-		t.Fatalf("helper definition with its digest was refused: %v", err)
-	}
-	definition.Executable, definition.ExecutableSHA256 = "/usr/bin/security", ""
-	if _, _, err = definition.Snapshot(); err == nil {
-		t.Fatal("native helper definition without a digest was accepted")
+	if snapshot.Executable != definition.Executable || snapshot.ExecutableSHA256 != "" || snapshot.Runtime == nil ||
+		snapshot.Runtime.Executable != "/usr/bin/provider" || snapshot.Runtime.ExecutableSHA256 != "" || snapshot.ProviderExecutable() != wantProvider {
+		t.Fatalf("snapshot changed installed role metadata: %+v", snapshot)
 	}
 }

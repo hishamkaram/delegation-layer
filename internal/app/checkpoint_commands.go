@@ -49,19 +49,22 @@ func runCheckpointCommand(a Arguments, deps storeDependencies, options workspace
 	if err != nil {
 		return checkpointFault(response, nil, err)
 	}
-	defer func() { mergeCheckpointClose(&result, store.Close) }()
+	resources := &workspaceCommandResources{store: store, ownsStore: true}
+	defer func() { mergeCheckpointClose(&result, func() error { return resources.closeAfter(result.err) }) }()
 	response.RootID = store.RootID
-	switch {
-	case a.CheckpointAction == "list":
+	if a.CheckpointAction == "list" {
 		return listCheckpoints(a, store, response)
+	}
+	ctx := context.Background()
+	switch {
 	case a.CheckpointAction == "status":
-		return watchCheckpoint(a, store, options, response)
+		return watchCheckpoint(ctx, a, store, options, response)
 	case a.CheckpointAction == checkpointRemoveAction:
-		return removeCheckpoint(a.CheckpointID, store, options, budget, response)
+		return removeCheckpoint(ctx, a.CheckpointID, store, options, budget, response)
 	case ordinary:
-		return createOrdinaryCheckpoint(selection, store, options, budget, response)
+		return createOrdinaryCheckpoint(ctx, selection, store, options, budget, response)
 	default:
-		return createManagedCheckpoint(a.WorkspaceID, store, options, budget, response)
+		return createManagedCheckpoint(ctx, a.WorkspaceID, store, options, resources, budget, response)
 	}
 }
 
@@ -88,8 +91,8 @@ func mergeCheckpointClose(result *commandResult, closeFn func() error) {
 	result.response.Checkpoint.NextAction = checkpointStopAndReport
 }
 
-func createOrdinaryCheckpoint(selection workspace.CheckpointSelection, store *taskdir.Store, options workspacescore.OperationOptions, budget time.Duration, response Response) commandResult {
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+func createOrdinaryCheckpoint(parent context.Context, selection workspace.CheckpointSelection, store *taskdir.Store, options workspacescore.OperationOptions, budget time.Duration, response Response) commandResult {
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	ack, err := workspacescore.BeginOrdinaryCheckpoint(ctx, store, options, selection, budget)
 	return observeCheckpointCreation(ctx, store, options, ack, err, response)
@@ -98,22 +101,25 @@ func createOrdinaryCheckpoint(selection workspace.CheckpointSelection, store *ta
 // createManagedCheckpoint creates under the workspace's use owner. A busy
 // owner is an unauthorized refusal: the Lead retries after the current use
 // closes; an active parent never waits for itself or bypasses through --cwd.
-func createManagedCheckpoint(workspaceID string, store *taskdir.Store, options workspacescore.OperationOptions, budget time.Duration, response Response) (result commandResult) {
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+func createManagedCheckpoint(parent context.Context, workspaceID string, store *taskdir.Store, options workspacescore.OperationOptions, resources *workspaceCommandResources, budget time.Duration, response Response) (result commandResult) {
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	resource, err := workspace.LoadResource(ctx, store, workspaceID)
+	resources.resource = resource
 	if err != nil {
 		return checkpointFault(response, nil, err)
 	}
-	defer func() { mergeCheckpointClose(&result, resource.Close) }()
 	owner, err := resource.TryAcquireUseOwner(ctx)
+	resources.useOwner = owner
+	if owner != nil && err != nil {
+		return checkpointFault(response, nil, err)
+	}
 	if errors.Is(err, task.ErrLockBusy) && workspaceViewRetryable(err) {
 		return observeCheckpointCreation(ctx, store, options, workspacescore.ActionAcknowledgement{}, workspace.ErrBusy, response)
 	}
 	if err != nil {
 		return checkpointFault(response, nil, err)
 	}
-	defer func() { mergeCheckpointClose(&result, owner.Release) }()
 	ack, err := workspacescore.BeginManagedCheckpoint(ctx, store, resource, options, budget)
 	return observeCheckpointCreation(ctx, store, options, ack, err, response)
 }
@@ -132,8 +138,8 @@ func observeCheckpointCreation(ctx context.Context, store *taskdir.Store, option
 
 // removeCheckpoint begins or reuses the registered removal attempt. When Begin
 // reports that attempt complete, exactly that attempt is observed once.
-func removeCheckpoint(checkpointID string, store *taskdir.Store, options workspacescore.OperationOptions, budget time.Duration, response Response) commandResult {
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+func removeCheckpoint(parent context.Context, checkpointID string, store *taskdir.Store, options workspacescore.OperationOptions, budget time.Duration, response Response) commandResult {
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	ack, err := workspacescore.BeginCheckpointRemoval(ctx, store, options, checkpointID, budget)
 	checkpoint, result, done := checkpointAcknowledgement(response, checkpointRemoveAction, checkpointID, ack, err)
@@ -148,8 +154,8 @@ func removeCheckpoint(checkpointID string, store *taskdir.Store, options workspa
 // failed result or the finite watch ends. It never begins an action; each
 // observation owns its own control deadline, so watch expiry cannot cancel or
 // renew accepted helper work. The latest observation is the result.
-func watchCheckpoint(a Arguments, store *taskdir.Store, options workspacescore.OperationOptions, response Response) commandResult {
-	ctx, cancel := context.WithTimeout(context.Background(), a.Watch)
+func watchCheckpoint(parent context.Context, a Arguments, store *taskdir.Store, options workspacescore.OperationOptions, response Response) commandResult {
+	ctx, cancel := context.WithTimeout(parent, a.Watch)
 	defer cancel()
 	for {
 		result := observeCheckpointOnce(ctx, a, store, options, response)

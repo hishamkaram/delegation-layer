@@ -8,19 +8,23 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import subprocess
-from typing import TypedDict
+from typing import TypedDict, NotRequired, Literal
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
-from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
-from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget
+from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, LockedReleaseGate, _HeldDisposal
+from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget, SelectedOwnerSubject
 
 
 class SupervisorCleanup(TypedDict):
+    delegate: Path
     client: Path
     config: Path
     env: dict[str, str]
     state: Path
     task_ids: list[str]
+    root_id: NotRequired[str]
+    owner: NotRequired[SelectedOwnerSubject | None | Literal["unresolved"]]
+    daemon: NotRequired[tuple[int, Path, tuple[int, int]]]
 
 
 class PredecessorCleanup(TypedDict):
@@ -30,6 +34,13 @@ class PredecessorCleanup(TypedDict):
     env: dict[str, str]
     task_ids: list[str]
     predecessor: PredecessorShutdownTarget
+
+
+class ClosedRoot(TypedDict):
+    """Shutdown's authorizing closure borrowed under the exact still-held disposal lease."""
+
+    closure: dict[str, object]
+    disposal: _HeldDisposal
 
 
 @dataclass
@@ -47,14 +58,26 @@ class FixtureLifetime:
     private_config: Path | None = None
     gate: Path | None = None
     release_gate: LockedReleaseGate | None = None
+    # The installation owner supplies this path; cleanup never infers it from Pueue or PATH.
+    delegate: Path | None = None
+    disposal: DisposalLeases = field(default_factory=DisposalLeases)
     old_install: Path | None = None
     old_libexec: Path | None = None
     upgraded_libexec: Path | None = None
     supervisor_cleanups: list[SupervisorCleanup | PredecessorCleanup] = field(default_factory=list)
     managed_state_roots: list[tuple[Path, list[str]]] = field(default_factory=list)
+    # Scenario cleanup adds a root only after its owner and daemon fully close.
+    # Finalization reads this ledger to avoid new observation or double teardown.
+    closed_roots: dict[Path, ClosedRoot | None] = field(default_factory=dict)
     handoff_cleanup_bindings: list[SupervisorCleanup] = field(default_factory=list)
     attempted_task_ids: list[str] = field(default_factory=list)
     # Bound only by a composition whose selected Delegate CLI and attempted IDs
     # are known created records for the primary root; None keeps passive cleanup.
     # It takes a task ID and the absolute monotonic cleanup deadline.
     primary_observer: Callable[[str, float], str] | None = None
+    # Scenario-owned preparation runs before primary readiness, under the same
+    # absolute deadline. It must close child roots before parent disposal.
+    prepare_cleanup: Callable[[float, DisposalLeases], None] | None = None
+    # The canonical reader remains the default. A scenario may bind its
+    # explicit canonical Go never-launched proof port; no result is cached.
+    closure_reader: Callable[[Path, tuple[str, ...]], dict[str, object]] | None = None

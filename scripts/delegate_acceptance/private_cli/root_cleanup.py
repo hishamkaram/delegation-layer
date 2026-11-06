@@ -10,6 +10,7 @@ from scripts.delegate_acceptance.private_cli.configuration import PRIVATE_ACCEPT
 from scripts.delegate_acceptance.private_cli.noexec_state import custody_release_pending
 from scripts.delegate_acceptance.private_cli.noexec_state import describe_pending_custody
 from scripts.delegate_acceptance.private_cli.supervisor import authorize_managed_lifetime_closure
+from scripts.delegate_acceptance.private_cli.supervisor import read_managed_closure
 
 
 def remove_private_acceptance_root(
@@ -19,6 +20,7 @@ def remove_private_acceptance_root(
     *,
     disposal=None,
     deadline=None,
+    reader=None,
 ):
     """Authorize managed closure and owned custody release, then remove the exact owned root.
 
@@ -45,7 +47,7 @@ def remove_private_acceptance_root(
     owned_roots = tuple(entry.directory for entry in entries)
     # A refusal before the lease leaves every root byte unchanged; the lease then
     # excludes elected maintenance and the same facts are rechecked under it.
-    _require_disposal_ready(managed, owned_roots)
+    _require_disposal_ready(managed, owned_roots, reader=reader)
     for state in sorted({Path(state) for state, _task_ids in managed}, key=str):
         if os.path.lexists(state / ".supervisor"):
             if disposal is None:
@@ -55,14 +57,15 @@ def remove_private_acceptance_root(
                 "private supervisor disposal lease has no deadline: " + str(state),
             )
             disposal.hold(state, deadline)
-    _require_disposal_ready(managed, owned_roots)
+    _require_disposal_ready(managed, owned_roots, reader=reader)
     rollback_owned_directories(entries)
     if root_token.directory.exists() or root_token.directory.is_symlink():
         raise RuntimeError("private acceptance root deletion was not verified: " + str(root_token.directory))
 
 
-def _require_disposal_ready(managed, owned_roots):
+def _require_disposal_ready(managed, owned_roots, *, reader=None):
     for state, task_ids in managed:
-        closure = authorize_managed_lifetime_closure(state, tuple(task_ids))
+        closure = (authorize_managed_lifetime_closure(state, tuple(task_ids)) if reader is None
+                   else read_managed_closure(state, tuple(task_ids), reader))
         pending = custody_release_pending(closure, owned_roots)
         require(not pending, "custody release remained pending before root removal: " + describe_pending_custody(pending))

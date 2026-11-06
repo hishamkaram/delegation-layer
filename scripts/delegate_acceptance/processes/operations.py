@@ -394,7 +394,7 @@ def _record_process_invocation(
     invocation = {
         "argv": process.argv,
         "cwd": str(cwd),
-        "executable_sha256": digest(executable),
+        "executable": process.argv[0],
         "stdin": "PIPE" if stdin is not None else "DEVNULL",
         "stdin_bytes": len(process._stdin_data) if process._stdin_data is not None else 0,
         "stdin_sha256": sha(process._stdin_data) if process._stdin_data is not None else None,

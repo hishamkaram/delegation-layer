@@ -13,6 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
+	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -22,7 +23,40 @@ import (
 func schedulerObservationFixture(store *taskdir.Store) schedulerTasks {
 	deps := Dependencies{PredicateRegistry: predicate.Default, Environment: []string{}}.normalized()
 	deps.SupervisorOptions.WaitForPendingClose = true
-	return schedulerTasks{root: store.Root, rootID: store.RootID, dependencies: deps}
+	return schedulerTasks{root: store.Root, rootID: store.RootID, dependencies: deps, routing: deps.infrastructureRouting()}
+}
+
+func TestSchedulerObservationCleanupRetainsRoutingStore(t *testing.T) {
+	store := supervisorfixture.NewInspectionStore(t)
+	other, err := taskdir.OpenStore(store.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := errors.Join(store.Close(), other.Close()); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	cleanup := &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: store}, cause: os.ErrPermission}
+	resultErr := errors.Join(errors.New("earlier independent cause"), cleanup)
+	state := schedulerruntime.TaskState{Observation: contract.Observation{ObservedAt: time.Unix(1, 0).UTC()}}
+	closeSchedulerObservation(&state, &resultErr, store)
+	if _, pinErr := store.PinRootContext(t.Context()); pinErr != nil {
+		t.Fatalf("scheduler closed routed cleanup's borrowed Store: %v", pinErr)
+	}
+	if state.Observation.ObservedAt.IsZero() || !errors.Is(resultErr, os.ErrPermission) {
+		t.Fatal("scheduler lost the observation or cleanup cause")
+	}
+	closeSchedulerObservation(&state, &resultErr, other)
+	if _, pinErr := other.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
+		t.Fatalf("scheduler retained an unrelated handle for the same root: %v", pinErr)
+	}
+	// No native actor is involved: this control represents a settled error view.
+	cleanup.resources = nil
+	closeSchedulerObservation(&state, &resultErr, store)
+	if _, pinErr := store.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
+		t.Fatalf("scheduler retained a settled cleanup view: %v", pinErr)
+	}
 }
 
 func TestSchedulerObservationReleasesCancelledSubmittedNeverLaunchedTask(t *testing.T) {
@@ -58,7 +92,7 @@ func TestSchedulerObservationReleasesCancelledSubmittedNeverLaunchedTask(t *test
 
 func assertSchedulerMissingQueueUnlaunched(t *testing.T, store *taskdir.Store, td *taskdir.TaskDir, tasks schedulerTasks) {
 	t.Helper()
-	observed, statusErr := tasklifecycle.Status(store, td, observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup()), "", tasks.dependencies.Catalog)
+	observed, statusErr := tasklifecycle.Status(store, td, observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup(), tasks.dependencies.infrastructureRouting()), "", tasks.dependencies.Catalog)
 	if statusErr == nil || !tasklifecycle.IsPureSupervisorUncertaintyError(statusErr) || !observed.ControlObservation || observed.Admission != task.AdmissionUnknown || observed.Pending != "" {
 		t.Fatalf("missing-row Status classification: %+v, %v", observed, statusErr)
 	}

@@ -21,7 +21,7 @@ import (
 )
 
 func resolveTeamsProject(ctx context.Context, cwd, projectRoot string, deps Dependencies) (task.TeamProject, error) {
-	deps = deps.withCapturedEnvironment()
+	deps = deps.withCapturedEnvironmentContext(ctx)
 	git := workspace.Git{Runner: teamsProjectRunner{}, Environment: slices.Clone(deps.Environment)}
 	return teams.ResolveProject(ctx, cwd, projectRoot, git)
 }
@@ -36,8 +36,8 @@ func (teamsProjectRunner) Run(ctx context.Context, command *exec.Cmd) error {
 	return execution.RunIsolatedCommand(ctx, ownerExecutable, command)
 }
 
-func catalogForTeams(deps Dependencies) (*teams.Catalog, error) {
-	path, err := resolveTeamsCatalogPath(deps.withCapturedEnvironment())
+func catalogForTeams(ctx context.Context, deps Dependencies) (*teams.Catalog, error) {
+	path, err := resolveTeamsCatalogPath(deps.withCapturedEnvironmentContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func catalogForTeams(deps Dependencies) (*teams.Catalog, error) {
 }
 
 func lookupTeamMember(ctx context.Context, target task.TeamTarget, root, cwd, projectRoot string, deps Dependencies) (contract.ResolvedMember, error) {
-	deps = deps.withCapturedEnvironment()
+	deps = deps.withCapturedEnvironmentContext(ctx)
 	path, err := resolveTeamsCatalogPath(deps)
 	if err != nil {
 		return contract.ResolvedMember{}, err
@@ -78,7 +78,7 @@ func lookupTeamMember(ctx context.Context, target task.TeamTarget, root, cwd, pr
 	if err = task.ValidateTeamTarget(target, false); err != nil {
 		return contract.ResolvedMember{}, &teamsInputError{cause: err}
 	}
-	catalog, err := catalogForTeams(deps)
+	catalog, err := catalogForTeams(ctx, deps)
 	if err != nil {
 		return contract.ResolvedMember{}, err
 	}
@@ -92,7 +92,7 @@ func checkTeamProject(ctx context.Context, ref task.TeamReference, cwd, projectR
 	if ref.Scope == "user" {
 		return nil
 	}
-	_, err := projectForTeamReference(ctx, ref, cwd, projectRoot, deps.withCapturedEnvironment())
+	_, err := projectForTeamReference(ctx, ref, cwd, projectRoot, deps.withCapturedEnvironmentContext(ctx))
 	return err
 }
 

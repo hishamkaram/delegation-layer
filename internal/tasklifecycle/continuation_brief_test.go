@@ -2,10 +2,13 @@ package tasklifecycle_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -122,6 +125,97 @@ func TestContinuationInputRefusesChangedBrief(t *testing.T) {
 				t.Fatalf("restored brief = %d bytes, %v", len(got), err)
 			}
 		})
+	}
+}
+
+func TestContinueMissingPredecessorOwnsOnlyInputStore(t *testing.T) {
+	store, _, _ := newBriefFixture(t)
+	assertContinueInputFailure(t, store.Root, string(bytes.Repeat([]byte{'9'}, 32)), os.ErrNotExist)
+}
+
+func TestContinueStoreOpenFailureKeepsPredecessorStage(t *testing.T) {
+	store, td, _ := newBriefFixture(t)
+	cause := errors.New("continuation store unavailable")
+	options := tasklifecycle.ContinuationOptions{Dispatch: tasklifecycle.DispatchOptions{
+		OpenStore: func(string, bool) (*taskdir.Store, error) { return nil, cause },
+	}}
+	result := tasklifecycle.ContinueContext(t.Context(), tasklifecycle.DispatchRequest{Root: store.Root, TaskID: td.TaskID}, options)
+	var stage *admission.StageError
+	if !errors.Is(result.Failure, cause) || !errors.As(result.Failure, &stage) || stage.Stage() != "load-predecessor" {
+		t.Fatalf("store open failure = %v; want load-predecessor with original cause", result.Failure)
+	}
+	if result.Phase != tasklifecycle.ContinueLoadPredecessor || result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+		t.Fatalf("failed store open started successor work: %+v", result)
+	}
+}
+
+func TestContinueRefusesChangedRootIdentity(t *testing.T) {
+	store, td, _ := newBriefFixture(t)
+	path := filepath.Join(store.Root, "root.json")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root task.RootRecord
+	if err = task.DecodeStrict(content, &root); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the root record valid while making its identity disagree with the
+	// existing task and binding. A fresh reader must validate current metadata.
+	first := byte('0')
+	if root.RootID[0] == first {
+		first = '1'
+	}
+	root.RootID = string(first) + root.RootID[1:]
+	if err = task.ValidateRootRecord(&root); err != nil {
+		t.Fatal(err)
+	}
+	content, err = json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertContinueInputFailure(t, store.Root, td.TaskID, task.ErrIdentityMismatch)
+}
+
+func assertContinueInputFailure(t *testing.T, root, id string, want error) {
+	t.Helper()
+	var opened []*taskdir.Store
+	options := tasklifecycle.ContinuationOptions{Dispatch: tasklifecycle.DispatchOptions{
+		OpenStore: func(path string, create bool) (*taskdir.Store, error) {
+			if path != root || create {
+				t.Fatalf("continuation input open = %q, create=%v; want existing %q", path, create, root)
+			}
+			store, err := taskdir.OpenStore(path)
+			if err != nil {
+				return nil, err
+			}
+			opened = append(opened, store)
+			t.Cleanup(func() {
+				if closeErr := store.Close(); closeErr != nil {
+					t.Error(closeErr)
+				}
+			})
+			return store, nil
+		},
+	}}
+	result := tasklifecycle.ContinueContext(t.Context(), tasklifecycle.DispatchRequest{Root: root, TaskID: id}, options)
+	var stage *admission.StageError
+	if !errors.Is(result.Failure, want) || !errors.As(result.Failure, &stage) || stage.Stage() != "load-predecessor" {
+		t.Errorf("continuation input failure = %v; want load-predecessor with %v", result.Failure, want)
+	}
+	if result.Phase != tasklifecycle.ContinueLoadPredecessor || result.Dispatch != nil || result.Resources != nil || result.Workspace != nil {
+		t.Errorf("failed predecessor started successor work: %+v", result)
+	}
+	if len(opened) != 1 {
+		t.Errorf("failed continuation opened %d Stores; only its input reader needs one", len(opened))
+	}
+	for _, store := range opened {
+		if _, err := store.PinRootContext(t.Context()); !errors.Is(err, os.ErrClosed) {
+			t.Errorf("failed continuation left input Store open: %v", err)
+		}
 	}
 }
 

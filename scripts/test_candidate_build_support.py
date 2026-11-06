@@ -99,8 +99,8 @@ for os_name, arch in (("darwin", "amd64"), ("darwin", "arm64"), ("linux", "amd64
     bundle = pathlib.Path(".release/pueue") / os_name / arch
     members = {"delegate": b"delegate " + stamp.encode(), "delegate-run": b"run " + stamp.encode(),
                "pueue": (bundle / "pueue").read_bytes(), "pueued": (bundle / "pueued").read_bytes()}
-    if "wrong-pueue" in MODE and (os_name, arch) == ("darwin", "arm64"):
-        members["pueued"] = b"substituted"
+    if "missing-pueue" in MODE and (os_name, arch) == ("darwin", "arm64"):
+        del members["pueued"]
     raw = io.BytesIO()
     with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as zipped, tarfile.open(fileobj=zipped, mode="w") as tar:
         for member, data in members.items():

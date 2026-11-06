@@ -9,7 +9,7 @@ import base64
 import hashlib
 import json
 import re
-from .contract import BINARIES, VerificationError
+from .contract import InstalledExecutables, VerificationError
 
 
 CHANNELS = ("npm", "homebrew")
@@ -78,16 +78,13 @@ class PublishedRequest:
 
 @dataclass(frozen=True)
 class ArchiveFacts:
-    """Hashes of the verified extracted release archive; never read from checksums.txt."""
+    """Verified release/archive provenance and the extracted installation selection."""
 
     tag: str
     package_version: str
     release_commit: str
     archive_sha256: str
-    binaries: tuple[tuple[str, str], ...]
-
-    def binary_hashes(self) -> dict[str, str]:
-        return dict(self.binaries)
+    binaries: InstalledExecutables
 
 
 @dataclass(frozen=True)
@@ -129,7 +126,7 @@ class SkillManifest:
 class InstallFacts:
     label: str
     requested: str
-    binaries: tuple[tuple[str, str], ...]
+    binaries: InstalledExecutables
     skill_files: int
 
 
@@ -314,13 +311,6 @@ def compare_hashes(expected: dict[str, str], observed: dict[str, str], code: str
     """Require exactly the same names and digests; extra and missing names both fail."""
     if expected != observed:
         raise VerificationError(code, stage)
-
-
-def installed_binary_hashes(receipt_binaries: dict) -> dict[str, str]:
-    try:
-        return {name: receipt_binaries[name]["sha256"] for name in BINARIES}
-    except (KeyError, TypeError):
-        raise VerificationError("installed_binaries_invalid", "inspect-binaries") from None
 
 
 def decide_latest(npm_latest: str, github_tag: str, tag: str) -> LatestDecision:

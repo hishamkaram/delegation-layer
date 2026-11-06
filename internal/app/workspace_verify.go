@@ -43,7 +43,7 @@ func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store,
 	}
 	command := verificationCommand(request.Arguments, checkout.Workdir, environment)
 	command.Stdout, command.Stderr = stdout, stderr
-	commandErr := execution.RunScopedCommand(scope, command, execution.CommandHooks{})
+	commandErr := (workspaceCommandRunner{scope: scope, environment: slices.Clone(environment)}).Run(scope.Context(), command)
 	closeErr := errors.Join(stdout.Close(), stderr.Close())
 	code := 0
 	if commandErr != nil {

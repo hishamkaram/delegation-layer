@@ -37,12 +37,12 @@ func nativeInspection(environment profileEnvironment) (commonprovider.Inspection
 	if err != nil {
 		return commonprovider.InspectionDefinition{}, unsupportedNativeFacts()
 	}
-	helperDigest, err := commonprovider.FingerprintExecutable(nativeCredentialHelper)
+	helper, err := commonprovider.LocateCLIPath(nativeCredentialHelper)
 	if err != nil {
 		return commonprovider.InspectionDefinition{}, unsupportedNativeFacts()
 	}
 	definition := commonprovider.InspectionDefinition{
-		Revision: nativeInspectionRevision, Executable: nativeCredentialHelper, ExecutableSHA256: helperDigest,
+		Revision: nativeInspectionRevision, Executable: helper.Path,
 		Arguments: []string{"find-generic-password", "-s", "Claude Code-credentials", "-a", account, "-w"},
 		Directory: environment.Home, Environment: slices.Clone(environment.Values), OutputLimit: commonprovider.MaxInspectionOutput,
 		Remote: &commonprovider.HTTPInspectionDefinition{

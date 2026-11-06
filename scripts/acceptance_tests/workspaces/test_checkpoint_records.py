@@ -163,6 +163,36 @@ class ReceiptJournalOptions(TypedDict):
 
 
 class CheckpointCodecParityTests(unittest.TestCase):
+    def test_installed_operation_identity_omits_digest_in_go_order(self) -> None:
+        legacy = request_bytes(go_request("capture"))
+        request = go_request("capture")
+        del request["worker_sha256"]
+        request["executable_identity"] = "installed-path-v1"
+        expected = legacy.replace(
+            b'"worker_sha256":"' + b"6" * 64 + b'"',
+            b'"executable_identity":"installed-path-v1"')
+        self.assertEqual(request_bytes(request), expected)
+        request["worker_sha256"] = ""
+        self.assertEqual(request_bytes(request), expected)
+
+    def test_operation_identity_refuses_unknown_mixed_null_and_truncated_legacy(self) -> None:
+        for changes in (
+                {"executable_identity": "unknown"},
+                {"executable_identity": None},
+                {"executable_identity": "installed-path-v1"},
+                {"executable_identity": "installed-path-v1", "worker_sha256": None},
+                {"worker_sha256": ""},
+        ):
+            with self.subTest(changes=changes):
+                request = go_request("capture")
+                request.update(changes)
+                with self.assertRaises(AcceptanceFailure):
+                    request_bytes(request)
+        request = go_request("capture")
+        del request["worker_sha256"]
+        with self.assertRaises(AcceptanceFailure):
+            request_bytes(request)
+
     def test_malformed_subject_and_operation_kinds_are_protocol_failures(self) -> None:
         for invalid in ([], {}, None):
             subject = {"kind": invalid, "id": GO_CHECKPOINT, "sha256": "a" * 64}

@@ -146,17 +146,12 @@ func TestPreflightPlanRebindsExplicitEmptyEnvironment(t *testing.T) {
 
 func TestPreflightPlanRefreshesExecutableIdentityBeforeStart(t *testing.T) {
 	td, permit, plan, _ := fixtureTask(t, "echo")
-	replacementDir, err := os.MkdirTemp(filepath.Dir(plan.Executable), "preflight-refresh-")
-	require(t, err)
-	t.Cleanup(func() { require(t, os.RemoveAll(replacementDir)) })
+	replacementDir := t.TempDir()
 	replacement := filepath.Join(replacementDir, "provider")
-	data, err := os.ReadFile(plan.Executable)
-	require(t, err)
-	require(t, os.Link(plan.Executable, replacement))
+	require(t, os.WriteFile(replacement, []byte("#!/bin/sh\nexec /bin/cat\n"), 0o700))
 	refreshed := plan
 	refreshed.Executable = replacement
-	refreshed.ExecutableSHA256 = task.ComputeSHA256(data)
-	refreshed.ProviderRuntime = task.ProviderRuntimeIdentity{Executable: replacement, Version: "provider-refresh-v2", SHA256: refreshed.ExecutableSHA256}
+	refreshed.ProviderRuntime = task.ProviderRuntimeIdentity{Executable: replacement, Version: "provider-refresh-v2"}
 	startedExecutable := ""
 	result := Run(td, permit, plan, Options{
 		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {

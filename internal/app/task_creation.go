@@ -5,6 +5,11 @@ import (
 )
 
 func creationCommandResult(response Response, provider string, created tasklifecycle.CreationResult) commandResult {
+	result := creationPrimaryCommandResult(response, provider, created)
+	return result
+}
+
+func creationPrimaryCommandResult(response Response, provider string, created tasklifecycle.CreationResult) commandResult {
 	if created.Capability != nil {
 		capability := describeRuntimeCapability(provider, created.Capability.Description, created.Capability.Runtime)
 		response.Capability = &capability

@@ -4,6 +4,7 @@ from contextlib import ExitStack
 from contextlib import contextmanager
 from pathlib import Path
 from scripts.delegate_acceptance.directories.operations import _close_parent_descriptor
+from scripts.delegate_acceptance.directories.operations import _DIRECTORY_OPEN_FLAGS
 from scripts.delegate_acceptance.directories.operations import _open_parent_directory
 from scripts.delegate_acceptance.directories.operations import remove_exact_owned_fifo
 from scripts.delegate_acceptance.directories.policy import require
@@ -50,6 +51,25 @@ class LockedReleaseGate:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
+
+
+def ordinary_lifetime_owner_live(path):
+    """Probe an ordinary guardian lease without assuming ownership or signaling."""
+    descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        visible = os.stat(path, follow_symlinks=False)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_uid == os.getuid()
+                and (opened.st_dev, opened.st_ino) == (visible.st_dev, visible.st_ino),
+                "ordinary lifetime owner lock is unsafe or replaced")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
 
 
 TRANSITION_LOCK_TIMEOUT_SECONDS = 30
@@ -103,10 +123,12 @@ _DISPOSAL_LOCK_FLAGS = os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
 
 
 class _HeldDisposal:
-    """Exclusive lock descriptors for one state root, pinned to its private supervisor directory."""
+    """Exclusive disposal locks, with live pins for the state and supervisor directories."""
 
-    def __init__(self, state, supervisor_fd, supervisor_identity):
+    def __init__(self, state, state_fd, state_identity, supervisor_fd, supervisor_identity):
         self.state = state
+        self.state_fd = state_fd
+        self.state_identity = state_identity
         self.supervisor_fd = supervisor_fd
         self.supervisor_identity = supervisor_identity
         # Every opened lock descriptor is owned here from its open; ``acquired`` names the flocked ones.
@@ -115,15 +137,25 @@ class _HeldDisposal:
 
     def require_current(self):
         """Require the pinned directory and every held lock inode to remain at their paths."""
+        require(tuple(self.acquired) == DISPOSAL_LOCK_ORDER, "disposal lease is incomplete: " + str(self.state))
         try:
-            visible = os.stat(self.state / ".supervisor", follow_symlinks=False)
+            root = os.stat(self.state, follow_symlinks=False)
+        except OSError as error:
+            raise RuntimeError("disposal lease state root is missing or replaced: " + str(self.state)) from error
+        retained = os.fstat(self.state_fd)
+        require(stat.S_ISDIR(root.st_mode)
+                and (root.st_dev, root.st_ino) == self.state_identity == (retained.st_dev, retained.st_ino),
+                "disposal lease state root was replaced: " + str(self.state))
+        try:
+            visible = os.stat(".supervisor", dir_fd=self.state_fd, follow_symlinks=False)
         except OSError as error:
             raise RuntimeError("disposal lease supervisor directory is missing: " + str(self.state)) from error
+        retained = os.fstat(self.supervisor_fd)
         require(
-            stat.S_ISDIR(visible.st_mode) and (visible.st_dev, visible.st_ino) == self.supervisor_identity,
+            stat.S_ISDIR(visible.st_mode) and (visible.st_dev, visible.st_ino)
+            == self.supervisor_identity == (retained.st_dev, retained.st_ino),
             "disposal lease supervisor directory was replaced: " + str(self.state),
         )
-        require(tuple(self.acquired) == DISPOSAL_LOCK_ORDER, "disposal lease is incomplete: " + str(self.state))
         for name, descriptor in self.locks.items():
             held = os.fstat(descriptor)
             try:
@@ -136,10 +168,11 @@ class _HeldDisposal:
             )
 
     def close(self):
-        descriptors = [*reversed(tuple(self.locks.values())), self.supervisor_fd]
+        descriptors = [*reversed(tuple(self.locks.values())), self.supervisor_fd, self.state_fd]
         self.locks = {}
         self.acquired = []
         self.supervisor_fd = -1
+        self.state_fd = -1
         first_error = None
         for descriptor in descriptors:
             try:
@@ -203,6 +236,7 @@ class DisposalLeases:
         if held is None:
             raise RuntimeError("private state root has no held disposal lease: " + str(state))
         held.require_current()
+        return held
 
     def release(self, state):
         """Release one held root so its elected owner can progress; other held roots stay held."""
@@ -225,22 +259,21 @@ class DisposalLeases:
 
 
 def _open_held_disposal(state):
+    state_fd, state_identity = _open_parent_directory(state)
+    supervisor_fd = -1
     try:
-        root = os.stat(state, follow_symlinks=False)
-    except OSError as error:
-        raise RuntimeError("disposal lease state root is missing: " + str(state)) from error
-    require(stat.S_ISDIR(root.st_mode), "disposal lease state root is unsafe: " + str(state))
-    supervisor_fd, supervisor_identity = _open_parent_directory(state / ".supervisor")
-    try:
+        supervisor_fd = os.open(".supervisor", _DIRECTORY_OPEN_FLAGS, dir_fd=state_fd)
+        supervisor = os.fstat(supervisor_fd)
         require_private_directory(
-            os.fstat(supervisor_fd),
+            supervisor,
             "disposal lease supervisor directory is unsafe: " + str(state),
             owner_uid=os.geteuid(),
         )
     except BaseException:
         _close_parent_descriptor(supervisor_fd)
+        _close_parent_descriptor(state_fd)
         raise
-    return _HeldDisposal(state, supervisor_fd, supervisor_identity)
+    return _HeldDisposal(state, state_fd, state_identity, supervisor_fd, (supervisor.st_dev, supervisor.st_ino))
 
 
 def _acquire_disposal_lock(descriptor, name, deadline):

@@ -40,7 +40,7 @@ Commands:
   logs          Return validated output descriptors
   preflight     Check one provider without creating a task
   continue      Continue one terminal task through its exact session
-  supervisor    Inspect or migrate Delegate's private supervisor
+  supervisor    Inspect or migrate the private supervisor, or stop its infrastructure owner
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
   schedule      Manage recurring definitions and inspect executions
@@ -57,6 +57,8 @@ Global flags:
 Supervisor recovery:
   supervisor status --json
   supervisor migrate --json
+  supervisor stop-owner --json
+  stop-owner releases infrastructure serving; it does not stop Pueue or tasks.
 
 Managed Git workspaces (optional):
   dispatch ... --cwd ABS --isolation git-worktree [--base REV]
@@ -150,14 +152,25 @@ type Dependencies struct {
 	// not captured yet: the first command entrypoint captures os.Environ once
 	// and every later consumer reads that snapshot. A nonnil empty slice is an
 	// explicit empty environment and is kept.
-	Environment        []string
+	Environment      []string
+	invocationSource *capturedInfrastructureInvocation
+	// ownerRouting is an immutable command composition choice. Nil selects
+	// native routing; component tests can lend their existing lifecycle owner.
+	ownerRouting       supervisorcore.OwnerRouting
 	useCatalogExisting bool
 }
 
-// withCapturedEnvironment binds the caller's launch environment at a public
-// entrypoint. Composition reads that one snapshot afterward; it never reads
-// the process environment again.
+// withCapturedEnvironment binds actual invocation provenance before selecting
+// the launch environment. Dependency copies retain that immutable observation,
+// including a lazy capture error; launch scopes never replace its authority.
 func (d Dependencies) withCapturedEnvironment() Dependencies {
+	return d.withCapturedEnvironmentContext(context.Background())
+}
+
+func (d Dependencies) withCapturedEnvironmentContext(ctx context.Context) Dependencies {
+	if d.invocationSource == nil {
+		d.invocationSource = captureInfrastructureInvocation(ctx)
+	}
 	if d.Environment == nil {
 		d.Environment = os.Environ()
 	}
@@ -175,6 +188,8 @@ type storeDependencies struct {
 	supervisorLookup  supervisorcore.ExecutableLookup
 	runnerExecutable  string
 	environment       []string
+	invocationSource  *capturedInfrastructureInvocation
+	ownerRouting      supervisorcore.OwnerRouting
 	observeSupervisor bool
 }
 
@@ -190,6 +205,8 @@ func (d Dependencies) storeDependencies() storeDependencies {
 		supervisorLookup:  d.supervisorLookup(),
 		runnerExecutable:  d.RunnerExecutable,
 		environment:       slices.Clone(d.Environment),
+		invocationSource:  d.invocationSource,
+		ownerRouting:      d.ownerRouting,
 		observeSupervisor: true,
 	}
 }
@@ -229,23 +246,9 @@ func (d Dependencies) normalized() Dependencies {
 		d.PublisherVersion = defaultPublisher
 	}
 	if d.SupervisorOptions.ControlOwnerExecutable == "" {
-		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable()
+		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable(d.RunnerExecutable)
 	}
-	if d.SupervisorOptions.PrivateMaintenanceLauncher == nil && d.SupervisorOptions.ControlOwnerExecutable != "" {
-		d.SupervisorOptions.PrivateMaintenanceLauncher = supervisorcore.LaunchQueueMaintenanceOwnerWithEnvironment
-	}
-	if d.SupervisorOptions.SuccessfulCleanupAuthorizer == nil {
-		d.SupervisorOptions.SuccessfulCleanupAuthorizer = authorizePrivateSuccessfulCleanup
-	}
-	if d.SupervisorOptions.PrivateTerminalEvidencePreparer == nil {
-		d.SupervisorOptions.PrivateTerminalEvidencePreparer = preparePrivateTerminalEvidence
-	}
-	if d.SupervisorOptions.PrivateTerminalCustodyReleaser == nil {
-		d.SupervisorOptions.PrivateTerminalCustodyReleaser = releasePrivateTerminalCustody
-	}
-	if d.SupervisorOptions.PrivateMigrationAuthorizer == nil {
-		d.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue
-	}
+	d.SupervisorOptions = withDefaultSupervisorCallbacks(d.SupervisorOptions)
 	return d
 }
 
@@ -308,7 +311,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	if parsed.Command != "scheduler" {
 		return writeCLIError(stderr, errors.New("context execution requires a scheduler command"), 2)
 	}
-	result := runSchedulerCommand(ctx, parsed, deps.withCapturedEnvironment().normalized(), stderr)
+	result := runSchedulerCommand(ctx, parsed, deps.withCapturedEnvironmentContext(ctx).normalized(), stderr)
 	return presentCommandResult(parsed, result, stdout, stderr)
 }
 
@@ -417,14 +420,6 @@ func openStoreContext(ctx context.Context, root string, deps storeDependencies, 
 
 func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {
 	return supervisorcore.ResolveCurrentPrivateSupervisorExecutables(root, deps.supervisorLookup())
-}
-
-// newSupervisorControlClient proves the task's exact saved endpoint ready before
-// a mutating queue command. If that endpoint is unavailable, completed private
-// migration evidence may recover the current successor before the one control
-// command is sent. An uncertain probe and a failed control are never retried.
-func newSupervisorControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup supervisorcore.ExecutableLookup) (*pueue.Client, error) {
-	return supervisorcore.NewControlClient(ctx, root, saved, options, lookup, openNativeSupervisorStore)
 }
 
 func bindInitialForAdmission(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, deferPrivateStart bool) (*pueue.Client, error) {

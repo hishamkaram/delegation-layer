@@ -8,6 +8,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -17,9 +18,13 @@ func ReconcileRunner(ctx context.Context, root string, response *Observation, td
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err = supervisorcore.NewClient(ctx, root, submit.Supervisor, options.Options, true, options.Lookup, options.OpenStore)
+	source, err := supervisorcore.NewSavedBindingSource(req.RootID, infrastructure.SavedBindingTaskSubmission, td.TaskID, "", submit.Supervisor)
 	if err != nil {
 		return nil, pueue.Observation{}, err
+	}
+	client, err = options.savedClient(ctx, root, submit.Supervisor, source)
+	if err != nil {
+		return nil, pueue.Observation{}, supervisorcore.ClosePrivateAdmissionTransition(client, err)
 	}
 	defer func(owner *pueue.Client) {
 		if resultErr != nil {

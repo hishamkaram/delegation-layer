@@ -258,7 +258,7 @@ class RoutingTests(unittest.TestCase):
         gate.run_case(output=self.root, harness="codex", model=None, case=self.case, repetition=1, delegate_bin=missing)
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["delegate_executable"], str(missing))
-        self.assertIsNone(receipt["delegate_sha256"])
+        self.assertNotIn("delegate_sha256", receipt)
         self.assertEqual(gate.summarize(output=self.root, cases=[self.case], repetitions=1, harness="codex",
             delegate_bin=missing)["status"], "blocked")
 
@@ -355,14 +355,12 @@ class RoutingTests(unittest.TestCase):
         if candidate:
             delegate.write_text("candidate delegate\n")
             delegate.chmod(0o700)
-            delegate_sha256 = gate.digest(delegate)
         else:
             if delegate.exists():
                 delegate.unlink()
-            delegate_sha256 = None
         (fixture / "runtime.json").write_text(json.dumps({
             "delegate": str(delegate), "path": "/private/path",
-            "delegate_sha256": delegate_sha256, "scenario": scenario,
+            "scenario": scenario,
             "provider": "codex:exec", "state_root": str(state),
         }))
         stdout, stderr = io.StringIO(), io.StringIO()

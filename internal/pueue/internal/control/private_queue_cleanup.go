@@ -11,15 +11,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func privateClientReady(ctx context.Context, client *Client) (bool, error) {
-	return privateClientReadyWithCleanup(ctx, client, true)
-}
-
-func privateClientReadyWithCleanup(ctx context.Context, client *Client, cleanupSuccessful bool) (bool, error) {
-	_, ready, err := privateClientReadySnapshotWithCleanup(ctx, client, cleanupSuccessful)
-	return ready, err
-}
-
 // privateClientReadySnapshotWithCleanup projects the endpoint observation onto
 // the existing observer contract: absent is (false, nil) and a refusal is its
 // typed ErrBinding error.
@@ -128,9 +119,9 @@ func privateReadyEndpointFailure(ctx context.Context, client *Client, result Com
 
 // cleanSuccessfulTasks removes only exact terminal rows authorized by the
 // application. It never issues broad clean, including after status overflow.
-func (c *Client) cleanSuccessfulTasks(ctx context.Context, eventOnly bool) error {
+func (c *Client) cleanSuccessfulTasks(ctx context.Context) error {
 	for {
-		settling, err := c.cleanSuccessfulTasksPass(ctx, eventOnly)
+		settling, err := c.cleanSuccessfulTasksPass(ctx)
 		if err != nil {
 			return err
 		}
@@ -155,8 +146,8 @@ type privateCleanupCapture struct {
 	candidates []Job
 }
 
-func (c *Client) cleanSuccessfulTasksPass(ctx context.Context, eventOnly bool) (bool, error) {
-	capture, err := c.capturePrivateCleanup(ctx, eventOnly)
+func (c *Client) cleanSuccessfulTasksPass(ctx context.Context) (bool, error) {
+	capture, err := c.capturePrivateCleanup(ctx, false)
 	if err != nil {
 		return false, err
 	}
@@ -531,13 +522,27 @@ func (run privateQueueMaintenanceRun) acquireGenerationLock(ctx context.Context,
 func (run privateQueueMaintenanceRun) withGeneration(ctx context.Context, phase func(context.Context) error) (entered bool, resultErr error) {
 	resultErr = run.worker.withPrivateSupervisorLock(ctx, func(lockedContext context.Context) error {
 		entered = true
-		complete, err := PrivateSupervisorMigrationComplete(run.stateRoot, run.worker.binding)
+		current, found, err := ResolvePrivateSupervisorSuccessorWithLock(lockedContext, run.stateRoot, run.worker.binding)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrPrivateSupervisorMigrationRequired
+		}
+		complete, err := PrivateSupervisorMigrationComplete(run.stateRoot, current)
 		if err != nil {
 			return err
 		}
 		if !complete {
 			return ErrPrivateSupervisorMigrationRequired
 		}
+		if !privateBindingsMatch(run.worker.runtimeBinding, current) {
+			return errors.Join(ErrBinding, ErrPrivateSupervisorMigrationRequired)
+		}
+		// Only this exclusively owned worker adopts the published generation.
+		// The caller's binding retains its saved provenance; runtime installation
+		// metadata never replaces the generation journal's authority.
+		run.worker.binding = current
 		return phase(lockedContext)
 	}, run.acquireGenerationLock)
 	return entered, resultErr

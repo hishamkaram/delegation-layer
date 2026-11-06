@@ -8,7 +8,9 @@ import (
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // The probe supervisor client records the TMPDIR it was launched with, a
@@ -47,7 +49,16 @@ func TestWorkspaceRuntimeOpenSavedUsesSelectedScopeNotProcessEnvironment(t *test
 		t.Fatalf("clear bind-time probe: %v", err)
 	}
 	runtime := NewWorkspaceRuntime(supervisorcore.AdmissionOptions{Environment: []string{"PATH=" + path, "TMPDIR=" + selectedTmp}})
-	client, err := runtime.OpenSaved(t.Context(), filepath.Join(base, "root"), bound.Binding())
+	store, err := taskdir.InitStore(filepath.Join(base, "root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	client, err := runtime.OpenSaved(t.Context(), store, bound.Binding(), infrastructure.SavedBindingSource{})
 	if err != nil {
 		t.Fatalf("open saved supervisor: %v", err)
 	}

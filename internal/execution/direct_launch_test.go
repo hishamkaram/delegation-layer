@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 // installedProvider is a task whose provider is a private script, so a test
@@ -57,7 +56,7 @@ func installedProviderTask(t *testing.T) installedProvider {
 	writeProviderScript(t, replacement, "replacement")
 	td, permit, plan, _ := fixtureTaskWithPlan(t, "echo", func(meta *task.MetaRecord, plan *Plan) {
 		meta.ProviderExecutable = admitted
-		plan.Executable, plan.ExecutableSHA256, plan.Arguments = admitted, "", nil
+		plan.Executable, plan.Arguments = admitted, nil
 	})
 	plan.Environment = append(slices.Clone(plan.Environment), "TMPDIR="+temporary)
 	refreshed := plan
@@ -152,48 +151,24 @@ func readSeal(t *testing.T, provider installedProvider) task.ProviderExitRecord 
 	return seal
 }
 
-// The provider runs at its installed path with exact arguments and environment.
-// Helper binding still verifies admitted bytes; refusal seals a start failure
-// without a provider Start or fallback.
+// A preflight refusal seals its cause without consuming a native Start.
 func TestRunConstructsDirectProviderCommandWithoutCopy(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		want error
-	}{
-		{name: "helper-bound"},
-		{name: "helper-bad-digest", want: verifiedexec.ErrAdmittedExecutableChanged},
-		{name: "helper-missing", want: os.ErrNotExist},
-	} {
-		t.Run(test.name, func(t *testing.T) {
+	for _, refuse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "installed", true: "preflight-refusal"}[refuse], func(t *testing.T) {
 			fixture, temporary := binderTask(t)
-			request := helperCommandRequest(t, temporary)
-			switch test.name {
-			case "helper-bad-digest":
-				request.SHA256 = strings.Repeat("0", 64)
-			case "helper-missing":
-				request.Executable = filepath.Join(temporary, "private-missing-helper")
-			}
+			injected := errors.New("selected helper capability unavailable")
 			var started *exec.Cmd
-			var bindingErr error
 			result := Run(fixture.td, fixture.permit, fixture.plan, Options{
-				PreflightPlan: func(scope PreflightScope, plan Plan) (Plan, error) {
-					command, bindErr := scope.BindCommand(request)
-					bindingErr = bindErr
-					if bindErr != nil {
-						return Plan{}, bindErr
+				PreflightPlan: func(_ PreflightScope, plan Plan) (Plan, error) {
+					if refuse {
+						return Plan{}, injected
 					}
-					return plan, command.Close()
+					return plan, nil
 				},
-				Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
-					started = cmd
-					return cmd.Start()
-				}},
+				Hooks: Hooks{Start: func(cmd *exec.Cmd) error { started = cmd; return cmd.Start() }},
 			})
-			if !errors.Is(bindingErr, test.want) {
-				t.Fatalf("helper binding error = %v, want %v", bindingErr, test.want)
-			}
-			if test.want != nil {
-				assertHelperRefusalSealed(t, fixture, result, started, bindingErr)
+			if refuse {
+				assertHelperRefusalSealed(t, fixture, result, started, injected)
 			} else {
 				assertSuccess(t, result)
 				assertDirectProviderCommand(t, fixture.plan, started)

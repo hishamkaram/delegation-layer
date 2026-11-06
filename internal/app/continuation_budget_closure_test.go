@@ -101,6 +101,7 @@ func budgetClosureTerminationDigest(t *testing.T, td *taskdir.TaskDir) string {
 }
 
 func TestCollectFirstReportsBudgetClosureTimedOut(t *testing.T) {
+	t.Parallel()
 	fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 	before := snapshotRebootTaskFiles(t, fixture.td.Dir)
 	resetRebootCommandLog(t, fixture)
@@ -119,6 +120,7 @@ func TestCollectFirstReportsBudgetClosureTimedOut(t *testing.T) {
 // The classification reads only lifetime records, so every provider catalog
 // sees the same cause; the catalog decides resume guidance alone.
 func TestBudgetClosureClassificationIsProviderIndependent(t *testing.T) {
+	t.Parallel()
 	fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 	for _, tc := range []struct {
 		name      string
@@ -140,6 +142,7 @@ func TestBudgetClosureClassificationIsProviderIndependent(t *testing.T) {
 }
 
 func TestBudgetClosureClassificationIsOrderIndependent(t *testing.T) {
+	t.Parallel()
 	t.Run("status first", func(t *testing.T) {
 		fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 		status := rebootStatus(t, fixture)
@@ -181,6 +184,7 @@ func TestBudgetClosureClassificationIsOrderIndependent(t *testing.T) {
 }
 
 func TestBudgetClosureKeepsCancellationAndCausePrecedence(t *testing.T) {
+	t.Parallel()
 	t.Run("budget closure with user stop", func(t *testing.T) {
 		fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 		recordRebootStopRequest(t, fixture, strings.Repeat("c", 32), "user")
@@ -210,6 +214,7 @@ func TestBudgetClosureKeepsCancellationAndCausePrecedence(t *testing.T) {
 }
 
 func TestBudgetClosureWithoutWorkerWaitStaysPending(t *testing.T) {
+	t.Parallel()
 	fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 	if err := os.Remove(filepath.Join(fixture.td.Dir, "lifetime", "worker-wait.json")); err != nil {
 		t.Fatal(err)
@@ -225,6 +230,7 @@ func TestBudgetClosureWithoutWorkerWaitStaysPending(t *testing.T) {
 }
 
 func TestMalformedBudgetClosureIsRefused(t *testing.T) {
+	t.Parallel()
 	fixture := newBudgetClosureFixture(t, budgetClosureSetup())
 	writeRebootTaskFile(t, fixture, filepath.Join("lifetime", "terminated.json"), []byte("{"))
 	for _, result := range []commandResult{rebootStatus(t, fixture), rebootCollect(t, fixture)} {
@@ -236,6 +242,7 @@ func TestMalformedBudgetClosureIsRefused(t *testing.T) {
 }
 
 func TestSealedBudgetClosureIsCollectedNotTimedOut(t *testing.T) {
+	t.Parallel()
 	setup := budgetClosureSetup()
 	setup.seal = true
 	fixture := newRebootFixture(t, setup)
@@ -252,6 +259,7 @@ func TestSealedBudgetClosureIsCollectedNotTimedOut(t *testing.T) {
 // A rejected outcome is as authoritative as a committed one: the budget
 // closure beside it never reports a timeout.
 func TestRejectedOutcomeWinsOverBudgetClosure(t *testing.T) {
+	t.Parallel()
 	store, td, req := newAppTestTaskWithPrior(t, false, testPriorSession())
 	defer closeAppTestTask(t, store, td)
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {

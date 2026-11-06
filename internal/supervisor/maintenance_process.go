@@ -48,10 +48,10 @@ func StartQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, 
 		return nil, err
 	}
 	done := make(chan error, 1)
-	// Start transfers durable ownership to the independent process. Keep one
-	// asynchronous Wait while this caller lives so an early helper exit cannot
-	// become a zombie. If the caller exits first, the OS adopts the independent
-	// session and reaps it after natural completion.
+	// The caller has already persisted the maintenance wake. This helper is a
+	// best-effort attempt: a new session alone cannot outlive every finite task
+	// scope, and interruption leaves the wake available for later root activity.
+	// Keep one Wait while this caller lives so an early helper exit is reaped.
 	go func() {
 		waitErr := command.Wait()
 		if waitErr != nil {

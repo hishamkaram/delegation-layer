@@ -22,7 +22,7 @@ func TestQueueMaintenanceNeverRecreatesAbandonedRoot(t *testing.T) {
 			root, base := abandonedRootScenario(t, scenario)
 			before := existingRootEntries(t, root, base)
 
-			err := RunQueueMaintenance(root, pueue.Options{}, ExecutableLookup{})
+			err := RunQueueMaintenanceWithRuntime(root, AdmissionOptions{})
 			if after := existingRootEntries(t, root, base); after != before {
 				t.Errorf("abandoned root changed: before=%q after=%q", before, after)
 			}
@@ -34,7 +34,7 @@ func TestQueueMaintenanceNeverRecreatesAbandonedRoot(t *testing.T) {
 }
 
 // TestTerminalEventCallbackNeverRecreatesDeletedRoot: a late Pueue callback
-// entering through RunTerminalEvent after disposal deleted the state root
+// entering through RunTerminalEventWithRuntime after disposal deleted the state root
 // records nothing, reports the refused request, keeps the root absent, and
 // launches no supervisor executable from its lookup.
 func TestTerminalEventCallbackNeverRecreatesDeletedRoot(t *testing.T) {
@@ -42,7 +42,7 @@ func TestTerminalEventCallbackNeverRecreatesDeletedRoot(t *testing.T) {
 	before := existingRootEntries(t, root, base)
 	executables, lookup := launchMarkingLookup(t)
 
-	err := RunTerminalEvent(root, 1, "0", pueue.Options{}, lookup)
+	err := RunTerminalEventWithRuntime(root, 1, "0", AdmissionOptions{InitialExecutable: lookup.InitialExecutable, Environment: lookup.Environment})
 	if after := existingRootEntries(t, root, base); after != before {
 		t.Errorf("deleted root changed: before=%q after=%q", before, after)
 	}

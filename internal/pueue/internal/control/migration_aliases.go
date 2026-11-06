@@ -37,6 +37,7 @@ func privateDaemonIdentityError(invalid *migration.ViolationError) error {
 		migration.ViolationHistoryUnproven,
 		migration.ViolationHistoryEncode,
 		migration.ViolationExecutablePath,
+		migration.ViolationExecutableIdentity,
 		migration.ViolationLogicalIdentity,
 		migration.ViolationConfigPath:
 		return ErrBinding
@@ -67,6 +68,7 @@ func privateMigrationDecodeError(invalid *migration.ViolationError) error {
 		migration.ViolationHistoryUnproven,
 		migration.ViolationHistoryEncode,
 		migration.ViolationExecutablePath,
+		migration.ViolationExecutableIdentity,
 		migration.ViolationExecutableDigest,
 		migration.ViolationLogicalIdentity,
 		migration.ViolationConfigPath,
@@ -102,6 +104,7 @@ func privateMigrationEncodeError(invalid *migration.ViolationError) error {
 		migration.ViolationHistoryUnproven,
 		migration.ViolationHistoryEncode,
 		migration.ViolationExecutablePath,
+		migration.ViolationExecutableIdentity,
 		migration.ViolationExecutableDigest,
 		migration.ViolationLogicalIdentity,
 		migration.ViolationConfigPath,
@@ -134,6 +137,7 @@ func privateMigrationHistoryDecodeError(invalid *migration.ViolationError) error
 		migration.ViolationRecordEncode,
 		migration.ViolationHistoryEncode,
 		migration.ViolationExecutablePath,
+		migration.ViolationExecutableIdentity,
 		migration.ViolationExecutableDigest,
 		migration.ViolationLogicalIdentity,
 		migration.ViolationConfigPath,

@@ -11,7 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func RunTerminalEvent(root string, numericTaskID int64, exitCode string, options pueue.Options, lookup ExecutableLookup) error {
+func RunTerminalEventWithRuntime(root string, numericTaskID int64, exitCode string, runtime AdmissionOptions) error {
 	eventContext, cancelEvent := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
 	recorded, eventErr := pueue.RecordPrivateTerminalEventForMaintenance(eventContext, root, numericTaskID, exitCode)
 	cancelEvent()
@@ -44,22 +44,28 @@ func RunTerminalEvent(root string, numericTaskID int64, exitCode string, options
 	// Pueue invokes this helper after a row reaches Done, so this process already
 	// outlives the task creator. It owns the persisted wake to completion; task
 	// and inspection journals remain the sole removal authority.
-	if err := RunQueueMaintenance(root, options, lookup); err != nil {
+	if err := RunQueueMaintenanceWithRuntime(root, runtime); err != nil {
 		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
 	}
 	return nil
 }
 
-func RunQueueMaintenance(root string, options pueue.Options, lookup ExecutableLookup) (resultErr error) {
+func RunQueueMaintenanceWithRuntime(root string, runtime AdmissionOptions) (resultErr error) {
+	options := runtime.Control
 	binding, found, err := pueue.ReadPrivateSupervisorBinding(root)
 	if err != nil {
 		return err
 	}
 	if !found {
-		if binding, err = adoptLegacyPrivateSupervisor(root, options, lookup); err != nil {
+		if binding, err = prepareLegacyPrivateMaintenance(root, runtime); err != nil {
 			return err
 		}
 	}
+	selectedClient, err := ResolveSavedSupervisorClient(root, binding, runtime.Lookup())
+	if err != nil {
+		return err
+	}
+	options.RuntimeClientExecutable = selectedClient
 	supervisor, err := pueue.NewClient(binding, options)
 	if err != nil {
 		return err
@@ -73,46 +79,43 @@ func RunQueueMaintenance(root string, options pueue.Options, lookup ExecutableLo
 	return nil
 }
 
-// adoptLegacyPrivateSupervisor publishes the logical binding of a live private
-// daemon whose launch identity predates that record, so a maintenance wake on
-// a historical root is not refused forever. It is a bounded recovery: the
-// canonical installation resolver supplies the pair, and
-// EnsurePrivateSupervisorBindingWithLock under the bootstrap EX lease remains
-// the sole authority. It never creates a config, starts or restarts a queue,
-// or relaxes a daemon, path, hash or generation check; a pair that cannot
-// prove the recorded owner is refused and the durable wake stays pending. It
-// enters only an existing bootstrap boundary, so a late callback cannot
-// recreate a root that disposal removed or that never published a supervisor.
-func adoptLegacyPrivateSupervisor(root string, options pueue.Options, lookup ExecutableLookup) (task.SupervisorRef, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(options))
+// Legacy maintenance must retain an existing bootstrap/daemon/config boundary.
+// The local prefix observes eligibility only; independent preparation owns every
+// generation publication and start after that existing boundary is released.
+func prepareLegacyPrivateMaintenance(root string, runtime AdmissionOptions) (binding task.SupervisorRef, resultErr error) {
+	ctx, cancel := ControlContext(runtime.Control)
 	defer cancel()
-	err := pueue.WithExistingBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
-		if _, found, err := pueue.ReadPrivateSupervisorBinding(root); err != nil || found {
-			return err
-		}
-		daemonRecorded, err := pueue.PrivateDaemonIdentityPresent(root)
+	err := pueue.WithExistingBootstrapLockContext(ctx, root, func(locked context.Context) error {
+		recorded, err := pueue.PrivateDaemonIdentityPresent(root)
 		if err != nil {
 			return err
 		}
-		if !daemonRecorded {
+		if !recorded {
 			return fmt.Errorf("%w: private supervisor has no recorded daemon identity", pueue.ErrBinding)
 		}
 		if _, err = os.Lstat(pueue.PrivateConfigPath(root)); err != nil {
 			return fmt.Errorf("%w: legacy private supervisor config: %w", pueue.ErrBinding, err)
 		}
-		clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, lookup)
-		if err != nil {
-			return err
-		}
-		supervisor, err := pueue.PreparePrivateWithLock(lockedContext, clientExecutable, daemonExecutable, root, options)
-		if err != nil {
-			return err
-		}
-		err = supervisor.EnsurePrivateSupervisorBindingWithLock(lockedContext, root)
-		return errors.Join(err, supervisor.CloseAfterPending(err))
+		return locked.Err()
 	})
 	if err != nil {
-		return task.SupervisorRef{}, err
+		return binding, err
+	}
+	if runtime.OpenStore == nil {
+		return binding, ErrInfrastructureAuthorityUnavailable
+	}
+	store, err := runtime.OpenStore(ctx, root)
+	if err != nil {
+		return binding, err
+	}
+	defer func() {
+		if !CleanupRetainsStore(resultErr, store) {
+			resultErr = errors.Join(resultErr, store.Close())
+		}
+	}()
+	client, err := (ControlRuntime{Options: runtime.Control, Lookup: runtime.Lookup(), Routing: runtime.Routing}).PreparePrivateAdmission(ctx, store)
+	if err = ClosePrivateAdmissionTransition(client, err); err != nil {
+		return binding, err
 	}
 	binding, found, err := pueue.ReadPrivateSupervisorBinding(root)
 	if err == nil && !found {

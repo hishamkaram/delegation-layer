@@ -28,14 +28,14 @@ _RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
 
 
 _INSPECTION_BINDING_KEYS = {
-    "definition_revision", "definition_sha256", "helper_executable", "helper_sha256",
-    "worker_executable", "worker_sha256", "supervisor",
+    "definition_revision", "definition_sha256", "helper_executable",
+    "worker_executable", "supervisor",
 }
 
 
 _INSPECTION_BINDING_OPTIONAL_KEYS = {
     "capability_sha256", "environment", "environment_recorded", "runner_ownership",
-    "worker_exit_proof",
+    "worker_exit_proof", "executable_identity", "helper_sha256", "worker_sha256",
 }
 
 
@@ -83,11 +83,21 @@ def _validate_inspection_binding(value: object, label: str) -> None:
     if not (isinstance(value.get("definition_revision"), str) and
             value["definition_revision"]):
         raise AcceptanceFailure(f"{label} definition revision is invalid")
-    for key in ("definition_sha256", "worker_sha256"):
-        require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
-    helper_sha256 = value["helper_sha256"]
-    require(helper_sha256 == "" or _hex_digest(helper_sha256),
-            f"{label} helper_sha256 is invalid")
+    require(_hex_digest(value.get("definition_sha256")), f"{label} definition_sha256 is invalid")
+    identity = value.get("executable_identity", "")
+    require(isinstance(identity, str) and identity in {"", "installed-path-v1"},
+            f"{label} executable identity is unsupported")
+    if identity == "installed-path-v1":
+        for key in ("helper_sha256", "worker_sha256"):
+            require(key not in value or value[key] == "",
+                    f"{label} installed identity contains executable SHA")
+    else:
+        require({"helper_sha256", "worker_sha256"} <= value.keys(),
+                f"{label} missing fields: historical executable SHA")
+        require(_hex_digest(value.get("worker_sha256")), f"{label} worker_sha256 is invalid")
+        helper_sha256 = value["helper_sha256"]
+        require(helper_sha256 == "" or _hex_digest(helper_sha256),
+                f"{label} helper_sha256 is invalid")
     if "capability_sha256" in value:
         require(_hex_digest(value["capability_sha256"]), f"{label} capability_sha256 is invalid")
     if "runner_ownership" in value:

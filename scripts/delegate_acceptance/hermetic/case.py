@@ -23,8 +23,8 @@ from scripts.delegate_acceptance.hermetic.contract import require_true
 from scripts.delegate_acceptance.hermetic.contract import status_document
 from scripts.delegate_acceptance.hermetic.contract import status_job
 from scripts.delegate_acceptance.hermetic.evidence import require_bound_records
-from scripts.delegate_acceptance.hermetic.files import canonical_executable
-from scripts.delegate_acceptance.hermetic.files import copy_executable
+from scripts.delegate_acceptance.hermetic.installation import build_source_command
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
 from scripts.delegate_acceptance.hermetic.files import owned_directory_path
 from scripts.delegate_acceptance.hermetic.files import task_id
 from scripts.delegate_acceptance.hermetic.files import write_bytes
@@ -85,10 +85,13 @@ class Case:
         self.add_release_enabled = add_release
         try:
             self._create_layout()
-            self._copy_tools()
+            self._install_tools()
             self._write_configs(scenario, hook)
             self.processes = Processes(self.base / "processes", owner=ownership)
-        except BaseException:
+        except BaseException as error:
+            if command_closure_unproven(error):
+                ownership.release()
+                raise RuntimeError("fixture installation closure unproven; retained " + str(self.base)) from error
             ownership.rollback()
             raise
         self.owned_directories = ownership.transfer()
@@ -131,16 +134,18 @@ class Case:
             ).encode(),
         )
 
-    def _copy_tools(self):
-        tools = self.suite.tools
-        self.delegate = copy_executable(tools / "delegate", self.bin_dir / "delegate")
-        self.runner = copy_executable(tools / "delegate-run", self.bin_dir / "delegate-run")
-        self.provider = copy_executable(tools / "provider", self.bin_dir / "provider")
-        fake_supervisor = tools / "pueue-fake"
-        self.pueue = copy_executable(fake_supervisor, self.supervisor_dir / "pueue")
-        copy_executable(fake_supervisor, self.supervisor_dir / "pueued")
-        copy_executable(fake_supervisor, self.supervisor_dir / "pueue-fake")
-        self.probe = canonical_executable(tools / "harnessprobe")
+    def _install_tools(self):
+        source = self.suite.source_root
+        self.delegate = build_source_command(source, "harness_delegate", self.bin_dir / "delegate")
+        self.runner = build_source_command(source, "harness_runner", self.bin_dir / "delegate-run")
+        self.provider = build_source_command(source, "fake_provider", self.bin_dir / "provider")
+        self.pueue = build_source_command(source, "fake_supervisor", self.supervisor_dir / "pueue")
+        for name in ("pueued", "pueue-fake"):
+            build_source_command(source, "fake_supervisor", self.supervisor_dir / name)
+        self.probe = build_source_command(source, "harness_probe", self.bin_dir / "harnessprobe")
+        if self.case_id == "SCHEDULER-COMPAT":
+            self.scheduler_fixture = build_source_command(
+                source, "scheduler_fixture", self.bin_dir / "scheduler-fixture")
 
     def _write_configs(self, scenario, hook):
         provider = {
@@ -204,7 +209,6 @@ class Case:
         profile = {
             "schema_version": SCHEMA_VERSION,
             "provider_executable": str(self.provider),
-            "provider_sha256": digest(self.provider),
             "provider_config": str(self.provider_config),
             "provider_config_sha256": digest(self.provider_config),
             "supervisor_executable": str(self.pueue),
@@ -552,4 +556,15 @@ class Case:
         )
         # This is a diagnostic snapshot, not sealed execution evidence. Keep
         # the original base and preserve links without reading their targets.
-        shutil.copytree(self.base, destination / "private-base", symlinks=True)
+        shutil.copytree(self.base, destination / "private-base", symlinks=True,
+                        ignore=self._omit_installed_programs)
+
+    def _omit_installed_programs(self, directory, names):
+        # Only sibling fixture configuration is diagnostic data in these
+        # installation directories. Renamed/offline programs remain excluded.
+        configs = {
+            self.base / "cli space ' ; literal": "provider-fixture.json",
+            self.base / "supervisor space ' ; literal": "fake-supervisor.json",
+        }
+        config = configs.get(Path(directory))
+        return [name for name in names if name != config] if config is not None else []

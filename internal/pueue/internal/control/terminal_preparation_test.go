@@ -48,7 +48,7 @@ func TestPrivateCleanupProtectsPreparationAndReleasesIdentityBeforeAuthorization
 		return PrivateQueueCleanupPlan{RemoveIDs: []int64{0}}, nil
 	}
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
-		_, passErr := client.cleanSuccessfulTasksPass(ctx, false)
+		_, passErr := client.cleanSuccessfulTasksPass(ctx)
 		return passErr
 	})
 	if err != nil || !prepared.Load() || snapshots.Load() != 2 {

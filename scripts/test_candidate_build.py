@@ -230,7 +230,7 @@ class RefusalTests(FixtureCase):
             ("goreleaser", "drop-archive"): ("goreleaser_output_missing", None),
             ("goreleaser", "extra-checksum"): ("checksum_entries_not_exact", None),
             ("goreleaser", "corrupt-checksum"): ("archive_checksum_mismatch", None),
-            ("goreleaser", "wrong-pueue"): ("bundled_pueue_mismatch", None),
+            ("goreleaser", "missing-pueue"): ("release_binary_missing", None),
             ("goreleaser", "wrong-revision"): ("go_vcs_revision_mismatch", None),
             ("goreleaser", "modified"): ("go_vcs_modified", None),
             ("npm", "wrong-name"): ("npm_pack_output_invalid", None),

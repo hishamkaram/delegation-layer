@@ -79,7 +79,7 @@ func Run(ctx context.Context, config Config) (runErr error) {
 }
 
 // Shutdown collects settled worker errors without starting recovery mutations.
-// Root identity faults remain fatal even when cancellation wins the event select.
+// Root identity and cleanup faults remain fatal when cancellation wins the select.
 func (l *loop) settledErrors() error {
 	var faults error
 	for {
@@ -134,7 +134,7 @@ func (l *loop) wait(ctx context.Context) error {
 		cancel()
 		waitErr := <-waited
 		if !cancellationOnly(waitErr) {
-			return waitErr
+			return errors.Join(waitErr, l.reportTaskError(result))
 		}
 		return l.finish(ctx, result)
 	case <-ctx.Done():

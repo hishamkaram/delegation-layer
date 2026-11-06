@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,11 +10,15 @@ from unittest.mock import patch
 import acceptance_supervisor_common as supervisor_common
 from scripts import acceptance_native as entry
 from scripts.acceptance_tests.native.support import adjacent_runner_bundle
+from scripts.acceptance_tests.inspection.fixtures import forbid_installed_content
 from scripts.delegate_acceptance.native import acceptance as gate
 
 
 class ManagedRunnerPairTests(unittest.TestCase):
     def setUp(self):
+        guard = forbid_installed_content()
+        guard.__enter__()
+        self.addCleanup(guard.__exit__, None, None, None)
         temporary = tempfile.TemporaryDirectory(prefix="native-runner-pair-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve(strict=True)
@@ -23,7 +26,7 @@ class ManagedRunnerPairTests(unittest.TestCase):
         self.elsewhere = self.root / "elsewhere"
         self.elsewhere.mkdir()
         self.foreign = self.elsewhere / "delegate-run"
-        shutil.copyfile(self.runner, self.foreign)
+        self.foreign.write_text("#!/bin/sh\nexit 0\n")
         self.foreign.chmod(0o700)
 
     def test_canonical_delegate_sibling_is_the_selected_runner(self):

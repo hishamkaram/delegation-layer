@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -19,11 +21,14 @@ func ContinuationRunner(root, savedRunner, ownership string) (string, error) {
 		}
 		return savedRunner, nil
 	}
-	if savedRunner == "" || IsStateRunnerPath(root, filepath.Clean(savedRunner)) {
+	if savedRunner == "" || pueue.IsLegacyStateRunnerPath(root, filepath.Clean(savedRunner)) {
 		return "", nil
 	}
-	if _, err := os.Stat(savedRunner); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return savedRunner, nil
+	if _, err := os.Stat(savedRunner); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
 	}
-	return "", nil
+	return savedRunner, nil
 }

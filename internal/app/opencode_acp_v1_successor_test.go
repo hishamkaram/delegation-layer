@@ -112,7 +112,7 @@ func createOpenCodeACPV1Predecessor(t *testing.T, f *outputUpgradeFixture) {
 // production catalog's stored-predicate preparation of a fresh ACP admission.
 func openCodeACPV1Profile(t *testing.T, f *outputUpgradeFixture) PreparedProfile {
 	t.Helper()
-	fresh, err := f.deps.Catalog.Candidate(f.request, os.Environ())
+	fresh, err := f.deps.Catalog.Candidate(f.request, f.deps.Environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func openCodeACPV1Profile(t *testing.T, f *outputUpgradeFixture) PreparedProfile
 	}
 	seed := tasklifecycle.NewMeta(f.request, current, f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = f.testCase.source
-	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, os.Environ())
+	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, f.deps.Environment)
 	if err != nil {
 		t.Fatalf("stored acp-v1 candidate: %v", err)
 	}
@@ -157,6 +157,7 @@ func TestOpenCodeACPV1PredecessorContinuesUnderACPV2(t *testing.T) {
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(mode+"/"+entry.name, func(t *testing.T) {
+				t.Parallel()
 				runOpenCodeACPV1Successor(t, newOpenCodeACPV1Fixture(t, mode), entry)
 			})
 		}
@@ -255,8 +256,8 @@ func TestOpenCodeACPSuccessorRefusesAnUnknownACPPredicate(t *testing.T) {
 			for name, reference := range map[string]task.PredicateRef{"altered acp-v1 digest": altered, "other mode acp-v1": openCodeACPV1Reference(t, other)} {
 				record := f.meta
 				record.Predicate = reference
-				_, existingErr := f.deps.Catalog.ExistingCandidate(f.request, record, os.Environ())
-				_, successorErr := f.deps.Catalog.SuccessorCandidate(f.request, record, os.Environ())
+				_, existingErr := f.deps.Catalog.ExistingCandidate(f.request, record, f.deps.Environment)
+				_, successorErr := f.deps.Catalog.SuccessorCandidate(f.request, record, f.deps.Environment)
 				if existingErr == nil || successorErr == nil || existingErr.Error() != successorErr.Error() {
 					t.Fatalf("%s: successor error=%v, reconstruction error=%v, want the same refusal", name, successorErr, existingErr)
 				}

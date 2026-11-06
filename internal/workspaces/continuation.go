@@ -18,15 +18,16 @@ func PrepareContinuation(ctx context.Context, store *taskdir.Store, predecessor 
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
+	held := &Admission{resource: resource}
+	defer func() { resultErr = errors.Join(resultErr, held.closeAfter(store, resultErr)) }()
 	owner, err := resource.TryAcquireUseOwner(ctx)
-	if errors.Is(err, task.ErrLockBusy) {
+	held.owner = owner
+	if useOwnerContended(err) {
 		return &Description{ID: resource.Request().WorkspaceID, Isolation: "git-worktree", State: "busy", EvidenceState: "unknown", NextAction: "watch_workspace"}, workspace.ErrBusy
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
 	availabilityErr := continuationAvailable(ctx, store, resource, deps, predecessor)
 	description, describeErr := Describe(ctx, resource)
 	return &description, errors.Join(availabilityErr, describeErr)

@@ -24,7 +24,7 @@ func stageNames(rig *poolRig) []string {
 
 func TestInterruptedCopyLeavesTheWitnessAndAnEmptyView(t *testing.T) {
 	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "crash-before-copy")
+	entry, digest := plainEntry(t, rig.dir, "crash-before-copy", "0000000000000000000000000000000000000000000000000000000000000004")
 	seedEmptyLegacyView(t, rig, "a")
 	rig.requireImagesDir(0)
 	// The view directory is made before the first file is materialized; the
@@ -36,7 +36,7 @@ func TestInterruptedCopyLeavesTheWitnessAndAnEmptyView(t *testing.T) {
 	if pending, err := rig.pool.ReleasePending(rig.ns("a")); err != nil || !pending {
 		t.Fatalf("the crashed owner's witness: %v %v", pending, err)
 	}
-	rig.seedView("b", plainRequest(entry, digest))
+	rig.seedView("b", entry, digest)
 	rig.requireViewsLinkImages("b", entry)
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
 		t.Fatal(err)
@@ -63,23 +63,19 @@ func TestInterruptedStageLeavesAStageThatReclaimRemoves(t *testing.T) {
 
 func TestInterruptedImageLinkLeavesAnImageThatReclaimPreservesWhenLinked(t *testing.T) {
 	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "crash-image")
+	entry, digest := plainEntry(t, rig.dir, "crash-image", "0000000000000000000000000000000000000000000000000000000000000005")
 	seedEmptyLegacyView(t, rig, "a")
-	content, err := os.ReadFile(entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(rig.pool.imagePath(digest), content, 0o500); err != nil {
+	if err := os.WriteFile(rig.pool.imagePath(digest), []byte("historical pool fixture data\n"), 0o500); err != nil {
 		t.Fatal(err)
 	}
 	if got := rig.images(); len(got) != 1 {
 		t.Fatalf("images %v; want the published image", got)
 	}
-	// A later bind verifies the leftover image again before linking it.
-	rig.seedView("b", plainRequest(entry, digest))
+	// A surviving historical owner still links the image, so reclaim must preserve it.
+	rig.seedView("b", entry, digest)
 	rig.requireViewsLinkImages("b", entry)
 	if got := stageNames(rig); len(got) != 0 {
-		t.Fatalf("a later bind left stages %v", got)
+		t.Fatalf("historical layout left stages %v", got)
 	}
 	if err := rig.pool.ReleaseOwner(context.Background(), rig.ns("a")); err != nil {
 		t.Fatal(err)
@@ -89,8 +85,8 @@ func TestInterruptedImageLinkLeavesAnImageThatReclaimPreservesWhenLinked(t *test
 
 func TestInterruptedFirstViewLinkLeavesAHalfBuiltViewForClosureOwnedRelease(t *testing.T) {
 	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "crash-view")
-	rig.seedView("a", plainRequest(entry, digest))
+	entry, digest := plainEntry(t, rig.dir, "crash-view", "0000000000000000000000000000000000000000000000000000000000000008")
+	rig.seedView("a", entry, digest)
 	if got := rig.viewDirs("a"); len(got) != 1 {
 		t.Fatalf("views %v; the crash should leave one half-built view", got)
 	}
@@ -117,10 +113,10 @@ func TestCrashDuringReleaseKeepsTheWitnessUntilTheRetryCompletes(t *testing.T) {
 	for _, point := range []poolPoint{pointAfterViewRemoved, pointBeforeWitnessRemove} {
 		t.Run(string(point), func(t *testing.T) {
 			rig := newPoolRig(t)
-			first, firstDigest := plainEntry(t, rig.dir, "crash-release-1")
-			second, secondDigest := plainEntry(t, rig.dir, "crash-release-2")
-			rig.seedView("a", plainRequest(first, firstDigest))
-			rig.seedView("a", plainRequest(second, secondDigest))
+			first, firstDigest := plainEntry(t, rig.dir, "crash-release-1", "0000000000000000000000000000000000000000000000000000000000000006")
+			second, secondDigest := plainEntry(t, rig.dir, "crash-release-2", "0000000000000000000000000000000000000000000000000000000000000007")
+			rig.seedView("a", first, firstDigest)
+			rig.seedView("a", second, secondDigest)
 			outcome := runWorker(t, modeCrashRelease+string(point), rig.pool.root, rig.id, "a")
 			if outcome.Exit != exitWorkerCrash {
 				t.Fatalf("worker exited %d at %s: %s", outcome.Exit, point, outcome.Stderr)

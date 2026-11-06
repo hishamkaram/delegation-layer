@@ -3,14 +3,12 @@ package tasklifecycle
 import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 type ContinuationOptions struct {
-	Dispatch   DispatchOptions
-	Supervisor supervisorcore.ContinuationOptions
+	Dispatch DispatchOptions
 }
 
 type ContinuationPhase uint8
@@ -24,7 +22,6 @@ const (
 	ContinueRunner
 	ContinueSession
 	ContinueGenerateID
-	ContinueSupervisor
 	ContinueResources
 )
 

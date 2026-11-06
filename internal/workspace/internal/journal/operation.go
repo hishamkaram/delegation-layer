@@ -135,6 +135,13 @@ func (o *Operation) Claim(ctx context.Context, name string) (bool, error) {
 	return created, err
 }
 
+// CheckLaunchPermission reads current canonical permission without accepting a
+// historical receipt as execution authority. No external effect runs under the
+// lifetime transaction.
+func (o *Operation) CheckLaunchPermission(ctx context.Context) error {
+	return o.WithLifetimeLaunchPermissionContext(ctx, func(*taskdir.ControlTransaction) error { return nil })
+}
+
 func (o *Operation) RecordReceipt(ctx context.Context, id int64) error {
 	if id < 0 {
 		return task.ErrIdentityMismatch
@@ -152,6 +159,8 @@ func (o *Operation) RecordReceipt(ctx context.Context, id int64) error {
 	})
 }
 
+// TryAcquireLifetimeOwner forwards a nonnil partial lease on failed unwind.
+// Such a result owns cleanup only; the error never grants transition authority.
 func (o *Operation) TryAcquireLifetimeOwner(ctx context.Context) (*taskdir.LifetimeOwnerLease, error) {
 	return o.control.TryAcquireLifetimeOwnerContext(ctx)
 }

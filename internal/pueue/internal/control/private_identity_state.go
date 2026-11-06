@@ -95,15 +95,11 @@ func ReadPrivateSupervisorBinding(stateRoot string) (task.SupervisorRef, bool, e
 	return loadPrivateSupervisorBinding(stateRoot)
 }
 
-// publishPrivateSupervisorBindingIfAbsent records a verified predecessor
+// publishPrivateSupervisorBindingIfAbsentContext records a verified predecessor
 // before migration can stop its daemon. It is intentionally create-once: a
 // later generation may replace the logical binding only through the
 // readiness-gated identity publication transaction.
-func publishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.SupervisorRef) error {
-	return publishPrivateSupervisorBindingIfAbsentContext(context.Background(), stateRoot, binding)
-}
-
-func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef, guard PrivateGenerationGuard) error {
 	if ctx == nil {
 		return context.Canceled
 	}
@@ -133,20 +129,9 @@ func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRo
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	return publishPrivateRecord(filepath.Join(stateRoot, privateSupervisorDirectory), privateSupervisorBindingPath(stateRoot), data)
-}
-
-// PublishPrivateSupervisorBindingIfAbsent records a validated logical owner
-// when an older state root has daemon provenance but no separate binding file.
-// It never replaces an existing generation.
-func PublishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.SupervisorRef) error {
-	return publishPrivateSupervisorBindingIfAbsent(stateRoot, binding)
-}
-
-// PublishPrivateSupervisorBindingIfAbsentContext preserves caller cancellation
-// before the canonical create-once publisher starts staging the binding.
-func PublishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
+	return guardPrivateGeneration(ctx, stateRoot, guard, func() error {
+		return publishPrivateRecord(filepath.Join(stateRoot, privateSupervisorDirectory), privateSupervisorBindingPath(stateRoot), data)
+	})
 }
 
 // EnsurePrivateSupervisorBindingWithLock adopts a live private daemon whose
@@ -169,7 +154,7 @@ func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, st
 	if c == nil || !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
 		return ErrConfiguration
 	}
-	if c.binding != c.runtimeBinding {
+	if !task.SameSupervisorIdentity(c.binding, c.runtimeBinding) {
 		return ErrPrivateSupervisorMigrationRequired
 	}
 	if err := ready(ctx); err != nil {
@@ -189,7 +174,7 @@ func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, st
 	if found && !privateFullGenerationMatches(published, c.binding) {
 		return fmt.Errorf("%w: private supervisor is not the published generation", ErrPrivateSupervisorMigrationRequired)
 	}
-	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding); err != nil {
+	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding, c.options.PrivateGenerationGuard); err != nil {
 		return privatePublishedRecoveryError(err)
 	}
 	// Binding publication has already run. Preserve the migration postcondition
@@ -239,7 +224,7 @@ func (c *Client) authorizePrivateMutationWithLock(stateRoot string) error {
 	return nil
 }
 
-func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot string, binding task.SupervisorRef, guard PrivateGenerationGuard) error {
 	if existing, found, err := loadPrivateSupervisorBinding(stateRoot); err != nil {
 		return err
 	} else if found {
@@ -256,7 +241,7 @@ func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot str
 	// A saved task or inspection record is the validated logical owner of this
 	// state-rooted config. Recreate only that missing logical record; daemon
 	// provenance remains separate and is reconciled by the normal bootstrap.
-	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding, guard)
 }
 
 func loadPrivateSupervisorBindingRaw(stateRoot string) (binding task.SupervisorRef, found bool, resultErr error) {
@@ -291,21 +276,9 @@ func privateSupervisorBindingStatus(stateRoot string, binding task.SupervisorRef
 	return true, task.SameSupervisorIdentity(persisted, binding), nil
 }
 
-func privateSupervisorBindingForIdentity(current task.SupervisorRef, identity privateDaemonIdentity) task.SupervisorRef {
-	legacy := current
-	legacy.DaemonExecutable = identity.Executable
-	legacy.DaemonSHA256 = identity.SHA256
-	if identity.ConfigPath != "" {
-		legacy.ConfigPath = identity.ConfigPath
-		legacy.ConfigDigest = identity.ConfigDigest
-		legacy.ResolvedConfigSHA256 = identity.ResolvedConfigSHA256
-		legacy.Endpoint = identity.Endpoint
-	}
-	return legacy
-}
-
 func privateDaemonIdentityForBinding(binding task.SupervisorRef) privateDaemonIdentity {
 	return privateDaemonIdentity{
+		ExecutableIdentity:   binding.ExecutableIdentity,
 		Executable:           binding.DaemonExecutable,
 		SHA256:               binding.DaemonSHA256,
 		ConfigPath:           binding.ConfigPath,
@@ -316,7 +289,7 @@ func privateDaemonIdentityForBinding(binding task.SupervisorRef) privateDaemonId
 }
 
 func samePrivateDaemonIdentity(left, right privateDaemonIdentity) bool {
-	return left.Executable == right.Executable && left.SHA256 == right.SHA256
+	return left.ExecutableIdentity == right.ExecutableIdentity && left.Executable == right.Executable && left.SHA256 == right.SHA256
 }
 
 func privateLogicalIdentityPresent(identity privateDaemonIdentity) bool {
@@ -338,16 +311,16 @@ func privateDaemonIdentityMatchesBinding(identity privateDaemonIdentity, binding
 }
 
 func privateMigrationIdentityMatchesCurrent(identity, currentDaemon, currentBinding privateDaemonIdentity) bool {
-	if !samePrivateDaemonIdentity(identity, currentDaemon) {
+	if !samePrivateDaemonIdentity(identity, currentBinding) {
 		return false
 	}
 	if !privateLogicalIdentityPresent(identity) {
 		return true
 	}
-	return identity.ConfigPath == currentBinding.ConfigPath &&
-		identity.ConfigDigest == currentBinding.ConfigDigest &&
-		identity.ResolvedConfigSHA256 == currentBinding.ResolvedConfigSHA256 &&
-		identity.Endpoint == currentBinding.Endpoint
+	return identity.ConfigPath == currentDaemon.ConfigPath &&
+		identity.ConfigDigest == currentDaemon.ConfigDigest &&
+		identity.ResolvedConfigSHA256 == currentDaemon.ResolvedConfigSHA256 &&
+		identity.Endpoint == currentDaemon.Endpoint
 }
 
 func verifyPrivateSupervisorBinding(stateRoot string, binding task.SupervisorRef, ready bool) error {

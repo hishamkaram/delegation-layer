@@ -7,6 +7,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -56,9 +57,13 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	if request.NumericTaskID == nil {
 		return stopTaskWithoutNumericTarget(td, permit, requestID, cause)
 	}
-	client, err := openControl(context.Background(), root, request.Supervisor, supervisorOptions, lookup)
+	source, err := supervisorcore.NewSavedBindingSource(meta.RootID, infrastructure.SavedBindingTaskStop, td.TaskID, requestID, request.Supervisor)
 	if err != nil {
 		return StopOutcome{}, errors.Join(err, permit.Release())
+	}
+	client, err := openControl(context.Background(), root, request.Supervisor, source, supervisorOptions, lookup)
+	if err != nil {
+		return StopOutcome{}, errors.Join(supervisorcore.ClosePrivateAdmissionTransition(client, err), permit.Release())
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
 	stopResult, stopErr := client.Stop(pueue.WithControlLease(context.Background(), owner), permit)

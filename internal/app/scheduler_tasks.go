@@ -8,6 +8,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -20,6 +21,7 @@ type schedulerTasks struct {
 	rootID       string
 	arguments    Arguments
 	dependencies Dependencies
+	routing      supervisor.OwnerRouting
 }
 
 func (tasks schedulerTasks) openStore(root string, _ bool) (*taskdir.Store, error) {
@@ -43,14 +45,19 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 	arguments.Brief, arguments.BriefBytes = "", definition.Brief
 	options := dispatchOptions(tasks.dependencies, false)
 	options.OpenStore = tasks.openStore
+	options.Creation.Admission.Supervisor.Routing = tasks.routing
 	dispatched := tasklifecycle.Dispatch(dispatchRequest(arguments, tasks.dependencies), options)
+	projected := dispatchCommandResult(dispatched)
+	if cleanupErr := schedulerTaskCleanupError(projected.err); errors.Is(cleanupErr, schedulerruntime.ErrTaskCleanupUnresolved) {
+		return schedulerruntime.TaskState{}, cleanupErr
+	}
 	// WaitForPendingClose makes the ordinary lifecycle's deferred close join its
 	// existing owner. Observing/fencing now cannot race this invocation's launch.
 	state, observeErr := tasks.Observe(request.TaskID)
-	if dispatched.Err() != nil && state.Observation.FaultCode == "" {
+	if projected.err != nil && state.Observation.FaultCode == "" {
 		state.Observation.FaultCode = "admission_failed"
 	}
-	return state, errors.Join(dispatched.Err(), observeErr)
+	return state, errors.Join(projected.err, observeErr)
 }
 
 func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState, resultErr error) {
@@ -58,7 +65,7 @@ func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState
 	if err != nil {
 		return state, err
 	}
-	defer func() { clearSchedulerStateOnCloseFault(&state, &resultErr, store.Close()) }()
+	defer func() { closeSchedulerObservation(&state, &resultErr, store) }()
 	exists, err := store.TaskEntryExists(id)
 	if err != nil {
 		return state, err
@@ -75,9 +82,29 @@ func (tasks schedulerTasks) Observe(id string) (state schedulerruntime.TaskState
 		return state, err
 	}
 	defer func() { clearSchedulerStateOnCloseFault(&state, &resultErr, td.Close()) }()
-	options := observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup())
+	options := observationSupervisorOptions(tasks.dependencies.supervisorControlScope(), tasks.dependencies.supervisorLookup(), tasks.routing)
 	observed, err := tasklifecycle.Status(store, td, options, tasks.dependencies.RunnerExecutable, tasks.dependencies.Catalog)
 	return tasks.observeStatus(td, observed, err)
+}
+
+func closeSchedulerObservation(state *schedulerruntime.TaskState, resultErr *error, store *taskdir.Store) {
+	if !cleanupRetainsStore(*resultErr, store) {
+		clearSchedulerStateOnCloseFault(state, resultErr, store.Close())
+	}
+	*resultErr = schedulerTaskCleanupError(*resultErr)
+}
+
+// The scheduler runtime owns the fatal classification. This boundary preserves
+// the actual application cleanup projections that keep their resources alive.
+func schedulerTaskCleanupError(cause error) error {
+	unresolved := tasklifecycle.CleanupUnresolved(cause) || task.AnyErrorNode(cause, func(node error) bool {
+		var cleanup *taskAdmissionCleanupError
+		return errors.As(node, &cleanup) && cleanup != nil && cleanup.store != nil
+	})
+	if !unresolved || errors.Is(cause, schedulerruntime.ErrTaskCleanupUnresolved) {
+		return cause
+	}
+	return errors.Join(schedulerruntime.ErrTaskCleanupUnresolved, cause)
 }
 
 // Local read/close faults discard this pass; task diagnostics accompanying a

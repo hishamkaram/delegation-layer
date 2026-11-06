@@ -284,7 +284,21 @@ See [required options](../skills/agent-integration/references/command-reference.
 
 The default supervisor is private to the state root. Normal dispatch adopts a
 reachable compatible generation and recovers the saved generation when its
-endpoint is absent.
+endpoint is absent and its recorded installed pair remains available.
+An interrupted historical restart keeps its recorded target. If that target
+cannot be verified or is not ready, recovery and explicit migration refuse
+while preserving the record. This ambiguous legacy state has no automatic
+repair.
+
+An unmarked historical generation must already be reachable before a fresh
+migration can inspect its queue. Delegate cannot safely start it solely for
+inspection, so a stopped historical generation has no automatic migration.
+The refusal reports `reason_code: "historical_target_not_ready"` and
+`next_action: "stop_and_report"`; dispatch keeps `supervisor_upgrade_required`
+without a recovery command. Restoring readiness through the original
+installation allows migration to inspect its queue. A migration that already
+recorded a safe predecessor shutdown can still resume its installed successor.
+
 The explicit commands are for inspecting or repairing a real logical/configuration
 migration:
 
@@ -320,6 +334,10 @@ resumed from the immutable migration journal. A successful JSON response has
 `supervisor_control.state: "migrated"` and
 `supervisor_control.next_action: "retry_dispatch"`. The command never
 migrates or stops an external Pueue configuration.
+
+If the selected resident helper is missing, run `supervisor migrate` from
+outside a Delegate task; it replaces that serving resident through the current
+installation before migrating the supervisor.
 
 When the inspection journal points to an external supervisor, the same command
 prepares or reuses Delegate's private supervisor and records the

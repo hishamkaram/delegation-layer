@@ -189,14 +189,15 @@ def _adopt_archived_directories(
 
 def _verify_archived_binaries(
         archived: dict, receipt: dict, extracted: Path, package_version: str) -> dict:
+    if archived.get("executable_representation", "installed-paths-v1") != "installed-paths-v1":
+        raise VerificationError("archive_receipt_invalid", "validate-binary-identity")
     current = inspect_binaries(extracted, receipt)
     old_binaries = archived.get("binaries")
     if not isinstance(old_binaries, dict) or set(old_binaries) != set(BINARIES):
         raise VerificationError("archive_receipt_invalid", "validate-binary-identity")
     for name, path in current.items():
         previous = old_binaries[name]
-        if (not isinstance(previous, dict) or previous.get("path") != str(path)
-                or previous.get("sha256") != receipt["binaries"][name]["sha256"]):
+        if not isinstance(previous, dict) or previous.get("path") != str(path):
             raise VerificationError("release_binary_identity_changed", "validate-binary-identity")
         if "version" in previous:
             receipt["binaries"][name]["version"] = previous["version"]
