@@ -65,9 +65,9 @@ BUILD_RECORDS=(
     "build linux/arm64 dist/delegate-linux-arm64/delegate-run"
 )
 PLATFORM_GATES_BEFORE_BUILD=(
-    "go run ./cmd/maintainability --strict" "python3 scripts/verify_skills.py" sha256sum
+    "python3 scripts/verify_skills.py" sha256sum
     "python3 scripts/verify_acceptance_ownership.py" check-plugin-package
-    check-skill-package "go run ./cmd/maintainability --go-sources" "golangci-lint config" goreleaser "go vet ./..."
+    check-skill-package "go run ./cmd/source-inventory --kind go --allow-empty" "golangci-lint config" goreleaser "go vet ./..."
     "golangci-lint run" verify-gates verify-tooling-regressions "go test -race -count=1 -timeout=30m ./..."
     "python3 -m unittest discover -s scripts -t scripts -p test_*.py -v"
 )

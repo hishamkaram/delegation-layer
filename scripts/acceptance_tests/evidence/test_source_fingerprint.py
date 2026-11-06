@@ -30,6 +30,23 @@ class SourceFingerprintTests(unittest.TestCase):
         self.assertEqual(source.PARSER_SOURCE,
                          source.parse_source_facts.__module__.replace(".", "/") + ".py")
 
+    def test_parser_retains_static_imports_without_evaluating_source(self):
+        code = ("from . import values\n"
+                "import scripts.fixture.values\n"
+                "from scripts.fixture import values as renamed\n"
+                "from datetime import datetime\n"
+                "raise RuntimeError('never evaluate')\n")
+        facts = source.parse_source_facts("scripts/fixture/__init__.py", code,
+                                          {"fixture", "fixture.values"})
+        self.assertEqual(facts, {
+            "path": "scripts/fixture/__init__.py", "module": "py:fixture", "imports": [
+                {"target": "py:fixture.values", "line": 1},
+                {"target": "py:fixture.values", "line": 2},
+                {"target": "py:fixture.values", "line": 3},
+                {"target": "py:datetime", "line": 4},
+            ],
+        })
+
     def test_parser_definition_and_transitive_dependency_changes_are_bound(self):
         parser = "scripts/maintainability/python_ast.py"
         helper = "scripts/maintainability/parser_helpers.py"

@@ -35,8 +35,8 @@ own shared public procedures and response decisions.
 | `internal/scheduler` | Schedule storage and recurrence policy; the application runtime composes due claims with existing task execution. |
 
 Consumer-owned interfaces keep decisions independent of storage and OS details.
-The [maintainability contract](../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
-and [module registry](../agents/_data/subsystems.json) own enforced boundaries.
+The [architecture guidance](../agents/_data/maintainability-contract.md#architecture-guidance)
+describes ownership and dependency design.
 
 ## Ownership boundaries
 

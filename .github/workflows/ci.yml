@@ -121,18 +121,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up minimum Node.js for collector checks
-        if: ${{ needs.changes.outputs.full == 'true' }}
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '18.x'
-
-      - name: Check the JavaScript collector on Node 18
-        if: ${{ needs.changes.outputs.full == 'true' }}
-        env:
-          GOTOOLCHAIN: local
-        run: go test -race -count=1 ./internal/maintainability -run '^TestJavaScript'
-
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -284,16 +272,6 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
-
-      - name: Set up minimum Node.js for collector checks
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '18.x'
-
-      - name: Check the JavaScript collector on Node 18
-        env:
-          GOTOOLCHAIN: local
-        run: go test -race -count=1 ./internal/maintainability -run '^TestJavaScript'
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020

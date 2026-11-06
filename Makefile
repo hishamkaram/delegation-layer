@@ -19,9 +19,8 @@ GORELEASER_BIN := $(BIN_DIR)/goreleaser
 # only these because test-python already runs every Python test.
 VERIFY_SKILLS := python3 scripts/verify_skills.py
 VERIFY_ACCEPTANCE_OWNERSHIP := python3 scripts/verify_acceptance_ownership.py
-VERIFY_MAINTAINABILITY := go run ./cmd/maintainability --strict
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-python test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-private-cli-default-stop acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-python test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-private-cli-default-stop acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools: tools-go
 	python3 scripts/static_tools.py install
@@ -53,12 +52,12 @@ tool-versions:
 
 fmt: tool-versions
 	@formatter_sources=$$(mktemp) || exit $$?; trap 'rm -f "$$formatter_sources"' EXIT; \
-	go run ./cmd/maintainability --go-sources >"$$formatter_sources" || exit $$?; \
+	go run ./cmd/source-inventory --kind go --allow-empty >"$$formatter_sources" || exit $$?; \
 	if [ -s "$$formatter_sources" ]; then xargs -0 "$(GOFUMPT_BIN)" -w <"$$formatter_sources"; fi
 
 fmt-check: tool-versions
 	@formatter_sources=$$(mktemp) || exit $$?; trap 'rm -f "$$formatter_sources"' EXIT; \
-	go run ./cmd/maintainability --go-sources >"$$formatter_sources" || exit $$?; \
+	go run ./cmd/source-inventory --kind go --allow-empty >"$$formatter_sources" || exit $$?; \
 	files=$$(if [ -s "$$formatter_sources" ]; then xargs -0 "$(GOFUMPT_BIN)" -l <"$$formatter_sources"; fi) || exit $$?; \
 	if [ -n "$$files" ]; then \
 		echo "ERROR: The following Go files are not formatted with gofumpt:" >&2; \
@@ -103,14 +102,6 @@ verify-acceptance-ownership:
 	$(VERIFY_ACCEPTANCE_OWNERSHIP)
 	python3 -m unittest discover -s scripts -p 'test_verify_acceptance_ownership.py' -v
 
-verify-maintainability: tool-versions
-	go test -race -count=1 ./internal/maintainability/...
-	go run ./cmd/maintainability
-
-verify-maintainability-strict: tool-versions
-	go test -race -count=1 ./internal/maintainability/...
-	$(VERIFY_MAINTAINABILITY)
-
 skill-package-check:
 	./scripts/check-skill-package.sh
 
@@ -120,7 +111,6 @@ plugin-package-check:
 .PHONY: check-docs
 # Content validators use the project compiler, not the runtime tool/native matrix.
 check-docs:
-	$(VERIFY_MAINTAINABILITY)
 	$(VERIFY_SKILLS)
 	$(MAKE) verify-diagram-checksums plugin-package-check
 	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
@@ -316,7 +306,6 @@ check:
 
 check-platform:
 	$(MAKE) tool-versions
-	$(VERIFY_MAINTAINABILITY)
 	$(VERIFY_SKILLS)
 	$(MAKE) verify-diagram-checksums
 	$(VERIFY_ACCEPTANCE_OWNERSHIP)

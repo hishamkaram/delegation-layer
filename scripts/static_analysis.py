@@ -1,4 +1,4 @@
-"""Run static checks over the maintainability owner's explicit source inventory."""
+"""Run static checks over the repository's explicit Git source inventory."""
 
 import argparse
 import os
@@ -12,7 +12,7 @@ LANGUAGES = {"python": ".py", "javascript": ".mjs", "shell": ".sh"}
 
 
 def source_paths(language: str, *, root: Path = ROOT) -> list[str]:
-    result = subprocess.run(["go", "run", "./cmd/maintainability", "--sources", language],
+    result = subprocess.run(["go", "run", "./cmd/source-inventory", "--kind", language],
                             cwd=root, capture_output=True, check=False, timeout=120)
     if result.returncode:
         reason = result.stderr.decode(errors="replace").strip() if result.stderr else "no diagnostic output"

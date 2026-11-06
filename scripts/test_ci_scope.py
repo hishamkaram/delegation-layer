@@ -117,7 +117,7 @@ class WorkflowSelectionTests(unittest.TestCase):
         self.assertIn("needs.changes.outputs.full == 'false'", light)
         self.assertIn("run: make check-docs", light)
         full_steps = (
-            "Check the JavaScript collector on Node 18", "Install tools", "Run gate checks",
+            "Install tools", "Run gate checks",
             "Prove selected native lifetime backend", "Run protocol acceptance",
             "Install pinned supervisor test binaries", "Prove private supervisor bootstrap through delegate CLI",
             "Prove external inspection handoff through delegate CLI",

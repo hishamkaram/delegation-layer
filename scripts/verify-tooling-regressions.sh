@@ -56,7 +56,7 @@ write_go_stub() {
 #!/usr/bin/env bash
 if [[ "\$*" == "version" ]]; then echo "$2"; exit $3; fi
 if [[ "\$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
-if [[ "\$*" == "run ./cmd/maintainability --go-sources" ]]; then printf '%s\0' "\$PWD/cmd/dummy.go"; exit 0; fi
+if [[ "\$*" == "run ./cmd/source-inventory --kind go --allow-empty" ]]; then printf '%s\0' "\$PWD/cmd/dummy.go"; exit 0; fi
 exit 0
 EOF
     chmod +x "$1/go"

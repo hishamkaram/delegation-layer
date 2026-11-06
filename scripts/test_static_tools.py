@@ -17,8 +17,10 @@ class StaticAnalysisTests(unittest.TestCase):
         root = Path("/.hidden/project directory")
         expected = [str(root / "a file.py"), str(root / "z.py")]
         output = b"\0".join(path.encode() for path in expected) + b"\0"
-        with mock.patch.object(analysis.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)):
+        with mock.patch.object(analysis.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, output)) as run:
             self.assertEqual(analysis.source_paths("python", root=root), expected)
+        run.assert_called_once_with(["go", "run", "./cmd/source-inventory", "--kind", "python"],
+                                    cwd=root, capture_output=True, check=False, timeout=120)
 
     def test_empty_or_malformed_inventory_is_not_a_clean_scan(self):
         for output in (b"", b"\0", b"/repo/a.py", b"/repo/b.py\0/repo/a.py\0", b"/repo/a.py\0/repo/a.py\0"):

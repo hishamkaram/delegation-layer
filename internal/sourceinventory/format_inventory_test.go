@@ -1,4 +1,4 @@
-package maintainability
+package sourceinventory
 
 import (
 	"errors"
@@ -10,69 +10,6 @@ import (
 	"strings"
 	"testing"
 )
-
-func TestGoSourcePathsUsesMaintainedInventory(t *testing.T) {
-	root := t.TempDir()
-	runFormatGit(t, root, "init", "--quiet")
-	runFormatGit(t, root, "config", "core.excludesFile", os.DevNull)
-	files := map[string]string{
-		".gitignore":             ".local/\n",
-		"kept.go":                "package fixture\n",
-		"deleted.go":             "package fixture\n",
-		"untracked.go":           "package fixture\n",
-		"with space.go":          "package fixture\n",
-		"with\nnewline.go":       "package fixture\n",
-		"native_darwin.go":       "//go:build darwin\n\npackage fixture\n",
-		"ordinary_test.go":       "package fixture\n",
-		"notes.txt":              "not Go source\n",
-		".local/snapshot.go":     "package ignored\n",
-		".local/scratch_test.go": "package ignored\n",
-		"not-source.go.snapshot": "not Go source\n",
-	}
-	for name, content := range files {
-		writeFormatFile(t, root, name, []byte(content), 0o600)
-	}
-	runFormatGit(t, root, "add", "--", ".gitignore", "kept.go", "deleted.go")
-	if err := os.Remove(filepath.Join(root, "deleted.go")); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(t.TempDir(), "linked repository")
-	if err := os.Symlink(root, alias); err != nil {
-		t.Fatal(err)
-	}
-	paths, err := GoSourcePaths(alias)
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonical, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"kept.go", "untracked.go", "with space.go", "with\nnewline.go",
-		"native_darwin.go", "ordinary_test.go",
-	}
-	for index, name := range want {
-		want[index] = filepath.Join(canonical, name)
-	}
-	slices.Sort(want)
-	if !slices.Equal(paths, want) {
-		t.Fatalf("maintained Go paths = %q, want %q", paths, want)
-	}
-}
-
-func TestGoSourcePathsFailsWithoutGitInventory(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("GIT_CEILING_DIRECTORIES", root)
-	writeFormatFile(t, root, "would-be-fallback.go", []byte("package fixture\n"), 0o600)
-	paths, err := GoSourcePaths(root)
-	if err == nil || len(paths) != 0 {
-		t.Fatalf("non-Git root returned paths %q and error %v", paths, err)
-	}
-	if !strings.Contains(err.Error(), "inventory maintained paths") {
-		t.Fatalf("enumeration failure lost its context: %v", err)
-	}
-}
 
 type formatRecipeCase struct {
 	name            string
@@ -109,7 +46,7 @@ func TestMakeFormattingUsesCanonicalInventory(t *testing.T) {
 				requireFormatMakeOutcome(t, output, runErr, scenario.wantMakeFailure)
 				var wantGo []string
 				if scenario.temporaryExit == 0 {
-					wantGo = []string{"invocation", "run", "./cmd/maintainability", "--go-sources"}
+					wantGo = []string{"invocation", "run", "./cmd/source-inventory", "--kind", "go", "--allow-empty"}
 				}
 				requireFormatNULLog(t, fixture.root, "go.calls.nul", wantGo)
 				var want []string
@@ -214,25 +151,5 @@ func requireFormatNULLog(t *testing.T, root, name string, want []string) {
 	actual := strings.Split(string(data[:len(data)-1]), "\x00")
 	if !slices.Equal(actual, want) {
 		t.Fatalf("%s = %q, want %q", name, actual, want)
-	}
-}
-
-func runFormatGit(t *testing.T, root string, arguments ...string) {
-	t.Helper()
-	command := exec.Command("git", arguments...)
-	command.Dir = root
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("git %q failed: %v\n%s", arguments, err, output)
-	}
-}
-
-func writeFormatFile(t *testing.T, root, name string, data []byte, mode os.FileMode) {
-	t.Helper()
-	path := filepath.Join(root, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, mode); err != nil {
-		t.Fatal(err)
 	}
 }

@@ -15,7 +15,7 @@ real consumers and done condition. Confirm the tools this assignment needs in
 your launch context. A setup failure is blocked, not a passing check or reason
 to repair global configuration.
 
-Read [module boundaries](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
+Read [architecture guidance](../../agents/_data/maintainability-contract.md#architecture-guidance)
 and the [quality floor](../../agents/_data/code-quality-floor.md). Consult
 [adapter rules](../../agents/_data/adapter-contract.md) only for provider work,
 and [lifecycle tests](../../agents/_data/maintainability-contract.md#lifecycle-tests)
@@ -33,7 +33,7 @@ for changed durable or process behavior.
 4. Add meaningful success/failure regressions. Prove a bug test fails for its
    intended assertion; unrelated compile/setup failures are not expected red.
 5. Run formatting and affected tests, with race detection for concurrent paths.
-   Run relevant maintainability checks when boundaries change. Do not invoke
+   Run the applicable lint and type checks. Do not invoke
    unchanged full aggregates after their focused subsets merely for another pass.
 
 ## Result

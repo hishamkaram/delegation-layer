@@ -24,7 +24,7 @@ This document specifies the non-negotiable engineering floor for the repository.
   ShellCheck 0.11.0 and jactionlint 2.4.0. Ruff's exact pin and wheel hashes live in
   `tools/lint/requirements.txt`; ESLint and its dependencies use the separate
   locked `tools/lint/package.json`, never the published package's dependencies.
-  `make lint-static` uses the maintainability inventory for Python, JavaScript,
+  `make lint-static` uses the Git source inventory for Python, JavaScript,
   and shell paths. Root `ruff.toml` and `eslint.config.mjs` own their rules.
 - **Type and workflow security checks**: `make tools` also installs the pinned
   ty and zizmor wheels from `tools/diagnostics/requirements.txt`. Their historical
@@ -99,5 +99,5 @@ This document specifies the non-negotiable engineering floor for the repository.
   Initial adoption covers execution, scheduler host, Pueue control and application
   composition. This does not establish leak-check coverage for the remaining
   goroutine owners (guardian, lifetime, supervisor, scheduler runtime, transport,
-  inspection probes, verified execution, provider inspection and maintainability).
+  inspection probes, verified execution and provider inspection).
 - **No Test Weakening**: Tests must never be loosened, assertions must not be bypassed, and linters must never be suppressed to force green status.

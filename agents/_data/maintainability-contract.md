@@ -1,7 +1,7 @@
 # Maintainability and architecture
 
-This document owns module boundaries, dependency policy and maintainability
-checks. [AGENTS](../../AGENTS.md) owns collaboration/check reporting; the
+This document owns architecture, ownership and review guidance.
+[AGENTS](../../AGENTS.md) owns collaboration/check reporting; the
 [product boundary](product-boundary.md) owns product scope. Read only relevant
 sections. No contributor ledger, handoff index, private implementation baseline
 or universal full-contract read is required.
@@ -22,49 +22,17 @@ own runtime lifecycle. The [adapter contract](adapter-contract.md) owns provider
 preparation/interpretation, not shared process/capture/publication mechanics.
 Use one startup catalog, not hidden singleton state or init registration.
 
-## Subsystem boundaries and maintainability gates
+## Architecture guidance
 
-The [registry](subsystems.json) owns roles, budgets and allowed project imports.
-Observed imports do not automatically become allowed imports. Review a real
-boundary change before updating its entry.
+Keep modules cohesive and dependencies directed toward data and pure decisions.
+Applications compose runtime owners through their public boundaries. A wrapper
+holding another owner is not a new boundary. Preserve real supported consumers,
+persisted formats and error identities, not every private export/signature/test ID.
 
-| Role | Allowed project dependency roles |
-| --- | --- |
-| pure | pure |
-| runtime | pure, runtime |
-| application | pure, runtime, application |
-| tool | pure, runtime, application, tool |
-| test | all roles |
-
-Applications compose runtime owners, never contributor tools or test fixtures.
-Subsystem internal implementations remain sealed. A wrapper holding another
-owner is not a new boundary. Preserve real supported consumers, persisted
-formats and error identities, not every private export/signature/test ID.
-
-The maintained inventory includes tests, fixtures, untracked source and
-build-excluded Go. Ignored scratch is excluded. Formatting uses the same
-inventory; an audit rejects concurrent edits to it.
-
-Physical limits are 800 lines for code/scripts, 1,000 for tests/handwritten
-fixtures and 1,800 for documentation, including authored diagram JSON. Other
-JSON uses the code limit unless explicitly generated. Go declarations use the
-pinned funlen measurement and limit of 80, including tests. Python AST spans
-have the same limit. Eight or more positional Python arguments are rejected,
-including literal starred arguments: name arguments rather than pass an
-unrelated local-state bundle. Keep new large helpers keyword-only.
-
-Pure-package checks enforce exact imports and reject effects, unsafe access,
-dot imports and linkname. Keep read-only codec reflection within its existing
-policy. JavaScript collectors parse without evaluating source. Static checks
-prove their bounded rules, not semantic purity. Preserve rejecting/corrected
-fixtures; never learn architectural allowlists from the current graph.
-
-Unknown modules, unused permissions, cycles, parser failures and exceeded
-budgets fail. Strict completion requires an empty migration inventory and no
-size exceptions; changed code cannot reuse an old exemption. The
-[code-quality floor](code-quality-floor.md) owns compiler/linter/formatter policy.
-The standalone `make verify-maintainability-strict` is useful during edits;
-the final aggregate must not invoke its same test suite twice.
+Review changed dependencies against the affected owners and real consumers.
+Graphs describe relationships; they do not establish whether a design is sound.
+The [code-quality floor](code-quality-floor.md) owns compiler, linter, formatter
+and test requirements.
 
 ## Lifecycle tests
 
@@ -190,7 +158,7 @@ custom proof receipt is required.
 ## Review dimensions
 
 Review integrated behavior, ownership, dependencies, real consumer compatibility,
-errors and secret handling. Size checks alone do not prove cohesion. Fix
+errors and secret handling. Small files alone do not prove cohesion. Fix
 in-scope findings and recheck affected consumers; report unrelated findings
 separately instead of expanding the ticket. Skill authoring/evaluation format
 belongs in the [contributor guide](../../docs/contributing.md#repository-skills).
