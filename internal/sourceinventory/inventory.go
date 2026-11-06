@@ -64,11 +64,16 @@ func Paths(root, kind string, allowEmpty bool) ([]string, error) {
 }
 
 func maintainedNames(root string) ([]string, error) {
-	command := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard", "-z")
-	command.Dir = root
-	output, err := command.Output()
+	prefix, err := gitOutput(root, "rev-parse", "--show-prefix")
 	if err != nil {
-		return nil, fmt.Errorf("inventory maintained paths: %w", err)
+		return nil, err
+	}
+	if !bytes.Equal(prefix, []byte{'\n'}) {
+		return nil, errors.New("source inventory root must be the repository root")
+	}
+	output, err := gitOutput(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
 	}
 	if len(output) == 0 {
 		return nil, nil
@@ -87,6 +92,22 @@ func maintainedNames(root string) ([]string, error) {
 	}
 	slices.Sort(names)
 	return slices.Compact(names), nil
+}
+
+func gitOutput(root string, arguments ...string) ([]byte, error) {
+	command := exec.Command("git", arguments...)
+	command.Dir = root
+	output, err := command.Output()
+	if err == nil {
+		return output, nil
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		if diagnostic := bytes.TrimSpace(exitError.Stderr); len(diagnostic) > 0 {
+			return nil, fmt.Errorf("inventory maintained paths: %w: %s", err, diagnostic)
+		}
+	}
+	return nil, fmt.Errorf("inventory maintained paths: %w", err)
 }
 
 func canonicalRoot(root string) (string, error) {

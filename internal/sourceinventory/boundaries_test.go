@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,40 @@ func TestPathsPreservesGitFailure(t *testing.T) {
 	}
 }
 
+func TestPathsRejectsRepositorySubdirectory(t *testing.T) {
+	root := t.TempDir()
+	runFormatGit(t, root, "init", "--quiet")
+	writeFormatFile(t, root, ".gitignore", []byte(".local/\n"), 0o600)
+	writeFormatFile(t, root, "nested/source.go", []byte("package fixture\n"), 0o600)
+	writeFormatFile(t, root, ".local/source.go", []byte("package ignored\n"), 0o600)
+	for _, directory := range []string{"nested", ".local"} {
+		t.Run(directory, func(t *testing.T) {
+			paths, err := Paths(filepath.Join(root, directory), "go", true)
+			if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "source inventory root must be the repository root") {
+				t.Fatalf("repository subdirectory returned paths=%q error=%v", paths, err)
+			}
+		})
+	}
+}
+
+func TestPathsPreservesGitFailureDiagnostics(t *testing.T) {
+	for _, operation := range []string{"rev-parse", "ls-files"} {
+		t.Run(operation, func(t *testing.T) {
+			root := fakeGitInventory(t, nil, 42)
+			t.Setenv("SOURCE_INVENTORY_TEST_FAIL_COMMAND", operation)
+			t.Setenv("SOURCE_INVENTORY_TEST_STDERR", "  controlled Git diagnostic\n\n")
+			paths, err := Paths(root, "go", true)
+			var exitError *exec.ExitError
+			if len(paths) != 0 || !errors.As(err, &exitError) || exitError.ExitCode() != 42 {
+				t.Fatalf("Git failure paths=%q error=%v", paths, err)
+			}
+			if !strings.Contains(err.Error(), "inventory maintained paths") || !strings.HasSuffix(err.Error(), ": controlled Git diagnostic") {
+				t.Fatalf("Git failure lost context or diagnostic: %v", err)
+			}
+		})
+	}
+}
+
 func TestPathsRejectsSourceSymlinkTraversal(t *testing.T) {
 	root := t.TempDir()
 	runFormatGit(t, root, "init", "--quiet")
@@ -106,9 +141,19 @@ func fakeGitInventory(t *testing.T, data []byte, exitCode int) string {
 		t.Fatal(err)
 	}
 	writeFormatFile(t, root, "inventory.nul", data, 0o600)
-	writeFormatFile(t, root, "bin/git", []byte("#!/bin/sh\ncat \"$SOURCE_INVENTORY_TEST_OUTPUT\"\nexit \"$SOURCE_INVENTORY_TEST_EXIT\"\n"), 0o700)
+	writeFormatFile(t, root, "bin/git", []byte(`#!/bin/sh
+if [ "$1" = rev-parse ] && [ "$SOURCE_INVENTORY_TEST_FAIL_COMMAND" != rev-parse ]; then
+    printf '\n'
+    exit 0
+fi
+cat "$SOURCE_INVENTORY_TEST_OUTPUT"
+printf '%s' "$SOURCE_INVENTORY_TEST_STDERR" >&2
+exit "$SOURCE_INVENTORY_TEST_EXIT"
+`), 0o700)
 	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("SOURCE_INVENTORY_TEST_OUTPUT", filepath.Join(root, "inventory.nul"))
 	t.Setenv("SOURCE_INVENTORY_TEST_EXIT", fmt.Sprint(exitCode))
+	t.Setenv("SOURCE_INVENTORY_TEST_FAIL_COMMAND", "ls-files")
+	t.Setenv("SOURCE_INVENTORY_TEST_STDERR", "")
 	return root
 }
