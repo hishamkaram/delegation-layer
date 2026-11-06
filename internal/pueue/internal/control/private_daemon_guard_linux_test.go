@@ -62,6 +62,47 @@ func daemonGuardReapingFixture(t *testing.T, twice bool, result error) DaemonSta
 	})
 }
 
+func TestDaemonGuardPIDPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data string
+		pid  int
+		bad  bool
+	}{
+		{name: "empty file before printf"},
+		{name: "shell PID line", data: "42\n", pid: 42},
+		{name: "existing caller PID", data: "42", pid: 42},
+		{name: "whitespace is not a publication", data: " \n", bad: true},
+		{name: "duplicate starts", data: "42\n43\n", bad: true},
+		{name: "malformed PID", data: "child\n", bad: true},
+		{name: "zero PID", data: "0\n", bad: true},
+		{name: "negative PID", data: "-42\n", bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pid, err := daemonGuardPublishedPID([]byte(tc.data))
+			if (err != nil) != tc.bad || pid != tc.pid {
+				t.Fatalf("PID publication %q = %d, %v; want PID %d, error=%t", tc.data, pid, err, tc.pid, tc.bad)
+			}
+		})
+	}
+}
+
+func daemonGuardPublishedPID(data []byte) (int, error) {
+	// Append redirection creates the file before printf publishes its PID.
+	if len(data) == 0 {
+		return 0, nil
+	}
+	pids := strings.Fields(string(data))
+	if len(pids) != 1 {
+		return 0, fmt.Errorf("daemon starts = %d, want 1", len(pids))
+	}
+	pid, err := strconv.Atoi(pids[0])
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid child PID %q", pids[0])
+	}
+	return pid, nil
+}
+
 func waitDaemonGuardChildReaped(t *testing.T, pidPath string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -74,13 +115,13 @@ func waitDaemonGuardChildReaped(t *testing.T, pidPath string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pids := strings.Fields(string(data))
-		if len(pids) != 1 {
-			t.Fatalf("daemon starts = %d, want 1", len(pids))
+		pid, err := daemonGuardPublishedPID(data)
+		if err != nil {
+			t.Fatal(err)
 		}
-		pid, err := strconv.Atoi(pids[0])
-		if err != nil || pid <= 0 {
-			t.Fatalf("invalid child PID %q", pids[0])
+		if pid == 0 {
+			time.Sleep(time.Millisecond)
+			continue
 		}
 		_, err = os.Stat(fmt.Sprintf("/proc/%d", pid))
 		if errors.Is(err, os.ErrNotExist) {

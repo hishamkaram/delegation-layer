@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestRunnerRepairTargetUsesInstalledPathAndRejectsOtherSelections(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "delegate-run")
+	path := filepath.Join(supervisorfixture.CanonicalPath(t, t.TempDir()), "delegate-run")
 	selectionExecutable(t, path)
 	target, err := PlanQueuedRunnerRepairTarget(path)
 	if err != nil {
@@ -41,7 +42,7 @@ func TestRunnerRepairTargetUsesInstalledPathAndRejectsOtherSelections(t *testing
 
 func TestManagedRunnerSuccessorRequiresSelectedRoleAndRecordedOwnership(t *testing.T) {
 	original := filepath.Join(t.TempDir(), "recorded-runner")
-	selected := filepath.Join(t.TempDir(), "delegate-run")
+	selected := filepath.Join(supervisorfixture.CanonicalPath(t, t.TempDir()), "delegate-run")
 	selectionExecutable(t, selected)
 	target, err := PlanQueuedRunnerRepairTarget(selected)
 	if err != nil {
@@ -72,8 +73,8 @@ func TestManagedRunnerSuccessorRequiresSelectedRoleAndRecordedOwnership(t *testi
 
 func TestManagedRetryPreservesRecordedInstallationUntilAbsent(t *testing.T) {
 	root := t.TempDir()
-	recorded := filepath.Join(t.TempDir(), "recorded-runner")
-	installed := filepath.Join(t.TempDir(), "delegate-run")
+	recorded := filepath.Join(supervisorfixture.CanonicalPath(t, t.TempDir()), "recorded-runner")
+	installed := filepath.Join(supervisorfixture.CanonicalPath(t, t.TempDir()), "delegate-run")
 	selectionExecutable(t, recorded)
 	selectionExecutable(t, installed)
 	meta := &task.MetaRecord{RunnerExecutable: recorded, RunnerOwnership: task.RunnerOwnershipManaged}
@@ -91,7 +92,7 @@ func TestManagedRetryPreservesRecordedInstallationUntilAbsent(t *testing.T) {
 }
 
 func TestResolveRunnerAcceptsInstalledAliasAndPinsResolvedSelection(t *testing.T) {
-	directory := t.TempDir()
+	directory := supervisorfixture.CanonicalPath(t, t.TempDir())
 	real := filepath.Join(directory, "installed-worker")
 	alias := filepath.Join(directory, "delegate-run")
 	selectionExecutable(t, real)

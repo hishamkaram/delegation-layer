@@ -417,6 +417,11 @@ func newInstalledCallbackMigrationFixture(t *testing.T, busy bool) *installedCal
 	}
 	f := &installedCallbackMigrationFixture{owned: owned}
 	t.Cleanup(func() { f.cleanup(t) })
+	owned, err = filepath.EvalSymlinks(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.owned = owned
 	root := filepath.Join(owned, "state")
 	writePrivateStateRootRecord(t, root)
 	f.private = privateSupervisorTestFixture{stateRoot: root, clientPath: filepath.Join(owned, "pueue"), daemonPath: filepath.Join(owned, "pueued")}

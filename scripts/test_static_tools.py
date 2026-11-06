@@ -175,12 +175,12 @@ class StaticToolTests(unittest.TestCase):
 
     def test_download_script_does_not_mask_command_substitution_failure(self):
         with tempfile.TemporaryDirectory() as directory:
-            stub = Path(directory) / "basename"
+            stub = Path(directory) / "dirname"
             stub.write_text("#!/bin/sh\nexit 71\n")
             stub.chmod(0o755)
-            download = Path(directory) / "curl"
-            download.write_text("#!/bin/sh\nexit 72\n")
-            download.chmod(0o755)
+            installer = Path(directory) / "python3"
+            installer.write_text("#!/bin/sh\nexit 72\n")
+            installer.chmod(0o755)
             result = subprocess.run(["bash", str(tools.ROOT / "scripts/fetch-pueue-assets.sh"), directory],
                                     env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]},
                                     capture_output=True, text=True, check=False, timeout=10)

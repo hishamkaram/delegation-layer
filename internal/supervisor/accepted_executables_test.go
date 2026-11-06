@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 )
 
 func TestAcceptedSupervisorPairKeepsDifferentlyNamedInstalledClient(t *testing.T) {
-	directory := t.TempDir()
+	directory := supervisorfixture.CanonicalPath(t, t.TempDir())
 	versioned := filepath.Join(directory, "pueue-4.0.4")
 	planted, daemon := filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
 	for _, path := range []string{versioned, planted, daemon} {

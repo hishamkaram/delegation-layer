@@ -1,6 +1,7 @@
 package infrastructure
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -417,5 +419,169 @@ func TestOwnerStopLocatorRefusesReplacedRoot(t *testing.T) {
 	replaced = true
 	if _, _, err := readOwnerStopLocator(t.Context(), f.reader); err == nil {
 		t.Fatal("replacement root inherited the original pinned owner")
+	}
+}
+
+func TestOwnerStopSnapshotAcceptsSameOwnerServingReleasePublishedAfterCapture(t *testing.T) {
+	parent, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newOwnerServerFixtureWithSelection(t, &ownerServerTestHost{}, ownerServerFixtureSelection{
+		artifacts: Artifacts{Runner: filepath.Join(parent, "missing-installed-runner")},
+	})
+	t.Logf("owned actual-server fixture root: %s", f.root)
+	reader := contextPassiveReader(t, f.entry.journal)
+	if _, err = f.server.prepareInitial(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	snapshot, err := readOwnerStopSnapshot(ctx, reader, f.entry.journal.pin, f.entry.operation.Intent().Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.records[3]) != 0 || snapshot.locator.servingReleased {
+		t.Fatal("fixture already had a serving-release settlement before capture")
+	}
+	stopAndReleaseOwnerServerFixture(t, ctx, f)
+	requireOwnerStopReleaseEvidence(t, ctx, reader, snapshot)
+	snapshotErr := verifySelectedOwnerStopSnapshot(ctx, reader, snapshot.locator, snapshot.names, snapshot.records)
+	current, err := readOwnerStopSequence(ctx, reader, snapshot.locator.pin, snapshot.locator.reference.Sequence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = matchSelectedOwnerStopLocator(ctx, current, snapshot.locator)
+	if err != nil || !current.servingReleased {
+		t.Fatalf("fresh same-generation observation rejected the serving release: %v", err)
+	}
+	result, err := StopOwnerServing(ctx, reader)
+	expected := OwnerStopResult{
+		State: OwnerServingReleased, ProcessClosure: OwnerProcessPending,
+		Startup: snapshot.locator.reference, Process: snapshot.locator.assumption.Process,
+	}
+	if err != nil || result != expected {
+		t.Fatalf("fresh public stop changed the released live owner: got=%+v want=%+v error=%v", result, expected, err)
+	}
+	t.Logf("actual server release preserved root and first three records; fresh public stop=%s/%s; captured snapshot error=%v", result.State, result.ProcessClosure, snapshotErr)
+	if snapshotErr != nil {
+		t.Errorf("lawful same-owner serving release published after capture was rejected: %v", snapshotErr)
+	}
+}
+
+func TestOwnerStopSnapshotRejectsLateSettlementWithoutBoundServingRelease(t *testing.T) {
+	for _, kind := range []string{"truncated", "zero byte", "wrong reference", "wrong assumption", "wrong publication", "wrong boot", "assumed absent", "previous boot"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newStopLocatorFixture(t, true)
+			snapshot, err := readOwnerStopSnapshot(t.Context(), f.reader, f.owner.journal.pin, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.records[3]) != 0 || snapshot.locator.servingReleased {
+				t.Fatal("fixture already had a settlement before capture")
+			}
+			locator := snapshot.locator
+			data, valid := nonServingStopFenceBytes(t, locator, kind)
+			f.write(t, 3, data)
+			if err = verifySelectedOwnerStopSnapshot(t.Context(), f.reader, locator, snapshot.names, snapshot.records); !errors.Is(err, ErrIdentity) {
+				t.Fatalf("late settlement without the exact serving-release fence was accepted: %v", err)
+			}
+			if valid {
+				current, readErr := readOwnerStopSequence(t.Context(), f.reader, locator.pin, locator.reference.Sequence)
+				if readErr != nil || current.servingReleased {
+					t.Fatalf("valid non-serving settlement changed its existing passive meaning: %v", readErr)
+				}
+			}
+		})
+	}
+}
+
+func stopAndReleaseOwnerServerFixture(t *testing.T, ctx context.Context, f *ownerServerFixture) {
+	t.Helper()
+	// The canonical fixture has already registered cleanup of its server,
+	// served goroutine, entry, store and owned root before this launch.
+	f.startContext(ctx)
+	deadline, _ := ctx.Deadline()
+	subject := f.requestContext(t, ctx, ownerStatus)
+	request := ownerStopRequest{
+		StopProtocol: ownerStopProtocolVersion, RootID: subject.RootID, Owner: subject.Owner,
+		PublicationSHA256: subject.PublicationSHA256, Client: subject.Client,
+		Deadline: deadline.UTC().Format(time.RFC3339Nano),
+	}
+	connection := f.dial(t)
+	if err := connection.SetDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOwnerFrame(connection, request); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := readOwnerFrame[ownerStopReply](bufio.NewReader(connection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected := ownerStopFixtureReply(request, ownerStopAccepted); reply != expected {
+		t.Fatalf("actual server stop changed its authenticated subject: got=%+v want=%+v", reply, expected)
+	}
+	select {
+	case <-f.server.drained:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if serverErr := f.server.fault(); serverErr != nil {
+		t.Fatal(serverErr)
+	}
+	released, err := f.entry.releaseServingContext(ctx)
+	if err != nil || !released {
+		t.Fatalf("actual owner serving release: released=%t error=%v", released, err)
+	}
+	// The actual server is drained and its listener is now closed. Leave its
+	// served channel to the canonical cleanup without stopping the listener twice.
+	f.server = nil
+}
+
+func nonServingStopFenceBytes(t *testing.T, locator ownerStopLocator, kind string) ([]byte, bool) {
+	t.Helper()
+	record := startupSettlement{
+		Protocol: RecordProtocolVersion, Startup: locator.reference,
+		AssumptionSHA256:  locator.publication.AssumptionSHA256,
+		PublicationSHA256: locator.publicationSHA256, ObservedBootID: locator.bootID,
+		SettledAt: "2026-11-05T00:00:00Z", Reason: settlementServingReleased,
+	}
+	valid, released := configureStopFence(kind, &record)
+	if released {
+		t.Fatal("negative fixture unexpectedly selected a serving-release reason")
+	}
+	data, err := task.MarshalCanonical(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch kind {
+	case "truncated":
+		data = []byte("{")
+	case "zero byte":
+		data = nil
+	}
+	return data, valid
+}
+
+func requireOwnerStopReleaseEvidence(t *testing.T, ctx context.Context, reader *taskdir.ReadOnlyStore, snapshot ownerStopSnapshot) {
+	t.Helper()
+	for index := range 3 {
+		current, readErr := reader.ReadInfrastructureRecordContext(ctx, snapshot.names[index])
+		if readErr != nil || !bytes.Equal(current, snapshot.records[index]) {
+			t.Fatalf("serving release changed immutable record %d: %v", index, readErr)
+		}
+	}
+	pin, err := reader.PinRootContext(ctx)
+	if err != nil || !pin.Equal(snapshot.locator.pin) {
+		t.Fatalf("serving release changed the selected root: %v", err)
+	}
+	settlement, err := reader.ReadInfrastructureRecordContext(ctx, snapshot.names[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced, err := ownerStopReleased(settlement, snapshot.locator)
+	if err != nil || !fenced {
+		t.Fatalf("new settlement is not the selected owner's bound release: fenced=%t error=%v", fenced, err)
 	}
 }

@@ -342,7 +342,14 @@ func verifySelectedOwnerStopSnapshot(ctx context.Context, reader *taskdir.ReadOn
 			if task.RecordAbsent(readErr) {
 				continue
 			}
-			return errors.Join(ErrIdentity, readErr)
+			if readErr != nil {
+				return errors.Join(ErrIdentity, readErr)
+			}
+			released, releaseErr := ownerStopReleased(current, locator)
+			if releaseErr != nil || !released {
+				return errors.Join(ErrIdentity, releaseErr)
+			}
+			continue
 		}
 		if readErr != nil || !bytes.Equal(current, records[index]) {
 			return errors.Join(ErrIdentity, readErr)

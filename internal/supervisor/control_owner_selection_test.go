@@ -6,6 +6,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 )
 
 func TestControlOwnerSelectionPreservesExplicitMissingAndInvalidRoles(t *testing.T) {
@@ -23,7 +25,7 @@ func TestControlOwnerSelectionPreservesExplicitMissingAndInvalidRoles(t *testing
 }
 
 func TestControlOwnerSelectionUsesLoadedRoleAndRefusesHistoricalCopy(t *testing.T) {
-	directory := t.TempDir()
+	directory := supervisorfixture.CanonicalPath(t, t.TempDir())
 	self := filepath.Join(directory, "differently-named-current-worker")
 	selectionExecutable(t, self)
 	managed := &debug.BuildInfo{Path: managedRunnerMain}
