@@ -13,7 +13,7 @@ class PackagedDefaultPathTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-packaged-default-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve(strict=True)
 
     def test_command_construction_omits_every_global_path_override(self):
         brief = self.root / "brief.md"
@@ -97,7 +97,7 @@ class InstalledDefaultCoreTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-installed-default-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve(strict=True)
         self.state = self.root / "state"
         (self.root / "bin").mkdir()
         self.installed = packaged_defaults.InstalledDefaults(

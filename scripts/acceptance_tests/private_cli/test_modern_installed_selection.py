@@ -22,7 +22,7 @@ class ModernInstalledSelectionTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="modern-installed-selection-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve(strict=True)
         self.state = self.root / "state"
         self.supervisor = self.state / ".supervisor"
         self.supervisor.mkdir(parents=True)

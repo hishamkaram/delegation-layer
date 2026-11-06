@@ -44,6 +44,18 @@ esac
 
 func newWorkerSuccessorFixture(t *testing.T) *workerSuccessorFixture {
 	t.Helper()
+	fixture := newWorkerSuccessorCandidateFixture(t)
+	bound, logPath, _ := newUncertainGroupSupervisorWithConfig(t, fixture.store.RootID, pueue.PrivateConfigPath(fixture.store.Root))
+	fixture.supervisor = bound.Binding()
+	if err := bound.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.pueueEnv = append(os.Environ(), "FAKE_LOG="+logPath, "FAKE_STATUS="+filepath.Join(filepath.Dir(logPath), "status.json"))
+	return fixture
+}
+
+func newWorkerSuccessorCandidateFixture(t *testing.T) *workerSuccessorFixture {
+	t.Helper()
 	userHome, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -75,12 +87,6 @@ func newWorkerSuccessorFixture(t *testing.T) *workerSuccessorFixture {
 			t.Error(closeErr)
 		}
 	})
-	bound, logPath, _ := newUncertainGroupSupervisorWithConfig(t, fixture.store.RootID, pueue.PrivateConfigPath(fixture.store.Root))
-	fixture.supervisor = bound.Binding()
-	if err = bound.Close(); err != nil {
-		t.Fatal(err)
-	}
-	fixture.pueueEnv = append(os.Environ(), "FAKE_LOG="+logPath, "FAKE_STATUS="+filepath.Join(filepath.Dir(logPath), "status.json"))
 	return fixture
 }
 
@@ -400,7 +406,7 @@ func TestInspectionWorkerKeepsAdmittedAndInjectedSelection(t *testing.T) {
 // TestInspectionCandidateDependenciesReadPredecessorOnlyForProspectiveSuccessor
 // covers the selections that must not open a predecessor at all.
 func TestInspectionCandidateDependenciesReadPredecessorOnlyForProspectiveSuccessor(t *testing.T) {
-	fixture := newWorkerSuccessorFixture(t)
+	fixture := newWorkerSuccessorCandidateFixture(t)
 	absent := task.TaskRecord{Provider: ccr.Provider, TaskID: strings.Repeat("d", 32)}
 	prospective := fixture.successorRequest(t, absent, "recorded-session")
 	interactive := prospective
@@ -469,7 +475,7 @@ func TestCatalogExistingClassifiesAdmittedInteractiveContinuation(t *testing.T) 
 // scope; the worker recompiles it from the binding's filtered scope through
 // the same successor factory and must reach the identical definition.
 func TestProspectiveSuccessorDefinitionRoundTripsThroughFilteredBinding(t *testing.T) {
-	fixture := newWorkerSuccessorFixture(t)
+	fixture := newWorkerSuccessorCandidateFixture(t)
 	for _, binary := range []string{"agy", "codex", "pi", "opencode"} {
 		writeRunnerFixture(t, filepath.Join(fixture.cliDir, binary), workerSuccessorCLI)
 	}

@@ -540,6 +540,42 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         self.assertEqual(cleanup["retained_owned_directories"],
                          [str(token.directory) for token in self.owner.tokens])
 
+    def test_owner_absence_timeout_preserves_selected_owner_and_daemon_in_receipt(self):
+        context, _cohort = self._daemon_context([])
+        context.environment["TEST_PRIVATE"] = "do-not-publish"
+        subject = {"startup": {"sequence": 1, "epoch": "b" * 32, "intent_sha256": "c" * 64},
+                   "process": {"pid": 31415, "start_token": "selected-owner-start"}}
+        reply = {"root_id": ROOT_ID, "supervisor_owner": {
+            "action": "stop-owner", "state": "serving_released", **subject}}
+        endpoint = context.private_config.parent / "run" / "pueue.sock"
+        fault = subprocess.TimeoutExpired(["native-owner-observation"], 1)
+        closed = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
+        output = self.home / "receipt.json"
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure", return_value=closed),
+            mock.patch.object(private_cli_supervisor.commands, "run_json", return_value=reply) as stop,
+            mock.patch.object(private_cli_supervisor, "private_shutdown_evidence", return_value=(4242, endpoint, (1, 2))),
+            mock.patch.object(private_cli_supervisor, "shutdown_observed_supervisor") as daemon,
+            mock.patch.object(private_cli_supervisor, "await_private_owner_absence", side_effect=fault),
+            mock.patch.object(private_cli_root_cleanup, "remove_private_acceptance_root") as remove,
+        ):
+            result = application._finalize_run(
+                ReceiptFinalizer(output, [], {}), context, None, "failed", "original reason")
+        self.assertEqual(result, ("failed", "original reason"))
+        stop.assert_called_once()
+        daemon.assert_called_once()
+        remove.assert_not_called()
+        receipt = json.loads(output.read_text())
+        cleanup = receipt["cleanup"]
+        self.assertEqual(cleanup["terminal_cleanup"], {
+            "state": str(context.state), "config": str(context.private_config), "root_id": ROOT_ID,
+            "owner": subject, "daemon": {"pid": 4242, "endpoint": str(endpoint), "socket_identity": [1, 2]},
+        })
+        self.assertFalse(cleanup["authorized"])
+        self.assertEqual(cleanup["daemon_error"], str(fault))
+        self.assertNotIn("env", cleanup["terminal_cleanup"])
+        self.assertNotIn("do-not-publish", output.read_text())
+
     def test_state_renamed_after_authorized_shutdown_is_still_rechecked_and_the_root_retained(self):
         events = []
         context, _cohort = self._daemon_context(events)

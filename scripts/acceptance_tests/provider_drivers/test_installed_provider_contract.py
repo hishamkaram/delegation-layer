@@ -196,7 +196,7 @@ class InstalledProviderSetupTests(unittest.TestCase):
         }
         for kind, module in (("claude", claude_runtime), ("codex", codex_runtime)):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
-                runner = Path(tmp) / "runner"
+                runner = Path(tmp).resolve(strict=True) / "runner"
                 runner.write_bytes(b"owned worker")
                 arguments: InspectionArguments = {"pueue": Path("/owned/pueue"), "config": Path("/owned/pueue.yml"),
                              "base": Path("/owned/base"), "config_digest": "a" * 64,

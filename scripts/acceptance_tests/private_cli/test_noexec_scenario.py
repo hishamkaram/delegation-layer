@@ -255,7 +255,9 @@ class NoexecCaseFlowTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-noexec-case-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
-        owner = DirectoryPinOwner(self)
+        self.lifetime = FixtureLifetime(DirectoryPinOwner(self))
+        self.addCleanup(self.lifetime.disposal.release_all)
+        owner = self.lifetime.ownership
         self.external_root = owner.create("external", self.root / "external-supervisor", self.root)
         self.process_root = owner.create("processes", self.root / "external-supervisor-processes", self.root)
         self.capture_root = owner.create("capture", self.root / "capture", self.root)
@@ -345,6 +347,8 @@ class NoexecCaseFlowTests(unittest.TestCase):
                 client_call_log=self.root / "old-client-starts-calls",
                 handoff_action=EXTERNAL_NOEXEC_STATE_SCENARIO, case_label=EXTERNAL_NOEXEC_STATE_SCENARIO,
                 handoff_cases=self.cases,
+                disposal=self.lifetime.disposal, closed_roots=self.lifetime.closed_roots,
+                supervisor_cleanups=self.lifetime.supervisor_cleanups,
             )
 
     def test_success_proves_unplaced_registrations_after_closure_and_before_collection(self):

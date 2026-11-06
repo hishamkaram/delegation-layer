@@ -31,7 +31,7 @@ class SourceCommandTests(unittest.TestCase):
 
     def test_build_uses_exact_source_role_and_never_inspects_installed_output(self):
         with forbid_program_content(), tempfile.TemporaryDirectory() as temporary:
-            source = self.source(Path(temporary))
+            source = self.source(Path(temporary).resolve(strict=True))
             target = source / "quoted ' ; install"
             target.mkdir()
             calls = []
@@ -56,7 +56,7 @@ class SourceCommandTests(unittest.TestCase):
 
     def test_invalid_role_occupied_target_and_missing_package_fail_before_launch(self):
         with forbid_program_content(), tempfile.TemporaryDirectory() as temporary:
-            source = self.source(Path(temporary))
+            source = self.source(Path(temporary).resolve(strict=True))
             target = write_program(source / "installed")
             with patch.object(installation, "run_bounded_command") as command:
                 with self.assertRaisesRegex(RuntimeError, "unknown fixture source role"):
@@ -70,7 +70,7 @@ class SourceCommandTests(unittest.TestCase):
 
     def test_build_failure_preserves_closure_cause_without_private_compiler_output(self):
         with forbid_program_content(), tempfile.TemporaryDirectory() as temporary:
-            source = self.source(Path(temporary))
+            source = self.source(Path(temporary).resolve(strict=True))
             failure = BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT)
             with patch.object(installation, "run_bounded_command", side_effect=failure):
                 with self.assertRaisesRegex(RuntimeError, "command_termination_timeout") as raised:
@@ -84,7 +84,7 @@ class SourceCommandTests(unittest.TestCase):
 
     def test_driver_bindings_keep_config_integrity_without_program_reads(self):
         with forbid_program_content(), tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve(strict=True)
             source = self.source(root)
             pueue, pueued = write_program(root / "pueue"), write_program(root / "pueued")
             for module, cls, count in ((contributor, contributor.ContributorAcceptance, 3),
@@ -131,7 +131,7 @@ class SourceCommandTests(unittest.TestCase):
 
     def test_all_constructors_retain_only_when_build_wait_is_unproven(self):
         with forbid_program_content(), tempfile.TemporaryDirectory() as temporary:
-            root = self.source(Path(temporary))
+            root = self.source(Path(temporary).resolve(strict=True))
             pueue, pueued = write_program(root / "pueue"), write_program(root / "pueued")
             for module, cls in ((case_module, case_module.Case),
                                 (contributor, contributor.ContributorAcceptance), (native, native.NativeSuite)):

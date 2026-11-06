@@ -18,7 +18,7 @@ class FixtureEvidenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-evidence-observation-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve(strict=True)
         self.executable = self.root / "fixture"
         self.executable.write_text("original executable fixture source\n")
         self.executable.chmod(0o700)

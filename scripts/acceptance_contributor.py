@@ -96,7 +96,8 @@ class ContributorAcceptance:
         self.output.mkdir(mode=0o700, parents=True)
         ownership = DirectoryOwner()
         try:
-            allocated = Path(tempfile.mkdtemp(prefix="dc-", dir="/tmp"))
+            temporary_parent = Path("/tmp").resolve(strict=True)
+            allocated = Path(tempfile.mkdtemp(prefix="dc-", dir=temporary_parent))
             self.base = ownership.adopt_created(
                 "contributor private state", allocated, allocated.parent).directory.resolve()
             self.root = ownership.create("contributor task state", self.base / "task-state", self.base).directory
