@@ -1,5 +1,5 @@
 name: CI
-run-name: ${{ inputs.native_startup_component_only && 'Native infrastructure component proof only' || github.workflow }}
+run-name: ${{ github.workflow }}
 
 on:
   push:
@@ -8,11 +8,6 @@ on:
     branches: ["**"]
   workflow_dispatch:
     inputs:
-      native_startup_component_only:
-        description: 'Run only native infrastructure component proofs; does not establish full CI or PR readiness'
-        required: false
-        default: false
-        type: boolean
       build_candidate:
         description: 'Build distribution artifacts from this branch, including main'
         required: false
@@ -60,7 +55,6 @@ jobs:
           --base "$CHANGE_BASE" --head "$CHANGE_HEAD" --output "$GITHUB_OUTPUT"
 
   skill-package-linux:
-    if: ${{ !inputs.native_startup_component_only }}
     name: Agent skill package (ubuntu-24.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -81,7 +75,7 @@ jobs:
   skill-package-macos:
     name: Agent skill package (macos-15)
     needs: changes
-    if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+    if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: macos-15
     timeout-minutes: 10
     steps:
@@ -99,7 +93,7 @@ jobs:
   gate-linux:
     name: Gate (Linux ubuntu-24.04)
     needs: changes
-    if: ${{ always() && !inputs.native_startup_component_only }}
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -141,11 +135,11 @@ jobs:
           python3 --version
 
       - name: Install tools
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make tools
 
       - name: Run gate checks
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make check
 
       - name: Check documentation, skills and diagrams
@@ -154,7 +148,7 @@ jobs:
 
       - name: Prove selected native lifetime backend
         id: native_lifetime
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
@@ -172,33 +166,33 @@ jobs:
           if-no-files-found: error
 
       - name: Run protocol acceptance
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-protocol
 
       - name: Install pinned supervisor test binaries
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: ./scripts/install-test-supervisor.sh
 
       - name: Prove private supervisor bootstrap through delegate CLI
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
 
       - name: Prove external inspection handoff through delegate CLI
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-supervisor-handoff
 
       - name: Prove private supervisor upgrade recovery through delegate CLI
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-supervisor-upgrade-recovery
 
       - name: Prove default user and budget stops through delegate CLI
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
@@ -217,7 +211,7 @@ jobs:
 
       - name: Prove managed workspace fixtures through delegate CLI
         id: workspaces
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
@@ -237,7 +231,7 @@ jobs:
 
       - name: Run supervisor acceptance
         id: supervisor
-        if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+        if: ${{ needs.changes.outputs.full == 'true' }}
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
@@ -259,7 +253,7 @@ jobs:
   gate-macos:
     name: Gate (macOS macos-15)
     needs: changes
-    if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+    if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -396,7 +390,7 @@ jobs:
   independent-startup-component:
     name: Native infrastructure component (${{ matrix.os }})
     needs: changes
-    if: ${{ inputs.native_startup_component_only || needs.changes.outputs.full == 'true' }}
+    if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -406,17 +400,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: '.go-version'
           cache: false
-      - name: Install pinned repository tools
-        run: make tools
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
+      - name: Install pinned repository tools
+        run: make tools
       - name: Prove native infrastructure components only
         shell: bash
         env:
@@ -431,20 +427,13 @@ jobs:
           name: independent-startup-component-${{ matrix.os }}-${{ github.run_attempt }}
           path: |
             bin/independent-startup-proof/native.log
-            bin/independent-startup-proof/init-census/census.json
-            bin/independent-startup-proof/init-census/native-packages.json
-            bin/independent-startup-proof/init-census/startup.inittrace
-            bin/independent-startup-proof/init-census/startup.strace
-            bin/independent-startup-proof/editor-survivors/builds.json
-            bin/independent-startup-proof/editor-survivors/keep-native.log
-            bin/independent-startup-proof/editor-survivors/close-native.log
           retention-days: 7
           if-no-files-found: error
 
   nested-survival:
     name: Nested survival (${{ matrix.os }})
     needs: changes
-    if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
+    if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -454,6 +443,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
@@ -484,7 +475,7 @@ jobs:
     name: Distribution build
     needs: changes
     if: >-
-      ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' && ((github.event_name == 'pull_request' &&
+      ${{ needs.changes.outputs.full == 'true' && ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch')) }}
@@ -565,7 +556,7 @@ jobs:
     name: Distribution install (${{ matrix.os }}, ${{ matrix.channel }})
     needs: development-candidate
     if: >-
-      ${{ !inputs.native_startup_component_only && ((github.event_name == 'pull_request' &&
+      ${{ ((github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_candidate && github.ref_type == 'branch')) }}
@@ -656,5 +647,5 @@ jobs:
   ccr:
     name: CCR integration
     needs: changes
-    if: ${{ !inputs.native_startup_component_only && needs.changes.outputs.full == 'true' }}
-    uses: ./.github/workflows/ccr-integration.yml
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    uses: $/.github/workflows/ccr-integration.yml

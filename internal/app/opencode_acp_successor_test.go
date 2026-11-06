@@ -3,7 +3,6 @@ package app
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -89,14 +88,14 @@ func TestOpenCodeFreshAdmissionUsesOnlyTheACPMachineProtocol(t *testing.T) {
 // protocol factory, and refusal of an interactive request.
 func requireOpenCodeFreshAdmission(t *testing.T, mode string) {
 	t.Helper()
-	installOutputUpgradeProvider(t, "opencode")
+	environment := installOutputUpgradeProvider(t, "opencode")
 	workspace := testsupport.CanonicalTempDir(t)
 	catalog := NativeCatalog()
 	request, err := admission.BuildRequest(strings.Repeat("a", 32), strings.Repeat("b", 32), openCodeProvider, workspace, task.TaskConfig{Permission: mode, Budget: "1m0s"}, []byte("brief"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := catalog.Candidate(request, os.Environ())
+	candidate, err := catalog.Candidate(request, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +112,7 @@ func requireOpenCodeFreshAdmission(t *testing.T, mode string) {
 	assertOpenCodeFreshProtocol(t, profile)
 	interactive := request
 	interactive.RequestedConfig.Interactive = true
-	if _, err = catalog.Candidate(interactive, os.Environ()); err == nil {
+	if _, err = catalog.Candidate(interactive, environment); err == nil {
 		t.Fatal("an interactive OpenCode request was admitted without a native question protocol")
 	}
 }
@@ -149,11 +148,11 @@ func openCodeRunRevisions() []string {
 // approval, the recorded environment and writable roots, the source predicate,
 // and the run dialect's own runtime capability. Callers persist only the
 // returned admitted profile, through tasklifecycle.NewMeta.
-func openCodeHistoricalRunProfile(t *testing.T, catalog commonprovider.Catalog, request task.TaskRecord, revision string, source task.PredicateRef) PreparedProfile {
+func openCodeHistoricalRunProfile(t *testing.T, catalog commonprovider.Catalog, request task.TaskRecord, revision string, source task.PredicateRef, environment []string) PreparedProfile {
 	t.Helper()
 	// Every native dialect projects the same environment and writable roots,
 	// so the host candidate supplies the inputs the historical task recorded.
-	host, err := catalog.Candidate(request, os.Environ())
+	host, err := catalog.Candidate(request, environment)
 	if err != nil {
 		t.Fatalf("host candidate: %v", err)
 	}
@@ -168,14 +167,14 @@ func openCodeHistoricalRunProfile(t *testing.T, catalog commonprovider.Catalog, 
 	record := task.MetaRecord{EffectiveConfig: effective, Environment: slices.Clone(host.Inspection.Environment), EnvironmentRecorded: true, Predicate: source}
 	// A record without a capability digest is not statically admissible; its
 	// candidate exposes the run inspection whose digest the task recorded.
-	inspection, err := catalog.ExistingCandidate(request, record, os.Environ())
+	inspection, err := catalog.ExistingCandidate(request, record, environment)
 	if err != nil {
 		t.Fatalf("historical run inspection: %v", err)
 	}
 	if record.RuntimePreflightSHA256, err = commonprovider.RuntimeCapabilityDigest(*inspection.Inspection); err != nil {
 		t.Fatal(err)
 	}
-	existing, err := catalog.ExistingCandidate(request, record, os.Environ())
+	existing, err := catalog.ExistingCandidate(request, record, environment)
 	if err != nil {
 		t.Fatalf("historical run candidate: %v", err)
 	}

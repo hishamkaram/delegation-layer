@@ -26,12 +26,8 @@ var (
 	ErrSubmissionUncertain         = errors.New("pueue task submission outcome is unknown")
 	ErrEnqueueUncertain            = errors.New("pueue staged task enqueue outcome is unknown")
 	ErrStagedCapability            = errors.New("pueue staged launch capability is unavailable")
-	// ErrCleanupDeferred means the exact task row is still running while its
-	// Delegate outcome is already terminal. A later maintenance pass owns
-	// removal after Pueue reports the row as ended.
-	ErrCleanupDeferred        = errors.New("pueue completed task cleanup deferred")
-	ErrCleanupAuthorization   = errors.New("successful supervisor cleanup authorization is unavailable")
-	ErrMigrationAuthorization = errors.New("private supervisor migration authorization is unavailable")
+	ErrCleanupAuthorization        = errors.New("successful supervisor cleanup authorization is unavailable")
+	ErrMigrationAuthorization      = errors.New("private supervisor migration authorization is unavailable")
 )
 
 // DaemonStartGuard owns placement authorization for one synchronous start.
@@ -61,6 +57,14 @@ type DaemonWaitOwner interface {
 // fresh call; the default child environment is bounded to pueue's control
 // variables. A nonnil Environment is passed through as supplied by the caller.
 type Options struct {
+	// RuntimeClientExecutable is the installation resolver's selected transport.
+	// It never changes the persisted generation binding or grants Start authority.
+	// Empty retains an ordinary recorded installation; historical managed copies
+	// require an explicit installed selection and are never executed implicitly.
+	RuntimeClientExecutable string
+	// PrivateTerminalEventRunner is the selected installed callback for a new
+	// private generation. A live generation keeps its published callback string.
+	PrivateTerminalEventRunner string
 	// PrivateGenerationGuard is required for new private generation decisions.
 	// Warm reads and exact durable publication replay require no grant.
 	PrivateGenerationGuard PrivateGenerationGuard

@@ -52,8 +52,8 @@ func requireUnresolved(t *testing.T, rig *poolRig, entry, digest string, cause e
 func boundRig(t *testing.T) (rig *poolRig, entry, digest string) {
 	t.Helper()
 	rig = newPoolRig(t)
-	entry, digest = plainEntry(t, rig.dir, "guard")
-	rig.seedView("a", plainRequest(entry, digest))
+	entry, digest = plainEntry(t, rig.dir, "guard", "000000000000000000000000000000000000000000000000000000000000000d")
+	rig.seedView("a", entry, digest)
 	return rig, entry, digest
 }
 
@@ -204,8 +204,8 @@ func TestRootRemovedAfterTheGuardIsNeverReportedAsReleased(t *testing.T) {
 func idleImageRig(t *testing.T) (rig *poolRig, digest string) {
 	t.Helper()
 	rig = newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "idle")
-	command := rig.seedView("a", plainRequest(entry, digest))
+	entry, digest := plainEntry(t, rig.dir, "idle", "000000000000000000000000000000000000000000000000000000000000000e")
+	command := rig.seedView("a", entry, digest)
 	if err := unsealTemporaryDirectory(command.temporaryDir); err != nil {
 		t.Fatal(err)
 	}

@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
-	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -91,17 +90,13 @@ func newProducerNativeFixture(t *testing.T) *producerNativeFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := os.ReadFile(self)
+	runner, err := filepath.EvalSymlinks(self)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := filepath.Join(f.store.Root, "component-runner")
-	if err = os.WriteFile(runner, image, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	artifacts := Artifacts{Runner: runner, RunnerSHA256: task.ComputeSHA256(image), Client: filepath.Join(f.store.Root, "fixture-pueue"), ClientSHA256: task.ComputeSHA256([]byte("client")), Daemon: filepath.Join(f.store.Root, "fixture-pueued"), DaemonSHA256: task.ComputeSHA256([]byte("daemon"))}
+	artifacts := Artifacts{Runner: runner}
 	f.host = &producerTestHost{artifacts: artifacts}
-	f.request = EstablishmentRequest{Context: LaunchContext{Protocol: ProtocolVersion, Root: f.store.Root, RootID: f.store.RootID, OS: runtime.GOOS, ControlEnvironment: []string{"DELEGATION_LAYER_PROCESS_SCOPE=pg:11111111111111111111111111111111", "DELEGATE_INFRASTRUCTURE_ORIGIN=foreign configuration", "HOME=/selected/configuration"}, MaintenanceEnvironment: []string{}}, Requirements: ArtifactRequirements{RequiredRuntimeSHA256: artifacts.RunnerSHA256, RequiredClientSHA256: artifacts.ClientSHA256, RequiredDaemonSHA256: artifacts.DaemonSHA256}, Deadline: time.Now().Add(time.Minute)}
+	f.request = EstablishmentRequest{Context: LaunchContext{Protocol: RecordProtocolVersion, Root: f.store.Root, RootID: f.store.RootID, OS: runtime.GOOS, ControlEnvironment: []string{"DELEGATION_LAYER_PROCESS_SCOPE=pg:11111111111111111111111111111111", "DELEGATE_INFRASTRUCTURE_ORIGIN=foreign configuration", "HOME=/selected/configuration"}, MaintenanceEnvironment: []string{}, SupervisorExecutable: filepath.Join(f.store.Root, "pueue")}, Deadline: time.Now().Add(time.Minute)}
 	f.input, f.stop, err = os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +254,7 @@ func exerciseProducerNative(t *testing.T, mode string) {
 	case "observer-canceled":
 		after = cancelStart
 	}
-	attempt, err := establishOutside(ctxStart, f.store, f.request, f.host, f.native(t, after))
+	attempt, err := producerInvocation(t).establishOutside(ctxStart, f.store, f.request, f.host, f.native(t, after))
 	if attempt != nil {
 		f.attempts = append(f.attempts, attempt)
 	}
@@ -273,9 +268,13 @@ func exerciseProducerNative(t *testing.T, mode string) {
 	f.ready(t, attempt)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	publication, ready, observeErr := attempt.Observe(ctx)
-	if observeErr != nil || !ready || publication.Startup != attempt.Reference() {
+	ready, observeErr := attempt.Observe(ctx)
+	if observeErr != nil || !ready {
 		t.Fatalf("native publication: ready=%t err=%v", ready, observeErr)
+	}
+	publication, err := attempt.journal.readPublication(ctx, attempt.Reference())
+	if err != nil || publication.Startup != attempt.Reference() {
+		t.Fatalf("native publication reference: %v", err)
 	}
 	if err = attempt.Close(); err != nil {
 		t.Fatal(err)
@@ -290,7 +289,7 @@ func (f *producerNativeFixture) assertLiveJoin(t *testing.T, attempt *StartupAtt
 		t.Fatal("closing parent resources ended resident ownership")
 	default:
 	}
-	joined, joinErr := EstablishOutside(t.Context(), f.store, f.request, f.host)
+	joined, joinErr := producerInvocation(t).EstablishOutside(t.Context(), f.store, f.request, f.host)
 	if joined != nil {
 		f.attempts = append(f.attempts, joined)
 	}
@@ -359,9 +358,13 @@ func TestProducerContainedInvocationRefusesBeforePreparation(t *testing.T) {
 		if err := lease.Close(); err != nil {
 			t.Fatal(err)
 		}
-		request := EstablishmentRequest{Context: contextForJournal(t, j), Requirements: ArtifactRequirements{RequiredRuntimeSHA256: task.ComputeSHA256([]byte("runtime")), RequiredClientSHA256: task.ComputeSHA256([]byte("client")), RequiredDaemonSHA256: task.ComputeSHA256([]byte("daemon"))}, Deadline: time.Now().Add(time.Minute)}
+		request := EstablishmentRequest{Context: contextForJournal(t, j), Deadline: time.Now().Add(time.Minute)}
 		host := &producerTestHost{}
-		attempt, err := EstablishOutside(t.Context(), j.store, request, host)
+		source, err := CaptureInvocationSource(t.Context())
+		var attempt *StartupAttempt
+		if err == nil {
+			attempt, err = source.EstablishOutside(t.Context(), j.store, request, host)
+		}
 		ownProducerAttempt(t, attempt)
 		if !errors.Is(err, lifetime.ErrTaskContained) || host.calls != 0 || attempt != nil {
 			t.Fatalf("contained caller reached preparation: calls=%d err=%v", host.calls, err)

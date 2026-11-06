@@ -49,7 +49,7 @@ func (c currentSuccessorEnvironment) requireCurrentLaunch(t *testing.T, label st
 		t.Fatalf("%s has no runtime inspection", label)
 	}
 	c.requireCurrentValues(t, label, candidate.Inspection.Environment, predecessor)
-	if candidate.Inspection.Executable != c.executable || candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, c.executable) {
+	if candidate.Inspection.Executable != c.executable || candidate.Inspection.ExecutableSHA256 != "" {
 		t.Errorf("%s executable %q, want the current environment's %q", label, candidate.Inspection.Executable, c.executable)
 	}
 	c.requireCurrentRoots(t, label, candidate.WritableRoots, predecessor)
@@ -442,7 +442,7 @@ func (c portableCurrentEnvironment) requireLaunch(t *testing.T, label string, ca
 	t.Helper()
 	predecessorHome := environmentValue(predecessor.Environment, "HOME")
 	requireSelectedAgy(t, label, candidate, c.home, c.executable, predecessorHome)
-	if candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, c.executable) || !slices.Contains(candidate.Inspection.Environment, "TMPDIR="+c.tempRoot) {
+	if candidate.Inspection.ExecutableSHA256 != "" || !slices.Contains(candidate.Inspection.Environment, "TMPDIR="+c.tempRoot) {
 		t.Errorf("%s did not launch under the current executable and values", label)
 	}
 	for _, entry := range candidate.Inspection.Environment {

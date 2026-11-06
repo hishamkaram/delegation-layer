@@ -13,7 +13,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.resources import DirectoryPinOwner
-from scripts.acceptance_tests.private_cli.fixtures import ready_path
+from scripts.acceptance_tests.private_cli.fixtures import (
+    materialize_candidate_pair, materialize_supervisor_pair, ready_path,
+)
+from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import application, handoff as handoff_impl
 from scripts.delegate_acceptance.private_cli import fixture_setup, scenario_entry
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
@@ -60,10 +63,13 @@ class FixtureCase(unittest.TestCase):
             self.binaries[name] = binary
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 1, 1, {})
         self.lifetime = FixtureLifetime(DirectoryPinOwner(self), DirectoryPinOwner(self))
+        self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=materialize_candidate_pair))
+        self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
 
     def arguments(self, scenario, parent):
         return SimpleNamespace(
             scenario=scenario, noexec_state_parent=parent, upgraded_delegate=None, upgraded_runner=None,
+            source_root=installation.REPOSITORY, upgraded_source_root=None,
             **self.binaries,
         )
 
@@ -207,7 +213,7 @@ class NoexecScenarioEntryTests(FixtureCase):
     def test_main_dispatches_the_scenario_through_the_one_fixture_owner_and_finalizer(self):
         output = self.root / "dispatch" / "receipt.json"
         argv = [
-            "acceptance-private-cli", "--delegate", "/b/delegate", "--runner", "/b/delegate-run",
+            "acceptance-private-cli",
             "--pueue", "/b/pueue", "--pueued", "/b/pueued", "--output", str(output),
             "--scenario", EXTERNAL_NOEXEC_STATE_SCENARIO, "--parallel-tasks", "1",
             "--noexec-state-parent", str(self.parent),

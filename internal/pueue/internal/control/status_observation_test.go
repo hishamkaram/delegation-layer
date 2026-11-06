@@ -151,7 +151,7 @@ func TestReconcileStatusReplacesMalformedAndWrongGenerationSnapshots(t *testing.
 	}
 
 	wrongBinding := bound.RuntimeBinding()
-	wrongBinding.ClientSHA256 = task.ComputeSHA256([]byte("other-client-generation"))
+	wrongBinding.ConfigDigest = task.ComputeSHA256([]byte("other config generation"))
 	label := identities[0].Label()
 	if err = publishPrivateTaskObservation(fixture.stateRoot, wrongBinding, QueueSnapshot{Jobs: []Job{{ID: 7, Label: &label, State: StateRunning}}}); err != nil {
 		t.Fatal(err)

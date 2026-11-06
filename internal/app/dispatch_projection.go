@@ -13,7 +13,7 @@ func dispatchCommandResult(observed tasklifecycle.DispatchResult) commandResult 
 		applyManagedAdmissionFinish(observed.Root, *observed.Workspace, &result)
 	}
 	mergeCommandClose(&result, func() error { return observed.StoreCloseError })
-	retainTaskAdmissionCleanup(&result, observed.RootAdmissionCleanup, observed.StoreCleanup, observed.RootAdmissionReleaseError)
+	retainTaskAdmissionCleanup(&result, observed.StoreCleanup)
 	return result
 }
 

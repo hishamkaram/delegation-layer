@@ -24,7 +24,8 @@ func privateAdmissionRuntimeBinding(root string) task.SupervisorRef {
 	binding.ConfigPath = PrivateConfigPath(root)
 	binding.Endpoint = "unix:" + filepath.Join(root, privateSupervisorDirectory, "run", "pueue.sock")
 	binding.DaemonExecutable = "/fixture/pueued"
-	binding.DaemonSHA256 = task.ComputeSHA256([]byte("daemon C"))
+	binding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	binding.ClientSHA256, binding.DaemonSHA256 = "", ""
 	return binding
 }
 
@@ -55,7 +56,7 @@ func writePrivateAdmissionRuntimeRecord[T privateSupervisorBindingRecord | priva
 }
 
 func TestCheckPrivateAdmissionRuntimeCanonicalStoreDecisionsAreReadOnly(t *testing.T) {
-	for _, name := range []string{"exact", "client prime", "alias", "alias read error", "migration error", "daemon path", "daemon digest", "logical identity", "unsettled", "missing publication", "missing identity"} {
+	for _, name := range []string{"exact", "different client", "alias", "alias read error", "migration error", "daemon path", "logical identity", "unsettled", "missing publication", "missing identity"} {
 		t.Run(name, func(t *testing.T) {
 			f := newPrivateAdmissionRuntimeFixture(t)
 			selected, refused := preparePrivateAdmissionRuntimeDecision(t, f, name)
@@ -79,8 +80,8 @@ func preparePrivateAdmissionRuntimeDecision(t *testing.T, f privateAdmissionRunt
 	t.Helper()
 	runtime := f.runtime
 	switch name {
-	case "client prime":
-		runtime.ClientSHA256 = task.ComputeSHA256([]byte("client prime"))
+	case "different client":
+		runtime.ClientExecutable = "/other/pueue"
 	case "alias":
 		return privateAdmissionRuntimeAlias(t, f), false
 	case "alias read error":
@@ -89,10 +90,7 @@ func preparePrivateAdmissionRuntimeDecision(t *testing.T, f privateAdmissionRunt
 		writePrivateSuccessorTestBytes(t, privateMigrationRecordPath(f.base), []byte("malformed migration owned by recovery"))
 	case "daemon path":
 		runtime.DaemonExecutable = "/other/pueued"
-		return runtime, true
-	case "daemon digest":
-		runtime.DaemonSHA256 = task.ComputeSHA256([]byte("other daemon"))
-		return runtime, true
+		return runtime, false
 	case "logical identity":
 		runtime.ConfigDigest = task.ComputeSHA256([]byte("other config"))
 		return runtime, true

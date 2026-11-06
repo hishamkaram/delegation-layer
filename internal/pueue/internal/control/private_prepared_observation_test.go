@@ -78,7 +78,8 @@ func TestPreparedPrivateMigrationAllowsPublishedLegacyObservationAfterBusy(t *te
 	// Reopen through BindPrivate as a later status command does. BindPrivate's
 	// exclusive setup finishes before either reader acquires its shared lease.
 	legacy := fixture.legacy.Binding()
-	readerClient := bindPreparedPrivateObservation(t, fixture.stateRoot, legacy.ClientExecutable, legacy.DaemonExecutable, fixture.legacy.options)
+	readerClient := bindPrivateSetupForTest(t, fixture.stateRoot, legacy.ClientExecutable, legacy.DaemonExecutable, fixture.legacy.options)
+	ownPrivateMigrationTestClient(t, readerClient)
 	if readerClient.Binding() != legacy {
 		t.Fatal("BindPrivate did not reopen the exact published legacy generation")
 	}
@@ -152,25 +153,14 @@ func newPreparedPrivateObservationPair(t *testing.T) preparedPrivateObservationF
 	t.Helper()
 	private := newPrivateSupervisorTestFixture(t)
 	options := privateMigrationTestOptions(private.stateRoot, privateTestObservationTimeout)
-	legacy := bindPreparedPrivateObservation(t, private.stateRoot, private.clientPath, private.daemonPath, options)
+	options.DaemonWaitOwner, _ = ownPrivateRecoveryDaemonWaits(t, private.stateRoot)
+	legacy := bindPrivateSetupForTest(t, private.stateRoot, private.clientPath, private.daemonPath, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	options = legacy.options
 	successorPath := filepath.Join(filepath.Dir(private.daemonPath), "successor-pueued")
 	writeExecutable(t, successorPath, privateDaemonFixture+"\n# prepared successor\n")
-	successor := bindPreparedPrivateObservation(t, private.stateRoot, private.clientPath, successorPath, options)
+	successor := preparePrivateCandidateForTest(t, private.stateRoot, private.clientPath, successorPath, options)
 	return preparedPrivateObservationFixture{stateRoot: private.stateRoot, legacy: legacy, successor: successor}
-}
-
-func bindPreparedPrivateObservation(t *testing.T, root, clientPath, daemonPath string, options Options) *Client {
-	t.Helper()
-	client, err := BindPrivate(t.Context(), clientPath, daemonPath, root, options)
-	if err != nil {
-		t.Fatalf("bind private observation fixture: %v", err)
-	}
-	t.Cleanup(func() {
-		if closeErr := client.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	return client
 }
 
 func newBusyPreparedPrivateObservation(t *testing.T) preparedPrivateObservationFixture {
@@ -207,7 +197,7 @@ func assertBusyPreparedPrivateObservation(t *testing.T, fixture preparedPrivateO
 	if err != nil || !found || journal != want {
 		t.Fatalf("busy refusal did not retain the exact pre-stop journal: found=%t journal=%+v err=%v", found, journal, err)
 	}
-	if !privateMigrationMayRetarget(journal) {
+	if !privateMigrationPrepared(journal) {
 		t.Fatal("prepared journal crossed the canonical shutdown boundary")
 	}
 	recovery, found, err := ReadPrivateRecoveryBinding(fixture.stateRoot)
@@ -273,7 +263,7 @@ func faultPreparedPrivateObservation(t *testing.T, fixture preparedPrivateObserv
 	case "unrelated-binding":
 		path := filepath.Join(filepath.Dir(root), "unrelated-pueued")
 		writeExecutable(t, path, privateDaemonFixture+"\n# unrelated pair\n")
-		unrelated := bindPreparedPrivateObservation(t, root, fixture.legacy.Binding().ClientExecutable, path, fixture.legacy.options)
+		unrelated := preparePrivateCandidateForTest(t, root, fixture.legacy.Binding().ClientExecutable, path, fixture.legacy.options)
 		publishPreparedPrivateTestBinding(t, fixture, unrelated)
 		return unrelated
 	default:
@@ -293,20 +283,14 @@ func faultPreparedPrivateTransitionMetadata(t *testing.T, fixture preparedPrivat
 			t.Fatalf("read prepared journal: found=%t err=%v", found, err)
 		}
 		foreign := record
-		foreign.Legacy.SHA256 = strings.Repeat("e", 64)
-		if err = replacePrivateMigrationRecord(base, record, foreign); err != nil {
-			t.Fatal(err)
-		}
+		foreign.Legacy.Executable += "-foreign"
+		writePrivateSuccessorTestRecord(t, privateMigrationRecordPath(base), foreign)
 	case "foreign-recovery", "corrupt-recovery-alias", "alias-digest-mismatch":
 		faultPreparedPrivateRecoveryMetadata(t, root, fault)
 	case "restart-pending":
 		target := fixture.legacy.Binding()
 		target.DaemonExecutable += "-relocated"
-		if err := publishPrivatePairRestartIntent(root, privatePairRestartIntent{
-			Predecessor: fixture.legacy.Binding(), Target: target,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		publishTestPairRestartIntent(t, root, fixture.legacy.Binding(), target)
 	case "bootstrap-pending":
 		if err := markPrivateBootstrapPending(root); err != nil {
 			t.Fatal(err)
@@ -394,7 +378,7 @@ func setPreparedPrivateShutdownFlag(t *testing.T, fixture preparedPrivateObserva
 	if err = replacePrivateMigrationRecord(base, record, updated); err != nil {
 		t.Fatal(err)
 	}
-	if privateMigrationMayRetarget(updated) {
+	if privateMigrationPrepared(updated) {
 		t.Fatal("canonical migration owner allowed retargeting after a shutdown flag")
 	}
 	matches, err := PrivateMigrationTargetsWithLock(fixture.stateRoot, fixture.successor.Binding())

@@ -10,10 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
-	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestInfrastructureRoutingRejectsCapturedSourceFaultBeforeStaging(t *testing.T) {
@@ -31,7 +28,6 @@ func TestInfrastructureRoutingRejectsCapturedSourceFaultBeforeStaging(t *testing
 	for _, initial := range []infrastructure.InitialOperation{
 		{},
 		{Kind: infrastructure.InitialRecoverSaved},
-		{Kind: infrastructure.InitialMigrateReferenced},
 		{Kind: infrastructure.InitialMigrateOwn},
 	} {
 		_, err := routing.prepare(ctx, store, selected, initial)
@@ -106,65 +102,5 @@ func TestInfrastructureRoutingCleanupRetainsActualBorrowedStore(t *testing.T) {
 	}
 	if _, err := store.PinRootContext(t.Context()); err != nil {
 		t.Fatalf("routing closed caller-owned Store: %v", err)
-	}
-}
-
-func TestInfrastructureRoutingCleanupKeepsAncestorAdmissionAcrossStores(t *testing.T) {
-	storeA := newBareInspectionStore(t)
-	storeB, err := taskdir.OpenStore(storeA.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease, err := storeA.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := errors.Join(lease.Release(), storeB.Close()); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	borrowed, err := supervisor.AcquireOrBorrowRootAdmissionContext(t.Context(), storeB, lease, time.Second)
-	if err != nil || borrowed != lease {
-		t.Fatalf("second Store did not borrow the same ancestor: %v", err)
-	}
-	child := &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: storeB}, cause: os.ErrPermission}
-	result := commandResult{err: supervisor.ReleaseOwnedRootAdmission(lease, errors.Join(errors.New("earlier independent cause"), child))}
-	var retained *supervisor.RootAdmissionCleanupError
-	if !errors.As(result.err, &retained) || retained == nil || retained.Lease() != lease || !lease.CleanupPending() {
-		t.Fatalf("routing cleanup lost the actual ancestor: %v", result.err)
-	}
-	closeObservationStore(&result, storeA)
-	closeObservationStore(&result, storeB)
-	for _, store := range []*taskdir.Store{storeA, storeB} {
-		if _, pinErr := store.PinRootContext(t.Context()); pinErr != nil {
-			t.Fatalf("parent or child Store closed behind unresolved cleanup: %v", pinErr)
-		}
-	}
-	assertRoutingCleanupBlocksExclusive(t, storeA)
-	// The real routing error is sticky. Explicit test teardown owns this lease;
-	// it does not claim that a production cleanup retry or child settlement ran.
-	if err = lease.Release(); err != nil {
-		t.Fatal(err)
-	}
-	exclusive, err := storeA.TryAcquireRootAdmissionExclusiveContext(t.Context())
-	if err != nil {
-		t.Fatalf("explicit teardown did not release the native ancestor: %v", err)
-	}
-	if err = exclusive.Release(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func assertRoutingCleanupBlocksExclusive(t *testing.T, store *taskdir.Store) {
-	t.Helper()
-	exclusive, err := store.TryAcquireRootAdmissionExclusiveContext(t.Context())
-	if exclusive != nil {
-		if releaseErr := exclusive.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	}
-	if !errors.Is(err, task.ErrLockBusy) {
-		t.Fatalf("ancestor SH released behind real routing cleanup: %v", err)
 	}
 }

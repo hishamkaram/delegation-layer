@@ -66,9 +66,9 @@ func TestNamespaceValidation(t *testing.T) {
 
 func TestPoolRefusesANilContextBeforeAnyMutation(t *testing.T) {
 	rig := newPoolRig(t)
-	entry, digest := plainEntry(t, rig.dir, "nil-context")
+	entry, digest := plainEntry(t, rig.dir, "nil-context", "0000000000000000000000000000000000000000000000000000000000000012")
 	var nilContext context.Context
-	rig.seedView("a", plainRequest(entry, digest))
+	rig.seedView("a", entry, digest)
 	if err := rig.pool.ReleaseOwner(nilContext, rig.ns("a")); !errors.Is(err, errNilContext) {
 		t.Fatalf("ReleaseOwner with a nil context gave %v; want %v", err, errNilContext)
 	}

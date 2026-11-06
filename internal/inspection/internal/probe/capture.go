@@ -21,19 +21,11 @@ type nativeHooks struct {
 	wait               func(*exec.Cmd) error
 }
 
-// nativeScope is the private runNative boundary: the execution package owns
-// the command lifetime and the binding decision; execution.PreflightScope
-// satisfies both.
-type nativeScope interface {
-	execution.CommandScope
-	commandBinder
-}
-
 // runNative is private to the supervised inspection lifetime. The scope owns
 // the final start gate and guardian registration. Cancellation refuses a new
 // start, but never abandons a started command or its pipes. On success the
 // caller owns the returned sensitive buffer and must clear it after projection.
-func runNative(scope nativeScope, definition provider.InspectionDefinition, hooks nativeHooks) ([]byte, error) {
+func runNative(scope execution.CommandScope, definition provider.InspectionDefinition, hooks nativeHooks) ([]byte, error) {
 	if scope == nil {
 		return nil, errNativeInspection
 	}
@@ -45,9 +37,7 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	if _, finite := ctx.Deadline(); !finite || ctx.Err() != nil {
 		return nil, errNativeInspection
 	}
-	// A nil Stdin makes the child receive finite EOF. A native helper is bound
-	// to its admitted bytes before the final Start gate; the installed provider
-	// CLI runs directly at its resolved path.
+	// A nil Stdin gives the child finite EOF. Every role runs in place.
 	if hooks.prepareEnvironment != nil {
 		environment, prepareErr := hooks.prepareEnvironment(definition.Environment)
 		if prepareErr != nil {
@@ -55,10 +45,7 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 		}
 		definition.Environment = environment
 	}
-	cmd, verified, err := nativeCommand(scope, definition)
-	if err != nil {
-		return nil, errNativeInspection
-	}
+	cmd := newProviderCommand(definition.Executable, definition.Directory, definition.Environment, definition.Arguments...)
 	stdout := boundedNativeBuffer{
 		remaining: definition.OutputLimit,
 		retain:    true,
@@ -67,31 +54,21 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	stderr := boundedNativeBuffer{remaining: definition.OutputLimit}
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	commandErr := execution.RunScopedCommand(scope, cmd, execution.CommandHooks{
-		Start:   hooks.startCommand,
-		Wait:    hooks.waitCommand,
-		Started: verified.ReleaseDescriptors,
+		Start: hooks.startCommand,
+		Wait:  hooks.waitCommand,
 	})
-	verifiedErr := verified.Close()
-	if errors.Join(commandErr, verifiedErr) != nil || stdout.overflow || stderr.overflow {
+	if commandErr != nil || stdout.overflow || stderr.overflow {
 		clear(stdout.bytes)
 		return nil, errNativeInspection
 	}
 	return stdout.bytes, nil
 }
 
-// nativeCommand selects the command for the definition's executable role.
-// The returned verified binding is nil for the provider CLI; its methods are
-// nil-safe, so callers release and close it uniformly.
-func nativeCommand(scope nativeScope, definition provider.InspectionDefinition) (*exec.Cmd, *verifiedCommandFiles, error) {
-	if definition.ProviderExecutable() {
-		return newProviderCommand(definition.Executable, definition.Directory, definition.Environment, definition.Arguments...), nil, nil
-	}
-	cmd, verified, err := newVerifiedCommand(scope, definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
-	if err != nil {
-		return nil, nil, err
-	}
-	cmd.Dir, cmd.Env = definition.Directory, definition.Environment
-	return cmd, verified, nil
+// newProviderCommand preserves the selected installed role and native arguments.
+func newProviderCommand(executable, directory string, environment []string, args ...string) *exec.Cmd {
+	cmd := exec.Command(executable, args...)
+	cmd.Dir, cmd.Env = directory, environment
+	return cmd
 }
 
 func (h nativeHooks) startCommand(cmd *exec.Cmd) error {

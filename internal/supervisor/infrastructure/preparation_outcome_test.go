@@ -31,7 +31,6 @@ func TestPreparationOutcomeConditionsAndZero(t *testing.T) {
 		{Startup: preparationOwnerFixture()},
 		{Condition: PreparationOK, Startup: StartupReference{Sequence: 1}},
 		{Condition: PreparationOK, Disposition: Disposition{Kind: "unknown"}},
-		{Condition: PreparationOK, MigrationResult: "unknown"},
 		{Condition: PreparationFault, Failure: PreparationFailure{Causes: 1 << 31}},
 	} {
 		if err := outcome.Validate(); !errors.Is(err, ErrIdentity) {
@@ -57,9 +56,9 @@ func TestPreparationOutcomeRetainsCompletedWorkWithLateFault(t *testing.T) {
 		for _, report := range manualMigrationReportFixtures()[:5] {
 			outcome := PreparationOutcome{
 				Condition: condition, Startup: preparationOwnerFixture(),
-				Disposition:     Disposition{Kind: DispositionStarted, Context: LaunchContextReference{SHA256: strings.Repeat("b", 64)}},
-				MigrationResult: MigrationCompleted, Report: report,
-				Failure: PreparationFailure{Causes: PreparationCauseDeadline, IndependentFault: true},
+				Disposition: Disposition{Kind: DispositionStarted, Context: LaunchContextReference{SHA256: strings.Repeat("b", 64)}},
+				Report:      report,
+				Failure:     PreparationFailure{Causes: PreparationCauseDeadline, IndependentFault: true},
 			}
 			before := outcome
 			if err := outcome.Validate(); err != nil || outcome != before {
@@ -80,6 +79,7 @@ func TestPreparationOutcomeRetainsCompletedWorkWithLateFault(t *testing.T) {
 func TestPreparationOutcomeStrictJSON(t *testing.T) {
 	for _, data := range []string{
 		`null`, `{"condition":null}`, `{"condition":"fault","failure":null}`,
+		`{"condition":"ok","migration_result":"completed"}`,
 		`{"condition":"fault","failure":{"causes":1}}`,
 		`{"condition":"ok","report":{"state":"migrated"}}`,
 		`{"condition":"ok","extra":true}`,
@@ -107,7 +107,7 @@ func TestPreparationOutcomeStrictJSON(t *testing.T) {
 func TestPreparationRequestValidatedBeforeNormalization(t *testing.T) {
 	owner := preparationOwnerFixture()
 	for _, operation := range initialOperationFixtures(t, originTestRootID) {
-		request := PreparationRequest{Operation: operation, InitialResultFor: owner, Requirements: ownerRequirementsFixture()}
+		request := PreparationRequest{Operation: operation, InitialResultFor: owner}
 		before := request
 		normalized, err := request.Normalized(originTestRootID, owner)
 		if err != nil || request != before {
@@ -117,7 +117,7 @@ func TestPreparationRequestValidatedBeforeNormalization(t *testing.T) {
 		if operation.Kind == InitialEnsureOwn {
 			want = InitialOperation{}
 		}
-		if normalized.Operation != want || normalized.InitialResultFor != owner || normalized.Context != (LaunchContextReference{}) || normalized.Requirements != before.Requirements {
+		if normalized.Operation != want || normalized.InitialResultFor != owner || normalized.Context != (LaunchContextReference{}) {
 			t.Fatalf("normalization changed selection: %+v", normalized)
 		}
 	}
@@ -129,7 +129,6 @@ func TestPreparationRequestValidatedBeforeNormalization(t *testing.T) {
 		{InitialResultFor: StartupReference{Sequence: 2, Epoch: owner.Epoch, IntentSHA256: owner.IntentSHA256}},
 		{Operation: InitialOperation{Kind: "unknown"}},
 	} {
-		request.Requirements = ownerRequirementsFixture()
 		if _, err := request.Normalized(originTestRootID, owner); !errors.Is(err, ErrIdentity) {
 			t.Fatalf("invalid request normalized: %+v: %v", request, err)
 		}
@@ -164,12 +163,9 @@ func TestPreparationRequestZeroJSONAndStrictSelectors(t *testing.T) {
 	if err = task.DecodeStrict(data, &request); err != nil || request != (PreparationRequest{}) {
 		t.Fatalf("absent request fields changed default: %v", err)
 	}
-	if err = request.Validate(originTestRootID, preparationOwnerFixture()); !errors.Is(err, ErrIdentity) {
-		t.Fatalf("request without requirements accepted: %v", err)
-	}
-	request.Requirements = ownerRequirementsFixture()
+
 	if err = request.Validate(originTestRootID, preparationOwnerFixture()); err != nil {
-		t.Fatalf("default Own operation with valid requirements refused: %v", err)
+		t.Fatalf("default Own operation refused: %v", err)
 	}
 	for _, raw := range []string{
 		`{"initial_result_for":null}`, `{"operation":null}`, `{"operation":{"kind":""}}`,
@@ -177,26 +173,6 @@ func TestPreparationRequestZeroJSONAndStrictSelectors(t *testing.T) {
 	} {
 		if err = task.DecodeStrict([]byte(raw), &request); err == nil {
 			t.Fatalf("invalid request representation decoded: %s", raw)
-		}
-	}
-}
-
-func TestPreparationRequestRequiresEveryArtifactHash(t *testing.T) {
-	owner := preparationOwnerFixture()
-	for _, member := range []string{"all", "runtime", "client", "daemon"} {
-		request := PreparationRequest{Requirements: ownerRequirementsFixture()}
-		switch member {
-		case "all":
-			request.Requirements = ArtifactRequirements{}
-		case "runtime":
-			request.Requirements.RequiredRuntimeSHA256 = ""
-		case "client":
-			request.Requirements.RequiredClientSHA256 = ""
-		case "daemon":
-			request.Requirements.RequiredDaemonSHA256 = ""
-		}
-		if err := request.Validate(originTestRootID, owner); !errors.Is(err, ErrIdentity) {
-			t.Fatalf("missing %s requirements accepted: %v", member, err)
 		}
 	}
 }

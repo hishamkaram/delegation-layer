@@ -11,7 +11,7 @@ import (
 // InvocationSource owns an immutable observation of the actual command entry.
 // Capture it before opening the target or applying selected launch environments.
 // Its zero value is invalid. An origin locator supplies routing data only;
-// outside provenance is captured separately through the native containment check.
+// outside capture requires a separate native containment check.
 type InvocationSource struct {
 	origin  Origin
 	outside capturedProducerStarter
@@ -45,7 +45,7 @@ func (s InvocationSource) Origin() (Origin, bool) {
 	return s.origin, s.origin.root != ""
 }
 
-// EstablishOutside uses only this invocation's captured outside provenance.
+// EstablishOutside uses only this invocation's captured outside environment.
 // Any nonnil attempt transfers cleanup ownership, including on error; the
 // caller retains the borrowed target Store until the attempt is closed.
 func (s InvocationSource) EstablishOutside(ctx context.Context, target *taskdir.Store, request EstablishmentRequest, host EstablishmentHost) (*StartupAttempt, error) {
@@ -62,8 +62,8 @@ func (s InvocationSource) establishOutside(ctx context.Context, target *taskdir.
 	if s.origin.root != "" {
 		return nil, fmt.Errorf("%w: invocation origin requires owner routing", ErrIdentity)
 	}
-	if s.outside.provenance.Kind != StarterOutside {
+	if s.outside.environment == nil {
 		return nil, os.ErrInvalid
 	}
-	return establishCaptured(ctx, target, request, capturedEstablishment{starter: s.outside, prepare: host.PrepareOutsideArtifacts}, native)
+	return establishCaptured(ctx, target, request, capturedEstablishment{starter: s.outside, prepare: host.PrepareOutsideRunner}, native)
 }

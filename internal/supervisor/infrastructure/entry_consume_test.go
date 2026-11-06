@@ -18,7 +18,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"golang.org/x/sys/unix"
 )
 
@@ -29,12 +28,12 @@ type componentEntryHost struct {
 	calls  int
 }
 
-func (h *componentEntryHost) ValidateArtifacts(ctx context.Context, root string, artifacts Artifacts, info *debug.BuildInfo) error {
+func (h *componentEntryHost) ValidateRunner(ctx context.Context, root, runner string, info *debug.BuildInfo) error {
 	h.calls++
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if h.reject || root == "" || artifacts.Runner == "" || info == nil {
+	if h.reject || root == "" || runner == "" || info == nil {
 		return ErrIdentity
 	}
 	flags, err := unix.FcntlInt(3, unix.F_GETFD, 0)
@@ -57,14 +56,6 @@ func (*componentEntryHost) RecoverSaved(context.Context, Operation, LaunchContex
 
 func (*componentEntryHost) PrepareContinuation(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error) {
 	return Disposition{}, errors.New("component must not prepare continuation")
-}
-
-func (*componentEntryHost) MigrateReferenced(context.Context, Operation, LaunchContext, MigrationReference, ResidentGuards, DaemonWaitOwner) (Disposition, MigrationResult, error) {
-	return Disposition{}, "", errors.New("component must not migrate supervisor")
-}
-
-func (*componentEntryHost) StageTargetArtifacts(context.Context, Operation, ArtifactRequirements, *taskdir.Store) (Artifacts, error) {
-	return Artifacts{}, errors.New("component must not stage foreign artifacts")
 }
 
 func (*componentEntryHost) MigrateOwnRoot(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, ManualMigrationReport, error) {
@@ -106,7 +97,7 @@ func componentPreparationCause(err error) (PreparationCauses, bool) {
 		{ErrOwnerBusy, PreparationCauseLockBusy},
 		{context.DeadlineExceeded, PreparationCauseDeadline},
 		{context.Canceled, PreparationCauseCanceled},
-		{ErrIncompatible, 0},
+		{ErrOwnerIncompatible, 0},
 		{ErrOwnerIncompatible, 0},
 	} {
 		// Equal compares exact pointer/value identity without invoking a leaf's Is method.
@@ -175,7 +166,7 @@ func newComponentEntryFixture(t *testing.T, kind string) *componentEntryFixture 
 		t.Fatalf("fixture election: %v", err)
 	}
 	fixture.intent = componentIntent(t, fixture.journal)
-	changeComponentIntent(t, kind, &fixture.intent, fixture.journal, fixture.lease)
+	changeComponentIntent(t, kind, &fixture.intent, fixture.journal)
 	// Canonical direct publication also represents historical prior-writer data
 	// for stale boot/native-pin refusal tests; it grants no child permission.
 	err = fixture.journal.control.WithLock(t.Context(), func(tx *taskdir.ControlTransaction) error {
@@ -221,8 +212,8 @@ func componentIntent(t *testing.T, journal *intentJournal) StartupIntent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	executable, digest := componentExecutable(t, executable)
-	intent.Inputs.Artifacts.Runner, intent.Inputs.Artifacts.RunnerSHA256 = executable, digest
+	executable = componentExecutable(t, executable)
+	intent.Inputs.Artifacts.Runner = executable
 	record := contextForJournal(t, journal)
 	record.OS = runtime.GOOS
 	reference, _, err := journal.stageContext(t.Context(), record)
@@ -234,7 +225,7 @@ func componentIntent(t *testing.T, journal *intentJournal) StartupIntent {
 	return intent
 }
 
-func changeComponentIntent(t *testing.T, kind string, intent *StartupIntent, journal *intentJournal, lease *Lease) {
+func changeComponentIntent(t *testing.T, kind string, intent *StartupIntent, journal *intentJournal) {
 	t.Helper()
 	switch kind {
 	case "stale-boot":
@@ -246,21 +237,7 @@ func changeComponentIntent(t *testing.T, kind string, intent *StartupIntent, jou
 	case "expired":
 		intent.Deadline = time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
 		intent.AcceptedAt = time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
-	case "valid-upgrade":
-		body := journalLifecycleBody(t, journal, epochLifecycleOwnerUpgrade, 1)
-		body.SuccessorArtifacts, body.SuccessorContext = intent.Inputs.Artifacts, intent.Inputs.Context
-		requireLifecycleAccept(t, journal, lease, body)
-		requireLifecycleProgress(t, journal, lease, body, epochLifecycleClosing)
-		requireLifecycleProgress(t, journal, lease, body, epochLifecycleExiting)
-		ref := lifecycleReference(t, body)
-		intent.Inputs.Kind, intent.Inputs.Artifacts, intent.Inputs.Context = StartupUpgrade, Artifacts{}, LaunchContextReference{}
-		intent.Inputs.UpgradeID, intent.Inputs.UpgradeSHA256 = ref.ID, ref.SHA256
-	case "upgrade":
-		intent.Inputs.Kind = StartupUpgrade
-		intent.Inputs.Artifacts = Artifacts{}
-		intent.Inputs.Context = LaunchContextReference{}
-		intent.Inputs.UpgradeID = strings.Repeat("a", 32)
-		intent.Inputs.UpgradeSHA256 = strings.Repeat("b", 64)
+
 	}
 	refreshIntentDigest(t, intent)
 }
@@ -322,7 +299,8 @@ func TestOwnerEntryComponentChild(t *testing.T) {
 	host := &componentEntryHost{reject: mode == "host-refusal"}
 	ctx := t.Context()
 	if mode == "refuse-nil-context" {
-		ctx = nil
+		checkComponentNilContextRefusal(t, invocation, host)
+		return
 	}
 	entry, err := consumeOwnerInvocation(ctx, invocation, host)
 	ownComponentEntry(t, entry)
@@ -343,6 +321,22 @@ func TestOwnerEntryComponentChild(t *testing.T) {
 		t.Fatalf("component birth: %v", err)
 	}
 	exerciseResidentComponent(t, entry, mode)
+}
+
+func checkComponentNilContextRefusal(t *testing.T, invocation ownerInvocation, host *componentEntryHost) {
+	t.Helper()
+	descriptor := ownComponentForeignDescriptor(t)
+	arguments, err := ownerArguments(invocation.root, invocation.rootID, invocation.startup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ctx context.Context // Exercise the public boundary before FD3 adoption.
+	handled, err := RunOwnerMode(ctx, arguments, host)
+	if !handled || !errors.Is(err, os.ErrInvalid) {
+		t.Fatalf("nil context owner mode refusal: handled=%t error=%v", handled, err)
+	}
+	requireComponentForeignDescriptorPreserved(t, descriptor)
+	requireComponentBirthRefusal(t, nil, err, host.calls, "refuse-nil-context")
 }
 
 func componentChildInvocation(t *testing.T) (string, ownerInvocation, bool) {
@@ -380,6 +374,12 @@ func ownComponentEntry(t *testing.T, entry *ownedResidentEntry) {
 	}
 }
 
+func (e *ownedResidentEntry) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), endpointCleanupTimeout)
+	defer cancel()
+	return e.closeContext(ctx)
+}
+
 func componentRefusalMode(mode string) bool {
 	return strings.HasPrefix(mode, "refuse-") || mode == "host-refusal" || mode == "bare-descriptor" || mode == "wrong-descriptor"
 }
@@ -389,7 +389,7 @@ func requireComponentBirthRefusal(t *testing.T, entry *ownedResidentEntry, err e
 	if err == nil || entry != nil {
 		t.Fatalf("invalid component birth accepted: %v", err)
 	}
-	if mode == "refuse-valid-upgrade" && (hostCalls != 1 || !errors.Is(err, ErrIncompatible)) {
+	if mode == "refuse-valid-upgrade" && (hostCalls != 1 || !errors.Is(err, ErrOwnerIncompatible)) {
 		t.Fatalf("valid upgrade did not reach pre-publication refusal: hostCalls=%d err=%v", hostCalls, err)
 	}
 	if mode != "host-refusal" && mode != "refuse-existing-assumption" && mode != "refuse-valid-upgrade" && hostCalls != 0 {
@@ -413,7 +413,7 @@ func TestOwnerEntryConsumesNativeInheritedLease(t *testing.T) {
 }
 
 func TestOwnerEntryRefusesBeforeAssumptionAndSocket(t *testing.T) {
-	for _, kind := range []string{"stale-boot", "stale-native-root", "wrong-executable", "expired", "upgrade", "valid-upgrade", "root-id", "reference", "missing-root", "host-refusal", "bare-descriptor", "wrong-descriptor", "nil-context"} {
+	for _, kind := range []string{"stale-boot", "stale-native-root", "wrong-executable", "expired", "root-id", "reference", "missing-root", "host-refusal", "bare-descriptor", "wrong-descriptor", "nil-context"} {
 		t.Run(kind, func(t *testing.T) { checkComponentEntryRefusal(t, kind) })
 	}
 }
@@ -638,17 +638,13 @@ func requireComponentEntryTestHost(t *testing.T) {
 	t.Fatalf("blocked: test host containment observation failed: %v", err)
 }
 
-func componentExecutable(t *testing.T, executable string) (string, string) {
+func componentExecutable(t *testing.T, executable string) string {
 	t.Helper()
-	executable, err := filepath.EvalSymlinks(executable)
+	resolved, err := filepath.EvalSymlinks(executable)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := verifiedexec.Fingerprint(executable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return executable, digest
+	return resolved
 }
 
 func TestOwnerEntryFixtureCanonicalizesExecutableAlias(t *testing.T) {
@@ -668,15 +664,17 @@ func TestOwnerEntryFixtureCanonicalizesExecutableAlias(t *testing.T) {
 	if err = os.Symlink(canonical, alias); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = verifiedexec.Fingerprint(alias); err == nil {
-		t.Fatal("noncanonical executable reached fingerprint boundary")
+	if resolved := componentExecutable(t, alias); resolved != canonical {
+		t.Fatal("fixture did not select the installed native path")
 	}
-	resolved, digest := componentExecutable(t, alias)
-	expected, err := verifiedexec.Fingerprint(canonical)
-	if err != nil {
+	if err = validateExecutingRunnerPath(alias, canonical); err != nil {
 		t.Fatal(err)
 	}
-	if resolved != canonical || digest != expected {
-		t.Fatal("fixture failed to preserve canonical image identity")
+	other := filepath.Join(directory, "other-installed-runner")
+	if err = os.WriteFile(other, []byte("original fixture source\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateExecutingRunnerPath(alias, other); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("different installed target accepted: %v", err)
 	}
 }

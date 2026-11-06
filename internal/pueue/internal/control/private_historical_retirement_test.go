@@ -228,16 +228,15 @@ func assertPrivateBusyTargetAuthority(t *testing.T, ctx context.Context, fixture
 	recorded := fixture.successor.Binding()
 	firstProposal := recorded
 	firstProposal.DaemonExecutable += "-earlier"
-	firstProposal.DaemonSHA256 = task.ComputeSHA256([]byte("earlier prepared daemon"))
 	for _, proposal := range []task.SupervisorRef{firstProposal, recorded} {
 		matches, err := PrivateMigrationTargetsWithLock(fixture.stateRoot, proposal)
 		if err != nil || matches != (proposal == recorded) {
 			t.Errorf("private intent lost unique recorded target: recorded=%t matches=%t err=%v", proposal == recorded, matches, err)
 		}
 	}
-	retargetable, err := PrivateMigrationRetargetableWithLock(fixture.stateRoot)
-	if err != nil || !retargetable {
-		t.Errorf("Busy intent lost pre-stop retarget authority: retargetable=%t err=%v", retargetable, err)
+	pendingTarget, err := PrivateMigrationTargetsWithLock(fixture.stateRoot, recorded)
+	if err != nil || !pendingTarget {
+		t.Errorf("Busy intent lost fixed recorded target: pendingTarget=%t err=%v", pendingTarget, err)
 	}
 	client, err := PrepareRecordedPrivateMigrationWithLock(ctx, fixture.stateRoot, recorded, fixture.successor.options)
 	if err != nil {

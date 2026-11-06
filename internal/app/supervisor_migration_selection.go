@@ -16,8 +16,8 @@ func newSupervisorCommandResponse(action string) Response {
 	return response
 }
 
-// The accepted startup intent owns resident selection. A resident must never
-// rediscover an installation from the directory containing its staged client.
+// The accepted context owns resident selection. Its pair is derived from the
+// selected installed client; no mutable state inventory or program copy is read.
 // Ordinary CLI migration retains its current-installation selection policy.
 func migrationSupervisorPair(root string, lookup supervisor.ExecutableLookup) (string, string, error) {
 	accepted := lookup.AcceptedBootstrapPair

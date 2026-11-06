@@ -10,7 +10,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -64,8 +63,7 @@ func TestSchedulerDispatchRetainsCleanupBeforeAnyObservation(t *testing.T) {
 	tasks.routing = routing
 	id := strings.Repeat("b", 32)
 	definition := fixture.claim(t, id)
-	var dispatchErr error
-	t.Cleanup(func() { closeSchedulerRoutingTestResources(t, routing.store, dispatchErr) })
+	t.Cleanup(func() { closeSchedulerRoutingTestResources(t, routing.store) })
 	state, dispatchErr := tasks.Dispatch(schedulerruntime.DispatchRequest{TaskID: id, Definition: definition})
 	if routing.calls != 1 || routing.store == nil {
 		t.Fatalf("real dispatch did not reach independent preparation: calls=%d error=%v", routing.calls, dispatchErr)
@@ -74,10 +72,9 @@ func TestSchedulerDispatchRetainsCleanupBeforeAnyObservation(t *testing.T) {
 		t.Fatalf("scheduler observed again after unresolved dispatch cleanup: %+v", state)
 	}
 	var retained *taskAdmissionCleanupError
-	if !errors.Is(dispatchErr, schedulerruntime.ErrTaskCleanupUnresolved) || !errors.As(dispatchErr, &retained) || retained == nil || !retained.lease.CleanupPending() || retained.store != routing.store {
+	if !errors.Is(dispatchErr, schedulerruntime.ErrTaskCleanupUnresolved) || !errors.As(dispatchErr, &retained) || retained == nil || retained.store != routing.store {
 		t.Fatalf("dispatch lost its actual retained parent or Store: %v", dispatchErr)
 	}
-	assertRoutingCleanupBlocksExclusive(t, fixture.state)
 	if _, pinErr := routing.store.PinRootContext(t.Context()); pinErr != nil {
 		t.Fatalf("dispatch closed its retained Store: %v", pinErr)
 	}
@@ -115,11 +112,11 @@ func TestSchedulerObserveRetainsActualRoutedStoreAndStopsAdmission(t *testing.T)
 	}
 	recordSchedulerFixtureReceipt(t, td)
 	routing := &schedulerRetainedRouting{}
-	var observationErr error
-	t.Cleanup(func() { closeSchedulerRoutingTestResources(t, routing.store, observationErr) })
+	t.Cleanup(func() { closeSchedulerRoutingTestResources(t, routing.store) })
 	tasks := schedulerObservationFixture(store)
+	tasks.dependencies.InitialSupervisorExecutable = binding.ClientExecutable
 	tasks.routing = routing
-	_, observationErr = tasks.Observe(td.TaskID)
+	_, observationErr := tasks.Observe(td.TaskID)
 	if routing.calls != 1 || routing.store == nil || routing.store == store || routing.source.Kind != infrastructure.SavedBindingTaskSubmission {
 		t.Fatalf("real scheduler Status path did not route the committed private source: calls=%d source=%+v error=%v", routing.calls, routing.source, observationErr)
 	}
@@ -131,25 +128,8 @@ func TestSchedulerObserveRetainsActualRoutedStoreAndStopsAdmission(t *testing.T)
 	}
 }
 
-func closeSchedulerRoutingTestResources(t *testing.T, store *taskdir.Store, cause error) {
+func closeSchedulerRoutingTestResources(t *testing.T, store *taskdir.Store) {
 	t.Helper()
-	leases := map[*taskdir.RootAdmissionLease]struct{}{}
-	task.AnyErrorNode(cause, func(node error) bool {
-		var owned *supervisor.RootAdmissionCleanupError
-		if errors.As(node, &owned) && owned != nil && owned.Lease() != nil {
-			leases[owned.Lease()] = struct{}{}
-		}
-		var projected *taskAdmissionCleanupError
-		if errors.As(node, &projected) && projected != nil && projected.lease != nil {
-			leases[projected.lease] = struct{}{}
-		}
-		return false
-	})
-	for lease := range leases {
-		if err := lease.Release(); err != nil {
-			t.Error(err)
-		}
-	}
 	if store != nil {
 		if err := store.Close(); err != nil {
 			t.Error(err)
@@ -157,7 +137,7 @@ func closeSchedulerRoutingTestResources(t *testing.T, store *taskdir.Store, caus
 	}
 }
 
-// Required config and binding are historical fixture data. Derived data/run
+// Required config and saved binding are owned fixture data. Derived data/run
 // directories are absent, so the real read-only probe needs routing. No daemon
 // or provider is launched; the recording port returns the actual borrowed Store.
 func schedulerPrivateSavedBinding(t *testing.T, store *taskdir.Store) task.SupervisorRef {
@@ -181,7 +161,7 @@ func schedulerPrivateSavedBinding(t *testing.T, store *taskdir.Store) task.Super
 		t.Fatal(err)
 	}
 	binding := client.Binding()
-	binding.DaemonExecutable, binding.DaemonSHA256 = daemonPath, task.ComputeSHA256([]byte(daemonBody))
+	binding.DaemonExecutable = daemonPath
 	if err = task.ValidateFreshSupervisorRef(binding); err != nil {
 		t.Fatal(err)
 	}

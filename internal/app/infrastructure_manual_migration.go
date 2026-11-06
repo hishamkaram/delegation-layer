@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
@@ -12,7 +11,7 @@ import (
 // The accepted operation owns executable selection. This fixed host runs the
 // same canonical migration as the CLI with its resident guards, not a new
 // migration protocol or an application Dependencies override.
-func (infrastructureEntryHost) MigrateOwnRoot(ctx context.Context, operation infrastructure.Operation, selected infrastructure.LaunchContext, guards infrastructure.ResidentGuards, wait infrastructure.DaemonWaitOwner) (disposition infrastructure.Disposition, report infrastructure.ManualMigrationReport, resultErr error) {
+func (infrastructureEntryHost) migrateOwnRoot(ctx context.Context, operation infrastructure.Operation, selected infrastructure.LaunchContext, guards infrastructure.ResidentGuards, wait infrastructure.DaemonWaitOwner) (disposition infrastructure.Disposition, report infrastructure.ManualMigrationReport, resultErr error) {
 	preparation, err := openInfrastructurePreparation(ctx, operation, selected, guards, wait)
 	defer func() {
 		disposition = preparation.disposition()
@@ -21,7 +20,6 @@ func (infrastructureEntryHost) MigrateOwnRoot(ctx context.Context, operation inf
 	if err != nil {
 		return infrastructure.Disposition{}, report, err
 	}
-	ctx = pueue.WithControlLease(ctx, preparation.admission)
 	state, migrationErr := inspectSupervisorMigration(ctx, preparation.store.Root, preparation.lookup, preparation.options, preparation.store)
 	result := manualSupervisorMigrationResult(state, migrationErr)
 	if result.err == nil && state.current != nil {

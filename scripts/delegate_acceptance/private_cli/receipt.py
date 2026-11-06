@@ -5,6 +5,7 @@ from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.fingerprints import descriptor_evidence
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
+from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 import json
 import platform
 import threading
@@ -37,7 +38,7 @@ class AcceptanceReceipt:
             "source": {
                 "acceptance_private_cli.py": file_fingerprint(REPOSITORY / "scripts" / "acceptance_private_cli.py")
             },
-            "binaries": {role: file_fingerprint(path) for role, path in sorted(binaries.items())},
+            "binaries": {role: installed_executable_observation(path) for role, path in sorted(binaries.items())},
         }
 
     def phase(self, name):
@@ -72,6 +73,11 @@ class AcceptanceReceipt:
     def add_details(self, **values):
         with self.lock:
             self.details.update(values)
+
+    def observe_installations(self, binaries):
+        observations = {role: installed_executable_observation(path) for role, path in binaries.items()}
+        with self.lock:
+            self.fingerprints["binaries"].update(observations)
 
     def write(self, result, cleanup, error=None):
         now = time.monotonic()

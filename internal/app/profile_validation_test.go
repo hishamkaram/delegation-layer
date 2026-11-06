@@ -218,13 +218,8 @@ func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *ru
 }
 
 func (f *runnerRefreshFixture) profile() PreparedProfile {
-	providerExecutable := f.providerExecutable
-	providerBytes, err := os.ReadFile(providerExecutable)
-	if err != nil {
-		providerBytes = nil
-	}
 	return PreparedProfile{
-		Plan:            execution.Plan{Executable: providerExecutable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Directory: f.req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: f.providerExecutable, Directory: f.req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("runner-profile"))},
 	}

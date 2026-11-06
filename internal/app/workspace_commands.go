@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -38,11 +37,6 @@ func workspaceCommand(a Arguments, deps Dependencies) (result commandResult) {
 	ctx, cancel := context.WithTimeout(context.Background(), observationBudget)
 	defer cancel()
 	options := workspaceRuntimeOptions(deps)
-	ctx, lease, err := resources.acquire(ctx, options.RootAdmission, deps.SupervisorOptions)
-	if err != nil {
-		return failed(response, err, 1)
-	}
-	options.RootAdmission = lease
 	resource, err := workspace.LoadResource(ctx, store, a.WorkspaceID)
 	resources.resource = resource
 	if err != nil {
@@ -143,8 +137,7 @@ func workspaceViewRetryable(err error) bool {
 	var lifetimeCleanup *taskdir.LifetimeOwnerCleanupError
 	var admissionCleanup *workspacescore.AdmissionCleanupError
 	var commandCleanup *workspaceCommandCleanupError
-	var rootCleanup *supervisorcore.RootAdmissionCleanupError
-	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) || errors.As(err, &commandCleanup) || errors.As(err, &rootCleanup) {
+	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) || errors.As(err, &commandCleanup) {
 		return false
 	}
 	return task.AllErrorCauses(err, func(cause error) bool {

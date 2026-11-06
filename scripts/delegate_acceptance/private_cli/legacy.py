@@ -3,13 +3,12 @@
 from scripts.delegate_acceptance.private_cli.capture import start_legacy_inspection
 
 
-import hashlib
 import json
 import os
 import shlex
 import uuid
 
-from scripts.delegate_acceptance.directories.operations import rollback_owned_directories, remove_owned_directory
+from scripts.delegate_acceptance.directories.operations import rollback_owned_directories
 
 
 from scripts.delegate_acceptance.private_cli.configuration import COLLECT_TIMEOUT_SECONDS
@@ -45,11 +44,11 @@ def run_legacy_scenario(
         fixture, initial, legacy_mode, lifetime, response_directory
     )
     inspection_task_id, inspection_label = queue_legacy_inspection(initial, lifetime, previous_inspection_labels)
-    state_runner_path = repair_legacy_queued_task(
+    installed_runner_path = repair_legacy_queued_task(
         fixture, lifetime, old_runner_path, queued_label, queued_task_id, response_directory
     )
     validate_legacy_inspection(
-        fixture, inspection_label, inspection_task_id, legacy_mode, lifetime, old_runner_path, state_runner_path
+        fixture, inspection_label, inspection_task_id, legacy_mode, lifetime, old_runner_path, installed_runner_path
     )
     collect_legacy_workers(
         fixture=fixture,
@@ -60,10 +59,10 @@ def run_legacy_scenario(
         queued_label=queued_label,
         queued_task_id=queued_task_id,
         response_directory=response_directory,
-        state_runner_path=state_runner_path,
+        installed_runner_path=installed_runner_path,
     )
     complete_legacy_package_removal(fixture, initial, lifetime, response_directory)
-    upgraded_task_id = dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state_runner_path)
+    upgraded_task_id = dispatch_upgraded_task(fixture, initial, lifetime, response_directory, installed_runner_path)
     restarted_task_id = restart_upgraded_supervisor(fixture, initial, lifetime, response_directory)
     shutdown_private_supervisor(
         lifetime.upgraded_libexec / "pueue",
@@ -151,12 +150,11 @@ def queue_legacy_task(fixture, initial, legacy_mode, lifetime, response_director
         raise RuntimeError("legacy task did not remain queued in the paused default group")
     old_queued_command = queued_row.get("original_command", "")
     old_runner_path = str(lifetime.old_install / "delegate-run")
-    initial_runner_digest = hashlib.sha256(fixture.runner_binary.read_bytes()).hexdigest()
-    stable_runner_path = str(fixture.state / ".supervisor" / ("delegate-run-" + initial_runner_digest))
+    stable_runner_path = str(fixture.runner_binary.resolve(strict=True))
     if legacy_mode and old_runner_path not in old_queued_command:
         raise RuntimeError("legacy queued command does not reference the removable install path")
     if not legacy_mode and stable_runner_path not in old_queued_command:
-        raise RuntimeError("current CLI did not submit the durable state-root runner path")
+        raise RuntimeError("current CLI did not submit its selected installed runner path")
     previous_inspection_labels = {
         row.get("label")
         for row in pueue_snapshot(
@@ -234,7 +232,7 @@ def queue_legacy_inspection(initial, lifetime, previous_inspection_labels):
 def repair_legacy_queued_task(fixture, lifetime, old_runner_path, queued_label, queued_task_id, response_directory):
     # Let the upgraded public CLI recover the queued task while the legacy
     # install is still present, so it can prove the saved runner is managed
-    # and move the command to the new immutable state-root runner.
+    # and select the upgraded installation's runner for the managed command.
     lifetime.env["PATH"] = (
         str(fixture.provider_bin)
         + os.pathsep
@@ -271,28 +269,27 @@ def repair_legacy_queued_task(fixture, lifetime, old_runner_path, queued_label, 
     if migrated_row is None or pueue_state(migrated_row) != "Queued":
         raise RuntimeError("upgraded CLI lost the legacy queued task during status recovery")
     migrated_command = migrated_row.get("original_command", "")
-    upgraded_digest = hashlib.sha256(fixture.upgraded_runner_binary.read_bytes()).hexdigest()
-    state_runner_path = str(fixture.state / ".supervisor" / ("delegate-run-" + upgraded_digest))
-    if state_runner_path not in migrated_command:
+    installed_runner_path = str(fixture.upgraded_runner_binary.resolve(strict=True))
+    if installed_runner_path not in migrated_command:
         queued_meta = json.loads((fixture.state / "tasks" / queued_task_id / "meta.json").read_text())
         raise RuntimeError(
-            "upgraded status did not migrate the queue to its immutable state-root runner: "
+            "upgraded status did not select its installed runner for the managed queue: "
             "status=%r runner=%r ownership=%r expected=%r command=%r"
             % (
                 repaired_status,
                 queued_meta.get("runner_executable"),
                 queued_meta.get("runner_ownership"),
-                state_runner_path,
+                installed_runner_path,
                 migrated_command,
             )
         )
     if old_runner_path in migrated_command:
         raise RuntimeError("migrated queue command still references the old installation")
-    return state_runner_path
+    return installed_runner_path
 
 
 def validate_legacy_inspection(
-    fixture, inspection_label, inspection_task_id, legacy_mode, lifetime, old_runner_path, state_runner_path
+    fixture, inspection_label, inspection_task_id, legacy_mode, lifetime, old_runner_path, installed_runner_path
 ):
     migrated_inspection = task_row_by_label(
         pueue_snapshot(
@@ -311,7 +308,7 @@ def validate_legacy_inspection(
     inspection_request = json.loads(inspection_request_path.read_text())
     upgrade_record_path = fixture.state / "inspections" / inspection_task_id / "worker-upgrade.json"
     if legacy_mode:
-        if old_runner_path not in migrated_inspection_command or state_runner_path in migrated_inspection_command:
+        if old_runner_path not in migrated_inspection_command or installed_runner_path in migrated_inspection_command:
             raise RuntimeError(
                 "upgraded status changed the runner for a legacy inspection with unknown ownership: "
                 + migrated_inspection_command
@@ -322,11 +319,11 @@ def validate_legacy_inspection(
             raise RuntimeError("ambiguous legacy inspection was incorrectly authorized for worker migration")
     else:
         if (
-            state_runner_path not in migrated_inspection_command
+            installed_runner_path not in migrated_inspection_command
             or inspection_request.get("binding", {}).get("runner_ownership") != "managed"
         ):
-            raise RuntimeError("managed inspection did not retain its recorded state-root runner")
-    assert_state_supervisor_pair(fixture.state, lifetime.upgraded_libexec)
+            raise RuntimeError("managed inspection did not select its installed runner")
+    assert_state_supervisor_pair(fixture.state, lifetime.old_libexec)
 
 
 def collect_legacy_workers(
@@ -338,22 +335,9 @@ def collect_legacy_workers(
     queued_label,
     queued_task_id,
     response_directory,
-    state_runner_path,
+    installed_runner_path,
 ):
-    # Keep the old Pueue client layout until the running models command
-    # finishes polling. For legacy records, retain only its pinned worker;
-    # for new records, the state-root copy is sufficient.
-    if legacy_mode:
-        old_install_token = next(
-            entry for entry in lifetime.old_layout_owned if entry.directory == lifetime.old_install
-        )
-        remove_owned_directory(old_install_token)
-        lifetime.old_layout_owned = tuple(
-            entry for entry in lifetime.old_layout_owned if entry is not old_install_token
-        )
-        if (lifetime.old_install / "delegate").exists():
-            raise RuntimeError("old CLI remained after simulated package cleanup")
-
+    # Keep the whole old installation until its ambiguous legacy inspection closes.
     upgraded_pueue = lifetime.upgraded_libexec / "pueue"
     migrated_row = task_row_by_label(
         pueue_snapshot(
@@ -368,8 +352,8 @@ def collect_legacy_workers(
     if migrated_row is None or pueue_state(migrated_row) != "Queued":
         raise RuntimeError("upgraded CLI lost the legacy queued task")
     migrated_command = migrated_row.get("original_command", "")
-    if state_runner_path not in migrated_command:
-        raise RuntimeError("upgraded CLI did not retain the migrated content-addressed runner")
+    if installed_runner_path not in migrated_command:
+        raise RuntimeError("upgraded CLI did not retain the selected installed runner")
     if old_runner_path in migrated_command:
         raise RuntimeError("migrated queue command still references the removed install")
 
@@ -408,7 +392,7 @@ def collect_legacy_workers(
 
 def complete_legacy_package_removal(fixture, initial, lifetime, response_directory):
     # Once the worker has finished, remove the remaining old package and
-    # prove the upgraded CLI uses only its state-root supervisor pair.
+    # prove the upgraded CLI controls the warm generation through its installed client.
     if (lifetime.base / "old").exists() or (lifetime.base / "old").is_symlink():
         rollback_owned_directories(lifetime.old_layout_owned)
         lifetime.old_layout_owned = ()
@@ -428,7 +412,7 @@ def complete_legacy_package_removal(fixture, initial, lifetime, response_directo
         raise RuntimeError("upgraded CLI could not inspect models after old package removal")
 
 
-def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state_runner_path):
+def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, installed_runner_path):
     upgraded_task_id = uuid.uuid4().hex
     lifetime.attempted_task_ids.append(upgraded_task_id)
     lifetime.env["PATH"] = (
@@ -472,8 +456,8 @@ def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state
     if default_group.get("parallel_tasks") != 0:
         raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
     upgraded_meta = json.loads((fixture.state / "tasks" / upgraded_task_id / "meta.json").read_text())
-    if upgraded_meta.get("runner_executable") != state_runner_path:
-        raise RuntimeError("upgraded task metadata did not retain the state-root runner")
+    if upgraded_meta.get("runner_executable") != installed_runner_path:
+        raise RuntimeError("upgraded task metadata did not retain the installed runner")
     upgraded_collected = run_json(
         fixture.upgraded_install / "delegate",
         lifetime.env,
@@ -489,11 +473,7 @@ def dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state
         raise RuntimeError("compatible live supervisor was restarted during ordinary upgraded dispatch")
     if fixture.old_daemon_marker.read_text().splitlines() != ["started"]:
         raise RuntimeError("ordinary upgraded dispatch restarted the original private daemon")
-    adopted_identity = json.loads(initial.identity_path.read_text())
-    if (
-        adopted_identity.get("executable") != str(initial.initial_daemon)
-        or adopted_identity.get("sha256") != initial.old_digest
-    ):
+    if initial.identity_path.read_bytes() != initial.daemon_identity:
         raise RuntimeError("ordinary upgrade adoption rewrote the live daemon identity")
     return upgraded_task_id
 
@@ -557,7 +537,8 @@ def restart_upgraded_supervisor(fixture, initial, lifetime, response_directory):
     upgraded_identity = json.loads(initial.identity_path.read_text())
     if (
         upgraded_identity.get("executable") != str(initial.upgraded_daemon)
-        or upgraded_identity.get("sha256") != initial.upgraded_daemon_digest
+        or upgraded_identity.get("executable_identity") != "installed-path-v1"
+        or upgraded_identity.get("sha256")
     ):
         raise RuntimeError("restarted supervisor did not publish the upgraded daemon identity")
     return restarted_task_id

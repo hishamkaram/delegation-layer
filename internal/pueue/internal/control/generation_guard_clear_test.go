@@ -29,11 +29,9 @@ func TestPrivateGenerationGuardStaleAliasClearRefusesWithoutGrant(t *testing.T) 
 	if err := fixture.client.ClearPrivateRecoveryBindingWithLock(t.Context(), fixture.root, fixture.client.Binding()); !errors.Is(err, denied) || calls != 1 {
 		t.Fatalf("stale alias clear bypassed grant: calls=%d err=%v", calls, err)
 	}
-	if err := ClearPrivateRecoveryBinding(fixture.root, fixture.client.Binding()); !errors.Is(err, ErrInfrastructureOwnerRequired) {
-		t.Fatalf("optionless clear acquired removal authority: %v", err)
-	}
-	if err := ClearPrivateRecoveryBindingIfPresent(fixture.root); !errors.Is(err, ErrInfrastructureOwnerRequired) {
-		t.Fatalf("optionless broad clear acquired removal authority: %v", err)
+	fixture.client.options.PrivateGenerationGuard = nil
+	if err := fixture.client.ClearPrivateRecoveryBindingWithLock(t.Context(), fixture.root, fixture.client.Binding()); !errors.Is(err, ErrInfrastructureOwnerRequired) {
+		t.Fatalf("clear without a resident guard acquired removal authority: %v", err)
 	}
 	if after := snapshotPrivateSuccessorTestState(t, fixture.root); !reflect.DeepEqual(before, after) {
 		t.Fatal("refused stale alias clear changed retained recovery state")
@@ -78,13 +76,9 @@ func TestPrivateGenerationGuardStaleAliasClearComparesInsideCommit(t *testing.T)
 func TestPrivateGenerationGuardAbsentAliasClearRemainsWarm(t *testing.T) {
 	fixture := newGenerationGuardFixture(t)
 	fixture.client.options.PrivateGenerationGuard = nil
-	if err := fixture.client.ClearPrivateRecoveryBindingWithLock(t.Context(), fixture.root, fixture.client.Binding()); err != nil {
-		t.Fatalf("absent alias clear required a resident grant: %v", err)
-	}
-	if err := ClearPrivateRecoveryBinding(fixture.root, fixture.client.Binding()); err != nil {
-		t.Fatalf("absent optionless alias clear required a grant: %v", err)
-	}
-	if err := ClearPrivateRecoveryBindingIfPresent(fixture.root); err != nil {
-		t.Fatalf("absent broad alias clear required a grant: %v", err)
+	for range 2 {
+		if err := fixture.client.ClearPrivateRecoveryBindingWithLock(t.Context(), fixture.root, fixture.client.Binding()); err != nil {
+			t.Fatalf("absent alias clear required a resident grant: %v", err)
+		}
 	}
 }

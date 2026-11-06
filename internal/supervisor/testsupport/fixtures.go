@@ -154,14 +154,6 @@ esac
 	return client, logPath
 }
 
-func RequireExecutable(t *testing.T, runner, contents string) {
-	t.Helper()
-	data, err := os.ReadFile(runner)
-	if err != nil || string(data) != contents {
-		t.Fatalf("runner content = %q, want %q (err=%v)", data, contents, err)
-	}
-}
-
 func WriteExecutable(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

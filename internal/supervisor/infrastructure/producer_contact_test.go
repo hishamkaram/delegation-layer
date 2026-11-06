@@ -17,7 +17,7 @@ func TestProducerWaitForContactPendingPublicationAndNativeExit(t *testing.T) {
 func exerciseProducerWaitForContact(t *testing.T, publish bool) {
 	t.Helper()
 	f := newProducerNativeFixture(t)
-	attempt, err := establishOutside(t.Context(), f.store, f.request, f.host, f.nativeForChild(t, nil, "TestProducerNativePendingChild"))
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.store, f.request, f.host, f.nativeForChild(t, nil, "TestProducerNativePendingChild"))
 	if attempt != nil {
 		f.attempts = append(f.attempts, attempt)
 	}
@@ -55,7 +55,7 @@ func exerciseProducerWaitForContact(t *testing.T, publish bool) {
 func TestProducerWaitForContactJoinedCancellationAndRecordFailure(t *testing.T) {
 	f := producerFixture(t)
 	intent := seedProducerIntent(t, f, 1, false)
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
 	ownProducerAttempt(t, attempt)
 	if err != nil || attempt == nil || attempt.NativeCompletion() != nil {
 		t.Fatalf("join: %v", err)

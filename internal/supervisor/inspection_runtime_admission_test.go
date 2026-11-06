@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,21 +12,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestValidateInspectionRunnerRejectsDigestDrift(t *testing.T) {
+func TestValidateInspectionRunnerKeepsRecordedPath(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
-	request.TaskID = strings.Repeat("e", 32)
-	client, logPath := supervisorfixture.NewBlockingSupervisor(t, store.RootID)
-	runner, err := filepath.EvalSymlinks("/usr/bin/true")
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := strings.Repeat("a", 64)
+	runner := filepath.Join(t.TempDir(), "recorded-worker")
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
-		DefinitionRevision: "inspection-v1", DefinitionSHA256: digest,
-		HelperExecutable: "/usr/bin/true", HelperSHA256: digest,
-		WorkerExecutable: runner, WorkerSHA256: digest,
-		Supervisor: client.Binding(),
+		DefinitionRevision: "inspection-v1", DefinitionSHA256: strings.Repeat("a", 64),
+		HelperExecutable: "/historical/helper", HelperSHA256: strings.Repeat("b", 64),
+		WorkerExecutable: runner, WorkerSHA256: strings.Repeat("c", 64),
+		Supervisor: generationBinding(store.Root, "historical operation data"),
 	}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
@@ -37,14 +30,10 @@ func TestValidateInspectionRunnerRejectsDigestDrift(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	if err = ValidateInspectionRunner(operation, runner); !errors.Is(err, task.ErrEvidenceFault) {
-		t.Fatalf("worker digest drift was accepted: %v", err)
+	if err = ValidateInspectionRunner(operation, runner); err != nil {
+		t.Fatalf("recorded worker required executable contents: %v", err)
 	}
-	invocations, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if count := strings.Count(string(invocations), "arg=status\n"); count != 0 {
-		t.Fatalf("worker digest check launched supervisor observation %d times: %s", count, invocations)
+	if err = ValidateInspectionRunner(operation, filepath.Join(t.TempDir(), "other-worker")); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("different worker accepted: %v", err)
 	}
 }

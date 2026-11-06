@@ -905,8 +905,7 @@ class FreshTurnConsumerTests(unittest.TestCase):
 
 class LineageApplicationTests(unittest.TestCase):
     def _arguments(self, output, *extra):
-        return ["--delegate", "d", "--runner", "r", "--pueue", "p", "--pueued", "q",
-                "--output", str(output), *extra]
+        return ["--source-root", str(application.REPOSITORY), "--output", str(output), *extra]
 
     def test_lineage_is_a_scenario_without_capacity_options(self):
         with tempfile.TemporaryDirectory() as temporary:

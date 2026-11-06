@@ -67,7 +67,7 @@ func runResidentServer(ctx context.Context, server *ownerServer) error {
 	// stopAcceptAndDrain can report retained native cleanup faults after drain;
 	// the actual drained signal, not its error value, controls entry disposal.
 	<-server.drained
-	return closeResidentEntry(context.WithoutCancel(ctx), server.entry, errors.Join(serveErr, prepareErr, drainErr))
+	return finishResidentRuntime(context.WithoutCancel(ctx), server.entry, server.waits, errors.Join(serveErr, prepareErr, drainErr))
 }
 
 // An unresolved close transfers the actual partial owner in the error graph.
@@ -81,6 +81,7 @@ func closeResidentEntry(ctx context.Context, entry *ownedResidentEntry, cause er
 
 type residentEntryCleanupError struct {
 	entry *ownedResidentEntry
+	waits *daemonWaitOwner
 	cause error
 }
 

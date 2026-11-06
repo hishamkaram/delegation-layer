@@ -17,7 +17,7 @@ const MaxInspectionOutput int64 = 1 << 20
 
 // Snapshot validates and copies the serializable effect description. The
 // digest never evaluates callbacks or includes their transient credentials.
-// The worker executable digest separately pins callback implementations.
+// Installed executable paths are selection data, not byte-immutability proof.
 func (d InspectionDefinition) Snapshot() (InspectionDefinition, string, error) {
 	d.Arguments = slices.Clone(d.Arguments)
 	d.Environment = slices.Clone(d.Environment)
@@ -77,27 +77,16 @@ func validateInspectionCommand(d InspectionDefinition) error {
 	if !inspectionText(d.Revision) || strings.TrimSpace(d.Revision) == "" ||
 		d.OutputLimit <= 0 || d.OutputLimit > MaxInspectionOutput ||
 		!inspectionPath(d.Executable) || !inspectionPath(d.Directory) ||
-		validateInspectionExecutableDigest(d) != nil || d.Environment == nil {
+		ValidateOptionalExecutableSHA256(d.ExecutableSHA256) != nil || d.Environment == nil {
 		return fmt.Errorf("%w: invalid inspection command binding", ErrProfileUnavailable)
 	}
 	return nil
 }
 
-// validateInspectionExecutableDigest applies the role of the top-level
-// executable. The installed provider CLI, which model discovery and runtime
-// probes run, carries an optional digest. Any other executable is a native
-// helper whose bytes remain integrity-bound, so its digest is required.
-func validateInspectionExecutableDigest(d InspectionDefinition) error {
-	if d.ProviderExecutable() {
-		return ValidateOptionalExecutableSHA256(d.ExecutableSHA256)
-	}
-	return task.ValidateSHA256(d.ExecutableSHA256)
-}
-
 // ProviderExecutable is the single classifier of the top-level executable's
 // role: the installed provider CLI, which model discovery runs and which a
 // runtime probe shares when both identity fields match, or otherwise an
-// integrity-bound native helper. Admission replay, inspection contract
+// installed native helper. Admission replay, inspection contract
 // digests and the probe all use it.
 func (d InspectionDefinition) ProviderExecutable() bool {
 	return d.Models != nil || (d.Runtime != nil && d.Executable == d.Runtime.Executable && d.ExecutableSHA256 == d.Runtime.ExecutableSHA256)

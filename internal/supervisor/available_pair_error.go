@@ -1,12 +1,26 @@
 package supervisor
 
 import (
+	"context"
 	"errors"
 	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+// Only positive installation absence is optional. Selection and observation
+// keep every independent context or filesystem fault.
+func resolveCompatiblePrivatePair(ctx context.Context, root string, lookup ExecutableLookup) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	client, daemon, err := ResolvePrivateSupervisorExecutables(root, lookup)
+	if unavailableBundledPair(err) && ctx.Err() == nil {
+		return "", "", pueue.ErrCompatiblePairUnavailable
+	}
+	return client, daemon, errors.Join(err, ctx.Err())
+}
 
 // Only a raw installation lookup can classify this observation. Inventory
 // validation returns before this boundary, so missing inventory members remain

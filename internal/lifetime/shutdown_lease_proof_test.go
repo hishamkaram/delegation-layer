@@ -5,8 +5,6 @@ package lifetime
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,9 +14,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -82,8 +77,7 @@ func TestShutdownLeaseNativeProof(t *testing.T) {
 	}
 }
 
-func verifyShutdownLeaseBinary(ctx context.Context) (string, error) {
-	candidate := os.Getenv("DELEGATE_SHUTDOWN_LEASE_PUEUE")
+func shutdownLeaseBinaryPath(candidate string) (string, error) {
 	if !filepath.IsAbs(candidate) {
 		return "", errors.New("DELEGATE_SHUTDOWN_LEASE_PUEUE must name an absolute native fixture")
 	}
@@ -98,21 +92,13 @@ func verifyShutdownLeaseBinary(ctx context.Context) (string, error) {
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", errors.New("native Pueue fixture must be an executable regular file")
 	}
-	asset, err := shutdownLeaseAsset()
+	return path, nil
+}
+
+func verifyShutdownLeaseBinary(ctx context.Context) (string, error) {
+	path, err := shutdownLeaseBinaryPath(os.Getenv("DELEGATE_SHUTDOWN_LEASE_PUEUE"))
 	if err != nil {
 		return "", err
-	}
-	expected, err := shutdownLeasePinnedSHA(asset)
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	actual := sha256.Sum256(data)
-	if hex.EncodeToString(actual[:]) != expected {
-		return "", errors.New("native Pueue differs from independently pinned release SHA256")
 	}
 	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -126,42 +112,6 @@ func verifyShutdownLeaseBinary(ctx context.Context) (string, error) {
 		return "", errors.New("native fixture did not report exact pinned Pueue 4.0.4")
 	}
 	return path, nil
-}
-
-func shutdownLeaseAsset() (string, error) {
-	architecture := ""
-	switch runtime.GOARCH {
-	case "amd64":
-		architecture = "x86_64"
-	case "arm64":
-		architecture = "aarch64"
-	default:
-		return "", errors.New("no independently pinned native fixture architecture")
-	}
-	platform := "unknown-linux-musl"
-	if runtime.GOOS == "darwin" {
-		platform = "apple-darwin"
-	}
-	return "pueue-" + architecture + "-" + platform, nil
-}
-
-func shutdownLeasePinnedSHA(asset string) (string, error) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "test-supervisor-sha256.txt"))
-	if err != nil {
-		return "", err
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 || fields[1] != asset {
-			continue
-		}
-		decoded, decodeErr := hex.DecodeString(fields[0])
-		if decodeErr != nil || len(decoded) != sha256.Size {
-			return "", errors.New("malformed independently pinned Pueue digest")
-		}
-		return fields[0], nil
-	}
-	return "", errors.New("native Pueue asset absent from independent release digests")
 }
 
 func (p *shutdownLeaseProof) run(ctx context.Context, t *testing.T) error {
@@ -650,20 +600,34 @@ func testShutdownLeaseCancellation(t *testing.T) {
 	}
 }
 
-// Keep independently selected manifest parsing observable on ordinary discovery.
-func TestShutdownLeasePinnedAsset(t *testing.T) {
-	asset, err := shutdownLeaseAsset()
-	if err != nil {
+// The contributor installer verifies its distribution archive before supplying
+// this role. Selection checks metadata; the native case checks required CLI and
+// descriptor behavior. Neither step hashes installed program contents.
+func TestShutdownLeaseInstalledFixtureSelection(t *testing.T) {
+	base := t.TempDir()
+	installed := filepath.Join(base, "pueue")
+	if err := os.WriteFile(installed, []byte("owned fixture source\n"), 0o111); err != nil {
 		t.Fatal(err)
 	}
-	expected, err := shutdownLeasePinnedSHA(asset)
-	if err != nil {
+	alias := filepath.Join(base, "alias")
+	if err := os.Symlink(installed, alias); err != nil {
 		t.Fatal(err)
 	}
-	if len(expected) != 64 {
-		t.Fatal("independent fixture digest must be SHA256")
+	for _, selected := range []string{installed, alias} {
+		actual, err := shutdownLeaseBinaryPath(selected)
+		if err != nil || actual != installed {
+			t.Fatalf("installed role selection=%q error=%v", actual, err)
+		}
 	}
-	if _, err = strconv.ParseUint(expected[:8], 16, 32); err != nil {
+	for _, selected := range []string{"pueue", base, filepath.Join(base, "missing")} {
+		if _, err := shutdownLeaseBinaryPath(selected); err == nil {
+			t.Fatalf("invalid installed role accepted: %q", selected)
+		}
+	}
+	if err := os.Chmod(installed, 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := shutdownLeaseBinaryPath(installed); err == nil {
+		t.Fatal("nonexecutable installed role accepted")
 	}
 }

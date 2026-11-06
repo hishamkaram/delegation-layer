@@ -34,12 +34,8 @@ func TestAdmissionRetainsRoutedChildrenUntilTheirOwnersClose(t *testing.T) {
 
 func exerciseRoutedAdmissionCleanup(t *testing.T, projected bool) {
 	t.Helper()
-	store, _ := workspacefixture.NewResource(t)
-	root, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission := &Admission{rootAdmission: root}
+	store, resource := workspacefixture.NewResource(t)
+	admission := &Admission{resource: resource}
 	first := &retainedRoutingStoreError{store: store, cause: errors.New("first routed cleanup unresolved")}
 	second := &retainedRoutingStoreError{store: store, cause: errors.New("second routed cleanup unresolved")}
 	t.Cleanup(func() {
@@ -53,15 +49,15 @@ func exerciseRoutedAdmissionCleanup(t *testing.T, projected bool) {
 		cause = errors.Join(routedCleanupProjectionError{owner: first}, routedCleanupProjectionError{owner: second})
 	}
 	finished := admission.FinishContext(t.Context(), store, cause, false, nil)
-	if finished.CloseError == nil || !admission.CleanupPending() || !root.RetainsStore(store) {
+	if finished.CloseError == nil || !admission.CleanupPending() {
 		t.Fatal("routed child caused early admission release")
 	}
 	first.store = nil
-	if closeErr := admission.Close(); closeErr == nil || !root.RetainsStore(store) {
+	if closeErr := admission.Close(); closeErr == nil {
 		t.Fatal("first settled child hid second routed owner")
 	}
 	second.store = nil
-	if err = admission.Close(); err != nil || admission.CleanupPending() || root.RetainsStore(store) {
+	if err := admission.Close(); err != nil || admission.CleanupPending() {
 		t.Fatal("settled routed owners prevented parent cleanup")
 	}
 }

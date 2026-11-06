@@ -41,7 +41,7 @@ INSPECTION = "3" * 32
 
 def invocation(*extra, scenario=EXTERNAL_NOEXEC_STATE_SCENARIO):
     return [
-        "acceptance-private-cli", "--delegate", "/b/delegate", "--runner", "/b/delegate-run",
+        "acceptance-private-cli", "--source-root", "/source",
         "--pueue", "/b/pueue", "--pueued", "/b/pueued", "--output", "/b/receipt.json",
         "--scenario", scenario, *extra,
     ]
@@ -113,7 +113,7 @@ class NoexecArgumentsTests(unittest.TestCase):
                 )
 
     def test_scenario_rejects_runtime_only_and_upgraded_installations(self):
-        for extra in (["--runtime-only"], ["--upgraded-delegate", "/c/delegate"], ["--upgraded-runner", "/c/runner"]):
+        for extra in (["--runtime-only"], ["--upgraded-source-root", "/candidate"]):
             with self.subTest(extra=extra):
                 message = self.rejected("--parallel-tasks", "1", "--noexec-state-parent", "/mnt/noexec", *extra)
                 self.assertIn("current installation only", message)

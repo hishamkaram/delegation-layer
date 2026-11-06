@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,26 +14,48 @@ import (
 )
 
 func TestMigratePrivateSupervisorRecoversMissingLogicalBindingFromLivePredecessor(t *testing.T) {
-	base, stateRoot := newPrivateSupervisorTestRoots(t)
-	clientPath := filepath.Join(base, "pueue")
-	oldDaemonPath := filepath.Join(base, "old-pueued")
-	currentDaemonPath := filepath.Join(base, "current-pueued")
-	writeExecutable(t, clientPath, privateClientFixture)
-	writeExecutable(t, oldDaemonPath, privateDaemonFixture)
-	writeExecutable(t, currentDaemonPath, privateDaemonFixture+"\n# current bundle\n")
-	options := privateMigrationTestOptions(stateRoot, privateTestObservationTimeout)
-	if _, err := BindPrivate(context.Background(), clientPath, oldDaemonPath, stateRoot, options); err != nil {
-		t.Fatal(err)
+	for _, removeInstallation := range []bool{false, true} {
+		name := "installed predecessor"
+		if removeInstallation {
+			name = "removed predecessor installation"
+		}
+		t.Run(name, func(t *testing.T) {
+			assertMissingLogicalBindingMigration(t, removeInstallation)
+		})
 	}
+}
+
+func assertMissingLogicalBindingMigration(t *testing.T, removeInstallation bool) {
+	t.Helper()
+	base, stateRoot := newPrivateSupervisorTestRoots(t)
+	oldInstallation := filepath.Join(base, "predecessor")
+	oldClientPath, oldDaemonPath := installPrivateSupervisorPair(t, oldInstallation)
+	clientPath, currentDaemonPath := installPrivateSupervisorPair(t, filepath.Join(base, "current"))
+	options := privateMigrationTestOptions(stateRoot, privateTestObservationTimeout)
+	waitOwner, joinDaemons := ownPrivateRecoveryDaemonWaits(t, stateRoot)
+	options.DaemonWaitOwner = waitOwner
+	legacy := bindPrivateSetupForTest(t, stateRoot, oldClientPath, oldDaemonPath, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	options = legacy.options // Carry the actual daemon Wait owner into every launch.
+	legacyBinding := legacy.Binding()
+	legacyIdentity := readPrivateDaemonIdentity(t, stateRoot)
 	if err := os.Remove(privateSupervisorBindingPath(stateRoot)); err != nil {
 		t.Fatal(err)
 	}
-	current, err := BindPrivate(context.Background(), clientPath, currentDaemonPath, stateRoot, options)
-	if err != nil {
-		t.Fatal(err)
+	current := preparePrivateCandidateForTest(t, stateRoot, clientPath, currentDaemonPath, options)
+	if removeInstallation {
+		// Close joins the predecessor's control work before removing its CLI.
+		if err := legacy.Close(); err != nil {
+			t.Fatal(err)
+		}
+		joinDaemons()
+		removePrivateTestPath(t, oldInstallation)
 	}
-	if err = WithBootstrapLock(context.Background(), stateRoot, func() error {
-		return current.MigratePrivateSupervisorWithLock(context.Background(), stateRoot)
+	if got := readPrivateDaemonIdentity(t, stateRoot); got != legacyIdentity {
+		t.Fatal("candidate preparation changed the predecessor's persisted identity")
+	}
+	if err := WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		return current.MigratePrivateSupervisorWithLock(ctx, stateRoot)
 	}); err != nil {
 		t.Fatalf("migration did not recover missing logical binding: %v", err)
 	}
@@ -43,6 +66,120 @@ func TestMigratePrivateSupervisorRecoversMissingLogicalBindingFromLivePredecesso
 	if !found || !task.SameSupervisorIdentity(persisted, current.Binding()) {
 		t.Fatalf("successor logical binding was not published: found=%t binding=%+v want=%+v", found, persisted, current.Binding())
 	}
+	assertRecoveredPrivateMigrationPredecessor(t, stateRoot, legacyBinding)
+	assertPrivateDaemonStartCount(t, stateRoot, 2)
+}
+
+// The finite authored daemons publish readiness and exit. Retain their actual
+// startDaemon Wait completions, including on assertion failure, before any
+// owned installation or state path is removed.
+func ownPrivateRecoveryDaemonWaits(t *testing.T, stateRoot string) (DaemonWaitOwner, func()) {
+	t.Helper()
+	var waits []<-chan struct{}
+	join := func() {
+		for _, done := range waits {
+			<-done
+		}
+	}
+	t.Cleanup(func() {
+		join()
+		// These markers belong to the finite authored fixture, whose actual
+		// processes have now exited. They are not native termination evidence.
+		removePrivateTestDaemonState(t, stateRoot)
+	})
+	return daemonWaitOwnerFunc(func(_ string, _ int, done <-chan struct{}) error {
+		waits = append(waits, done)
+		return nil
+	}), join
+}
+
+func ownPrivateMigrationTestClient(t *testing.T, client *Client) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func assertRecoveredPrivateMigrationPredecessor(t *testing.T, stateRoot string, legacy task.SupervisorRef) {
+	t.Helper()
+	history, found, err := loadPrivateMigrationHistory(filepath.Join(stateRoot, privateSupervisorDirectory))
+	if err != nil || !found || len(history.Migrations) != 1 {
+		t.Fatalf("recovered predecessor history: found=%t history=%+v err=%v", found, history, err)
+	}
+	if got := history.Migrations[0].Legacy; got != privateDaemonIdentityForBinding(legacy) {
+		t.Fatalf("migration replaced the predecessor's saved daemon coordinates or logical facts: got=%+v want=%+v", got, privateDaemonIdentityForBinding(legacy))
+	}
+}
+
+func TestMissingLogicalBindingRejectsMismatchedPendingPredecessorBeforePublication(t *testing.T) {
+	base, stateRoot := newPrivateSupervisorTestRoots(t)
+	oldClient, oldDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "predecessor"))
+	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(base, "selected"))
+	options := privateMigrationTestOptions(stateRoot, privateTestObservationTimeout)
+	waitOwner, _ := ownPrivateRecoveryDaemonWaits(t, stateRoot)
+	options.DaemonWaitOwner = waitOwner
+	legacy := bindPrivateSetupForTest(t, stateRoot, oldClient, oldDaemon, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	current := preparePrivateCandidateForTest(t, stateRoot, clientPath, daemonPath, legacy.options)
+	pending := privateMigrationRecord{
+		SchemaVersion: task.SchemaVersion,
+		Legacy:        privateDaemonIdentityForBinding(legacy.Binding()),
+		Successor:     privateDaemonIdentityForBinding(current.Binding()),
+	}
+	pending.Legacy.ConfigDigest = task.ComputeSHA256([]byte("another predecessor config"))
+	privateBase := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := publishPrivateMigrationState(privateBase, pending); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(privateSupervisorBindingPath(stateRoot)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotPrivateSuccessorTestState(t, stateRoot)
+	err := WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		return current.MigratePrivateSupervisorWithLock(ctx, stateRoot)
+	})
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("mismatched pending predecessor was accepted: %v", err)
+	}
+	if after := snapshotPrivateSuccessorTestState(t, stateRoot); !reflect.DeepEqual(before, after) {
+		t.Fatal("mismatched pending predecessor published or changed durable generation state")
+	}
+	assertPrivateDaemonStartCount(t, stateRoot, 1)
+}
+
+func TestMissingLogicalBindingRejectsUnmarkedHistoricalDaemonWithoutFullReference(t *testing.T) {
+	base, stateRoot := newPrivateSupervisorTestRoots(t)
+	oldClient, oldDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "predecessor"))
+	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(base, "selected"))
+	options := privateMigrationTestOptions(stateRoot, privateTestObservationTimeout)
+	waitOwner, _ := ownPrivateRecoveryDaemonWaits(t, stateRoot)
+	options.DaemonWaitOwner = waitOwner
+	legacy := bindPrivateSetupForTest(t, stateRoot, oldClient, oldDaemon, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	current := preparePrivateCandidateForTest(t, stateRoot, clientPath, daemonPath, legacy.options)
+	identity := privateDaemonIdentityForBinding(legacy.Binding())
+	// A frozen historical digest is decoded record data. It proves no installed
+	// bytes and supplies neither the absent old client nor resolver provenance.
+	_, historical := installedIdentityLegacyRef(t)
+	identity.ExecutableIdentity = ""
+	identity.SHA256 = historical.DaemonSHA256
+	writePrivateSuccessorTestRecord(t, privateDaemonIdentityPath(filepath.Join(stateRoot, privateSupervisorDirectory)), identity)
+	if err := os.Remove(privateSupervisorBindingPath(stateRoot)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotPrivateSuccessorTestState(t, stateRoot)
+	err := WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		return current.MigratePrivateSupervisorWithLock(ctx, stateRoot)
+	})
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("unmarked historical daemon supplied a complete predecessor binding: %v", err)
+	}
+	if after := snapshotPrivateSuccessorTestState(t, stateRoot); !reflect.DeepEqual(before, after) {
+		t.Fatal("incomplete historical predecessor was relabeled or published")
+	}
+	assertPrivateDaemonStartCount(t, stateRoot, 1)
 }
 
 func TestMigratePrivateSupervisorRejectsChangedConfigWithoutLogicalPredecessorProof(t *testing.T) {
@@ -63,10 +200,7 @@ func TestMigratePrivateSupervisorRejectsChangedConfigWithoutLogicalPredecessorPr
 		removePrivateTestDaemonState(t, stateRoot)
 	})
 	identityPath := privateDaemonIdentityPath(filepath.Join(stateRoot, privateSupervisorDirectory))
-	writePrivateSuccessorTestRecord(t, identityPath, privateDaemonIdentity{
-		Executable: legacyBinding.DaemonExecutable,
-		SHA256:     legacyBinding.DaemonSHA256,
-	})
+	writePrivateSuccessorTestRecord(t, identityPath, privateDaemonIdentityForBinding(legacyBinding))
 	configData, err := os.ReadFile(legacyBinding.ConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +327,8 @@ func TestRetirePrivateRecoveryBindingRemovesStaleAliasAfterSuccessorReady(t *tes
 	successor.ResolvedConfigSHA256 = task.ComputeSHA256([]byte("successor-resolved-config"))
 	successor.Endpoint = "unix:/successor.sock"
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, currentDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
 		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
@@ -236,7 +371,8 @@ func TestRetirePrivateRecoveryBindingRemovesAliasForSameSuccessor(t *testing.T) 
 	writeExecutable(t, currentDaemon, privateDaemonFixture+"\n# same logical successor\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, currentDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
 		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, successor, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
@@ -260,13 +396,15 @@ func TestRetirePrivateRecoveryBindingRejectsUnrelatedSuccessor(t *testing.T) {
 	writeExecutable(t, otherDaemon, privateDaemonFixture+"\n# unrelated successor\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, currentDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	recordBefore := readPrivateSupervisorFile(t, privateRecoveryRecordPath(fixture.stateRoot))
 	configBefore := readPrivateSupervisorFile(t, privateRecoveryConfigPath(fixture.stateRoot))
 	unrelated := successor
 	unrelated.DaemonExecutable = canonicalPrivateTestExecutable(t, otherDaemon)
-	unrelated.DaemonSHA256 = hashPrivateTestExecutable(t, otherDaemon)
+	unrelated.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	unrelated.ClientSHA256, unrelated.DaemonSHA256 = "", ""
 	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
 		return RetirePrivateRecoveryBindingWithOptionsContext(t.Context(), fixture.stateRoot, unrelated, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
 	}); err == nil {
@@ -298,7 +436,8 @@ func TestRetirePrivateRecoveryBindingRejectsMismatchedSuccessorHistory(t *testin
 	writeExecutable(t, otherDaemon, privateDaemonFixture+"\n# history mismatch\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, currentDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, currentDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	historyPath := privateMigrationHistoryPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory))
 	history, found, err := loadPrivateMigrationHistory(filepath.Dir(historyPath))
@@ -306,7 +445,7 @@ func TestRetirePrivateRecoveryBindingRejectsMismatchedSuccessorHistory(t *testin
 		t.Fatalf("successor history was not seeded: found=%t err=%v", found, err)
 	}
 	history.Migrations[0].Successor.Executable = canonicalPrivateTestExecutable(t, otherDaemon)
-	history.Migrations[0].Successor.SHA256 = hashPrivateTestExecutable(t, otherDaemon)
+	history.Migrations[0].Successor.Executable = canonicalPrivateTestExecutable(t, otherDaemon)
 	writePrivateSuccessorTestRecord(t, historyPath, history)
 	recordBefore := readPrivateSupervisorFile(t, privateRecoveryRecordPath(fixture.stateRoot))
 	configBefore := readPrivateSupervisorFile(t, privateRecoveryConfigPath(fixture.stateRoot))
@@ -331,7 +470,8 @@ func TestRetirePrivateRecoveryBindingRejectsIncompletePredecessorShutdown(t *tes
 	writeExecutable(t, successorDaemon, privateDaemonFixture+"\n# incomplete-history successor\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, successorDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, successorDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	historyPath := privateMigrationHistoryPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory))
 	writePrivateSuccessorTestRecord(t, historyPath, privateMigrationHistory{
@@ -394,7 +534,8 @@ func TestRetirePrivateRecoveryBindingRetriesOrphanedConfig(t *testing.T) {
 	writeExecutable(t, successorDaemon, privateDaemonFixture+"\n# orphan cleanup successor\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, successorDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, successorDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := os.Remove(privateRecoveryRecordPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
@@ -435,7 +576,8 @@ func TestRetirePrivateRecoveryBindingCleansPartiallyRemovedRecord(t *testing.T) 
 	writeExecutable(t, successorDaemon, privateDaemonFixture+"\n# partial cleanup successor\n")
 	successor := legacy.Binding()
 	successor.DaemonExecutable = canonicalPrivateTestExecutable(t, successorDaemon)
-	successor.DaemonSHA256 = hashPrivateTestExecutable(t, successorDaemon)
+	successor.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	successor.ClientSHA256, successor.DaemonSHA256 = "", ""
 	seedPrivateRecoveryRetirementSuccessor(t, fixture.stateRoot, legacy.Binding(), successor)
 	if err := os.Remove(privateRecoveryConfigPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
@@ -450,33 +592,66 @@ func TestRetirePrivateRecoveryBindingCleansPartiallyRemovedRecord(t *testing.T) 
 	}
 }
 
-func TestSelectRecoveryDaemonUsesFallbackAfterSavedBytesChange(t *testing.T) {
+func TestSelectRecoveryDaemonKeepsRecordedInstalledPathAfterCompatibleUpdate(t *testing.T) {
 	base := canonicalTemp(t)
-	savedPath := filepath.Join(base, "saved-pueued")
-	fallbackPath := filepath.Join(base, "current-pueued")
-	writeExecutable(t, savedPath, "#!/bin/sh\nold\n")
-	writeExecutable(t, fallbackPath, "#!/bin/sh\ncurrent\n")
-	savedDigest, err := hashExecutable(savedPath)
-	if err != nil {
+	savedPath, fallbackPath := filepath.Join(base, "saved-pueued"), filepath.Join(base, "current-pueued")
+	writeExecutable(t, savedPath, "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, fallbackPath, "#!/bin/sh\nexit 0\n")
+	saved := task.SupervisorRef{ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, DaemonExecutable: savedPath}
+	writeExecutable(t, savedPath, "#!/bin/sh\n# compatible installed update\nexit 0\n")
+	got, err := selectRecoveryDaemon(saved, fallbackPath)
+	if err != nil || got != savedPath {
+		t.Fatalf("recorded daemon selection = %q, %v", got, err)
+	}
+	if err = os.Remove(savedPath); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(savedPath, []byte("#!/bin/sh\nreplaced\n"), 0o700); err != nil {
+	got, err = selectRecoveryDaemon(saved, fallbackPath)
+	if err != nil || got != fallbackPath {
+		t.Fatalf("absent recorded daemon fallback = %q, %v", got, err)
+	}
+	if err = os.Mkdir(savedPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	saved := task.SupervisorRef{DaemonExecutable: savedPath, DaemonSHA256: savedDigest}
-	got, digest, err := selectRecoveryDaemon(saved, fallbackPath)
-	if err != nil {
-		t.Fatalf("select recovery daemon failed: %v", err)
+	if _, err = selectRecoveryDaemon(saved, fallbackPath); err == nil {
+		t.Fatal("invalid recorded role silently fell back")
 	}
-	want, err := canonicalExecutable(fallbackPath)
-	if err != nil {
+}
+
+func TestMissingLogicalBindingResumesStoppedSuccessor(t *testing.T) {
+	base, root := newPrivateSupervisorTestRoots(t)
+	oldClient, oldDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "predecessor"))
+	clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(base, "successor"))
+	options := privateMigrationTestOptions(root, privateTestObservationTimeout)
+	waitOwner, _ := ownPrivateRecoveryDaemonWaits(t, root)
+	options.DaemonWaitOwner = waitOwner
+	legacy := bindPrivateSetupForTest(t, root, oldClient, oldDaemon, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	current := preparePrivateCandidateForTest(t, root, clientPath, daemonPath, legacy.options)
+	if err := WithBootstrapLockContext(t.Context(), root, func(ctx context.Context) error {
+		return current.MigratePrivateSupervisorWithLock(ctx, root)
+	}); err != nil {
 		t.Fatal(err)
 	}
-	wantDigest, err := hashExecutable(want)
-	if err != nil {
-		t.Fatal(err)
+	privateBase := filepath.Join(root, privateSupervisorDirectory)
+	history, found, err := loadPrivateMigrationHistory(privateBase)
+	if err != nil || !found || len(history.Migrations) != 1 {
+		t.Fatalf("completed migration history: %+v found=%t err=%v", history, found, err)
 	}
-	if got != want || digest != wantDigest {
-		t.Fatalf("fallback daemon = (%q, %q), want (%q, %q)", got, digest, want, wantDigest)
+	if err := WithBootstrapLockContext(t.Context(), root, func(ctx context.Context) error {
+		if err := publishPrivateMigrationStateContext(ctx, privateBase, history.Migrations[0], legacy.options.PrivateGenerationGuard); err != nil {
+			return err
+		}
+		if err := os.Remove(privateSupervisorBindingPath(root)); err != nil {
+			return err
+		}
+		return current.MigratePrivateSupervisorWithLock(ctx, root)
+	}); err != nil {
+		t.Fatalf("stopped successor could not recover its missing logical binding: %v", err)
+	}
+	assertPrivateDaemonIdentityMatchesBinding(t, root, current.Binding())
+	assertPrivateDaemonStartCount(t, root, 2)
+	if pending, err := PrivateSupervisorMigrationPending(root); err != nil || pending {
+		t.Fatalf("stopped replay retained migration journal: pending=%t err=%v", pending, err)
 	}
 }

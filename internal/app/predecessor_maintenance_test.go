@@ -12,7 +12,7 @@ import (
 func TestPredecessorTerminatedPreservesSubmissionDeferral(t *testing.T) {
 	fixture := prepareHistoricalObservationPhase(t, pueue.StateStashed)
 	prepareCompleteStashedObservationClient(t, fixture)
-	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 	before := snapshotObservationPhaseRecords(t, fixture)
 	commands := observePhaseStatusCommands(fixture)
 

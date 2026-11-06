@@ -46,7 +46,7 @@ func prepareDispatchContinuationContext(ctx context.Context, store *taskdir.Stor
 	if err = ValidateContinuationEnvironment(meta); err != nil {
 		return options, nil, err
 	}
-	prior, err := ResolvePredecessorContext(ctx, store, PredecessorOptions{RootAdmission: options.Creation.RootAdmission, Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
+	prior, err := ResolvePredecessorContext(ctx, store, PredecessorOptions{Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
 	if err != nil {
 		return options, nil, err
 	}

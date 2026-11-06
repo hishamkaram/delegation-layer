@@ -15,23 +15,25 @@ import (
 // These fixtures neither launch a native pueued nor prove resident authority.
 func TestProbeSavedPrivateCompatibleHealthyExactIgnoresSelector(t *testing.T) {
 	f := newCompletedPrivateSuccessorTestFixture(t, true)
-	before := snapshotSavedProbeTestState(t, f.stateRoot)
-	called := 0
-	selector := func(context.Context) (string, string, error) {
-		called++
-		return "", "", errors.New("unused install unavailable")
+	for _, saved := range []task.SupervisorRef{f.saved, f.successor} {
+		before := snapshotSavedProbeTestState(t, f.stateRoot)
+		called := 0
+		selector := func(context.Context) (string, string, error) {
+			called++
+			return "", "", errors.New("unused install unavailable")
+		}
+		client, err := ProbeSavedPrivateCompatible(t.Context(), f.stateRoot, saved, f.options, selector)
+		closeSavedProbeTestClient(t, client, err)
+		if err != nil || client == nil || called != 0 || client.Binding() != saved || client.RuntimeBinding() != f.successor {
+			t.Fatalf("healthy exact selection: client=%t calls=%d err=%v", client != nil, called, err)
+		}
+		assertSavedProbeTestUnchanged(t, f.stateRoot, before)
+		assertPrivateDaemonStartCount(t, f.stateRoot, 2)
 	}
-	client, err := ProbeSavedPrivateCompatible(t.Context(), f.stateRoot, f.saved, f.options, selector)
-	closeSavedProbeTestClient(t, client, err)
-	if err != nil || client == nil || called != 0 || client.Binding() != f.saved || client.RuntimeBinding() != f.successor {
-		t.Fatalf("healthy exact selection: client=%t calls=%d err=%v", client != nil, called, err)
-	}
-	assertSavedProbeTestUnchanged(t, f.stateRoot, before)
-	assertPrivateDaemonStartCount(t, f.stateRoot, 2)
 }
 
 func TestProbeSavedPrivateCompatibleUnavailablePairReadsThroughD(t *testing.T) {
-	for _, damage := range []string{"missing client", "missing daemon", "changed client", "changed daemon"} {
+	for _, damage := range []string{"missing client", "missing daemon"} {
 		t.Run(damage, func(t *testing.T) {
 			f := newCompletedPrivateSuccessorTestFixture(t, true)
 			clientPath, daemonPath := installPrivateSupervisorPair(t, filepath.Join(f.base, "available-D"))
@@ -63,18 +65,14 @@ func damageCompatibleProbePair(t *testing.T, f completedPrivateSuccessorTestFixt
 	if damage == "missing daemon" || damage == "changed daemon" {
 		path = f.daemonPath
 	}
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	source := privateClientFixture
+	if damage == "missing daemon" || damage == "changed daemon" {
+		source = privateDaemonFixture
 	}
-	// Restore the original pair before the fixture's canonical shutdown cleanup.
-	t.Cleanup(func() {
-		if restoreErr := os.WriteFile(path, bytes, 0o700); restoreErr != nil {
-			t.Error(restoreErr)
-		}
-	})
+	// Cleanup restores original fixture source without reading the installed file.
+	t.Cleanup(func() { writeExecutable(t, path, source) })
 	if damage == "missing client" || damage == "missing daemon" {
-		if err = os.Remove(path); err != nil {
+		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 	} else {
@@ -116,6 +114,23 @@ func TestProbeSavedPrivateCompatibleStoppedDoesNotStart(t *testing.T) {
 	}
 }
 
+func TestProbeSavedPrivateCompatibleMissingSelectedPairIsOperational(t *testing.T) {
+	f := newCompletedPrivateSuccessorTestFixture(t, false)
+	removePrivateTestPath(t, filepath.Join(f.base, "completed"))
+	before := snapshotSavedProbeTestState(t, f.stateRoot)
+	called := 0
+	client, err := ProbeSavedPrivateCompatible(t.Context(), f.stateRoot, f.saved, f.options, func(context.Context) (string, string, error) {
+		called++
+		return f.clientPath, f.daemonPath, nil
+	})
+	closeSavedProbeTestClient(t, client, err)
+	if client != nil || called != 1 || !errors.Is(err, ErrBinding) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing selected transport became clean not-ready: client=%t calls=%d err=%v", client != nil, called, err)
+	}
+	assertSavedProbeTestUnchanged(t, f.stateRoot, before)
+	assertPrivateDaemonStartCount(t, f.stateRoot, 1)
+}
+
 func TestProbeSavedPrivateCompatibleUnrelatedSavedDoesNotSelectD(t *testing.T) {
 	f := newCompletedPrivateSuccessorTestFixture(t, true)
 	damageCompatibleProbePair(t, f, "missing client")
@@ -143,13 +158,30 @@ func TestProbeSavedPrivateCompatibleSelectorFaultGraphIsHard(t *testing.T) {
 	assertSavedProbeTestUnchanged(t, f.stateRoot, before)
 }
 
-func TestProbeSavedPrivateCompatibleLeavesExactAPIUnchanged(t *testing.T) {
+func TestProbeSavedPrivateTaskObservationUnrelatedCompleteExactStaysNotReady(t *testing.T) {
 	f := newCompletedPrivateSuccessorTestFixture(t, true)
-	damageCompatibleProbePair(t, f, "missing client")
-	dClient, dDaemon := installPrivateSupervisorPair(t, filepath.Join(f.base, "available-D"))
-	client, err := ProbeSavedPrivate(t.Context(), f.stateRoot, f.saved, dClient, dDaemon, f.options)
-	closeSavedProbeTestClient(t, client, err)
-	if client != nil || err != nil {
-		t.Fatalf("old exact probe was broadened: client=%t err=%v", client != nil, err)
+	saved := f.saved
+	saved.ConfigDigest = task.ComputeSHA256([]byte("unrelated saved config"))
+	for _, probe := range []struct {
+		name string
+		run  func(context.Context, string, task.SupervisorRef, Options, CompatiblePairSelector) (*Client, error)
+	}{
+		{name: "general", run: ProbeSavedPrivateCompatible},
+		{name: "task observation", run: ProbeSavedPrivateTaskObservation},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			before := snapshotSavedProbeTestState(t, f.stateRoot)
+			called := 0
+			client, err := probe.run(t.Context(), f.stateRoot, saved, f.options, func(context.Context) (string, string, error) {
+				called++
+				return "", "", errors.New("ready exact pair must not select another installation")
+			})
+			closeSavedProbeTestClient(t, client, err)
+			if client != nil || err != nil || called != 0 {
+				t.Fatalf("unrelated complete generation did not remain not ready: client=%t calls=%d err=%v", client != nil, called, err)
+			}
+			assertSavedProbeTestUnchanged(t, f.stateRoot, before)
+			assertPrivateDaemonStartCount(t, f.stateRoot, 2)
+		})
 	}
 }

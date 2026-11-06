@@ -3,42 +3,74 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
-	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
-		if ctx == nil {
-			return nil, context.Canceled
+func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if options.RuntimeClientExecutable == "" {
+		selected, err := ResolveSavedSupervisorClient(root, saved, lookup)
+		if err != nil {
+			return nil, err
 		}
-		return recoverPrivateClient(ctx, root, saved, options, lookup, openStore)
+		options.RuntimeClientExecutable = selected
 	}
 	return pueue.NewClient(saved, options)
 }
 
-// recoverPrivateClient reconciles the published pair once, and only for the
-// explicit PairUnavailable fact. An operational recovery error is returned
-// unchanged; a failed reconciliation or retry keeps the first cause.
-func recoverPrivateClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
-	recovery, err := attemptSavedPrivateRecovery(ctx, root, saved, options, lookup)
+// RecoverPrivateClient borrows the resident's pinned Store. Only a clean
+// unavailable-pair fact allows reconciliation and one recovery retry.
+func RecoverPrivateClient(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if store == nil || !pueue.IsPrivateConfig(store.Root, saved.ConfigPath) {
+		return nil, pueue.ErrConfiguration
+	}
+	ctx, cancel := ControlContextWithParent(ctx, options)
+	defer cancel()
+	if _, err := store.PinRootContext(ctx); err != nil {
+		return nil, err
+	}
+	pending, err := pueue.PrivatePairRestartPending(store.Root)
+	if err != nil {
+		return nil, &pueue.PrivateRecoveryError{ReasonCode: "state_unreadable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)}
+	}
+	if pending {
+		if err = reconcileSavedPrivateClient(ctx, store, options, lookup); err != nil {
+			return nil, err
+		}
+	}
+	recovery, err := attemptSavedPrivateRecovery(ctx, store.Root, saved, options, lookup)
 	if err != nil || !recovery.PairUnavailable() {
 		return recovery.Client(), err
 	}
 	cause := recovery.Cause()
-	if reconcileErr := ReconcileSaved(ctx, root, options, openStore); reconcileErr != nil {
-		return nil, errors.Join(cause, reconcileErr)
-	}
-	retry, err := attemptSavedPrivateRecovery(ctx, root, saved, options, lookup)
-	if err != nil {
+	if err = reconcileSavedPrivateClient(ctx, store, options, lookup); err != nil {
 		return nil, errors.Join(cause, err)
 	}
-	if retry.PairUnavailable() {
-		return nil, errors.Join(cause, retry.Cause())
+	retry, err := attemptSavedPrivateRecovery(ctx, store.Root, saved, options, lookup)
+	if err != nil || retry.PairUnavailable() {
+		return nil, errors.Join(cause, err, retry.Cause())
 	}
 	return retry.Client(), nil
+}
+
+func reconcileSavedPrivateClient(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup ExecutableLookup) error {
+	return pueue.WithBootstrapLockContext(ctx, store.Root, func(lockedContext context.Context) error {
+		return ReconcilePublishedSupervisorWithLock(lockedContext, store, options, lookup, false)
+	})
 }
 
 func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (pueue.PrivateRecovery, error) {
@@ -49,71 +81,28 @@ func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.Su
 	return pueue.AttemptPrivateRecovery(ctx, root, saved, clientExecutable, daemonExecutable, options)
 }
 
-// NewControlClient proves the task's exact saved endpoint ready before
-// a mutating queue command. Only a verified missing saved private pair or a
-// clean absent or refused private endpoint may enter saved recovery, where
-// completed private migration evidence may recover the current successor
-// before the one control command is sent. A failed bind, an uncertain
-// observation, a close failure, and a failed control are never retried or
-// recovered.
-func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
+// NewControlClient proves an external supervisor's saved endpoint ready before
+// mutation. Private clients are prepared by the independent resident owner.
+func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
-	private := pueue.IsPrivateConfig(root, saved.ConfigPath)
-	if private {
-		// An upgrade may remove the exact saved pair; recovery then reopens the
-		// current generation instead of a direct bind that cannot run.
-		missing, err := pueue.PrivateSupervisorPairMissing(saved)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if options.RuntimeClientExecutable == "" {
+		selected, err := ResolveSavedSupervisorClient(root, saved, lookup)
 		if err != nil {
 			return nil, err
 		}
-		if missing {
-			return NewClient(ctx, root, saved, options, true, lookup, openStore)
-		}
+		options.RuntimeClientExecutable = selected
 	}
 	direct, err := pueue.BindSaved(ctx, saved, options)
 	if err != nil {
 		return nil, errors.Join(err, direct.CloseAfterPending(err))
 	}
-	if !private {
-		if err = direct.Ready(ctx); err != nil {
-			return nil, errors.Join(err, direct.CloseAfterPending(err))
-		}
-		return direct, nil
+	if err = direct.Ready(ctx); err != nil {
+		return nil, errors.Join(err, direct.CloseAfterPending(err))
 	}
-	observation, err := direct.ObservePrivateEndpoint(ctx)
-	if err == nil && observation.State() == pueue.PrivateEndpointReady {
-		return direct, nil
-	}
-	if closeErr := direct.CloseAfterPending(err); err != nil || closeErr != nil {
-		return nil, errors.Join(err, closeErr)
-	}
-	if state := observation.State(); state != pueue.PrivateEndpointAbsent && state != pueue.PrivateEndpointRefused {
-		return nil, fmt.Errorf("%w: private supervisor endpoint was not observed", pueue.ErrBinding)
-	}
-	recovered, err := NewClient(ctx, root, saved, options, true, lookup, openStore)
-	if err != nil {
-		return nil, errors.Join(observation.Cause(), err)
-	}
-	return recovered, nil
-}
-
-func ReconcileSaved(ctx context.Context, root string, options pueue.Options, openStore StoreOpener) (resultErr error) {
-	if ctx == nil {
-		return context.Canceled
-	}
-	if _, bounded := ctx.Deadline(); !bounded {
-		boundedContext, cancel := context.WithTimeout(ctx, pueue.PrivateControlTimeout(options))
-		defer cancel()
-		ctx = boundedContext
-	}
-	store, err := openStore(ctx, root)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	return pueue.WithBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
-		return ReconcilePublishedSupervisorWithLock(lockedContext, store, options, false)
-	})
+	return direct, nil
 }

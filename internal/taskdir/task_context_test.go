@@ -11,7 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func ownContextTask(t *testing.T, fixture *rootAdmissionFixture, td *TaskDir) {
+func ownContextTask(t *testing.T, fixture *storeOwnerFixture, td *TaskDir) {
 	t.Helper()
 	if td == nil {
 		return
@@ -24,7 +24,7 @@ func ownContextTask(t *testing.T, fixture *rootAdmissionFixture, td *TaskDir) {
 	})
 }
 
-func contextPreparedTask(t *testing.T, fixture *rootAdmissionFixture) (*TaskDir, *task.TaskRecord, *task.MetaRecord) {
+func contextPreparedTask(t *testing.T, fixture *storeOwnerFixture) (*TaskDir, *task.TaskRecord, *task.MetaRecord) {
 	t.Helper()
 	req, meta, brief := preparedInput(t, fixture.store)
 	td, err := fixture.store.CreateTaskContext(t.Context(), req.TaskID, req, brief, meta)
@@ -34,7 +34,7 @@ func contextPreparedTask(t *testing.T, fixture *rootAdmissionFixture) (*TaskDir,
 }
 
 func TestTaskContextPortsRefuseCanceledMutation(t *testing.T) {
-	fixture := newRootAdmissionFixture(t)
+	fixture := newStoreOwnerFixture(t)
 	td, req, meta := contextPreparedTask(t, fixture)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -82,7 +82,7 @@ func (f *taskRecordCancellation) OnBeforeStageCreate(_, destination string) erro
 }
 
 func TestCreateTaskContextCancellationKeepsRecoverableFragments(t *testing.T) {
-	fixture := newRootAdmissionFixture(t)
+	fixture := newStoreOwnerFixture(t)
 	req, meta, brief := preparedInput(t, fixture.store)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

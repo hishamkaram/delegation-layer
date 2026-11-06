@@ -12,5 +12,5 @@ import (
 // and retain the target pin and instance boundary. This port grants no placement
 // or daemon Start authority and accepts no executable paths from a request.
 type EstablishmentHost interface {
-	PrepareOutsideArtifacts(context.Context, *taskdir.Store) (Artifacts, error)
+	PrepareOutsideRunner(context.Context, *taskdir.Store) (string, error)
 }

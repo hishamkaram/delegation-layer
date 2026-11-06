@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,12 +17,13 @@ import (
 )
 
 func TestStatusDuringPreparedMigrationObservesExistingTask(t *testing.T) {
+	t.Parallel()
 	fixture := newHistoricalSupervisorFixturePaths(t)
 	workspace, _ := prepareHistoricalSupervisorExecutables(t, fixture)
 	fixture.options = newHistoricalSupervisorOptions()
 	prepareHistoricalSupervisorTask(t, fixture, workspace)
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, 7)
-	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 	journalPath := filepath.Join(fixture.root, ".supervisor", "migration.json")
 	journalBefore := readSupervisorProbeTestFile(t, journalPath)
 	before := snapshotObservationPhaseRecords(t, fixture)
@@ -44,10 +44,11 @@ func TestStatusDuringPreparedMigrationObservesExistingTask(t *testing.T) {
 }
 
 func TestStatusDuringPreparedMigrationObservesQueuedAndReceiptedStashedTasks(t *testing.T) {
+	t.Parallel()
 	for _, state := range []pueue.State{pueue.StateQueued, pueue.StateStashed} {
 		t.Run(string(state), func(t *testing.T) {
 			fixture := prepareHistoricalObservationPhase(t, state)
-			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 			before := snapshotObservationPhaseRecords(t, fixture)
 			commands := observePhaseStatusCommands(fixture)
 			code, stdout, stderr, response := runHistoricalSupervisorCommand(t, fixture, []string{
@@ -67,6 +68,7 @@ func TestStatusDuringPreparedMigrationObservesQueuedAndReceiptedStashedTasks(t *
 }
 
 func TestStatusDuringPreparedMigrationRejectsInvalidStashedReceipts(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		fault string
 		code  int
@@ -78,7 +80,7 @@ func TestStatusDuringPreparedMigrationRejectsInvalidStashedReceipts(t *testing.T
 	} {
 		t.Run(test.fault, func(t *testing.T) {
 			fixture := prepareHistoricalObservationPhase(t, pueue.StateStashed)
-			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 			faultObservationPhaseReceipt(t, fixture, test.fault)
 			before := snapshotObservationPhaseRecords(t, fixture)
 			commands := observePhaseStatusCommands(fixture)
@@ -98,10 +100,11 @@ func TestStatusDuringPreparedMigrationRejectsInvalidStashedReceipts(t *testing.T
 }
 
 func TestStatusRejectsUnsafeMigrationProgressWithoutMutation(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"shutdown-requested", "foreign-predecessor"} {
 		t.Run(fault, func(t *testing.T) {
 			fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
-			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+			prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 			faultObservationPhaseJournal(t, fixture, fault)
 			before := snapshotObservationPhaseRecords(t, fixture)
 			commands := observePhaseStatusCommands(fixture)
@@ -119,6 +122,7 @@ func TestStatusRejectsUnsafeMigrationProgressWithoutMutation(t *testing.T) {
 }
 
 func TestPublicStatusRepairsCompleteCapabilitylessSchedulingReceipt(t *testing.T) {
+	t.Parallel()
 	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
 	deps := fixture.dependencies()
 	deps.InitialSupervisorExecutable = fixture.clientA
@@ -155,30 +159,36 @@ func TestPublicStatusRepairsCompleteCapabilitylessSchedulingReceipt(t *testing.T
 }
 
 func TestPublicStatusObservesCompletedHistoryThroughCompatiblePair(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name         string
+		removeClient bool
 		removeDaemon bool
 	}{
-		{name: "client-and-daemon", removeDaemon: true},
-		{name: "client-only"},
+		{name: "client-and-daemon", removeClient: true, removeDaemon: true},
+		{name: "client-only", removeClient: true},
+		{name: "daemon-only", removeDaemon: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runObservationPhaseCompatiblePair(t, test.removeDaemon)
+			runObservationPhaseCompatiblePair(t, test.removeClient, test.removeDaemon)
 		})
 	}
 }
 
-func runObservationPhaseCompatiblePair(t *testing.T, removeDaemon bool) {
+func runObservationPhaseCompatiblePair(t *testing.T, removeClient, removeDaemon bool) {
 	t.Helper()
-	fixture, originalClient, originalDaemon := prepareObservationPhasePublishedStatePair(t)
+	fixture := prepareObservationPhasePublishedInstallation(t)
 	currentClient, currentDaemon := installObservationPhaseCompatiblePair(t, fixture, removeDaemon)
-	if fixture.successor.ClientExecutable == originalClient || fixture.successor.DaemonExecutable == originalDaemon || currentClient == fixture.successor.ClientExecutable {
+	if currentClient == fixture.successor.ClientExecutable {
 		t.Fatal("compatible recovery fixture did not retain separate published and available pairs")
 	}
-	if !removeDaemon && task.ComputeSHA256(readSupervisorProbeTestFile(t, currentDaemon)) != fixture.successor.DaemonSHA256 {
-		t.Fatal("client-only compatible pair changed the retained daemon bytes")
+	if !removeDaemon && currentDaemon != fixture.successor.DaemonExecutable {
+		t.Fatal("client-only compatible selection changed the canonical daemon path")
 	}
-	missingPaths := []string{fixture.successor.ClientExecutable}
+	var missingPaths []string
+	if removeClient {
+		missingPaths = append(missingPaths, fixture.successor.ClientExecutable)
+	}
 	if removeDaemon {
 		missingPaths = append(missingPaths, fixture.successor.DaemonExecutable)
 	}
@@ -188,14 +198,6 @@ func runObservationPhaseCompatiblePair(t *testing.T, removeDaemon bool) {
 		}
 	}
 	before := snapshotObservationPhaseRecords(t, fixture)
-	if !removeDaemon {
-		path := fixture.successor.DaemonExecutable
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before[path] = observationPhaseRecord{data: readSupervisorProbeTestFile(t, path), info: info}
-	}
 	historyPath := filepath.Join(fixture.root, ".supervisor", "migration-history.json")
 	history := readSupervisorProbeTestFile(t, historyPath)
 	commands := observePhaseStatusCommands(fixture)
@@ -229,30 +231,22 @@ func assertObservationPhaseCompatibleResponse(t *testing.T, code int, stdout, st
 	}
 }
 
-func prepareObservationPhasePublishedStatePair(t *testing.T) (*historicalSupervisorFixture, string, string) {
+func prepareObservationPhasePublishedInstallation(t *testing.T) *historicalSupervisorFixture {
 	t.Helper()
 	fixture := newHistoricalSupervisorFixturePaths(t)
 	workspace, legacyDir := prepareHistoricalSupervisorExecutables(t, fixture)
 	fixture.options = newHistoricalSupervisorOptions()
 	prepareHistoricalSupervisorTask(t, fixture, workspace)
-	originalClient, originalDaemon := fixture.clientB, fixture.daemonB
-	var err error
-	fixture.clientB, fixture.daemonB, err = supervisorcore.InstallStateSupervisorPairPaths(t.Context(), fixture.root, originalClient, originalDaemon)
-	if err != nil {
-		t.Fatal(err)
-	}
 	completeHistoricalSupervisorFixtureMigration(t, fixture, legacyDir, false)
 	resetHistoricalSupervisorCommandLog(t, fixture)
+	// Preserve the original fixture owner even if the test removes its selected
+	// installed member: re-author owned source before its native cleanup runs.
 	t.Cleanup(func() {
-		// Restore only fixture-owned bytes after assertions so its existing
-		// finalizer can close the still-live B daemon through its bound client.
-		ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(fixture.options))
-		defer cancel()
-		if _, _, restoreErr := supervisorcore.InstallStateSupervisorPairPaths(ctx, fixture.root, originalClient, originalDaemon); restoreErr != nil {
-			t.Error(restoreErr)
-		}
+		pid := filepath.Join(fixture.root, ".supervisor", "run", "pueue.pid")
+		writeRunnerFixture(t, fixture.clientB, historicalSupervisorClientScript("B", fixture.readyPath, pid, fixture.statusPath, fixture.commandLog))
+		writeRunnerFixture(t, fixture.daemonB, historicalSupervisorDaemonScript("B", fixture.readyPath, pid, fixture.daemonStartLog))
 	})
-	return fixture, originalClient, originalDaemon
+	return fixture
 }
 
 func installObservationPhaseCompatiblePair(t *testing.T, fixture *historicalSupervisorFixture, replaceDaemon bool) (string, string) {
@@ -264,20 +258,19 @@ func installObservationPhaseCompatiblePair(t *testing.T, fixture *historicalSupe
 	if replaceDaemon {
 		writeRunnerFixture(t, daemon, historicalSupervisorDaemonScript("C", fixture.readyPath, pidPath, fixture.daemonStartLog))
 	} else {
+		if err := os.Symlink(fixture.successor.DaemonExecutable, daemon); err != nil {
+			t.Fatal(err)
+		}
 		daemon = fixture.successor.DaemonExecutable
 	}
-	installedClient, installedDaemon, err := supervisorcore.InstallStateSupervisorPairPaths(t.Context(), fixture.root, client, daemon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return installedClient, installedDaemon
+	return client, daemon
 }
 
 func TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter(t *testing.T) {
-	store, deps, legacy := newSupervisorProbeTestFixture(t)
+	store, deps, legacy, owner := newOwnedSupervisorProbeTestFixture(t)
 	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
 	defer cancelControl()
-	held, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
+	held, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, componentPublicationOptions(t, store.Root, owner, deps.SupervisorOptions))
 	if err != nil || held == nil {
 		t.Fatalf("prepare complete held client: client=%v err=%v", held, err)
 	}
@@ -289,7 +282,7 @@ func TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter(t *testing.T
 	if complete, completeErr := pueue.PrivateSupervisorMigrationComplete(store.Root, held.Binding()); completeErr != nil || !complete {
 		t.Fatalf("held client was not prepared from a complete phase: complete=%t err=%v", complete, completeErr)
 	}
-	prepareBusyAdmissionMigration(t, store.Root, legacy.Binding(), deps.SupervisorOptions)
+	prepareBusyAdmissionMigration(t, store.Root, legacy.Binding(), deps.SupervisorOptions, owner)
 	if complete, completeErr := pueue.PrivateSupervisorMigrationComplete(store.Root, held.Binding()); completeErr != nil || complete {
 		t.Fatalf("migration did not invalidate the held client's complete phase: complete=%t err=%v", complete, completeErr)
 	}
@@ -310,6 +303,7 @@ func TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter(t *testing.T
 }
 
 func TestStashedStatusConsumerDefersWhenCompleteClientBecomesPrepared(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"matching", "missing", "invalid", "mismatched-meta"} {
 		t.Run(fault, func(t *testing.T) {
 			runLateStashedObservationPhase(t, fault)
@@ -318,9 +312,10 @@ func TestStashedStatusConsumerDefersWhenCompleteClientBecomesPrepared(t *testing
 }
 
 func TestReconcileStatusDoesNotReusePriorMaintenanceDeferral(t *testing.T) {
+	t.Parallel()
 	prepared := prepareHistoricalObservationPhase(t, pueue.StateStashed)
 	preparedClient := prepareCompleteStashedObservationClient(t, prepared)
-	prepareBusyAdmissionMigration(t, prepared.root, prepared.predecessor, prepared.options)
+	prepareBusyAdmissionMigration(t, prepared.root, prepared.predecessor, prepared.options, prepared.component)
 	var observed tasklifecycle.Observation
 	queue, err := tasklifecycle.ReconcileStatusWithClient(
 		t.Context(), prepared.root, prepared.td, &prepared.req, &prepared.meta,
@@ -366,7 +361,7 @@ func runLateStashedObservationPhase(t *testing.T, fault string) {
 	fixture := prepareHistoricalObservationPhase(t, pueue.StateStashed)
 	commands := observePhaseStatusCommands(fixture)
 	client := prepareCompleteStashedObservationClient(t, fixture)
-	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options)
+	prepareBusyAdmissionMigration(t, fixture.root, fixture.predecessor, fixture.options, fixture.component)
 	if fault != "matching" {
 		faultObservationPhaseReceipt(t, fixture, fault)
 	}
@@ -403,9 +398,12 @@ func runLateStashedObservationPhase(t *testing.T, fault string) {
 
 func prepareCompleteStashedObservationClient(t *testing.T, fixture *historicalSupervisorFixture) *pueue.Client {
 	t.Helper()
-	prepared, err := supervisorcore.ObserveTaskSupervisor(
+	prepared, err := supervisorcore.ObserveTaskSupervisorWithOptions(
 		t.Context(), fixture.store, fixture.predecessor, &fixture.meta,
-		fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA}, fixture.runner, openNativeSupervisorStore,
+		supervisorcore.TaskSupervisorObservationOptions{
+			Control: fixture.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA},
+			RunnerExecutable: fixture.runner, OpenStore: openNativeSupervisorStore,
+		},
 	)
 	settleSupervisorProbeTestClient(t, prepared.Client, err)
 	if err != nil || prepared.Client == nil || prepared.MaintenanceDeferred || prepared.MaintenanceError != nil {
@@ -576,7 +574,7 @@ func faultObservationPhaseJournal(t *testing.T, fixture *historicalSupervisorFix
 		record.LegacyProcessStart = "recorded-predecessor-start"
 		record.LegacyShutdownRequested = true
 	case "foreign-predecessor":
-		record.Legacy.SHA256 = task.ComputeSHA256([]byte("unrelated predecessor"))
+		record.Legacy.Executable += "-unrelated"
 	default:
 		t.Fatalf("unknown migration fault %q", fault)
 	}

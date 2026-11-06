@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -37,48 +36,25 @@ func (f *joinedCleanupFault) OnFlock(path string, operation int) error {
 func joinedObservationFailure(t *testing.T, kind string) (*taskdir.Store, func() error, error) {
 	t.Helper()
 	store := supervisorfixture.NewInspectionStore(t)
-	fault := &joinedCleanupFault{name: taskdir.RootAdmissionLockName, cause: errors.New("joined cleanup fault")}
-	if kind == "lifetime" {
-		control, err := store.OpenInfrastructureContext(t.Context(), true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		lease, err := control.AcquireLifetimeOwner(t.Context())
-		t.Cleanup(func() {
-			store.SetFaultInjector(nil)
-			if closeErr := errors.Join(lease.Release(), control.Close()); closeErr != nil {
-				t.Error(closeErr)
-			}
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		fault.name = ".maintenance.lock"
-		store.SetFaultInjector(fault)
-		return store, lease.Release, lease.ReleaseWithError(errors.New("work failed"))
-	}
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	lease := appCleanupLifetimeLease(t, store)
 	cleanup := lease.Release
 	t.Cleanup(func() {
 		store.SetFaultInjector(nil)
-		if closeErr := cleanup(); closeErr != nil {
-			t.Error(closeErr)
+		if err := cleanup(); err != nil {
+			t.Error(err)
 		}
 	})
-	store.SetFaultInjector(fault)
+	store.SetFaultInjector(&joinedCleanupFault{name: ".lifetime-owner.lock", cause: errors.New("joined cleanup fault")})
 	if kind == "workspace" {
-		owner := &workspaceCommandResources{store: store, rootAdmission: lease}
+		owner := &workspaceCommandResources{store: store, childOwner: lease}
 		cleanup = owner.close
 		return store, cleanup, owner.closeAfter(nil)
 	}
-	return store, cleanup, supervisorcore.ReleaseOwnedRootAdmission(lease, nil)
+	return store, cleanup, lease.ReleaseWithError(errors.New("work failed"))
 }
 
 func TestJoinedObservationCleanupRetainsExactLaterStore(t *testing.T) {
-	for _, kind := range []string{"root", "lifetime", "workspace"} {
+	for _, kind := range []string{"lifetime", "workspace"} {
 		for _, order := range []string{"settled-first", "pending-first"} {
 			t.Run(kind+"/"+order, func(t *testing.T) { assertJoinedObservationStore(t, kind, order) })
 		}
@@ -149,11 +125,6 @@ func newJoinedWorkspaceChildren(t *testing.T) *joinedWorkspaceChildren {
 		fault:     &joinedCleanupFault{name: ".lifetime-owner.lock", cause: errors.New("joined lifetime unlock failure")},
 	}
 	t.Cleanup(func() { fixture.close(t) })
-	root, err := store.AcquireRootAdmissionContext(t.Context())
-	fixture.resources.rootAdmission = root
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, id := range []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"} {
 		fixture.acquireChild(t, id)
 	}
@@ -203,7 +174,7 @@ func (f *joinedWorkspaceChildren) close(t *testing.T) {
 func TestJoinedWorkspaceCleanupSettlesAllRetainedChildren(t *testing.T) {
 	fixture := newJoinedWorkspaceChildren(t)
 	resources, fault := fixture.resources, fixture.fault
-	store, root := resources.store, resources.rootAdmission
+	store := resources.store
 	leases, causes := fixture.leases, fixture.causes
 	joined := errors.Join(causes[0], fmt.Errorf("later: %w", causes[1]), causes[0])
 	retainedErr := resources.closeAfter(joined)
@@ -213,7 +184,7 @@ func TestJoinedWorkspaceCleanupSettlesAllRetainedChildren(t *testing.T) {
 	}
 	before := fault.attempts
 	failed := retained.Cleanup()
-	if failed == nil || fault.attempts != before+1 || !root.CleanupPending() {
+	if failed == nil || fault.attempts != before+1 || resources.store == nil {
 		t.Fatal("explicit cleanup retried duplicate failed child or released parent")
 	}
 	store.SetFaultInjector(nil)
@@ -227,7 +198,7 @@ func TestJoinedWorkspaceCleanupSettlesAllRetainedChildren(t *testing.T) {
 	if cleanupErr := retained.Cleanup(); cleanupErr != nil {
 		t.Fatal(cleanupErr)
 	}
-	if root.CleanupPending() || leases[0].CleanupPending() || leases[1].CleanupPending() || retained.RetainedStore() != nil {
+	if leases[0].CleanupPending() || leases[1].CleanupPending() || retained.RetainedStore() != nil {
 		t.Fatal("explicit workspace cleanup left a joined sibling behind")
 	}
 }
@@ -235,8 +206,7 @@ func TestJoinedWorkspaceCleanupSettlesAllRetainedChildren(t *testing.T) {
 func joinedWorkspaceAdmissionFailure(t *testing.T) (*workspaceCommandResources, error) {
 	t.Helper()
 	fixture := workspacefixture.NewRecoveryFixture(t)
-	root, err := fixture.Store.AcquireRootAdmissionContext(t.Context())
-	resources := &workspaceCommandResources{store: fixture.Store, rootAdmission: root}
+	resources := &workspaceCommandResources{store: fixture.Store}
 	var admission *workspaces.Admission
 	t.Cleanup(func() {
 		fixture.Store.SetFaultInjector(nil)
@@ -244,12 +214,10 @@ func joinedWorkspaceAdmissionFailure(t *testing.T) (*workspaceCommandResources, 
 			t.Error(closeErr)
 		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	admission, _, err = workspaces.PrepareDispatchContext(t.Context(), workspaces.DispatchRequest{
 		WorkspaceID: fixture.Resource.Request().WorkspaceID, RunnerOwnership: task.RunnerOwnershipManaged,
-	}, workspaces.OperationOptions{Environment: []string{}, RootAdmission: root, Runtime: &checkpointAdmissionProbe{store: fixture.Store}}, fixture.Store,
+	}, workspaces.OperationOptions{Environment: []string{}, Runtime: &checkpointAdmissionProbe{store: fixture.Store}}, fixture.Store,
 		"dddddddddddddddddddddddddddddddd", fixture.Resource.Request().SourceCwd, []byte("work"))
 	if admission == nil || !errors.Is(err, errCheckpointAdmissionProbe) {
 		t.Fatalf("missing real admission: %v", err)
@@ -273,7 +241,7 @@ func TestJoinedWorkspaceAdmissionRetainsWholeCause(t *testing.T) {
 	joined := errors.Join(historical, fmt.Errorf("pending: %w", pending), sibling)
 	retainedErr := resources.closeAfter(joined)
 	var retained *workspaceCommandCleanupError
-	if !errors.As(retainedErr, &retained) || !errors.Is(retainedErr, joined) || !errors.Is(retainedErr, sibling) || !resources.rootAdmission.CleanupPending() {
+	if !errors.As(retainedErr, &retained) || !errors.Is(retainedErr, joined) || !errors.Is(retainedErr, sibling) || resources.store == nil {
 		t.Fatal("settled admission hid pending sibling or original joined cause was lost")
 	}
 	resources.store.SetFaultInjector(nil)

@@ -12,7 +12,6 @@ func existingCommandResult(response Response, provider string, observed tasklife
 	applyTaskObservation(&response, observed.Observation, "")
 	result := existingPrimaryResult(response, provider, observed)
 	mergeCommandClose(&result, func() error { return observed.TaskCloseError })
-	retainTaskAdmissionCleanup(&result, observed.RootAdmissionCleanup, nil, observed.RootAdmissionReleaseError)
 	if result.err != nil {
 		result.err = admission.WithStage("existing-task", result.err)
 		result.response.setError(result.err)

@@ -122,7 +122,7 @@ def _verify_channel(
         "commit_sha": archive.release_commit,
     }
     receipt["artifact"] = {"archive_sha256": archive.archive_sha256}
-    receipt["published"]["archive_binaries"] = dict(archive.binaries)
+    receipt["published"]["archive_binaries"] = archive.binaries.to_record()
     workspace = runner / f"delegation-layer-published-{request.channel}-{secrets.token_hex(6)}"
     token = owner.create("published consumer workspace", workspace, runner)
     remember_directory(receipt, token)

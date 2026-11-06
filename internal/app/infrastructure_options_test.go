@@ -15,7 +15,7 @@ func TestInfrastructureSupervisorOptionsUsesAcceptedSnapshots(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PROVIDER_KEY", "ambient-provider")
-	artifacts := infrastructure.Artifacts{Runner: "/accepted/runner", Client: "/accepted/client", Daemon: "/accepted/daemon"}
+	artifacts := infrastructure.Artifacts{Runner: "/accepted/runner"}
 	control := []string{"PATH=/control/bin", "CONTROL_BYTES=\xff"}
 	maintenance := []string{"PATH=/maintenance/bin", "PROVIDER_KEY=accepted-provider", "PROVIDER_BYTES=\xfe"}
 	launch := infrastructure.LaunchContext{ControlEnvironment: control, MaintenanceEnvironment: maintenance}

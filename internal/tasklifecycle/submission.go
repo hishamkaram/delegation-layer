@@ -45,9 +45,9 @@ func SubmitSavedContext(ctx context.Context, td *taskdir.TaskDir, req *task.Task
 		return submissionFailure(SubmissionRunner, err)
 	}
 	if allowManagedRunnerUpgrade {
-		err = admissioncore.ValidateManagedRetrySubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner)
+		err = admissioncore.ValidateManagedRetrySubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner, options.DefaultRunner)
 	} else {
-		err = admissioncore.ValidateSubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner)
+		err = admissioncore.ValidateSubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner, options.DefaultRunner)
 	}
 	if err != nil {
 		return submissionFailure(SubmissionRunnerValidation, err)
@@ -82,7 +82,7 @@ func SubmitWithProfileContext(ctx context.Context, td *taskdir.TaskDir, req *tas
 	if err != nil {
 		return submissionFailure(SubmissionRunner, err)
 	}
-	if err = admissioncore.ValidateSubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner); err != nil {
+	if err = admissioncore.ValidateSubmissionRunnerContext(ctx, options.OpenValidationStore, td, req, meta, runner, options.DefaultRunner); err != nil {
 		return submissionFailure(SubmissionRunnerValidation, err)
 	}
 	if req.PriorSession != nil {

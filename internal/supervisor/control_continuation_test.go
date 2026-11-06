@@ -155,7 +155,7 @@ func TestControlContinuationWarmMappedGenerationNeedsNoRoute(t *testing.T) {
 
 func TestControlContinuationColdUsesOriginalMetadataAndNoFallback(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
-	fixture.options.Environment = append(fixture.options.Environment, "REFERENCED_UNAVAILABLE=1")
+	fixture.options.Environment = append(fixture.options.Environment, "CONTROL_FIXTURE_UNAVAILABLE=1")
 	unknown := errors.New("continuation outcome unknown")
 	calls := 0
 	routing := selectedControlRouting{continuation: func(_ context.Context, actual *taskdir.Store, _ infrastructure.LaunchContext, observed infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {

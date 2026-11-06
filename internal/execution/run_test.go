@@ -43,16 +43,13 @@ func fixtureTaskWithPlan(t *testing.T, mode string, configure func(*task.MetaRec
 	require(t, err)
 	exe, err = filepath.EvalSymlinks(exe)
 	require(t, err)
-	exeBytes, err := os.ReadFile(exe)
-	require(t, err)
-	exeDigest := task.ComputeSHA256(exeBytes)
 	id, err := randomid.NewTaskID()
 	require(t, err)
 	brief := []byte("  literal '$HOME' $(inert) \"Ω\"\nsecond line\n\n")
 	config := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	req := &task.TaskRecord{SchemaVersion: 1, RootID: s.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: config, BudgetNanos: int64(time.Minute), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	meta := &task.MetaRecord{SchemaVersion: 1, RootID: s.RootID, TaskID: id, RequestedConfig: config, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("execution-test"))}, Containment: "fixture-only", Approval: "never", ProviderExecutable: exe, ProviderVersion: "fixture-v1", PublisherBuild: "test-build", PublisherVersion: "test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ConfigPath: "/fake/pueue.yml", ConfigDigest: task.ComputeSHA256([]byte("pueue")), Endpoint: "/fake/socket", ObservedVersion: "fixture-v1"}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	plan := Plan{Executable: exe, ExecutableSHA256: exeDigest, Arguments: []string{"-test.run=^TestExecutionHelper$"}, Directory: cwd, Environment: append(os.Environ(), "DELEGATE_EXECUTION_HELPER="+mode), Predicate: task.FixturePredicateRef()}
+	plan := Plan{Executable: exe, Arguments: []string{"-test.run=^TestExecutionHelper$"}, Directory: cwd, Environment: append(os.Environ(), "DELEGATE_EXECUTION_HELPER="+mode), Predicate: task.FixturePredicateRef()}
 	if configure != nil {
 		configure(meta, &plan)
 		req.RequestedConfig = meta.RequestedConfig

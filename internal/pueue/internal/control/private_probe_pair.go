@@ -9,8 +9,7 @@ import (
 )
 
 // Pair verification is separate from endpoint readiness and generation phase.
-// Only missing executable coordinates or unequal actual digests prove this
-// Unverified state. Filesystem, config and cleanup faults are operational errors.
+// Only positively missing executable coordinates prove the Unverified state. Filesystem, config and cleanup faults are operational errors.
 type privateProbePairVerification uint8
 
 const (
@@ -28,30 +27,24 @@ func verifyPrivateProbePair(binding task.SupervisorRef) (privateProbePairVerific
 	if missing {
 		verification = privateProbePairUnverified
 	}
-	for _, member := range []struct{ path, digest string }{{binding.ClientExecutable, binding.ClientSHA256}, {binding.DaemonExecutable, binding.DaemonSHA256}} {
-		if member.path == "" {
+	for _, path := range []string{binding.ClientExecutable, binding.DaemonExecutable} {
+		if path == "" {
 			continue
 		}
-		if _, statErr := os.Lstat(member.path); errors.Is(statErr, os.ErrNotExist) {
+		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 			verification = privateProbePairUnverified
 			continue
 		} else if statErr != nil {
 			return 0, statErr
 		}
-		canonical, canonicalErr := canonicalExecutable(member.path)
+		canonical, canonicalErr := canonicalExecutable(path)
 		if canonicalErr != nil {
 			return 0, canonicalErr
 		}
-		if canonical != member.path {
+		if canonical != path {
 			return 0, ErrBinding
 		}
-		digest, hashErr := hashExecutable(canonical)
-		if hashErr != nil {
-			return 0, hashErr
-		}
-		if digest != member.digest {
-			verification = privateProbePairUnverified
-		}
+
 	}
 	return verification, nil
 }
@@ -81,9 +74,6 @@ func probeExactPrivatePair(ctx context.Context, published task.SupervisorRef, re
 	}
 	if err = attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
 		return client, 0, PrivateEndpointObservation{}, err
-	}
-	if client.binding.DaemonSHA256 != published.DaemonSHA256 {
-		return client, privateProbePairNotReady, PrivateEndpointObservation{}, nil
 	}
 	probed, _, observation, err := probeVerifiedPrivateClient(ctx, client, privateProbeSnapshot)
 	return probed, verification, observation, err

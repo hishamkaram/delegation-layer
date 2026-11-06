@@ -285,6 +285,20 @@ See [required options](../skills/agent-integration/references/command-reference.
 The default supervisor is private to the state root. Normal dispatch adopts a
 reachable compatible generation and recovers the saved generation when its
 endpoint is absent.
+An interrupted historical restart keeps its recorded target. If that target
+cannot be verified or is not ready, recovery and explicit migration refuse
+while preserving the record. This ambiguous legacy state has no automatic
+repair.
+
+An unmarked historical generation must already be reachable before a fresh
+migration can inspect its queue. Delegate cannot safely start it solely for
+inspection, so a stopped historical generation has no automatic migration.
+The refusal reports `reason_code: "historical_target_not_ready"` and
+`next_action: "stop_and_report"`; dispatch keeps `supervisor_upgrade_required`
+without a recovery command. Restoring readiness through the original
+installation allows migration to inspect its queue. A migration that already
+recorded a safe predecessor shutdown can still resume its installed successor.
+
 The explicit commands are for inspecting or repairing a real logical/configuration
 migration:
 

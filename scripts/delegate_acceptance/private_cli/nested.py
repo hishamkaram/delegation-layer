@@ -5,7 +5,7 @@ import re
 import time
 import uuid
 
-from scripts.delegate_acceptance.evidence.files import digest, write_json
+from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.records import _read_control_record
 from scripts.delegate_acceptance.evidence.validation import require
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort
@@ -19,7 +19,6 @@ from scripts.delegate_acceptance.private_cli.nested_policy import (
 )
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state, task_row_by_label
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_command, pueue_snapshot
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 from scripts.delegate_acceptance.private_cli.wrapper_policy import require_no_startup_control_calls
 from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_records
 
@@ -32,16 +31,16 @@ def run_nested_survival(args, lifetime, fixture, receipts, receipt):
     require(not any(re.fullmatch(r"delegate-v1-[0-9a-f]{32}", part)
                     for part in driver["cgroup"].split("/")), "driver is inside a Delegate cgroup")
     case.evidence["driver"] = driver
-    case.evidence["native_fixture_sha256"] = digest(args.native_fixture)
     bootstrap(case, case.a, "warm-a")
     if args.nested_topology == "other-warm":
         bootstrap(case, case.b, "warm-b")
     elif args.nested_topology == "other-cold":
         require(not case.b.exists() and not case.b.is_symlink(), "cold worker root already exists")
         case.evidence["cold_runtime_absent_at_unix_ns"] = time.time_ns()
+    warm_before_leader = None
     if args.nested_topology != "other-cold":
-        case.evidence["warm_before_leader"] = supervisor_continuity(
-            case.b, case.configuration, lifetime.capture_token, "")
+        warm_before_leader = supervisor_continuity(case.b, case.configuration, lifetime.capture_token, "")
+        case.evidence["warm_before_leader"] = warm_before_leader
     leader = case.dispatch(case.a, case.configuration["leader"], case.configuration["leader_brief"], "3m", "leader")
     case.responses["leader"] = leader
     leader_identity = await_record(case.controls.directory / "leader-identity.json", time.monotonic() + 30)
@@ -59,10 +58,10 @@ def run_nested_survival(args, lifetime, fixture, receipts, receipt):
     scope = read_lifetime(case.a, leader, "intent.json")["scope_plan"]
     before = supervisor_continuity(case.b, case.configuration, lifetime.capture_token, scope)
     case.evidence["supervisor_before"] = before
-    if "warm_before_leader" in case.evidence:
-        require_same_supervisor(case.evidence["warm_before_leader"], before,
+    if warm_before_leader is not None:
+        require_same_supervisor(warm_before_leader, before,
                                 same_identity=case.tokens_match(before["process"]["process_start"],
-                                                               case.evidence["warm_before_leader"]["process"]["process_start"]))
+                                                               warm_before_leader["process"]["process_start"]))
     record_actor_placement(case, leader, w1, before)
     receipt.update_counts(running_task_count=2, live_lease_count=1)
     queue_worker(case, leader_spec, first_lease)
@@ -71,21 +70,7 @@ def run_nested_survival(args, lifetime, fixture, receipts, receipt):
     calls += wrapper_call_records(lifetime.base / "old-daemon-starts-calls", "daemon", "old")
     require_no_startup_control_calls(calls)
     case.evidence["wrapper_calls"] = calls
-    finish_supervisors(case)
     receipt.stage("nested-survival-proven")
-
-
-def finish_supervisors(case):
-    if case.b != case.a:
-        client, environment = bound_private_client(case.b, case.lifetime.env)
-        shutdown_private_supervisor(client, case.b / ".supervisor" / "pueue.yml", environment,
-                                    state=case.b, task_ids=tuple(case.b_ids), capture_root=case.lifetime.capture_token,
-                                    reader=case.read_closure)
-        case.lifetime.supervisor_cleanups[:] = [entry for entry in case.lifetime.supervisor_cleanups
-                                               if entry.get("state") != case.b]
-    shutdown_private_supervisor(case.lifetime.old_libexec / "pueue", case.lifetime.private_config, case.lifetime.env,
-                                state=case.a, task_ids=tuple(case.lifetime.attempted_task_ids),
-                                capture_root=case.lifetime.capture_token, reader=case.read_closure)
 
 
 def compact_spec(specification):

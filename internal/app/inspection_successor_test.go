@@ -163,14 +163,10 @@ func (f *workerSuccessorFixture) queueInspection(t *testing.T, request task.Task
 		}
 	}
 	worker := canonicalAppTestExecutable(t)
-	workerSHA, err := commonprovider.FingerprintExecutable(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
 	operation, err := inspection.OpenOperation(f.store, request, inspection.Binding{
 		DefinitionRevision: definition.Revision, DefinitionSHA256: digest, CapabilitySHA256: capability,
-		HelperExecutable: definition.Executable, HelperSHA256: definition.ExecutableSHA256,
-		WorkerExecutable: worker, WorkerSHA256: workerSHA, RunnerOwnership: task.RunnerOwnershipManaged,
+		HelperExecutable: definition.Executable, WorkerExecutable: worker,
+		ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, RunnerOwnership: task.RunnerOwnershipManaged,
 		Environment: definition.Environment, EnvironmentRecorded: true, Supervisor: f.supervisor,
 	}, time.Now().UTC())
 	if err != nil {

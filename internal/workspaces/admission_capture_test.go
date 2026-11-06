@@ -17,15 +17,6 @@ import (
 func newTaskCaptureContextFixture(t *testing.T) (*taskdir.Store, *workspace.Resource, task.TaskRecord) {
 	t.Helper()
 	store, resource := workspacefixture.NewResource(t)
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if releaseErr := lease.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	})
 	owner, err := resource.AcquireUseOwner(t.Context())
 	t.Cleanup(func() {
 		if releaseErr := owner.Release(); releaseErr != nil {

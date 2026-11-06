@@ -318,7 +318,7 @@ func TestPrivateQueueMaintenanceFullRequestDominatesOnlyItsGeneration(t *testing
 func TestElectedPrivateQueueMaintenanceHandsOffLastWakeWithoutWaiting(t *testing.T) {
 	fixture, base := newPrivateQueueMaintenanceStateTestFixture(t)
 	ctx := t.Context()
-	if generation, err := requestPrivateInspectionQueueMaintenance(ctx, fixture.stateRoot); err != nil || generation != 1 {
+	if generation, err := requestPrivateCandidateQueueMaintenance(ctx, fixture.stateRoot); err != nil || generation != 1 {
 		t.Fatalf("initial maintenance generation=%d err=%v, want generation 1", generation, err)
 	}
 
@@ -385,7 +385,7 @@ func startPrivateQueueMaintenanceHandoffOwner(
 func startPrivateQueueMaintenanceHandoffContender(ctx context.Context, stateRoot string) <-chan privateQueueMaintenanceElectionResult {
 	done := make(chan privateQueueMaintenanceElectionResult, 1)
 	go func() {
-		generation, requestErr := requestPrivateInspectionQueueMaintenance(ctx, stateRoot)
+		generation, requestErr := requestPrivateCandidateQueueMaintenance(ctx, stateRoot)
 		if requestErr != nil {
 			done <- privateQueueMaintenanceElectionResult{generation: generation, err: requestErr}
 			return
@@ -454,7 +454,7 @@ func waitForPrivateQueueMaintenanceHandoffOwner(
 func TestElectedPrivateQueueMaintenanceDrainsNewerWakeAfterFailedPass(t *testing.T) {
 	fixture, base := newPrivateQueueMaintenanceStateTestFixture(t)
 	ctx := t.Context()
-	if _, err := requestPrivateInspectionQueueMaintenance(ctx, fixture.stateRoot); err != nil {
+	if _, err := requestPrivateCandidateQueueMaintenance(ctx, fixture.stateRoot); err != nil {
 		t.Fatal(err)
 	}
 
@@ -467,7 +467,7 @@ func TestElectedPrivateQueueMaintenanceDrainsNewerWakeAfterFailedPass(t *testing
 			return errors.Join(passErr, errors.New("elected owner did not observe pending work"))
 		}
 		if passes == 1 {
-			if _, passErr = requestPrivateInspectionQueueMaintenance(ctx, fixture.stateRoot); passErr != nil {
+			if _, passErr = requestPrivateCandidateQueueMaintenance(ctx, fixture.stateRoot); passErr != nil {
 				return passErr
 			}
 			_, finishErr := finishPrivateQueueMaintenancePass(ctx, fixture.stateRoot, target, full, false)
@@ -556,7 +556,7 @@ func TestPrivateQueueMaintenanceRejectsMalformedGenerations(t *testing.T) {
 			if _, err := readPrivateQueueMaintenanceRecord(base); !errors.Is(err, ErrBinding) {
 				t.Fatalf("read malformed generation error=%v, want ErrBinding", err)
 			}
-			if _, err := requestPrivateInspectionQueueMaintenance(t.Context(), fixture.stateRoot); !errors.Is(err, ErrBinding) {
+			if _, err := requestPrivateCandidateQueueMaintenance(t.Context(), fixture.stateRoot); !errors.Is(err, ErrBinding) {
 				t.Fatalf("request over malformed generation error=%v, want ErrBinding", err)
 			}
 			if err := writePrivateQueueMaintenanceRecord(base, testCase.record); !errors.Is(err, ErrConfiguration) {
@@ -579,7 +579,7 @@ func requestPrivateQueueMaintenanceBurst(t *testing.T, ctx context.Context, stat
 		callers.Add(1)
 		go func() {
 			defer callers.Done()
-			generation, err := requestPrivateInspectionQueueMaintenance(ctx, stateRoot)
+			generation, err := requestPrivateCandidateQueueMaintenance(ctx, stateRoot)
 			results <- result{generation: generation, err: err}
 		}()
 	}
@@ -602,7 +602,7 @@ func requestPrivateQueueMaintenanceBurst(t *testing.T, ctx context.Context, stat
 
 func requestExpectedPrivateQueueMaintenance(t *testing.T, ctx context.Context, stateRoot string, want uint64) {
 	t.Helper()
-	got, err := requestPrivateInspectionQueueMaintenance(ctx, stateRoot)
+	got, err := requestPrivateCandidateQueueMaintenance(ctx, stateRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

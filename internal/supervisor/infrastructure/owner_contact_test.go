@@ -67,7 +67,7 @@ func ownerContactFixtureWithSelection(t *testing.T, wrongPeer bool, initial Init
 	auth.intent.Inputs.Context = reference
 	auth.intent.Inputs.Initial = ownerInitialOperationFixture(journal.pin.RootID(), initial)
 	if auth.intent.Inputs.Initial != (InitialOperation{}) {
-		auth.intent.Protocol = startupInitialOperationProtocolVersion
+		auth.intent.Protocol = RecordProtocolVersion
 	}
 	if wrongPeer {
 		auth.assumption.Process.PID++
@@ -187,7 +187,7 @@ func exerciseOwnerContactRefusal(t *testing.T, changed string) {
 	if changed == "nil-context" && !errors.Is(err, os.ErrInvalid) {
 		t.Fatal("invalid context cause lost")
 	}
-	requireOwnerContactPhase(t, err, ownerContactBeforeWrite, false)
+	requireOwnerContactError(t, err)
 	requireNoOwnerContactConnection(t, f.auth.listener)
 }
 
@@ -256,7 +256,7 @@ func TestOwnerContactRejectsReplySubjectAndCurrentChanges(t *testing.T) {
 			if err == nil || reply != (ownerReply{}) || strings.Contains(err.Error(), f.auth.root) {
 				t.Fatalf("stale reply accepted: %v", err)
 			}
-			requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+			requireOwnerContactError(t, err)
 			if err := join(); err != nil {
 				t.Fatal(err)
 			}
@@ -375,7 +375,7 @@ func TestOwnerContactAuthenticatesPeerBeforeSending(t *testing.T) {
 	if !errors.Is(err, ErrIdentity) || reply != (ownerReply{}) {
 		t.Fatalf("wrong native peer accepted: %v", err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactBeforeWrite, false)
+	requireOwnerContactError(t, err)
 	join()
 }
 
@@ -408,7 +408,7 @@ func exerciseOwnerContactCancellation(t *testing.T, wireDeadline bool) {
 	if !errors.Is(err, expected) || errors.Is(err, ErrIdentity) || reply != (ownerReply{}) {
 		t.Fatalf("bounded contact: zero=%t err=%v", reply == (ownerReply{}), err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+	requireOwnerContactError(t, err)
 	if joinErr := join(); joinErr != nil {
 		t.Fatal(joinErr)
 	}
@@ -421,17 +421,17 @@ func TestOwnerContactTransportEOFDoesNotClaimIdentity(t *testing.T) {
 	if !errors.Is(err, io.EOF) || errors.Is(err, ErrIdentity) || reply != (ownerReply{}) {
 		t.Fatalf("transport EOF misclassified: zero=%t err=%v", reply == (ownerReply{}), err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+	requireOwnerContactError(t, err)
 	if err := join(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func requireOwnerContactPhase(t *testing.T, err error, phase ownerContactPhase, unknown bool) {
+func requireOwnerContactError(t *testing.T, err error) {
 	t.Helper()
 	var contactErr ownerContactError
-	if !errors.As(err, &contactErr) || contactErr.phase != phase || contactErr.OutcomeUnknown() != unknown || contactErr.ReplyVerified() != (phase == ownerContactReplyVerified) {
-		t.Fatalf("contact outcome phase = %d unknown=%t, want phase=%d unknown=%t", contactErr.phase, contactErr.OutcomeUnknown(), phase, unknown)
+	if !errors.As(err, &contactErr) || err.Error() != "infrastructure owner contact failed" {
+		t.Fatalf("contact error was not redacted: %v", err)
 	}
 }
 
@@ -444,7 +444,7 @@ func TestOwnerContactVerifiedCompletionSurvivesLateContext(t *testing.T) {
 func checkOwnerContactLateContext(t *testing.T, deadline bool) {
 	t.Helper()
 	// The completion policy is tested after verification, without a native timing
-	// race or a production I/O hook. Native exchange tests prove the phase boundary.
+	// race or a production I/O hook. Native exchange tests prove reply verification.
 	verified := ownerReplyFixture()
 	ctx, cancel := context.WithCancel(t.Context())
 	if deadline {
@@ -459,7 +459,7 @@ func checkOwnerContactLateContext(t *testing.T, deadline bool) {
 	if lateErr == nil {
 		t.Fatal("late context observation missing")
 	}
-	reply, err := completeOwnerContact(ownerContactReplyVerified, verified, nil, lateErr, nil)
+	reply, err := completeOwnerContact(true, verified, nil, lateErr, nil)
 	if err != nil || reply != verified {
 		t.Fatalf("late context erased verified reply: %v", err)
 	}
@@ -469,11 +469,11 @@ func TestOwnerContactVerifiedReplySurvivesCleanupFaults(t *testing.T) {
 	verified := ownerReplyFixture()
 	wakeFault := errors.New("untrusted wake failure")
 	closeFault := errors.New("untrusted close failure")
-	reply, err := completeOwnerContact(ownerContactReplyVerified, verified, nil, context.Canceled, errors.Join(wakeFault, closeFault))
+	reply, err := completeOwnerContact(true, verified, nil, context.Canceled, errors.Join(wakeFault, closeFault))
 	if reply != verified || !errors.Is(err, wakeFault) || !errors.Is(err, closeFault) || errors.Is(err, context.Canceled) || errors.Is(err, ErrIdentity) {
 		t.Fatalf("verified cleanup result lost: %v", err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactReplyVerified, false)
+	requireOwnerContactError(t, err)
 	if strings.Contains(err.Error(), "untrusted") {
 		t.Fatal("cleanup diagnostic was not redacted")
 	}
@@ -482,10 +482,10 @@ func TestOwnerContactVerifiedReplySurvivesCleanupFaults(t *testing.T) {
 func TestOwnerContactFailedExchangeKeepsUnknownOutcomeAndCauses(t *testing.T) {
 	cleanupFault := errors.New("untrusted cleanup failure")
 	for _, exchangeErr := range []error{io.ErrShortWrite, io.EOF} {
-		reply, err := completeOwnerContact(ownerContactMayHaveWritten, ownerReplyFixture(), exchangeErr, context.DeadlineExceeded, cleanupFault)
+		reply, err := completeOwnerContact(false, ownerReplyFixture(), exchangeErr, context.DeadlineExceeded, cleanupFault)
 		if reply != (ownerReply{}) || !errors.Is(err, exchangeErr) || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, cleanupFault) || errors.Is(err, ErrIdentity) {
 			t.Fatalf("failed exchange causes lost: %v", err)
 		}
-		requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+		requireOwnerContactError(t, err)
 	}
 }

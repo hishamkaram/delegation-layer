@@ -58,12 +58,6 @@ func replacePrivateMigrationRecordContext(ctx context.Context, base string, expe
 	})
 }
 
-func publishPrivatePairRestartIntentContext(ctx context.Context, root string, intent privatePairRestartIntent, guard PrivateGenerationGuard) error {
-	return guardPrivateGeneration(ctx, root, guard, func() error {
-		return publishPrivatePairRestartIntent(root, intent)
-	})
-}
-
 func replaceReconciledPrivateBindingContext(ctx context.Context, root string, before, candidate task.SupervisorRef, guard PrivateGenerationGuard) error {
 	return guardPrivateGeneration(ctx, root, guard, func() error {
 		return replaceReconciledPrivateBinding(root, before, candidate)

@@ -11,7 +11,7 @@ from .candidate_codec import text
 from .candidate_manifest import CHECKSUMS_PATH, ArtifactKind
 # EXPECTED_DEFAULT_STATE is re-exported: the shared contract owns it for every install probe.
 from .contract import (
-    EXPECTED_DEFAULT_STATE as EXPECTED_DEFAULT_STATE, TAG_RE, BinaryDigests, VerificationError, expected_archive,
+    EXPECTED_DEFAULT_STATE as EXPECTED_DEFAULT_STATE, TAG_RE, InstalledExecutables, VerificationError, expected_archive,
 )
 from .published_contract import NPM_PACKAGE
 
@@ -68,17 +68,13 @@ WITNESS_ROLE_KINDS = {
 
 @dataclass(frozen=True)
 class CandidateInstallRequest:
-    """One exact candidate; hashes come from the caller's already verified candidate."""
+    """One verified candidate distribution and its expected skill files."""
 
     tag: str
     repo: str
     installer: Path
     files: CandidateFiles
-    binaries: tuple[tuple[str, str], ...]
     skill: tuple[tuple[str, str], ...]
-
-    def binary_hashes(self) -> dict[str, str]:
-        return dict(self.binaries)
 
     def skill_digests(self) -> dict[str, str]:
         return dict(self.skill)
@@ -126,37 +122,36 @@ _BOOTSTRAP_ID_RE = re.compile(r"[0-9a-f]{32}")
 
 @dataclass(frozen=True)
 class BootstrapTarget:
-    """The installed layout one bootstrap probe exercises, after the channel's hashes matched.
+    """The installed layout one bootstrap probe exercises, after the channel's archive and layout were verified.
 
     ``command_directory`` is the only installed directory on the probe's PATH and
     ``delegate`` the installed entry that ``delegate`` must resolve to there.
     ``supervisor_directory`` holds the supervisor pair the installation ships: the
     command directory itself for an archive install, the keg's libexec for Homebrew,
-    which never joins PATH. ``binaries`` are the candidate's expected digests.
+    which never joins PATH. ``binaries`` are this installation's selected paths.
     """
 
     command_directory: Path
     delegate: Path
     supervisor_directory: Path
-    binaries: BinaryDigests
+    binaries: InstalledExecutables
 
 
 @dataclass(frozen=True)
 class BootstrapObservation:
-    """Compact, path-free facts of one fixture task run through an installed default path.
+    """Compact facts of one fixture task run through an installed default path.
 
     ``root_id`` and ``task_id`` are the identities that admission, status, collection
     and the task's own managed lifetime closure all reported. ``binaries`` are the
-    observed digests of the executed delegate, the runner the task recorded and the
-    supervisor pair its state root selected; a content digest cannot distinguish a
-    byte-identical copy from another origin. The remaining fields are the collected
+    observed installed paths of the executed delegate, the runner the task recorded and the
+    supervisor pair its state root selected. The remaining fields are the collected
     verdict, the task's worker Wait result, its termination cause and empty scope, and
     the verified daemon exit with endpoint closure.
     """
 
     root_id: str
     task_id: str
-    binaries: BinaryDigests
+    binaries: InstalledExecutables
     outcome: str
     worker_result: str
     termination_cause: str
@@ -164,7 +159,7 @@ class BootstrapObservation:
     shutdown: str
 
     def __post_init__(self) -> None:
-        if (not isinstance(self.binaries, BinaryDigests) or type(self.scope_empty) is not bool
+        if (not isinstance(self.binaries, InstalledExecutables) or type(self.scope_empty) is not bool
                 or not all(isinstance(value, str) for value in (
                     self.outcome, self.worker_result, self.termination_cause, self.shutdown))):
             raise VerificationError("install_bootstrap_invalid", STAGE)
@@ -173,7 +168,7 @@ class BootstrapObservation:
 
     def to_record(self) -> dict[str, object]:
         return {
-            "root_id": self.root_id, "task_id": self.task_id, "binaries": self.binaries.as_mapping(),
+            "root_id": self.root_id, "task_id": self.task_id, "binaries": self.binaries.to_record(),
             "outcome": self.outcome, "worker_result": self.worker_result,
             "termination_cause": self.termination_cause, "scope_empty": self.scope_empty,
             "shutdown": self.shutdown,
@@ -191,7 +186,7 @@ class BootstrapProbe(Protocol):
     def __call__(self, target: BootstrapTarget) -> BootstrapObservation: ...
 
 
-def require_bootstrap(observation: object, binaries: BinaryDigests) -> BootstrapObservation:
+def require_bootstrap(observation: object, binaries: InstalledExecutables) -> BootstrapObservation:
     """Accept only a committed, closed and shut-down turn of exactly ``binaries``."""
     if (not isinstance(observation, BootstrapObservation) or observation.binaries != binaries
             or (observation.outcome, observation.worker_result, observation.termination_cause,
@@ -213,7 +208,7 @@ class InstallObservation:
 
     channel: str
     requests: tuple[RequestRecord, ...]
-    binaries: tuple[tuple[str, str], ...]
+    binaries: InstalledExecutables
     skill_files: int
     delegate_version: str
     default_state: tuple[str, str, str]
@@ -240,7 +235,7 @@ class CandidateInstallFacts:
                     "channel": item.channel,
                     "installer_sha256": item.installer_sha256,
                     "requests": [{"outcome": r.outcome, "url": r.url} for r in item.requests],
-                    "binaries": dict(item.binaries),
+                    "binaries": item.binaries.to_record(),
                     "skill_files": item.skill_files,
                     "delegate_version": item.delegate_version,
                     "default_state": list(item.default_state),

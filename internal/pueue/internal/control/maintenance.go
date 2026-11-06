@@ -41,10 +41,6 @@ func requestPrivateCandidateQueueMaintenance(ctx context.Context, stateRoot stri
 	return requestPrivateQueueMaintenanceScope(ctx, stateRoot, false)
 }
 
-func requestPrivateInspectionQueueMaintenance(ctx context.Context, stateRoot string) (uint64, error) {
-	return requestPrivateCandidateQueueMaintenance(ctx, stateRoot)
-}
-
 func requestPrivateQueueMaintenanceScope(ctx context.Context, stateRoot string, full bool) (uint64, error) {
 	var requested uint64
 	err := withPrivateQueueMaintenanceState(ctx, stateRoot, func(base string, record *privateQueueMaintenanceRecord) error {
@@ -75,13 +71,6 @@ func RequestPrivateQueueMaintenance(ctx context.Context, stateRoot string) error
 func RequestPrivateCandidateQueueMaintenance(ctx context.Context, stateRoot string) error {
 	_, err := requestPrivateCandidateQueueMaintenance(ctx, stateRoot)
 	return err
-}
-
-// RequestPrivateInspectionQueueMaintenance retains the original internal API
-// name for existing embedders. Candidate maintenance now covers both ordinary
-// and inspection terminal events.
-func RequestPrivateInspectionQueueMaintenance(ctx context.Context, stateRoot string) error {
-	return RequestPrivateCandidateQueueMaintenance(ctx, stateRoot)
 }
 
 // PrivateQueueMaintenanceRetryNeeded is an unlocked durable-work hint. Atomic

@@ -14,7 +14,6 @@ var errTaskAdmissionCleanupUnresolved = errors.New("task admission cleanup remai
 // command error. It neither releases them nor creates another resource owner.
 type taskAdmissionCleanupError struct {
 	cause error
-	lease *taskdir.RootAdmissionLease
 	store *taskdir.Store
 }
 
@@ -22,16 +21,8 @@ func (e *taskAdmissionCleanupError) Error() string { return e.cause.Error() }
 
 func (e *taskAdmissionCleanupError) Unwrap() error { return e.cause }
 
-func retainTaskAdmissionCleanup(result *commandResult, lease *taskdir.RootAdmissionLease, store *taskdir.Store, releaseErr error) {
-	if releaseErr != nil {
-		if !errors.Is(result.err, releaseErr) {
-			result.err = errors.Join(result.err, releaseErr)
-		}
-		result.code = 1
-		result.response.Failure = nil
-		result.response.setError(result.err)
-	}
-	if lease == nil && store == nil && releaseErr == nil {
+func retainTaskAdmissionCleanup(result *commandResult, store *taskdir.Store) {
+	if store == nil {
 		return
 	}
 	if result.err == nil {
@@ -39,9 +30,7 @@ func retainTaskAdmissionCleanup(result *commandResult, lease *taskdir.RootAdmiss
 		result.code = 1
 		result.response.Failure = nil
 	}
-	if lease != nil || store != nil {
-		result.err = &taskAdmissionCleanupError{cause: result.err, lease: lease, store: store}
-	}
+	result.err = &taskAdmissionCleanupError{cause: result.err, store: store}
 	if continuation := result.response.Continuation; continuation != nil {
 		continuation.Resumable = false
 		continuation.ContinueCommand = ""

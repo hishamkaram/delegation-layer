@@ -14,7 +14,6 @@ import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -22,6 +21,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
+	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 // The recording client wraps the canonical terminal-event fake supervisor. It
@@ -48,7 +48,14 @@ type wakeEnvironmentTask struct {
 
 func newWakeEnvironmentTask(t *testing.T) wakeEnvironmentTask {
 	t.Helper()
-	store, resource, use := newManagedTaskUse(t)
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	store, err := taskdir.InitStore(owner.root)
+	owner.ownStore(t, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource := workspacefixture.NewResourceInStore(t, store)
+	use := newManagedTaskUseInStore(t, store, resource)
 	// A durable user stop before any launch closes the provider lifetime.
 	stop, err := use.td.PrepareStop(strings.Repeat("a", 32), "user", time.Time{})
 	if err != nil {
@@ -57,17 +64,13 @@ func newWakeEnvironmentTask(t *testing.T) wakeEnvironmentTask {
 	if err = stop.Release(); err != nil {
 		t.Fatal(err)
 	}
-	binding := bindPathRecordingSupervisor(t, store)
+	binding := bindPathRecordingSupervisor(t, owner)
 	worker := executablePath(t)
-	digest, err := commonprovider.FingerprintExecutable(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request := workspace.OperationRequest{
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: managedTaskCaptureID,
 		WorkspaceID: resource.Request().WorkspaceID, Kind: workspace.OperationCapture, Subject: use.subject,
 		Deadline:         time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
-		WorkerExecutable: worker, WorkerSHA256: digest, Supervisor: binding,
+		WorkerExecutable: worker, ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, Supervisor: binding,
 	}
 	operation, err := workspace.OpenOperation(t.Context(), store, request)
 	if err != nil {
@@ -83,27 +86,30 @@ func newWakeEnvironmentTask(t *testing.T) wakeEnvironmentTask {
 	return wakeEnvironmentTask{store: store, td: use.td, resource: resource, capture: request.OperationID, addPath: filepath.Join(filepath.Dir(binding.ConfigPath), "capture-add-path")}
 }
 
-func bindPathRecordingSupervisor(t *testing.T, store *taskdir.Store) task.SupervisorRef {
+func bindPathRecordingSupervisor(t *testing.T, owner *componentSupervisorFixture) task.SupervisorRef {
 	t.Helper()
-	bundle := supervisorfixture.CanonicalTempDir(t)
+	store := owner.store
+	bundle := filepath.Join(owner.base, "pair")
 	clientPath, daemonPath := filepath.Join(bundle, "pueue"), filepath.Join(bundle, "pueued")
 	admissionfixture.WriteTerminalEventInspectionSupervisorExecutables(t, filepath.Join(bundle, "fixture-pueue"), daemonPath)
 	supervisorfixture.WriteExecutable(t, clientPath, pathRecordingSupervisorClient)
 	cleanup := supervisorcore.NewCleanup(admissioncore.TerminalEvidence{}, workspacescore.InspectPrivateOperation)
 	options := pueue.Options{
-		ObservationTimeout: inspection.AdmissionTimeout, Environment: os.Environ(),
+		ObservationTimeout: inspection.AdmissionTimeout, Environment: os.Environ(), ControlOwnerExecutable: canonicalAppTestExecutable(t),
 		SuccessfulCleanupAuthorizer: cleanup.AuthorizeSuccessfulCleanup, PrivateTerminalEvidencePreparer: cleanup.PrepareTerminalEvidence,
 	}
-	bootstrap, err := pueue.BindPrivate(t.Context(), clientPath, daemonPath, store.Root, options)
+	bootstrap, err := owner.bindPrivate(t.Context(), clientPath, daemonPath, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	admissionfixture.ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
+	owner.listen(t, bootstrap.Binding().Endpoint)
 	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), options)
 	defer cancelControl()
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
-	admissionfixture.SettleSupervisorProbeTestClient(t, client, err)
-	if err = errors.Join(err, bootstrap.Close()); err != nil {
+	firstWait := len(owner.daemonWaits())
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, owner.setupOptions(options))
+	owner.ownClient(client, err)
+	owner.ownDaemonClients(client, firstWait)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return client.Binding()

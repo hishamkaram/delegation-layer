@@ -861,7 +861,8 @@ class PrimaryFinalizationTests(ObservedReadinessFixture):
         errors = []
         args = unittest.mock.Mock(scenario="capacity")
         with patch.object(finalization, "PRIMARY_FINALIZATION_SECONDS", budget):
-            _binding, ready, deadline = finalization.release_fixture_workers(args, errors, lifetime, False)
+            _binding, ready, deadline, preparation_failed = finalization.release_fixture_workers(args, errors, lifetime, False)
+        self.assertFalse(preparation_failed)
         return ready, deadline, errors
 
     def test_failed_finalization_reaches_public_recovery_before_refusing_intent_only_closure(self):

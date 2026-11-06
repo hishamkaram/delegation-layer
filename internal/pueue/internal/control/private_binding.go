@@ -55,7 +55,7 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return nil, err
 	}
-	configPath, base, err := privateBindingConfig(ctx, stateRoot, base, resolution, expected, options.PrivateGenerationGuard)
+	configPath, base, err := privateBindingConfig(ctx, stateRoot, base, resolution, expected, options)
 	if err != nil {
 		return nil, err
 	}
@@ -81,10 +81,13 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, expected); err != nil {
 		return nil, err
 	}
+	if err = client.validatePrivateGenerationLaunch(stateRoot); err != nil {
+		return nil, err
+	}
 	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return nil, err
 	}
-	if err = startDaemon(ctx, stateRoot, daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
+	if err = startDaemon(ctx, stateRoot, daemonPath, configPath, base, options); err != nil {
 		return nil, err
 	}
 	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
@@ -300,9 +303,9 @@ func preparePrivateBootstrap(ctx context.Context, clientExecutable, daemonExecut
 	return normalized, resolution, clientPath, daemonPath, base, lock, nil
 }
 
-func privateBindingConfig(ctx context.Context, stateRoot, base string, resolution ResolutionContext, expected *task.SupervisorRef, guard PrivateGenerationGuard) (configPath, privateBase string, resultErr error) {
+func privateBindingConfig(ctx context.Context, stateRoot, base string, resolution ResolutionContext, expected *task.SupervisorRef, options Options) (configPath, privateBase string, resultErr error) {
 	if expected == nil {
-		return ensurePrivateConfigContext(ctx, stateRoot, resolution, guard)
+		return ensurePrivateConfigContext(ctx, stateRoot, resolution, options.PrivateGenerationGuard, options.PrivateTerminalEventRunner)
 	}
 	if !IsPrivateConfig(stateRoot, expected.ConfigPath) {
 		return "", "", fmt.Errorf("%w: saved supervisor config is not private to the state root", ErrConfiguration)

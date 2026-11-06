@@ -33,7 +33,7 @@ func TestWarmOwnerOtherRootUsesRequestContextWithoutNewBirth(t *testing.T) {
 		return Disposition{Kind: DispositionWarmReuse}, nil
 	}})
 	expectedBirth = b.entry.operation.defaultContextReference()
-	expected = b.entry.operation.context.Clone()
+	expected = b.birthContext(t)
 	expected.ControlEnvironment = []string{"WARM_OWNER_CONTEXT=C2"}
 	selected, _, err := b.entry.journal.stageContext(t.Context(), expected)
 	if err != nil {
@@ -52,12 +52,12 @@ func TestWarmOwnerOtherRootUsesRequestContextWithoutNewBirth(t *testing.T) {
 	defer cancel()
 	// The real public client validates A's complete wire reply, including the
 	// nonzero exact B startup, through validateOwnerReplyBinding.
-	established, err := RequestOtherEstablishment(ctx, contextPassiveReader(t, a.entry.journal), a.request(t, ownerStatus).Owner, target, selected, warmOwnerRequirements(b.entry.operation.Artifacts()), InitialOperation{})
+	established, err := RequestOtherEstablishment(ctx, contextPassiveReader(t, a.entry.journal), a.request(t, ownerStatus).Owner, target, selected, InitialOperation{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertEstablishedOnly(t, established, b.request(t, ownerStatus).Owner, calls.Load())
-	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, b.entry.journal), established.Owner, PreparationRequest{Requirements: warmOwnerRequirements(b.entry.operation.Artifacts()), Context: selected})
+	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, b.entry.journal), established.Owner, PreparationRequest{Context: selected})
 	reference, disposition := outcome.Startup, outcome.Disposition
 	if err != nil || reference != b.request(t, ownerStatus).Owner || disposition.Kind != DispositionWarmReuse || calls.Load() != 1 {
 		t.Fatalf("warm B did not prepare C2: calls=%d reference=%v disposition=%v err=%v", calls.Load(), reference, disposition, err)
@@ -65,10 +65,6 @@ func TestWarmOwnerOtherRootUsesRequestContextWithoutNewBirth(t *testing.T) {
 	if !maps.Equal(before, producerBudgetTree(t, filepath.Join(b.root, "infrastructure"))) {
 		t.Fatal("warm contact changed B's stored birth/context evidence or created another startup")
 	}
-}
-
-func warmOwnerRequirements(artifacts Artifacts) ArtifactRequirements {
-	return ArtifactRequirements{RequiredRuntimeSHA256: artifacts.RunnerSHA256, RequiredClientSHA256: artifacts.ClientSHA256, RequiredDaemonSHA256: artifacts.DaemonSHA256}
 }
 
 func TestWarmOwnerOtherRootPendingContextsPreserveBirth(t *testing.T) {
@@ -112,11 +108,17 @@ func exerciseWarmOwnerPendingContextReplies(t *testing.T, assumed bool) {
 	for _, test := range []struct {
 		selected LaunchContextReference
 		code     ownerReplyCode
-	}{{intent.Inputs.Context, ownerTimeout}, {c2, ownerBusy}} {
+		contact  time.Duration
+	}{
+		{intent.Inputs.Context, ownerTimeout, time.Second},
+		// A different context must return busy without waiting for B's original
+		// startup deadline. It has no 150ms handshake latency requirement.
+		{c2, ownerBusy, 5 * time.Second},
+	} {
 		request := a.request(t, ownerEnsureOther)
 		request.Target = originRecord{Root: intent.Inputs.Root, RootID: intent.Inputs.RootID}
-		request.Context, request.Requirements = test.selected, b.request.Requirements
-		request.Deadline = time.Now().Add(150 * time.Millisecond).UTC().Format(time.RFC3339Nano)
+		request.Context = test.selected
+		request.Deadline = time.Now().Add(test.contact).UTC().Format(time.RFC3339Nano)
 		assertWarmPendingContextReply(t, a, request, test.code, writes)
 	}
 	if !maps.Equal(before, producerBudgetTree(t, filepath.Join(b.journal.pin.Root(), "infrastructure"))) {
@@ -144,14 +146,14 @@ func assertWarmPendingContextReply(t *testing.T, a *ownerServerFixture, request 
 			t.Fatalf("pending context did not wait for original deadline: %s", reply.Code)
 		}
 	} else if readErr != nil || reply.Code != expected || reply.Disposition != (Disposition{}) {
-		t.Fatalf("pending context reply=%s want=%s disposition=%v err=%v", reply.Code, expected, reply.Disposition, readErr)
+		t.Fatalf("pending context reply=%s want=%s disposition=%v eof=%t expired=%t err=%v", reply.Code, expected, reply.Disposition, errors.Is(readErr, io.EOF), errors.Is(readErr, context.DeadlineExceeded), readErr)
 	}
 	select {
 	case written := <-writes:
 		if written.Code != expected {
 			t.Fatalf("A did not retain same-attempt wait until deadline: %s want %s", written.Code, expected)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("A did not finish bounded observation")
 	}
 }

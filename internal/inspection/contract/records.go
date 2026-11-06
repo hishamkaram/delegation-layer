@@ -45,17 +45,17 @@ type Binding struct {
 	// those are re-probed before a provider launch.
 	CapabilitySHA256 string `json:"capability_sha256,omitempty"`
 	HelperExecutable string `json:"helper_executable"`
-	// HelperSHA256 is empty when the inspected executable is the installed
-	// provider CLI, whose bytes are never fingerprinted. A native helper's
-	// definition requires its digest, and admission binds this field to it.
-	HelperSHA256        string             `json:"helper_sha256"`
-	WorkerExecutable    string             `json:"worker_executable"`
-	WorkerSHA256        string             `json:"worker_sha256"`
-	RunnerOwnership     string             `json:"runner_ownership,omitempty"`
-	WorkerExitProof     string             `json:"worker_exit_proof,omitempty"`
-	Environment         []string           `json:"environment,omitempty"`
-	EnvironmentRecorded bool               `json:"environment_recorded,omitempty"`
-	Supervisor          task.SupervisorRef `json:"supervisor"`
+	// Executable SHA fields are historical data only. New installed-path
+	// bindings omit both; the definition digest still covers command metadata.
+	HelperSHA256        string                  `json:"helper_sha256,omitempty"`
+	WorkerExecutable    string                  `json:"worker_executable"`
+	WorkerSHA256        string                  `json:"worker_sha256,omitempty"`
+	ExecutableIdentity  task.ExecutableIdentity `json:"executable_identity,omitempty"`
+	RunnerOwnership     string                  `json:"runner_ownership,omitempty"`
+	WorkerExitProof     string                  `json:"worker_exit_proof,omitempty"`
+	Environment         []string                `json:"environment,omitempty"`
+	EnvironmentRecorded bool                    `json:"environment_recorded,omitempty"`
+	Supervisor          task.SupervisorRef      `json:"supervisor"`
 }
 
 // RequestRecord is the immutable admission request persisted outside ordinary
@@ -104,7 +104,7 @@ type StartRecord struct {
 	CreatedAt     string `json:"created_at"`
 }
 
-// ManagedWorkerUpgradeRecord authorizes later content-addressed managed
+// ManagedWorkerUpgradeRecord authorizes later selected installed managed
 // workers for the same immutable inspection request after queue migration.
 type ManagedWorkerUpgradeRecord struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -143,21 +143,8 @@ func ValidateBinding(binding Binding) error {
 			return fmt.Errorf("inspection capability digest: %w", err)
 		}
 	}
-	for name, value := range map[string]string{
-		"inspection helper executable": binding.HelperExecutable,
-		"inspection worker executable": binding.WorkerExecutable,
-	} {
-		if err := validateAbsoluteCleanPath(name, value); err != nil {
-			return err
-		}
-	}
-	if binding.HelperSHA256 != "" {
-		if err := task.ValidateSHA256(binding.HelperSHA256); err != nil {
-			return fmt.Errorf("inspection helper digest: %w", err)
-		}
-	}
-	if err := task.ValidateSHA256(binding.WorkerSHA256); err != nil {
-		return fmt.Errorf("inspection worker digest: %w", err)
+	if err := validateBindingExecutables(binding); err != nil {
+		return err
 	}
 	if err := task.ValidateFreshSupervisorRef(binding.Supervisor); err != nil {
 		return fmt.Errorf("inspection supervisor binding: %w", err)

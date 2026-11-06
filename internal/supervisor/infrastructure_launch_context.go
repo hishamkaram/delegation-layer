@@ -13,7 +13,7 @@ import (
 // selected by trusted supervisor composition, after its existing provider merge.
 // It adds no environment-selection policy. RPC data cannot call this producer
 // or become executable/source authority through the resulting record.
-func captureInfrastructureLaunchContext(pin taskdir.RootPin, options pueue.Options) (infrastructure.LaunchContext, error) {
+func captureInfrastructureLaunchContext(pin taskdir.RootPin, options pueue.Options, selectedClient string) (infrastructure.LaunchContext, error) {
 	control := options.Environment
 	if control == nil {
 		control = pueue.DefaultEnvironment()
@@ -37,11 +37,30 @@ func captureInfrastructureLaunchContext(pin taskdir.RootPin, options pueue.Optio
 		return infrastructure.LaunchContext{}, err
 	}
 	record := infrastructure.LaunchContext{
-		Protocol: infrastructure.ProtocolVersion, Root: pin.Root(), RootID: pin.RootID(), OS: runtime.GOOS,
+		Protocol: infrastructure.RecordProtocolVersion, Root: pin.Root(), RootID: pin.RootID(), OS: runtime.GOOS, SupervisorExecutable: selectedClient,
 		ControlEnvironment: control, MaintenanceEnvironment: maintenance,
 	}
 	if _, err = record.Digest(); err != nil {
 		return infrastructure.LaunchContext{}, err
 	}
 	return record, nil
+}
+
+// Routed work selects its target's recorded installed client first. This is
+// metadata and path selection only; the resident re-reads canonical authority.
+func (r ControlRuntime) captureLaunchContext(pin taskdir.RootPin) (infrastructure.LaunchContext, error) {
+	saved, found, err := pueue.ReadPrivateSupervisorBinding(pin.Root())
+	if err != nil {
+		return infrastructure.LaunchContext{}, err
+	}
+	var client string
+	if found {
+		client, err = ResolveSavedSupervisorClient(pin.Root(), saved, r.Lookup)
+	} else {
+		client, err = resolveInstalledSupervisorClient(r.Lookup)
+	}
+	if err != nil {
+		return infrastructure.LaunchContext{}, err
+	}
+	return captureInfrastructureLaunchContext(pin, r.Options, client)
 }

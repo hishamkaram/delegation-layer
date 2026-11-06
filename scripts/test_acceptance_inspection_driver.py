@@ -21,28 +21,143 @@ from acceptance_supervisor_common import digest, write_json
 from scripts.acceptance_tests.record_fixtures import object_at
 from scripts.acceptance_tests.inspection.fixtures import FixtureProcesses
 from scripts.acceptance_tests.resources import DirectoryPinOwner
+from scripts.acceptance_tests.inspection.fixtures import forbid_installed_content
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure
+
+
+class InspectionInstallationTests(unittest.TestCase):
+    COMMANDS = (
+        ("delegate", "internal/testutil/inspectionfixture/cmd/delegate"),
+        ("delegate-run", "internal/testutil/inspectionfixture/cmd/delegate-run"),
+        ("inspection-helper", "internal/testutil/inspectionfixture/cmd/inspection-helper"),
+        ("provider", "internal/testutil/fakeprovider/cmd/provider"),
+    )
+
+    def setUp(self):
+        self.enterContext(forbid_installed_content())
+        temporary = tempfile.TemporaryDirectory(prefix="inspection-installation-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.source = self.root / "source"
+        self.source.mkdir()
+        (self.source / "go.mod").write_text("module example.invalid/inspection\n")
+        for _name, package in self.COMMANDS:
+            directory = self.source / package
+            directory.mkdir(parents=True)
+            (directory / "main.go").write_text("package main\nfunc main() {}\n")
+        for name in ("pueue", "pueued"):
+            path = self.root / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o700)
+        self.args = Namespace(source_root=str(self.source), tools=None,
+                                    pueue=str(self.root / "pueue"), pueued=str(self.root / "pueued"),
+                                    output=str(self.root / "evidence"))
+        self.enterContext(patch("scripts.delegate_acceptance.paths.operations.reject_tmp"))
+        self.launch = self.enterContext(patch("subprocess.Popen", side_effect=AssertionError("actor launched")))
+
+    @staticmethod
+    def materialize_build(arguments, _environment, **_options):
+        target = Path(arguments[arguments.index("-o") + 1])
+        target.write_text("#!/bin/sh\nexit 0\n")  # Original source-build output; no image copy.
+        target.chmod(0o700)
+        return BoundedCommandResult(0, b"")
+
+    def construct(self):
+        operation = InspectionAcceptance(self.args)
+        self.addCleanup(supervisor_common.rollback_owned_directories, operation.owned_directories)
+        return operation
+
+    def test_builds_four_selected_source_commands_directly_into_owned_installation(self):
+        with patch.object(inspection_acceptance, "run_bounded_command", side_effect=self.materialize_build) as build:
+            operation = self.construct()
+        self.assertEqual(build.call_count, 4)
+        for call, (name, package) in zip(build.call_args_list, self.COMMANDS):
+            self.assertEqual(call.args[0], ["go", "build", "-buildvcs=false", "-o",
+                                           str(operation.bindir / name), "./" + package])
+            self.assertEqual(call.kwargs["cwd"], self.source)
+            self.assertEqual(call.args[1]["GOTOOLCHAIN"], "local")
+            self.assertEqual(call.args[1]["CGO_ENABLED"], "0")
+            self.assertEqual(call.kwargs["timeout"], 900)
+            self.assertEqual(call.kwargs["max_output"], 1024 * 1024)
+            self.assertTrue(call.kwargs["capture_stderr"])
+        self.assertEqual(operation.delegate, operation.bindir / "delegate")
+        self.assertEqual(operation.runner, operation.bindir / "delegate-run")
+        self.launch.assert_not_called()
+
+    def test_retired_tools_refuses_before_reading_or_copying_installed_programs(self):
+        tools = self.root / "legacy-tools"
+        tools.mkdir()
+        for name, _package in self.COMMANDS:
+            (tools / name).write_text("#!/bin/sh\nexit 0\n")
+            (tools / name).chmod(0o700)
+        self.args.tools = str(tools)
+        with patch.object(inspection_acceptance, "run_bounded_command") as build:
+            with self.assertRaisesRegex(AcceptanceFailure, "--tools is retired.*--source-root"):
+                InspectionAcceptance(self.args)
+        build.assert_not_called()
+        self.launch.assert_not_called()
+        self.assertFalse(Path(self.args.output).exists())
+
+    def test_build_and_data_configuration_keep_programs_in_place_without_sha_fields(self):
+        with patch.object(inspection_acceptance, "run_bounded_command", side_effect=self.materialize_build):
+            operation = self.construct()
+        _task, _brief, _case, helper_config = operation.configure("finite", 0)
+        provider_record = supervisor_common.read_json(operation.bindir / "provider-fixture.json")
+        helper_record = supervisor_common.read_json(operation.bindir / "inspection-fixture.json")
+        self.assertNotIn("provider_sha256", provider_record)
+        self.assertNotIn("helper_sha256", helper_record)
+        self.assertEqual(provider_record["provider_executable"], str(operation.provider))
+        self.assertEqual(helper_record["helper_executable"], str(operation.helper))
+        self.assertEqual(provider_record["provider_config_sha256"], digest(Path(provider_record["provider_config"])))
+        self.assertEqual(helper_record["helper_config_sha256"], digest(helper_config))
+        self.launch.assert_not_called()
+
+    def test_completed_build_failure_rolls_back_without_private_output(self):
+        with patch.object(inspection_acceptance, "run_bounded_command", return_value=BoundedCommandResult(
+                9, b"private compiler stdout", b"private compiler stderr")) as build:
+            with self.assertRaisesRegex(AcceptanceFailure, "build failed with exit 9") as stopped:
+                InspectionAcceptance(self.args)
+        self.assertNotIn("private compiler", str(stopped.exception))
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(list(Path(self.args.output).iterdir()), [])
+        self.launch.assert_not_called()
+
+    def test_unproven_build_wait_retains_owned_installation_before_cleanup(self):
+        failure = BoundedCommandError(CommandFailure.TERMINATION_FAILED)
+        with patch.object(inspection_acceptance, "run_bounded_command", side_effect=failure):
+            with self.assertRaisesRegex(AcceptanceFailure, "command_termination_failed") as stopped:
+                InspectionAcceptance(self.args)
+        self.assertIn("retained " + str(Path(self.args.output)), str(stopped.exception))
+        self.assertTrue((Path(self.args.output) / "fixture/bin").is_dir())
+        self.launch.assert_not_called()
+        # The Wait failure was simulated. No child exists; TemporaryDirectory
+        # owns final cleanup after verifying that constructor retention worked.
+
+    def test_missing_fixture_source_blocks_before_any_build(self):
+        (self.source / self.COMMANDS[2][1] / "main.go").unlink()
+        with patch.object(inspection_acceptance, "run_bounded_command") as build:
+            with self.assertRaisesRegex(AcceptanceFailure, "all four inspection fixture commands"):
+                InspectionAcceptance(self.args)
+        build.assert_not_called()
+        self.assertEqual(list(Path(self.args.output).iterdir()), [])
 
 
 class InspectionDriverTests(unittest.TestCase):
     def test_constructor_rolls_back_disposable_roots_after_partial_setup(self):
         with tempfile.TemporaryDirectory(prefix="inspection-constructor-") as temporary:
             root = Path(temporary)
-            tools = root / "tools"
-            tools.mkdir()
-            for name in ("delegate", "delegate-run", "provider", "inspection-helper"):
-                (tools / name).write_bytes(name.encode())
             pueue = root / "pueue"
             pueued = root / "pueued"
             pueue.write_bytes(b"pueue")
             pueued.write_bytes(b"pueued")
             output = root / "evidence"
-            args = Namespace(tools=str(tools), pueue=str(pueue),
+            args = Namespace(source_root=str(inspection_acceptance.REPO), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
 
             with patch("scripts.delegate_acceptance.paths.operations.reject_tmp"), \
-                    patch.object(inspection_acceptance.shutil, "copyfile",
-                                 side_effect=OSError("injected copy failure")):
-                with self.assertRaisesRegex(OSError, "copy failure"):
+                    patch.object(inspection_acceptance, "build_inspection_tools",
+                                 side_effect=OSError("injected build failure")):
+                with self.assertRaisesRegex(OSError, "build failure"):
                     InspectionAcceptance(args)
 
             self.assertTrue(output.is_dir())
@@ -184,7 +299,7 @@ class InspectionDriverTests(unittest.TestCase):
                     return not success or failure is not False
 
                 self.enterContext(patch.object(driver, "finalize", side_effect=finalize))
-                argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
+                argv = ["--source-root", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
                         "--output", str(output)]
                 with patch.object(inspection_acceptance, "InspectionAcceptance", return_value=driver), \
                         patch.object(inspection_acceptance, "no_secret_bytes"), \
@@ -338,15 +453,12 @@ class SetupBoundary(RuntimeError):
 
 
 class InspectionDriverSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(forbid_installed_content())
+
     def test_setup_validates_config_source_and_binding_before_daemon_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            tools = root / "tools"
-            tools.mkdir(mode=0o700)
-            for name in ("delegate", "delegate-run", "provider", "inspection-helper"):
-                path = tools / name
-                path.write_bytes(name.encode("ascii"))
-                path.chmod(0o700)
             pueue = root / "pueue"
             pueued = root / "pueued"
             for path in (pueue, pueued):
@@ -354,7 +466,7 @@ class InspectionDriverSetupTests(unittest.TestCase):
                 path.chmod(0o700)
 
             output = root / "output"
-            args = Namespace(tools=str(tools), pueue=str(pueue),
+            args = Namespace(source_root=str(inspection_acceptance.REPO), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
             private_prefix = (Path("/Users/Shared") if sys.platform == "darwin"
                               else Path.home() / ".dl-acceptance")
@@ -401,7 +513,9 @@ class InspectionDriverSetupTests(unittest.TestCase):
                                  "unix:" + str(base / "run" / "p.sock"))
                 raise SetupBoundary("daemon creation boundary reached")
 
-            with patch.object(inspection_acceptance, "ensure_private_directory",
+            with patch.object(inspection_acceptance, "run_bounded_command",
+                              side_effect=InspectionInstallationTests.materialize_build), \
+                    patch.object(inspection_acceptance, "ensure_private_directory",
                               side_effect=private_directory), \
                     patch.object(inspection_acceptance.secrets, "token_hex",
                                  side_effect=lambda count: "a" * (count * 2)), \

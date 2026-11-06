@@ -1,13 +1,9 @@
 package provider
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
@@ -37,20 +33,9 @@ func LocateCLI(name string, environment []string) (CLIInfo, error) {
 // regular file with an execute bit. It never reads or fingerprints the
 // provider's bytes, because the user owns provider installations and updates.
 func LocateCLIPath(path string) (CLIInfo, error) {
-	absolute, err := filepath.Abs(path)
+	canonical, err := verifiedexec.LocatePath(path)
 	if err != nil {
 		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
-	}
-	canonical, err := config.CanonicalizePath(absolute)
-	if err != nil {
-		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
-	}
-	info, err := os.Stat(canonical)
-	if err != nil {
-		return CLIInfo{}, fmt.Errorf("inspect provider executable: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return CLIInfo{}, errors.New("inspect provider executable: not a regular executable file")
 	}
 	return CLIInfo{Path: canonical}, nil
 }
@@ -93,20 +78,4 @@ func ContainsCLIFlag(output []byte, flag string) bool { return containsCLIFlag(o
 
 func isCLIFlagRune(value byte) bool {
 	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '-' || value == '_'
-}
-
-// FingerprintExecutable reads a canonical regular executable without launching
-// it. It identifies Delegate-owned workers and supervisors and integrity-bound
-// native helpers; external provider executables are never fingerprinted.
-func FingerprintExecutable(path string) (digest string, resultErr error) {
-	return verifiedexec.Fingerprint(path)
-}
-
-// OpenVerifiedExecutable opens the exact regular executable represented by
-// expectedSHA256 and leaves the descriptor positioned at its beginning. The
-// descriptor can be used by platform-specific launch code that supports
-// descriptor-backed execution; portable callers should use the verified
-// command builder, which preserves the same admitted bytes on every platform.
-func OpenVerifiedExecutable(path, expectedSHA256 string) (*os.File, error) {
-	return verifiedexec.Open(path, expectedSHA256)
 }

@@ -49,6 +49,7 @@ type Response struct {
 	EvidenceSHA256    string                     `json:"evidence_sha256,omitempty"`
 	Supervisor        *SupervisorResponse        `json:"supervisor,omitempty"`
 	SupervisorControl *SupervisorControlResponse `json:"supervisor_control,omitempty"`
+	SupervisorOwner   *SupervisorOwnerResponse   `json:"supervisor_owner,omitempty"`
 	Stops             []StopResponse             `json:"stops,omitempty"`
 	Stop              *StopResponse              `json:"stop,omitempty"`
 	Pending           *PendingResponse           `json:"pending,omitempty"`

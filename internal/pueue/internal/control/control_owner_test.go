@@ -65,11 +65,11 @@ func runControlOwnerCallerTest(args []string) int {
 	command := exec.Command(args[0], args[1], args[2])
 	command.Dir = filepath.Dir(args[0])
 	started := make(chan struct{}, 1)
-	startControlOwnedCaptured(ctx, os.Args[0], command, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", func(event CommandEvent) {
+	startControlOwnedCapturedWithConsume(ctx, os.Args[0], command, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", func(event CommandEvent) {
 		if event.Stage == "started" {
 			started <- struct{}{}
 		}
-	}, "")
+	}, "", nil)
 	select {
 	case <-started:
 		return 0
@@ -264,11 +264,11 @@ func TestControlOwnerTestHelperJoinsOwnerBeforeEarlierCleanup(t *testing.T) {
 func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVersion string) *Pending {
 	t.Helper()
 	started := make(chan struct{}, 1)
-	pending := startControlOwnedCaptured(t.Context(), os.Args[0], command, commandID, func(event CommandEvent) {
+	pending := startControlOwnedCapturedWithConsume(t.Context(), os.Args[0], command, commandID, func(event CommandEvent) {
 		if event.Stage == "started" {
 			started <- struct{}{}
 		}
-	}, statusVersion)
+	}, statusVersion, nil)
 	// The owner child is finite, so join its sole completion before earlier
 	// cleanups such as the fixture's TempDir run. The join cannot use t.Context,
 	// which is canceled before cleanups; the bounded wait only reports a stuck

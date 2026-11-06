@@ -48,25 +48,18 @@ func locateTestShell(t *testing.T) provider.CLIInfo {
 	return info
 }
 
-// locateTestHelper returns the shell as an integrity-bound native helper:
-// unlike a provider CLI, a helper definition carries its admitted digest.
+// locateTestHelper selects an installed shell by metadata only.
 func locateTestHelper(t *testing.T) provider.CLIInfo {
 	t.Helper()
-	info := locateTestShell(t)
-	digest, err := provider.FingerprintExecutable(info.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	info.SHA256 = digest
-	return info
+	return locateTestShell(t)
 }
 
 func testModelDefinition(t *testing.T, outputLimit int64) provider.InspectionDefinition {
 	t.Helper()
 	info := locateTestShell(t)
 	return provider.InspectionDefinition{
-		Executable: info.Path, ExecutableSHA256: info.SHA256,
-		Directory: "/workspace", Environment: []string{}, OutputLimit: outputLimit,
+		Executable: info.Path,
+		Directory:  "/workspace", Environment: []string{}, OutputLimit: outputLimit,
 	}
 }
 
@@ -151,8 +144,8 @@ func TestModelCommandRunsInstalledExecutableAfterPathReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := provider.InspectionDefinition{
-		Executable: info.Path, ExecutableSHA256: info.SHA256,
-		Directory: root, Environment: []string{}, OutputLimit: 128,
+		Executable: info.Path,
+		Directory:  root, Environment: []string{}, OutputLimit: 128,
 	}
 	var captured modelCommandResult
 	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}}, func(scope execution.PreflightScope) error {

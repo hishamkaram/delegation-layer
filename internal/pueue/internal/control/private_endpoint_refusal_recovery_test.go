@@ -35,10 +35,9 @@ func TestRecoverPrivateEntersExclusiveClosureForRefusedEndpoint(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), privateTestObservationTimeout)
 	defer cancel()
 
-	recovered, err := RecoverPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
-	if err != nil {
-		t.Fatalf("saved recovery did not enter exclusive refused-endpoint closure: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout})
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	t.Cleanup(func() {
 		if closeErr := recovered.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -57,7 +56,7 @@ func TestPendingMigrationRefusedEndpointStartsRecordedSuccessor(t *testing.T) {
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	base := filepath.Dir(current.Binding().ConfigPath)
 	pending := privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: privateDaemonIdentityForBinding(legacy.Binding()), Successor: privateDaemonIdentityForBinding(current.Binding())}
 	if err := publishPrivateMigrationRecord(base, pending.Legacy, pending.Successor); err != nil {

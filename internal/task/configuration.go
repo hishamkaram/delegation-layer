@@ -206,6 +206,14 @@ func ValidatePredicateRef(ref PredicateRef) error {
 
 // ValidateSupervisorRef checks persisted supervisor coordinates and provenance.
 func ValidateSupervisorRef(ref SupervisorRef) error {
+	if err := ref.ExecutableIdentity.Validate(); err != nil {
+		return err
+	}
+	if ref.ExecutableIdentity == ExecutableIdentityInstalledPathV1 {
+		if err := validateInstalledSupervisorRef(ref); err != nil {
+			return err
+		}
+	}
 	for _, executable := range []struct {
 		name  string
 		value string
@@ -234,6 +242,16 @@ func ValidateSupervisorRef(ref SupervisorRef) error {
 		return errors.New("missing supervisor endpoint or version")
 	}
 	return ValidateSHA256(ref.ConfigDigest)
+}
+
+func validateInstalledSupervisorRef(ref SupervisorRef) error {
+	if ref.ClientSHA256 != "" || ref.DaemonSHA256 != "" {
+		return errors.New("installed supervisor identity contains executable digests")
+	}
+	if ref.ClientExecutable == "" {
+		return errors.New("missing saved supervisor client executable")
+	}
+	return ValidateSHA256(ref.ResolvedConfigSHA256)
 }
 
 func validateSupervisorResolution(ref SupervisorRef) error {
@@ -445,11 +463,14 @@ func validateSessionFields(provider, timestamp string) error {
 	return validateTimestamp(timestamp)
 }
 
-// ValidateFreshSupervisorRef requires the complete Supervisor binding without reading
-// external files. The pueue boundary verifies actual executable/configuration bytes.
+// ValidateFreshSupervisorRef requires a complete binding without reading files.
+// Unmarked records retain their historical digest requirements.
 func ValidateFreshSupervisorRef(ref SupervisorRef) error {
 	if err := ValidateSupervisorRef(ref); err != nil {
 		return err
+	}
+	if ref.ExecutableIdentity == ExecutableIdentityInstalledPathV1 {
+		return nil
 	}
 	if ref.ClientExecutable == "" {
 		return errors.New("missing saved supervisor client executable")

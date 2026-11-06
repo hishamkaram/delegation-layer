@@ -223,6 +223,8 @@ func TestCancelWithoutSubmissionDoesNotRecoverPrivateSupervisor(t *testing.T) {
 }
 
 type cancelQueueRepairFixture struct {
+	owner             *componentSupervisorFixture
+	root              string
 	initialExecutable string
 	commandLog        string
 	statusPath        string
@@ -230,11 +232,18 @@ type cancelQueueRepairFixture struct {
 	supervisor        *pueue.Client
 }
 
-func newCancelQueueRepairFixture(t *testing.T, stateRoot string) cancelQueueRepairFixture {
+func newCancelQueueRepairFixture(t *testing.T) cancelQueueRepairFixture {
 	t.Helper()
-	supervisorDir := filepath.Join(stateRoot, ".supervisor")
-	if err := os.MkdirAll(supervisorDir, 0o700); err != nil {
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	stateRoot := owner.root
+	store, err := taskdir.InitStore(stateRoot)
+	owner.ownStore(t, store)
+	if err != nil {
 		t.Fatal(err)
+	}
+	supervisorDir := filepath.Join(stateRoot, ".supervisor")
+	if directoryErr := os.MkdirAll(supervisorDir, 0o700); directoryErr != nil {
+		t.Fatal(directoryErr)
 	}
 	bundleDir := t.TempDir()
 	clientPath := filepath.Join(bundleDir, "pueue")
@@ -272,11 +281,15 @@ func newCancelQueueRepairFixture(t *testing.T, stateRoot string) cancelQueueRepa
 		Environment: append(pueue.DefaultEnvironment(),
 			"FAKE_COMMAND_LOG="+commandLog, "FAKE_STATUS_PATH="+statusPath),
 	}
-	supervisor, err := pueue.Bind(context.Background(), clientPath, configPath, options)
+	writeAppTestFile(t, statusPath, []byte(`{"tasks":{},"groups":{}}`))
+	supervisor, err := owner.bindPrivate(t.Context(), clientPath, daemonPath, options)
 	if err != nil {
 		t.Fatal(err)
 	}
+	owner.listen(t, supervisor.Binding().Endpoint)
 	return cancelQueueRepairFixture{
+		owner:             owner,
+		root:              stateRoot,
 		initialExecutable: initialExecutable,
 		commandLog:        commandLog,
 		statusPath:        statusPath,
@@ -292,7 +305,7 @@ func createQueuedCancelTask(t *testing.T, stateRoot, statusPath string, supervis
 		t.Fatal(err)
 	}
 	runnerSource := canonicalAppTestExecutable(t)
-	runner := installStateRunnerFixture(t, stateRoot, runnerSource)
+	runner := runnerSource
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -383,15 +396,9 @@ func writeQueuedCancelStatus(t *testing.T, path, label, workspace string) {
 }
 
 func TestCancelStopsTaskWithoutRunningOptionalQueueRepair(t *testing.T) {
-	stateRoot := testsupport.CanonicalTempDir(t)
-	store, err := taskdir.InitStore(stateRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	fixture := newCancelQueueRepairFixture(t, stateRoot)
+	fixture := newCancelQueueRepairFixture(t)
+	stateRoot := fixture.root
+	publishReadyCancelGeneration(t, fixture)
 	taskID := createQueuedCancelTask(t, stateRoot, fixture.statusPath, fixture.supervisor)
 
 	maintenanceLease, err := taskdir.OpenLockFile(filepath.Join(stateRoot, ".maintenance.lock"), taskdir.LockLevelMaintenance)
@@ -410,7 +417,7 @@ func TestCancelStopsTaskWithoutRunningOptionalQueueRepair(t *testing.T) {
 		SupervisorOptions: fixture.options, InitialSupervisorExecutable: fixture.initialExecutable,
 	})
 	if result.code != 0 || result.err != nil || result.response.Stop == nil || result.response.Stop.Action != "remove" {
-		t.Fatalf("cancel did not send the saved stop request while holding a shared task lease: %+v", result)
+		t.Fatalf("cancel did not send the saved stop request while holding a shared task lease: %+v err=%v", result, result.err)
 	}
 	commands, err := os.ReadFile(fixture.commandLog)
 	if err != nil {
@@ -419,22 +426,41 @@ func TestCancelStopsTaskWithoutRunningOptionalQueueRepair(t *testing.T) {
 	if got := strings.Count(string(commands), "remove\n"); got != 1 {
 		t.Fatalf("supervisor received remove %d times, want exactly once; commands=%q", got, commands)
 	}
+	for _, command := range []string{"parallel", "edit", "add", "enqueue"} {
+		if strings.Contains(string(commands), command+"\n") {
+			t.Fatalf("cancel performed optional queue repair %s: %q", command, commands)
+		}
+	}
 	if _, err = os.Lstat(filepath.Join(stateRoot, ".supervisor", "pueue-pair.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancel performed optional supervisor-pair migration: %v", err)
 	}
 }
 
+func publishReadyCancelGeneration(t *testing.T, fixture cancelQueueRepairFixture) {
+	t.Helper()
+	stateRoot := fixture.root
+	waitsBefore := len(fixture.owner.daemonWaits())
+	if err := pueue.WithBootstrapLockContext(t.Context(), stateRoot, func(ctx context.Context) error {
+		return fixture.supervisor.StartPrivate(ctx, stateRoot)
+	}); err != nil {
+		t.Fatalf("publish already-ready private generation: %v", err)
+	}
+	published, found, err := pueue.ReadPrivateSupervisorBinding(stateRoot)
+	if err != nil || !found || published != fixture.supervisor.Binding() {
+		t.Fatalf("ready fixture has no exact published generation: found=%t binding=%+v err=%v", found, published, err)
+	}
+	if complete, completeErr := pueue.PrivateSupervisorMigrationComplete(stateRoot, published); completeErr != nil || !complete {
+		t.Fatalf("ready fixture generation is incomplete: complete=%t err=%v", complete, completeErr)
+	}
+	if waitsAfter := len(fixture.owner.daemonWaits()); waitsAfter != waitsBefore {
+		t.Fatalf("ready generation publication started a daemon: Wait count %d -> %d", waitsBefore, waitsAfter)
+	}
+}
+
 func activeLifetimeOwnerCancelFixture(t *testing.T) (string, cancelQueueRepairFixture, string, *taskdir.TaskDir) {
 	t.Helper()
-	stateRoot := testsupport.CanonicalTempDir(t)
-	store, err := taskdir.InitStore(stateRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	fixture := newCancelQueueRepairFixture(t, stateRoot)
+	fixture := newCancelQueueRepairFixture(t)
+	stateRoot := fixture.root
 	taskID := createQueuedCancelTask(t, stateRoot, fixture.statusPath, fixture.supervisor)
 
 	ownerStore, err := taskdir.OpenStore(stateRoot)
@@ -804,6 +830,7 @@ func requirePendingPublication(t *testing.T, label string, code int, response Re
 }
 
 func TestCollectWatchPendingPublicationReturnsOnlyAfterItsBound(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		store, td, req := newAppTestTask(t, false)
 		defer closeAppTestTask(t, store, td)

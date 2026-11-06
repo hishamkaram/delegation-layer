@@ -7,20 +7,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// ProbeSavedPrivate observes a saved private generation without recovering,
-// publishing, cleaning the queue, or starting a daemon. A ready client preserves
-// the saved Binding while RuntimeBinding identifies its verified current
-// successor. The caller owns the returned client and must close it. A nil client
-// and nil error mean only not ready, never permission to recover or start.
-func ProbeSavedPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
-	_, cancel, probe, err := prepareSavedPrivateProbe(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
-	if err != nil {
-		return nil, err
-	}
-	defer cancel()
-	return probe.client, nil
-}
-
 // savedPrivateProbe carries normalized options and the observed client. The
 // separately returned finite context remains explicit: recovery retains it
 // across its exclusive phase, while a warm-only observation cancels on return.

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -17,12 +19,13 @@ import (
 // The supervisor already started this process, so bootstrapping it again or
 // scanning its full queue cannot add authority and creates avoidable fan-out
 // when many tasks start together.
-func ResumeSupervisedRunner(ctx context.Context, response *Observation, td *taskdir.TaskDir, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+func ResumeSupervisedRunner(ctx context.Context, response *Observation, td *taskdir.TaskDir, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup) (*pueue.Client, pueue.Observation, error) {
 	receipt, err := WaitRunnerSupervisorReceipt(ctx, td, pueue.PrivateControlTimeout(supervisorOptions))
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err := pueue.NewClient(receipt.SupervisorRef(), supervisorOptions)
+	root := filepath.Dir(filepath.Dir(td.Dir))
+	client, err := supervisorcore.NewClient(ctx, root, receipt.SupervisorRef(), supervisorOptions, lookup)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}

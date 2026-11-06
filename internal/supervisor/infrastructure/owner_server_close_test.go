@@ -82,13 +82,24 @@ func exerciseOwnerServerRejectedDrain(t *testing.T, kind string) {
 	t.Helper()
 	f := newOwnerServerFixture(t, &ownerServerTestHost{})
 	request := f.request(t, ownerEnsureOwn)
+	reserved := 0
+	releaseCapacity := func() {
+		for reserved > 0 {
+			f.server.finishInitial()
+			reserved--
+		}
+	}
+	t.Cleanup(releaseCapacity)
 	expected := ownerRefused
 	switch kind {
 	case "refused":
 		request.Context = LaunchContextReference{SHA256: strings.Repeat("f", 64)}
 	case "busy":
-		if err := f.server.pauseOperationsAndDrain(t.Context()); err != nil {
-			t.Fatal(err)
+		for range ownerOperationLimit {
+			if err := f.server.registerInitial(); err != nil {
+				t.Fatal(err)
+			}
+			reserved++
 		}
 		expected = ownerBusy
 	case "auth-rejected":
@@ -120,6 +131,7 @@ func exerciseOwnerServerRejectedDrain(t *testing.T, kind string) {
 	go func() { close(attempted); drained <- f.server.stopAcceptAndDrain(ctx) }()
 	<-attempted
 	unblock()
+	releaseCapacity()
 	select {
 	case err := <-drained:
 		if err != nil {

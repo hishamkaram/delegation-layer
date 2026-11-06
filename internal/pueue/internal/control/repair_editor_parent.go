@@ -46,25 +46,6 @@ func canonicalRepairParent(root string) (controlRepairParent, error) {
 	return controlRepairParent{Path: path, Identity: controlLeaseIdentity{Device: uint64(stat.Dev), Inode: stat.Ino}}, nil
 }
 
-func validateRepairParentHeader(admission *controlOwnerAdmission) error {
-	parent := admission.RepairParent
-	if parent == nil || parent.Path != filepath.Join(admission.Root, privateSupervisorDirectory) || parent.Path != filepath.Dir(admission.ConfigPath) || parent.Identity.Inode == 0 {
-		return ErrConfiguration
-	}
-	return nil
-}
-
-func verifyRepairParent(parent *controlRepairParent) error {
-	if parent == nil {
-		return ErrConfiguration
-	}
-	file, err := openRepairPath(parent.Path)
-	if err != nil {
-		return err
-	}
-	return errors.Join(checkRepairParent(*parent, file), file.Close())
-}
-
 func checkRepairParent(parent controlRepairParent, file *os.File) error {
 	var descriptor, named unix.Stat_t
 	if err := unix.Fstat(int(file.Fd()), &descriptor); err != nil {
@@ -87,19 +68,6 @@ func repairActuatorEnvironment(environment []string, parent *controlRepairParent
 	values = setEnvironment(values, repairParentEnv, parent.Path)
 	values = setEnvironment(values, repairDeviceEnv, strconv.FormatUint(parent.Identity.Device, 10))
 	return setEnvironment(values, repairInodeEnv, strconv.FormatUint(parent.Identity.Inode, 10))
-}
-
-func controlOwnerEnvironment(admission *controlOwnerAdmission, forwardedCount int) ([]string, error) {
-	environment := os.Environ()
-	if admission == nil || admission.Role != controlAdmissionRepair {
-		return environment, nil
-	}
-	// ExtraFiles[0] becomes fd3 in the Rust CLI, regardless of the original
-	// selected lease index in the owner's larger inherited file set.
-	if forwardedCount != 1 || admission.RepairParent == nil {
-		return nil, ErrConfiguration
-	}
-	return repairActuatorEnvironment(environment, admission.RepairParent), nil
 }
 
 func repairParentFromEnvironment(root, path string) (controlRepairParent, error) {

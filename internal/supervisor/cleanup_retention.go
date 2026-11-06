@@ -19,10 +19,6 @@ func CleanupRetainsStore(cause error, store *taskdir.Store) bool {
 		if errors.As(node, &retained) && retained != nil && retained.RetainedStore() == store {
 			return true
 		}
-		var root *RootAdmissionCleanupError
-		if errors.As(node, &root) && root != nil && root.Lease().RetainsStore(store) {
-			return true
-		}
 		var lifetime *taskdir.LifetimeOwnerCleanupError
 		return errors.As(node, &lifetime) && lifetime != nil && lifetime.Lease().RetainsStore(store)
 	})

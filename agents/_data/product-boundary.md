@@ -17,13 +17,43 @@ without adding general workflow orchestration.
 - optional managed workspace capture;
 - sealed result and artifact evidence; and
 - its own installation, worker, bundled private supervisor, and their identities,
-  including verification of its own release and install artifacts.
+  including verification of downloaded release/install archives, subject to the
+  installed-executable rule below.
 
 ## The provider and the user own
 
 CLI installations and updates, accounts and authentication, settings, extensions,
 and native session storage. Delegate does not manage, audit, sandbox, or police
 them, and it adds no independent provider policy engine.
+
+## Installed executables
+
+This rule applies throughout the project: Delegate, delegate-run, Pueue,
+provider CLIs, callbacks, helpers, tests, fixtures and contributor/release tools.
+
+- Execute the selected installed files in place. Do not copy, stage, mirror or
+  content-address installed executables into state roots, runtime caches,
+  workspaces or proof fixtures. A prior implementation is not an exception.
+- Do not calculate or require executable-content SHA/checksums/fingerprints,
+  including for diagnostics, acceptance receipts, build identity or recovery.
+  Do not disguise an executable digest as a version, record or compatibility ID.
+- The installation resolver owns selection; launch and recovery read that
+  selection. Validate the required native behavior, protocol/capabilities and
+  process/root/endpoint identity. A version or path alone does not prove byte
+  immutability. An incompatible or missing installation fails explicitly;
+  uncertain work is never replayed.
+- Ordinary installation/extraction of a verified distribution archive and
+  building an owned candidate installation remain supported. Permitted download
+  integrity covers archives and source inputs. A raw downloaded executable is
+  still an executable: its content hash is prohibited, including before first
+  use or packaging. Replace such download paths with a verified archive/source
+  route before use; never obtain compliance by shipping unverified binaries.
+  Availability of that route must be established, not assumed.
+- Preserve task/result/artifact evidence, configuration and persisted-record
+  integrity digests, source-input evidence and diagram checksums. Classify by
+  the bytes being hashed, not a field or module name. Historical executable
+  digest fields may be decoded as historical data; they do not authorize new
+  executable hashing or rewriting sealed evidence.
 
 ## Rules for external provider CLIs
 

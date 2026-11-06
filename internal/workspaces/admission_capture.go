@@ -14,8 +14,7 @@ func RecordTaskCapture(store *taskdir.Store, request task.TaskRecord) error {
 	return RecordTaskCaptureContext(context.Background(), store, request)
 }
 
-// RecordTaskCaptureContext preserves the creator's root admission context while
-// binding the canonical saved request to its capture obligation. The journal
+// RecordTaskCaptureContext uses the caller's bounded context while binding the canonical saved request to its capture obligation. The journal
 // owns the write and completes accepted staging barriers before returning.
 func RecordTaskCaptureContext(parent context.Context, store *taskdir.Store, request task.TaskRecord) (resultErr error) {
 	if request.Workspace == nil {

@@ -163,7 +163,8 @@ func TestProbePrivateRejectsRegularDataPathWithIndependentCredentials(t *testing
 	fixture := newPrivateSupervisorTestFixture(t)
 	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
 	makePrivateTestDirectory(t, base)
-	config := strings.Replace(privateConfigYAML(base),
+	callback := privateInstalledCallbackForTest(t, fixture.stateRoot)
+	config := strings.Replace(privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"), callback),
 		"  shared_secret_path: "+strconv.Quote(filepath.Join(base, "data", "shared_secret")),
 		strings.Join([]string{
 			"  shared_secret_path: " + strconv.Quote(filepath.Join(base, "shared_secret")),
@@ -175,7 +176,7 @@ func TestProbePrivateRejectsRegularDataPathWithIndependentCredentials(t *testing
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	original, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
+	original, err := BindPrivate(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second, PrivateTerminalEventRunner: callback, DaemonWaitOwner: privateFixtureDaemonWaitOwner(t)})
 	supervisorLeaseTestSettleClient(t, original, err)
 	if err != nil {
 		t.Fatalf("bind healthy fixture with credentials outside data: %v", err)

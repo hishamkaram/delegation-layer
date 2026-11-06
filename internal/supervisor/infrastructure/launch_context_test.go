@@ -2,6 +2,7 @@ package infrastructure
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,9 +14,9 @@ func launchContextFixture(t *testing.T) LaunchContext {
 	t.Helper()
 	origin := testOrigin(t)
 	return LaunchContext{
-		Protocol: ProtocolVersion, Root: origin.Root(), RootID: origin.RootID(), OS: "linux",
+		Protocol: RecordProtocolVersion, Root: origin.Root(), RootID: origin.RootID(), OS: "linux",
 		ControlEnvironment:     []string{"HOME=/selected", "CALLBACK_CONTEXT=preserved"},
-		MaintenanceEnvironment: []string{},
+		MaintenanceEnvironment: []string{}, SupervisorExecutable: filepath.Join(origin.Root(), "pueue"),
 	}
 }
 

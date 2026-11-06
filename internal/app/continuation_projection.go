@@ -5,7 +5,7 @@ import "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 func continuationCommandResult(observed tasklifecycle.ContinuationResult) commandResult {
 	result := continuationPrimaryCommandResult(observed)
 	mergeCommandClose(&result, func() error { return observed.StoreCloseError })
-	retainTaskAdmissionCleanup(&result, observed.RootAdmissionCleanup, observed.StoreCleanup, observed.RootAdmissionReleaseError)
+	retainTaskAdmissionCleanup(&result, observed.StoreCleanup)
 	return result
 }
 
@@ -26,7 +26,7 @@ func continuationPrimaryCommandResult(observed tasklifecycle.ContinuationResult)
 		code = 2
 	case tasklifecycle.ContinueWorkspace:
 		return managedContinuationFailure(observed.Root, response, observed.Failure)
-	case tasklifecycle.ContinueResolveRoot, tasklifecycle.ContinueLoadPredecessor, tasklifecycle.ContinueRunner, tasklifecycle.ContinueGenerateID, tasklifecycle.ContinueSupervisor, tasklifecycle.ContinueResources:
+	case tasklifecycle.ContinueResolveRoot, tasklifecycle.ContinueLoadPredecessor, tasklifecycle.ContinueRunner, tasklifecycle.ContinueGenerateID, tasklifecycle.ContinueResources:
 	}
 	return failed(response, observed.Failure, code)
 }

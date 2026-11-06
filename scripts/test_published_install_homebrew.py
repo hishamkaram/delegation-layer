@@ -1,6 +1,5 @@
 """Deterministic tests for Homebrew published-consumer verification over mock ports."""
 
-import hashlib
 import json
 from pathlib import Path
 import platform
@@ -11,7 +10,6 @@ from unittest.mock import NonCallableMock, patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts import verify_release_archive as verifier
 from scripts import test_published_install as base
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 
@@ -54,10 +52,10 @@ class FakeBrewWorld(base.FakeWorld):
         }]}).encode()
 
     def install_keg(self):
-        for name in verifier.BINARIES:
+        for name in base.verifier.BINARIES:
             directory = self.keg / ("libexec" if name in {"pueue", "pueued"} else "bin")
             directory.mkdir(parents=True, exist_ok=True)
-            data = self.binary_override.get(name, (self.extract / name).read_bytes())
+            data = self.binary_source(name)
             (directory / name).write_bytes(data)
             (directory / name).chmod(0o755)
 
@@ -76,7 +74,7 @@ class HomebrewTests(base.PublishedBase):
     def brew_calls(self):
         return [call for call in self.world.calls if call["argv"][0].endswith("/brew")]
 
-    def test_fresh_install_binds_version_and_all_four_hashes_including_libexec_supervisor(self):
+    def test_fresh_install_records_selected_paths_including_libexec_supervisor(self):
         ports = self.world.ports(self.tree, {"HOMEBREW_GITHUB_API_TOKEN": base.SECRET, "GH_TOKEN": base.SECRET})
         self.assertEqual(base.published.verify_published(self.request(), ports=ports), 0)
         receipt = self.receipt()
@@ -84,8 +82,8 @@ class HomebrewTests(base.PublishedBase):
         self.assertEqual(receipt["published"]["verified"]["homebrew_formula"], {"version": "1.2.3", "tap": TAP})
         self.assertEqual(receipt["binaries"]["pueued"]["path"],
                          str(self.world.keg.resolve() / "libexec" / "pueued"))
-        self.assertEqual(receipt["binaries"]["delegate-run"]["sha256"],
-                         hashlib.sha256(base.binary_script("delegate-run").encode()).hexdigest())
+        self.assertEqual(receipt["binaries"]["delegate-run"]["path"],
+                         str(self.world.keg.resolve() / "bin" / "delegate-run"))
         self.assertEqual(receipt["binaries"]["pueue"]["version"], "4.0.4")
         install = next(call for call in self.brew_calls() if call["name"] == "homebrew-install")
         self.assertEqual(install["argv"][1:], ["install", "--formula", FORMULA])
@@ -110,12 +108,12 @@ class HomebrewTests(base.PublishedBase):
         self.world.prefix = "/home/linuxbrew/.linuxbrew"
         self.assertFailed("homebrew_prefix_unsupported")
 
-    def test_each_installed_binary_must_match_the_archive_including_libexec(self):
-        for name in verifier.BINARIES:
+    def test_required_cli_protocol_is_checked_including_libexec(self):
+        for name in ("delegate", "pueue", "pueued"):
             with self.subTest(name):
                 self.reset()
                 self.world.binary_override = {name: b"#!/bin/sh\nexit 9\n"}
-                receipt = self.assertFailed("installed_binary_hash_mismatch")
+                receipt = self.assertFailed("command_failed")
                 self.assertEqual(receipt["published"]["verified"]["homebrew_install"], "completed-and-retained")
 
     def test_formula_version_and_tap_must_match(self):

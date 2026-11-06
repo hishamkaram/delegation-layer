@@ -31,9 +31,11 @@ func newBootstrapCleanupFixture(t *testing.T) *bootstrapCleanupFixture {
 		}
 		if fixture.owner != nil {
 			awaitBootstrapCleanup(t, fixture.owner)
-			// Command faults are asserted by the test; Close still releases custody.
-			if closeErr := fixture.owner.Close(); closeErr != nil && fixture.owner.CleanupPending() {
+			// Command faults are asserted by the test. A release fault prevents
+			// claiming native closure even after the Go handle is retired.
+			if closeErr := fixture.owner.Close(); closeErr != nil && (fixture.owner.CleanupPending() || !errors.Is(errors.Unwrap(fixture.owner), ErrInFlight)) {
 				t.Errorf("unresolved bootstrap cleanup: %v", closeErr)
+				return
 			}
 		}
 		if releaseErr := closeBootstrapLock(fixture.lock); releaseErr != nil {

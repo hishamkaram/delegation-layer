@@ -20,7 +20,7 @@ func seedProducerInitialIntent(t *testing.T, f producerDataFixture, initial Init
 		t.Fatal(err)
 	}
 	intent.Inputs.Context, intent.Inputs.Initial = reference, initial
-	intent.Protocol = startupInitialOperationProtocolVersion
+	intent.Protocol = RecordProtocolVersion
 	intent.AcceptedAt = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
 	intent.Deadline = time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
 	refreshIntentDigest(t, &intent)
@@ -37,7 +37,7 @@ func TestProducerInitialOperationAcceptance(t *testing.T) {
 		request.Initial = operation
 		refusal := errors.New("refuse before native Start")
 		starts := 0
-		attempt, err := establishOutside(t.Context(), f.journal.store, request, f.host, producerNative{start: func(*exec.Cmd) error {
+		attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, request, f.host, producerNative{start: func(*exec.Cmd) error {
 			starts++
 			return refusal
 		}})
@@ -53,10 +53,7 @@ func TestProducerInitialOperationAcceptance(t *testing.T) {
 		if operation.Kind == InitialEnsureOwn {
 			wantInitial = InitialOperation{}
 		}
-		wantProtocol := 2
-		if wantInitial == (InitialOperation{}) {
-			wantProtocol = 1
-		}
+		wantProtocol := RecordProtocolVersion
 		if stored.Protocol != wantProtocol || stored.Inputs.Initial != wantInitial || request.Initial != operation {
 			t.Fatalf("accepted operation changed: protocol=%d initial=%+v", stored.Protocol, stored.Inputs.Initial)
 		}
@@ -84,7 +81,7 @@ func TestProducerInitialOperationRefusedBeforeWrites(t *testing.T) {
 			case "own-subject":
 				request.Initial = InitialOperation{Kind: InitialEnsureOwn, Source: source}
 			}
-			attempt, err := EstablishOutside(t.Context(), f.journal.store, request, f.host)
+			attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, request, f.host)
 			ownProducerAttempt(t, attempt)
 			if !errors.Is(err, ErrIdentity) || attempt != nil || f.host.calls != 0 {
 				t.Fatalf("invalid purpose accepted: attempt=%t prepare=%d err=%v", attempt != nil, f.host.calls, err)
@@ -98,7 +95,7 @@ func TestProducerInitialOperationRefusedBeforeWrites(t *testing.T) {
 
 func TestProducerPendingInitialOperationMatch(t *testing.T) {
 	for _, free := range []bool{false, true} {
-		for _, change := range []string{"same", "purpose", "subject", "artifacts-first"} {
+		for _, change := range []string{"same", "purpose", "subject"} {
 			t.Run(change+"/free="+map[bool]string{false: "false", true: "true"}[free], func(t *testing.T) {
 				checkProducerPendingInitialOperation(t, free, change)
 			})
@@ -123,11 +120,9 @@ func checkProducerPendingInitialOperation(t *testing.T, free bool, change string
 		request.Initial = InitialOperation{Kind: InitialMigrateOwn}
 	case "subject":
 		request.Initial.Source.RecordID = "budget"
-	case "artifacts-first":
-		request.Initial = InitialOperation{Kind: InitialMigrateOwn}
-		request.Requirements.RequiredRuntimeSHA256 = strings.Repeat("f", 64)
+
 	}
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, request, f.host)
 	ownProducerAttempt(t, attempt)
 	requireProducerPendingOutcome(t, change, attempt, err)
 	if attempt != nil && attempt.intent != intent {
@@ -151,9 +146,6 @@ func requireProducerPendingOutcome(t *testing.T, change string, attempt *Startup
 		return
 	}
 	want := task.ErrLockBusy
-	if change == "artifacts-first" {
-		want = ErrIncompatible
-	}
 	if !errors.Is(err, want) || attempt != nil {
 		t.Fatalf("mismatch outcome: attempt=%t err=%v want=%v", attempt != nil, err, want)
 	}
@@ -164,7 +156,7 @@ func TestProducerExplicitOwnJoinsLegacyPending(t *testing.T) {
 	intent := seedProducerIntent(t, f, 1, false)
 	request := f.request
 	request.Initial.Kind = InitialEnsureOwn
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, request, f.host)
 	ownProducerAttempt(t, attempt)
 	if err != nil || attempt == nil || attempt.intent != intent || f.host.calls != 0 {
 		t.Fatalf("explicit Own did not join legacy acceptance: %v", err)

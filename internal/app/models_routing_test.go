@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -13,7 +14,10 @@ import (
 
 func TestModelDiscoveryPrivatePreparationUsesCapturedRoutingFault(t *testing.T) {
 	t.Setenv(infrastructure.OriginEnvironment, "malformed original invocation")
-	deps := (Dependencies{Environment: []string{}}).withCapturedEnvironmentContext(t.Context())
+	clientPath := filepath.Join(supervisorfixture.CanonicalTempDir(t), "pueue")
+	writeRunnerFixture(t, clientPath, "#!/bin/sh\nprintf 'pueue 4.0.4\\n'\n")
+	writeRunnerFixture(t, filepath.Join(filepath.Dir(clientPath), "pueued"), "#!/bin/sh\nexit 0\n")
+	deps := (Dependencies{Environment: []string{}, InitialSupervisorExecutable: clientPath}).withCapturedEnvironmentContext(t.Context())
 	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.err, infrastructure.ErrIdentity) {
 		t.Fatal("fixture did not capture malformed actual source")
 	}

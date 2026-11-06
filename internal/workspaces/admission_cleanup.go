@@ -1,8 +1,8 @@
 package workspaces
 
 // AdmissionCleanupError retains the exact admission whose inner use-owner,
-// resource or owned root admission could not close. The outer creator keeps
-// its borrowed root lease and store open until Admission().Close succeeds.
+// resource could not close. The caller keeps its borrowed Store open until
+// Admission().Close succeeds.
 // This handle grants cleanup ownership, never another admission or launch.
 type AdmissionCleanupError struct {
 	admission *Admission
@@ -29,5 +29,5 @@ func (m *Admission) CleanupPending() bool {
 			return true
 		}
 	}
-	return m.owner.CleanupPending() || m.resource != nil || m.rootAdmission.CleanupPending()
+	return m.owner.CleanupPending() || m.resource != nil
 }

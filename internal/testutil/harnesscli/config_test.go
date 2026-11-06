@@ -64,7 +64,7 @@ func TestValidateHarnessConfigRejectsUnboundedOrMisplacedHooks(t *testing.T) {
 	}
 }
 
-func TestPrepareProfileReadsAndBindsAllFixtureDigests(t *testing.T) {
+func TestPrepareProfileReadsAndBindsFixtureConfigDigests(t *testing.T) {
 	dir := canonicalTestDir(t)
 	fixture := testHarnessFixture(t, dir)
 	configPath := filepath.Join(dir, fixtureConfigName)
@@ -174,7 +174,6 @@ func testHarnessFixture(t *testing.T, dir string) harnessFixture {
 	config := HarnessConfig{
 		SchemaVersion:        1,
 		ProviderExecutable:   executable,
-		ProviderSHA256:       mustHashRegular(t, executable),
 		ProviderConfig:       providerPath,
 		ProviderConfigSHA256: task.ComputeSHA256(providerData),
 		SupervisorExecutable: filepath.Join(dir, "missing-supervisor"),
@@ -196,15 +195,6 @@ func canonicalTestDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
-}
-
-func mustHashRegular(t *testing.T, path string) string {
-	t.Helper()
-	digest, err := hashRegular(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return digest
 }
 
 func writeCanonicalTestFile(t *testing.T, path string, data []byte) {

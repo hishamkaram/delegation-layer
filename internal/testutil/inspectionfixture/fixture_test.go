@@ -36,7 +36,7 @@ func newFixtureFiles(t *testing.T) fixtureFiles {
 		t.Fatal(err)
 	}
 	helperPath := filepath.Join(dir, "inspection-helper")
-	writeFixtureFile(t, helperPath, []byte("fixture helper executable\n"), 0o700)
+	writeFixtureFile(t, helperPath, []byte("#!/bin/sh\nexit 0\n"), 0o700)
 	artifactDir := filepath.Join(dir, "markers")
 	if err = os.Mkdir(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -46,8 +46,8 @@ func newFixtureFiles(t *testing.T) fixtureFiles {
 	writeFixtureFile(t, sentinelPath, sentinel, 0o600)
 	helperConfig := HelperConfig{SchemaVersion: SchemaVersion, ArtifactDir: artifactDir, SentinelPath: sentinelPath, Eligible: true}
 	helperConfigPath := filepath.Join(dir, "helper.json")
-	writeFixtureJSON(t, helperConfigPath, helperConfig)
-	outer := Config{SchemaVersion: SchemaVersion, HelperExecutable: helperPath, HelperSHA256: hashFixtureFile(t, helperPath), HelperConfig: helperConfigPath, HelperConfigSHA256: hashFixtureFile(t, helperConfigPath), Environment: []string{"LANG=C", "FIXTURE=yes"}}
+	helperRaw := writeFixtureJSON(t, helperConfigPath, helperConfig)
+	outer := Config{SchemaVersion: SchemaVersion, HelperExecutable: helperPath, HelperConfig: helperConfigPath, HelperConfigSHA256: task.ComputeSHA256(helperRaw), Environment: []string{"LANG=C", "FIXTURE=yes"}}
 	outerPath := filepath.Join(dir, ConfigName)
 	writeFixtureJSON(t, outerPath, outer)
 	return fixtureFiles{dir: dir, outerPath: outerPath, helperPath: helperPath, helperConfig: helperConfigPath, artifactDir: artifactDir, sentinelPath: sentinelPath, sentinel: sentinel, outer: outer, helper: helperConfig}
@@ -68,15 +68,6 @@ func writeFixtureJSON(t *testing.T, path string, value any) []byte {
 	}
 	writeFixtureFile(t, path, data, 0o600)
 	return data
-}
-
-func hashFixtureFile(t *testing.T, path string) string {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return task.ComputeSHA256(data)
 }
 
 func fixtureRequest(dir string) task.TaskRecord {
@@ -118,11 +109,10 @@ func TestLoadConfigStrictlyBindsHelperAndEnvironment(t *testing.T) {
 	raw := writeFixtureJSON(t, fixture.outerPath, struct {
 		SchemaVersion      int      `json:"schema_version"`
 		HelperExecutable   string   `json:"helper_executable"`
-		HelperSHA256       string   `json:"helper_sha256"`
 		HelperConfig       string   `json:"helper_config"`
 		HelperConfigSHA256 string   `json:"helper_config_sha256"`
 		Environment        []string `json:"Environment"`
-	}{fixture.outer.SchemaVersion, fixture.outer.HelperExecutable, fixture.outer.HelperSHA256, fixture.outer.HelperConfig, fixture.outer.HelperConfigSHA256, fixture.outer.Environment})
+	}{fixture.outer.SchemaVersion, fixture.outer.HelperExecutable, fixture.outer.HelperConfig, fixture.outer.HelperConfigSHA256, fixture.outer.Environment})
 	if _, err = loadConfig(fixture.outerPath); err == nil {
 		t.Fatalf("wrong-case environment accepted: %s", raw)
 	}
@@ -146,7 +136,7 @@ func TestConfigAndHelperRejectPathDigestAndDelayFaults(t *testing.T) {
 		name string
 		edit func(*Config, *HelperConfig)
 	}{
-		{name: "helper digest", edit: func(cfg *Config, _ *HelperConfig) { cfg.HelperSHA256 = strings.Repeat("0", 64) }},
+		{name: "missing helper", edit: func(cfg *Config, _ *HelperConfig) { cfg.HelperExecutable += "-missing" }},
 		{name: "helper config digest", edit: func(cfg *Config, _ *HelperConfig) { cfg.HelperConfigSHA256 = strings.Repeat("0", 64) }},
 		{name: "helper config delay", edit: func(_ *Config, helper *HelperConfig) { helper.DelayMS = MaxDelay.Milliseconds() + 1 }},
 		{name: "helper ineligible", edit: func(_ *Config, helper *HelperConfig) { helper.Eligible = false }},
@@ -271,12 +261,31 @@ func TestPrepareInspectionCandidateFinalizesOnlyProjectedFacts(t *testing.T) {
 	}
 }
 
-func TestPrepareInspectionCandidateRejectsChangedHelper(t *testing.T) {
+func TestPrepareInspectionCandidateKeepsSelectedHelperAfterInstalledUpdate(t *testing.T) {
 	fixture := newFixtureFiles(t)
 	request := fixtureRequest(fixture.dir)
-	writeFixtureFile(t, fixture.helperPath, []byte("changed helper\n"), 0o700)
+	before, err := prepareInspectionCandidate(request, fixtureProfile(request), fixture.outerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, beforeDigest, err := before.Inspection.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, fixture.helperPath, []byte("#!/bin/sh\n# installed helper update\nexit 0\n"), 0o700)
+	after, err := prepareInspectionCandidate(request, fixtureProfile(request), fixture.outerPath)
+	if err != nil {
+		t.Fatalf("installed helper update refused: %v", err)
+	}
+	_, afterDigest, err := after.Inspection.Snapshot()
+	if err != nil || beforeDigest != afterDigest || after.Inspection.ExecutableSHA256 != "" {
+		t.Fatalf("helper bytes changed definition identity: before=%s after=%s err=%v", beforeDigest, afterDigest, err)
+	}
+	if err := os.Chmod(fixture.helperPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := prepareInspectionCandidate(request, fixtureProfile(request), fixture.outerPath); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("changed helper accepted: %v", err)
+		t.Fatalf("non-executable helper accepted: %v", err)
 	}
 }
 

@@ -63,6 +63,7 @@ class ContributorHarnessTests(unittest.TestCase):
             root = Path(temporary)
             tools = root / "tools"
             tools.mkdir()
+            (tools / "go.mod").write_text("module fixture\n")
             pueue = root / "pueue"
             pueued = root / "pueued"
             pueue.write_bytes(b"pueue")
@@ -86,6 +87,7 @@ class ContributorHarnessTests(unittest.TestCase):
             root = Path(temporary)
             tools = root / "tools"
             tools.mkdir()
+            (tools / "go.mod").write_text("module fixture\n")
             pueue = root / "pueue"
             pueued = root / "pueued"
             pueue.write_bytes(b"pueue")

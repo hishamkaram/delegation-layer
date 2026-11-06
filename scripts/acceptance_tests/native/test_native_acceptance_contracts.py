@@ -28,12 +28,12 @@ class OptionalRuntimeDiagnosticsTests(unittest.TestCase):
         identity = self.bindings.record(
             self.task_id, self.meta, Path("/admitted/provider"),
             launch_evidence=(self.started, dict(self.started)))
-        self.assertEqual(identity, {"executable": "/upgraded/provider", "version": "", "sha256": ""})
+        self.assertEqual(identity, {"executable": "/upgraded/provider", "version": ""})
         self.assertEqual(self.bindings.receipt({self.task_id})["provider_versions"], {self.task_id: ""})
 
     def test_historical_fallback_does_not_require_policy_hash(self):
         self.assertEqual(self.bindings.record(self.task_id, self.meta, Path("/admitted/provider")),
-                         {"executable": "/admitted/provider", "version": "", "sha256": ""})
+                         {"executable": "/admitted/provider", "version": ""})
 
     def test_historical_fallback_retains_and_validates_optional_hash(self):
         for digest in ("b" * 64, "", None, "bad"):
@@ -61,7 +61,7 @@ class OptionalRuntimeDiagnosticsTests(unittest.TestCase):
 
     def test_start_exit_mismatch_and_task_coverage_stay_strict(self):
         for field, value in (("provider_executable", "/another/provider"),
-                             ("provider_version", "upgraded"), ("provider_sha256", "b" * 64)):
+                             ("provider_version", "upgraded")):
             with self.subTest(field=field), self.assertRaisesRegex(
                     gate.AcceptanceFailure, "runtime identities differ"):
                 self.bindings.record(self.task_id, self.meta, Path("/admitted/provider"),

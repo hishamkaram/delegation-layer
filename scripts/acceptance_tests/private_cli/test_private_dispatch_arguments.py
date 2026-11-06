@@ -1,7 +1,6 @@
 """Implementation methods for PrivateDispatchArgumentsTests; collected once by the acceptance_tests discovery."""
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
-import hashlib
 import io
 import json
 from pathlib import Path
@@ -15,12 +14,14 @@ from scripts.delegate_acceptance.private_cli import finalization as finalization
 from scripts.delegate_acceptance.private_cli import scenario_entry as scenario_entry_impl
 from scripts.delegate_acceptance.private_cli import initial as initial_impl
 from scripts.delegate_acceptance.private_cli import capacity_entry as capacity_entry_impl
+from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
 from scripts.delegate_acceptance.processes import operations as process_owner_impl
 from scripts import acceptance_supervisor_common as common
 from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.acceptance_tests.private_cli.fixtures import (
     _release_live_directory_tokens,
+    materialize_candidate_pair, materialize_supervisor_pair,
 )
 
 
@@ -60,6 +61,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-args-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve(strict=True)
+        self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=materialize_candidate_pair))
+        self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
         self.sources = {}
         for name in ("delegate", "runner", "pueue", "pueued"):
             source = self.root / name
@@ -126,7 +129,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
     def arguments(self, total, workers, output=None, scenario="capacity"):
         output = output or (self.root / "receipt.json")
         args = ["acceptance_private_cli.py"]
-        for name in ("delegate", "runner", "pueue", "pueued"):
+        for name in ("pueue", "pueued"):
             args.extend(["--" + name, str(self.sources[name])])
         args.extend(["--output", str(output), "--parallel-tasks", str(total)])
         if scenario != private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
@@ -795,7 +798,7 @@ def _current_scenario_callbacks(base, cleanup_failure, old_libexec, pending_old_
             (supervisor / "pueue.yml").write_text("fixture config\n")
             (supervisor / "daemon.identity.json").write_text(json.dumps({
                 "executable": str(old_libexec / "pueued"),
-                "sha256": hashlib.sha256((old_libexec / "pueued").read_bytes()).hexdigest(),
+                "executable_identity": "installed-path-v1",
             }))
             (base / "old-daemon-starts").write_text("started\n")
             return {"task_id": task_id, "root_id": "b" * 32,

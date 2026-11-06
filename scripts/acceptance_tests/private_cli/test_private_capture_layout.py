@@ -22,7 +22,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from scripts.acceptance_tests.resources import DirectoryPinOwner
-from scripts.acceptance_tests.private_cli.fixtures import exception_capture_paths, ready_path
+from scripts.acceptance_tests.private_cli.fixtures import (
+    exception_capture_paths, materialize_candidate_pair, materialize_supervisor_pair, ready_path,
+)
+from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import capacity_entry
 from scripts.delegate_acceptance.private_cli import contention_controls
 from scripts.delegate_acceptance.private_cli import finalization
@@ -114,10 +117,16 @@ class CaptureLayoutCase(unittest.TestCase):
         self.responses = self.root / "responses"
         self.receipt = AcceptanceReceipt(self.root / "receipt.json", 1, 1, {})
         self.lifetime = FixtureLifetime(DirectoryPinOwner(self), DirectoryPinOwner(self))
+        def build(source, destination):
+            materialize_candidate_pair(source, destination, FAKE_DELEGATE.format(python=sys.executable, slow=SLOW_TASK))
+        self.enterContext(patch.object(installation, "build_candidate_pair", side_effect=build))
+        self.enterContext(patch.object(installation, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
+        self.enterContext(patch.object(fixture_setup, "install_supervisor_pair", side_effect=materialize_supervisor_pair))
 
     def arguments(self, scenario="capacity"):
         return SimpleNamespace(
             scenario=scenario, noexec_state_parent=None, upgraded_delegate=None, upgraded_runner=None,
+            source_root=installation.REPOSITORY, upgraded_source_root=None,
             parallel_tasks=1, runtime_only=True, output=self.root / "receipt.json", **self.binaries,
         )
 
@@ -307,27 +316,30 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
 
 
 class RecoveryAndHandoffPathTests(CaptureLayoutCase):
-    def test_recovery_package_and_retarget_markers_stay_at_the_fixture_base(self):
+    def test_recovery_pending_package_uses_fixture_base_and_owned_capture_child(self):
         fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
         base = ready_path(self.lifetime.base)
         before = self.base_entries()
-        pair = self.root / "pair"
+        pair = ready_path(self.lifetime.upgraded_libexec)
         binding = {"client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
-                   "client_sha256": "c", "daemon_sha256": "d", "endpoint": "unix:/fixture.sock"}
+                   "executable_identity": "installed-path-v1", "endpoint": "unix:/fixture.sock"}
         staged = {}
-        markers = []
         cleanup = {"predecessor": object()}
 
-        def stage(*, base, **_options):
-            staged["base"] = base
-            return self.root / "pending", binding, base / "upgrade-legacy-control.yml", "", cleanup
+        def stage(*, base, source_root, **_options):
+            staged.update(base=base, source_root=source_root)
+            for path in (fixture.state / ".supervisor/migration.json",
+                         fixture.state / "inspection-group/migration.json"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("accepted migration fixture record\n")
+            return base / "pending-package/libexec", binding, base / "upgrade-legacy-control.yml", "", cleanup
 
         def collect(*_args):
             return None
 
         with patch.object(upgrade, "_upgrade_task_operations", return_value=(None, collect)), \
                 patch.object(upgrade, "prepare_upgrade_history",
-                             return_value=(pair, binding, {}, self.root, "history")), \
+                             return_value=(binding, {}, self.root, "history")), \
                 patch.object(upgrade, "_prove_recovered_capacity"), \
                 patch.object(upgrade, "snapshot", return_value="history"), \
                 patch.object(upgrade, "read_json", return_value={"binding": binding}), \
@@ -336,22 +348,19 @@ class RecoveryAndHandoffPathTests(CaptureLayoutCase):
                 patch.object(upgrade, "interrupt_pending_migration",
                              side_effect=lambda *, capture_root, **_k: (
                                  fake_control(capture_root, {"blocked": True}), "/fixture.sock")[1]), \
-                patch.object(upgrade, "install_wrapper",
-                             side_effect=lambda _destination, _source, marker, *_a: markers.append(marker)), \
                 patch.object(upgrade, "run_json",
                              side_effect=lambda *_a, capture_root, **_k: fake_control(
-                                 capture_root, {"supervisor_control": {"state": "migrated"}})), \
+                                 capture_root, {"supervisor_control": {"state": "blocked"}})), \
                 patch.object(upgrade, "await_pending_predecessor",
                              side_effect=lambda capture_root, _target: pid_fallback(capture_root)), \
                 patch.object(upgrade, "release_pending_predecessor"), \
-                patch.object(upgrade, "shutdown_private_supervisor",
+                patch.object(upgrade, "shutdown_predecessor_supervisor",
                              side_effect=lambda *_a, capture_root, **_k: pid_fallback(capture_root)):
             scenario_entry.run_recovery_scenario("n" * 32, self.lifetime, self.responses, self.receipt, fixture)
         self.assertEqual(staged["base"], base)
-        self.assertEqual(markers, [base / "retarget-client", base / "retarget-daemon"])
+        self.assertEqual(staged["source_root"], fixture.source_root)
         directory, _ = self.assert_captures_outside_base(before, 8)
         self.assertNotEqual(directory, staged["base"])
-        self.assertNotIn(directory, [marker.parent for marker in markers])
 
     def test_handoff_reads_the_base_client_call_log_and_captures_outside_base(self):
         fixture = self.prepare(EXTERNAL_INSPECTION_HANDOFF_SCENARIO)

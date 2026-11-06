@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -21,10 +23,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestPreparePrivateAdmissionSupervisorRecoversPendingPublication(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	base := filepath.Dir(original.Binding().ConfigPath)
 	identityPath := filepath.Join(base, "supervisor.identity.json")
 	pendingPath := filepath.Join(base, "identity.pending.json")
@@ -78,7 +82,8 @@ func TestPreparePrivateAdmissionSupervisorRecoversPendingPublication(t *testing.
 }
 
 func TestPreparePrivateAdmissionSupervisorElectsOneColdPolicyTransition(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	base := filepath.Dir(original.Binding().ConfigPath)
 	parallelLog := filepath.Join(base, "parallel")
 	clearSupervisorProbeTestStatus(t, base)
@@ -130,7 +135,8 @@ func TestPreparePrivateAdmissionSupervisorElectsOneColdPolicyTransition(t *testi
 }
 
 func TestPreparePrivateAdmissionSupervisorWarmConcurrencyUsesNoControlCommands(t *testing.T) {
-	store, deps, _ := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -158,7 +164,8 @@ func TestPreparePrivateAdmissionSupervisorWarmConcurrencyUsesNoControlCommands(t
 }
 
 func TestPreparePrivateAdmissionSupervisorRepairsMissingTaskObservationLock(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	base := filepath.Dir(original.Binding().ConfigPath)
 	if err := os.Remove(filepath.Join(base, "task-observation.lock")); err != nil {
 		t.Fatal(err)
@@ -182,7 +189,8 @@ func TestPreparePrivateAdmissionSupervisorRepairsMissingTaskObservationLock(t *t
 }
 
 func TestPreparePrivateAdmissionSupervisorRepairsStaleSchedulingWithoutQueueScan(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	base := filepath.Dir(original.Binding().ConfigPath)
 	parallelLog := filepath.Join(base, "parallel")
 	clearSupervisorProbeTestStatus(t, base)
@@ -197,6 +205,9 @@ func TestPreparePrivateAdmissionSupervisorRepairsStaleSchedulingWithoutQueueScan
 		t.Fatal(closeErr)
 	}
 	staleSupervisorProbeTestOrdinaryScheduling(t, store.Root)
+	if recorded, receiptErr := supervisorcore.OrdinarySchedulingRecorded(store.Root, original.Binding()); receiptErr != nil || recorded {
+		t.Fatalf("stale scheduling receipt = %t, %v; want false, nil", recorded, receiptErr)
+	}
 	err = os.WriteFile(filepath.Join(base, "reject-status"), nil, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +274,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 	parallelLog := filepath.Join(base, "parallel")
 	saved := original.Binding()
 
-	continuation, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	continuation, err := supervisorcore.PrepareAdmissionSupervisorContext(t.Context(), supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, continuation, err)
 	if err != nil || continuation == nil {
 		t.Fatalf("continuation admission did not configure private scheduling: client=%v err=%v", continuation, err)
@@ -284,7 +295,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 		t.Fatalf("continuation did not publish ordinary scheduling receipt: configured=%t err=%v", configured, err)
 	}
 
-	warm, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	warm, err := supervisorcore.PrepareAdmissionSupervisorContext(t.Context(), supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, warm, err)
 	if err != nil || warm == nil {
 		t.Fatalf("warm continuation admission failed: client=%v err=%v", warm, err)
@@ -348,7 +359,11 @@ func TestEnsurePrivateQueuedRunnerRepairElectsOneQueueScan(t *testing.T) {
 }
 
 func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) {
-	store, deps, supervisor := newSupervisorProbeTestFixture(t)
+	store, deps, supervisor, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
+	if err := supervisorcore.EnsureAdmissionScheduling(store, supervisor, deps.SupervisorOptions); err != nil {
+		t.Fatal(err)
+	}
 	base := filepath.Dir(supervisor.Binding().ConfigPath)
 	statusLog := filepath.Join(base, "status")
 	if err := os.WriteFile(statusLog, nil, 0o600); err != nil {
@@ -356,7 +371,17 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 	}
 	runner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, runner, "runner")
-	meta := &task.MetaRecord{SupervisorConfig: supervisor.Binding()}
+	brief := []byte("queue repair source")
+	request := newHistoricalSupervisorTaskRecord(store.RootID, testsupport.CanonicalTempDir(t), brief)
+	profile := appTestExecutionProfile(&request, runner, nil)
+	meta := tasklifecycle.NewMeta(request, profile, supervisor.Binding(), runner, task.RunnerOwnershipManaged, "queue-repair-test")
+	td, err := store.CreateTask(request.TaskID, &request, brief, &meta)
+	owner.ownTask(td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps.RunnerExecutable = runner
+	options := supervisorAdmissionOptions(deps, deps.SupervisorOptions)
 
 	const callers = 24
 	start := make(chan struct{})
@@ -367,12 +392,7 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 		go func() {
 			defer calls.Done()
 			<-start
-			errs <- supervisorcore.RepairQueueForTask(t.Context(), store, supervisor.Binding(), meta, supervisorAdmissionOptions(Dependencies{
-				ResourceChecker:             fixtureResources,
-				InitialSupervisorExecutable: deps.InitialSupervisorExecutable,
-				SupervisorOptions:           deps.SupervisorOptions,
-				RunnerExecutable:            runner,
-			}, deps.SupervisorOptions))
+			errs <- supervisorcore.RepairQueueForTask(t.Context(), store, supervisor.Binding(), &meta, options)
 		}()
 	}
 	close(start)
@@ -392,7 +412,84 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 	}
 }
 
+func TestRepairPrivateQueueForTaskRefusesUnconnectedWarmBindingBeforeMaintenance(t *testing.T) {
+	store, deps, supervisor, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
+	if err := supervisorcore.EnsureAdmissionScheduling(store, supervisor, deps.SupervisorOptions); err != nil {
+		t.Fatal(err)
+	}
+	warm, err := supervisorcore.ProbePrivateAdmissionSupervisor(t.Context(), store, "", "", deps.SupervisorOptions)
+	owner.ownClient(warm, err)
+	if closeErr := supervisorcore.ClosePrivateAdmissionTransition(warm, err); closeErr != nil || warm == nil {
+		t.Fatalf("fixture is not a ready admission generation: client=%v err=%v", warm != nil, closeErr)
+	}
+	runner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
+	writeRunnerFixture(t, runner, "runner")
+	brief := []byte("unconnected queue repair source")
+	request := newHistoricalSupervisorTaskRecord(store.RootID, testsupport.CanonicalTempDir(t), brief)
+	profile := appTestExecutionProfile(&request, runner, nil)
+	saved := supervisor.Binding()
+	saved.ConfigDigest = task.ComputeSHA256([]byte("unconnected historical configuration"))
+	meta := tasklifecycle.NewMeta(request, profile, saved, runner, task.RunnerOwnershipManaged, "queue-repair-test")
+	td, err := store.CreateTask(request.TaskID, &request, brief, &meta)
+	owner.ownTask(td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Dir(supervisor.Binding().ConfigPath)
+	clearActiveGenerationSupervisorCommands(t, base)
+	socketPath := strings.TrimPrefix(supervisor.Binding().Endpoint, "unix:")
+	socket, err := os.Lstat(socketPath)
+	if err != nil || socket.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("fixture endpoint is not a socket: info=%v err=%v", socket, err)
+	}
+	before := storeRecordDigests(t, store.Root)
+	deps.RunnerExecutable = runner
+	deps.SupervisorOptions.Observer = func(event pueue.CommandEvent) {
+		if event.Stage == "entry" {
+			t.Error("unconnected warm binding launched a supervisor command before refusal")
+		}
+	}
+	err = supervisorcore.RepairQueueForTask(t.Context(), store, meta.SupervisorConfig, &meta, supervisorAdmissionOptions(deps, deps.SupervisorOptions))
+	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) || !errors.Is(err, pueue.ErrBinding) {
+		t.Errorf("unconnected warm binding did not require migration: %v", err)
+	}
+	assertActiveGenerationNoSupervisorCommands(t, base)
+	assertSupervisorProbeTestDaemonStartCount(t, base, 1)
+	if _, err = os.Lstat(filepath.Join(store.Root, "runner-repair")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unconnected warm binding published runner repair state: %v", err)
+	}
+	requireUnchangedRecords(t, "unconnected warm binding", store.Root, before)
+	after, err := os.Lstat(socketPath)
+	if err != nil || !os.SameFile(socket, after) || socket.Mode() != after.Mode() || !socket.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("unconnected warm binding changed its socket: before=%v after=%v err=%v", socket, after, err)
+	}
+}
+
 func newSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, *pueue.Client) {
+	t.Helper()
+	store, deps, client, _ := newOwnedSupervisorProbeTestFixture(t)
+	return store, deps, client
+}
+
+// Direct preparation fixtures receive their actual owner separately. Public
+// command dependencies remain free of lifecycle grants and implicit routing.
+func newOwnedSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, *pueue.Client, *componentSupervisorFixture) {
+	t.Helper()
+	store, deps, owner := newColdSupervisorProbeTestFixture(t)
+	// Preserve the owned namespace in failure output before the first Start.
+	t.Logf("supervisor probe fixture root=%s", store.Root)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	client, err := owner.bindPrivate(ctx, deps.InitialSupervisorExecutable, filepath.Join(filepath.Dir(deps.InitialSupervisorExecutable), "pueued"), deps.SupervisorOptions)
+	if err != nil {
+		t.Fatalf("bind healthy private supervisor fixture: %v", err)
+	}
+	owner.listen(t, client.Binding().Endpoint)
+	return store, deps, client, owner
+}
+
+func newColdSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, *componentSupervisorFixture) {
 	t.Helper()
 	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
 	root := owner.root
@@ -404,62 +501,192 @@ func newSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, 
 	bundle := filepath.Join(owner.base, "bundle")
 	clientPath := filepath.Join(bundle, "pueue")
 	daemonPath := filepath.Join(bundle, "pueued")
-	writeRunnerFixture(t, clientPath, `#!/bin/sh
-set -eu
-[ "${1-}" = -c ]
-base=${2%/*}
-case "${3-}" in
-  --version) printf '%s\n' 'pueue 4.0.4' ;;
-  status)
-    [ -f "$base/ready" ] || exit 1
-	[ ! -f "$base/reject-status" ] || exit 97
-	printf '%s\n' status >> "$base/status"
-    parallel=1
-    [ -f "$base/parallel-unlimited" ] && parallel=0
-    printf '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":%s},"delegation-inspection-`+store.RootID+`":{"status":"Running","parallel_tasks":1}}}\n' "$parallel"
-    ;;
-	group)
-	  [ -f "$base/ready" ] || exit 1
-	  printf '%s\n' group >> "$base/group"
-	  parallel=1
-	  [ -f "$base/parallel-unlimited" ] && parallel=0
-	  printf '{"default":{"status":"Running","parallel_tasks":%s},"delegation-inspection-`+store.RootID+`":{"status":"Running","parallel_tasks":1}}\n' "$parallel"
-	  ;;
-	parallel)
-	  printf '%s\n' parallel >> "$base/parallel"
-	  : > "$base/parallel-unlimited"
-	  ;;
-	add)
-	  [ "${4-}" = --help ] || exit 64
-	  printf '%s\n' add-help >> "$base/staged-capability"
-	  printf '%s\n' '--stashed --print-task-id'
-	  ;;
-	enqueue)
-	  [ "${4-}" = --help ] || exit 64
-	  printf '%s\n' enqueue-help >> "$base/staged-capability"
-	  printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
-	  ;;
-  *) exit 64 ;;
-esac
-`)
-	writeRunnerFixture(t, daemonPath, `#!/bin/sh
-set -eu
-[ "${1-}" = -c ]
-base=${2%/*}
-printf '%s\n' started >> "$base/daemon-started"
-mkdir -p "$base/run"
-printf '%s\n' "$$" > "$base/run/pueue.pid"
-: > "$base/ready"
-`)
-	options := pueue.Options{ObservationTimeout: 10 * time.Second}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	client, err := owner.bindPrivate(ctx, clientPath, daemonPath, options)
-	if err != nil {
-		t.Fatalf("bind healthy private supervisor fixture: %v", err)
+	writeSupervisorProbeExecutables(t, store.RootID, clientPath, daemonPath)
+	options := pueue.Options{ObservationTimeout: 10 * time.Second, WaitForPendingClose: true}
+	t.Logf("cold supervisor probe fixture root=%s", root)
+	deps := Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: options}
+	return store, deps, owner
+}
+
+func withSupervisorProbeRouting(t *testing.T, deps Dependencies, owner *componentSupervisorFixture) Dependencies {
+	t.Helper()
+	deps.ownerRouting = &componentPreparationRouting{test: t, owner: owner, client: deps.InitialSupervisorExecutable, options: deps.SupervisorOptions}
+	return deps
+}
+
+// Journal setup can borrow only this root's publication guard. It cannot Start
+// a daemon or claim Wait ownership; actual Starts use the component's setup.
+func componentPublicationOptions(t *testing.T, root string, owner *componentSupervisorFixture, options pueue.Options) pueue.Options {
+	t.Helper()
+	if owner == nil || root != owner.root {
+		t.Fatal("publication setup requires the exact component root owner")
 	}
-	owner.listen(t, client.Binding().Endpoint)
-	return store, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: clientPath, SupervisorOptions: options}, client
+	options.DaemonStartGuard = nil
+	options.DaemonWaitOwner = nil
+	options.PrivateGenerationGuard = owner
+	options.WaitForPendingClose = true
+	return options
+}
+
+// This composes real preparation with the existing component owner.
+// Native placement needs separate proof.
+type componentPreparationRouting struct {
+	test    *testing.T
+	owner   *componentSupervisorFixture
+	client  string
+	options pueue.Options
+}
+
+func TestInfrastructureRoutingDependencyPreservesCommandChoice(t *testing.T) {
+	route := &componentPreparationRouting{}
+	deps := Dependencies{ownerRouting: route, Environment: []string{}}
+	deps = deps.withCapturedEnvironmentContext(t.Context()).normalized()
+	storeDeps := deps.storeDependencies()
+	if deps.infrastructureRouting() != route || storeDeps.infrastructureRouting() != route {
+		t.Fatal("command capture, normalization or store narrowing replaced the selected route")
+	}
+	deps.ownerRouting = nil
+	if storeDeps.infrastructureRouting() != route {
+		t.Fatal("changing the command copy replaced the held store dependency choice")
+	}
+	for _, selected := range []supervisorcore.OwnerRouting{deps.infrastructureRouting(), deps.storeDependencies().infrastructureRouting()} {
+		native, ok := selected.(infrastructureOwnerRouting)
+		if !ok || native.invocation != deps.invocationSource || native.defaultRunner != deps.RunnerExecutable {
+			t.Fatal("nil routing dependency lost native invocation routing")
+		}
+	}
+}
+
+func (r *componentPreparationRouting) preparation(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (supervisorcore.ExecutableLookup, pueue.Options, *infrastructure.PreparationObservation, error) {
+	if ctx == nil || store == nil || r.owner == nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+	}
+	pin, err := store.PinRootContext(ctx)
+	if err != nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+	}
+	if pin.Root() != r.owner.root || pin.RootID() != r.owner.store.RootID || selected.SupervisorExecutable != r.client || selected.OS != runtime.GOOS {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, infrastructure.ErrIdentity
+	}
+	digest, err := selected.Digest()
+	reference := infrastructure.LaunchContextReference{SHA256: digest}
+	if err != nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+	}
+	if err = reference.ValidateContext(selected, pin.Root(), pin.RootID()); err != nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+	}
+	observation, err := infrastructure.NewPreparationObservation(r.owner, reference)
+	if err != nil {
+		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+	}
+	options := r.owner.setupOptions(supervisorcore.OptionsForEnvironment(r.options, selected.ControlEnvironment))
+	options.DaemonStartGuard = observation
+	lookup := supervisorcore.ExecutableLookup{InitialExecutable: r.client, Environment: []string{}, AcceptedBootstrapPair: supervisorcore.BootstrapPair{Client: r.client, Daemon: filepath.Join(filepath.Dir(r.client), "pueued")}}
+	return lookup, options, observation, nil
+}
+
+func (r *componentPreparationRouting) EnsurePrivate(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, error) {
+	lookup, options, observation, err := r.preparation(ctx, store, selected)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	before := len(r.owner.daemonWaits())
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(ctx, lookup, store, options)
+	r.owner.ownClient(client, err)
+	r.owner.ownDaemonClients(client, before)
+	r.recordReady(observation, client, err)
+	return observation.Disposition(), r.closePreparationClient(client, before, err)
+}
+
+func (r *componentPreparationRouting) RecoverSaved(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext, source infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
+	lookup, options, observation, err := r.preparation(ctx, store, selected)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	saved, err := resolveInfrastructureSavedBinding(ctx, store, source)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	before := len(r.owner.daemonWaits())
+	client, err := supervisorcore.RecoverPrivateClient(ctx, store, saved, options, lookup)
+	r.owner.ownClient(client, err)
+	r.owner.ownDaemonClients(client, before)
+	r.recordReady(observation, client, err)
+	return observation.Disposition(), r.closePreparationClient(client, before, err)
+}
+
+func (r *componentPreparationRouting) PrepareContinuation(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext, source infrastructure.SavedBindingSource) (disposition infrastructure.Disposition, resultErr error) {
+	lookup, control, observation, err := r.preparation(ctx, store, selected)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	firstWait := len(r.owner.daemonWaits())
+	var client *pueue.Client
+	defer func() {
+		r.owner.ownClient(client, resultErr)
+		r.owner.ownDaemonClients(client, firstWait)
+		r.recordReady(observation, client, resultErr)
+		resultErr = r.closePreparationClient(client, firstWait, resultErr)
+		disposition = observation.Disposition()
+	}()
+	original, err := supervisorcore.ReadTaskMetadataSupervisor(ctx, store, source)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	options := supervisorcore.ContinuationOptions{
+		Options: control, InitialExecutable: lookup.InitialExecutable,
+		Environment: lookup.Environment, OpenStore: openNativeSupervisorStore,
+	}
+	successor, err := supervisorcore.RebindContinuation(ctx, store.Root, original, options)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	successor, err = supervisorcore.PrepareContinuationSuccessor(ctx, store.Root, successor, options)
+	if err != nil {
+		return infrastructure.Disposition{}, err
+	}
+	client, resultErr = supervisorcore.RecoverPrivateClient(ctx, store, successor, control, lookup)
+	return infrastructure.Disposition{}, resultErr
+}
+
+func (r *componentPreparationRouting) MigrateOwn(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error) {
+	lookup, options, observation, err := r.preparation(ctx, store, selected)
+	if err != nil {
+		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, err
+	}
+	before := len(r.owner.daemonWaits())
+	state, migrationErr := inspectSupervisorMigration(ctx, store.Root, lookup, options, store)
+	r.owner.ownClient(state.current, migrationErr)
+	r.owner.ownDaemonClients(state.current, before)
+	result := manualSupervisorMigrationResult(state, migrationErr)
+	r.recordReady(observation, state.current, result.err)
+	report, reportErr := infrastructureManualMigrationReport(result)
+	return observation.Disposition(), report, errors.Join(r.closePreparationClient(state.current, before, result.err), reportErr)
+}
+
+func (r *componentPreparationRouting) closePreparationClient(client *pueue.Client, firstWait int, cause error) error {
+	if client != nil && r.owner.lifetime == componentPersistentDaemon && len(r.owner.daemonWaits()) > firstWait {
+		// The existing component owner needs this client for supported Shutdown.
+		// It closes the client only after the actual registered Wait completes.
+		return cause
+	}
+	return supervisorcore.ClosePrivateAdmissionTransition(client, cause)
+}
+
+func (r *componentPreparationRouting) recordReady(observation *infrastructure.PreparationObservation, client *pueue.Client, cause error) {
+	if cause != nil || client == nil {
+		return
+	}
+	if observation.Disposition().Kind == infrastructure.DispositionStarted && r.owner.lifetime == componentFiniteDaemon {
+		// The authored finite CLI proves protocol readiness; this separately
+		// owned listener supplies the component's subsequent endpoint probe.
+		r.owner.listen(r.test, client.Binding().Endpoint)
+	}
+	observation.RecordReady()
 }
 
 func listenSupervisorProbeTestEndpoint(t *testing.T, endpoint string) {
@@ -529,20 +756,11 @@ func readSupervisorProbeTestFile(t *testing.T, path string) []byte {
 
 func assertSupervisorProbeTestDaemonMatchesBinding(t *testing.T, path string, want task.SupervisorRef) {
 	t.Helper()
-	var got struct {
-		Executable           string `json:"executable"`
-		SHA256               string `json:"sha256"`
-		ConfigPath           string `json:"config_path,omitempty"`
-		ConfigDigest         string `json:"config_digest,omitempty"`
-		ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
-		Endpoint             string `json:"endpoint,omitempty"`
-	}
+	var got historicalPrivateDaemonIdentity
 	if err := task.DecodeStrict(readSupervisorProbeTestFile(t, path), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Executable != want.DaemonExecutable || got.SHA256 != want.DaemonSHA256 ||
-		got.ConfigPath != want.ConfigPath || got.ConfigDigest != want.ConfigDigest ||
-		got.ResolvedConfigSHA256 != want.ResolvedConfigSHA256 || got.Endpoint != want.Endpoint {
+	if got != historicalPrivateDaemonIdentityFor(want) {
 		t.Fatalf("daemon identity = %+v, want binding %+v", got, want)
 	}
 }
@@ -615,23 +833,15 @@ func staleSupervisorProbeTestOrdinaryScheduling(t *testing.T, root string) {
 	if err := task.DecodeStrict(data, &record); err != nil {
 		t.Fatal(err)
 	}
-	var supervisor map[string]json.RawMessage
+	var supervisor task.SupervisorRef
 	if err := task.DecodeStrict(record["supervisor"], &supervisor); err != nil {
 		t.Fatal(err)
 	}
-	var current string
-	if err := json.Unmarshal(supervisor["daemon_sha256"], &current); err != nil {
+	supervisor.DaemonExecutable = filepath.Join(filepath.Dir(supervisor.DaemonExecutable), "previous-pueued")
+	if err := task.ValidateFreshSupervisorRef(supervisor); err != nil {
 		t.Fatal(err)
 	}
-	replacement := strings.Repeat("0", 64)
-	if current == replacement {
-		replacement = strings.Repeat("1", 64)
-	}
-	digest, err := json.Marshal(replacement)
-	if err != nil {
-		t.Fatal(err)
-	}
-	supervisor["daemon_sha256"] = digest
+	var err error
 	record["supervisor"], err = task.MarshalCanonical(supervisor)
 	if err != nil {
 		t.Fatal(err)
@@ -656,4 +866,64 @@ func assertSupervisorProbeTestNoAdmissionAuthority(t *testing.T, store *taskdir.
 func settleSupervisorProbeTestClient(t *testing.T, client *pueue.Client, err error) {
 	t.Helper()
 	admissionfixture.SettleSupervisorProbeTestClient(t, client, err)
+}
+
+// Fixture scripts are source authored in their selected installation, never
+// copied or fingerprinted from an installed executable.
+func writeSupervisorProbeExecutables(t *testing.T, rootID, clientPath, daemonPath string) {
+	t.Helper()
+	writeRunnerFixture(t, clientPath, `#!/bin/sh
+set -eu
+[ "${1-}" = -c ]
+base=${2%/*}
+case "${3-}" in
+  --version) printf '%s\n' 'pueue 4.0.4' ;;
+  status)
+    [ -f "$base/ready" ] || exit 1
+	[ ! -f "$base/reject-status" ] || exit 97
+	printf '%s\n' status >> "$base/status"
+    parallel=1
+    [ -f "$base/parallel-unlimited" ] && parallel=0
+    printf '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":%s},"delegation-inspection-`+rootID+`":{"status":"Running","parallel_tasks":1}}}\n' "$parallel"
+    ;;
+	group)
+	  [ -f "$base/ready" ] || exit 1
+	  printf '%s\n' group >> "$base/group"
+	  parallel=1
+	  [ -f "$base/parallel-unlimited" ] && parallel=0
+	  printf '{"default":{"status":"Running","parallel_tasks":%s},"delegation-inspection-`+rootID+`":{"status":"Running","parallel_tasks":1}}\n' "$parallel"
+	  ;;
+	parallel)
+	  printf '%s\n' parallel >> "$base/parallel"
+	  : > "$base/parallel-unlimited"
+	  ;;
+	add)
+	  [ "${4-}" = --help ] || exit 64
+	  printf '%s\n' add-help >> "$base/staged-capability"
+	  printf '%s\n' '--stashed --print-task-id'
+	  ;;
+	enqueue)
+	  [ "${4-}" = --help ] || exit 64
+	  printf '%s\n' enqueue-help >> "$base/staged-capability"
+	  printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
+	  ;;
+  *) exit 64 ;;
+esac
+`)
+	writeSupervisorProbeDaemon(t, daemonPath)
+}
+
+// Render original fixture source into its selected installation. The shared
+// producer never obtains program bytes from an installed executable.
+func writeSupervisorProbeDaemon(t *testing.T, path string) {
+	t.Helper()
+	writeRunnerFixture(t, path, `#!/bin/sh
+set -eu
+[ "${1-}" = -c ]
+base=${2%/*}
+printf '%s\n' started >> "$base/daemon-started"
+mkdir -p "$base/run"
+printf '%s\n' "$$" > "$base/run/pueue.pid"
+: > "$base/ready"
+`)
 }

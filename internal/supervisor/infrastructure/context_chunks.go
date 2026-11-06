@@ -11,13 +11,14 @@ import (
 const contextChunkBytes = 512 * 1024
 
 type contextManifest struct {
-	Protocol         int    `json:"protocol"`
-	Root             string `json:"root"`
-	RootID           string `json:"root_id"`
-	OS               string `json:"os"`
-	ControlBytes     int64  `json:"control_bytes"`
-	MaintenanceBytes int64  `json:"maintenance_bytes"`
-	Head             string `json:"head"`
+	Protocol             int    `json:"protocol"`
+	Root                 string `json:"root"`
+	RootID               string `json:"root_id"`
+	OS                   string `json:"os"`
+	SupervisorExecutable string `json:"supervisor_executable"`
+	ControlBytes         int64  `json:"control_bytes"`
+	MaintenanceBytes     int64  `json:"maintenance_bytes"`
+	Head                 string `json:"head"`
 }
 
 type contextChunk struct {
@@ -56,7 +57,10 @@ func contextChunkCount(total int) int {
 }
 
 func (m contextManifest) validate() error {
-	if m.Protocol != ProtocolVersion || (m.OS != "linux" && m.OS != "darwin") {
+	if m.Protocol != RecordProtocolVersion || (m.OS != "linux" && m.OS != "darwin") {
+		return ErrIdentity
+	}
+	if !cleanAbsolutePath(m.SupervisorExecutable) {
 		return ErrIdentity
 	}
 	if _, err := NewOrigin(m.Root, m.RootID); err != nil {
@@ -89,7 +93,7 @@ func encodeLaunchContext(record LaunchContext) (contextManifest, []contextChunk,
 	if err != nil {
 		return contextManifest{}, nil, err
 	}
-	manifest := contextManifest{Protocol: record.Protocol, Root: record.Root, RootID: record.RootID, OS: record.OS, ControlBytes: control, MaintenanceBytes: maintenance}
+	manifest := contextManifest{Protocol: record.Protocol, Root: record.Root, RootID: record.RootID, OS: record.OS, SupervisorExecutable: record.SupervisorExecutable, ControlBytes: control, MaintenanceBytes: maintenance}
 	total, err := manifest.payloadBytes()
 	if err != nil {
 		return contextManifest{}, nil, err
@@ -107,7 +111,7 @@ func encodeLaunchContext(record LaunchContext) (contextManifest, []contextChunk,
 	next := ""
 	for index := len(chunks) - 1; index >= 0; index-- {
 		offset := index * contextChunkBytes
-		chunk := contextChunk{Protocol: ProtocolVersion, Data: payload[offset : offset+min(contextChunkBytes, total-offset)], Next: next}
+		chunk := contextChunk{Protocol: RecordProtocolVersion, Data: payload[offset : offset+min(contextChunkBytes, total-offset)], Next: next}
 		digest, digestErr := digestStartupRecord(chunk)
 		if digestErr != nil {
 			return contextManifest{}, nil, digestErr
@@ -134,7 +138,7 @@ func decodeContextPayload(manifest contextManifest, payload []byte) (LaunchConte
 	if err != nil {
 		return LaunchContext{}, err
 	}
-	record := LaunchContext{Protocol: manifest.Protocol, Root: manifest.Root, RootID: manifest.RootID, OS: manifest.OS, ControlEnvironment: control, MaintenanceEnvironment: maintenance}
+	record := LaunchContext{Protocol: manifest.Protocol, Root: manifest.Root, RootID: manifest.RootID, OS: manifest.OS, SupervisorExecutable: manifest.SupervisorExecutable, ControlEnvironment: control, MaintenanceEnvironment: maintenance}
 	if err = record.Validate(); err != nil {
 		return LaunchContext{}, err
 	}

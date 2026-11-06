@@ -18,7 +18,7 @@ type wireRequest struct {
 	Epoch    string   `json:"epoch"`
 	Host     Identity `json:"host"`
 	Client   Identity `json:"client"`
-	BuildID  string   `json:"build_id"`
+	BuildID  string   `json:"build_id,omitempty"`
 	Action   string   `json:"action"`
 }
 
@@ -98,7 +98,7 @@ func contact(ctx context.Context, query Query, epoch epochRecord, action string)
 	if err != nil {
 		return response, err
 	}
-	request := wireRequest{Protocol: ProtocolVersion, RootID: epoch.RootID, Epoch: epoch.Epoch, Host: epoch.Host, Client: identity(client), BuildID: query.BuildID, Action: action}
+	request := wireRequest{Protocol: ProtocolVersion, RootID: epoch.RootID, Epoch: epoch.Epoch, Host: epoch.Host, Client: identity(client), BuildID: epoch.BuildID, Action: action}
 	if err = writeFrame(conn, request); err != nil {
 		return response, errors.Join(err, ctx.Err())
 	}

@@ -13,9 +13,6 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, err
 	}
-	if err := c.requireRootAdmissionOwner(ctx); err != nil {
-		return CommandResult{}, err
-	}
 	cmd, err := c.prepareCommand(args...)
 	if err != nil {
 		return CommandResult{}, err

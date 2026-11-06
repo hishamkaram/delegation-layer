@@ -168,7 +168,7 @@ class ConsumerBoundaryTests(unittest.TestCase):
         installer = self.root / "install.sh"
         return CandidateInstallRequest(
             tag="v" + VERSION, repo="hishamkaram/delegation-layer", installer=installer,
-            files=CandidateFiles(archive=archive, **files), binaries=(), skill=())
+            files=CandidateFiles(archive=archive, **files), skill=())
 
     def test_package_reader_refuses_the_first_byte_the_manifest_refuses(self):
         at_limit = sparse(self.root / "at-limit.tgz", entry_limit(ArtifactKind.NPM_PACKAGE))

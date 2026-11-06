@@ -114,8 +114,7 @@ def _validate_inspection_runtime_bindings(
         request = journal.get("request")
         binding = request.get("binding") if isinstance(request, dict) else None
         if not (isinstance(binding, dict) and
-                binding.get("helper_executable") == identity.get("executable") and
-                binding.get("helper_sha256") == identity.get("sha256")):
+                binding.get("helper_executable") == identity.get("executable")):
             raise AcceptanceFailure(f"inspection helper binding does not match admitted runtime for {task_id}")
 
 def _terminal_private_queue(owner, status: dict[str, object]) -> bool:

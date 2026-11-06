@@ -28,10 +28,9 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 	}
 	base := os.Getenv("PUEUE_PRIVATE_DAEMON_BASE")
 	executable := os.Getenv("PUEUE_PRIVATE_DAEMON_EXECUTABLE")
-	digest := os.Getenv("PUEUE_PRIVATE_DAEMON_SHA256")
 	config := os.Getenv("PUEUE_PRIVATE_DAEMON_CONFIG")
 	childMode := os.Getenv("PUEUE_PRIVATE_DAEMON_CHILD_MODE")
-	if base == "" || executable == "" || digest == "" || config == "" || childMode == "" {
+	if base == "" || executable == "" || config == "" || childMode == "" {
 		t.Fatal("private daemon helper environment is incomplete")
 	}
 	var limit syscall.Rlimit
@@ -44,7 +43,7 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 		}
 	}
 	environment := replacePrivateDaemonHelperEnvironment(os.Environ(), privateDaemonHelperMode, childMode)
-	if err := startDaemon(t.Context(), base, executable, digest, config, base, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: environment}); err != nil {
+	if err := startDaemon(t.Context(), base, executable, config, base, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: environment}); err != nil {
 		t.Fatal(err)
 	}
 	waitForPrivateDaemonTestFile(t, os.Getenv(privateDaemonMarker), 3*time.Second)
@@ -67,17 +66,12 @@ set -eu
 ulimit -n >"$PUEUE_PRIVATE_DAEMON_MARKER"
 `)
 	config := writePrivateDaemonTestConfig(t, base)
-	digest, err := hashExecutable(script)
-	if err != nil {
-		t.Fatal(err)
-	}
 	command := exec.Command("/bin/sh", "-c", `ulimit -S -n 256; exec "$1" -test.run '^TestPrivateDaemonLaunchHelper$'`, "sh", os.Args[0])
 	command.Env = append(os.Environ(),
 		privateDaemonHelperMode+"=limit-launcher",
 		"PUEUE_PRIVATE_DAEMON_CHILD_MODE=limit-child",
 		"PUEUE_PRIVATE_DAEMON_BASE="+base,
 		"PUEUE_PRIVATE_DAEMON_EXECUTABLE="+script,
-		"PUEUE_PRIVATE_DAEMON_SHA256="+digest,
 		"PUEUE_PRIVATE_DAEMON_CONFIG="+config,
 		"PUEUE_PRIVATE_DAEMON_EXPECTED_LIMIT="+expected,
 		privateDaemonMarker+"="+actual,
@@ -108,26 +102,21 @@ sleep 1
 printf 'survived\n' >"$PUEUE_PRIVATE_DAEMON_SURVIVED"
 `)
 	config := writePrivateDaemonTestConfig(t, base)
-	digest, err := hashExecutable(script)
-	if err != nil {
-		t.Fatal(err)
-	}
 	command := exec.Command(os.Args[0], "-test.run", "^TestPrivateDaemonLaunchHelper$")
 	command.Env = append(os.Environ(),
 		privateDaemonHelperMode+"=session-launcher",
 		"PUEUE_PRIVATE_DAEMON_CHILD_MODE=session-child",
 		"PUEUE_PRIVATE_DAEMON_BASE="+base,
 		"PUEUE_PRIVATE_DAEMON_EXECUTABLE="+script,
-		"PUEUE_PRIVATE_DAEMON_SHA256="+digest,
 		"PUEUE_PRIVATE_DAEMON_CONFIG="+config,
 		privateDaemonMarker+"="+pidMarker,
 		privateDaemonReady+"="+ready,
 		"PUEUE_PRIVATE_DAEMON_SURVIVED="+survived,
 	)
-	if err = lifetime.ConfigureIndependentSession(command); err != nil {
+	if err := lifetime.ConfigureIndependentSession(command); err != nil {
 		t.Fatal(err)
 	}
-	if err = command.Start(); err != nil {
+	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
 	waited := false

@@ -3,9 +3,7 @@ package app
 import (
 	"context"
 	"errors"
-	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -20,55 +18,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
-
-func buildRoutingCallerRunner(t *testing.T) string {
-	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locating the managed Runner build")
-	}
-	path := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
-	command := exec.Command("go", "build", "-buildvcs=false", "-o", path, "./cmd/delegate-run")
-	command.Dir = filepath.Clean(filepath.Join(filepath.Dir(source), "../.."))
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("building the selected caller Runner: %v: %s", err, output)
-	}
-	return path
-}
-
-func TestInfrastructureRoutingEpochRequirementsKeepActualCallerRuntime(t *testing.T) {
-	runner := buildRoutingCallerRunner(t)
-	bytes, err := os.ReadFile(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedRuntime := task.ComputeSHA256(bytes)
-	epochPair := infrastructure.OwnerEpochPair{ClientSHA256: strings.Repeat("c", 64), DaemonSHA256: strings.Repeat("d", 64)}
-	for _, oldInventory := range []bool{false, true} {
-		t.Run(map[bool]string{false: "absent-inventory", true: "unavailable-old-inventory"}[oldInventory], func(t *testing.T) {
-			store := newBareInspectionStore(t)
-			if oldInventory {
-				client, daemon := writeSavedSupervisorPair(t)
-				installed, _, installErr := supervisor.InstallStateSupervisorPairPaths(t.Context(), store.Root, client, daemon)
-				if installErr != nil {
-					t.Fatal(installErr)
-				}
-				if removeErr := os.Remove(installed); removeErr != nil {
-					t.Fatal(removeErr)
-				}
-			}
-			host := newInfrastructureEstablishmentHost(runner, supervisor.ExecutableLookup{InitialExecutable: "/absent-install/delegate", Environment: []string{}}, infrastructure.InitialOperation{})
-			before := snapshotContinuationSuccessorTestState(t, store.Root)
-			requirements, readErr := host.ownerRequirements(t.Context(), store, epochPair)
-			if readErr != nil || requirements.RequiredRuntimeSHA256 != expectedRuntime || requirements.RequiredClientSHA256 != epochPair.ClientSHA256 || requirements.RequiredDaemonSHA256 != epochPair.DaemonSHA256 {
-				t.Fatalf("owner constraints changed caller runtime or consulted old inventory: requirements=%+v error=%v", requirements, readErr)
-			}
-			if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, store.Root)) {
-				t.Fatal("epoch constraint observation changed target state")
-			}
-		})
-	}
-}
 
 func TestInfrastructureRoutingSelectedOwnerDoesNotOpenUnavailableOrigin(t *testing.T) {
 	store := newBareInspectionStore(t)
@@ -102,8 +51,8 @@ func TestInfrastructureRoutingSelectedOwnerDoesNotOpenUnavailableOrigin(t *testi
 	}()
 	routing := infrastructureOwnerRouting{invocation: invocation}
 	request := infrastructure.LaunchContext{
-		Protocol: infrastructure.ProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
-		ControlEnvironment: []string{}, MaintenanceEnvironment: []string{},
+		Protocol: infrastructure.RecordProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
+		ControlEnvironment: []string{}, MaintenanceEnvironment: []string{}, SupervisorExecutable: filepath.Join(store.Root, "pueue"),
 	}
 	selection, host, err := routing.selectPreparation(ctx, pin, request, infrastructure.InitialOperation{})
 	if err != nil {
@@ -163,12 +112,11 @@ func TestInfrastructureRoutingProbeDiagnosticRetainsActualCleanupOwner(t *testin
 	}
 }
 
-func TestInfrastructureRoutingManualRequirementsSkipOwnerProbe(t *testing.T) {
-	store := newBareInspectionStore(t)
-	host := newInfrastructureEstablishmentHost("/absent-install/delegate-run", supervisor.ExecutableLookup{InitialExecutable: "/absent-install/delegate", Environment: []string{}}, infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn})
+func TestInfrastructureRoutingManualMigrationSkipsOwnerProbe(t *testing.T) {
+	host := newInfrastructureEstablishmentHost("/absent-install/delegate-run", infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn})
 	var unavailableReader *taskdir.ReadOnlyStore
-	selected, err := host.preparationRequirements(t.Context(), store, unavailableReader)
-	if err == nil || selected.probeErr != nil || selected.owner != (infrastructure.StartupReference{}) {
-		t.Fatalf("manual migration probed an owner or accepted unavailable installation: selected=%+v error=%v", selected, err)
+	selected, err := host.probePreparationOwner(t.Context(), unavailableReader)
+	if err != nil || selected.probeErr != nil || selected.owner != (infrastructure.StartupReference{}) {
+		t.Fatalf("manual migration probed an owner: selected=%+v error=%v", selected, err)
 	}
 }

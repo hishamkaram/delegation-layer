@@ -14,47 +14,13 @@ import (
 
 // These finite command fixtures exercise control policy and filesystem effects;
 // they are not proof of a native Pueue daemon or resident authority.
-func TestProbeSavedPrivateAttachesCompletedSuccessorWithoutWrites(t *testing.T) {
-	fixture := newCompletedPrivateSuccessorTestFixture(t, true)
-	before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-	client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-	closeSavedProbeTestClient(t, client, err)
-	if err != nil || client == nil {
-		t.Fatalf("warm successor: client present=%t err=%v", client != nil, err)
-	}
-	if client.Binding() != fixture.saved || client.RuntimeBinding() != fixture.successor {
-		t.Fatal("warm probe changed saved or current generation")
-	}
-	assertSavedProbeTestUnchanged(t, fixture.stateRoot, before)
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
-}
-
-func TestProbeSavedPrivateNotReadyNeverRecovers(t *testing.T) {
-	for _, missingPair := range []bool{false, true} {
-		t.Run(map[bool]string{false: "stopped", true: "missing pair"}[missingPair], func(t *testing.T) {
-			fixture := newCompletedPrivateSuccessorTestFixture(t, false)
-			if missingPair {
-				removePrivateTestPath(t, filepath.Join(fixture.base, "completed"))
-			}
-			before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-			client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-			closeSavedProbeTestClient(t, client, err)
-			if client != nil || err != nil {
-				t.Fatalf("not-ready probe: client present=%t err=%v", client != nil, err)
-			}
-			assertSavedProbeTestUnchanged(t, fixture.stateRoot, before)
-			assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
-		})
-	}
-}
-
-func TestProbeSavedPrivateErrorsNeverRecover(t *testing.T) {
+func TestProbeSavedPrivateCompatibleErrorsNeverRecover(t *testing.T) {
 	for _, name := range []string{"missing config", "malformed config", "malformed binding", "uncertain status", "unrelated saved", "canceled"} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newCompletedPrivateSuccessorTestFixture(t, true)
 			ctx, saved, want := prepareSavedProbeTestDecision(t, fixture, name)
 			before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-			client, err := ProbeSavedPrivate(ctx, fixture.stateRoot, saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+			client, err := ProbeSavedPrivateCompatible(ctx, fixture.stateRoot, saved, fixture.options, nil)
 			closeSavedProbeTestClient(t, client, err)
 			if client != nil || !errors.Is(err, want) {
 				t.Fatalf("probe: client present=%t err=%v, want %v", client != nil, err, want)
@@ -102,13 +68,13 @@ func prepareSavedProbeTestDecision(t *testing.T, fixture completedPrivateSuccess
 	return ctx, saved, want
 }
 
-func TestProbeSavedPrivateDoesNotCreateMissingLease(t *testing.T) {
+func TestProbeSavedPrivateCompatibleDoesNotCreateMissingLease(t *testing.T) {
 	fixture := newCompletedPrivateSuccessorTestFixture(t, false)
 	if err := os.Remove(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "bootstrap.lock")); err != nil {
 		t.Fatal(err)
 	}
 	before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-	client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+	client, err := ProbeSavedPrivateCompatible(t.Context(), fixture.stateRoot, fixture.saved, fixture.options, nil)
 	closeSavedProbeTestClient(t, client, err)
 	if client != nil || err != nil {
 		t.Fatalf("missing lease: client present=%t err=%v", client != nil, err)
@@ -161,13 +127,13 @@ func TestProbeSavedPrivateCloseFaultCannotBecomeNotReady(t *testing.T) {
 	}
 }
 
-func TestProbeSavedPrivateAbsentRootDoesNotInitialize(t *testing.T) {
+func TestProbeSavedPrivateCompatibleAbsentRootDoesNotInitialize(t *testing.T) {
 	parent := canonicalTemp(t)
 	root := filepath.Join(parent, "missing")
 	saved := validBindingForTest()
 	saved.ConfigPath = PrivateConfigPath(root)
 	before := snapshotSavedProbeTestState(t, parent)
-	client, err := ProbeSavedPrivate(t.Context(), root, saved, saved.ClientExecutable, saved.DaemonExecutable, Options{})
+	client, err := ProbeSavedPrivateCompatible(t.Context(), root, saved, Options{}, nil)
 	closeSavedProbeTestClient(t, client, err)
 	if client != nil || !errors.Is(err, ErrBinding) || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("absent root: client present=%t err=%v", client != nil, err)
@@ -175,10 +141,10 @@ func TestProbeSavedPrivateAbsentRootDoesNotInitialize(t *testing.T) {
 	assertSavedProbeTestUnchanged(t, parent, before)
 }
 
-func TestProbeSavedPrivateRefusedSocketIsNotRecoveryPermission(t *testing.T) {
+func TestProbeSavedPrivateCompatibleRefusedSocketIsNotRecoveryPermission(t *testing.T) {
 	fixture := newRefusedPrivateEndpointFixture(t)
 	before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-	client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.client.Binding(), fixture.clientPath, fixture.daemonPath, fixture.client.options)
+	client, err := ProbeSavedPrivateCompatible(t.Context(), fixture.stateRoot, fixture.client.Binding(), fixture.client.options, nil)
 	closeSavedProbeTestClient(t, client, err)
 	if client != nil || err != nil {
 		t.Fatalf("refused endpoint: client present=%t err=%v", client != nil, err)
@@ -203,7 +169,7 @@ func snapshotSavedProbeTestState(t *testing.T, root string) map[string]privateSu
 			return err
 		}
 		file := privateSuccessorTestFile{mode: info.Mode(), modified: info.ModTime()}
-		if info.Mode().IsRegular() {
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr

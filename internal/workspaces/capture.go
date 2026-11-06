@@ -22,9 +22,6 @@ func ReconcileUse(ctx context.Context, store *taskdir.Store, resource *workspace
 	control, finish := workspaceSchedulingControl(ctx, deps)
 	defer finish()
 	ctx = control
-	if err := checkWorkspaceRootAdmission(ctx, store, deps.RootAdmission); err != nil {
-		return err
-	}
 	reservation, err := resource.Reservation(ctx)
 	if workspace.OperationAbsent(err) {
 		return reconcileClosedWorkspaceUse(ctx, store, resource, deps)

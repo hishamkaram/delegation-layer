@@ -52,7 +52,7 @@ func TestEstablishedInspectionGroupSharesSupervisorGeneration(t *testing.T) {
 	if ensureErr := supervisorcore.EnsureInspectionGroup(store, supervisor, 5*time.Second); ensureErr != nil {
 		t.Fatalf("healthy group readiness required an exclusive transition: %v", ensureErr)
 	}
-	if ensureErr := supervisorcore.EnsureInspectionGroupWithoutMigration(store, supervisor, 5*time.Second); ensureErr != nil {
+	if ensureErr := supervisorcore.EnsureInspectionGroupWithoutMigrationContext(t.Context(), store, supervisor, 5*time.Second); ensureErr != nil {
 		t.Fatalf("same-generation continuation required an exclusive transition: %v", ensureErr)
 	}
 }

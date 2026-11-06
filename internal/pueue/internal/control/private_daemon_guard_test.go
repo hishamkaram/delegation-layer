@@ -38,11 +38,7 @@ func TestDaemonStartRequiresGuard(t *testing.T) {
 			marker := filepath.Join(root, "started")
 			executable := filepath.Join(root, "daemon")
 			writeExecutable(t, executable, "#!/bin/sh\ntouch '"+marker+"'\n")
-			digest, err := hashExecutable(executable)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = startDaemon(t.Context(), root, executable, digest, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
+			err := startDaemon(t.Context(), root, executable, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
 			if !errors.Is(err, ErrInfrastructureOwnerRequired) {
 				t.Fatalf("guard refusal = %v", err)
 			}

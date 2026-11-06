@@ -55,11 +55,7 @@ func runCheckpointCommand(a Arguments, deps storeDependencies, options workspace
 	if a.CheckpointAction == "list" {
 		return listCheckpoints(a, store, response)
 	}
-	ctx, lease, err := resources.acquire(context.Background(), options.RootAdmission, deps.supervisorOptions)
-	if err != nil {
-		return checkpointFault(response, nil, err)
-	}
-	options.RootAdmission = lease
+	ctx := context.Background()
 	switch {
 	case a.CheckpointAction == "status":
 		return watchCheckpoint(ctx, a, store, options, response)

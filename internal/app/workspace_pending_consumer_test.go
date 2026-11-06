@@ -678,7 +678,10 @@ func TestManagedDispatchObservationDeadlineKeepsJoinedFault(t *testing.T) {
 		if !fault.parked || !fault.fired || observed.RecordPresence() != tasklifecycle.RecordAbsent {
 			t.Fatalf("owner fault parked %t, fired %t, record %v; want the observer's release fault before any record", fault.parked, fault.fired, observed.Record)
 		}
-		result := requireDispatchGuidance(t, "joined observer fault", observed, preparationFaultGuidance)
+		guidance := preparationFaultGuidance
+		// Unresolved owner cleanup is an operational command-close failure.
+		guidance.exit = 1
+		result := requireDispatchGuidance(t, "joined observer fault", observed, guidance)
 		for _, err := range []error{observed.Failure, result.err} {
 			if !errors.Is(err, errOperationOwnerUnlock) || !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, workspace.ErrPending) || workspacescore.PendingError(err) {
 				t.Fatalf("joined observer fault = %v; want the deadline joined with the release fault, not pending", err)

@@ -34,6 +34,7 @@ func (r admissionContinuationRouting) PrepareContinuation(ctx context.Context, s
 
 func TestContinuationAdmissionKeepsOriginalSourceAfterCandidateMerge(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
+	clientPath := writeAdmissionRoutingClient(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	digest := task.ComputeSHA256([]byte("original metadata fixture"))
 	original := supervisorfixture.ContinuationSupervisorRef(store.Root, digest, "unix:"+filepath.Join(store.Root, "original.sock"))
@@ -71,18 +72,19 @@ func TestContinuationAdmissionKeepsOriginalSourceAfterCandidateMerge(t *testing.
 	calls := 0
 	routing := admissionContinuationRouting{prepare: func(_ context.Context, actual *taskdir.Store, selected infrastructure.LaunchContext, observed infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
 		calls++
-		if actual != store || observed != source || !slices.Contains(selected.ControlEnvironment, "TMPDIR=/selected-provider") || !slices.Contains(selected.MaintenanceEnvironment, "TMPDIR=/captured-caller") {
-			t.Fatal("continuation lost original metadata or final candidate scope")
+		assertAdmissionRoutingScope(t, selected, clientPath)
+		if actual != store || observed != source {
+			t.Fatal("continuation lost original metadata")
 		}
 		return infrastructure.Disposition{}, refused
 	}}
-	options := supervisorcore.AdmissionOptions{Routing: routing, Control: supervisorcore.OptionsForEnvironment(pueue.Options{}, []string{"TMPDIR=/captured-caller"})}
+	options := supervisorcore.AdmissionOptions{Routing: routing, InitialExecutable: clientPath, Control: supervisorcore.OptionsForEnvironment(pueue.Options{}, []string{"TMPDIR=/captured-caller"})}
 	client, err := prepareAdmissionSupervisorContext(t.Context(), resolved, options, store, candidate, "")
 	if client != nil || !errors.Is(err, refused) || calls != 1 {
 		t.Fatalf("derived candidate used strict Saved recovery or early scope: calls=%d err=%v", calls, err)
 	}
 	var staged *StageError
-	if !errors.As(err, &staged) || staged.Stage() != "resolve-continuation-supervisor" {
+	if !errors.As(err, &staged) || staged.Stage() != "start-supervisor" {
 		t.Fatal("continuation changed its public failure stage")
 	}
 }
@@ -95,16 +97,13 @@ func (admissionRoutingFunc) PrepareContinuation(context.Context, *taskdir.Store,
 	return infrastructure.Disposition{}, errors.New("unexpected continuation routing")
 }
 
-func (admissionRoutingFunc) MigrateReferenced(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.MigrationReference) (infrastructure.Disposition, infrastructure.MigrationResult, error) {
-	return infrastructure.Disposition{}, "", errors.New("unexpected referenced route")
-}
-
 func (admissionRoutingFunc) MigrateOwn(context.Context, *taskdir.Store, infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error) {
 	return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, errors.New("unexpected manual route")
 }
 
 func TestAdmissionRoutingCapturesFinalCandidateControlScope(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
+	clientPath := writeAdmissionRoutingClient(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	candidate := scopeInspectionCandidate(request)
 	candidate.Inspection.Environment = []string{"TMPDIR=/selected-provider", infrastructure.OriginEnvironment + "=old selected origin"}
@@ -113,11 +112,9 @@ func TestAdmissionRoutingCapturesFinalCandidateControlScope(t *testing.T) {
 	calls := 0
 	routing := admissionRoutingFunc(func(_ context.Context, actual *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, error) {
 		calls++
+		assertAdmissionRoutingScope(t, selected, clientPath)
 		if actual != store || selected.Root != store.Root || selected.RootID != store.RootID {
 			t.Fatal("admission routing substituted its borrowed target")
-		}
-		if !slices.Contains(selected.ControlEnvironment, "TMPDIR=/selected-provider") || !slices.Contains(selected.MaintenanceEnvironment, "TMPDIR=/captured-caller") {
-			t.Fatal("routing captured before candidate merge or replaced maintenance scope")
 		}
 		origin, found, err := infrastructure.ReadOrigin(selected.ControlEnvironment)
 		if err != nil || !found || origin.RootID() != store.RootID {
@@ -125,7 +122,7 @@ func TestAdmissionRoutingCapturesFinalCandidateControlScope(t *testing.T) {
 		}
 		return infrastructure.Disposition{}, refused
 	})
-	options := supervisorcore.AdmissionOptions{Routing: routing, InitialExecutable: filepath.Join(store.Root, "unavailable-installation", "delegate"), Control: supervisorcore.OptionsForEnvironment(pueue.Options{}, []string{"TMPDIR=/captured-caller"})}
+	options := supervisorcore.AdmissionOptions{Routing: routing, InitialExecutable: clientPath, Control: supervisorcore.OptionsForEnvironment(pueue.Options{}, []string{"TMPDIR=/captured-caller"})}
 	client, err := prepareAdmissionSupervisorContext(t.Context(), supervisorcore.AdmissionSelection{}, options, store, candidate, "")
 	if client != nil || !errors.Is(err, refused) || calls != 1 {
 		t.Fatalf("private candidate bypassed routed preparation: calls=%d err=%v", calls, err)
@@ -133,4 +130,27 @@ func TestAdmissionRoutingCapturesFinalCandidateControlScope(t *testing.T) {
 	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed owner route staged local supervisor: %v", err)
 	}
+}
+
+func assertAdmissionRoutingScope(t *testing.T, selected infrastructure.LaunchContext, clientPath string) {
+	t.Helper()
+	if selected.SupervisorExecutable != clientPath {
+		t.Fatal("routing substituted the selected installed client")
+	}
+	if !slices.Contains(selected.ControlEnvironment, "TMPDIR=/selected-provider") || !slices.Contains(selected.MaintenanceEnvironment, "TMPDIR=/captured-caller") {
+		t.Fatal("routing captured before candidate merge or replaced maintenance scope")
+	}
+}
+
+func writeAdmissionRoutingClient(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(supervisorfixture.CanonicalTempDir(t), "pueue")
+	supervisorfixture.WriteExecutable(t, path, `#!/bin/sh
+set -eu
+case "${1-}" in
+  --version) printf '%s\n' 'pueue 4.0.4' ;;
+  *) exit 64 ;;
+esac
+`)
+	return supervisorfixture.CanonicalPath(t, path)
 }

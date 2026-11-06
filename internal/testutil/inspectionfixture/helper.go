@@ -31,7 +31,7 @@ func RunHelper(args []string, _ io.Reader, stdout, stderr io.Writer) error {
 	if err != nil {
 		return ErrInvalidHelper
 	}
-	sentinel, err := readCanonicalRegular(loaded.Config.SentinelPath, maxSentinelBytes, false)
+	sentinel, err := readCanonicalRegular(loaded.Config.SentinelPath, maxSentinelBytes)
 	if err != nil || len(sentinel) == 0 {
 		clear(sentinel)
 		return ErrInvalidHelper

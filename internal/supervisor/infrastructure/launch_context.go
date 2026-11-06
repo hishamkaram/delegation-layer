@@ -10,13 +10,15 @@ import (
 // LaunchContext is an immutable snapshot selected by trusted supervisor
 // composition. The target journal owns its create-once, content-addressed
 // record; the intent binds that exact digest. This is consequential launch
-// data, never executable selection, birth-chain or native Start authority.
+// data, including the selected installed client path. It grants no birth-chain
+// or native Start authority.
 // Capture and consumers clone the environments; values never belong in errors.
 type LaunchContext struct {
 	Protocol               int      `json:"protocol"`
 	Root                   string   `json:"root"`
 	RootID                 string   `json:"root_id"`
 	OS                     string   `json:"os"`
+	SupervisorExecutable   string   `json:"supervisor_executable"`
 	ControlEnvironment     []string `json:"control_environment"`
 	MaintenanceEnvironment []string `json:"maintenance_environment"`
 }
@@ -28,8 +30,11 @@ func (c LaunchContext) Clone() LaunchContext {
 }
 
 func (c LaunchContext) Validate() error {
-	if c.Protocol != ProtocolVersion || (c.OS != "linux" && c.OS != "darwin") {
+	if c.Protocol != RecordProtocolVersion || (c.OS != "linux" && c.OS != "darwin") {
 		return ErrIdentity
+	}
+	if !cleanAbsolutePath(c.SupervisorExecutable) {
+		return fmt.Errorf("%w: installed supervisor client selection is required", ErrIdentity)
 	}
 	if _, err := NewOrigin(c.Root, c.RootID); err != nil {
 		return err

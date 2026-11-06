@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,25 +17,19 @@ import (
 )
 
 // probeStartLifetime observes commands at the existing lifetime start boundary.
-// Only helpers have an admitted digest and a private view; providers run directly.
+// Every role runs directly at the selected installed path.
 type probeStartLifetime struct {
 	t          *testing.T
 	definition provider.InspectionDefinition
 	mu         sync.Mutex
 	started    [][]string
+	refusal    error
 }
 
 func (l *probeStartLifetime) StartCommand(cmd *exec.Cmd, start func() error) error {
 	definition := l.definition
-	if definition.ProviderExecutable() {
-		if cmd.Path != definition.Executable || cmd.Args[0] != definition.Executable {
-			l.t.Errorf("provider command is not the installed executable: %q %q", cmd.Path, cmd.Args)
-		}
-	} else {
-		assertImmutableVerifiedView(l.t, cmd.Path, definition.Executable, definition.ExecutableSHA256)
-		if cmd.Args[0] != definition.Executable {
-			l.t.Errorf("helper command lost its admitted argument zero: %q", cmd.Args)
-		}
+	if cmd.Path != definition.Executable || cmd.Args[0] != definition.Executable {
+		l.t.Errorf("command is not the selected installed executable: %q %q", cmd.Path, cmd.Args)
 	}
 	if cmd.Dir != definition.Directory || !slices.Equal(cmd.Env, definition.Environment) {
 		l.t.Errorf("command lost its launch directory or environment: dir=%q env=%q", cmd.Dir, cmd.Env)
@@ -44,6 +37,9 @@ func (l *probeStartLifetime) StartCommand(cmd *exec.Cmd, start func() error) err
 	l.mu.Lock()
 	l.started = append(l.started, slices.Clone(cmd.Args[1:]))
 	l.mu.Unlock()
+	if l.refusal != nil {
+		return l.refusal
+	}
 	return start()
 }
 
@@ -83,7 +79,7 @@ func probeBinderRoutes() []probeBinderRoute {
 	}
 }
 
-func TestInspectCopiesOnlyNativeHelperCommands(t *testing.T) {
+func TestInspectRunsSelectedInstalledCommands(t *testing.T) {
 	for _, route := range probeBinderRoutes() {
 		t.Run(route.name, func(t *testing.T) {
 			temporary := binderTemporaryDirectory(t)
@@ -106,9 +102,9 @@ func TestInspectCopiesOnlyNativeHelperCommands(t *testing.T) {
 }
 
 // Both the inspection entrypoint and native capture refuse real helper faults.
-// The latter reaches binding directly rather than the inspection fingerprint gate.
+// Both retain a single native Start attempt with no fallback.
 func TestInspectRefusesInvalidHelperWithoutStartOrFallback(t *testing.T) {
-	for _, fault := range []string{"bad-digest", "missing-helper"} {
+	for _, fault := range []string{"non-executable-helper", "missing-helper"} {
 		for _, entry := range []string{"inspect", "native-capture"} {
 			t.Run(fault+"/"+entry, func(t *testing.T) {
 				assertInvalidHelperRefused(t, fault, entry)
@@ -121,11 +117,8 @@ func assertInvalidHelperRefused(t *testing.T, fault, entry string) {
 	t.Helper()
 	temporary := binderTemporaryDirectory(t)
 	definition := binderHelperDefinition(t, t.TempDir(), temporary)
-	if fault == "bad-digest" {
-		definition.ExecutableSHA256 = strings.Repeat("0", 64)
-	} else {
-		definition.Executable = filepath.Join(temporary, "private-missing-helper")
-	}
+	definition.Executable = filepath.Join(temporary, "selected-helper")
+	original := prepareInvalidBinderHelper(t, definition.Executable, fault)
 	lifetime := &probeStartLifetime{t: t, definition: definition}
 	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
 		var data []byte
@@ -144,15 +137,14 @@ func assertInvalidHelperRefused(t *testing.T, fault, entry string) {
 	if !errors.Is(workErr, errNativeInspection) || stopErr != nil || workErr.Error() != errNativeInspection.Error() {
 		t.Fatalf("helper refusal result: work=%v stop=%v, want sanitized %v", workErr, stopErr, errNativeInspection)
 	}
-	if got := lifetime.arguments(); len(got) != 0 {
-		t.Fatalf("refused helper started or fell back: %q", got)
+	if got := lifetime.arguments(); len(got) != 1 || !slices.Equal(got[0], definition.Arguments) {
+		t.Fatalf("helper must have exactly one selected-path Start attempt and no fallback: %q", got)
 	}
-	assertNoVerifiedViews(t, temporary)
+	assertInvalidBinderHelperUnchanged(t, definition.Executable, original)
 }
 
-// binderTemporaryDirectory is the TMPDIR selected for the probe commands. A
-// private copy leaves its view here while open; every view must be gone when
-// inspection returns.
+// binderTemporaryDirectory selects an owned TMPDIR. Inspection must leave it
+// unchanged because installed commands do not stage executable views.
 func binderTemporaryDirectory(t *testing.T) string {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
@@ -160,6 +152,46 @@ func binderTemporaryDirectory(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+func prepareInvalidBinderHelper(t *testing.T, path, fault string) os.FileInfo {
+	t.Helper()
+	if fault == "missing-helper" {
+		return nil
+	}
+	if fault != "non-executable-helper" {
+		t.Fatalf("unknown helper fault %q", fault)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf native\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
+func assertInvalidBinderHelperUnchanged(t *testing.T, path string, original os.FileInfo) {
+	t.Helper()
+	if original == nil {
+		assertNoVerifiedViews(t, filepath.Dir(path))
+		return
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(path) {
+		t.Fatalf("helper refusal added or removed fixture entries: %v", entries)
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(original, current) || current.Mode() != original.Mode() || current.Size() != original.Size() || !current.ModTime().Equal(original.ModTime()) {
+		t.Fatalf("helper refusal changed the original installation metadata: before=%v after=%v", original, current)
+	}
 }
 
 func assertNoVerifiedViews(t *testing.T, temporary string) {
@@ -214,12 +246,12 @@ func binderModelsDefinition(t *testing.T, directory, temporary string) provider.
 }
 
 // binderHelperDefinition is a native-only inspection whose executable is an
-// integrity-bound helper carrying its admitted digest.
+// installed helper selected by metadata.
 func binderHelperDefinition(t *testing.T, directory, temporary string) provider.InspectionDefinition {
 	t.Helper()
 	helper := locateTestHelper(t)
 	return provider.InspectionDefinition{
-		Revision: "native-helper-binder-v1", Executable: helper.Path, ExecutableSHA256: helper.SHA256,
+		Revision: "native-helper-binder-v1", Executable: helper.Path,
 		Arguments: []string{"-c", "printf native"}, Directory: directory,
 		Environment: []string{"TMPDIR=" + temporary}, OutputLimit: 64,
 		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"eligible":true}`), nil },

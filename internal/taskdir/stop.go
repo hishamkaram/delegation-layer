@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -122,13 +123,14 @@ func (p *StopPermit) Release() error {
 	return s.releaseErr
 }
 
-func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (_ *StopPermit, resultErr error) {
-	// Automatic abandonment requires the conditional admission/lifetime/run
-	// transaction; the general stop path cannot assert never-started facts.
-	if cause == task.StopCauseAutomaticAbandonment {
-		return nil, task.ErrInvalidPermit
-	}
-	if err := task.ValidateStopRequestID(requestID); err != nil {
+func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (*StopPermit, error) {
+	return td.PrepareStopContext(context.Background(), requestID, cause, deadline)
+}
+
+// PrepareStopContext retains the caller's cancellation through durable request
+// publication. TaskDir remains the sole writer and grant owner for the request.
+func (td *TaskDir) PrepareStopContext(ctx context.Context, requestID, cause string, deadline time.Time) (_ *StopPermit, resultErr error) {
+	if err := validateStopPreparation(ctx, requestID, cause); err != nil {
 		return nil, err
 	}
 	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
@@ -159,10 +161,10 @@ func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (_ *
 		return nil, err
 	}
 	dir := filepath.Join(td.Dir, "stop")
-	if err = td.store.mkdir(dir, td.store.faultInjector); err != nil {
+	if err = td.store.mkdirContext(ctx, dir, td.store.faultInjector); err != nil {
 		return nil, err
 	}
-	_, cleanup, err := td.store.stageAndCommit(dir, requestID+".request.json", data, td.store.faultInjector)
+	_, cleanup, err := td.store.stageReaderContext(ctx, dir, requestID+".request.json", bytes.NewReader(data), td.store.faultInjector)
 	if errors.Is(err, os.ErrExist) {
 		return nil, errors.Join(task.ErrStopAlreadyRequested, cleanup)
 	}
@@ -171,6 +173,21 @@ func (td *TaskDir) PrepareStop(requestID, cause string, deadline time.Time) (_ *
 	}
 	granted = true
 	return &StopPermit{state: &stopState{maintenance: td.store.maintLock, request: *r}}, nil
+}
+
+func validateStopPreparation(ctx context.Context, requestID, cause string) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Automatic abandonment requires the conditional admission/lifetime/run
+	// transaction; the general stop path cannot assert never-started facts.
+	if cause == task.StopCauseAutomaticAbandonment {
+		return task.ErrInvalidPermit
+	}
+	return task.ValidateStopRequestID(requestID)
 }
 
 func (td *TaskDir) newStopRequest(id, cause string, deadline time.Time) (*task.StopRequestRecord, error) {

@@ -127,7 +127,7 @@ func TestOwnerTerminalHandoffRejectsFreshMismatchAndStatusWithoutHost(t *testing
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	reader := contextPassiveReader(t, f.entry.journal)
-	selection := PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial}
+	selection := PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial}
 	outcome, err := RequestBoundPreparation(ctx, reader, owner, selection)
 	if err != nil || outcome.Condition != PreparationBusy {
 		t.Fatalf("fresh handoff request was admitted: %v %v", outcome, err)
@@ -135,8 +135,13 @@ func TestOwnerTerminalHandoffRejectsFreshMismatchAndStatusWithoutHost(t *testing
 	selection.InitialResultFor = owner
 	selection.Operation.Source.OwnerID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	outcome, err = RequestBoundPreparation(ctx, reader, owner, selection)
-	if err != nil || outcome.Condition != PreparationBusy {
-		t.Fatalf("mismatched handoff request was not busy: %v %v", outcome, err)
+	if err != nil || outcome.Condition != PreparationRefused {
+		t.Fatalf("explicit mismatched replay selector was not refused: %v %v", outcome, err)
+	}
+	select {
+	case <-f.server.initialDelivered:
+		t.Fatal("wrong replay subject consumed the terminal handoff")
+	default:
 	}
 	if _, err = ProbeOwner(ctx, reader); !errors.Is(err, ErrOwnerBusy) {
 		t.Fatalf("status during handoff did not return busy: %v", err)
@@ -208,13 +213,5 @@ func TestOwnerRetainedInitialBusyClosesAndRetainsActualGraph(t *testing.T) {
 	if !errors.As(err, &actual) || actual != retained {
 		t.Fatalf("runtime discarded actual retained owner: %v", err)
 	}
-	exclusive, acquireErr := retained.store.TryAcquireRootAdmissionExclusiveContext(t.Context())
-	if exclusive != nil {
-		if releaseErr := exclusive.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	}
-	if !errors.Is(acquireErr, task.ErrLockBusy) {
-		t.Fatalf("retained root SH disappeared: %v", acquireErr)
-	}
+	retained.assertLeaseHeld(t, t.Context())
 }

@@ -49,15 +49,6 @@ func consumeOwnerInvocation(ctx context.Context, invocation ownerInvocation, hos
 		return nil, err
 	} // Adopt consumes the descriptor even on failure.
 	entry.lease = lease
-	// Invalid input still consumes FD3. No path-dependent borrowers exist yet.
-	if ctx == nil {
-		entry.closed = true
-		if err = lease.Close(); err != nil {
-			entry.closeErr = err
-			return entry, errors.Join(os.ErrInvalid, err)
-		}
-		return nil, os.ErrInvalid
-	}
 	if err = entry.prepare(ctx, invocation, host); err != nil {
 		return finishFailedEntry(ctx, entry, err)
 	}
@@ -94,20 +85,12 @@ func (e *ownedResidentEntry) prepare(ctx context.Context, invocation ownerInvoca
 	if err := e.prepareRoot(ctx, invocation, host); err != nil {
 		return err
 	}
-	// Upgrade birth needs its lifecycle coordinator; refusing here must precede
-	// any new assumption, endpoint or publication.
-	if e.operation.Intent().Inputs.Kind == StartupUpgrade {
-		return ErrIncompatible
-	}
 	return e.assumeAndPublish(ctx, invocation.startup)
 }
 
 // prepareRoot establishes the executing image and actual rooted borrowers before
 // any assumption. Endpoint birth and publication remain separate owned phases.
 func (e *ownedResidentEntry) prepareRoot(ctx context.Context, invocation ownerInvocation, host EntryHost) error {
-	if ctx == nil || host == nil {
-		return os.ErrInvalid
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -115,9 +98,6 @@ func (e *ownedResidentEntry) prepareRoot(ctx context.Context, invocation ownerIn
 	// store probe. A nil observation does not attest independence.
 	environment := os.Environ()
 	if err := lifetime.CheckCurrentTaskContainment(ctx, environment); err != nil {
-		return err
-	}
-	if err := invocation.validate(); err != nil {
 		return err
 	}
 	operation, pin, err := e.readOperation(ctx, invocation)
@@ -189,7 +169,7 @@ func (e *ownedResidentEntry) readOperation(ctx context.Context, invocation owner
 	if expired {
 		return Operation{}, empty, ErrIdentity
 	}
-	operation, err := readEntryOperation(ctx, reader, pin, intent)
+	operation, err := readEntryOperation(ctx, reader, intent)
 	return operation, pin, err
 }
 
@@ -198,14 +178,31 @@ func validateExecutingArtifacts(ctx context.Context, operation Operation, host E
 	if err != nil {
 		return err
 	}
-	if executable != operation.Artifacts().Runner {
-		return ErrIdentity
+	if err = validateExecutingRunnerPath(executable, operation.Artifacts().Runner); err != nil {
+		return err
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ErrIdentity
 	}
-	return host.ValidateArtifacts(ctx, operation.Intent().Inputs.Root, operation.Artifacts(), info)
+	return host.ValidateRunner(ctx, operation.Intent().Inputs.Root, operation.Artifacts().Runner, info)
+}
+
+// Selection is resolved once by the installation resolver. Native aliases in
+// os.Executable are compared through the same path domain before assumption.
+func validateExecutingRunnerPath(current, selected string) error {
+	actual, err := filepath.EvalSymlinks(current)
+	if err != nil {
+		return err
+	}
+	accepted, err := filepath.EvalSymlinks(selected)
+	if err != nil {
+		return err
+	}
+	if actual != accepted {
+		return ErrIdentity
+	}
+	return nil
 }
 
 // assumeAndBind creates the exact self assumption and its sequence endpoint.
@@ -245,7 +242,7 @@ func (e *ownedResidentEntry) assumeAndPublish(ctx context.Context, reference Sta
 	if err != nil {
 		return err
 	}
-	publication := OwnerPublication{Protocol: ProtocolVersion, Startup: reference, AssumptionSHA256: digest, RuntimeSHA256: e.operation.Artifacts().RunnerSHA256, Endpoint: e.endpoint.Identity()}
+	publication := OwnerPublication{Protocol: RecordProtocolVersion, Startup: reference, AssumptionSHA256: digest, Endpoint: e.endpoint.Identity()}
 	created, err := e.journal.putPublication(ctx, e.lease, publication)
 	if err != nil {
 		return err
@@ -261,16 +258,10 @@ func (e *ownedResidentEntry) assumeAndPublish(ctx context.Context, reference Sta
 	return nil
 }
 
-// Close invalidates starts before closure and waits for any active callback.
+// closeContext invalidates starts before closure and waits for any active callback.
 // Endpoint cleanup may be retried with its original facts and dependencies.
 // Other native close failures are retained as unproved closure, not converted
-// to success by a second Close on an already-invalid descriptor wrapper.
-func (e *ownedResidentEntry) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), endpointCleanupTimeout)
-	defer cancel()
-	return e.closeContext(ctx)
-}
-
+// to success by another close on an already-invalid descriptor wrapper.
 func (e *ownedResidentEntry) closeContext(ctx context.Context) error {
 	if e == nil {
 		return nil

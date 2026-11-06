@@ -13,8 +13,12 @@ For process/OS changes, also use [native checks](../../agents/_data/maintainabil
 
 Changed behavior and cases, actual binary/path under test, requested provider,
 model/effort/permissions, finite budgets and available native host/authentication.
-Use existing driver targets from the [contributor guide](../../docs/contributing.md).
+Use existing driver targets and [fixture installation options](../../docs/contributing.md#fixture-installations).
 No new ledger, handoff manifest or hosted proof submission is required.
+The [installed-executable rule](../../agents/_data/product-boundary.md#installed-executables)
+applies to acceptance helpers and binary selection evidence as well as runtime.
+Observe the selected installed path, invocation and required behavior; do not
+claim immutable executable bytes from a version or path.
 
 ## Work
 

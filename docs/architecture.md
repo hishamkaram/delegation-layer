@@ -173,6 +173,35 @@ Pueue for ordinary tasks. Delegate creates state-rooted configuration and recove
 its saved binding as needed. A separately configured external supervisor remains
 an explicit operator choice.
 
+The [installed-executable rule](../agents/_data/product-boundary.md#installed-executables)
+owns executable selection policy across runtime and contributor tooling. Current
+bindings select installed paths and validate required behavior, configuration
+and native owner/endpoint identity. New records carry an installed-path marker
+and omit executable-content digests. Historical executable SHA fields remain
+readable as recorded data; they do not authorize hashing the current program or
+rewriting sealed task evidence. Queue/callback recovery uses the selected
+installation and the existing generation transaction. These checks establish
+selection and ownership, not immutable executable bytes.
+
+Private infrastructure starts through a per-root resident outside task lifetime
+scopes. Its authenticated operations use the existing generation and task owners;
+independently admitted tasks retain their own guardians and budgets.
+`delegate supervisor stop-owner` stops only that resident's serving role. It
+refuses while startup, accepted operations or unresolved cleanup prevent draining.
+After draining, the resident closes its endpoint and releases its instance lease;
+the existing startup settlement records this serving release. A resident that
+started a still-live daemon stays in the same process to retain its actual
+`Wait`. Serving release therefore permits replacement without claiming process
+closure. The command reports those observations separately and projects the
+selected startup's validated PID/start token for exact native observation. This
+identity adds no closure claim or control authority. It neither stops Pueue nor
+cancels tasks. See the [command reference](../skills/agent-integration/references/command-reference.md#supervisor-owner-control).
+
+Fixture drivers build owned installations from source where sibling data or
+quoted layouts are required. They execute other selected installations in place;
+see [fixture installations](contributing.md#fixture-installations). Fixture tests
+and source builds alone do not establish supported-host lifecycle acceptance.
+
 One completed-generation record owns the active private supervisor. Startup and
 migration take its exclusive lock; ordinary controls hold a shared generation
 lease until their in-flight commands settle. A healthy endpoint can be reused

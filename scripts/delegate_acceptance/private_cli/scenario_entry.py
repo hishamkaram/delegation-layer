@@ -46,10 +46,10 @@ def run_recovery_scenario(lease_nonce, lifetime, response_directory, run_receipt
         attempted_task_ids=lifetime.attempted_task_ids,
         remove_old_package=remove_old_package,
         real_client=fixture.pueue_binary,
-        real_daemon=fixture.pueued_binary,
         supervisor_cleanups=lifetime.supervisor_cleanups,
         capture_root=lifetime.capture_token,
         fixture_base=lifetime.base,
+        source_root=fixture.source_root,
     )
     run_receipt.stage("supervisor-upgrade-recovery-proved")
 

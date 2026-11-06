@@ -181,7 +181,7 @@ func TestContextPayloadDuplicateKeyErrorsAreRedacted(t *testing.T) {
 	}
 	secret := "private-duplicate-key"
 	payload := []byte(secret + "=a\x00" + secret + "=b\x00")
-	chunk := contextChunk{Protocol: ProtocolVersion, Data: payload}
+	chunk := contextChunk{Protocol: RecordProtocolVersion, Data: payload}
 	digest, err := digestStartupRecord(chunk)
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +381,7 @@ func TestContextChunkPrefixCollisionPreservesWinner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	winner := contextChunk{Protocol: ProtocolVersion, Data: []byte("different winner")}
+	winner := contextChunk{Protocol: RecordProtocolVersion, Data: []byte("different winner")}
 	if _, err = publishContextRecord(t.Context(), journal, name, winner); err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,11 @@ func (r ControlRuntime) MigrateOwn(ctx context.Context, store *taskdir.Store) (i
 	if r.Routing == nil {
 		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, ErrInfrastructureAuthorityUnavailable
 	}
-	selected, err := captureInfrastructureLaunchContext(pin, r.Options)
+	client, err := resolveInstalledSupervisorClient(r.Lookup)
+	if err != nil {
+		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, err
+	}
+	selected, err := captureInfrastructureLaunchContext(pin, r.Options, client)
 	if err != nil {
 		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, err
 	}

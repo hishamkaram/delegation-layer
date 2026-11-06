@@ -15,17 +15,7 @@ func DispatchExisting(options ExistingTaskOptions, store *taskdir.Store, td *tas
 }
 
 func DispatchExistingContext(ctx context.Context, options ExistingTaskOptions, store *taskdir.Store, td *taskdir.TaskDir, req task.TaskRecord) (result ExistingTaskResult) {
-	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.Creation.RootAdmission, options.Creation.Admission.Supervisor.Control)
-	if lease != nil && options.Creation.RootAdmission == nil {
-		defer func() {
-			result.RootAdmissionCleanup, result.RootAdmissionReleaseError = releaseRootAdmission(lease, result.Err())
-		}()
-	}
 	defer func() { result.TaskCloseError = td.Close() }()
-	if err != nil {
-		return existingFailure(result, ExistingPreparation, err)
-	}
-	options.Creation.RootAdmission = lease
 	oldReq, oldMeta, err := td.PreparedRecords()
 	if err != nil {
 		created := CreateTaskContext(ctx, options.Selection, options.Creation, store, req, nil, options.BriefPath)
@@ -89,7 +79,7 @@ func retryExistingTask(ctx context.Context, options ExistingTaskOptions, store *
 	if profileErr != nil {
 		return existingFailure(result, ExistingProfile, profileErr)
 	}
-	selection, allowManagedRunnerUpgrade, runnerErr := supervisorcore.RefreshManagedRetryRunnerContext(ctx, options.Selection, options.Creation.Admission.Supervisor.RunnerExecutable, store.Root, store, td, oldMeta)
+	selection, allowManagedRunnerUpgrade, runnerErr := supervisorcore.RefreshManagedRetryRunnerContext(ctx, options.Selection, options.Creation.Admission.Supervisor.RunnerExecutable, store.Root, td, oldMeta)
 	if runnerErr != nil {
 		return existingFailure(result, ExistingRunnerRefresh, runnerErr)
 	}

@@ -107,11 +107,11 @@ func TestContinuationSuccessorPreservesCCRHistoricalModelSelection(t *testing.T)
 	previous := ccrPreviousContinuationReference(t)
 	for _, testCase := range ccrContinuationSuccessorCases(previous) {
 		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newCCRContinuationSuccessorTestState(t)
+			fixture, owner := newCCRContinuationSuccessorTestState(t)
 			seedContinuationSuccessorTestHistory(t, fixture, [][2]string{{"A", "B"}}, "B")
 			seedContinuationSuccessorTestBlocker(t, fixture, "recovery alias")
 			workspace, ccrHome := newCCRContinuationEnvironment(t)
-			runCCRContinuationSuccessorCase(t, fixture, workspace, ccrHome, testCase)
+			runCCRContinuationSuccessorCase(t, fixture, owner, workspace, ccrHome, testCase)
 		})
 	}
 }
@@ -141,11 +141,13 @@ func ccrPreviousContinuationReference(t *testing.T) task.PredicateRef {
 
 func runCCRContinuationEntryPoint(t *testing.T, entryPoint string, testCase ccrContinuationSuccessorCase) {
 	t.Helper()
-	fixture := newCCRContinuationSuccessorTestState(t)
+	fixture, owner := newCCRContinuationSuccessorTestState(t)
 	seedContinuationSuccessorTestHistory(t, fixture, [][2]string{{"A", "B"}}, "B")
 	seedContinuationSuccessorTestBlocker(t, fixture, "recovery alias")
 	workspace, ccrHome := newCCRContinuationEnvironment(t)
 	predecessor := newCCRContinuationSuccessorPredecessor(t, fixture, workspace, ccrHome, testCase.predicate)
+
+	initialExecutable := filepath.Join(t.TempDir(), "missing-pueue")
 
 	var candidate commonprovider.ProfileCandidate
 	catalog := ccrContinuationCatalog(t, &candidate)
@@ -155,11 +157,13 @@ func runCCRContinuationEntryPoint(t *testing.T, entryPoint string, testCase ccrC
 	}
 	args, wantCode, wantStage := ccrContinuationEntryPointInvocation(t, entryPoint, fixture, workspace, briefPath, predecessor, testCase)
 
-	var stdout, stderr bytes.Buffer
-	code := Run(args, &stdout, &stderr, Dependencies{
+	deps := withSupervisorProbeRouting(t, Dependencies{
 		ResourceChecker: fixtureResources,
-		Catalog:         catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
-	})
+		Catalog:         catalog, InitialSupervisorExecutable: initialExecutable,
+		SupervisorOptions: pueue.Options{ControlOwnerExecutable: canonicalAppTestExecutable(t)},
+	}, owner)
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr, deps)
 	assertCCRContinuationResponse(t, entryPoint, code, &stdout, &stderr, wantCode, wantStage)
 	assertCCRContinuationProfile(t, entryPoint, candidate, testCase)
 }
@@ -170,7 +174,7 @@ func ccrContinuationEntryPointInvocation(t *testing.T, entryPoint string, fixtur
 	switch entryPoint {
 	case "continue --task":
 		args = append(args, "continue", "--task", predecessor.TaskID, "--model", testCase.model, "--json")
-		return args, 1, "resolve-continuation-supervisor"
+		return args, 2, "resolve-predecessor"
 	case "dispatch --resume":
 		args = append(args, "dispatch", "--provider", ccr.Provider, "--brief", briefPath, "--cwd", workspace,
 			"--resume-task", predecessor.TaskID, "--model", testCase.model, "--permission", config.ModeReadOnly,
@@ -279,25 +283,34 @@ func ccrContinuationSuccessorCases(previous task.PredicateRef) []ccrContinuation
 	}
 }
 
-func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessorTestState, workspace, ccrHome string, testCase ccrContinuationSuccessorCase) {
+func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessorTestState, owner *componentSupervisorFixture, workspace, ccrHome string, testCase ccrContinuationSuccessorCase) {
 	t.Helper()
 	predecessor := newCCRContinuationSuccessorPredecessor(t, fixture, workspace, ccrHome, testCase.predicate)
+
+	transport := installedGenerationCandidate(t, fixture.store, fixture.bindings["B"])
 
 	var candidate commonprovider.ProfileCandidate
 	catalog := ccrContinuationCatalog(t, &candidate)
 	before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
+	deps := withSupervisorProbeRouting(t, Dependencies{
+		ResourceChecker: fixtureResources,
+		Catalog:         catalog, InitialSupervisorExecutable: transport.ClientExecutable,
+		SupervisorOptions: pueue.Options{ControlOwnerExecutable: canonicalAppTestExecutable(t)},
+	}, owner)
 	result := continueTask(Arguments{
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
 		Config: task.TaskConfig{Model: testCase.model},
-	}, Dependencies{
-		ResourceChecker: fixtureResources,
-		Catalog:         catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
-	})
+	}, deps)
 	if result.code != 1 || !errors.Is(result.err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("continuation result=%+v, want blocked supervisor recovery after admission", result)
 	}
-	if result.response.TaskRecord != "not_created" || result.response.TaskID != "" {
-		t.Fatalf("continuation created or exposed a successor before supervisor recovery: %+v", result.response)
+	if result.response.TaskRecord != "not_created" || task.ValidateTaskID(result.response.TaskID) != nil || result.response.TaskID == predecessor.TaskID {
+		t.Fatalf("continuation lost its uncreated successor identity: %+v", result.response)
+	}
+	failure := dispatchFailure(result.err, result.response.TaskRecord)
+	wantFailure := DispatchFailureResponse{Code: "supervisor_upgrade_required", ReasonCode: "historical_target_not_ready", Stage: "resolve-predecessor", NextAction: "stop_and_report"}
+	if failure != wantFailure {
+		t.Fatalf("continuation lost supervisor recovery guidance: %+v", failure)
 	}
 	if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, fixture.store.Root)) {
 		t.Fatal("continuation changed state-root files before supervisor recovery")
@@ -541,6 +554,33 @@ func newPiContinuationPredecessor(t *testing.T, fixture continuationSuccessorTes
 
 func recordContinuationTestIdentity(t *testing.T, td *taskdir.TaskDir, provider, conversationID string) {
 	t.Helper()
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	permit, err := td.PrepareSubmission(meta.SupervisorConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submission, err := historicalConsumeSubmissionPermit(permit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := int64(7)
+	observation := pueue.Observation{
+		Matched: true, State: pueue.StateRunning, Binding: meta.SupervisorConfig, NumericTaskID: id,
+		Identity: pueue.Identity{
+			RootID: submission.RootID, TaskID: submission.TaskID,
+			SpecSHA256: submission.SpecSHA256, MetaSHA256: submission.MetaSHA256, NumericTaskID: &id,
+		},
+	}
+	receipt, err := observation.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordSupervisorReceipt(*receipt); err != nil {
+		t.Fatal(err)
+	}
 	start, err := td.PrepareStart(0)
 	if err != nil {
 		t.Fatal(err)
@@ -591,29 +631,35 @@ func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSucce
 
 func newContinuationSuccessorTestState(t *testing.T) continuationSuccessorTestState {
 	t.Helper()
-	return newContinuationSuccessorTestStateAt(t, filepath.Join(testsupportcore.CanonicalTempDir(t), "state"))
-}
-
-func newCCRContinuationSuccessorTestState(t *testing.T) continuationSuccessorTestState {
-	t.Helper()
-	userHome, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newContinuationSuccessorTestStateAt(t, mustCCRContinuationTempDir(t, userHome, "delegation-ccr-state-"))
-}
-
-func newContinuationSuccessorTestStateAt(t *testing.T, root string) continuationSuccessorTestState {
-	t.Helper()
-	store := openContinuationSuccessorTestStoreAt(t, root)
+	store := openContinuationSuccessorTestStoreAt(t, filepath.Join(testsupportcore.CanonicalTempDir(t), "state"))
 	t.Cleanup(func() {
 		if closeErr := store.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
+	return newContinuationSuccessorTestStateWithStore(t, store)
+}
+
+func newCCRContinuationSuccessorTestState(t *testing.T) (continuationSuccessorTestState, *componentSupervisorFixture) {
+	t.Helper()
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := newComponentSupervisorFixtureIn(t, componentFiniteDaemon, userHome)
+	store := openContinuationSuccessorTestStoreAt(t, owner.root)
+	owner.ownStore(t, store)
+	return newContinuationSuccessorTestStateWithStore(t, store), owner
+}
+
+func newContinuationSuccessorTestStateWithStore(t *testing.T, store *taskdir.Store) continuationSuccessorTestState {
+	t.Helper()
 	base := filepath.Dir(pueue.PrivateConfigPath(store.Root))
-	if mkdirErr := os.MkdirAll(base, 0o700); mkdirErr != nil {
-		t.Fatal(mkdirErr)
+	// Native binding creates these configured directories before publication.
+	for _, directory := range []string{"data", "run"} {
+		if mkdirErr := os.MkdirAll(filepath.Join(base, directory), 0o700); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
 	}
 	writeContinuationSuccessorTestBytes(t, filepath.Join(base, "bootstrap.lock"), nil)
 	fixture := continuationSuccessorTestState{store: store, bindings: make(map[string]task.SupervisorRef)}

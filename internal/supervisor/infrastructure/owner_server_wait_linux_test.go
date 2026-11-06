@@ -154,7 +154,6 @@ func TestOwnerServerDrainRetainsLiveWaitUntilExactNativeReaping(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	checkOwnerServerPausedLiveWait(t, f, child, ctx)
 	if err := f.server.stopAcceptAndDrain(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +173,9 @@ func TestOwnerServerDrainRetainsLiveWaitUntilExactNativeReaping(t *testing.T) {
 	if err := f.entry.validateResident(t.Context()); err != nil {
 		t.Fatalf("drain closed resident: %v", err)
 	}
+	// This host has no retained worker. The test owns the post-worker phase
+	// normally performed by finishResidentRuntime, then observes actual reaping.
+	f.server.waits.closeRegistration()
 	if err := child.gateWrite.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -219,37 +221,5 @@ func (c *ownerServerOwnedChild) verifyReaped(t *testing.T, ctx context.Context, 
 	}
 	if err := waits.join(ctx); err != nil {
 		t.Fatalf("completed Wait collection: %v", err)
-	}
-}
-
-func checkOwnerServerPausedLiveWait(t *testing.T, f *ownerServerFixture, child *ownerServerOwnedChild, ctx context.Context) {
-	t.Helper()
-	original := f.server.waits
-	if err := f.server.pauseOperationsAndDrain(ctx); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-child.done:
-		t.Fatal("pause closed the live child Wait")
-	default:
-	}
-	completed := make(chan struct{})
-	close(completed)
-	if err := original.RegisterDaemonWait(f.root, 1, completed); err != nil {
-		t.Fatalf("pause closed Wait registration: %v", err)
-	}
-	// Mechanics only: durable Aborted verification belongs to the future private
-	// lifecycle caller, not this component fixture or this resume method.
-	if err := f.server.resumeOperationsAfterVerifiedAbort(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if f.server.waits != original {
-		t.Fatal("resume replaced Wait collection")
-	}
-	original.mu.Lock()
-	pid, present := original.active[child.done]
-	original.mu.Unlock()
-	if !present || pid != child.pid() {
-		t.Fatal("pause/resume lost the exact live completion handle")
 	}
 }

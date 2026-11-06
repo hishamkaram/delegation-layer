@@ -30,7 +30,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			taskMaintenanceObserver{root: root, options: deps.supervisorControlScope()}.observe(td)
+			taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}.observe(td)
 		}
 	}()
 	defer func() { fillRecordedTaskContext(store, td, deps.Environment, &result) }()
@@ -66,7 +66,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			taskMaintenanceObserver{root: root, options: deps.supervisorOptions}.observe(td)
+			taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}.observe(td)
 		}
 	}()
 	defer func() { fillRecordedTaskContext(store, td, deps.environment, &result) }()

@@ -34,7 +34,7 @@ func privateTerminalEventsEnabled(ctx context.Context, c *Client) (string, bool,
 	if err != nil {
 		return "", false, err
 	}
-	return stateRoot, privateTerminalEventsConfigured(base, resolved.Daemon.Callback), nil
+	return stateRoot, privateTerminalEventsConfiguredForBinding(base, resolved.Daemon.Callback, c.binding), nil
 }
 
 // PrivateTerminalEventsEnabled reports whether this client is bound to the

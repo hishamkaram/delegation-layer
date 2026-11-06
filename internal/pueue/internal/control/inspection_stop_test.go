@@ -262,7 +262,9 @@ func newPrivateInspectionSupervisor(t *testing.T, mode string) (*fakeSupervisor,
 	if err = os.MkdirAll(filepath.Dir(fake.configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(fake.configPath, []byte(privateConfigYAML(filepath.Dir(fake.configPath))), 0o600); err != nil {
+	base := filepath.Dir(fake.configPath)
+	callback := privateInstalledCallbackForTest(t, store.Root)
+	if err = os.WriteFile(fake.configPath, []byte(privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"), callback)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err = WithBootstrapLock(context.Background(), store.Root, func() error { return nil }); err != nil {

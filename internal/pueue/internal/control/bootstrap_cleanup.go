@@ -2,97 +2,87 @@ package control
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 )
 
-// BootstrapCleanupError owns the actual bootstrap descriptor until every
-// pending command completes and canonical release succeeds. It grants no work.
-// Done denotes the natural cleanup attempt, not successful descriptor release.
+// BootstrapCleanupError owns bootstrap cleanup until pending commands settle.
+// Done denotes a completed close attempt, not proven native release. A release
+// fault requires fail-stop handling even when CleanupPending is false.
 type BootstrapCleanupError struct {
-	mu       sync.Mutex
-	lock     *bootstrapLock
-	done     chan struct{}
-	err      error
-	complete bool
+	mu         sync.Mutex
+	lock       *bootstrapLock
+	done       chan struct{}
+	commandErr error
+	releaseErr error
+	complete   bool
 }
 
 func (e *BootstrapCleanupError) Error() string {
-	return "private supervisor bootstrap cleanup retained"
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.complete {
+		return "private supervisor bootstrap cleanup pending"
+	}
+	if e.releaseErr != nil {
+		return fmt.Sprintf("private supervisor bootstrap cleanup completed with release fault: %v", e.releaseErr)
+	}
+	return "private supervisor bootstrap cleanup completed"
 }
 
 func (e *BootstrapCleanupError) Done() <-chan struct{} { return e.done }
 
-// CleanupPending reports actual descriptor custody, independently of historical
-// command/release faults. It grants no operation or retry permission.
+// CleanupPending reports custody of a usable Go descriptor. False does not
+// prove native closure: Err must still be checked for a release fault.
 func (e *BootstrapCleanupError) CleanupPending() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.lock != nil
 }
 
-// Err reports collected command/release faults. Before Done it also reports
-// ErrInFlight; neither cancellation nor callback return completes cleanup.
+// Err exposes both command diagnostics and release faults to the cleanup owner.
+// Neither callback return nor cancellation completes pending work.
 func (e *BootstrapCleanupError) Err() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.complete {
-		return errors.Join(ErrInFlight, e.err)
+		return errors.Join(ErrInFlight, e.commandErr, e.releaseErr)
 	}
-	return e.err
+	return errors.Join(e.commandErr, e.releaseErr)
 }
 
-// Unwrap preserves the original in-flight classification when cleanup has no
-// fault. Completed successful cleanup is observed through Done and Err.
+// Unwrap preserves legacy supervisor uncertainty. Command outcomes are available
+// only through Err; only a release fault changes the callback error policy.
 func (e *BootstrapCleanupError) Unwrap() error {
-	if err := e.Err(); err != nil {
-		return err
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.releaseErr != nil {
+		return e.releaseErr
 	}
 	return ErrInFlight
 }
 
-// Close only retries canonical descriptor cleanup after natural completion.
-// It never waits for commands or admits a new operation.
-func (e *BootstrapCleanupError) Close() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.complete {
-		return ErrInFlight
-	}
-	releaseErr := closeBootstrapLock(e.lock)
-	e.err = errors.Join(e.err, releaseErr)
-	e.clearReleasedLock()
-	return e.err
-}
-
-// The caller holds e.mu or has not published e. The canonical lock owner alone
-// records successful File.Close; an unlock fault can coexist with that release.
-func (e *BootstrapCleanupError) clearReleasedLock() {
-	if e.lock == nil {
-		return
-	}
-	lock := e.lock
-	lock.mu.Lock()
-	defer lock.mu.Unlock()
-	if lock.closed {
-		e.lock = nil
-	}
-}
+// Close is nonwaiting cleanup status. Natural cleanup owns the sole close
+// attempt; an attempted os.File.Close cannot be retried as a usable handle.
+func (e *BootstrapCleanupError) Close() error { return e.Err() }
 
 func retainBootstrapLock(lock **bootstrapLock, pending []*Pending, report func(error)) *BootstrapCleanupError {
-	if lock == nil || *lock == nil || len(pending) == 0 {
-		return nil
-	}
-	owner := &BootstrapCleanupError{lock: *lock, done: make(chan struct{})}
-	*lock = nil
 	results := newBootstrapPendingResults(pending)
 	results.collectSettled()
-	return retainBootstrapResults(owner, results, report)
-}
-
-func retainBootstrapResults(owner *BootstrapCleanupError, results *bootstrapPendingResults, report func(error)) *BootstrapCleanupError {
+	owner := &BootstrapCleanupError{done: make(chan struct{}), commandErr: results.err}
+	if lock != nil && *lock != nil {
+		retained := *lock
+		retained.mu.Lock()
+		retained.retired = true
+		retained.mu.Unlock()
+		owner.lock, *lock = retained, nil
+	}
 	if len(results.pending) == 0 {
 		owner.finish(results.err, report)
+		if owner.Err() == nil {
+			return nil
+		}
 	} else {
 		go func() {
 			results.wait()
@@ -105,8 +95,10 @@ func retainBootstrapResults(owner *BootstrapCleanupError, results *bootstrapPend
 func (e *BootstrapCleanupError) finish(commandErr error, report func(error)) {
 	e.mu.Lock()
 	releaseErr := closeBootstrapLock(e.lock)
-	e.err = errors.Join(commandErr, releaseErr)
-	e.clearReleasedLock()
+	e.commandErr, e.releaseErr = commandErr, releaseErr
+	// A completed close attempt retires the Go handle, including on failure.
+	// The release fault remains authoritative; no native-success claim follows.
+	e.lock = nil
 	e.complete = true
 	close(e.done)
 	e.mu.Unlock()
@@ -116,22 +108,8 @@ func (e *BootstrapCleanupError) finish(commandErr error, report func(error)) {
 }
 
 func finishPrivateBootstrap(lock **bootstrapLock, resultErr *error) {
-	results := newBootstrapPendingResults(pendingHandles(*resultErr))
-	results.collectSettled()
-	*resultErr = errors.Join(*resultErr, results.err)
-	if lock != nil && *lock != nil && len(results.pending) > 0 {
-		owner := &BootstrapCleanupError{lock: *lock, done: make(chan struct{})}
-		*lock = nil
-		*resultErr = errors.Join(*resultErr, retainBootstrapResults(owner, results, reportBootstrapCleanup))
-		return
-	}
-	if releaseErr := closeBootstrapLock(*lock); releaseErr != nil {
-		owner := &BootstrapCleanupError{lock: *lock, done: make(chan struct{}), err: releaseErr, complete: true}
-		owner.clearReleasedLock()
-		close(owner.done)
-		*lock = nil
+	if owner := retainBootstrapLock(lock, pendingHandles(*resultErr), reportBootstrapCleanup); owner != nil {
 		*resultErr = errors.Join(*resultErr, owner)
-		reportBootstrapCleanup(releaseErr)
 	}
 }
 

@@ -37,34 +37,6 @@ func TestSchedulerCleanupClassificationPrecedesStorageIncompatibility(t *testing
 	}
 }
 
-func TestSchedulerCleanupProjectionRetainsNestedDispatchOwner(t *testing.T) {
-	store := supervisorfixture.NewInspectionStore(t)
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := lease.Release(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	observed := tasklifecycle.DispatchResult{Creation: &tasklifecycle.CreationResult{RootAdmissionCleanup: lease, RootAdmissionReleaseError: os.ErrPermission}}
-	projected := dispatchCommandResult(observed)
-	marked := schedulerTaskCleanupError(projected.err)
-	var cleanup *taskAdmissionCleanupError
-	if !errors.As(marked, &cleanup) || cleanup == nil || cleanup.lease != lease || !errors.Is(marked, schedulerruntime.ErrTaskCleanupUnresolved) || !errors.Is(marked, os.ErrPermission) {
-		t.Fatalf("scheduler dropped nested actual cleanup: %v", marked)
-	}
-	assertRoutingCleanupBlocksExclusive(t, store)
-	if err = lease.Release(); err != nil {
-		t.Fatal(err)
-	}
-	settled := schedulerTaskCleanupError(projected.err)
-	if errors.Is(settled, schedulerruntime.ErrTaskCleanupUnresolved) {
-		t.Fatalf("historical settled lease invented active cleanup: %v", settled)
-	}
-}
-
 func TestSchedulerCleanupProjectionRetainsStoreCloseOwner(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
 	projected := dispatchCommandResult(tasklifecycle.DispatchResult{StoreCleanup: store, StoreCloseError: os.ErrPermission})

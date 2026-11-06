@@ -346,26 +346,24 @@ func projectionContext(t *testing.T) context.Context {
 
 func nativeInspectionDefinition(project func([]byte) (json.RawMessage, error)) provider.InspectionDefinition {
 	return provider.InspectionDefinition{
-		Revision:         "fixture-v1",
-		Executable:       "/private/inspection-helper",
-		ExecutableSHA256: strings.Repeat("a", 64),
-		Arguments:        []string{"--inspect"},
-		Directory:        "/private",
-		Environment:      []string{"LANG=C"},
-		OutputLimit:      provider.MaxInspectionOutput,
-		Project:          project,
+		Revision:    "fixture-v1",
+		Executable:  "/private/inspection-helper",
+		Arguments:   []string{"--inspect"},
+		Directory:   "/private",
+		Environment: []string{"LANG=C"},
+		OutputLimit: provider.MaxInspectionOutput,
+		Project:     project,
 	}
 }
 
 func remoteInspectionDefinition(authorize func([]byte) (string, bool, error), project func([]byte, int, []byte) (json.RawMessage, error)) provider.InspectionDefinition {
 	return provider.InspectionDefinition{
-		Revision:         "fixture-v1",
-		Executable:       "/private/inspection-helper",
-		ExecutableSHA256: strings.Repeat("a", 64),
-		Arguments:        []string{"--inspect"},
-		Directory:        "/private",
-		Environment:      []string{"LANG=C"},
-		OutputLimit:      provider.MaxInspectionOutput,
+		Revision:    "fixture-v1",
+		Executable:  "/private/inspection-helper",
+		Arguments:   []string{"--inspect"},
+		Directory:   "/private",
+		Environment: []string{"LANG=C"},
+		OutputLimit: provider.MaxInspectionOutput,
 		Remote: &provider.HTTPInspectionDefinition{
 			URL:           "https://provider.invalid/settings",
 			Headers:       map[string]string{},

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Protocol
@@ -9,18 +10,47 @@ import shlex
 import shutil
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from scripts import acceptance_provider_common as provider_common
 from scripts.acceptance_provider_common import NativeTaskOps, _inspection_group
 from scripts.acceptance_supervisor_common import digest, read_json, write_json
 from scripts.delegate_acceptance.evidence.records import _read_strict_json
 from scripts.delegate_acceptance.tasks.contracts import TaskCommand
-from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER, managed_state_runner
 
 
 ROOT = "a" * 32
 TASK = "b" * 32
+
+
+@contextmanager
+def forbid_installed_content():
+    """Enable before fixture setup, allowing authored source creation and record I/O."""
+    read_bytes, open_file, copy_file = Path.read_bytes, Path.open, shutil.copyfile
+
+    def installed(path):
+        name = Path(path).name
+        return name.startswith("delegate-run") or name in {"delegate", "pueue", "pueued", "provider", "helper", "inspection-helper", "unselected-runner"}
+
+    def read_data(path):
+        if installed(path):
+            raise AssertionError("installed executable content read")
+        return read_bytes(path)
+
+    def open_data(path, mode="r", *args, **kwargs):
+        if installed(path) and ("r" in mode or "+" in mode):
+            raise AssertionError("installed executable content opened")
+        return open_file(path, mode, *args, **kwargs)
+
+    def copy_source(source, destination, **kwargs):
+        if installed(source):
+            raise AssertionError("installed executable copied")
+        return copy_file(source, destination, **kwargs)
+
+    with patch.object(Path, "read_bytes", read_data), patch.object(Path, "open", open_data), \
+            patch.object(shutil, "copyfile", copy_source):
+        yield
+
 
 
 class CapturedCommand:
@@ -114,19 +144,8 @@ class InspectionFixture:
     def close(self):
         self.temporary.cleanup()
 
-    def managed_runner_copy(self) -> Path:
-        """Install the immutable state runner copy a private-root admission executes."""
-        installed = managed_state_runner(self.state, digest(self.runner))
-        if not installed.exists():
-            installed.parent.mkdir(mode=0o700, exist_ok=True)
-            installed.write_bytes(self.runner.read_bytes())
-            installed.chmod(0o700)
-        return installed
-
     def placed_runner(self) -> Path:
-        """Return the runner path Go queues for the ledger's admission placement."""
-        if self.ops.runner_placement == STATE_INSTALLED_RUNNER:
-            return self.managed_runner_copy()
+        """Use the selected installed runner directly for every state root."""
         return self.runner
 
     def _write_completed_inspection(
@@ -162,7 +181,8 @@ class InspectionFixture:
                            legacy_admission: bool = False,
                            managed_exit_proof: bool = False,
                            custom_inspection: bool = False,
-                           helper_sha256: str = "e" * 64) -> Path:
+                           helper_sha256: str = "e" * 64,
+                           legacy_executable_identity: bool = False) -> Path:
         # Declare the expectation before restoring the seeded dispatch
         # attempt, matching the production pre-dispatch ordering.
         self.ops.dispatch_attempts.discard(TASK)
@@ -192,17 +212,7 @@ class InspectionFixture:
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "task": task_record,
             "task_sha256": provider_common.sha(provider_common._canonical_task_bytes(task_record)),
-            "binding": {
-                "definition_revision": revision,
-                "definition_sha256": "d" * 64,
-                "helper_executable": str(self.base / "helper"),
-                "helper_sha256": helper_sha256,
-                "worker_executable": str(self.placed_runner()),
-                "worker_sha256": digest(self.runner),
-                "supervisor": provider_common.supervisor_binding(
-                    self.pueue, self.config, self.config.parent, digest(self.config),
-                    "pueue 4.0.4"),
-            },
+            "binding": self.inspection_binding(revision, helper_sha256, legacy_executable_identity),
             "group": _inspection_group(ROOT),
             "label": f"{_inspection_group(ROOT)}-{TASK}",
             "created_at": "2026-09-15T00:00:00Z",
@@ -233,6 +243,23 @@ class InspectionFixture:
                 directory, request, request_sha, result, managed_exit_proof,
             )
         return directory
+
+    def inspection_binding(self, revision: str, helper_sha256: str,
+                           legacy_executable_identity: bool) -> dict[str, object]:
+        """Create current coordinates or explicit historical data, never hash a program."""
+        binding = {
+            "definition_revision": revision,
+            "definition_sha256": "d" * 64,
+            "helper_executable": str(self.base / "helper"),
+            "worker_executable": str(self.placed_runner()),
+            "executable_identity": "installed-path-v1",
+            "supervisor": provider_common.supervisor_binding(
+                self.pueue, self.config, self.config.parent, digest(self.config), "pueue 4.0.4"),
+        }
+        if legacy_executable_identity:
+            del binding["executable_identity"]
+            binding.update(helper_sha256=helper_sha256, worker_sha256="f" * 64)
+        return binding
 
     @staticmethod
     def managed_inspection_lifetime(directory: Path, request: dict[str, object],

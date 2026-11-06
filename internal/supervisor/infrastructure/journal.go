@@ -97,28 +97,6 @@ func (j *intentJournal) checkRoot(ctx context.Context) error {
 	return nil
 }
 
-func (j *intentJournal) tryAcquire(ctx context.Context) (lease *Lease, acquired bool, resultErr error) {
-	resultErr = j.withOpen(ctx, func() error {
-		if err := j.checkRoot(ctx); err != nil {
-			return err
-		}
-		var err error
-		lease, acquired, err = TryAcquireLease(ctx, filepath.Join(j.pin.Root(), instanceLeaseName))
-		if err != nil {
-			return err
-		}
-		if err = j.checkRoot(ctx); err != nil {
-			if lease != nil {
-				err = errors.Join(err, lease.Close())
-			}
-			lease, acquired = nil, false
-			return err
-		}
-		return nil
-	})
-	return lease, acquired, resultErr
-}
-
 // putIntent performs only a short canonical record transaction. created=false
 // is never permission to replace an intent or perform a fresh native Start.
 func (j *intentJournal) putIntent(ctx context.Context, lease *Lease, intent StartupIntent) (created bool, resultErr error) {
@@ -126,18 +104,10 @@ func (j *intentJournal) putIntent(ctx context.Context, lease *Lease, intent Star
 		if err := validateCurrentIntent(intent, j.pin, j.bootID); err != nil {
 			return err
 		}
-		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
-		if err := requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
-			return err
-		}
 		if err := validateIntentAppend(ctx, controlIntentReader{j.control}, j.pin, intent); err != nil {
 			return err
 		}
-		_, selected, selectionErr := lifecycleStartupSelection(ctx, reader, j.pin, intent)
-		if selectionErr != nil {
-			return selectionErr
-		}
-		if _, err := readContextRecords(ctx, transactionContextReader{tx}, selected, j.pin); err != nil {
+		if _, err := readContextRecords(ctx, transactionContextReader{tx}, intent.Inputs.Context, j.pin); err != nil {
 			return err
 		}
 		if err := j.checkRoot(ctx); err != nil {
@@ -199,7 +169,7 @@ func validateIntentAppend(ctx context.Context, reader intentRecordReader, pin ta
 	return nil
 }
 
-// Lifecycle record mutators borrow the same actual instance lease and current root
+// Startup record mutators borrow the same actual instance lease and current root
 // inside a short record transaction. Nothing in this closure may start a process
 // or wait for readiness; the runtime coordinator owns those decisions.
 func (j *intentJournal) withLeaseTransaction(ctx context.Context, lease *Lease, callback func(*taskdir.ControlTransaction) error) error {

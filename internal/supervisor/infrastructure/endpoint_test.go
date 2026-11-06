@@ -74,7 +74,7 @@ func endpointJournalAt(t *testing.T, root, temporary string) ownerJournalFixture
 	})
 	intent := liveJournalIntent(t, journal)
 	if temporary != "" {
-		record := LaunchContext{Protocol: ProtocolVersion, Root: root, RootID: store.RootID, OS: runtime.GOOS, ControlEnvironment: []string{"TMPDIR=" + temporary}, MaintenanceEnvironment: []string{"TMPDIR=" + temporary}}
+		record := LaunchContext{Protocol: RecordProtocolVersion, Root: root, RootID: store.RootID, OS: runtime.GOOS, ControlEnvironment: []string{"TMPDIR=" + temporary}, MaintenanceEnvironment: []string{"TMPDIR=" + temporary}, SupervisorExecutable: filepath.Join(root, "pueue")}
 		reference, _, stageErr := journal.stageContext(t.Context(), record)
 		if stageErr != nil {
 			t.Fatal(stageErr)
@@ -328,7 +328,7 @@ func TestEndpointNativeLengthErrorDoesNotRenderPath(t *testing.T) {
 		t.Fatal("overlong native endpoint was accepted")
 	}
 	var refusal *endpointError
-	if !errors.As(err, &refusal) || refusal.PathBytes() != len(ownerEndpointPath(root, fixture.intent.Sequence)) {
+	if !errors.As(err, &refusal) || refusal.pathBytes != len(ownerEndpointPath(root, fixture.intent.Sequence)) {
 		t.Fatalf("typed endpoint length lost: %v", err)
 	}
 	var native *net.OpError
@@ -480,7 +480,7 @@ func restoreEndpointRoot(t *testing.T, observer *rootSwapEndpointObserver) {
 func TestEndpointFailedBirthRetainsCleanupOwnership(t *testing.T) {
 	fixture := endpointJournalAt(t, shortEndpointRoot(t), "")
 	observer := &rootSwapEndpointObserver{store: fixture.journal.store, sequence: fixture.intent.Sequence}
-	endpoint, err := fixture.journal.listenEndpointWithObserver(t.Context(), fixture.lease, fixture.assumption.Startup, observer)
+	endpoint, err := bindInitialEndpoint(t.Context(), observer, fixture.journal.pin, fixture.intent)
 	// Own every returned resource before interpreting the error. Restore runs
 	// before cleanup retry, and both precede borrowed journal/store/root teardown.
 	ownEndpointResult(t, endpoint)
@@ -554,7 +554,7 @@ func TestOwnerEndpointCanonicalSequencePaths(t *testing.T) {
 
 // These probes exercise real inherited leases, native socket birth and process
 // exit using the Go-test-only host stub. They prove neither managed CLI image
-// eligibility nor the future coordinator's complete successor predicate.
+// eligibility nor the startup settlement owner's complete successor predicate.
 func TestSequenceEndpointCrashChild(t *testing.T) {
 	mode, invocation, selected := componentChildInvocation(t)
 	if !selected {
@@ -818,7 +818,7 @@ func requireSequenceInstanceFree(t *testing.T, fixture *componentEntryFixture) {
 }
 
 // Dense intent-only rows represent canonical historical fixture data. They are
-// not settlement evidence or a claim that the future coordinator may skip its
+// not settlement evidence or a claim that the startup settlement owner may skip its
 // complete successor predicate. The actual old child was already joined/absent.
 func appendSequenceSuccessor(t *testing.T, fixture *componentEntryFixture) {
 	t.Helper()

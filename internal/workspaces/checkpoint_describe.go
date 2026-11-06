@@ -54,13 +54,6 @@ type CheckpointRemovalDescription struct {
 func ObserveCheckpoint(ctx context.Context, store *taskdir.Store, deps OperationOptions, checkpointID string) (description CheckpointDescription, resultErr error) {
 	control, cancel := workspaceSchedulingControl(ctx, deps)
 	defer cancel()
-	borrowed := deps.RootAdmission
-	lease, err := acquireWorkspaceRootAdmission(control, store, deps)
-	defer func() { resultErr = workspaceRootAdmissionError(resultErr, lease, borrowed) }()
-	if err != nil {
-		return description, err
-	}
-	deps.RootAdmission = lease
 	original, err := loadCheckpointCreation(control, store, checkpointID)
 	if err != nil {
 		return description, err

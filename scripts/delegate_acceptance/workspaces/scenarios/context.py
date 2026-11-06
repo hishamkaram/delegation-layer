@@ -10,6 +10,7 @@ import time
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
 import scripts.delegate_acceptance.private_cli.root_cleanup as private_cli_root_cleanup
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
 from scripts.delegate_acceptance.directories.operations import (
     DirectoryOwner, OwnedDirectory, release_owned_directories,
 )
@@ -93,6 +94,12 @@ class AcceptanceSetupFailure(RuntimeError):
         }
 
     def _process_refusal(self, paths: list[str]) -> dict[str, object] | None:
+        if command_closure_unproven(self.cause):
+            return {
+                "authorized": False,
+                "decision": "setup-installation-closure-unproven",
+                "retained_owned_directories": paths,
+            }
         if self.processes is None:
             return None
         try:

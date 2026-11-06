@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -44,16 +43,11 @@ type recordedRunnerResult struct {
 	Publication string `json:"publication"`
 }
 
-// installRunner installs this test binary as the state root's protected,
-// content-addressed managed runner through the production installer and
-// selects it for successors only; the predecessor's records are unchanged.
+// installRunner selects the built test installation in place for successors;
+// predecessor records remain unchanged.
 func (f *recordedEnvironmentFixture) installRunner(t *testing.T) {
 	t.Helper()
-	installed, err := supervisor.InstallStateRunner(f.root, canonicalAppTestExecutable(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.deps.RunnerExecutable = installed
+	f.deps.RunnerExecutable = canonicalAppTestExecutable(t)
 }
 
 // runInstalledRunner publishes the successor's Running supervisor row and
@@ -63,8 +57,7 @@ func (f *recordedEnvironmentFixture) installRunner(t *testing.T) {
 func (f *recordedEnvironmentFixture) runInstalledRunner(t *testing.T, id string) recordedRunnerResult {
 	t.Helper()
 	request, meta := f.loadRecords(t, id)
-	if meta.RunnerOwnership != task.RunnerOwnershipManaged || meta.RunnerExecutable != f.deps.RunnerExecutable ||
-		!supervisor.CurrentManagedRunnerExecutable(f.root, meta.RunnerExecutable) {
+	if meta.RunnerOwnership != task.RunnerOwnershipManaged || meta.RunnerExecutable != f.deps.RunnerExecutable {
 		t.Fatalf("successor runner ownership=%q is not the installed protected runner", meta.RunnerOwnership)
 	}
 	writeRunnerStatus(t, f.statusPath, request.RootID, id, 7)

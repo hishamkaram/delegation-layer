@@ -144,6 +144,11 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 	// runs in the binding's saved launch scope, including the maintenance its
 	// supervisor client starts.
 	supervisorOptions := supervisorcore.OptionsForEnvironment(deps.SupervisorOptions, deps.Environment)
+	selectedClient, err := supervisorcore.ResolveSavedSupervisorClient(canonicalRoot, record.Binding.Supervisor, deps.supervisorLookup())
+	if err != nil {
+		return inspectionWorkerFailure("resolve-supervisor")
+	}
+	supervisorOptions.RuntimeClientExecutable = selectedClient
 	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
 	deps, err = prepareInspectionWorkerScope(observeContext, canonicalRoot, operation, record.Binding, deps)
@@ -211,17 +216,17 @@ func loadInspectionWorkerMeta(store *taskdir.Store, taskID string) (meta *task.M
 	return meta, resultErr
 }
 
-func validateInspectionWorkerStartup(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) error {
+func validateInspectionWorkerStartup(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, configuredRole string) error {
 	if operation == nil || operation.Expired(time.Now()) {
 		return task.ErrEvidenceFault
 	}
-	return validateCurrentInspectionWorker(ctx, root, operation, binding)
+	return validateCurrentInspectionWorker(ctx, root, operation, binding, configuredRole)
 }
 
 // prepareInspectionWorkerScope validates startup, then selects the binding's
 // saved launch scope over the worker's captured scope.
 func prepareInspectionWorkerScope(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, deps Dependencies) (Dependencies, error) {
-	if err := validateInspectionWorkerStartup(ctx, root, operation, binding); err != nil {
+	if err := validateInspectionWorkerStartup(ctx, root, operation, binding, deps.RunnerExecutable); err != nil {
 		return Dependencies{}, err
 	}
 	return scopedDependencies(deps, binding.Environment, binding.EnvironmentRecorded)
@@ -367,15 +372,26 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 
 // validateCurrentInspectionWorker accepts the immutable worker identity or a
 // digest-verified state-root runner authorized by a durable managed upgrade.
-func validateCurrentInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) error {
+func validateCurrentInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, configuredRole string) error {
 	current, err := os.Executable()
 	if err != nil {
 		return task.ErrEvidenceFault
 	}
-	return validateInspectionWorkerExecutable(ctx, root, operation, binding, current)
+	var target supervisorcore.RunnerRepairTarget
+	if current != binding.WorkerExecutable && binding.RunnerOwnership == task.RunnerOwnershipManaged {
+		installed, err := supervisorcore.ResolveRunner("", configuredRole)
+		if err != nil {
+			return err
+		}
+		target, err = supervisorcore.PlanQueuedRunnerRepairTarget(installed)
+		if err != nil {
+			return err
+		}
+	}
+	return validateInspectionWorkerExecutable(ctx, root, operation, binding, current, target)
 }
 
-func validateInspectionWorkerExecutable(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, current string) error {
+func validateInspectionWorkerExecutable(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, current string, target supervisorcore.RunnerRepairTarget) error {
 	if operation == nil {
 		return task.ErrEvidenceFault
 	}
@@ -390,18 +406,14 @@ func validateInspectionWorkerExecutable(ctx context.Context, root string, operat
 	if err != nil {
 		return task.ErrEvidenceFault
 	}
-	digest, err := commonprovider.FingerprintExecutable(canonical)
-	if err != nil {
-		return task.ErrEvidenceFault
-	}
-	if canonical == binding.WorkerExecutable && digest == binding.WorkerSHA256 {
+	if canonical == binding.WorkerExecutable {
 		return nil
 	}
 	if !managedInspectionWorkerBinding(saved, binding) {
 		return task.ErrEvidenceFault
 	}
-	if !supervisorcore.IsStateRunnerPath(root, canonical) || !supervisorcore.CurrentManagedRunnerExecutable(root, canonical) {
-		return task.ErrEvidenceFault
+	if err = target.ValidateExecutable(canonical); err != nil {
+		return errors.Join(task.ErrEvidenceFault, err)
 	}
 	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(ctx)
 	if err != nil {

@@ -131,6 +131,14 @@ type privateClientConstruction struct {
 	runtimeConfig task.SupervisorRef
 }
 
+// Binding remains read-only-compatible. The actual shutdown consumer reports
+// an optional qualification fault instead of silently bypassing its boundary.
+func qualifyPrivateClientConstruction(client *Client) {
+	if root, private := privateStateRoot(client.runtimeBinding.ConfigPath); private {
+		client.privateConstructionErr = recordPrivateClientConstruction(client, root)
+	}
+}
+
 func recordPrivateClientConstruction(client *Client, root string) error {
 	if client == nil || client.privateConstruction != nil {
 		return ErrConfiguration

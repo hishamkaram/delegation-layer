@@ -10,7 +10,6 @@ import (
 
 func TestInfrastructureIncompatibleCannotEnterMigrationLoop(t *testing.T) {
 	for _, cause := range []error{
-		infrastructure.ErrIncompatible,
 		infrastructure.ErrOwnerIncompatible,
 		errors.Join(infrastructure.ErrOwnerIncompatible, pueue.ErrPrivateSupervisorMigrationRequired),
 		errors.Join(infrastructure.ErrOwnerIncompatible, pueue.ErrPrivateSupervisorMigrationBusy),

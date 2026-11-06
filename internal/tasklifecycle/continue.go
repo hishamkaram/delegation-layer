@@ -23,18 +23,8 @@ func ContinueContext(ctx context.Context, request DispatchRequest, options Conti
 		return continuationFailure(result, ContinueLoadPredecessor, "open-state", err)
 	}
 	defer func() {
-		result.StoreCleanup, result.StoreCloseError = closeAdmissionStore(store, result.RootAdmissionCleanup, continuationWorkError(result))
+		result.StoreCleanup, result.StoreCloseError = closeAdmissionStore(store, continuationWorkError(result))
 	}()
-	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.Dispatch.Creation.RootAdmission, options.Dispatch.Creation.Admission.Supervisor.Control)
-	if lease != nil && options.Dispatch.Creation.RootAdmission == nil {
-		defer func() {
-			result.RootAdmissionCleanup, result.RootAdmissionReleaseError = releaseRootAdmission(lease, continuationWorkError(result))
-		}()
-	}
-	if err != nil {
-		return continuationFailure(result, ContinueLoadPredecessor, "root-admission", err)
-	}
-	options.Dispatch.Creation.RootAdmission = lease
 	predecessor, meta, brief, err := LoadContinuationInputContext(ctx, root, request, options.Dispatch)
 	if err != nil {
 		return continuationFailure(result, ContinueLoadPredecessor, "load-predecessor", err)

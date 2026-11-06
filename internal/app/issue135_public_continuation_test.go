@@ -27,17 +27,26 @@ import (
 // finite CLI/daemon commands and the Go endpoint; no native placement or
 // provider execution is represented by the fake supervisor's empty queue.
 type publicContinuationFixture struct {
-	owner                     *componentSupervisorFixture
-	deps                      Dependencies
-	client                    *pueue.Client
-	clientC, daemonC, clientD string
-	seed                      *taskdir.TaskDir
-	seedData                  publicContinuationSeedData
-	workErr                   error
+	owner                              *componentSupervisorFixture
+	deps                               Dependencies
+	client                             *pueue.Client
+	clientC, daemonC, clientD, daemonD string
+	seed                               *taskdir.TaskDir
+	seedData                           publicContinuationSeedData
+	workErr                            error
+}
+
+// The fixture owns completion custody and the release-only projection. The
+// optional reader is observed after every original completion, never as a
+// replacement for Done or as a source of command diagnostics.
+type publicContinuationCompletion struct {
+	done         <-chan struct{}
+	releaseFault func() error
 }
 
 func TestIssue135PublicContinuationPublishedLegacyPair(t *testing.T) {
-	for _, change := range []string{"client bytes", "missing client"} {
+	t.Parallel()
+	for _, change := range []string{"client bytes", "missing client", "missing clients"} {
 		t.Run(change, func(t *testing.T) {
 			f := newPublicContinuationFixture(t)
 			f.assertNoInventory(t)
@@ -46,29 +55,49 @@ func TestIssue135PublicContinuationPublishedLegacyPair(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			daemonBytes := readSupervisorProbeTestFile(t, f.daemonC)
-			if change == "client bytes" {
-				original := readSupervisorProbeTestFile(t, f.clientC)
-				replacement := f.clientC + ".replacement"
-				writeRunnerFixture(t, replacement, string(original)+"\n# compatible replacement client\n")
-				if err = os.Rename(replacement, f.clientC); err != nil {
-					t.Fatal(err)
-				}
-			} else if err = os.Remove(f.clientC); err != nil {
-				t.Fatal(err)
-			}
-
+			expectedRuntime := f.changePublishedClient(t, change)
 			result := runCommand(Arguments{Command: "continue", Root: f.owner.root, TaskID: f.seed.TaskID}, f.deps)
 			f.workErr = result.err
 			response := publicContinuationResponse(t, result)
-			f.assertDaemonUnchanged(t, daemonInfo, daemonBytes)
-			if change == "client bytes" {
-				f.assertCreated(t, result, response)
-			} else {
+			f.assertDaemonUnchanged(t, daemonInfo)
+			if change == "missing clients" {
 				f.assertRefused(t, result, response, receipt)
+				return
 			}
+			f.assertCreated(t, result, response, expectedRuntime)
 		})
 	}
+}
+
+func (f *publicContinuationFixture) changePublishedClient(t *testing.T, change string) task.SupervisorRef {
+	t.Helper()
+	if change == "client bytes" {
+		replacement := f.clientC + ".replacement"
+		writeRunnerFixture(t, replacement, publicContinuationClient+"\n# compatible replacement client\n")
+		if err := os.Rename(replacement, f.clientC); err != nil {
+			t.Fatal(err)
+		}
+		return f.expectedRuntime(f.clientC, f.daemonC)
+	}
+	if err := os.Remove(f.clientC); err != nil {
+		t.Fatal(err)
+	}
+	if change == "missing clients" {
+		if err := os.Remove(f.clientD); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f.expectedRuntime(f.clientD, f.daemonD)
+}
+
+// Expected transport comes from this fixture's selected installed paths and
+// canonical config, independently of the scheduling receipt under test.
+func (f *publicContinuationFixture) expectedRuntime(client, daemon string) task.SupervisorRef {
+	binding := f.client.Binding()
+	binding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	binding.ClientExecutable, binding.DaemonExecutable = client, daemon
+	binding.ClientSHA256, binding.DaemonSHA256 = "", ""
+	return binding
 }
 
 func newPublicContinuationFixture(t *testing.T) *publicContinuationFixture {
@@ -78,12 +107,11 @@ func newPublicContinuationFixture(t *testing.T) *publicContinuationFixture {
 	// path removal while independently owned finite resources still close.
 	t.Cleanup(func() { f.cleanup(t) })
 	f.clientC, f.daemonC = writePublicContinuationPair(t, f.owner.base, "C")
-	f.clientD, _ = writePublicContinuationPair(t, f.owner.base, "D")
+	f.clientD, f.daemonD = writePublicContinuationPair(t, f.owner.base, "D")
 	f.deps = fixtureContinuationDependencies(t, nil, f.clientD)
 	f.deps.Environment = []string{"PATH=/usr/bin:/bin"}
 	f.deps.SupervisorOptions = pueue.Options{Environment: f.deps.Environment, ObservationTimeout: 10 * time.Second, WaitForPendingClose: true}
-	f.deps.RunnerExecutable = filepath.Join(f.owner.base, "runner")
-	writeRunnerFixture(t, f.deps.RunnerExecutable, "#!/bin/sh\nexit 64\n")
+	f.deps.RunnerExecutable = canonicalAppTestExecutable(t)
 	store, err := taskdir.InitStoreWithPredicates(f.owner.root, f.deps.Catalog.Registry())
 	f.owner.ownStore(t, store)
 	if err != nil {
@@ -167,12 +195,21 @@ func publicContinuationResponse(t *testing.T, result commandResult) Response {
 	return response
 }
 
-func (f *publicContinuationFixture) assertCreated(t *testing.T, result commandResult, response Response) {
+func (f *publicContinuationFixture) assertCreated(t *testing.T, result commandResult, response Response, expectedRuntime task.SupervisorRef) {
 	t.Helper()
 	if result.code != 0 || result.err != nil || response.TaskRecord != "created" || response.TaskID == "" || response.TaskID == f.seed.TaskID || response.Failure != nil {
 		t.Fatalf("compatible client did not reach public creation: code=%d response=%+v err=%v", result.code, response, result.err)
 	}
-	td, err := f.owner.store.OpenTask(response.TaskID)
+	f.assertSuccessorBinding(t, response.TaskID)
+	f.assertRuntimeScheduling(t, expectedRuntime)
+	if got := readSupervisorProbeTestFile(t, filepath.Join(filepath.Dir(f.client.Binding().ConfigPath), "submissions")); string(got) != "add\n" {
+		t.Fatalf("submissions=%q", got)
+	}
+}
+
+func (f *publicContinuationFixture) assertSuccessorBinding(t *testing.T, id string) {
+	t.Helper()
+	td, err := f.owner.store.OpenTask(id)
 	f.owner.ownTask(td)
 	if err != nil {
 		t.Fatal(err)
@@ -182,45 +219,80 @@ func (f *publicContinuationFixture) assertCreated(t *testing.T, result commandRe
 		t.Fatalf("successor durable binding=%+v err=%v", meta, err)
 	}
 	receipt, err := td.ReadSupervisorReceipt()
-	if err != nil || receipt.ClientExecutable != f.clientC || receipt.DaemonExecutable != f.daemonC || receipt.ClientSHA256 == f.client.Binding().ClientSHA256 || receipt.DaemonSHA256 != f.client.Binding().DaemonSHA256 {
-		t.Fatalf("public runtime receipt did not retain same-daemon Cprime: %+v err=%v", receipt, err)
+	if err != nil || receipt.SupervisorRef() != f.client.Binding() || receipt.NumericTaskID != 7 {
+		t.Fatalf("task receipt changed its logical published binding: %+v err=%v", receipt, err)
 	}
-	if got := readSupervisorProbeTestFile(t, filepath.Join(filepath.Dir(f.client.Binding().ConfigPath), "submissions")); string(got) != "add\n" {
-		t.Fatalf("submissions=%q", got)
+}
+
+func (f *publicContinuationFixture) assertRuntimeScheduling(t *testing.T, runtime task.SupervisorRef) {
+	t.Helper()
+	// Task metadata and its numeric receipt retain logical C. Scheduling
+	// owns the runtime Cprime identity and compares the full canonical binding.
+	if runtime.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || runtime.ClientSHA256 != "" || runtime.DaemonSHA256 != "" || !task.SameSupervisorIdentity(runtime, f.client.Binding()) {
+		t.Fatalf("runtime lost installed-path transport identity: %+v", runtime)
+	}
+	recorded, err := supervisorcore.OrdinarySchedulingRecorded(f.owner.root, runtime)
+	if err != nil || !recorded {
+		t.Fatalf("scheduling receipt did not record same-daemon Cprime: recorded=%t err=%v", recorded, err)
 	}
 }
 
 func (f *publicContinuationFixture) assertRefused(t *testing.T, result commandResult, response Response, receipt []byte) {
 	t.Helper()
-	if result.code != 1 || !errors.Is(result.err, pueue.ErrPrivateSupervisorSubmissionIncomplete) || response.TaskRecord != "not_created" || response.TaskID != "" || response.Failure == nil || response.Failure.Code != "continuation_unavailable" || response.Failure.Stage != "resolve-continuation-supervisor" || response.Failure.NextAction != "stop_and_report" {
-		t.Fatalf("missing client lost early refusal mapping: code=%d response=%+v err=%v", result.code, response, result.err)
+	// Failed selected-installation lookup is ErrConfiguration; classifyCode
+	// assigns exit 2 before considering its joined ErrBinding cause.
+	if result.code != 2 || !errors.Is(result.err, pueue.ErrConfiguration) || !errors.Is(result.err, pueue.ErrBinding) || !errors.Is(result.err, os.ErrNotExist) || response.TaskRecord != "not_created" || response.Failure == nil || response.Failure.Code != "supervisor_setup_failed" || response.Failure.Stage != "prepare-supervisor-executables" || response.Failure.NextAction != "stop_and_report" {
+		t.Fatalf("unavailable selected installations lost early refusal mapping: code=%d response=%+v err=%v", result.code, response, result.err)
 	}
+	f.assertNoContinuationWork(t, response.TaskID)
 	if after := readSupervisorProbeTestFile(t, filepath.Join(f.owner.root, ".supervisor", "ordinary-scheduling.json")); !bytes.Equal(receipt, after) {
 		t.Fatal("early refusal changed scheduling receipt")
 	}
-	ids, err := f.owner.store.TaskIDs(t.Context())
-	if err != nil || len(ids) != 1 || ids[0] != f.seed.TaskID {
-		t.Fatalf("early refusal created successor: ids=%v err=%v", ids, err)
-	}
-	if _, err = os.Lstat(filepath.Join(filepath.Dir(f.client.Binding().ConfigPath), "submissions")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(filepath.Dir(f.client.Binding().ConfigPath), "submissions")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("early refusal submitted work: %v", err)
 	}
 }
 
-func (f *publicContinuationFixture) assertDaemonUnchanged(t *testing.T, before os.FileInfo, data []byte) {
+func (f *publicContinuationFixture) assertNoContinuationWork(t *testing.T, candidateID string) {
+	t.Helper()
+	ids, err := f.owner.store.TaskIDs(t.Context())
+	if err != nil || len(ids) != 1 || ids[0] != f.seed.TaskID {
+		t.Fatalf("early refusal created successor: ids=%v err=%v", ids, err)
+	}
+	// A generated candidate ID is not durable creation. The authoritative
+	// directory census above must still contain only the original seed.
+	if candidateID != "" {
+		if err = task.ValidateTaskID(candidateID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = os.Lstat(filepath.Join(f.owner.root, "tasks", candidateID)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("refused candidate has a durable directory: %v", err)
+		}
+	}
+	helpers, err := f.owner.store.InspectionOperationIDs(t.Context())
+	if err != nil || len(helpers) != 0 {
+		t.Fatalf("early refusal created inspection helpers: ids=%v err=%v", helpers, err)
+	}
+}
+
+func (f *publicContinuationFixture) assertDaemonUnchanged(t *testing.T, before os.FileInfo) {
 	t.Helper()
 	after, err := os.Stat(f.daemonC)
-	if err != nil || !os.SameFile(before, after) || !bytes.Equal(data, readSupervisorProbeTestFile(t, f.daemonC)) {
+	if err != nil || !os.SameFile(before, after) {
 		t.Fatalf("published daemon changed: %v", err)
+	}
+	published, found, err := pueue.ReadPrivateSupervisorBinding(f.owner.root)
+	if err != nil || !found || published != f.client.Binding() {
+		t.Fatalf("public continuation replaced published generation: found=%t binding=%+v err=%v", found, published, err)
 	}
 	assertSupervisorProbeTestDaemonStartCount(t, filepath.Dir(f.client.Binding().ConfigPath), 1)
 }
 
 func (f *publicContinuationFixture) assertNoInventory(t *testing.T) {
 	t.Helper()
-	_, _, found, err := supervisorcore.ResolveStateSupervisorPair(filepath.Join(f.owner.root, ".supervisor"))
-	if err != nil || found {
-		t.Fatalf("legacy fixture has current inventory: found=%t err=%v", found, err)
+	_, err := os.Lstat(filepath.Join(f.owner.root, ".supervisor", "pueue-pair.json"))
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy fixture has executable inventory: %v", err)
 	}
 }
 
@@ -238,9 +310,9 @@ func (f *publicContinuationFixture) cleanup(t *testing.T) {
 	}
 }
 
-func (f *publicContinuationFixture) closeOwned(ctx context.Context) error {
+func (f *publicContinuationFixture) closeOwned(ctx context.Context, extra ...publicContinuationCompletion) error {
 	workErr := f.closeWork(ctx)
-	finiteErr := f.closeFinite(ctx)
+	finiteErr := f.closeFinite(ctx, extra...)
 	if err := errors.Join(workErr, finiteErr); err != nil {
 		return err
 	}
@@ -279,7 +351,7 @@ func (f *publicContinuationFixture) closeWork(ctx context.Context) (resultErr er
 	return errors.Join(resultErr, ctx.Err())
 }
 
-func (f *publicContinuationFixture) closeFinite(ctx context.Context) (resultErr error) {
+func (f *publicContinuationFixture) closeFinite(ctx context.Context, extra ...publicContinuationCompletion) (resultErr error) {
 	f.owner.mu.Lock()
 	f.owner.closing = true
 	f.owner.mu.Unlock()
@@ -288,39 +360,36 @@ func (f *publicContinuationFixture) closeFinite(ctx context.Context) (resultErr 
 	for _, client := range f.owner.clients {
 		resultErr = errors.Join(resultErr, client.CloseAfterPending(f.workErr))
 	}
-	completions := slices.Clone(f.owner.pending)
+	completions := slices.Clone(extra)
+	for _, pending := range f.owner.pending {
+		completions = append(completions, publicContinuationCompletion{done: pending})
+	}
 	completions = append(completions, publicContinuationCommandCompletions(f.workErr)...)
 	for _, wait := range f.owner.daemonWaits() {
-		completions = append(completions, wait.done)
+		completions = append(completions, publicContinuationCompletion{done: wait.done})
 	}
-	for _, done := range completions {
+	for _, completion := range completions {
 		select {
-		case <-done:
+		case <-completion.done:
 		case <-ctx.Done():
 			resultErr = errors.Join(resultErr, ctx.Err())
 		}
 	}
-	for _, endpoint := range f.owner.endpoints {
-		if endpoint.listener == nil {
-			continue
-		}
-		err := endpoint.listener.Close()
-		if !errors.Is(err, net.ErrClosed) {
-			resultErr = errors.Join(resultErr, err)
-		}
-		select {
-		case <-endpoint.done:
-		case <-ctx.Done():
-			resultErr = errors.Join(resultErr, ctx.Err())
-		}
-	}
+	resultErr = errors.Join(resultErr, f.closeEndpoints(ctx))
 	// Historical result errors do not retain borrowers. Actual unfinished
 	// children do, even after the observer's finite cleanup context expires.
-	for _, done := range completions {
+	for _, completion := range completions {
 		select {
-		case <-done:
+		case <-completion.done:
 		default:
 			return errors.Join(resultErr, errors.New("finite child completion unresolved; borrowers retained"))
+		}
+	}
+	// Completion retires usable custody; release failure remains authoritative
+	// for path removal even when independently safe borrowers can now close.
+	for _, completion := range completions {
+		if completion.releaseFault != nil {
+			resultErr = errors.Join(resultErr, completion.releaseFault())
 		}
 	}
 	for _, td := range f.owner.tasks {
@@ -339,27 +408,69 @@ func (f *publicContinuationFixture) closeFinite(ctx context.Context) (resultErr 
 	return resultErr
 }
 
-// Read completion ownership from every branch, including retained bootstrap
-// owners. A historical observation error alone is never an unfinished child.
-func publicContinuationCommandCompletions(err error) []<-chan struct{} {
+func (f *publicContinuationFixture) closeEndpoints(ctx context.Context) (resultErr error) {
+	for _, endpoint := range f.owner.endpoints {
+		if endpoint.listener == nil {
+			continue
+		}
+		err := endpoint.listener.Close()
+		if !errors.Is(err, net.ErrClosed) {
+			resultErr = errors.Join(resultErr, err)
+		}
+		select {
+		case <-endpoint.done:
+		case <-ctx.Done():
+			resultErr = errors.Join(resultErr, ctx.Err())
+		}
+	}
+	return resultErr
+}
+
+// Adapt actual producer types; BootstrapCleanupError.Err includes command
+// diagnostics, so only its Unwrap release projection belongs in this port.
+func publicContinuationCommandCompletions(err error) []publicContinuationCompletion {
+	completions := collectPublicContinuationCommandCompletions(err)
+	// errors.As also sees owners through wrappers. Keep one completion and
+	// release observation per authoritative owner when walking all join arms.
+	seen := make(map[<-chan struct{}]bool)
+	var unique []publicContinuationCompletion
+	for _, completion := range completions {
+		if seen[completion.done] {
+			continue
+		}
+		seen[completion.done] = true
+		unique = append(unique, completion)
+	}
+	return unique
+}
+
+func collectPublicContinuationCommandCompletions(err error) []publicContinuationCompletion {
 	if err == nil {
 		return nil
 	}
-	var done []<-chan struct{}
-	if owner, ok := err.(interface{ Done() <-chan struct{} }); ok {
-		done = append(done, owner.Done())
+	var completions []publicContinuationCompletion
+	var owner *pueue.BootstrapCleanupError
+	if errors.As(err, &owner) {
+		completions = append(completions, publicContinuationCompletion{done: owner.Done(), releaseFault: func() error {
+			releaseErr := owner.Unwrap()
+			if task.AllErrorCauses(releaseErr, func(cause error) bool { return errors.Is(cause, pueue.ErrInFlight) }) {
+				return nil
+			}
+			return releaseErr
+		}})
 	}
-	if inFlight, ok := err.(*pueue.InFlightError); ok && inFlight.Pending != nil {
-		done = append(done, inFlight.Pending.Done())
+	var inFlight *pueue.InFlightError
+	if errors.As(err, &inFlight) && inFlight.Pending != nil {
+		completions = append(completions, publicContinuationCompletion{done: inFlight.Pending.Done()})
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, child := range joined.Unwrap() {
-			done = append(done, publicContinuationCommandCompletions(child)...)
+			completions = append(completions, collectPublicContinuationCommandCompletions(child)...)
 		}
 	} else if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		done = append(done, publicContinuationCommandCompletions(wrapped.Unwrap())...)
+		completions = append(completions, collectPublicContinuationCommandCompletions(wrapped.Unwrap())...)
 	}
-	return done
+	return completions
 }
 
 func (f *publicContinuationFixture) closePublicTask(ctx context.Context, id string) (resultErr error) {
@@ -368,7 +479,7 @@ func (f *publicContinuationFixture) closePublicTask(ctx context.Context, id stri
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	stop, err := td.PrepareStop(strings.Repeat("b", 32), "user", time.Time{})
+	stop, err := td.PrepareStopContext(ctx, strings.Repeat("b", 32), "user", time.Time{})
 	if err != nil {
 		return err
 	}
@@ -379,7 +490,7 @@ func (f *publicContinuationFixture) closePublicTask(ctx context.Context, id stri
 	if err != nil || !proven {
 		return errors.Join(err, fmt.Errorf("task %s lacks canonical never-launched proof", id))
 	}
-	return checkRootOrdinaryTaskClosure(ctx, f.owner.store, id)
+	return ctx.Err()
 }
 
 func writePublicContinuationPair(t *testing.T, base, name string) (string, string) {
@@ -389,23 +500,7 @@ func writePublicContinuationPair(t *testing.T, base, name string) (string, strin
 		t.Fatal(err)
 	}
 	client, daemon := filepath.Join(dir, "pueue"), filepath.Join(dir, "pueued")
-	writeRunnerFixture(t, client, `#!/bin/sh
-set -eu
-[ "${1-}" = -c ]
-base=${2%/*}
-parallel=1
-[ -f "$base/parallel-unlimited" ] && parallel=0
-groups='"default":{"status":"Running","parallel_tasks":'$parallel'}}'
-case "${3-}" in
- --version) printf '%s\n' 'pueue 4.0.4' ;;
- status) [ -f "$base/ready" ]; printf '{"tasks":{},"groups":{%s}\n' "$groups" ;;
- group) printf '{%s\n' "$groups" ;;
- parallel) : > "$base/parallel-unlimited" ;;
- add) if [ "${4-}" = --help ]; then printf '%s\n' '--stashed --print-task-id'; else printf '%s\n' add >> "$base/submissions"; printf '%s\n' 7; fi ;;
- enqueue) [ "${4-}" != --help ] || printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...' ;;
- *) exit 64 ;;
-esac
-`)
+	writeRunnerFixture(t, client, publicContinuationClient)
 	writeRunnerFixture(t, daemon, `#!/bin/sh
 set -eu
 [ "${1-}" = -c ]
@@ -468,8 +563,8 @@ func TestIssue135PublicContinuationDataFaultStillClosesOwnedHandles(t *testing.T
 	owner := &componentSupervisorFixture{base: base, root: filepath.Join(base, "state"), directory: directory, lifetime: componentFiniteDaemon}
 	f := &publicContinuationFixture{owner: owner}
 	t.Cleanup(func() {
-		if err := errors.Join(f.closeFinite(context.WithoutCancel(t.Context())), directory.Close()); err != nil {
-			t.Error(err)
+		if closeErr := errors.Join(f.closeFinite(context.WithoutCancel(t.Context())), directory.Close()); closeErr != nil {
+			t.Error(closeErr)
 		}
 	})
 	f.deps = fixtureContinuationDependencies(t, nil, "/unused/pueue")
@@ -511,8 +606,8 @@ func TestIssue135PublicContinuationUnfinishedWaitRetainsBorrowers(t *testing.T) 
 		if !released {
 			close(done)
 		}
-		if err := errors.Join(f.closeFinite(context.WithoutCancel(t.Context())), directory.Close()); err != nil {
-			t.Error(err)
+		if closeErr := errors.Join(f.closeFinite(context.WithoutCancel(t.Context())), directory.Close()); closeErr != nil {
+			t.Error(closeErr)
 		}
 	})
 	store, err := taskdir.InitStore(owner.root)
@@ -540,3 +635,88 @@ func TestIssue135PublicContinuationUnfinishedWaitRetainsBorrowers(t *testing.T) 
 		t.Fatalf("completed original Wait retained Store: %v", err)
 	}
 }
+
+func TestIssue135PublicContinuationReleaseFaultGatesRemoval(t *testing.T) {
+	for _, fault := range []bool{false, true} {
+		t.Run(fmt.Sprintf("release fault=%t", fault), func(t *testing.T) {
+			f := newPublicContinuationReleaseFixture(t)
+			releaseErr := errors.New("bootstrap native release fault")
+			if !fault {
+				releaseErr = nil
+			}
+			// Synthetic completed owner ports prove only the fixture removal policy.
+			// No bootstrap internals, native processes or native release are fabricated.
+			done := make(chan struct{})
+			close(done)
+			if err := f.owner.RegisterDaemonWait(f.owner.root, 123, done); err != nil {
+				t.Fatal(err)
+			}
+			completion := publicContinuationCompletion{done: done, releaseFault: func() error { return releaseErr }}
+			cleanupErr := f.closeOwned(t.Context(), completion)
+			f.assertReleaseRemoval(t, releaseErr, cleanupErr)
+		})
+	}
+}
+
+func newPublicContinuationReleaseFixture(t *testing.T) *publicContinuationFixture {
+	t.Helper()
+	base := t.TempDir()
+	directory, err := os.Open(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &componentSupervisorFixture{base: base, root: filepath.Join(base, "state"), directory: directory, lifetime: componentFiniteDaemon}
+	f := &publicContinuationFixture{owner: owner, workErr: errors.New("historical command diagnostic")}
+	t.Cleanup(func() {
+		closeErr := f.closeFinite(context.WithoutCancel(t.Context()))
+		// The successful removal path already closed this exact handle.
+		if _, statErr := directory.Stat(); !errors.Is(statErr, os.ErrClosed) {
+			closeErr = errors.Join(closeErr, statErr, directory.Close())
+		}
+		if closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	store, err := taskdir.InitStore(owner.root)
+	owner.ownStore(t, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *publicContinuationFixture) assertReleaseRemoval(t *testing.T, releaseErr, cleanupErr error) {
+	t.Helper()
+	_, pathErr := os.Lstat(f.owner.base)
+	if releaseErr != nil {
+		if pathErr != nil {
+			t.Fatalf("bootstrap release fault removed namespace: %v", pathErr)
+		}
+		if !errors.Is(cleanupErr, releaseErr) {
+			t.Fatalf("bootstrap release fault lost at removal gate: %v", cleanupErr)
+		}
+	} else if cleanupErr != nil || !errors.Is(pathErr, os.ErrNotExist) {
+		t.Fatalf("command diagnostic prevented clean removal: cleanup=%v path=%v", cleanupErr, pathErr)
+	}
+	if _, err := f.owner.store.PinRootContext(t.Context()); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("completed independent Store retained: %v", err)
+	}
+}
+
+const publicContinuationClient = `#!/bin/sh
+set -eu
+[ "${1-}" = -c ]
+base=${2%/*}
+parallel=1
+[ -f "$base/parallel-unlimited" ] && parallel=0
+groups='"default":{"status":"Running","parallel_tasks":'$parallel'}}'
+case "${3-}" in
+ --version) printf '%s\n' 'pueue 4.0.4' ;;
+ status) [ -f "$base/ready" ]; printf '{"tasks":{},"groups":{%s}\n' "$groups" ;;
+ group) printf '{%s\n' "$groups" ;;
+ parallel) : > "$base/parallel-unlimited" ;;
+ add) if [ "${4-}" = --help ]; then printf '%s\n' '--stashed --print-task-id'; else printf '%s\n' add >> "$base/submissions"; printf '%s\n' 7; fi ;;
+ enqueue) [ "${4-}" != --help ] || printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...' ;;
+ *) exit 64 ;;
+esac
+`

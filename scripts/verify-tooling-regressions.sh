@@ -108,9 +108,10 @@ expect_download_boundary() {
 }
 
 create_valid_stubs() {
-    write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${GO_PIN} darwin/arm64" 0
+    local stub_bin="${1:-${DISPOSABLE_REPO}/bin}"
+    write_go_stub "${stub_bin}" "go version go${GO_PIN} darwin/arm64" 0
 
-    cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
+    cat << 'EOF' > "${stub_bin}/golangci-lint"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* || "$*" == *"version"* ]]; then
     echo "golangci-lint has version 2.14.0 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
@@ -118,9 +119,9 @@ if [[ "$*" == *"-version"* || "$*" == *"version"* ]]; then
 fi
 exit 0
 EOF
-    chmod +x "${DISPOSABLE_REPO}/bin/golangci-lint"
+    chmod +x "${stub_bin}/golangci-lint"
 
-    cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
+    cat << 'EOF' > "${stub_bin}/gofumpt"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* ]]; then
     echo "v0.12.0 (go1.27.2)"
@@ -128,9 +129,9 @@ if [[ "$*" == *"-version"* ]]; then
 fi
 exit 0
 EOF
-    chmod +x "${DISPOSABLE_REPO}/bin/gofumpt"
+    chmod +x "${stub_bin}/gofumpt"
 
-    cat << 'EOF' > "${DISPOSABLE_REPO}/bin/govulncheck"
+    cat << 'EOF' > "${stub_bin}/govulncheck"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* ]]; then
     echo "Scanner: govulncheck@v1.8.0"
@@ -139,9 +140,9 @@ if [[ "$*" == *"-version"* ]]; then
 fi
 exit 0
 EOF
-    chmod +x "${DISPOSABLE_REPO}/bin/govulncheck"
+    chmod +x "${stub_bin}/govulncheck"
 
-    cat << 'EOF' > "${DISPOSABLE_REPO}/bin/goreleaser"
+    cat << 'EOF' > "${stub_bin}/goreleaser"
 #!/usr/bin/env bash
 if [[ "$*" == *"--version"* || "$*" == *"-version"* ]]; then
     echo "GitVersion:    2.18.1"
@@ -149,7 +150,7 @@ if [[ "$*" == *"--version"* || "$*" == *"-version"* ]]; then
 fi
 exit 0
 EOF
-    chmod +x "${DISPOSABLE_REPO}/bin/goreleaser"
+    chmod +x "${stub_bin}/goreleaser"
 }
 
 create_valid_stubs
@@ -661,7 +662,7 @@ cp "${REPO_ROOT}/.go-version" "${SPACED_REPO}/.go-version"
 cp "${REPO_ROOT}/.golangci.yml" "${SPACED_REPO}/.golangci.yml"
 cp "${REPO_ROOT}/Makefile" "${SPACED_REPO}/Makefile"
 cp "${DISPOSABLE_REPO}/cmd/dummy.go" "${SPACED_REPO}/cmd/"
-cp "${DISPOSABLE_REPO}/bin/"* "${SPACED_REPO}/bin/"
+create_valid_stubs "${SPACED_REPO}/bin"
 
 # 11a. fmt-check in spaced path
 set +e

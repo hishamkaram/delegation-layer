@@ -13,7 +13,7 @@ import (
 )
 
 // Only tests replace these native operations. The public producer always uses
-// the accepted custody image and fixed argv; no RPC or host selects a command.
+// the accepted startup context and fixed argv; no RPC or host selects a command.
 type (
 	producerNative struct {
 		start   func(*exec.Cmd) error
@@ -75,7 +75,6 @@ func (a *StartupAttempt) acceptAndStart(ctx context.Context, intent StartupInten
 			return err
 		}
 		command.ExtraFiles = []*os.File{file}
-		defer func() { command.ExtraFiles = nil }()
 		if native.start != nil {
 			return native.start(command)
 		}
@@ -117,9 +116,6 @@ func (a *StartupAttempt) validateBirth(ctx context.Context, intent StartupIntent
 		return err
 	}
 	if err = validateCurrentIntent(intent, a.pin, boot); err != nil {
-		return err
-	}
-	if err = requireLifecycleStartup(ctx, a.currentLifecycleReader(), a.pin, intent); err != nil {
 		return err
 	}
 	if err = lifetime.CheckCurrentTaskContainment(ctx, environment); err != nil {
@@ -178,48 +174,48 @@ func waitProducerChild(child *producerChild, command *exec.Cmd, native producerN
 // Observe authenticates only the current resident instance. It does not send
 // an operation or infer daemon readiness. The observer supplies a finite context;
 // a resident remains valid after the original startup deadline.
-func (a *StartupAttempt) Observe(ctx context.Context) (publication OwnerPublication, ready bool, resultErr error) {
+func (a *StartupAttempt) Observe(ctx context.Context) (ready bool, resultErr error) {
 	if a == nil || ctx == nil {
-		return publication, false, os.ErrInvalid
+		return false, os.ErrInvalid
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed || a.reader == nil {
-		return publication, false, os.ErrClosed
+		return false, os.ErrClosed
 	}
 	if _, finite := ctx.Deadline(); !finite {
-		return publication, false, os.ErrInvalid
+		return false, os.ErrInvalid
 	}
 	intent, evidence, err := a.observationRecords(ctx)
 	if err != nil {
-		return publication, false, err
+		return false, err
 	}
 	pending, err := pendingOwnerPublication(intent, evidence)
 	if err != nil || pending {
-		return publication, false, err
+		return false, err
 	}
-	publication = *evidence.publication
+	publication := *evidence.publication
 	if err = a.matchObservedChild(*evidence.assumption); err != nil {
-		return publication, false, err
+		return false, err
 	}
 	if err = checkOwnerContactEndpoint(ctx, a.reader, a.pin, publication.Endpoint); err != nil {
-		return publication, false, err
+		return false, err
 	}
 	connection, err := dialOwnerContact(ctx, publication.Endpoint.Path)
 	if err != nil {
-		return publication, false, err
+		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, connection.Close()) }()
 	if err = authenticateOwnerPeer(ctx, connection, intent, *evidence.assumption, publication); err != nil {
-		return publication, false, err
+		return false, err
 	}
 	if err = checkOwnerContactEndpoint(ctx, a.reader, a.pin, publication.Endpoint); err != nil {
-		return publication, false, err
+		return false, err
 	}
 	if err = a.checkRoot(ctx); err != nil {
-		return publication, false, err
+		return false, err
 	}
-	return publication, true, nil
+	return true, nil
 }
 
 func (a *StartupAttempt) releaseElection() error {

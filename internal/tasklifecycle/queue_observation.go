@@ -12,19 +12,10 @@ import (
 )
 
 func ReconcileStatusWithClient(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, client *pueue.Client, response *Observation) (observation pueue.Observation, resultErr error) {
-	return reconcileStatusAttempt(ctx, root, td, req, meta, spec, metaHash, supervisorcore.TaskSupervisorObservation{Client: client}, response, nil, nil)
+	return reconcileStatusAttempt(ctx, root, td, req, meta, spec, metaHash, supervisorcore.TaskSupervisorObservation{Client: client}, response)
 }
 
-// ReconcileStatusWithClientAndAdmissionContext observes first. Only a matched
-// Stashed row enters outer root admission before recovery actuates the queue.
-func ReconcileStatusWithClientAndAdmissionContext(ctx context.Context, store *taskdir.Store, borrowed *taskdir.RootAdmissionLease, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, client *pueue.Client, response *Observation) (pueue.Observation, error) {
-	if store == nil {
-		return pueue.Observation{}, task.ErrInvalidPermit
-	}
-	return reconcileStatusAttempt(ctx, store.Root, td, req, meta, spec, metaHash, supervisorcore.TaskSupervisorObservation{Client: client}, response, store, borrowed)
-}
-
-func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, prepared supervisorcore.TaskSupervisorObservation, response *Observation, store *taskdir.Store, borrowed *taskdir.RootAdmissionLease) (observation pueue.Observation, resultErr error) {
+func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, prepared supervisorcore.TaskSupervisorObservation, response *Observation) (observation pueue.Observation, resultErr error) {
 	if ctx == nil {
 		return pueue.Observation{}, context.Canceled
 	}
@@ -48,7 +39,7 @@ func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDi
 	observation, reconcileErr := statusClient.ReconcileStatus(ctx, TaskIdentity(req, meta, spec, metaHash, receipt))
 	if observation.Matched && observation.State == pueue.StateStashed && !prepared.MaintenanceDeferred {
 		var recoverErr error
-		observation, recoverErr = observeStashedRecovery(ctx, root, td, statusClient, observation, response, store, borrowed)
+		observation, recoverErr = observeStashedRecovery(ctx, root, td, statusClient, observation, response)
 		reconcileErr = errors.Join(reconcileErr, recoverErr)
 	}
 	response.Supervisor = DescribeSupervisor(observation)
@@ -68,14 +59,8 @@ func reconcileStatusAttempt(ctx context.Context, root string, td *taskdir.TaskDi
 	return observation, reconcileErr
 }
 
-func observeStashedRecovery(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation, response *Observation, store *taskdir.Store, borrowed *taskdir.RootAdmissionLease) (pueue.Observation, error) {
-	var recovered pueue.Observation
-	var err error
-	if store == nil {
-		recovered, err = RecoverStagedSubmission(ctx, root, td, client, observation)
-	} else {
-		recovered, err = RecoverStagedSubmissionWithAdmissionContext(ctx, store, borrowed, td, client, observation)
-	}
+func observeStashedRecovery(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation, response *Observation) (pueue.Observation, error) {
+	recovered, err := RecoverStagedSubmission(ctx, root, td, client, observation)
 	if admissionCleanupFault(err) || !supervisorcore.TaskMaintenanceCompletionRefused(err) {
 		return recovered, err
 	}

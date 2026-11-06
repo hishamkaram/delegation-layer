@@ -54,11 +54,7 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		if err != nil {
 			return failed(response, err, 1)
 		}
-		self, selfErr := schedulerExecutable()
-		if selfErr != nil {
-			return failed(response, selfErr, 1)
-		}
-		foreground, err = hostLease.AnnounceForeground(ctx, store, self.SHA256)
+		foreground, err = hostLease.AnnounceForeground(ctx, store)
 		if err != nil {
 			return failed(response, err, 1)
 		}
@@ -74,12 +70,8 @@ func runScheduler(ctx context.Context, a Arguments, deps Dependencies, stderr io
 		return schedulerRuntime(runCtx, root, store.RootID, schedules, a, deps, stderr)
 	}
 	if a.schedulerResident {
-		self, selfErr := schedulerExecutable()
-		if selfErr != nil {
-			return failed(response, selfErr, 1)
-		}
 		err = host.RunChild(ctx, host.ChildConfig{
-			RootID: store.RootID, BuildID: self.SHA256,
+			RootID: store.RootID,
 			ReadFD: a.schedulerHostReadFD, WriteFD: a.schedulerHostWriteFD,
 			BeforeReady: func(checkCtx context.Context) error { return checkSchedulerDefinitions(checkCtx, schedules) },
 		}, run)

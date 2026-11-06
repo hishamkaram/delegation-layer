@@ -32,25 +32,3 @@ func TestPreparationDispositionKeepsOneContextMeaning(t *testing.T) {
 		})
 	}
 }
-
-func TestMigrationReferenceSelectsAnExistingHistoryPosition(t *testing.T) {
-	reference := MigrationReference{RootID: strings.Repeat("a", 32), RecordSHA256: strings.Repeat("b", 64)}
-	if err := reference.Validate(); err != nil {
-		t.Fatalf("first history offset is valid: %v", err)
-	}
-	later := reference
-	later.HistoryIndex++
-	if err := later.Validate(); err != nil || later == reference {
-		t.Fatalf("different history locators must remain distinct values: %v", err)
-	}
-	for _, invalid := range []MigrationReference{
-		{},
-		{RootID: reference.RootID},
-		{RootID: "../root", RecordSHA256: reference.RecordSHA256},
-		{RootID: reference.RootID, RecordSHA256: "invalid"},
-	} {
-		if err := invalid.Validate(); !errors.Is(err, ErrIdentity) {
-			t.Fatalf("invalid migration selector accepted: %v", err)
-		}
-	}
-}

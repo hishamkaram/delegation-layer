@@ -17,13 +17,9 @@ func EnsureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeo
 	return EnsureInspectionGroupWithMigration(store, supervisor, timeout, false)
 }
 
-// ensureInspectionGroupWithoutMigration binds a historical continuation to
+// EnsureInspectionGroupWithoutMigrationContext binds a historical continuation to
 // the exact inspection generation it recorded. A continuation must never
 // rewrite the root journal backwards to its predecessor supervisor.
-func EnsureInspectionGroupWithoutMigration(store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) (resultErr error) {
-	return EnsureInspectionGroupWithoutMigrationContext(context.Background(), store, supervisor, timeout)
-}
-
 func EnsureInspectionGroupWithoutMigrationContext(parent context.Context, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) error {
 	ctx, cancel, err := inspectionGroupContext(parent, store, supervisor, timeout)
 	if err != nil {

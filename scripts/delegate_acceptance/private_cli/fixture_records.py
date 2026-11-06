@@ -21,6 +21,8 @@ class FixtureInstallation:
     state: Path
     waiter_directory: Path
     lease_nonce: str
+    packaged_sources: tuple[tuple[str, Path], ...] = ()
+    source_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -30,9 +32,8 @@ class InitialObservation:
     initial_pair_directory: Path | None
     initial_daemon: Path
     identity_path: Path
-    old_digest: str
+    daemon_identity: bytes
     upgraded_daemon: Path
-    upgraded_daemon_digest: str
     packaged_evidence: dict[str, object]
     inspection_group: str
     inspection_prefix: str

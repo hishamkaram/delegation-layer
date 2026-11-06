@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -27,10 +26,7 @@ func ValidateInspectionRunner(operation *inspection.Operation, runner string) er
 	if runner != binding.WorkerExecutable {
 		return task.ErrIdentityMismatch
 	}
-	digest, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil || digest != binding.WorkerSHA256 {
-		return task.ErrEvidenceFault
-	}
+
 	return nil
 }
 
@@ -109,12 +105,12 @@ func queuedInspectionWorkerUpgradeEligible(ctx context.Context, root string, ope
 	return true, nil
 }
 
-func AuthorizeQueuedInspectionRunnerUpgrade(ctx context.Context, store *taskdir.Store, replacement pueue.RunnerCommandReplacement) (resultErr error) {
+func AuthorizeQueuedInspectionRunnerUpgrade(ctx context.Context, store *taskdir.Store, replacement pueue.RunnerCommandReplacement, target RunnerRepairTarget) (resultErr error) {
 	if store == nil || !replacement.Inspection || replacement.RootID != store.RootID || replacement.RootPath != store.Root {
 		return task.ErrIdentityMismatch
 	}
-	if !CurrentManagedRunnerExecutable(store.Root, replacement.NewRunner) {
-		return task.ErrEvidenceFault
+	if err := target.ValidateExecutable(replacement.NewRunner); err != nil {
+		return err
 	}
 	operation, err := inspection.LoadOperationContext(ctx, store, replacement.TaskID)
 	if err != nil {
@@ -185,8 +181,7 @@ func queuedRunnerCommandReplacementContext(ctx context.Context, store *taskdir.S
 	}, true, nil
 }
 
-// queuedWorkspaceOperation preserves a helper's immutable content-addressed
-// runner. Package upgrades do not remove that state-owned executable. This queue
+// queuedWorkspaceOperation preserves a helper's immutable recorded runner. This queue
 // transition cannot replace or relabel it as a provider inspection.
 func queuedWorkspaceOperation(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, id string) (owned bool, resultErr error) {
 	operation, err := workspace.LoadOperation(ctx, store, id)

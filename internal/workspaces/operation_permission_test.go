@@ -14,15 +14,6 @@ import (
 
 func TestWorkspaceEnqueuePermissionRejectsClosedReceiptReplay(t *testing.T) {
 	store, operation := workspacefixture.NewOperation(t)
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if releaseErr := lease.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	})
 	if receiptErr := operation.RecordReceipt(t.Context(), 9); receiptErr != nil {
 		t.Fatal(receiptErr)
 	}
@@ -33,7 +24,7 @@ func TestWorkspaceEnqueuePermissionRejectsClosedReceiptReplay(t *testing.T) {
 	if permissionErr := operation.CheckLaunchPermission(t.Context()); !errors.Is(permissionErr, task.ErrTerminalTask) {
 		t.Fatalf("closed canonical launch permission = %v", permissionErr)
 	}
-	if permissionErr := workspaceOperationLaunchPermission(t.Context(), store, operation, lease); !errors.Is(permissionErr, workspace.ErrPending) || !PendingError(permissionErr) {
+	if permissionErr := workspaceOperationLaunchPermission(t.Context(), operation); !errors.Is(permissionErr, workspace.ErrPending) || !PendingError(permissionErr) {
 		t.Fatalf("closed receipt granted enqueue permission: %v", permissionErr)
 	}
 	unlockFault := errors.New("injected operation journal unlock failure")
@@ -44,7 +35,7 @@ func TestWorkspaceEnqueuePermissionRejectsClosedReceiptReplay(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	err = workspaceOperationLaunchPermission(t.Context(), store, operation, lease)
+	err := workspaceOperationLaunchPermission(t.Context(), operation)
 	if !errors.Is(err, unlockFault) || !errors.Is(err, task.ErrTerminalTask) || PendingError(err) {
 		t.Fatalf("current permission hid its storage fault: %v", err)
 	}

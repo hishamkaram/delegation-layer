@@ -12,6 +12,7 @@ import (
 	"time"
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
@@ -68,33 +69,33 @@ func TestInspectionWorkerFailureExposesOnlySafeStage(t *testing.T) {
 func TestValidateInspectionWorkerExecutableRejectsWrongExecutable(t *testing.T) {
 	_, operation := newInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
 	binding := operation.Request().Binding
-	if err := validateInspectionWorkerExecutable(context.Background(), testsupport.CanonicalTempDir(t), operation, binding, filepath.Join(testsupport.CanonicalTempDir(t), "current-worker")); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := validateInspectionWorkerExecutable(context.Background(), testsupport.CanonicalTempDir(t), operation, binding, filepath.Join(testsupport.CanonicalTempDir(t), "current-worker"), supervisorcore.RunnerRepairTarget{}); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("wrong worker executable was accepted: %v", err)
 	}
 }
 
 func TestValidateInspectionWorkerExecutableRequiresStateRunnerForUpgrade(t *testing.T) {
-	t.Run("authorized content-addressed state runner", func(t *testing.T) {
+	t.Run("authorized selected installed runner", func(t *testing.T) {
 		store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), task.RunnerOwnershipManaged)
 		source := canonicalAppTestExecutable(t)
-		runner := installStateRunnerFixture(t, store.Root, source)
+		runner := source
 		if err := operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		binding := operation.Request().Binding
-		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); err != nil {
+		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner, appRunnerRepairTarget(t, runner)); err != nil {
 			t.Fatalf("verified state-root worker upgrade was rejected: %v", err)
 		}
 	})
 
-	t.Run("authorized install runner", func(t *testing.T) {
+	t.Run("authorized but unselected installed runner", func(t *testing.T) {
 		store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), task.RunnerOwnershipManaged)
 		runner := canonicalAppTestExecutable(t)
 		if err := operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		binding := operation.Request().Binding
-		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); !errors.Is(err, task.ErrEvidenceFault) {
+		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner, supervisorcore.RunnerRepairTarget{}); !errors.Is(err, task.ErrEvidenceFault) {
 			t.Fatalf("authorized install runner was accepted for task upgrade: %v", err)
 		}
 	})
@@ -106,7 +107,7 @@ func TestValidateInspectionWorkerExecutableRejectsUnmanagedUpgradeMarker(t *test
 		t.Run(name, func(t *testing.T) {
 			store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), ownership)
 			source := canonicalAppTestExecutable(t)
-			runner := installStateRunnerFixture(t, store.Root, source)
+			runner := source
 			control, err := store.OpenInspection(operation.Request().TaskID, false)
 			if err != nil {
 				t.Fatal(err)
@@ -120,7 +121,7 @@ func TestValidateInspectionWorkerExecutableRejectsUnmanagedUpgradeMarker(t *test
 				t.Fatal(err)
 			}
 			binding := operation.Request().Binding
-			if err = validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); !errors.Is(err, task.ErrEvidenceFault) {
+			if err = validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner, appRunnerRepairTarget(t, runner)); !errors.Is(err, task.ErrEvidenceFault) {
 				t.Fatalf("state-root successor accepted unmanaged ownership %q: %v", ownership, err)
 			}
 		})

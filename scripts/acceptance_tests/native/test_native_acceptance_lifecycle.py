@@ -840,7 +840,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertIsNone(receipt["native_mode"])
             self.assertEqual(receipt["provider_identity_scope"], "first-admitted-task")
             self.assertEqual(receipt["provider_task_id"], first_task)
-            self.assertEqual(receipt["provider_sha256"], first_identity["sha256"])
+            self.assertNotIn("provider_sha256", receipt)
+            self.assertEqual(receipt["schema_version"], 2)
+            self.assertEqual(receipt["installed_executables"]["delegate"], str(files["delegate"].resolve()))
             original = (output / "binding.json").read_bytes()
 
             second_task = "b" * 32

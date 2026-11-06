@@ -14,6 +14,10 @@ compiler setup failure.
 
 1. Verify claims against current code, actual commands and observations. Treat
    dated notes as pointers and distinguish current behavior from future work.
+   Reconcile executable-copy/fingerprint guidance with the
+   [installed-executable rule](../../agents/_data/product-boundary.md#installed-executables),
+   including examples/evals and packaged mirrors. Label unimplemented migrations
+   explicitly; preserve historical evidence and permitted data-integrity checks.
 2. Edit the smallest relevant sections. Keep one owner per rule; link to it
    rather than copy policy, symbol inventories or a mandatory workflow template.
 3. Preserve useful public CLI guidance and product receipt semantics. Remove

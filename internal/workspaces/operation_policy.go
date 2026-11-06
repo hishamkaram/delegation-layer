@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -18,8 +17,7 @@ import (
 func PendingError(err error) bool {
 	var lifetimeCleanup *taskdir.LifetimeOwnerCleanupError
 	var admissionCleanup *AdmissionCleanupError
-	var rootCleanup *supervisorcore.RootAdmissionCleanupError
-	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) || errors.As(err, &rootCleanup) {
+	if errors.As(err, &lifetimeCleanup) || errors.As(err, &admissionCleanup) {
 		return false
 	}
 	if !errors.Is(err, workspace.ErrPending) && !errors.Is(err, workspace.ErrBusy) {

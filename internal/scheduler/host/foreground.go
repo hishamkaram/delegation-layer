@@ -22,10 +22,10 @@ type Foreground struct {
 	epoch   epochRecord
 }
 
-func (l *Lease) AnnounceForeground(ctx context.Context, store *taskdir.Store, buildID string) (result *Foreground, resultErr error) {
+func (l *Lease) AnnounceForeground(ctx context.Context, store *taskdir.Store) (result *Foreground, resultErr error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.lock == nil || store == nil || l.rootID != store.RootID || l.root != store.Root || buildID == "" {
+	if l.lock == nil || store == nil || l.rootID != store.RootID || l.root != store.Root {
 		return nil, ErrIdentity
 	}
 	journal, err := store.OpenSchedulerHostContext(ctx, true)
@@ -49,7 +49,7 @@ func (l *Lease) AnnounceForeground(ctx context.Context, store *taskdir.Store, bu
 	if err != nil {
 		return nil, err
 	}
-	record := epochRecord{Protocol: ProtocolVersion, RootID: store.RootID, Sequence: sequence, Epoch: epoch, BuildID: buildID, Host: identity(ref), UID: os.Geteuid(), Kind: foregroundController}
+	record := epochRecord{Protocol: ProtocolVersion, RootID: store.RootID, Sequence: sequence, Epoch: epoch, Host: identity(ref), UID: os.Geteuid(), Kind: foregroundController}
 	if _, err = publishRecord(ctx, journal, epochName(sequence), record); err != nil {
 		return nil, err
 	}

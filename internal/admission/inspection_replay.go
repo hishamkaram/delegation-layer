@@ -58,12 +58,27 @@ func validateAdmissionInspectionReplay(ctx context.Context, store *taskdir.Store
 		return nil
 	}
 	if !sameInspectionBindingExceptManagedWorker(record.Binding, binding) {
-		return task.ErrEvidenceFault
+		return validateCompletedLegacyInspectionReplay(ctx, store.Root, operation, record.Binding, binding)
 	}
 	if record.Binding.WorkerExecutable == binding.WorkerExecutable && record.Binding.WorkerSHA256 == binding.WorkerSHA256 {
 		return nil
 	}
 	return validateManagedInspectionReplay(ctx, store.Root, operation, binding)
+}
+
+func validateCompletedLegacyInspectionReplay(ctx context.Context, root string, operation *inspection.Operation, saved, current inspection.Binding) error {
+	if saved.RunnerOwnership != "" || saved.WorkerExitProof != "" ||
+		!supervisorcore.ManagedInspectionBinding(root, saved) ||
+		!supervisorcore.ManagedInspectionWorkerExecutable(root, current) ||
+		current.WorkerExitProof != inspection.WorkerExitProofGuardianWaitV1 ||
+		!sameInspectionBindingBase(saved, current) {
+		return task.ErrEvidenceFault
+	}
+	_, err := operation.ReadProofContext(ctx)
+	if task.RecordAbsent(err) {
+		return task.ErrEvidenceFault
+	}
+	return err
 }
 
 func CreateAdmissionInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (*inspection.Operation, error) {

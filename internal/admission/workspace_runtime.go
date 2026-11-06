@@ -16,7 +16,7 @@ func (runtime workspaceRuntime) ManagedRunner() (string, error) {
 
 func (runtime workspaceRuntime) PrepareManaged(ctx context.Context, store *taskdir.Store, runner string) (string, *pueue.Client, error) {
 	configuration := runtime.configuration
-	prepared, err := supervisorcore.PreparePrivateAdmissionExecutablesContext(ctx, supervisorcore.AdmissionSelection{}, configuration, store.Root, runner, task.RunnerOwnershipManaged)
+	prepared, err := supervisorcore.PreparePrivateAdmissionExecutablesContext(ctx, supervisorcore.AdmissionSelection{}, configuration, store.Root, runner)
 	runner = prepared.Executable
 	err = WithStage(prepared.FailureStage, err)
 	if err != nil {

@@ -173,7 +173,8 @@ func TestModelsStateRootFailureNamesItsStage(t *testing.T) {
 }
 
 func TestModelsRealPrivateSupervisorMigrationRefusalIsTyped(t *testing.T) {
-	store, deps, original := newSupervisorProbeTestFixture(t)
+	store, deps, _, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, initial, err)
 	if err != nil || initial == nil {
@@ -183,8 +184,9 @@ func TestModelsRealPrivateSupervisorMigrationRefusalIsTyped(t *testing.T) {
 	if closeErr := initial.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	stagePublishedGenerationSuccessor(t, store.Root, active, original.Binding().ClientExecutable, original.Binding().DaemonExecutable)
-	stopActiveGenerationEndpoint(t, active)
+	transport := installedGenerationCandidate(t, store, active)
+	deps.InitialSupervisorExecutable = transport.ClientExecutable
+	stopOwnedActiveGenerationEndpoint(t, owner, active, deps.SupervisorOptions)
 	if err = os.Remove(active.ClientExecutable); err != nil {
 		t.Fatal(err)
 	}

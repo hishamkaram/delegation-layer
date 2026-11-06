@@ -198,7 +198,7 @@ func TestResumeSupervisedRunnerWaitsForDurableReceipt(t *testing.T) {
 	go func() {
 		close(started)
 		response := newResponse("run")
-		client, observation, err := resumeSupervisedRunner(ctx, &response, fixture.td, pueue.Options{Environment: fixture.environment})
+		client, observation, err := resumeSupervisedRunner(ctx, &response, fixture.td, tasklifecycle.SupervisorOptions{Options: pueue.Options{Environment: fixture.environment}})
 		done <- resumeResult{client: client, observation: observation, err: err}
 	}()
 	<-started

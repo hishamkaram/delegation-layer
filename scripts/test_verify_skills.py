@@ -632,7 +632,9 @@ class SkillEvalCaseTests(SkillFixture):
         repository = Path(__file__).resolve().parent.parent
         expected = (
             ("go-reviewer", 0, "checks/results.json", {"/checks/1/exit_code"}),
-            ("live-e2e", 0, "evidence/acceptance-receipt.json", {"/executed_binary/sha256"}),
+            ("live-e2e", 0, "evidence/acceptance-receipt.json", {"/executed_binary/path"}),
+            ("live-e2e", 2, "evidence/proposal.json", {"/subject"}),
+            ("live-e2e", 3, "evidence/proposal.json", {"/subject"}),
         )
         for skill, index, fixture, pointers in expected:
             with self.subTest(skill):

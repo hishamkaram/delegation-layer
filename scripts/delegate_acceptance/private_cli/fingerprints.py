@@ -4,12 +4,13 @@ from pathlib import Path
 import hashlib
 import os
 import resource
+import stat
 
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 
 def file_fingerprint(path):
-    """Return a compact, path-safe identity for one source or executable."""
+    """Digest permitted source/configuration inputs, never installed executable contents."""
     candidate = Path(path)
     try:
         resolved = candidate.resolve(strict=True)
@@ -21,6 +22,20 @@ def file_fingerprint(path):
             "bytes": info.st_size,
             "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
         }
+    except OSError:
+        return {"name": candidate.name, "status": "unavailable"}
+
+
+def installed_executable_observation(path):
+    """Observe the selected installation in place using only path metadata."""
+    candidate = Path(path)
+    try:
+        resolved = candidate.resolve(strict=True)
+        info = resolved.stat()
+        if not stat.S_ISREG(info.st_mode) or not os.access(resolved, os.X_OK):
+            raise OSError("not an executable regular file")
+        return {"representation": "installed-paths", "path": str(resolved),
+                "name": resolved.name, "bytes": info.st_size}
     except OSError:
         return {"name": candidate.name, "status": "unavailable"}
 

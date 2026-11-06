@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import shlex
-import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -154,21 +153,36 @@ class RenderedWrapperTests(WrapperRunCase):
         records = private_cli.wrapper_call_records(self.calls, "daemon", "old")
         self.assertEqual([(record["role"], record["command"]) for record in records], [("daemon", "startup")])
 
-    def test_byte_copy_and_interpreter_path_with_spaces_keep_the_original_logs(self):
+    def test_independent_installation_with_spaced_interpreter_keeps_original_logs(self):
         alias = self.root / "python with spaces"
         alias.symlink_to(sys.executable)
-        with patch.object(sys, "executable", str(alias)):
-            self.install()
-        copy = self.root / "relocated pair"
-        copy.mkdir()
-        shutil.copyfile(self.wrapper, copy / "pueue")
-        (copy / "pueue").chmod(0o700)
+        relocated = self.root / "relocated pair"
+        relocated.mkdir()
+        destination = relocated / "pueue"
+        sources = []
+        original_write = Path.write_text
 
-        result = self.run_wrapper(["status"], phase="copied", wrapper=copy / "pueue")
+        def write_source(path, source, *args, **kwargs):
+            if path in (self.wrapper, destination):
+                sources.append(source)
+            return original_write(path, source, *args, **kwargs)
+
+        def refuse_copy(*_args, **_kwargs):
+            self.fail("installed fixture executable was copied")
+
+        with patch("shutil.copyfile", side_effect=refuse_copy), \
+                patch.object(sys, "executable", str(alias)), \
+                patch.object(Path, "write_text", write_source):
+            self.install()
+            private_cli.install_wrapper(destination, self.callee, self.marker,
+                                        "fixture-install", "client")
+
+        result = self.run_wrapper(["status"], phase="relocated", wrapper=destination)
 
         self.assertEqual(result.returncode, 0)
-        self.assertIn(str(alias), self.wrapper.read_text())
-        self.assertEqual(self.calls.read_bytes(), call_line("copied", "client", ["status"]))
+        self.assertEqual(len(sources), 2)
+        self.assertTrue(all(shlex.quote(str(alias)) in source for source in sources))
+        self.assertEqual(self.calls.read_bytes(), call_line("relocated", "client", ["status"]))
 
     def test_flat_open_fault_refuses_before_any_record_or_callee(self):
         self.install()

@@ -18,7 +18,7 @@ func validateInspectionTaskBinding(record inspection.RequestRecord, req task.Tas
 }
 
 func validateStaticInspectionCandidate(record inspection.RequestRecord, definition commonprovider.InspectionDefinition, digest string) error {
-	if record.Binding.DefinitionSHA256 != digest || record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256 {
+	if record.Binding.DefinitionSHA256 != digest || record.Binding.HelperExecutable != definition.Executable || !inspectionHelperDigestMatches(record.Binding, definition) {
 		return task.ErrEvidenceFault
 	}
 	return nil

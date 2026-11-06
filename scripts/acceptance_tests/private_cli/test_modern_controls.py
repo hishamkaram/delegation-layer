@@ -12,7 +12,7 @@ from scripts.delegate_acceptance.processes import operations as process_owner
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_locks import probe_generation_lease
 from scripts.delegate_acceptance.private_cli.contention_policy import require_content_identity
-from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
@@ -106,7 +106,7 @@ class ModernBinaryControlTests(unittest.TestCase):
         self.assertTrue(self.fixture.processes.finished_naturally())
         self.assertTrue((self.fixture.processes.entries[0].directory / "completed.json").is_file())
 
-    def test_final_candidate_handoff_checks_actual_pair_content_and_immutable_records(self):
+    def test_final_candidate_handoff_checks_selected_installation_and_immutable_records(self):
         self.fixture.write_options(active=False)
         task_ops = NativeTaskOps(
             self.fixture.processes,
@@ -117,7 +117,7 @@ class ModernBinaryControlTests(unittest.TestCase):
             self.fixture.state,
             self.fixture.controls.directory,
             managed_runner=True,
-            runner_placement=STATE_INSTALLED_RUNNER,
+            runner_placement=BUNDLE_RUNNER,
         )
         task_ops.root_id = self.fixture.root_id
         evidence = controls.prove_exclusive_handoff(
@@ -128,7 +128,7 @@ class ModernBinaryControlTests(unittest.TestCase):
         pair = evidence["candidate_pair"]
         if not isinstance(pair, str):
             self.fail("candidate pair identity is not text")
-        self.assertIn("pueue-pair-", pair)
+        self.assertEqual(pair, str(self.fixture.candidate.libexec.resolve(strict=True)))
         self.assertTrue(object_at(evidence, "final_lock")["probe_exclusive_acquired"])
         self.assertEqual(evidence["immutable_content_before"], evidence["immutable_content_after"])
 

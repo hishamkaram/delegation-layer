@@ -196,7 +196,7 @@ def inspect_binaries(directory: Path, receipt: dict) -> dict[str, Path]:
                 or resolved.parent != directory.resolve() or info.st_size > MAX_BINARY):
             raise VerificationError("release_binary_invalid", "inspect-binaries")
         receipt["binaries"][name] = {
-            "path": str(resolved), "sha256": bounded_digest(path, MAX_BINARY, "release_binary_invalid"),
+            "path": str(resolved),
         }
         paths[name] = resolved
     return paths

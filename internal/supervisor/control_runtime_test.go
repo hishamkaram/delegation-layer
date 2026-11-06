@@ -25,10 +25,6 @@ func (controlRoutingFunc) PrepareContinuation(context.Context, *taskdir.Store, i
 	return infrastructure.Disposition{}, errors.New("unexpected continuation routing")
 }
 
-func (controlRoutingFunc) MigrateReferenced(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.MigrationReference) (infrastructure.Disposition, infrastructure.MigrationResult, error) {
-	return infrastructure.Disposition{}, "", errors.New("unexpected referenced migration")
-}
-
 func (controlRoutingFunc) MigrateOwn(context.Context, *taskdir.Store, infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error) {
 	return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, errors.New("unexpected manual migration")
 }
@@ -47,7 +43,7 @@ func TestControlRuntimeColdAdmissionRequiresIndependentAuthority(t *testing.T) {
 func TestControlRuntimePreparationReplyNeverReplacesReadyProof(t *testing.T) {
 	store := newGenerationStore(t)
 	calls := 0
-	runtime := ControlRuntime{Routing: controlRoutingFunc(func(ctx context.Context, borrowed *taskdir.Store) (infrastructure.Disposition, error) {
+	runtime := ControlRuntime{Lookup: controlRoutingLookup(t), Routing: controlRoutingFunc(func(ctx context.Context, borrowed *taskdir.Store) (infrastructure.Disposition, error) {
 		calls++
 		if borrowed != store {
 			return infrastructure.Disposition{}, errors.New("borrowed store replaced")
@@ -66,7 +62,7 @@ func TestControlRuntimeUnknownContactIsPreservedWithoutRetry(t *testing.T) {
 	store := newGenerationStore(t)
 	unknown := errors.New("unknown preparation outcome")
 	calls := 0
-	runtime := ControlRuntime{Routing: controlRoutingFunc(func(context.Context, *taskdir.Store) (infrastructure.Disposition, error) {
+	runtime := ControlRuntime{Lookup: controlRoutingLookup(t), Routing: controlRoutingFunc(func(context.Context, *taskdir.Store) (infrastructure.Disposition, error) {
 		calls++
 		return infrastructure.Disposition{}, unknown
 	})}
@@ -96,7 +92,7 @@ func TestControlRuntimeRefusesReplacedBorrowedRootAfterContact(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	runtime := ControlRuntime{Routing: controlRoutingFunc(func(context.Context, *taskdir.Store) (infrastructure.Disposition, error) {
+	runtime := ControlRuntime{Lookup: controlRoutingLookup(t), Routing: controlRoutingFunc(func(context.Context, *taskdir.Store) (infrastructure.Disposition, error) {
 		if err := os.Rename(store.Root, original); err != nil {
 			return infrastructure.Disposition{}, err
 		}
@@ -108,4 +104,12 @@ func TestControlRuntimeRefusesReplacedBorrowedRootAfterContact(t *testing.T) {
 	if client, err := runtime.PreparePrivateAdmission(t.Context(), store); client != nil || err == nil {
 		t.Fatal("replaced borrowed root accepted")
 	}
+}
+
+// Routing requires an actual selected installed role, even when the resident
+// reply cannot prove readiness. Authored finite scripts own no daemon work.
+func controlRoutingLookup(t *testing.T) ExecutableLookup {
+	t.Helper()
+	client, _ := installedPairFixture(t, parentMigrationClient, "#!/bin/sh\nexit 64\n")
+	return ExecutableLookup{InitialExecutable: client}
 }

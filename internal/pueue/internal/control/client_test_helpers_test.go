@@ -53,7 +53,7 @@ func validBindingForTest() task.SupervisorRef {
 	digest := task.ComputeSHA256([]byte("binding"))
 	return task.SupervisorRef{
 		ClientExecutable:     "/bin/sh",
-		ClientSHA256:         digest,
+		ExecutableIdentity:   task.ExecutableIdentityInstalledPathV1,
 		ResolvedConfigSHA256: digest,
 		ConfigPath:           "/tmp/pueue.yml",
 		ConfigDigest:         digest,

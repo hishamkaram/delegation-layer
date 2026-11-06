@@ -2,10 +2,8 @@ package app
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -14,13 +12,19 @@ import (
 )
 
 func TestPrivateAdmissionAdoptsReadyLegacyOwnerBeforeScheduling(t *testing.T) {
-	store, deps, legacy := newSupervisorProbeTestFixture(t)
+	store, deps, legacy, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps.normalized(), owner)
 	identity := removeLegacyAdoptionTestBinding(t, store.Root, legacy.Binding())
 	base := filepath.Join(store.Root, ".supervisor")
 	starts := readSupervisorProbeTestFile(t, filepath.Join(base, "daemon-started"))
 	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
 	defer cancelControl()
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
+	runtime := supervisorcore.ControlRuntime{
+		Options: deps.SupervisorOptions,
+		Lookup:  deps.supervisorLookup(),
+		Routing: deps.infrastructureRouting(),
+	}
+	client, err := runtime.PreparePrivateAdmission(control, store)
 	if client != nil {
 		t.Cleanup(func() {
 			if closeErr := client.Close(); closeErr != nil {
@@ -40,6 +44,7 @@ func TestPrivateAdmissionAdoptsReadyLegacyOwnerBeforeScheduling(t *testing.T) {
 }
 
 func TestStatusAdoptsExactReadyLegacyOwnerBeforeObservation(t *testing.T) {
+	t.Parallel()
 	fixture := newHistoricalSupervisorFixturePaths(t)
 	workspace, _ := prepareHistoricalSupervisorExecutables(t, fixture)
 	fixture.options = newHistoricalSupervisorOptions()
@@ -47,9 +52,10 @@ func TestStatusAdoptsExactReadyLegacyOwnerBeforeObservation(t *testing.T) {
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, 7)
 	identity := removeLegacyAdoptionTestBinding(t, fixture.root, fixture.predecessor)
 	starts := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
-	code, stdout, stderr, response := runHistoricalSupervisorCommand(t, fixture, []string{
+	deps := withSupervisorProbeRouting(t, fixture.dependencies().normalized(), fixture.component)
+	code, stdout, stderr, response := runHistoricalSupervisorCommandWithDependencies(t, []string{
 		"--root", fixture.root, "status", fixture.req.TaskID, "--json",
-	})
+	}, deps)
 	if code != 0 || response.Admission != task.AdmissionAdmitted.String() || !historicalSupervisorResponseMatches(response.Supervisor, 7) {
 		t.Errorf("legacy ready task was not observed: code=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
@@ -60,14 +66,12 @@ func TestStatusAdoptsExactReadyLegacyOwnerBeforeObservation(t *testing.T) {
 
 func removeLegacyAdoptionTestBinding(t *testing.T, root string, binding task.SupervisorRef) []byte {
 	t.Helper()
-	identity, err := task.MarshalCanonical(historicalPrivateDaemonIdentity{Executable: binding.DaemonExecutable, SHA256: binding.DaemonSHA256})
+	identity, err := task.MarshalCanonical(historicalPrivateDaemonIdentityFor(binding))
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := filepath.Join(root, ".supervisor")
-	if err = os.WriteFile(filepath.Join(base, "daemon.identity.json"), identity, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAppTestFile(t, filepath.Join(base, "daemon.identity.json"), identity)
 	if err = os.Remove(filepath.Join(base, "supervisor.identity.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -94,20 +98,21 @@ func assertLegacyAdoptionTestOwner(t *testing.T, root string, want task.Supervis
 func TestQueueMaintenanceAdoptsLegacyOwnerOnlyWhenProven(t *testing.T) {
 	for _, scenario := range []string{"ready", "unavailable", "foreign"} {
 		t.Run(scenario, func(t *testing.T) {
-			store, deps, legacy := newSupervisorProbeTestFixture(t)
+			store, deps, legacy, owner := newOwnedSupervisorProbeTestFixture(t)
+			deps = withSupervisorProbeRouting(t, deps.normalized(), owner)
 			identity := prepareLegacyMaintenanceScenario(t, store.Root, legacy.Binding(), scenario)
 			base := filepath.Join(store.Root, ".supervisor")
 			if err := pueue.RequestPrivateQueueMaintenance(t.Context(), store.Root); err != nil {
 				t.Fatal(err)
 			}
 			starts := readSupervisorProbeTestFile(t, filepath.Join(base, "daemon-started"))
-			err := supervisorcore.RunQueueMaintenance(store.Root, deps.SupervisorOptions, deps.supervisorLookup())
+			err := runQueueMaintenance(runnerArguments{Root: store.Root}, deps)
 			assertSupervisorProbeTestFile(t, filepath.Join(base, "daemon-started"), starts)
 			if scenario != "ready" {
 				assertLegacyMaintenanceRefused(t, store.Root, identity, err)
 				return
 			}
-			if errors.Is(err, pueue.ErrBinding) {
+			if err != nil {
 				t.Fatalf("ready legacy owner was refused: %v", err)
 			}
 			assertLegacyAdoptionTestOwner(t, store.Root, legacy.Binding(), identity)
@@ -127,7 +132,9 @@ func prepareLegacyMaintenanceScenario(t *testing.T, root string, binding task.Su
 			t.Fatal(err)
 		}
 	case "foreign":
-		foreign, err := task.MarshalCanonical(historicalPrivateDaemonIdentity{Executable: binding.DaemonExecutable, SHA256: strings.Repeat("0", 64)})
+		foreignIdentity := historicalPrivateDaemonIdentityFor(binding)
+		foreignIdentity.Executable = filepath.Join(base, "foreign-pueued")
+		foreign, err := task.MarshalCanonical(foreignIdentity)
 		if err != nil {
 			t.Fatal(err)
 		}

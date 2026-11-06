@@ -63,7 +63,7 @@ func TestInvocationSourceCaptureContextPrecedesEnvironment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			source, err := CaptureInvocationSource(tc.ctx)
 			_, found := source.Origin()
-			if !errors.Is(err, tc.want) || found || source.outside.provenance != (StartupProvenance{}) {
+			if !errors.Is(err, tc.want) || found || source.outside.environment != nil {
 				t.Fatalf("invalid context captured invocation: found=%t err=%v", found, err)
 			}
 		})
@@ -114,7 +114,7 @@ func TestInvocationSourceMalformedOriginIsRedacted(t *testing.T) {
 			t.Setenv(OriginEnvironment, raw)
 			source, err := CaptureInvocationSource(t.Context())
 			_, found := source.Origin()
-			if !errors.Is(err, ErrIdentity) || found || source.outside.provenance != (StartupProvenance{}) {
+			if !errors.Is(err, ErrIdentity) || found || source.outside.environment != nil {
 				t.Fatalf("malformed locator captured a source: found=%t err=%v", found, err)
 			}
 			if strings.Contains(err.Error(), privateValue) || err.Error() != "infrastructure identity mismatch: invalid invocation origin" {
@@ -129,8 +129,8 @@ func TestInvocationSourceActualScopeWithoutOriginRefusesCapture(t *testing.T) {
 	t.Setenv("DELEGATION_LAYER_PROCESS_SCOPE", "pg:"+strings.Repeat("a", 32))
 	source, err := CaptureInvocationSource(t.Context())
 	_, found := source.Origin()
-	if !errors.Is(err, lifetime.ErrTaskContained) || found || source.outside.provenance != (StartupProvenance{}) {
-		t.Fatalf("actual task marker minted outside provenance: found=%t err=%v", found, err)
+	if !errors.Is(err, lifetime.ErrTaskContained) || found || source.outside.environment != nil {
+		t.Fatalf("actual task marker minted outside capture: found=%t err=%v", found, err)
 	}
 }
 
@@ -171,6 +171,37 @@ func TestInvocationSourceInvalidEstablishmentLeavesTargetUntouched(t *testing.T)
 	}
 	if _, found := (InvocationSource{}).Origin(); found {
 		t.Fatal("zero source invented an origin")
+	}
+}
+
+func TestInvocationSourceEmptyEnvironmentRemainsValidCapturedState(t *testing.T) {
+	requireComponentEntryTestHost(t)
+	for _, environment := range [][]string{nil, {}} {
+		f := producerFixture(t)
+		releaseProducerFixtureLease(t, f)
+		outside, err := captureOutsideProducer(t.Context(), environment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outside.environment == nil || len(outside.environment) != 0 {
+			t.Fatal("successful empty capture lost its valid state")
+		}
+		refusal := errors.New("fixture refuses native Start")
+		starts := 0
+		source := InvocationSource{outside: outside}
+		attempt, err := source.establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{
+			start: func(command *exec.Cmd) error {
+				starts++
+				if command.Env == nil || len(command.Env) != 0 {
+					t.Error("empty capture inherited the ambient environment")
+				}
+				return refusal
+			},
+		})
+		ownProducerAttempt(t, attempt)
+		if !errors.Is(err, refusal) || attempt == nil || attempt.Reference().Sequence != 1 || starts != 1 || f.host.calls != 1 {
+			t.Fatalf("empty capture refused establishment: starts=%d prepare=%d err=%v", starts, f.host.calls, err)
+		}
 	}
 }
 

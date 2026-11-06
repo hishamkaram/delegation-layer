@@ -382,6 +382,15 @@ class DisposalLeaseIdentityTests(DisposalLeaseFixture):
             self.remove(disposal=self.disposal, deadline=time.monotonic() + 1)
         self.assertTrue(self.root.is_dir())
 
+    def test_replaced_state_with_original_supervisor_revokes_held_authority(self):
+        self.disposal.hold(self.state, time.monotonic() + 1)
+        retired = self.root / "retired-state"
+        self.state.rename(retired)
+        self.state.mkdir(mode=0o700)
+        (retired / ".supervisor").rename(self.supervisor)
+        with self.assertRaisesRegex(RuntimeError, "state root.*replaced"):
+            self.disposal.require_held(self.state)
+
     def test_failing_body_still_releases_and_waits_for_its_holder(self):
         with self.assertRaisesRegex(ValueError, "body failed"):
             with self.holder(ELECTION + ":EX") as process:
@@ -404,7 +413,7 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
         lifetime = self.owned_root_lifetime(second)
         for state in (self.state, second):
             self.disposal.hold(state, time.monotonic() + BARRIER_SECONDS)
-        held = {os.stat(state / ".supervisor").st_ino for state in (self.state, second)}
+        held = {os.stat(path).st_ino for state in (self.state, second) for path in (state, state / ".supervisor")}
         held |= {os.stat(state / ".supervisor" / name).st_ino
                  for state in (self.state, second) for name in leases.DISPOSAL_LOCK_ORDER}
         faulty = os.stat(self.supervisor / "transition.lock").st_ino
@@ -450,6 +459,99 @@ class FinalizerLeaseTeardownTests(DisposalLeaseFixture):
         self.assertIs(self.failed_receipt_error(receipt, "retained"), failure)
         for state in (self.state, self.root / "second"):
             self.assertTrue(all((state / ".supervisor" / name).is_file() for name in leases.DISPOSAL_LOCK_ORDER))
+
+    def nested_lifetime(self):
+        second = self.make_state(self.root / "second")
+        lifetime = self.owned_root_lifetime(second)
+        lifetime.private_config = self.supervisor / "pueue.yml"
+        lifetime.private_config.write_text("shared: {}\n")
+        lifetime.supervisor_cleanups.append({"client": self.base / "pueue", "config": second / ".supervisor" / "pueue.yml",
+                                            "env": {}, "state": second, "task_ids": []})
+        return lifetime
+
+    def test_failed_nested_hook_blocks_all_fallback_shutdown_and_deletion(self):
+        lifetime = self.nested_lifetime()
+        pending = tuple(lifetime.supervisor_cleanups)
+        lifetime.prepare_cleanup = Mock(side_effect=RuntimeError("child owner still live"))
+        failure = RuntimeError("original survival failure")
+        receipt = Mock()
+        args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=Path(__file__))
+        with patch.object(finalization, "await_primary_readiness") as readiness, \
+                patch.object(finalization, "shutdown_pending_private_supervisor") as supplemental, \
+                patch.object(finalization, "shutdown_private_supervisor") as primary, \
+                patch.object(finalization, "remove_private_acceptance_root") as remove:
+            finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+        readiness.assert_not_called()
+        supplemental.assert_not_called()
+        primary.assert_not_called()
+        remove.assert_not_called()
+        self.assertEqual(tuple(lifetime.supervisor_cleanups), pending)
+        self.assertTrue(self.root.is_dir())
+        self.assertIs(receipt.write.call_args.args[2], failure)
+        self.assertEqual(receipt.write.call_args.args[0], "FAIL")
+
+    def test_closed_nested_roots_skip_failed_scenario_public_readiness_and_double_shutdown(self):
+        lifetime = self.nested_lifetime()
+        lifetime.closed_roots = {state: None for state, _tasks in lifetime.managed_state_roots}
+        lifetime.prepare_cleanup = Mock()
+        receipt = Mock()
+        failure = RuntimeError("original survival failure")
+        args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=Path(__file__))
+        with patch.object(finalization, "await_primary_readiness") as readiness, \
+                patch.object(finalization, "shutdown_pending_private_supervisor") as supplemental, \
+                patch.object(finalization, "shutdown_private_supervisor") as primary:
+            finalization.finalize_fixture(args, failure, lifetime, receipt, False)
+        readiness.assert_not_called()
+        supplemental.assert_not_called()
+        primary.assert_not_called()
+        self.assertTrue(self.root.is_dir())
+        self.assertIs(receipt.write.call_args.args[2], failure)
+
+    def test_hook_borrows_finalizer_disposal_held_through_real_root_removal(self):
+        lifetime = self.nested_lifetime()
+        states = tuple(state for state, _tasks in lifetime.managed_state_roots)
+        events = []
+        deadline = []
+
+        def prepare(absolute, disposal):
+            self.assertIs(disposal, self.disposal)
+            deadline.append(absolute)
+            for state in reversed(states):
+                disposal.hold(state, absolute)
+                lifetime.closed_roots[state] = None
+            lifetime.supervisor_cleanups.clear()
+            events.append("hook")
+
+        lifetime.prepare_cleanup = prepare
+        remove_owned = root_cleanup.rollback_owned_directories
+
+        def remove(entries):
+            for state in states:
+                self.disposal.require_held(state)
+                for name in leases.DISPOSAL_LOCK_ORDER:
+                    self.assertFalse(_lock_free(state / ".supervisor" / name, fcntl.LOCK_EX))
+            events.append("remove")
+            return remove_owned(entries)
+
+        release = self.disposal.release_all
+
+        def release_all():
+            self.assertFalse(self.root.exists())
+            events.append("release")
+            release()
+
+        receipt = Mock()
+        args = SimpleNamespace(scenario="nested-survival", output=self.base / "receipt.json", pueue=None)
+        with patch.object(finalization, "DisposalLeases", return_value=self.disposal), \
+                patch.object(root_cleanup, "authorize_managed_lifetime_closure", return_value=CLOSED), \
+                patch.object(root_cleanup, "rollback_owned_directories", side_effect=remove), \
+                patch.object(self.disposal, "release_all", side_effect=release_all), \
+                patch.object(finalization, "shutdown_private_supervisor") as shutdown:
+            finalization.finalize_fixture(args, None, lifetime, receipt, True)
+        shutdown.assert_not_called()
+        self.assertEqual(events, ["hook", "remove", "release"])
+        self.assertEqual(len(deadline), 1)
+        self.assertEqual(receipt.write.call_args.args[0], "PASS")
 
 
 if __name__ == "__main__":

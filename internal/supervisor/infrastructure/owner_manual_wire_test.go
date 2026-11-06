@@ -17,7 +17,7 @@ func TestOwnerManualReportSurvivesLateBusyWithoutDisposition(t *testing.T) {
 	owner := f.request(t, ownerStatus).Owner
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: InitialOperation{Kind: InitialMigrateOwn}})
+	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Operation: InitialOperation{Kind: InitialMigrateOwn}})
 	if err != nil || outcome.Condition != PreparationFault || outcome.Report != report || outcome.Disposition != (Disposition{}) {
 		t.Fatalf("late busy erased acknowledged manual report: outcome=%v err=%v", outcome, err)
 	}
@@ -31,7 +31,7 @@ func TestOwnerManualSuccessRequiresReport(t *testing.T) {
 	owner := f.request(t, ownerStatus).Owner
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: InitialOperation{Kind: InitialMigrateOwn}})
+	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Operation: InitialOperation{Kind: InitialMigrateOwn}})
 	if err != nil || outcome.Condition != PreparationFault || !outcome.Failure.IndependentFault {
 		t.Fatalf("manual success omitted required report: outcome=%v err=%v", outcome, err)
 	}

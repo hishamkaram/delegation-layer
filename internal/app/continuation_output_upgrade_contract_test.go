@@ -29,6 +29,7 @@ func TestContinuationLeavesPredecessorOutputPredicateFrozen(t *testing.T) {
 	registry := NativeCatalog().Registry()
 	for _, testCase := range outputUpgradeCases(t) {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			interpreter, err := registry.Resolve(testCase.source)
 			resolved := err == nil && interpreter != nil
 			if matches := resolved && interpreter.Reference().Equal(testCase.source); !matches {
@@ -61,6 +62,7 @@ func TestOpenCodeHistoricalRunTargetPublishesWhatItsSourcesReject(t *testing.T) 
 	for _, control := range outputUpgradeControlCases(t) {
 		if control.provider == openCodeProvider {
 			t.Run(control.mode, func(t *testing.T) {
+				t.Parallel()
 				requireOpenCodeHistoricalRunControl(t, control, cases)
 			})
 		}
@@ -107,7 +109,7 @@ func sealOpenCodeHistoricalRun(t *testing.T, f *outputUpgradeFixture, taskID str
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, f.deps.Catalog, request, f.testCase.revision, reference), f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
+	meta := tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, f.deps.Catalog, request, f.testCase.revision, reference, f.deps.Environment), f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	td, err := store.CreateTask(taskID, &request, brief, &meta)
 	if err != nil {
 		t.Fatal(err)
@@ -165,10 +167,11 @@ func differingPreparationComponents(a, b outputUpgradePreparation) []string {
 func TestEligibleSourcePreparationDiffersOnlyByPredicate(t *testing.T) {
 	for _, testCase := range outputUpgradeCases(t) {
 		t.Run(testCase.name, func(t *testing.T) {
-			installOutputUpgradeProvider(t, testCase.executable())
+			t.Parallel()
+			environment := installOutputUpgradeProvider(t, testCase.executable())
 			request := outputUpgradeSuccessorRequest(t, testCase)
-			source := outputUpgradeProductionPreparation(t, testCase, request, testCase.source, commonprovider.Catalog.ExistingCandidate)
-			target := outputUpgradeProductionPreparation(t, testCase, request, testCase.target, commonprovider.Catalog.ExistingCandidate)
+			source := outputUpgradeProductionPreparation(t, testCase, request, testCase.source, commonprovider.Catalog.ExistingCandidate, environment)
+			target := outputUpgradeProductionPreparation(t, testCase, request, testCase.target, commonprovider.Catalog.ExistingCandidate, environment)
 			if !source.predicate.Equal(testCase.source) || !target.predicate.Equal(testCase.target) {
 				t.Fatalf("predicates source=%+v target=%+v", source.predicate, target.predicate)
 			}
@@ -189,10 +192,11 @@ func TestEligibleSourcePreparationDiffersOnlyByPredicate(t *testing.T) {
 func TestSuccessorOfEligibleSourcePreparesTheCurrentTarget(t *testing.T) {
 	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeCases(t)) {
 		t.Run(testCase.name, func(t *testing.T) {
-			installOutputUpgradeProvider(t, testCase.executable())
+			t.Parallel()
+			environment := installOutputUpgradeProvider(t, testCase.executable())
 			request := outputUpgradeSuccessorRequest(t, testCase)
-			successor := outputUpgradeProductionPreparation(t, testCase, request, testCase.source, commonprovider.Catalog.SuccessorCandidate)
-			want := outputUpgradeProductionPreparation(t, testCase, request, testCase.target, commonprovider.Catalog.ExistingCandidate)
+			successor := outputUpgradeProductionPreparation(t, testCase, request, testCase.source, commonprovider.Catalog.SuccessorCandidate, environment)
+			want := outputUpgradeProductionPreparation(t, testCase, request, testCase.target, commonprovider.Catalog.ExistingCandidate, environment)
 			if !successor.predicate.Equal(testCase.target) {
 				t.Fatalf("successor predicate %+v, want %+v", successor.predicate, testCase.target)
 			}
@@ -224,10 +228,10 @@ type outputUpgradeCandidateSource func(commonprovider.Catalog, task.TaskRecord, 
 
 // outputUpgradeProductionPreparation prepares request from a record stored
 // under reference, through the unmodified production catalog.
-func outputUpgradeProductionPreparation(t *testing.T, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef, prepare outputUpgradeCandidateSource) outputUpgradePreparation {
+func outputUpgradeProductionPreparation(t *testing.T, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef, prepare outputUpgradeCandidateSource, environment []string) outputUpgradePreparation {
 	t.Helper()
 	catalog := NativeCatalog()
-	candidate, err := prepare(catalog, request, outputUpgradeStoredRecord(t, catalog, testCase, request, reference), os.Environ())
+	candidate, err := prepare(catalog, request, outputUpgradeStoredRecord(t, catalog, testCase, request, reference, environment), environment)
 	if err != nil {
 		t.Fatalf("stored-predicate candidate under %+v: %v", reference, err)
 	}
@@ -237,12 +241,12 @@ func outputUpgradeProductionPreparation(t *testing.T, testCase outputUpgradeCase
 // outputUpgradeStoredRecord is the record a task admitted under reference
 // persisted. OpenCode references are historical run records; the other
 // providers' fresh admission is the launch contract their sources recorded.
-func outputUpgradeStoredRecord(t *testing.T, catalog commonprovider.Catalog, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef) task.MetaRecord {
+func outputUpgradeStoredRecord(t *testing.T, catalog commonprovider.Catalog, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef, environment []string) task.MetaRecord {
 	t.Helper()
 	if testCase.provider == openCodeProvider {
-		return tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, catalog, request, testCase.revision, reference), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
+		return tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, catalog, request, testCase.revision, reference, environment), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
 	}
-	fresh, err := catalog.Candidate(request, os.Environ())
+	fresh, err := catalog.Candidate(request, environment)
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
 	}
@@ -340,16 +344,16 @@ func outputUpgradeCCRCases(t *testing.T) []outputUpgradeCase {
 // the same modeled launch and predicate.
 func requireCCRRouteCapabilityChangeHandled(t *testing.T, testCase outputUpgradeCase, reference task.PredicateRef, prepare outputUpgradeCandidateSource) {
 	t.Helper()
-	installOutputUpgradeProvider(t, testCase.executable())
+	environment := installOutputUpgradeProvider(t, testCase.executable())
 	request := outputUpgradeSuccessorRequest(t, testCase)
 	catalog := NativeCatalog()
-	fresh, err := catalog.Candidate(request, os.Environ())
+	fresh, err := catalog.Candidate(request, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := tasklifecycle.NewMeta(request, outputUpgradeAdmit(t, testCase, fresh), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = reference
-	candidate, err := prepare(catalog, request, seed, os.Environ())
+	candidate, err := prepare(catalog, request, seed, environment)
 	if err != nil {
 		t.Fatal(err)
 	}

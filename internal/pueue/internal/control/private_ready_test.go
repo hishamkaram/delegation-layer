@@ -280,7 +280,7 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "test-record-kill"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error { return client.cleanSuccessfulTasks(context.Background(), false) }); err != nil {
+	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error { return client.cleanSuccessfulTasks(context.Background()) }); err != nil {
 		t.Fatal(err)
 	}
 	removed := strings.Fields(string(readPrivateSupervisorFile(t, filepath.Join(base, "test-kill-task-id"))))
@@ -303,7 +303,7 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 func TestPrivateCleanupFailsClosedWithoutApplicationAuthorizer(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	client := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: DefaultObservationTimeout})
-	if err := client.cleanSuccessfulTasks(context.Background(), false); !errors.Is(err, ErrCleanupAuthorization) {
+	if err := client.cleanSuccessfulTasks(context.Background()); !errors.Is(err, ErrCleanupAuthorization) {
 		t.Fatalf("cleanup without authorizer: %v", err)
 	}
 }

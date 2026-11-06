@@ -75,7 +75,7 @@ func cooperativeEOF(err error) bool {
 }
 
 func validateChildConfig(config ChildConfig) error {
-	if config.RootID == "" || config.BuildID == "" || config.ReadFD == config.WriteFD {
+	if config.RootID == "" || config.ReadFD == config.WriteFD {
 		return ErrIdentity
 	}
 	return nil
@@ -119,9 +119,6 @@ func confirmHost(ctx context.Context, config ChildConfig, control *channel) (chi
 func validateHello(hello childFrame, config ChildConfig) error {
 	if hello.Kind != "hello" || hello.Protocol != ProtocolVersion || hello.RootID != config.RootID || hello.Epoch == "" || hello.Attempt == 0 {
 		return ErrIdentity
-	}
-	if hello.BuildID != config.BuildID {
-		return ErrIncompatible
 	}
 	return nil
 }

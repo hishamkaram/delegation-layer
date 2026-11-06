@@ -420,7 +420,7 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 
 func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, options tasklifecycle.SupervisorOptions) (*pueue.Client, pueue.Observation, error) {
 	if parsed.Supervised {
-		return resumeSupervisedRunner(ctx, response, td, options.Options)
+		return resumeSupervisedRunner(ctx, response, td, options)
 	}
 	return reconcileRunner(ctx, root, response, td, req, meta, options)
 }

@@ -3,13 +3,12 @@
 from contextlib import ExitStack
 import hashlib
 import json
-from pathlib import Path
 import time
 import uuid
 
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.records import _read_control_record
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.private_cli.admission import observe_created_admission
 from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.nested_observation import (
@@ -68,7 +67,7 @@ class NestedCase:
         write_json(path, self.configuration)
 
     def command(self, state, arguments, name, *, expected=(0,), deadline=None):
-        return run_json(Path(self.configuration["delegate"]), self.lifetime.env,
+        return run_json(self.lifetime.old_install / "delegate", self.lifetime.env,
                         ["--root", str(state), *arguments, "--json"], expected=expected,
                         timeout=45 if deadline is None else None, deadline=deadline,
                         receipt=self.receipts / (name + ".json"), capture_response=True,
@@ -85,7 +84,7 @@ class NestedCase:
         require(response.get("task_id") == task_id and response.get("task_record") == "created",
                 "nested admission was not created; never redispatch")
         self.command(state, ["status", task_id], name + "-status")
-        observe_created_admission(Path(self.configuration["delegate"]), state, self.lifetime.env, response,
+        observe_created_admission(self.lifetime.old_install / "delegate", state, self.lifetime.env, response,
                                  self.receipts / (name + ".json"), capture_root=self.lifetime.capture_token)
         if name == "leader":
             self.receipt.increment("dispatch_completed_count")
@@ -130,6 +129,8 @@ class NestedCase:
         client, environment = bound_private_client(state, self.lifetime.env)
         receipt = _read_control_record(state / "tasks" / response["task_id"] / "supervisor.ref.json", "admission receipt")
         binding = _read_control_record(state / ".supervisor" / "supervisor.identity.json", "published binding")["binding"]
+        if not isinstance(binding, dict):
+            raise AcceptanceFailure("queue closure observation changed admitted supervisor identity")
         require(receipt.get("root_id") == response["root_id"] and receipt.get("task_id") == response["task_id"]
                 and all(receipt.get(key) == binding.get(key) for key in ("config_path", "config_digest", "endpoint")),
                 "queue closure observation changed admitted supervisor identity")
@@ -158,17 +159,17 @@ class NestedCase:
 
     def prove_unlaunched(self, state, root, task_id):
         return prove_task_absence(self.configuration, self.lifetime.capture_token, state, root, task_id,
-                                   deadline=self.cleanup_deadline)
+                                   deadline=self.cleanup_deadline, closed=self.lifetime.closed_roots.get(state))
 
     def read_closure(self, state, task_ids):
         return validate_managed_lifetime_closure(state, task_ids, prove_unlaunched=self.prove_unlaunched)
 
-    def cleanup(self, deadline):
+    def cleanup(self, deadline, disposal):
         from scripts.delegate_acceptance.private_cli.nested_cleanup import cleanup_case
         failure = None
         self.cleanup_deadline = deadline
         try:
-            cleanup_case(self, deadline)
+            cleanup_case(self, deadline, disposal)
         except BaseException as error:
             failure = error
             raise

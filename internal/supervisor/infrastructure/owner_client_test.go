@@ -2,13 +2,69 @@ package infrastructure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestOwnerClientRejectsLivePreviousCodecWithoutRewritingRecords(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	if f.auth.publication.Protocol != 3 || ownerProtocolVersion != 4 || ownerStopProtocolVersion != 1 {
+		t.Fatal("owner wire, record and stop protocols were conflated")
+	}
+	join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
+		reply := ownerServerReply(request, ownerOK)
+		reply.Protocol = 3
+		data, err := json.Marshal(reply)
+		if err != nil {
+			return err
+		}
+		previous := strings.TrimSuffix(string(data), "}") + `,"migration":{"root_id":"","record_sha256":"","history_index":0}}` + "\n"
+		_, err = connection.Write([]byte(previous))
+		return err
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	owner, err := ProbeOwner(ctx, f.reader)
+	if !errors.Is(err, ErrOwnerIncompatible) || owner != (StartupReference{}) {
+		t.Fatalf("live previous-codec owner was accepted: %v", err)
+	}
+	if err := join(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOwnerClientPreservesManualReportAlongsidePreparationFault(t *testing.T) {
+	for _, code := range []ownerReplyCode{ownerOK, ownerFault, ownerTimeout} {
+		t.Run(string(code), func(t *testing.T) {
+			f := newOwnerContactFixture(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			selected := LaunchContextReference{SHA256: ownerWireDigest}
+			report := ManualMigrationReport{State: ManualMigrationMigrated, Legacy: ManualMigrationLegacyRecovered, Active: ManualMigrationActiveNone}
+			join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
+				reply := ownerServerReply(request, code)
+				reply.Disposition = Disposition{Kind: DispositionStarted, Context: selected}
+				reply.Report = report
+				reply.Target = originRecord{Root: f.journal.pin.Root(), RootID: request.RootID}
+				reply.Startup = request.Owner
+				return writeOwnerFrame(connection, reply)
+			})
+			outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: InitialOperation{Kind: InitialMigrateOwn}, Context: selected})
+			if outcome.Report != report || outcome.Disposition != (Disposition{Kind: DispositionStarted, Context: selected}) || outcome.Condition != PreparationCondition(code) || err != nil {
+				t.Fatalf("manual outcome changed: outcome=%v err=%v", outcome, err)
+			}
+			if joinErr := join(); joinErr != nil {
+				t.Fatal(joinErr)
+			}
+		})
+	}
+}
 
 func TestOwnerClientProbesAuthenticatedResidentAfterStartupDeadline(t *testing.T) {
 	f := newOwnerContactFixture(t)
@@ -26,6 +82,38 @@ func TestOwnerClientProbesAuthenticatedResidentAfterStartupDeadline(t *testing.T
 	}
 	if err = join(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOwnerClientProbePreservesReferenceAndReplyCause(t *testing.T) {
+	for _, row := range []struct {
+		code  ownerReplyCode
+		cause error
+	}{
+		{ownerPending, ErrOwnerPending},
+		{ownerBusy, ErrOwnerBusy},
+		{ownerIncompatible, ErrOwnerIncompatible},
+		{ownerFault, ErrOwnerRequest},
+		{ownerTimeout, context.DeadlineExceeded},
+	} {
+		t.Run(string(row.code), func(t *testing.T) {
+			f := newOwnerContactFixture(t)
+			join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
+				return writeOwnerFrame(connection, ownerServerReply(request, row.code))
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			reference, err := ProbeOwner(ctx, f.reader)
+			if reference != f.auth.request.Owner || !errors.Is(err, row.cause) {
+				t.Fatalf("probe lost reference or reply cause: reference=%v err=%v", reference, err)
+			}
+			if row.code == ownerTimeout && !errors.Is(err, ErrOwnerRequest) {
+				t.Fatal("owner timeout lost request-failure cause")
+			}
+			if err = join(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -49,7 +137,7 @@ func TestOwnerClientOwnPreparationPreservesSelectedContext(t *testing.T) {
 		reply.Disposition = Disposition{Kind: DispositionWarmReuse}
 		return writeOwnerFrame(connection, reply)
 	})
-	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Context: reference, Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
+	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Context: reference})
 	disposition := outcome.Disposition
 	if err != nil || outcome.Condition != PreparationOK || disposition != (Disposition{Kind: DispositionWarmReuse}) {
 		t.Fatalf("own preparation: disposition=%v err=%v", disposition, err)
@@ -81,12 +169,12 @@ func exerciseOwnerClientContactOutcome(t *testing.T, unknown bool) {
 		}
 		return writeOwnerFrame(connection, ownerServerReply(request, ownerBusy))
 	})
-	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
+	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{})
 	if unknown {
 		if outcome != (PreparationOutcome{}) || err == nil {
 			t.Fatalf("unknown contact became success: outcome=%v err=%v", outcome, err)
 		}
-		requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+		requireOwnerContactError(t, err)
 	} else if err != nil || outcome.Condition != PreparationBusy || outcome.Disposition != (Disposition{}) {
 		t.Fatalf("verified busy outcome lost: outcome=%v err=%v", outcome, err)
 	}
@@ -111,34 +199,21 @@ func TestOwnerClientRequiresFiniteContextBeforeContact(t *testing.T) {
 
 // This is transport composition only. Source ownership and recovery eligibility
 // remain the receiving resident's canonical read, never these fixture locators.
-func TestOwnerClientPreservesSavedAndMigrationSubjects(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		migration bool
-	}{{"saved", false}, {"migration", true}} {
-		t.Run(test.name, func(t *testing.T) { exerciseOwnerClientSavedSubject(t, test.migration) })
-	}
-}
 
-func exerciseOwnerClientSavedSubject(t *testing.T, migration bool) {
+func TestOwnerClientPreservesSavedSubject(t *testing.T) {
 	t.Helper()
 	f := newOwnerContactFixture(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	expected := ownerPreparationSubjectFixture(ownerRecoverSaved)
-	if migration {
-		expected = ownerPreparationSubjectFixture(ownerMigrateReferenced)
-		expected.Migration.RootID = f.journal.pin.RootID()
-	} else {
-		expected.Source.RootID = f.journal.pin.RootID()
-	}
+	expected.Source.RootID = f.journal.pin.RootID()
 	join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
-		if request.Action != expected.Action || request.Source != expected.Source || request.Migration != expected.Migration || request.Context != expected.Context {
+		if request.Action != expected.Action || request.Source != expected.Source || request.Context != expected.Context {
 			return ErrIdentity
 		}
 		return writeOwnerFrame(connection, ownerServerReply(request, ownerIncompatible))
 	})
-	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: expected.preparationOperation(), Context: expected.Context, Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
+	outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: expected.preparationOperation(), Context: expected.Context})
 	if outcome.Disposition != (Disposition{}) || outcome.Condition != PreparationIncompatible || err != nil {
 		t.Fatalf("subject contact outcome changed: outcome=%v err=%v", outcome, err)
 	}
@@ -158,16 +233,16 @@ func TestOwnerClientPreservesOtherRootSelectionWithoutBirth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requirements := ownerRequirementsFixture()
+
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
-		if request.Action != ownerEnsureOther || request.Target != (originRecord{Root: target.Root(), RootID: target.RootID()}) || request.Context != selected || request.Requirements != requirements {
+		if request.Action != ownerEnsureOther || request.Target != (originRecord{Root: target.Root(), RootID: target.RootID()}) || request.Context != selected {
 			return ErrIdentity
 		}
 		return writeOwnerFrame(connection, ownerServerReply(request, ownerBusy))
 	})
-	established, err := RequestOtherEstablishment(ctx, f.reader, f.auth.request.Owner, target, selected, requirements, InitialOperation{})
+	established, err := RequestOtherEstablishment(ctx, f.reader, f.auth.request.Owner, target, selected, InitialOperation{})
 	if established != (EstablishedOwner{}) || !errors.Is(err, ErrOwnerBusy) {
 		t.Fatalf("other-root contact: owner=%v err=%v", established, err)
 	}
@@ -176,32 +251,5 @@ func TestOwnerClientPreservesOtherRootSelectionWithoutBirth(t *testing.T) {
 	}
 	if _, found, readErr := targetJournal.latestIntent(t.Context()); found || readErr != nil {
 		t.Fatalf("request client created target startup: found=%t err=%v", found, readErr)
-	}
-}
-
-func TestOwnerClientPreservesMigrationResultAlongsidePreparationFault(t *testing.T) {
-	for _, code := range []ownerReplyCode{ownerOK, ownerFault, ownerTimeout} {
-		t.Run(string(code), func(t *testing.T) {
-			f := newOwnerContactFixture(t)
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-			defer cancel()
-			migration := MigrationReference{RootID: f.journal.pin.RootID(), RecordSHA256: ownerWireDigest, HistoryIndex: 2}
-			selected := LaunchContextReference{SHA256: ownerWireDigest}
-			join := f.serve(t, func(connection *net.UnixConn, request ownerRequest) error {
-				reply := ownerServerReply(request, code)
-				reply.Disposition = Disposition{Kind: DispositionStarted, Context: selected}
-				reply.MigrationResult = MigrationCompleted
-				reply.Target = originRecord{Root: f.journal.pin.Root(), RootID: request.RootID}
-				reply.Startup = request.Owner
-				return writeOwnerFrame(connection, reply)
-			})
-			outcome, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: InitialOperation{Kind: InitialMigrateReferenced, Migration: migration}, Context: selected, Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
-			if outcome.MigrationResult != MigrationCompleted || outcome.Disposition != (Disposition{Kind: DispositionStarted, Context: selected}) || outcome.Condition != PreparationCondition(code) || err != nil {
-				t.Fatalf("migration outcome changed: outcome=%v err=%v", outcome, err)
-			}
-			if joinErr := join(); joinErr != nil {
-				t.Fatal(joinErr)
-			}
-		})
 	}
 }

@@ -7,7 +7,6 @@ The caller retains private-supervisor shutdown and owned-root finalization.
 """
 
 from dataclasses import asdict, dataclass
-import hashlib
 from pathlib import Path
 import shlex
 import sys
@@ -22,7 +21,7 @@ from scripts.delegate_acceptance.evidence.records import parse_json_output
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.processes.operations import Process, Processes
 from scripts.delegate_acceptance.processes.observation import wait_until
-from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 from scripts.delegate_acceptance.tasks.publication import snapshot, verify_collected_outcome
 from scripts.delegate_acceptance.private_cli import control_fixture
@@ -36,6 +35,7 @@ from scripts.delegate_acceptance.private_cli.contention_policy import (
     MODERN_CONTENTION_TASK_BUDGET,
     LOGICAL_IDENTITY_FIELDS,
     migration_expectation,
+    require_migration_facts,
     require_boundary_identity,
     require_content_identity,
     require_control_response,
@@ -48,6 +48,7 @@ from scripts.delegate_acceptance.private_cli.fixture_records import FixtureInsta
 from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
+from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort, LockedReleaseGate
 from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_supervisor_pair
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
@@ -204,44 +205,51 @@ def active_supervisor_content(state: Path) -> dict[str, object]:
 
 
 def observe_migration(state: Path, writer: ModernInstallation) -> dict[str, object]:
-    """Snapshot published facts and the packaged resolver's content-addressed target.
+    """Snapshot canonical records and the writer's actual installed selection.
 
     No inventory pointer chooses the active generation and no record is changed.
     The caller holds its reader gate when taking active-round observations.
     """
     supervisor = state / ".supervisor"
     published = optional_control_record(supervisor / "supervisor.identity.json")
-    if published is None:
-        raise AcceptanceFailure("modern published binding is missing")
+    if (published is None or type(published.get("schema_version")) is not int
+            or published["schema_version"] != 1):
+        raise AcceptanceFailure("modern published binding is missing or has an invalid schema")
     binding = published.get("binding")
     if not isinstance(binding, dict):
-        raise AcceptanceFailure("modern published binding is missing")
-    members = {name: digest(writer.libexec / name) for name in ("pueue", "pueued")}
-    pair_digest = hashlib.sha256((members["pueue"] + "\n" + members["pueued"]).encode()).hexdigest()
-    target = supervisor / ("pueue-pair-" + pair_digest)
-    for role in ("client", "daemon"):
-        executable = binding[role + "_executable"]
-        if not isinstance(executable, str):
-            raise AcceptanceFailure("modern published executable is invalid")
-        path = Path(executable)
-        require(path.is_file() and not path.is_symlink(), "modern published executable is unsafe")
-        require(digest(path) == binding[role + "_sha256"], "modern published executable bytes changed")
+        raise AcceptanceFailure("modern published binding is missing or has an invalid schema")
+    selected: dict[str, str] = {}
+    for role, name in (("client", "pueue"), ("daemon", "pueued")):
+        observed = installed_executable_observation(writer.libexec / name)
+        installed_path = observed.get("path")
+        if (observed.get("representation") != "installed-paths" or observed.get("name") != name
+                or not isinstance(installed_path, str)):
+            raise AcceptanceFailure("modern writer installed role is missing or unusable: " + name)
+        selected[role] = installed_path
+        recorded = binding.get(role + "_executable")
+        if not isinstance(recorded, str):
+            raise AcceptanceFailure("modern published installed role is missing")
+        published_role = installed_executable_observation(Path(recorded))
+        require(published_role.get("representation") == "installed-paths" and published_role.get("name") == name,
+                "modern published installed role is missing or unusable: " + name)
     alias_config = supervisor / "legacy-pueue.yml"
     require(not alias_config.is_symlink(), "modern recovery config is unsafe")
     alias = optional_control_record(supervisor / "legacy-supervisor.json")
     if alias is not None:
         require(alias.get("config_path") == str(alias_config), "modern recovery config escaped its owned supervisor")
     unsettled = ("bootstrap.pending", "identity.pending.json", "legacy-supervisor.pending.json", "legacy-pueue.pending")
-    return {
+    facts = {
         "published": binding,
         "daemon": optional_control_record(supervisor / "daemon.identity.json"),
-        "writer": {"executable": str(target / "pueued"), "sha256": members["pueued"],
+        "writer": {"executable": selected["daemon"], "executable_identity": "installed-path-v1",
                    **{field: binding.get(field) for field in LOGICAL_IDENTITY_FIELDS}},
         "migration": optional_control_record(supervisor / "migration.json"),
         "alias": alias,
         "alias_config_sha256": digest(alias_config) if alias_config.exists() else None,
         "unsettled_records": [name for name in unsettled if (supervisor / name).exists() or (supervisor / name).is_symlink()],
     }
+    require_migration_facts(facts)
+    return facts
 
 
 def prove_contention_round(
@@ -279,11 +287,14 @@ def prove_contention_round(
         # observation while the writer already owns EX and awaits fixture release.
         exclusive_evidence = observe_boundary(exclusive, exclusive_gate, lock_path, "exclusive")
         assert_live()
-        pair = assert_state_supervisor_pair(state, writer.libexec)
-        writer_identity = facts["writer"]
-        if not isinstance(writer_identity, dict):
-            raise AcceptanceFailure("modern writer identity is missing")
-        require(str(pair / "pueued") == writer_identity["executable"], "modern writer resolved another daemon")
+        daemon_identity = facts["daemon"]
+        if not isinstance(daemon_identity, dict):
+            raise AcceptanceFailure("modern active daemon identity is missing")
+        daemon_executable = daemon_identity.get("executable")
+        if not isinstance(daemon_executable, str):
+            raise AcceptanceFailure("modern active daemon executable is invalid")
+        pair = assert_state_supervisor_pair(state, Path(daemon_executable).parent)
+        require(str(pair / "pueued") == daemon_executable, "modern control changed the active daemon selection")
         require_content_identity(before, content(), "exclusive entry")
         exclusive_release = release_control(exclusive_gate)
         exclusive.wait(35, expected.exit_code)
@@ -494,7 +505,7 @@ def collect_modern_tasks(tasks: NativeTaskOps, baseline: ModernInstallation, can
     for name, installation in (("modern-baseline", baseline), ("modern-candidate", candidate)):
         select_installation(tasks, installation)
         # The current CLI consumes both tasks; queue validation still checks
-        # each task's original immutable managed-runner fingerprint.
+        # each task's original selected installed managed runner.
         tasks.delegate = candidate.delegate
         task_id = tasks.tasks[name]
         tasks.wait_task(name, task_id)
@@ -571,7 +582,7 @@ def run_modern_binary_contention(
         "root_id": tasks.root_id,
         "installations": {
             name: {
-                role: {"path": str(path), **file_fingerprint(path)}
+                role: installed_executable_observation(path)
                 for role, path in (
                     ("delegate", value.delegate),
                     ("runner", value.runner),
@@ -653,9 +664,8 @@ def dispatch_modern_pair(
     binding = identity.with_name("supervisor.identity.json")
     binding_before = digest(binding)
     new = dispatch_modern_task(tasks, candidate, fixture, "modern-candidate", waiting_brief)
-    # Installation stages candidate inventory; only migration may replace the
-    # active generation or the daemon's launch provenance.
-    assert_state_supervisor_pair(tasks.state, candidate.libexec)
+    # Warm admission keeps the published baseline generation; migration owns replacement.
+    assert_state_supervisor_pair(tasks.state, baseline.libexec)
     require_content_identity(launch_before, digest(identity), "modern warm candidate admission")
     require_content_identity(binding_before, digest(binding), "modern active generation")
     require_content_identity(pid_before, digest(pid), "modern warm candidate daemon PID")
@@ -700,7 +710,7 @@ def run_prepared_modern_contention(
         installed.state,
         response_directory,
         managed_runner=True,
-        runner_placement=STATE_INSTALLED_RUNNER,
+        runner_placement=BUNDLE_RUNNER,
     )
     fixture = ModernFixture(
         controls, installed.brief, installed.workspace, gate, installed.waiter_directory, installed.lease_nonce

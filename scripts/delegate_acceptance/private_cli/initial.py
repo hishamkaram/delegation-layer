@@ -3,7 +3,6 @@
 from scripts.delegate_acceptance.private_cli.fixture_records import InitialObservation
 
 
-import hashlib
 import json
 import os
 import uuid
@@ -22,19 +21,14 @@ from scripts.delegate_acceptance.private_cli.packaged_defaults import verify_pac
 def prepare_initial_observations(args, legacy_mode, lifetime, response_directory, run_receipt, fixture):
     initial_pair_directory = None
     dispatch, task_id = dispatch_initial_task(args, fixture, lifetime, response_directory, run_receipt)
-    (initial_pair_directory, initial_daemon, identity_path, old_digest, upgraded_daemon, upgraded_daemon_digest) = (
+    (initial_pair_directory, initial_daemon, identity_path, daemon_identity, upgraded_daemon) = (
         read_initial_provenance(fixture, legacy_mode, lifetime, task_id)
     )
     primary_client = lifetime.old_libexec / "pueue" if legacy_mode else initial_pair_directory / "pueue"
     packaged_evidence = verify_packaged_default_path(
         owner=lifetime.ownership,
         base=lifetime.base,
-        sources={
-            "delegate": fixture.upgraded_delegate_binary,
-            "delegate-run": fixture.upgraded_runner_binary,
-            "pueue": fixture.pueue_binary,
-            "pueued": fixture.pueued_binary,
-        },
+        sources=dict(fixture.packaged_sources),
         provider_bin=fixture.provider_bin,
         brief=fixture.brief,
         primary_client=primary_client,
@@ -81,9 +75,8 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
         initial_pair_directory=initial_pair_directory,
         initial_daemon=initial_daemon,
         identity_path=identity_path,
-        old_digest=old_digest,
+        daemon_identity=daemon_identity,
         upgraded_daemon=upgraded_daemon,
-        upgraded_daemon_digest=upgraded_daemon_digest,
         packaged_evidence=packaged_evidence,
         inspection_group=inspection_group,
         inspection_prefix=inspection_prefix,
@@ -176,22 +169,22 @@ def read_initial_provenance(fixture, legacy_mode, lifetime, task_id):
         if str(initial_pair_directory / "pueue") not in json.dumps(first_meta) or str(initial_daemon) not in json.dumps(
             first_meta
         ):
-            raise RuntimeError("task did not bind the verified state-root supervisor pair")
+            raise RuntimeError("task did not bind the selected installed supervisor pair")
     outcome = json.loads((task_dir / "outcome.json").read_text())
     if outcome.get("verdict") != "committed":
         raise RuntimeError("durable outcome does not confirm success")
 
     identity_path = fixture.state / ".supervisor" / "daemon.identity.json"
-    old_identity = json.loads(identity_path.read_text())
+    daemon_identity = identity_path.read_bytes()
+    old_identity = json.loads(daemon_identity)
     upgraded_daemon = lifetime.upgraded_libexec / "pueued"
-    upgraded_daemon_digest = hashlib.sha256(upgraded_daemon.read_bytes()).hexdigest()
     if old_identity.get("executable") != str(initial_daemon):
         raise RuntimeError("initial launch provenance does not name its selected private daemon")
-    old_digest = hashlib.sha256((lifetime.old_libexec / "pueued").read_bytes()).hexdigest()
-    if old_identity.get("sha256") != old_digest:
-        raise RuntimeError("initial launch provenance has the wrong daemon hash")
-    if old_identity.get("executable") == str(upgraded_daemon) or old_identity.get("sha256") == upgraded_daemon_digest:
-        raise RuntimeError("acceptance layouts do not reproduce daemon executable hash drift")
+    if old_identity.get("executable") == str(upgraded_daemon):
+        raise RuntimeError("acceptance layouts do not select independent daemon installations")
+    if not legacy_mode and (old_identity.get("executable_identity") != "installed-path-v1"
+                            or old_identity.get("sha256")):
+        raise RuntimeError("current daemon identity did not record installed-path selection")
     if not fixture.old_daemon_marker.is_file() or fixture.old_daemon_marker.read_text().splitlines() != ["started"]:
         raise RuntimeError("initial CLI did not start exactly one old-layout daemon")
-    return (initial_pair_directory, initial_daemon, identity_path, old_digest, upgraded_daemon, upgraded_daemon_digest)
+    return (initial_pair_directory, initial_daemon, identity_path, daemon_identity, upgraded_daemon)

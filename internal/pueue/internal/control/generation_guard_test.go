@@ -35,7 +35,7 @@ func newGenerationGuardFixture(t *testing.T) generationGuardFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, base, err := ensurePrivateConfigContext(t.Context(), fixture.stateRoot, resolution, options.PrivateGenerationGuard)
+	config, base, err := ensurePrivateConfigContext(t.Context(), fixture.stateRoot, resolution, options.PrivateGenerationGuard, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,6 @@ func newGenerationGuardFixture(t *testing.T) generationGuardFixture {
 	legacy := privateDaemonIdentityForBinding(client.Binding())
 	successor := legacy
 	successor.Executable = filepath.Join(filepath.Dir(fixture.daemonPath), "successor-pueued")
-	successor.SHA256 = strings.Repeat("a", 64)
 	return generationGuardFixture{
 		root: fixture.stateRoot, base: base, client: client,
 		record: privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: legacy, Successor: successor},
@@ -62,7 +61,7 @@ func newGenerationGuardFixture(t *testing.T) generationGuardFixture {
 }
 
 func TestPrivateGenerationGuardDeniesPublicationTransactions(t *testing.T) {
-	for _, name := range []string{"identity", "binding", "binding-replacement", "restart-intent", "migration-create", "migration-replacement", "migration-completion", "recovery-alias"} {
+	for _, name := range []string{"identity", "binding", "binding-replacement", "migration-create", "migration-replacement", "migration-completion", "recovery-alias"} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newGenerationGuardFixture(t)
 			operation := generationGuardOperation(t, fixture, name)
@@ -102,20 +101,11 @@ func generationGuardOperation(t *testing.T, fixture generationGuardFixture, name
 		}
 	case "binding":
 		return func(guard PrivateGenerationGuard) error {
-			return PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(t.Context(), fixture.root, binding, Options{PrivateGenerationGuard: guard})
+			return publishPrivateSupervisorBindingIfAbsentContext(t.Context(), fixture.root, binding, guard)
 		}
 	case "binding-replacement":
 		return func(guard PrivateGenerationGuard) error {
 			return replaceReconciledPrivateBindingContext(t.Context(), fixture.root, binding, binding, guard)
-		}
-	case "restart-intent":
-		if err := clearPrivateBootstrapPending(fixture.root); err != nil {
-			t.Fatal(err)
-		}
-		candidate := binding
-		candidate.ClientExecutable = filepath.Join(fixture.base, "replacement-client")
-		return func(guard PrivateGenerationGuard) error {
-			return publishPrivatePairRestartIntentContext(t.Context(), fixture.root, privatePairRestartIntent{Predecessor: binding, Target: candidate}, guard)
 		}
 	case "migration-create":
 		return func(guard PrivateGenerationGuard) error {
@@ -126,7 +116,7 @@ func generationGuardOperation(t *testing.T, fixture generationGuardFixture, name
 			t.Fatal(err)
 		}
 		replacement := fixture.record
-		replacement.Successor.SHA256 = strings.Repeat("b", 64)
+		replacement.Successor.Executable += "-replacement"
 		return func(guard PrivateGenerationGuard) error {
 			return replacePrivateMigrationRecordContext(t.Context(), fixture.base, fixture.record, replacement, guard)
 		}
@@ -218,7 +208,7 @@ func TestPrivateGenerationGuardStartMarkerPrecedesNoOrchestration(t *testing.T) 
 	}
 }
 
-func TestPrivateGenerationGuardPreparedWithdrawalRefused(t *testing.T) {
+func TestPrivatePreparedTargetMismatchRefusesBeforeGenerationGrant(t *testing.T) {
 	fixture := newGenerationGuardFixture(t)
 	binding := fixture.client.Binding()
 	if err := commitPrivateDaemonIdentity(fixture.base, binding); err != nil {
@@ -230,12 +220,12 @@ func TestPrivateGenerationGuardPreparedWithdrawalRefused(t *testing.T) {
 	before := snapshotPrivateSuccessorTestState(t, fixture.root)
 	fixture.client.options.PrivateGenerationGuard = nil
 	identity := privateDaemonIdentityForBinding(binding)
-	err := fixture.client.resumePreparedPrivateMigration(t.Context(), fixture.root, fixture.base, binding, true, identity, true, identity, identity, fixture.record)
-	if !errors.Is(err, ErrInfrastructureOwnerRequired) {
-		t.Fatalf("withdrawal bypassed generation grant: %v", err)
+	err := fixture.client.resumeValidatedPreparedPrivateMigration(t.Context(), fixture.root, fixture.base, binding, true, identity, true, identity, identity, fixture.record)
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("fixed target mismatch did not refuse: %v", err)
 	}
 	if after := snapshotPrivateSuccessorTestState(t, fixture.root); !reflect.DeepEqual(before, after) {
-		t.Fatal("unowned withdrawal erased prepared migration")
+		t.Fatal("fixed target mismatch erased prepared migration")
 	}
 }
 
@@ -258,7 +248,7 @@ func TestPrivateGenerationGuardExactReplayAndWarmReadNeedNoGrant(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := PublishPrivateSupervisorBindingIfAbsentContext(t.Context(), fixture.root, binding); err != nil {
+	if err := publishPrivateSupervisorBindingIfAbsentContext(t.Context(), fixture.root, binding, nil); err != nil {
 		t.Fatalf("equivalent durable binding required a grant: %v", err)
 	}
 	resolution, err := privateResolution(fixture.client.options)

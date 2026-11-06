@@ -2,11 +2,8 @@ package control
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"unicode"
@@ -25,17 +22,16 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil || executable != binding.ClientExecutable {
 		return task.SupervisorRef{}, errors.Join(ErrBinding, err)
 	}
-	if binding.ClientSHA256, err = hashExecutable(executable); err != nil {
-		return task.SupervisorRef{}, err
-	}
+	binding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	binding.ClientSHA256, binding.DaemonSHA256 = "", ""
 	return binding, nil
 }
 
 // readConfigBinding derives the config identity of the runtime binding from
 // the current config bytes and their resolution: config digest, endpoint,
 // resolved config digest and any recorded resolution. Executable fields are
-// copied from the runtime binding unauthenticated; readBinding authenticates
-// the client executable.
+// copied from the runtime binding; readBinding validates selected installed
+// executable metadata without reading its contents.
 func (c *Client) readConfigBinding() (task.SupervisorRef, error) {
 	runtimeBinding := c.runtimeBinding
 	if err := rejectSymlinkComponents(runtimeBinding.ConfigPath); err != nil {
@@ -61,7 +57,7 @@ func (c *Client) readConfigBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	binding := task.SupervisorRef{ClientExecutable: runtimeBinding.ClientExecutable, ClientSHA256: runtimeBinding.ClientSHA256, DaemonExecutable: runtimeBinding.DaemonExecutable, DaemonSHA256: runtimeBinding.DaemonSHA256, ResolutionCwd: runtimeBinding.ResolutionCwd, ConfigPath: runtimeBinding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: runtimeBinding.ObservedVersion}
+	binding := task.SupervisorRef{ExecutableIdentity: runtimeBinding.ExecutableIdentity, ClientExecutable: runtimeBinding.ClientExecutable, ClientSHA256: runtimeBinding.ClientSHA256, DaemonExecutable: runtimeBinding.DaemonExecutable, DaemonSHA256: runtimeBinding.DaemonSHA256, ResolutionCwd: runtimeBinding.ResolutionCwd, ConfigPath: runtimeBinding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: runtimeBinding.ObservedVersion}
 	if runtimeBinding.Endpoint == "" || runtimeBinding.ResolutionOS != "" {
 		setBindingResolution(&binding, resolution)
 	}
@@ -75,19 +71,6 @@ func readRegular(path string, limit int64) (data []byte, err error) {
 	}
 	defer func() { err = errors.Join(err, f.Close()) }()
 	return task.ReadBounded(f, limit)
-}
-
-func hashExecutable(path string) (digest string, err error) {
-	f, err := openRegular(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func openRegular(path string) (*os.File, error) {

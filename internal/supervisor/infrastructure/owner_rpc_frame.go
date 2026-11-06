@@ -10,7 +10,7 @@ import (
 )
 
 // Owner wire compatibility evolves separately from persisted record schemas.
-const ownerProtocolVersion = 2
+const ownerProtocolVersion = 4
 
 type ownerAction string
 
@@ -20,7 +20,6 @@ const (
 	ownerEnsureOther         ownerAction = "ensure-other"
 	ownerRecoverSaved        ownerAction = "recover-saved"
 	ownerPrepareContinuation ownerAction = "prepare-continuation"
-	ownerMigrateReferenced   ownerAction = "migrate-referenced"
 	ownerMigrateOwn          ownerAction = "migrate-own"
 )
 
@@ -50,8 +49,6 @@ type ownerRequest struct {
 	Context           LaunchContextReference `json:"context"`
 	Deadline          string                 `json:"deadline"`
 	Source            SavedBindingSource     `json:"source"`
-	Migration         MigrationReference     `json:"migration"`
-	Requirements      ArtifactRequirements   `json:"requirements"`
 	Initial           InitialOperation       `json:"initial_operation,omitzero"`
 	InitialResultFor  StartupReference       `json:"initial_result_for,omitzero"`
 }
@@ -77,14 +74,6 @@ func (r ownerRequest) validate() error {
 // owner's recorded default; other-root birth always names the target context.
 // These locators are data. The resident must re-read their canonical owners.
 func (r ownerRequest) validateSelections() error {
-	if r.Action == ownerStatus && r.Requirements != (ArtifactRequirements{}) {
-		return ErrIdentity
-	}
-	if ownPreparationAction(r.Action) && r.Requirements != (ArtifactRequirements{}) {
-		if err := r.Requirements.Validate(); err != nil {
-			return err
-		}
-	}
 	if r.InitialResultFor != (StartupReference{}) && (!ownPreparationAction(r.Action) || r.InitialResultFor != r.Owner) {
 		return ErrIdentity
 	}
@@ -110,7 +99,7 @@ func (r ownerRequest) validateOperationSubject() error {
 		}
 	case ownerEnsureOwn, ownerMigrateOwn:
 	case ownerEnsureOther:
-		return errors.Join(validateOwnerTarget(r.Target, r.RootID), r.Context.Validate(), r.Requirements.Validate(), r.Initial.Validate(r.Target.RootID))
+		return errors.Join(validateOwnerTarget(r.Target, r.RootID), r.Context.Validate(), r.Initial.Validate(r.Target.RootID))
 	case ownerPrepareContinuation:
 		return (InitialOperation{Kind: InitialPrepareContinuation, Source: r.Source}).Validate(r.RootID)
 	case ownerRecoverSaved:
@@ -118,11 +107,6 @@ func (r ownerRequest) validateOperationSubject() error {
 			return ErrIdentity
 		}
 		return r.Source.Validate()
-	case ownerMigrateReferenced:
-		if r.Migration.RootID != r.RootID {
-			return ErrIdentity
-		}
-		return r.Migration.Validate()
 	default:
 		return ErrIdentity
 	}
@@ -135,7 +119,6 @@ func (r ownerRequest) rejectForeignSubjects() error {
 		action  ownerAction
 	}{
 		{r.Source != (SavedBindingSource{}) && r.Action != ownerPrepareContinuation, ownerRecoverSaved},
-		{r.Migration != (MigrationReference{}), ownerMigrateReferenced},
 		{r.Target != (originRecord{}), ownerEnsureOther},
 		{r.Initial != (InitialOperation{}), ownerEnsureOther},
 	} {
@@ -148,7 +131,7 @@ func (r ownerRequest) rejectForeignSubjects() error {
 
 func ownPreparationAction(action ownerAction) bool {
 	switch action {
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
 		return true
 	case ownerStatus, ownerEnsureOther:
 		return false
@@ -170,11 +153,8 @@ type ownerReply struct {
 	Code              ownerReplyCode         `json:"code"`
 	Context           LaunchContextReference `json:"context"`
 	Source            SavedBindingSource     `json:"source"`
-	Migration         MigrationReference     `json:"migration"`
-	Requirements      ArtifactRequirements   `json:"requirements"`
 	Initial           InitialOperation       `json:"initial_operation,omitzero"`
 	InitialResultFor  StartupReference       `json:"initial_result_for,omitzero"`
-	MigrationResult   MigrationResult        `json:"migration_result,omitempty"`
 	Disposition       Disposition            `json:"disposition"`
 	Report            ManualMigrationReport  `json:"report,omitzero"`
 	Failure           PreparationFailure     `json:"failure,omitzero"`
@@ -219,31 +199,6 @@ func (r ownerReply) validatePreparationResult() error {
 	if (!ownPreparationAction(r.Action) || r.Code == ownerOK) && r.Failure != (PreparationFailure{}) {
 		return ErrIdentity
 	}
-	if err := r.validateMigrationResult(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (r ownerReply) validateMigrationResult() error {
-	if r.Action != ownerMigrateReferenced {
-		if r.MigrationResult != "" {
-			return ErrIdentity
-		}
-		return nil
-	}
-	switch r.Code {
-	case ownerOK:
-		return r.MigrationResult.Validate()
-	case ownerFault, ownerTimeout:
-		if r.MigrationResult != "" {
-			return r.MigrationResult.Validate()
-		}
-	case ownerPending, ownerBusy, ownerIncompatible, ownerRefused:
-		if r.MigrationResult != "" {
-			return ErrIdentity
-		}
-	}
 	return nil
 }
 
@@ -253,7 +208,7 @@ func (r ownerReply) validatePreparationSubject() error {
 	if ownPreparationAction(r.Action) {
 		subjectTarget = originRecord{}
 	}
-	subject := ownerRequest{Owner: r.OwnerRef, Action: r.Action, RootID: r.RootID, Target: subjectTarget, Context: r.Context, Source: r.Source, Migration: r.Migration, Requirements: r.Requirements, Initial: r.Initial}
+	subject := ownerRequest{Owner: r.OwnerRef, Action: r.Action, RootID: r.RootID, Target: subjectTarget, Context: r.Context, Source: r.Source, Initial: r.Initial}
 	if ownPreparationAction(r.Action) {
 		subject.InitialResultFor = r.InitialResultFor
 	}
@@ -279,7 +234,7 @@ func (r ownerReply) validateActionSubject() error {
 		if r.Target != (originRecord{}) || r.Startup != (StartupReference{}) || r.InitialResultFor != (StartupReference{}) {
 			return ErrIdentity
 		}
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
 		return r.validateOwnSubject(accepted)
 	case ownerEnsureOther:
 		if r.InitialResultFor != (StartupReference{}) && r.InitialResultFor != r.Startup {
@@ -334,7 +289,7 @@ func validateOwnerTarget(target originRecord, ownerRootID string) error {
 }
 
 type ownerWireFrame interface {
-	ownerRequest | ownerReply
+	ownerRequest | ownerReply | ownerStopRequest | ownerStopReply
 	validate() error
 }
 
@@ -354,12 +309,20 @@ func invalidOwnerFrame(cause error) error {
 // Any frame error requires connection closure. Transport faults retain their
 // I/O classification; only invalid bytes or domain values claim ErrIdentity.
 func readOwnerFrame[T ownerWireFrame](input *bufio.Reader) (T, error) {
-	var zero T
+	data, err := readOwnerFrameBytes(input)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return decodeOwnerFrame[T](data)
+}
+
+func readOwnerFrameBytes(input *bufio.Reader) ([]byte, error) {
 	var data []byte
 	for {
 		part, err := input.ReadSlice('\n')
 		if len(part) > task.MaxControlRecordSize-len(data) {
-			return zero, invalidOwnerFrame(task.ErrControlRecordTooBig)
+			return nil, invalidOwnerFrame(task.ErrControlRecordTooBig)
 		}
 		data = append(data, part...)
 		if errors.Is(err, bufio.ErrBufferFull) {
@@ -369,29 +332,36 @@ func readOwnerFrame[T ownerWireFrame](input *bufio.Reader) (T, error) {
 			if len(data) > 0 {
 				err = errors.Join(io.ErrUnexpectedEOF, err)
 			}
-			return zero, ownerFrameError{err}
+			return nil, ownerFrameError{err}
 		}
-		// Inspect compatibility before decoding the version-specific strict shape.
-		// Current-version input still passes DecodeStrict, including duplicate,
-		// unknown-field and exact field-name checks.
-		var envelope struct {
-			Protocol int `json:"protocol"`
-		}
-		if err = json.Unmarshal(data, &envelope); err != nil {
-			return zero, invalidOwnerFrame(err)
-		}
-		if envelope.Protocol != ownerProtocolVersion {
+		return data, nil
+	}
+}
+
+func decodeOwnerFrame[T ownerWireFrame](data []byte) (T, error) {
+	var zero T
+	var envelope struct {
+		Protocol     int `json:"protocol"`
+		StopProtocol int `json:"stop_protocol"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return zero, invalidOwnerFrame(err)
+	}
+	if envelope.StopProtocol != 0 {
+		if envelope.StopProtocol != ownerStopProtocolVersion {
 			return zero, invalidOwnerFrame(ErrOwnerIncompatible)
 		}
-		var result T
-		if err = task.DecodeStrict(data, &result); err != nil {
-			return zero, invalidOwnerFrame(err)
-		}
-		if err = result.validate(); err != nil {
-			return zero, invalidOwnerFrame(err)
-		}
-		return result, nil
+	} else if envelope.Protocol != ownerProtocolVersion {
+		return zero, invalidOwnerFrame(ErrOwnerIncompatible)
 	}
+	var result T
+	if err := task.DecodeStrict(data, &result); err != nil {
+		return zero, invalidOwnerFrame(err)
+	}
+	if err := result.validate(); err != nil {
+		return zero, invalidOwnerFrame(err)
+	}
+	return result, nil
 }
 
 func writeOwnerFrame[T ownerWireFrame](writer io.Writer, frame T) error {

@@ -16,7 +16,7 @@ func TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScope
 	}
 	base := OptionsForEnvironment(pueue.Options{}, []string{"HOME=/caller", "PATH=/caller/bin"})
 	options := OptionsWithEnvironment(base, []string{"HOME=/provider", "CALLBACK_CONTEXT=preserved", "XDG_CONFIG_HOME=/provider-config"})
-	record, err := captureInfrastructureLaunchContext(pin, options)
+	record, err := captureInfrastructureLaunchContext(pin, options, "/installed/pueue")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,12 +39,12 @@ func TestInfrastructureLaunchContextDistinguishesDefaultAndExplicitEmpty(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaulted, err := captureInfrastructureLaunchContext(pin, pueue.Options{})
+	defaulted, err := captureInfrastructureLaunchContext(pin, pueue.Options{}, "/installed/pueue")
 	if err != nil || !slices.Contains(defaulted.ControlEnvironment, "HOME=/ambient-control") ||
 		slices.Contains(defaulted.ControlEnvironment, "UNRELATED_PRIVATE_VALUE=must-not-be-captured") {
 		t.Fatalf("capture did not reuse the existing default policy: %v", err)
 	}
-	explicit, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: []string{}, PrivateMaintenanceEnvironment: []string{}})
+	explicit, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: []string{}, PrivateMaintenanceEnvironment: []string{}}, "/installed/pueue")
 	if err != nil || !slices.Equal(explicit.ControlEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), nil)) ||
 		!slices.Equal(explicit.MaintenanceEnvironment, expectedInfrastructureEnvironment(t, pin.Root(), pin.RootID(), nil)) {
 		t.Fatalf("capture replaced explicit empty environments: %v", err)
@@ -59,7 +59,7 @@ func TestInfrastructureLaunchContextRebasesReservedOverlay(t *testing.T) {
 	}
 	selected := []string{"PROVIDER=" + string([]byte{0xff}), "DELEGATION_LAYER_PROCESS_SCOPE=old", "DELEGATION_LAYER_PROCESS_SCOPE=duplicate", "DELEGATION_LAYER_PROCESS_SCOPE_NEAR=keep", infrastructure.OriginEnvironment + "=old-A", infrastructure.OriginEnvironment + "=duplicate-A"}
 	before := slices.Clone(selected)
-	record, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: selected, PrivateMaintenanceEnvironment: selected})
+	record, err := captureInfrastructureLaunchContext(pin, pueue.Options{Environment: selected, PrivateMaintenanceEnvironment: selected}, "/installed/pueue")
 	if err != nil {
 		t.Fatalf("reserved overlay was not rebased: %v", err)
 	}

@@ -319,25 +319,3 @@ func (c *Client) privateDaemonPID() (pid int, present bool, resultErr error) {
 	}
 	return pid, true, nil
 }
-
-// RestartPrivate starts the already-bound private daemon after the caller has
-// shut down and drained the old endpoint. It refuses a reachable endpoint and
-// publishes the new daemon identity only after readiness succeeds.
-func (c *Client) RestartPrivate(ctx context.Context, stateRoot string) error {
-	if c == nil {
-		return ErrConfiguration
-	}
-	if !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
-		return ErrConfiguration
-	}
-	if err := c.verifyBinding(); err != nil {
-		return err
-	}
-	if c.runtimeBinding.DaemonExecutable == "" || c.runtimeBinding.DaemonSHA256 == "" {
-		return ErrBinding
-	}
-	if err := c.WaitUnavailable(ctx); err != nil {
-		return err
-	}
-	return c.startPrivate(ctx, stateRoot)
-}

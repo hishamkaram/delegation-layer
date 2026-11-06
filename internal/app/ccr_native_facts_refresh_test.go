@@ -404,9 +404,9 @@ func TestRouteCCRSuccessorWithoutRouteCapabilityReportsTheCause(t *testing.T) {
 // envelope for that admission failure.
 func requireRouteSuccessorCapabilityFailure(t *testing.T, testCase outputUpgradeCase) {
 	t.Helper()
-	installOutputUpgradeProvider(t, testCase.executable())
+	environment := installOutputUpgradeProvider(t, testCase.executable())
 	request := outputUpgradeSuccessorRequest(t, testCase)
-	candidate, err := NativeCatalog().SuccessorCandidate(request, task.MetaRecord{Predicate: testCase.source, EnvironmentRecorded: true}, os.Environ())
+	candidate, err := NativeCatalog().SuccessorCandidate(request, task.MetaRecord{Predicate: testCase.source, EnvironmentRecorded: true}, environment)
 	if err != nil {
 		t.Fatal(err)
 	}

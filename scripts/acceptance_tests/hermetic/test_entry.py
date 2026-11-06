@@ -20,6 +20,7 @@ class HermeticEntryTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--tools", result.stdout)
+            self.assertIn("--source-root", result.stdout)
             self.assertIn("--case", result.stdout)
             self.assertEqual(list(Path(temporary).iterdir()), [])
 

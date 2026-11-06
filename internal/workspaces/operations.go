@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -100,7 +99,7 @@ func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resourc
 }
 
 // newWorkspaceOperationRequest binds one finite helper's deadline, published
-// runtime binding, fresh identity and executable fingerprint. Associating the
+// runtime binding, fresh identity and selected installed worker. Associating the
 // request with a workspace purpose stays with its caller.
 func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, deps OperationOptions, workspaceID string, spec OperationSpec) (workspace.OperationRequest, error) {
 	deadline, err := workspaceOperationDeadline(spec)
@@ -111,11 +110,10 @@ func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, dep
 	if err != nil {
 		return workspace.OperationRequest{}, err
 	}
-	id, err := randomid.NewTaskID()
-	if err != nil {
+	if err = validateWorkspaceOperationExecutable(store.Root, runner); err != nil {
 		return workspace.OperationRequest{}, err
 	}
-	digest, err := commonprovider.FingerprintExecutable(runner)
+	id, err := randomid.NewTaskID()
 	if err != nil {
 		return workspace.OperationRequest{}, err
 	}
@@ -123,7 +121,7 @@ func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, dep
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id,
 		WorkspaceID: workspaceID, Kind: spec.Kind, Subject: spec.Subject,
 		Deadline:         deadline,
-		WorkerExecutable: runner, WorkerSHA256: digest, Supervisor: supervisor,
+		WorkerExecutable: runner, ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, Supervisor: supervisor,
 		Arguments: spec.Arguments, Discard: spec.Discard, Checkpoint: cloneCheckpointSelection(spec.Checkpoint),
 	}, nil
 }
@@ -188,7 +186,7 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 	if err != nil {
 		return err
 	}
-	ctx, supervisor, err := workspaceSubmissionClient(ctx, store, supervisorOwner.Client(), request.Kind, deps)
+	ctx, supervisor, err := workspaceSubmissionClient(ctx, supervisorOwner.Client(), request.Kind, deps)
 	if err != nil {
 		return err
 	}
@@ -200,7 +198,7 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 		return LaunchPermissionError(operation.RecordReceipt(ctx, observation.Job.ID))
 	}
 	check := func(control context.Context) error {
-		return workspaceOperationLaunchPermission(control, store, operation, deps.RootAdmission)
+		return workspaceOperationLaunchPermission(control, operation)
 	}
 	permit, err := operation.SubmissionPermit(ctx)
 	if errors.Is(err, os.ErrExist) {
@@ -209,9 +207,8 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 	if err != nil {
 		return LaunchPermissionError(err)
 	}
-	digest, err := commonprovider.FingerprintExecutable(request.WorkerExecutable)
-	if err != nil || digest != request.WorkerSHA256 {
-		return errors.Join(task.ErrIdentityMismatch, err)
+	if err = validateWorkspaceOperationExecutable(store.Root, request.WorkerExecutable); err != nil {
+		return err
 	}
 	launch := pueue.Launch{RunnerExecutable: request.WorkerExecutable, RootPath: store.Root, Supervised: true, WorkspaceOperation: true}
 	checkedCommit := func(observation pueue.InspectionObservation) error {

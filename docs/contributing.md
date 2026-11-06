@@ -20,11 +20,42 @@ relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
 command/schema behavior; `4.0.4` is the
 [test download](../scripts/install-test-supervisor.sh) and
 [fixture baseline](../internal/pueue/testdata/README.md), not a runtime version
-pin or provider allowlist.
+pin or provider allowlist. The download helper installs only Pueue from fixed,
+verified `v0.3.1` distribution archives. It verifies the compressed archive and
+extracts the selected pair without hashing executable members or reusing cached
+programs. Updating that dependency requires an explicit verified archive/source
+update; it never follows the candidate being built or a moving latest release.
+See the [installed-executable rule](../agents/_data/product-boundary.md#installed-executables).
 
 Keep the behavior, affected area, non-goals and done condition in the existing
 plan. [AGENTS](../AGENTS.md) owns collaboration/scope defaults; load only the
 specialized rule or skill relevant to the work.
+
+### Fixture installations
+
+Fixture drivers build their commands directly from `--source-root` into owned
+installations. Private CLI, scheduler and managed-workspace drivers build
+Delegate and delegate-run; private CLI also accepts `--upgraded-source-root`
+for a distinct source checkout. Supervisor, hermetic, inspection and contributor
+drivers build their specific fixture commands at the required sibling or quoted
+paths. Their `--tools` directory inputs are retired and fail explicitly. These
+builds use the selected checkout, including uncommitted changes. Use the
+repository compiler pin from development setup; the build commands set
+`GOTOOLCHAIN=local`.
+
+Selected installed programs run in place. These drivers never clone executable
+images or hash them for receipts. Data/configuration, source-input and sealed
+evidence digests remain integrity checks. Managed-workspace fixtures install
+their own verified archive Pueue pair; private CLI upgrade scenarios do likewise.
+Other supervisor fixtures retain explicit installed Pueue paths for their
+required invocation observations. Missing or incompatible installations fail
+explicitly. Unknown build/child closure retains the owned paths for diagnosis.
+
+`make acceptance-supervisor` and `make acceptance-inspection` let their drivers
+own the fixture builds. The standalone `make supervisor-fixtures` and
+`make inspection-fixtures` remain available for direct fixture work; they are
+not prerequisites for those drivers. Source builds and finite fixture tests do
+not establish native lifecycle or real-provider acceptance.
 
 ## Development checks
 
@@ -127,21 +158,21 @@ Do not modify global provider settings or credentials for a pass.
 
 ## Independent startup component proof
 
-`DELEGATE_INDEPENDENT_EXPECTED_BACKEND=cgroup-v2 make acceptance-independent-startup`
-runs the infrastructure component probes on an exact Linux host. Use
-`process-group` only on a native cooperative host; the probe asserts the backend
-selected by production `Prepare` and does not force fallback. It checks native
-lease inheritance, descriptor exclusion, adoption, scope termination with an
-ordinary orphan control, peer identity and component custody staging.
+The `acceptance-independent-startup` target retains native lifetime, host, peer
+identity, shutdown-lease, infrastructure and recovery controls. Copied-image
+custody, root editor/census and executable-byte-pin upgrade probes are retired.
+Do not invoke the historical staging probes as replacement proof.
 
-For native Ubuntu/macOS component evidence before runtime integration, manually
-dispatch CI on the feature branch with `native_startup_component_only=true` and
-`build_candidate=false`. This mode runs the named component jobs and is labelled
-as component proof only. It does not establish full CI, product acceptance,
-production image provenance or PR readiness. Normal full CI remains required
-before opening the PR. An abrupt owned fixture exit models owner loss; it is not
-an external signal-handling test. Different-UID native rejection remains
-unverified without a second user.
+The replacement receipt/test producers and affected native checks remain
+unverified until their migrations and execution complete. Target availability
+and workflow guard tests establish neither current product acceptance nor full
+CI or PR readiness. Native Linux/macOS checks and the three nested-survival
+topologies on each required backend need their actual results. Cross-builds do
+not fill a missing native cell; Windows remains a future, unverified host.
+
+Assert the production-selected backend and never force fallback. An abrupt owned
+fixture exit models owner loss, not external signal handling. Different-UID
+native rejection remains unverified without a second user.
 
 ## Native and CLI scenarios
 
@@ -151,6 +182,8 @@ real account; a cross-build or a different kernel is not native runtime proof.
 
 | Target | Purpose |
 | --- | --- |
+| `make acceptance-supervisor` | Finite hermetic cases and an owned native Pueue lifecycle using source-built fixture commands. |
+| `make acceptance-inspection` | Source-built inspection fixtures against a selected installed Pueue pair. |
 | `make acceptance-private-cli` | Current CLI/private-supervisor bootstrap, dispatch/status/collect and 200-running-task capacity with finite provider fixtures. |
 | `make acceptance-private-cli-default-stop` | User and budget stop behavior. |
 | `make acceptance-scheduler` | Native ticks and stop isolation with finite fixtures. The driver defaults to `--hosting managed-host` for foreground `scheduler serve`, without an OS service manager. Optional `--hosting service` retains the legacy `scheduler run` service path. |
@@ -195,24 +228,25 @@ native default-root check. It starts plain `scheduler serve` on absent storage
 in an owned, isolated native configuration context, checks readiness with zero
 definitions, then uses ordinary no-root commands from different working
 directories and observes one finite fixture occurrence. It makes no AI calls
-and requires `managed-host`. Select it explicitly: `--scenario all` continues
-to run the existing `successive` and `overlap-stop` cases.
+and requires `managed-host`. In that hosting mode, `--scenario all` runs
+`successive`, `overlap-stop` and `fresh-default`; service mode's `all` runs only
+the first two.
 
-With the candidate binaries and fixture supervisors built, run from the
+With the source checkout and fixture supervisors available, run from the
 repository root using an absent output directory (change the example output
 name for later runs):
 
 ```sh
 python3 scripts/acceptance_scheduler.py \
   --scenario fresh-default --hosting managed-host \
-  --delegate "$PWD/bin/delegate" --runner "$PWD/bin/delegate-run" \
+  --source-root "$PWD" \
   --pueue "$PWD/bin/test-supervisor/pueue" \
   --pueued "$PWD/bin/test-supervisor/pueued" \
   --output "$PWD/.local/archive/scheduler-fresh-default-results"
 ```
 
 Use `python3 scripts/acceptance_scheduler.py --help` for the current driver's
-scenario and binary-path options.
+scenario, source-root and supervisor-path options.
 
 For the new path, run the actual candidate CLI/runner on Linux and macOS with a
 user-started `scheduler serve` in an independent terminal or tmux pane. Verify

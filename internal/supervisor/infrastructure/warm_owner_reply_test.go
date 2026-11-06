@@ -19,9 +19,9 @@ func TestWarmOwnerWireClassifiesOnlyCleanBusyAndIncompatible(t *testing.T) {
 		{"local-busy", task.ErrLockBusy, ownerBusy},
 		{"remote-busy", ErrOwnerBusy, ownerBusy},
 		{"joined-busy", errors.Join(task.ErrLockBusy, ErrOwnerBusy), ownerBusy},
-		{"local-incompatible", ErrIncompatible, ownerIncompatible},
+		{"local-incompatible", ErrOwnerIncompatible, ownerIncompatible},
 		{"remote-incompatible", ErrOwnerIncompatible, ownerIncompatible},
-		{"joined-incompatible", errors.Join(ErrIncompatible, ErrOwnerIncompatible), ownerIncompatible},
+		{"joined-incompatible", errors.Join(ErrOwnerIncompatible, ErrOwnerIncompatible), ownerIncompatible},
 		{"busy-with-storage-fault", errors.Join(task.ErrLockBusy, errors.New("storage read failed")), ownerFault},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,15 +65,7 @@ func TestWarmOwnerWireRetainsCleanupBusyAsFault(t *testing.T) {
 	if !errors.As(err, &actual) || actual != retained || !f.server.isClosing() {
 		t.Fatalf("wire failure lost actual retained cleanup graph: %v", err)
 	}
-	exclusive, acquireErr := retained.store.TryAcquireRootAdmissionExclusiveContext(ctx)
-	if exclusive != nil {
-		if releaseErr := exclusive.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	}
-	if !errors.Is(acquireErr, task.ErrLockBusy) {
-		t.Fatalf("retained shared admission disappeared: %v", acquireErr)
-	}
+	retained.assertLeaseHeld(t, ctx)
 }
 
 func TestWarmOwnerCleanBusyDoesNotMaskLaterFault(t *testing.T) {

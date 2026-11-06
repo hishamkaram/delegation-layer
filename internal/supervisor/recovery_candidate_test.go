@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -18,7 +19,7 @@ func TestRecoveryCandidateKeepsRecordedPairBeforeUnusedInventory(t *testing.T) {
 	if err := os.WriteFile(saved.ClientExecutable, []byte(parentMigrationClient+"\n# updated client\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName), []byte("damaged unused inventory"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture.store.Root, ".supervisor", "pueue-pair.json"), []byte("damaged unused inventory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := parentMigrationTree(t, fixture.store.Root)
@@ -31,38 +32,8 @@ func TestRecoveryCandidateKeepsRecordedPairBeforeUnusedInventory(t *testing.T) {
 	}
 }
 
-func TestRecoveryCandidateKeepsDamagedManagedPairHard(t *testing.T) {
-	fixture := newSavedControlFixture(t)
-	if err := os.WriteFile(fixture.target.ClientExecutable, []byte("damaged content-addressed fixture"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := ResolveRecoveryPrivateSupervisorExecutables(fixture.store.Root, fixture.target, ExecutableLookup{})
-	if err == nil {
-		t.Fatal("damaged managed pair was selected")
-	}
-	var unavailable *unavailableBundledPairError
-	if errors.As(err, &unavailable) {
-		t.Fatalf("managed integrity fault became candidate absence: %v", err)
-	}
-}
-
-func TestRecoveryCandidateKeepsDamagedInventoryHardAfterMissingRecordedPair(t *testing.T) {
-	fixture := newSavedControlFixture(t)
-	if err := os.Remove(fixture.target.ClientExecutable); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := ResolveRecoveryPrivateSupervisorExecutables(fixture.store.Root, fixture.target, ExecutableLookup{})
-	var unavailable *unavailableBundledPairError
-	if !errors.Is(err, os.ErrNotExist) || errors.As(err, &unavailable) {
-		t.Fatalf("damaged inventory was ignored: %v", err)
-	}
-}
-
 func TestRecoveryCandidateUsesCapturedPATHWithoutOverridingInitialChoice(t *testing.T) {
 	fixture := newSavedControlFixture(t)
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
-	}
 	saved := fixture.target
 	saved.ClientExecutable = filepath.Join(fixture.store.Root, "missing-recorded", "pueue")
 	saved.DaemonExecutable = filepath.Join(fixture.store.Root, "missing-recorded", "pueued")
@@ -96,20 +67,15 @@ func TestRecoveryCandidatePreservesJoinedBundleFaults(t *testing.T) {
 }
 
 // Legacy installations record executable paths outside managed state custody.
-// Their actual bytes are verified later by the canonical binding handshake.
+// The canonical native/protocol handshake verifies behavior, never executable bytes.
 func legacyRawControlPair(t *testing.T, fixture parentMigrationFixture) task.SupervisorRef {
 	t.Helper()
 	saved := fixture.target
 	directory := supervisorfixture.CanonicalTempDir(t)
-	for _, member := range []struct{ source, name string }{{saved.ClientExecutable, "pueue"}, {saved.DaemonExecutable, "pueued"}} {
-		data, err := os.ReadFile(member.source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = os.WriteFile(filepath.Join(directory, member.name), data, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
+	supervisorfixture.WriteExecutable(t, filepath.Join(directory, "pueue"), parentMigrationClient+"\n# legacy installed client\n")
+	supervisorfixture.WriteExecutable(t, filepath.Join(directory, "pueued"), "#!/bin/sh\nexit 0\n")
+	saved.ExecutableIdentity = ""
+	saved.ClientSHA256, saved.DaemonSHA256 = strings.Repeat("a", 64), strings.Repeat("b", 64)
 	saved.ClientExecutable, saved.DaemonExecutable = filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
 	return saved
 }

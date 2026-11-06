@@ -27,8 +27,7 @@ func PrepareContext(ctx context.Context, selection supervisorcore.AdmissionSelec
 			supervisorcore.CloseOwnerMaintenance(supervisorOwner, resultErr)
 		}
 	}()
-	// Bind control to the selected scope before the provider merge. A
-	// continuation has already bound its historical control, which is kept; an
+	// Bind captured control before merging the selected provider scope. An
 	// uncaptured composition keeps pueue's standalone default.
 	if options.Supervisor.Environment != nil {
 		options.Supervisor.Control = supervisorcore.OptionsForEnvironment(options.Supervisor.Control, options.Supervisor.Environment)
@@ -104,11 +103,7 @@ func prepareAdmissionSupervisorContext(ctx context.Context, selection supervisor
 	configuration.Control = options
 	client, err := supervisorcore.PrepareAdmissionSupervisorContext(ctx, selection, configuration, store, candidate.Inspection != nil, runner, private)
 	if err != nil {
-		stage := "start-supervisor"
-		if selection.ContinuationSource != (infrastructure.SavedBindingSource{}) {
-			stage = "resolve-continuation-supervisor"
-		}
-		return client, WithStage(stage, err)
+		return client, WithStage("start-supervisor", err)
 	}
 	return client, nil
 }

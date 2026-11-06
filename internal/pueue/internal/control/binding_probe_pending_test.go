@@ -52,7 +52,11 @@ func TestSavedPrivateVersionProbePendingIsNotBindingDrift(t *testing.T) {
 		ObservationTimeout:     10 * time.Second,
 	}
 	assertBindingProbePendingTest(t, gate, "pueue 99.7.3\n", func(ctx context.Context) (*Client, error) {
-		return RecoverPrivate(ctx, stateRoot, bindings["B"], replacement, daemon, options)
+		recovery, err := AttemptPrivateRecovery(ctx, stateRoot, bindings["B"], replacement, daemon, options)
+		if recovery.PairUnavailable() || recovery.Client() != nil || recovery.Cause() != nil {
+			t.Errorf("pending version probe returned a recovery result: %+v", recovery)
+		}
+		return recovery.Client(), err
 	})
 }
 

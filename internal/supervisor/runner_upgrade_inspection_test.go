@@ -17,28 +17,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func TestInstallStateRunnerRejectsContentAddressCollision(t *testing.T) {
-	root := supervisorfixture.CanonicalTempDir(t)
-	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
-	supervisorfixture.WriteExecutable(t, source, "trusted runner")
-	digest, err := stateExecutableSourceDigest(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := filepath.Join(root, ".supervisor")
-	if err = os.Mkdir(base, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	collision := filepath.Join(base, stateRunnerName+"-"+digest)
-	supervisorfixture.WriteExecutable(t, collision, "different runner")
-	if _, err = InstallStateRunner(root, source); err == nil {
-		t.Fatal("content-addressed path collision was overwritten")
-	}
-	if data, readErr := os.ReadFile(collision); readErr != nil || string(data) != "different runner" {
-		t.Fatalf("collision target changed = %q, err=%v", data, readErr)
-	}
-}
-
 func TestManagedRunnerExecutableSkipsExternalCustomRunner(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
 	custom := filepath.Join(supervisorfixture.CanonicalTempDir(t), "custom-delegate-run")
@@ -50,7 +28,7 @@ func TestManagedRunnerExecutableSkipsExternalCustomRunner(t *testing.T) {
 
 func TestManagedRunnerExecutablePreservesAmbiguousRemovedLegacyRunner(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
-	removed := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
+	removed := filepath.Join(supervisorfixture.CanonicalTempDir(t), managedRunnerName)
 	if managedRunnerExecutable(root, removed, "") {
 		t.Fatal("ambiguous removed legacy runner was guessed to be managed")
 	}
@@ -61,48 +39,20 @@ func TestManagedRunnerExecutablePreservesAmbiguousRemovedLegacyRunner(t *testing
 	if managedRunnerExecutable(root, custom, "") {
 		t.Fatal("missing custom runner was classified as managed")
 	}
-	removedStateRunner := filepath.Join(root, ".supervisor", stateRunnerName+"-"+strings.Repeat("a", 64))
+	removedStateRunner := filepath.Join(root, ".supervisor", managedRunnerName+"-"+strings.Repeat("a", 64))
 	if !managedRunnerExecutable(root, removedStateRunner, "") {
 		t.Fatal("removed immutable state runner lost its durable managed identity")
 	}
 }
 
-func TestManagedInspectionWorkerRequiresMatchingContentAddress(t *testing.T) {
+func TestManagedInspectionWorkerRequiresRecordedOwnership(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
-	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
-	supervisorfixture.WriteExecutable(t, source, "managed runner bytes")
-	managed := installStateRunnerFixture(t, root, source)
-	digest, err := stateExecutableSourceDigest(managed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ManagedInspectionWorkerExecutable(root, inspection.Binding{
-		WorkerExecutable: managed, WorkerSHA256: digest, RunnerOwnership: task.RunnerOwnershipManaged,
-	}) {
-		t.Fatal("verified explicitly managed state-root worker was not recognized")
-	}
-	if ManagedInspectionWorkerExecutable(root, inspection.Binding{
-		WorkerExecutable: managed, WorkerSHA256: digest, RunnerOwnership: task.RunnerOwnershipCustom,
-	}) {
-		t.Fatal("explicit custom state-root worker was reclassified as managed")
-	}
-	if ManagedInspectionWorkerExecutable(root, inspection.Binding{WorkerExecutable: managed, WorkerSHA256: digest}) {
-		t.Fatal("legacy worker with unknown ownership was guessed to be managed")
-	}
-
-	spoofed := filepath.Join(root, ".supervisor", stateRunnerName+"-"+strings.Repeat("a", 64))
-	supervisorfixture.WriteExecutable(t, spoofed, "runner bytes")
-	digest, err = stateExecutableSourceDigest(spoofed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if digest == strings.Repeat("a", 64) {
-		t.Fatal("fixture unexpectedly matched the spoofed content address")
-	}
-	if ManagedInspectionWorkerExecutable(root, inspection.Binding{
-		WorkerExecutable: spoofed, WorkerSHA256: digest, RunnerOwnership: task.RunnerOwnershipManaged,
-	}) {
-		t.Fatal("state-root worker with a mismatched content address was authorized as managed")
+	path := filepath.Join(root, ".supervisor", managedRunnerName+"-"+strings.Repeat("a", 64))
+	for _, ownership := range []string{task.RunnerOwnershipManaged, task.RunnerOwnershipCustom, ""} {
+		got := ManagedInspectionWorkerExecutable(root, inspection.Binding{WorkerExecutable: path, RunnerOwnership: ownership})
+		if got != (ownership == task.RunnerOwnershipManaged) {
+			t.Fatalf("ownership %q classified managed=%t", ownership, got)
+		}
 	}
 }
 
@@ -110,13 +60,10 @@ func TestExplicitInspectionWorkerCannotBeAuthorizedForMigration(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	supervisor, _ := supervisorfixture.NewBlockingSupervisor(t, store.RootID)
-	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
+	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), managedRunnerName)
 	supervisorfixture.WriteExecutable(t, source, "explicit custom runner")
-	worker := installStateRunnerFixture(t, store.Root, source)
-	digest, err := stateExecutableSourceDigest(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	worker := source
+	digest := strings.Repeat("b", 64) // historical identity data
 	binding := inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: strings.Repeat("a", 64),
 		HelperExecutable: "/usr/bin/true", HelperSHA256: strings.Repeat("a", 64),
@@ -165,35 +112,6 @@ func TestExplicitInspectionWorkerCannotBeAuthorizedForMigration(t *testing.T) {
 	}
 }
 
-func TestManagedStateRunnerPathsOnlyReturnsVerifiedContentAddresses(t *testing.T) {
-	root := supervisorfixture.CanonicalTempDir(t)
-	source := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
-	supervisorfixture.WriteExecutable(t, source, "runner v1")
-	first, err := InstallStateRunner(root, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	supervisorfixture.WriteExecutable(t, source, "runner v2")
-	second, err := InstallStateRunner(root, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	spoofed := filepath.Join(root, ".supervisor", stateRunnerName+"-"+strings.Repeat("b", 64))
-	supervisorfixture.WriteExecutable(t, spoofed, "not the named digest")
-
-	got, err := managedStateRunnerPaths(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]bool{}
-	for _, path := range got {
-		seen[path] = true
-	}
-	if len(got) != 2 || !seen[first] || !seen[second] {
-		t.Fatalf("verified managed runners = %v, want [%q %q]", got, first, second)
-	}
-}
-
 func TestPrepareQueuedInspectionRunnerCommandAuthorizesManagedUpgrade(t *testing.T) {
 	fixture := newQueuedInspectionUpgradeFixture(t)
 	if !fixture.replacement.Inspection || fixture.replacement.OldRunner != fixture.oldRunner || fixture.replacement.Label != (pueue.InspectionIdentity{RootID: fixture.store.RootID, TaskID: fixture.request.TaskID}).Label() {
@@ -218,13 +136,10 @@ func newQueuedInspectionUpgradeFixture(t *testing.T) queuedInspectionUpgradeFixt
 	store := supervisorfixture.NewInspectionStore(t)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	supervisor, _ := supervisorfixture.NewBlockingSupervisor(t, store.RootID)
-	oldSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
+	oldSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), managedRunnerName)
 	supervisorfixture.WriteExecutable(t, oldSource, "old inspection worker")
-	oldRunner := installStateRunnerFixture(t, store.Root, oldSource)
-	digest, err := stateExecutableSourceDigest(oldRunner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldRunner := oldSource
+	digest := strings.Repeat("b", 64) // historical identity data
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: strings.Repeat("a", 64),
 		HelperExecutable: "/usr/bin/true", HelperSHA256: strings.Repeat("a", 64),
@@ -248,9 +163,9 @@ func newQueuedInspectionUpgradeFixture(t *testing.T) queuedInspectionUpgradeFixt
 	if !eligible {
 		t.Fatal("managed inspection worker was not eligible for queue migration")
 	}
-	newSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), stateRunnerName)
+	newSource := filepath.Join(supervisorfixture.CanonicalTempDir(t), managedRunnerName)
 	supervisorfixture.WriteExecutable(t, newSource, "new inspection worker")
-	replacement.NewRunner = installStateRunnerFixture(t, store.Root, newSource)
+	replacement.NewRunner = newSource
 	return queuedInspectionUpgradeFixture{store: store, supervisor: supervisor, request: request, replacement: replacement, oldRunner: oldRunner}
 }
 
@@ -260,7 +175,7 @@ func TestQueuedRunnerMigrationRecordsLegacyOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := filepath.Join(root, ".supervisor", stateRunnerName)
+	runner := filepath.Join(root, ".supervisor", managedRunnerName)
 	supervisorfixture.WriteExecutable(t, runner, "managed state runner")
 	td, req, _ := newLegacyRunnerTask(t, store, runner)
 	defer closeAppTestTask(t, store, td)

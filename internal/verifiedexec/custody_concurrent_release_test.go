@@ -51,9 +51,9 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 	t.Helper()
 	f := &releaseFixture{rig: newPoolRig(t)}
 	for i := range f.entries {
-		f.entries[i], f.digests[i] = plainEntry(t, f.rig.dir, fmt.Sprintf("release-%d", i))
+		f.entries[i], f.digests[i] = plainEntry(t, f.rig.dir, fmt.Sprintf("release-%d", i), fmt.Sprintf("%064x", i+1))
 	}
-	f.rig.seedView("living", plainRequest(f.entries[0], f.digests[0]))
+	f.rig.seedView("living", f.entries[0], f.digests[0])
 	return f
 }
 
@@ -62,7 +62,7 @@ func newReleaseFixture(t *testing.T) *releaseFixture {
 func (f *releaseFixture) bindClosed(owner string) {
 	f.rig.t.Helper()
 	for i := range f.entries {
-		f.rig.seedView(owner, plainRequest(f.entries[i], f.digests[i]))
+		f.rig.seedView(owner, f.entries[i], f.digests[i])
 	}
 	f.rig.requireViewDirs(owner, closedViews)
 	for _, entry := range f.entries {

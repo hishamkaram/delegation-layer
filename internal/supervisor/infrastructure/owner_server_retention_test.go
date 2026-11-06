@@ -14,9 +14,10 @@ import (
 // Component wrapper represents a failed host cleanup while retaining actual
 // production resources. No finalizer or forced GC establishes lease ownership.
 type retainedPreparationTestError struct {
-	store *taskdir.Store
-	lease *taskdir.RootAdmissionLease
-	cause error
+	store   *taskdir.Store
+	lease   *taskdir.LifetimeOwnerLease
+	control *taskdir.ControlDir
+	cause   error
 }
 
 func (*retainedPreparationTestError) RetainsResidentCleanup() {}
@@ -54,17 +55,7 @@ func TestOwnerServerRetainsLaterCleanupOwnerAfterOrdinaryDiagnostic(t *testing.T
 	if !f.server.isClosing() {
 		t.Fatal("retained cleanup did not close admission")
 	}
-	exclusive, err := retained.store.TryAcquireRootAdmissionExclusiveContext(ctx)
-	if exclusive != nil {
-		t.Cleanup(func() {
-			if releaseErr := exclusive.Release(); releaseErr != nil {
-				t.Error(releaseErr)
-			}
-		})
-	}
-	if !errors.Is(err, task.ErrLockBusy) {
-		t.Fatalf("retained root SH barrier disappeared: %v", err)
-	}
+	retained.assertLeaseHeld(t, ctx)
 }
 
 func newRetainedPreparationTestError(t *testing.T, root string) *retainedPreparationTestError {
@@ -81,13 +72,47 @@ func newRetainedPreparationTestError(t *testing.T, root string) *retainedPrepara
 				return
 			}
 		}
+		if owner.control != nil {
+			if closeErr := owner.control.Close(); closeErr != nil {
+				t.Error(closeErr)
+				return
+			}
+		}
 		if closeErr := owner.store.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
-	owner.lease, err = store.AcquireRootAdmissionContext(t.Context())
+	owner.control, err = store.OpenInfrastructureContext(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.lease, err = owner.control.AcquireLifetimeOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	return owner
+}
+
+// The generic control lifetime owner is an actual native resource. This checks
+// retained custody without reinstating the rejected all-writer root fence.
+func (e *retainedPreparationTestError) assertLeaseHeld(t *testing.T, ctx context.Context) {
+	t.Helper()
+	peer, err := e.store.OpenInfrastructureContext(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := peer.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	candidate, acquireErr := peer.TryAcquireLifetimeOwnerContext(ctx)
+	if candidate != nil {
+		if releaseErr := candidate.Release(); releaseErr != nil {
+			t.Fatal(releaseErr)
+		}
+	}
+	if !errors.Is(acquireErr, task.ErrLockBusy) {
+		t.Fatalf("retained native lifetime custody disappeared: %v", acquireErr)
+	}
 }

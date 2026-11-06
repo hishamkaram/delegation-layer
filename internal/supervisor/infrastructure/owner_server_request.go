@@ -25,12 +25,16 @@ func (s *ownerServer) handleConnection(parent context.Context, connection *net.U
 		s.connectionFault(err)
 		return
 	}
-	request, err := readOwnerFrame[ownerRequest](bufio.NewReader(connection))
+	request, stop, err := readOwnerControlFrame(bufio.NewReader(connection))
 	if err != nil {
 		if errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 			return
 		}
 		s.connectionFault(err)
+		return
+	}
+	if stop.StopProtocol != 0 {
+		s.handleStopConnection(parent, connection, stop)
 		return
 	}
 	// This request owns its finite wire deadline. Socket loss does not cancel
@@ -99,9 +103,6 @@ func (s *ownerServer) acceptWork(ctx context.Context, connection *net.UnixConn, 
 	if err = authenticateOwnerRequest(ctx, connection, intent, assumption, publication, request); err != nil {
 		return acceptedOwnerWork{}, err
 	}
-	if err = checkOwnRequirements(request, operation); err != nil {
-		return acceptedOwnerWork{}, err
-	}
 	work := acceptedOwnerWork{request: request, operation: operation}
 	if ownPreparationAction(request.Action) {
 		work.selected, work.selectedReference, err = resolveSelectedContext(ctx, s.journal, operation.defaultContextReference(), request.Context)
@@ -152,7 +153,7 @@ func (s *ownerServer) readResident(ctx context.Context) (StartupIntent, StartupA
 }
 
 func ownerServerReply(request ownerRequest, code ownerReplyCode) ownerReply {
-	return ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: request.Action, Target: request.Target, Context: request.Context, Source: request.Source, Migration: request.Migration, Requirements: request.Requirements, Initial: request.Initial, InitialResultFor: request.InitialResultFor, Code: code}
+	return ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: request.Action, Target: request.Target, Context: request.Context, Source: request.Source, Initial: request.Initial, InitialResultFor: request.InitialResultFor, Code: code}
 }
 
 func (s *ownerServer) executeWork(ctx context.Context, work acceptedOwnerWork) (ownerReply, bool) {
@@ -160,7 +161,7 @@ func (s *ownerServer) executeWork(ctx context.Context, work acceptedOwnerWork) (
 	switch work.request.Action {
 	case ownerStatus:
 		// Status confirms authenticated resident contact, never daemon readiness.
-	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced, ownerMigrateOwn:
+	case ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateOwn:
 		return s.executeOwnPreparation(ctx, work, reply)
 	case ownerEnsureOther:
 		return s.executeOtherPreparation(ctx, work, reply), false
@@ -176,7 +177,7 @@ func (s *ownerServer) executeOwnPreparation(ctx context.Context, work acceptedOw
 		s.failReply(&reply, err)
 		return reply, false
 	}
-	reply.Code, reply.Disposition, reply.MigrationResult = ownerReplyCode(outcome.Condition), outcome.Disposition, outcome.MigrationResult
+	reply.Code, reply.Disposition = ownerReplyCode(outcome.Condition), outcome.Disposition
 	reply.Report, reply.Failure = outcome.Report, outcome.Failure
 	reply.Target = originRecord{Root: work.operation.Intent().Inputs.Root, RootID: work.operation.Intent().Inputs.RootID}
 	reply.Startup = work.request.Owner
@@ -189,7 +190,7 @@ func (s *ownerServer) failReply(reply *ownerReply, err error) {
 		s.connectionFault(err)
 		return
 	}
-	if reply.MigrationResult == "" && reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
+	if reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
 		return errors.Is(cause, task.ErrLockBusy) || errors.Is(cause, ErrOwnerBusy)
 	}) {
 		reply.Code = ownerBusy
@@ -197,8 +198,8 @@ func (s *ownerServer) failReply(reply *ownerReply, err error) {
 	}
 	s.connectionFault(err)
 	switch {
-	case reply.MigrationResult == "" && reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
-		return errors.Is(cause, ErrIncompatible) || errors.Is(cause, ErrOwnerIncompatible)
+	case reply.Report == (ManualMigrationReport{}) && task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, ErrOwnerIncompatible)
 	}):
 		reply.Code = ownerIncompatible
 	case errors.Is(err, context.DeadlineExceeded):

@@ -121,7 +121,6 @@ from scripts.delegate_acceptance.native_evidence.contract import (
     _normalize_requested_options as _normalize_requested_options,
     _parse_optional_revision as _parse_optional_revision,
     _safe_proof_text as _safe_proof_text,
-    _safe_runtime_executable as _safe_runtime_executable,
     _safe_source_status as _safe_source_status,
     _slug as _slug,
     _source_requested_options as _source_requested_options,

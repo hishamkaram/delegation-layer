@@ -3,7 +3,6 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -11,48 +10,55 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// reconcilePublishedSupervisorWithLock is the single application eligibility
-// gate for path-only recovery. Inventory cannot select the active generation;
-// the retained pair is derived from the published content identity. It reads
-// control's typed facts and never reclassifies an operational error.
-func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, explicitMigration bool) error {
-	// A healthy published pair does not depend on staged or retained inventory.
-	// Its availability is decided before any relocation candidate.
-	if settled, err := publishedPairAvailabilitySettles(ctx, store, options, explicitMigration); settled {
+// The bootstrap and inspection owners decide whether reconciliation may run.
+// Installation lookup supplies only a candidate; it cannot replace a recorded
+// restart target or authorize a new daemon generation.
+func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup ExecutableLookup, explicitMigration bool) error {
+	if _, err := store.PinRootContext(ctx); err != nil {
 		return err
+	}
+	restartPending, err := pueue.PrivatePairRestartPending(store.Root)
+	if err != nil {
+		return &pueue.PrivateRecoveryError{ReasonCode: "state_unreadable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)}
+	}
+	if settled, availabilityErr := publishedPairAvailabilitySettles(ctx, store, options, explicitMigration); settled {
+		return availabilityErr
 	}
 	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
-	if err != nil || !found {
-		return err
-	}
-	settled, err := inspectionAllowsPairReconciliation(ctx, store, published)
-	if err != nil || !settled {
-		return err
-	}
-	client, daemon, available, err := resolveReconciliationPair(store.Root, published, explicitMigration)
-	if err != nil || !available {
-		return err
-	}
-	outcome, err := pueue.ReconcilePublishedPrivatePairAttemptWithLock(ctx, store.Root, client, daemon, options)
 	if err != nil {
 		return err
 	}
-	switch outcome {
-	case pueue.PublishedPairReconciled:
-	case pueue.PublishedPairTransitionPending:
-		// Preserve the existing bootstrap/migration recovery owner.
-	case pueue.PublishedPairLiveUnavailable:
-		if !explicitMigration {
-			return outcome.ProjectedError()
+	if found {
+		allowed, inspectionErr := inspectionAllowsPairReconciliation(ctx, store, published)
+		if inspectionErr != nil {
+			return inspectionErr
 		}
-		// Explicit migration owns a live predecessor.
+		if !allowed {
+			if restartPending {
+				return pueue.PublishedPairTransitionPending.ProjectedError()
+			}
+			return nil
+		}
 	}
+	outcome, err := pueue.ReconcilePublishedPrivatePairAttemptWithLock(ctx, store.Root, func(selection context.Context) (string, string, error) {
+		return resolveCompatiblePrivatePair(selection, store.Root, lookup)
+	}, options)
+	if err != nil {
+		if task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {
+			return nil
+		}
+		return err
+	}
+	if outcome == pueue.PublishedPairLiveUnavailable {
+		return outcome.ProjectedError()
+	}
+	if outcome == pueue.PublishedPairTransitionPending && restartPending {
+		return outcome.ProjectedError()
+	}
+	// Readable competing transitions keep their existing recovery owner.
 	return nil
 }
 
-// publishedPairAvailabilitySettles applies control's availability fact and
-// reports whether it settles the call. Any observation fault settles with its
-// error; only a member-missing or incomplete generation continues.
 func publishedPairAvailabilitySettles(ctx context.Context, store *taskdir.Store, options pueue.Options, explicitMigration bool) (bool, error) {
 	availability, err := pueue.ObservePublishedPrivatePairWithLock(ctx, store.Root, options)
 	switch {
@@ -60,9 +66,8 @@ func publishedPairAvailabilitySettles(ctx context.Context, store *taskdir.Store,
 		return true, err
 	case availability == pueue.PublishedPairReady || availability == pueue.PublishedPairNotPublished:
 		return true, nil
-	case availability == pueue.PublishedPairConfigChanged && explicitMigration:
-		// Both executables proved their published provenance, so path-only
-		// repair has nothing to do. Explicit migration owns the config change.
+	case explicitMigration && (availability == pueue.PublishedPairConfigChanged || availability == pueue.PublishedPairMemberMissing):
+		// Explicit migration owns replacement after its queue and history gates.
 		return true, nil
 	case availability == pueue.PublishedPairConfigChanged:
 		return true, availability.ProjectedError()
@@ -70,28 +75,10 @@ func publishedPairAvailabilitySettles(ctx context.Context, store *taskdir.Store,
 	return false, nil
 }
 
-func resolveReconciliationPair(root string, published task.SupervisorRef, explicitMigration bool) (string, string, bool, error) {
-	client, daemon, err := ResolveRetainedSupervisorPair(root, published)
-	if err != nil {
-		pending, restartErr := pueue.PrivatePairRestartPending(root)
-		if restartErr != nil {
-			return "", "", false, &pueue.PrivateRecoveryError{ReasonCode: "state_unreadable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err, restartErr)}
-		}
-		if pending {
-			return "", "", false, &pueue.PrivateRecoveryError{ReasonCode: "predecessor_pair_unavailable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err, restartErr)}
-		}
-		if explicitMigration || errors.Is(err, os.ErrNotExist) {
-			return "", "", false, nil // Optional repair does not replace explicit migration.
-		}
-		return "", "", false, &pueue.PrivateRecoveryError{ReasonCode: "state_unreadable", Err: errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)}
-	}
-	return client, daemon, true, nil
-}
-
 func inspectionAllowsPairReconciliation(ctx context.Context, store *taskdir.Store, published task.SupervisorRef) (bool, error) {
 	pending, err := inspection.GroupMigrationPending(ctx, store)
 	if err != nil || pending {
-		return false, err // The existing inspection transition must finish first.
+		return false, err
 	}
 	head, _, err := inspection.ReadGroupHead(ctx, store)
 	if task.RecordAbsent(err) {

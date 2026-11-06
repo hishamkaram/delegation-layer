@@ -4,39 +4,12 @@ import (
 	"errors"
 	"testing"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func TestSettledRootAdmissionCleanupRemainsConcrete(t *testing.T) {
+func TestStoreWaitsForLifetimeCleanup(t *testing.T) {
 	fixture := newOrdinaryAdmissionFixture(t)
-	lease, err := fixture.store.AcquireRootAdmissionContext(t.Context())
-	fixture.own(lease)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cause := supervisorcore.RetainOwnedRootAdmission(lease, task.ErrLockBusy)
-	if !pendingAdmissionCleanup(cause) {
-		t.Fatal("held root lost its cleanup dependency")
-	}
-	assertLifetimeCleanupIsConcrete(t, cause)
-	if err = lease.Release(); err != nil {
-		t.Fatal(err)
-	}
-	if pendingAdmissionCleanup(cause) {
-		t.Fatal("settled root retained a historical cleanup dependency")
-	}
-	assertLifetimeCleanupIsConcrete(t, cause)
-}
-
-func TestOuterAdmissionWaitsForLifetimeCleanup(t *testing.T) {
-	fixture := newOrdinaryAdmissionFixture(t)
-	outer, err := fixture.store.AcquireRootAdmissionContext(t.Context())
-	fixture.own(outer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	control, err := fixture.store.OpenInfrastructureContext(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
@@ -59,11 +32,7 @@ func TestOuterAdmissionWaitsForLifetimeCleanup(t *testing.T) {
 	if !errors.As(cause, &cleanup) || cleanup.Lease() != owner {
 		t.Fatalf("missing cleanup owner: %v", cause)
 	}
-	retained, releaseErr := releaseRootAdmission(outer, cause)
-	if retained != outer || releaseErr != nil {
-		t.Fatalf("outer released before child: %v", releaseErr)
-	}
-	store, closeErr := closeAdmissionStore(fixture.store, retained, cause)
+	store, closeErr := closeAdmissionStore(fixture.store, cause)
 	if store != fixture.store || closeErr != nil {
 		t.Fatalf("Store closed before child: %v", closeErr)
 	}
@@ -76,10 +45,6 @@ func TestOuterAdmissionWaitsForLifetimeCleanup(t *testing.T) {
 		t.Fatal("settled child still blocks parent")
 	}
 	assertLifetimeCleanupIsConcrete(t, cause)
-	retained, releaseErr = releaseRootAdmission(outer, cause)
-	if retained != nil || releaseErr != nil {
-		t.Fatalf("settled child blocked release: %v", releaseErr)
-	}
 }
 
 func assertLifetimeCleanupIsConcrete(t *testing.T, cause error) {

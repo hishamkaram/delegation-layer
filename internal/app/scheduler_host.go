@@ -27,10 +27,10 @@ func runSchedulerCommand(ctx context.Context, a Arguments, deps Dependencies, st
 	}
 }
 
-func schedulerExecutable() (verifiedexec.Info, error) {
+func schedulerExecutable() (string, error) {
 	path, err := os.Executable()
 	if err != nil {
-		return verifiedexec.Info{}, err
+		return "", err
 	}
 	return verifiedexec.LocatePath(path)
 }
@@ -76,8 +76,8 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 		args = append(args, "--pueue-config", a.PueueConfig)
 	}
 	err = host.Serve(ctx, host.Config{
-		Store: store, Executable: self.Path, Args: args,
-		Environment: deps.Environment, Directory: root, BuildID: self.SHA256,
+		Store: store, Executable: self, Args: args,
+		Environment: deps.Environment, Directory: root,
 	})
 	if err == nil {
 		response.Scheduler = &SchedulerResponse{State: "stopped"}
@@ -122,11 +122,7 @@ func controlScheduler(ctx context.Context, a Arguments, deps Dependencies) (resu
 	}
 	defer func() { mergeCommandClose(&result, reader.Close) }()
 	response.RootID = reader.RootID()
-	self, err := schedulerExecutable()
-	if err != nil {
-		return failed(response, err, 1)
-	}
-	query := host.Query{Store: reader, BuildID: self.SHA256}
+	query := host.Query{Store: reader}
 	if a.SchedulerAction == "stop" {
 		stopped, stopErr := host.Stop(ctx, query)
 		observed := projectSchedulerStatus(stopped.Status)

@@ -11,21 +11,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestAdmissionCleanupRetainsInnerAndBorrowedOuterOwners(t *testing.T) {
+func TestAdmissionCleanupRetainsUseOwner(t *testing.T) {
 	fixture := workspacefixture.NewRecoveryFixture(t)
-	lease, err := fixture.Store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := lease.Release(); err != nil {
-			t.Error(err)
-		}
-	})
-	request := rootAdmissionDispatchRequest()
+	request := workspaceDispatchFixtureRequest()
 	request.WorkspaceID = fixture.Resource.Request().WorkspaceID
 	managed, _, prepareErr := PrepareDispatchContext(t.Context(), request, OperationOptions{
-		Environment: []string{}, RootAdmission: lease, Runtime: unavailableOperationRuntime{},
+		Environment: []string{}, Runtime: unavailableOperationRuntime{},
 	}, fixture.Store, teamDigestTaskID, fixture.Resource.Request().SourceCwd, []byte("work"))
 	if managed == nil {
 		t.Fatalf("missing admission owner: %v", prepareErr)
@@ -57,9 +48,6 @@ func TestAdmissionCleanupRetainsInnerAndBorrowedOuterOwners(t *testing.T) {
 	}
 	if err := cleanup.Admission().Close(); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := lease.PinRootContext(t.Context()); err != nil {
-		t.Fatalf("inner cleanup released borrowed outer admission: %v", err)
 	}
 }
 

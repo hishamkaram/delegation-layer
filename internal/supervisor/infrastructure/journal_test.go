@@ -66,7 +66,6 @@ func journalIntent(t *testing.T, journal *intentJournal, sequence uint64) Startu
 	intent.Inputs.BootID = journal.bootID
 	intent.Inputs.Root, intent.Inputs.RootID = journal.pin.Root(), journal.pin.RootID()
 	intent.Inputs.RootDevice, intent.Inputs.RootInode = journal.pin.Device(), journal.pin.Inode()
-	intent.Starter.Root, intent.Starter.RootID = journal.pin.Root(), journal.pin.RootID()
 	refreshIntentDigest(t, &intent)
 	return intent
 }
@@ -100,7 +99,7 @@ func TestIntentJournalCanonicalPublication(t *testing.T) {
 		t.Fatalf("equivalent publication: created=%v err=%v", created, err)
 	}
 	conflict := intent
-	conflict.Starter.PID++
+	conflict.Deadline = "2026-11-03T00:00:31Z"
 	if created, err = journal.putIntent(t.Context(), lease, conflict); created || !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("conflicting publication: created=%v err=%v", created, err)
 	}
@@ -314,10 +313,8 @@ func checkIntentWrongIdentity(t *testing.T, journal *intentJournal, lease *Lease
 	switch field {
 	case "root":
 		intent.Inputs.Root = testOrigin(t).Root()
-		intent.Starter.Root = intent.Inputs.Root
 	case "root-id":
 		intent.Inputs.RootID = originTestRootID
-		intent.Starter.RootID = originTestRootID
 	case "device":
 		intent.Inputs.RootDevice++
 	case "inode":
@@ -622,4 +619,26 @@ func TestIntentJournalSequenceExhaustionRetainsHistory(t *testing.T) {
 	if err != nil || !found || latest != last {
 		t.Fatalf("overflow changed latest history: %v %v", found, err)
 	}
+}
+
+func (j *intentJournal) tryAcquire(ctx context.Context) (lease *Lease, acquired bool, resultErr error) {
+	resultErr = j.withOpen(ctx, func() error {
+		if err := j.checkRoot(ctx); err != nil {
+			return err
+		}
+		var err error
+		lease, acquired, err = TryAcquireLease(ctx, filepath.Join(j.pin.Root(), instanceLeaseName))
+		if err != nil {
+			return err
+		}
+		if err = j.checkRoot(ctx); err != nil {
+			if lease != nil {
+				err = errors.Join(err, lease.Close())
+			}
+			lease, acquired = nil, false
+			return err
+		}
+		return nil
+	})
+	return lease, acquired, resultErr
 }

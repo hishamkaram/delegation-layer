@@ -1,35 +1,17 @@
 package control
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
-
-// Native lifetime driver owns observer gates, fault signals and actor cleanup.
-func TestRepairControlCallerFixture(t *testing.T) {
-	if os.Getenv("DELEGATE_ADMISSION_LEASE_REPAIR") != "1" {
-		t.Skip("fixed managed repair native caller")
-	}
-	deadline, err := strconv.ParseInt(os.Getenv("DELEGATE_ADMISSION_LEASE_DEADLINE"), 10, 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithDeadline(t.Context(), time.Unix(0, deadline))
-	defer cancel()
-	if err = runAdmissionNegativeFixture(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestManagedRepairNativePreservesQueuedAndStashedIdentity(t *testing.T) {
 	owner := os.Getenv("DELEGATE_REPAIR_EDITOR_OWNER")
@@ -63,11 +45,10 @@ func testManagedRepairNativeState(t *testing.T, owner string, state State) {
 	if _, err = client.command(t.Context(), nil, "pause", "--wait"); err != nil {
 		t.Fatal(err)
 	}
-	lease := admissionTestLease(t, store)
 	plan := prepareManagedRepairNativeRow(t, client, store, owner, state)
 	t.Cleanup(func() { client.options.ControlOwnerExecutable = "" })
 	client.options.ControlOwnerExecutable = owner
-	ctx := WithControlLease(t.Context(), lease)
+	ctx := t.Context()
 	if err = client.ReplaceQueuedRunnerCommands(ctx, []RunnerCommandReplacement{plan}); err != nil {
 		t.Fatal(err)
 	}

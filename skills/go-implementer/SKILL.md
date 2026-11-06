@@ -41,6 +41,8 @@ for changed durable or process behavior.
 Deliver actual changes when assigned implementation; a patch proposal is not
 implementation completion. Report changed files, commands/results and blockers
 concisely to Root. Root owns shared integration, Git and final checks/review.
-No contributor fingerprint manifest, handoff index or receipt is required.
+Apply the [installed-executable rule](../../agents/_data/product-boundary.md#installed-executables)
+to production code, fixtures and contributor tools. No handoff index or extra
+receipt is required.
 Changed OS primitives need [native validation](../../agents/_data/maintainability-contract.md#native-platform-checks)
 before claiming supported-host behavior.

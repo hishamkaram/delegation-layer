@@ -39,11 +39,7 @@ func ReconcileSubmittedContext(ctx context.Context, root string, td *taskdir.Tas
 	observation, reconcileErr := client.Reconcile(ctx, TaskIdentity(req, meta, spec, metaHash, receipt))
 	if observation.Matched && observation.State == pueue.StateStashed {
 		var recoverErr error
-		if options.AdmissionStore == nil {
-			observation, recoverErr = RecoverStagedSubmission(ctx, root, td, client, observation)
-		} else {
-			observation, recoverErr = RecoverStagedSubmissionWithAdmissionContext(ctx, options.AdmissionStore, options.RootAdmission, td, client, observation)
-		}
+		observation, recoverErr = RecoverStagedSubmission(ctx, root, td, client, observation)
 		reconcileErr = errors.Join(reconcileErr, recoverErr)
 	}
 	response := &result.Observation

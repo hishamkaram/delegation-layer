@@ -33,10 +33,6 @@ func (g *residentGrant) GuardDaemonStart(ctx context.Context, operationRoot stri
 			if err := e.validateResidentHeld(ctx); err != nil {
 				return err
 			}
-			reader := controlLifecycleReader{controlOwnerReader{controlIntentReader{e.journal.control}}}
-			if err := requireResidentLifecycle(ctx, reader, e.journal.pin, e.operation.Intent()); err != nil {
-				return err
-			}
 			// No observations or new errors after native Start: preserve its exact result.
 			return start()
 		})
@@ -119,4 +115,27 @@ func (e *ownedResidentEntry) validateResidentHeld(ctx context.Context) error {
 		return ErrIdentity
 	}
 	return ctx.Err()
+}
+
+func (g *residentGrant) GuardPrivateGenerationCommit(ctx context.Context, operationRoot string, commit func() error) error {
+	if g == nil || g.entry == nil || ctx == nil || commit == nil {
+		return os.ErrInvalid
+	}
+	entry := g.entry
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.closed {
+		return os.ErrClosed
+	}
+	if operationRoot != entry.operation.Intent().Inputs.Root {
+		return ErrIdentity
+	}
+	return entry.journal.withOpen(ctx, func() error {
+		return entry.lease.WithHeld(ctx, func() error {
+			if err := entry.validateResidentHeld(ctx); err != nil {
+				return err
+			}
+			return commit()
+		})
+	})
 }

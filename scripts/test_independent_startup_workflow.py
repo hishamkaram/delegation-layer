@@ -1,4 +1,4 @@
-"""A failing component proof must remain red without implying full CI success."""
+"""The native component CI job executes required proofs and preserves their failures."""
 
 import os
 from pathlib import Path
@@ -11,44 +11,13 @@ import unittest
 from scripts.test_candidate_build_workflow import job_text, steps, WORKFLOW
 
 
-ROOT_ADMISSION_NATIVE_CASES = (
-    "TestRootAdmissionSharedLeasesExcludeExclusiveAcrossStores",
-    "TestRootAdmissionCancellationDoesNotReleaseCallerWork",
-    "TestRootAdmissionRejectsDoneContextsBeforeLazyCreation",
-    "TestRootAdmissionIsLazyAndRequiresExistingRootOwner",
-    "TestRootAdmissionCheckRefusesDifferentRoot",
-    "TestRootAdmissionWaitDropsMaintenanceBeforeNativeContention",
-    "TestRootAdmissionExclusiveBlocksSharedUntilActualDeadline",
-    "TestRootAdmissionReleaseRetainsFailedUnlockOwnership",
-    "TestRootAdmissionOpeningUnlockFailureRetainsPartialHandle",
-    "TestRootAdmissionRejectsUnsafeNamedInodes",
-    "TestRootAdmissionCheckRefusesLockAndRootReplacement",
-    "TestRootAdmissionRechecksAfterWaitingOnReplacedRootOrLock",
-    "TestRootAdmissionPostcheckCleanupFailureKeepsOwnedDescriptor",
-    "TestRootAdmissionNativeSharedWorkersOverlap",
-    "TestRootAdmissionWaitingCancellationKeepsOtherOwnerHeld",
-    "TestRootAdmissionValidationRefusesChangedProtection",
-    "TestRootAdmissionTransferredParentReleasePreservesCopies",
-    "TestRootAdmissionTransferRefusesNonSharedAuthority",
-    "TestRootAdmissionTransferFailureRetainsOriginal",
-    "TestRootAdmissionTransferSerializesRelease",
-    "TestRootAdmissionTransferredIdentityAndCancellation",
-    "TestRootAdmissionTransferInheritedProcess",
-    "TestRootAdmissionTransferredRootReplacementRefused",
-    "TestRootAdmissionTransferFailedExportAlreadyCloseOnly",
-    "TestRootAdmissionTransferMissingReadinessClosesChild",
-    "TestRootAdmissionTransferReadinessDeadline",
-    "TestRootAdmissionPinObservationRequiresSharedAuthority",
-    "TestRootAdmissionPinObservationRechecksContextAndNamedInode",
-)
-
-
 PRODUCER_STARTER_CASES = (
     "TestProducerOutsideStarterOwnsCapturedEnvironment",
     "TestProducerResidentSnapshotUsesSharedAcceptanceWithoutSourceGuards",
     "TestProducerResidentSnapshotRequiresActualOpenGrant",
     "TestProducerResidentSnapshotRevalidatesPublishedEndpoint",
-    "TestProducerSameRootStarterRefusedBeforeTargetPreparation",
+    "TestProducerSameRootOwnerRequestRefusedBeforeTargetPreparation",
+    "TestOwnerEntryRejectsContainedTaskBeforeAuthority",
 )
 
 
@@ -85,13 +54,9 @@ def native_make_target() -> str:
 
 NATIVE_FOUNDATION_CASES = {
     "internal/supervisor": (
-        "TestContinuationPairPublicationPreservesInterveningOwner",
-        "TestContinuationPairRefusesUnavailableInterveningInventory",
-        "TestContinuationAbsentInventoryPrefersPublishedPair",
-        "TestContinuationAbsentInventoryKeepsLegacyPublishedPaths",
-        "TestContinuationAbsentInventoryMissingPublishedPairUsesCanonicalDiscovery",
-        "TestContinuationAbsentInventoryRefusesInvalidPublication",
-        "TestContinuationAbsentInventoryRefusesDamagedManagedPublishedPair",
+        "TestContinuationPairPrefersPublishedInstallation",
+        "TestContinuationPairMissingPublishedMemberUsesSelectedInstallation",
+        "TestContinuationPairCorruptPublicationRemainsFault",
         "TestControlContinuationWarmMappedGenerationNeedsNoRoute",
         "TestControlContinuationReadsActualThirdGenerationAfterRoute",
         "TestControlContinuationReadsCompatibleRuntimeWithoutInventory",
@@ -99,40 +64,44 @@ NATIVE_FOUNDATION_CASES = {
         "TestControlRuntimeSavedReadsCompatibleRuntimeWithoutInventory",
         "TestControlRuntimeSavedUnavailablePairStillRoutesOwner",
         "TestControlRuntimeSavedCapturedPATHRefusalDoesNotRouteOwner",
-        "TestControlRuntimeSavedEmptyCapturedPATHRoutesOwnerOnce",
+        "TestControlRuntimeSavedEmptyCapturedPATHRefusesOwnerRoute",
         "TestControlRuntimeSavedReadsCapturedPATHTransport",
         "TestControlContinuationPreservesLegacyClientUpdateAndUnusedInventoryFault",
         "TestControlContinuationRefusesDamagedManagedPair",
         "TestRecoveryCandidateKeepsRecordedPairBeforeUnusedInventory",
-        "TestRecoveryCandidateKeepsDamagedManagedPairHard",
-        "TestRecoveryCandidateKeepsDamagedInventoryHardAfterMissingRecordedPair",
         "TestRecoveryCandidateUsesCapturedPATHWithoutOverridingInitialChoice",
         "TestRecoveryCandidatePreservesJoinedBundleFaults",
         "TestPrepareTaskSupervisorDefersCompatibleRuntimeMaintenance",
-        "TestPrepareAdmissionSupervisorRefusesDifferentDaemonBeforeScheduling",
-        "TestInfrastructureRuntimeSourceFreezesManagedBytes",
-        "TestInfrastructurePairSourceUsesPublishedBinding",
-        "TestOutsideRuntimeObservationDoesNotReadOrChangePairSelection",
-        "TestOutsideRuntimeObservationRefusesInvalidOrCanceledSources",
-        "TestValidateInfrastructureArtifactsChecksTargetCustody",
+        "TestPrepareAdmissionSupervisorAcceptsCompatibleDaemonBeforeScheduling",
+        "TestPrivateAdmissionRuntimeRefusesDifferentLogicalGenerationWithoutAuthorization",
         "TestInfrastructureLaunchContextPreservesSelectedCallbackAndMaintenanceScopes",
         "TestInfrastructureLaunchContextPreservesNativeSizedEnvironments",
         "TestInfrastructureLaunchContextRebasesReservedOverlay",
-        "TestStatePairContentStagingPreservesSelection"),
+        "TestInfrastructureTargetPinRefusesOtherActualStore",
+        "TestAcceptedSupervisorPairKeepsDifferentlyNamedInstalledClient",
+        "TestResolveSavedSupervisorClientPreservesRecordedInstallation",
+        "TestResolveSavedSupervisorClientSelectsInstalledRoleForLegacyCopy",
+        "TestResolveSavedSupervisorClientFallsBackOnlyForAbsence"),
     "internal/app": (
-        "TestInfrastructureRoutingCleanupKeepsAncestorAdmissionAcrossStores",
+        "TestIssue135PublicContinuationPublishedLegacyPair",
+        "TestIssue135PublicContinuationSeedContract",
+        "TestIssue135PublicContinuationDataFaultStillClosesOwnedHandles",
+        "TestIssue135PublicContinuationUnfinishedWaitRetainsBorrowers",
+        "TestIssue135PublicContinuationReleaseFaultGatesRemoval",
+        "TestInfrastructureRoutingCleanupRetainsActualBorrowedStore",
         "TestModelDiscoveryPrivatePreparationUsesCapturedRoutingFault",
         "TestModelDiscoveryCleanupRetainsRoutingStore",
         "TestSchedulerObservationCleanupRetainsRoutingStore",
         "TestSchedulerObserveRetainsActualRoutedStoreAndStopsAdmission",
         "TestSchedulerDispatchRetainsCleanupBeforeAnyObservation",
         "TestSchedulerCleanupClassificationPrecedesStorageIncompatibility",
-        "TestSchedulerCleanupProjectionRetainsNestedDispatchOwner",
-        "TestInfrastructureRoutingEpochRequirementsKeepActualCallerRuntime",
+        "TestSchedulerCleanupProjectionRetainsStoreCloseOwner",
         "TestInfrastructureRoutingSelectedOwnerDoesNotOpenUnavailableOrigin",
+        "TestInfrastructureEstablishmentHostResolvesInstalledRunnerInPlace",
+        "TestInfrastructureEstablishmentHostRejectsUnavailableInstalledRunner",
         "TestInfrastructureRoutingProbeDiagnosticPreservesConsumerPolicy",
         "TestInfrastructureRoutingProbeDiagnosticRetainsActualCleanupOwner",
-        "TestInfrastructureRoutingManualRequirementsSkipOwnerProbe"),
+        "TestInfrastructureRoutingManualMigrationSkipsOwnerProbe"),
     "internal/pueue/internal/control": (
         "TestObservePrivateRestoreRequiresFullPublishedGeneration",
         "TestObservePrivateRestoreReadsOnlySelectedFileWithoutWrites",
@@ -152,7 +121,11 @@ NATIVE_FOUNDATION_CASES = {
         "TestProbeSavedPrivateCompatibleStoppedDoesNotStart",
         "TestProbeSavedPrivateCompatibleUnrelatedSavedDoesNotSelectD",
         "TestProbeSavedPrivateCompatibleSelectorFaultGraphIsHard",
-        "TestProbeSavedPrivateCompatibleLeavesExactAPIUnchanged",
+        "TestProbeSavedPrivateTaskObservationReadsEquivalentAliasAfterPrimaryRetarget",
+        "TestProbeSavedPrivateTaskObservationRefusesUnsafeDriftedAlias",
+        "TestProbeSavedPrivateTaskObservationOlderBindingCannotUseEquivalentSuccessorAlias",
+        "TestProbeSavedPrivateTaskObservationAliasSnapshotHoldsSharedLease",
+        "TestProbeSavedPrivateTaskObservationUnrelatedCompleteExactStaysNotReady",
         "TestProbeSavedPrivateCompatibleHealthyAliasRemainsExact",
         "TestProbeSavedPrivateCompatibleNeverUsesDThroughIncompleteGeneration",
         "TestProbeSavedPrivateCompatiblePairFaultIsNotUnavailable",
@@ -226,20 +199,19 @@ NATIVE_FOUNDATION_CASES = {
         "TestStartupSettlementMalformedDarwinAssumptionIsNotAbsence",
         "TestProducerNativeLifecycle",
         "TestProducerObservedChildUsesNativeIdentitySemantics",
-        "TestProducerStartupWindowRefusesBeforeTargetWrites",
+        "TestProducerExpiredDeadlineRefusesBeforeTargetWrites",
+        "TestProducerDeadlineValidity",
+        "TestProducerDeadlineAcceptsCanonicalMigrationControlBudget",
         "TestProducerBusyTerminalAttemptRefusesJoin",
         "TestOwnerServerConnectionCloseAndMapRemovalAreOneLockedPhase",
         "TestOwnerServerRejectedConnectionsRaceDrainWithoutCleanupFault",
         "TestOwnerServerOperationCapacityReservesStatusAndReturnsExactBusy",
-        "TestOwnerServerPauseDrainsOperationsReservesStatusAndResumesSameOwner",
         "TestOwnerClientProbesAuthenticatedResidentAfterStartupDeadline",
         "TestOwnerClientOwnPreparationPreservesSelectedContext",
         "TestOwnerClientDoesNotReplayBusyOrUnknownContact",
         "TestOwnerClientRequiresFiniteContextBeforeContact",
-        "TestOwnerClientPreservesSavedAndMigrationSubjects",
-        "TestOwnerClientPreservesOtherRootSelectionWithoutBirth",
-        "TestLifecycleFreshZeroOwnerRefusedWithStartupHistory",
-        "TestLifecycleAbandonedNonzeroOwnerCannotBecomeZero") + PRODUCER_STARTER_CASES,
+        "TestOwnerClientPreservesSavedSubject",
+        "TestOwnerClientPreservesOtherRootSelectionWithoutBirth") + PRODUCER_STARTER_CASES,
     "internal/task": ("TestDecodeStrictByteSliceCanonicalRoundTrip",
                       "TestDecodeStrictByteSlicePreservesStructuralChecks"),
     "internal/lifetime": ("TestWithoutProcessScopeMarkerOwnsExactKeyRemoval",
@@ -251,12 +223,10 @@ NATIVE_FOUNDATION_CASES = {
                           "TestShutdownLeaseNativeProof",
                           "TestShutdownLeaseDriverInterruption",
                           "TestShutdownLeaseDriverCleanupFaults",
-                          "TestShutdownLeasePinnedAsset",
-                          "TestManagedShutdownLeaseNativeProof",
-                          "TestManagedAdmissionLeaseNativeProof",
-                          "TestAdmissionNativeCBORRejectsMalformedFrames") + NATIVE_OBSERVATION_CASES,
+                          "TestShutdownLeaseInstalledFixtureSelection",
+                          "TestManagedShutdownLeaseNativeProof") + NATIVE_OBSERVATION_CASES,
     "internal/taskdir": ("TestInfrastructurePassiveMissingJournal",
-                         "TestRootPinRejectsReplacementWithIdenticalMetadata") + ROOT_ADMISSION_NATIVE_CASES,
+                         "TestRootPinRejectsReplacementWithIdenticalMetadata"),
 }
 
 
@@ -275,18 +245,17 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.assertEqual(commands[0][0], ["PROOF=1"])
         self.assertNotIn("-c", commands[0][1])
 
-    def test_component_mode_is_explicit_and_defaults_to_full_ci(self):
-        self.assertRegex(
-            self.source,
-            r"native_startup_component_only:\n(?:        .*\n)*?"
-            r"        default: false\n        type: boolean\n")
-        self.assertIn("Native infrastructure component proof only", self.source)
-        for name in ("skill-package-linux", "skill-package-macos", "gate-linux",
-                     "gate-macos", "nested-survival", "development-candidate",
-                     "development-candidate-install", "ccr"):
+    def test_native_component_job_keeps_full_ci_selection_without_an_exclusive_mode(self):
+        self.assertNotIn("native_startup_component_only", self.source)
+        for name in ("skill-package-macos", "gate-macos", "nested-survival", "development-candidate", "ccr"):
             with self.subTest(job=name):
                 condition = job_text(self.source, name).split("    runs-on:", 1)[0]
-                self.assertIn("!inputs.native_startup_component_only", condition)
+                self.assertIn("needs.changes.outputs.full == 'true'", condition)
+        linux_package = job_text(self.source, "skill-package-linux").split("    steps:", 1)[0]
+        self.assertNotIn("    if:", linux_package)
+        linux_gate = job_text(self.source, "gate-linux").split("    steps:", 1)[0]
+        self.assertIn("if: ${{ always() }}", linux_gate)
+        self.assertIn("needs: development-candidate", job_text(self.source, "development-candidate-install"))
         self.assertIn("needs.changes.outputs.full == 'true'", self.job)
         self.assertIn("os: [ubuntu-24.04, macos-15]", self.job)
         self.assertIn("DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group", self.proof)
@@ -294,7 +263,8 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
 
     def test_failed_make_is_not_hidden_by_successful_tee(self):
         shell = re.search(r"^        shell: (\S+)$", self.proof, re.M)
-        self.assertIsNotNone(shell, "explicit bash is required for GitHub pipefail")
+        if shell is None:
+            self.fail("explicit bash is required for GitHub pipefail")
         self.assertEqual(shell.group(1), "bash")
         script = self.proof.split("        run: |\n", 1)[1]
         script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
@@ -315,14 +285,12 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.assertIn("./scripts/install-test-supervisor.sh", target)
         self.assertIn("DELEGATE_INDEPENDENT_EXPECTED_BACKEND:?", target)
         self.assertIn("go test -race -count=1 -timeout=4m", target)
-        self.assertIn("NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof", target)
-        for package in ("./internal/lifetime", "./internal/scheduler/host", "./internal/supervisor"):
+        self.assertIn("NativeProof|PeerProof", target)
+        for package in ("./internal/lifetime", "./internal/scheduler/host"):
             self.assertIn(package, target)
         for package, cases in (
             ("internal/lifetime", ("TestIndependentStartupNativeProof",)),
             ("internal/scheduler/host", ("TestIndependentStartupPeerProof",)),
-            ("internal/supervisor", ("TestIndependentStartupCustodyNativeProof",
-                                     "TestIndependentStartupOwnStatePairProof")),
         ):
             self.assert_native_cases_exist(package, cases)
 
@@ -333,29 +301,9 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
             for option in ("-race", "-count=1", "-timeout=4m"):
                 self.assertIn(option, command)
 
-    def test_component_runs_native_init_and_live_survivor_guards(self):
-
-        target = native_make_target()
-        self.assertIn('python3 scripts/native_init_census.py --output "$(BIN_DIR)/independent-startup-proof/init-census"', target)
-        self.assertIn('python3 scripts/repair_editor_counterfactuals.py --output "$(BIN_DIR)/independent-startup-proof/editor-survivors" --pueue "$(BIN_DIR)/test-supervisor/pueue"', target)
-        python = steps(self.job)["Set up Python"]
-        self.assertIn("actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1", python)
-        self.assertIn("python-version: '3.12'", python)
-
-    def test_component_retains_bounded_census_and_survivor_evidence(self):
-
+    def test_component_retains_bounded_native_log(self):
         upload = steps(self.job)["Retain bounded native component output"]
-        for path in (
-            "bin/independent-startup-proof/native.log",
-            "bin/independent-startup-proof/init-census/census.json",
-            "bin/independent-startup-proof/init-census/native-packages.json",
-            "bin/independent-startup-proof/init-census/startup.inittrace",
-            "bin/independent-startup-proof/init-census/startup.strace",
-            "bin/independent-startup-proof/editor-survivors/builds.json",
-            "bin/independent-startup-proof/editor-survivors/keep-native.log",
-            "bin/independent-startup-proof/editor-survivors/close-native.log",
-        ):
-            self.assertIn(path, upload)
+        self.assertIn("bin/independent-startup-proof/native.log", upload)
         self.assertNotIn("/**", upload)
         self.assertNotIn("continue-on-error", self.job)
 
@@ -401,26 +349,6 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         caller = 'go test -c -race -o "$(BIN_DIR)/test-supervisor/private-control-fixture.test" ./internal/pueue/internal/control'
         self.assertLess(target.index(owner), target.index("-run '^TestManagedShutdownLease'"))
         self.assertLess(target.index(caller), target.index("-run '^TestManagedShutdownLease'"))
-
-    def test_managed_admission_requires_built_owner_caller_and_guard(self):
-        target = native_make_target()
-        selected = [environment for environment, command in go_test_commands(target)
-                    if "./internal/lifetime" in command and "-run" in command
-                    and re.search(command[command.index("-run") + 1].replace("$$", "$"),
-                                  "TestManagedAdmissionLeaseNativeProof")]
-        self.assertEqual(len(selected), 1)
-        for value in (
-            "DELEGATE_ADMISSION_LEASE_PROOF=1",
-            "DELEGATE_SHUTDOWN_LEASE_PUEUE=$(BIN_DIR)/test-supervisor/pueue",
-            "DELEGATE_SHUTDOWN_LEASE_CONTROL_FIXTURE=$(BIN_DIR)/test-supervisor/private-control-fixture.test",
-            "DELEGATE_SHUTDOWN_LEASE_CONTROL_OWNER=$(BIN_DIR)/test-supervisor/delegate-run",
-        ):
-            self.assertIn(value, selected[0])
-        proof = target.index("-run '^(TestManagedAdmissionLeaseNativeProof|")
-        owner = 'go build -buildvcs=false -o "$(BIN_DIR)/test-supervisor/delegate-run" ./cmd/delegate-run'
-        caller = 'go test -c -race -o "$(BIN_DIR)/test-supervisor/private-control-fixture.test" ./internal/pueue/internal/control'
-        self.assertLess(target.index(owner), proof)
-        self.assertLess(target.index(caller), proof)
 
     def assert_native_cases_exist(self, package, cases):
         directory = WORKFLOW.parents[2] / package

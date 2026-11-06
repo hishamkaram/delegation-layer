@@ -31,10 +31,6 @@ func (j *intentJournal) putAssumptionWithClock(ctx context.Context, lease *Lease
 		if err = requireUnsettledStartup(tx, intent); err != nil {
 			return err
 		}
-		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
-		if err = requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
-			return err
-		}
 		if _, err = assumption.Digest(intent); err != nil {
 			return err
 		}
@@ -84,18 +80,11 @@ func (j *intentJournal) putPublication(ctx context.Context, lease *Lease, public
 		if err = requireUnsettledStartup(tx, intent); err != nil {
 			return err
 		}
-		reader := transactionLifecycleReader{transactionStartupReader{transactionIntentReader{j.control, tx}}}
-		if err = requireLifecycleStartup(ctx, reader, j.pin, intent); err != nil {
-			return err
-		}
 		var assumption StartupAssumption
 		if err = tx.Read(assumptionName(intent.Sequence), &assumption); err != nil {
 			return err
 		}
 		if _, err = publication.Digest(intent, assumption); err != nil {
-			return err
-		}
-		if err = validateLifecycleRuntime(ctx, reader, j.pin, intent, publication.RuntimeSHA256); err != nil {
 			return err
 		}
 		created, err = tx.Put(publicationName(intent.Sequence), publication)
@@ -257,24 +246,6 @@ func (j *intentJournal) withHistoricalRecords(ctx context.Context, callback func
 		}
 		return j.checkRoot(ctx)
 	})
-}
-
-func (j *intentJournal) readAssumption(ctx context.Context, reference StartupReference) (record StartupAssumption, resultErr error) {
-	resultErr = j.withHistoricalRecords(ctx, func(reader ownerRecordReader, pin taskdir.RootPin) error {
-		var err error
-		record, err = readAssumptionRecord(ctx, reader, pin, reference)
-		return err
-	})
-	return record, resultErr
-}
-
-func (j *intentJournal) readPublication(ctx context.Context, reference StartupReference) (record OwnerPublication, resultErr error) {
-	resultErr = j.withHistoricalRecords(ctx, func(reader ownerRecordReader, pin taskdir.RootPin) error {
-		var err error
-		record, err = readPublicationRecord(ctx, reader, pin, reference)
-		return err
-	})
-	return record, resultErr
 }
 
 // Passive history reads use current namespace pins, but never probe boot or

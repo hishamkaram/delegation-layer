@@ -20,13 +20,6 @@ func (a *StartupAttempt) joinBusy(ctx context.Context, request EstablishmentRequ
 	if !found {
 		return fmt.Errorf("%w: occupied infrastructure instance has no startup reference", task.ErrLockBusy)
 	}
-	reader := passiveLifecycleReader{passiveOwnerReader{passiveIntentReader{a.reader}}}
-	if err = a.requireOrdinaryBirth(ctx, reader); err != nil {
-		return err
-	}
-	if err = validateLifecycleStartupHistory(ctx, reader, a.pin, latest); err != nil {
-		return err
-	}
 	boot, err := lifetime.BootID()
 	if err != nil {
 		return err
@@ -38,8 +31,8 @@ func (a *StartupAttempt) joinBusy(ctx context.Context, request EstablishmentRequ
 	if err != nil {
 		return err
 	}
-	if latest.Inputs.Kind == StartupUpgrade || evidence.publication != nil {
-		return a.requireOwnerContact(ctx, reader, latest, request.Requirements, evidence)
+	if evidence.publication != nil {
+		return a.requireOwnerContact(ctx, latest, evidence)
 	}
 	if err = a.matchPendingRootOwner(ctx, request, latest); err != nil {
 		return err
@@ -57,10 +50,7 @@ func (a *StartupAttempt) matchPendingRootOwner(ctx context.Context, request Esta
 		return err
 	}
 	if intent.Inputs.Kind != StartupRootOwner {
-		return ErrIncompatible
-	}
-	if err = request.Requirements.ValidateArtifacts(intent.Inputs.Artifacts); err != nil {
-		return err
+		return ErrIdentity
 	}
 	digest, err := request.Context.Digest()
 	if err != nil {
@@ -76,9 +66,6 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 	var err error
 	a.journal, err = openIntentJournal(ctx, a.target, true)
 	if err != nil {
-		return err
-	}
-	if err = a.requireOrdinaryBirth(ctx, a.currentLifecycleReader()); err != nil {
 		return err
 	}
 	latest, found, err := a.journal.latestIntent(ctx)
@@ -98,13 +85,11 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 	if !time.Now().Before(request.Deadline) {
 		return context.DeadlineExceeded
 	}
-	artifacts, err := source.prepare(ctx, a.target)
+	runner, err := source.prepare(ctx, a.target)
 	if err != nil {
 		return err
 	}
-	if err = request.Requirements.ValidateArtifacts(artifacts); err != nil {
-		return err
-	}
+	artifacts := Artifacts{Runner: runner}
 	if err = artifacts.validate(); err != nil {
 		return err
 	}
@@ -115,7 +100,7 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 	if err != nil {
 		return err
 	}
-	intent, err := a.newIntent(artifacts, reference, request, latest.Sequence, source.starter)
+	intent, err := a.newIntent(artifacts, reference, request, latest.Sequence)
 	if err != nil {
 		return err
 	}
@@ -124,11 +109,8 @@ func (a *StartupAttempt) elect(ctx context.Context, request EstablishmentRequest
 
 // A future-deadline unassumed attempt is joined, even with a free lease. An
 // assumed same-boot live incarnation faults under the canonical settler. No
-// lifecycle abandonment/upgrade permission is inferred from a free descriptor.
+// fresh Start permission is inferred from a free descriptor.
 func (a *StartupAttempt) prepareSuccessor(ctx context.Context, request EstablishmentRequest, latest StartupIntent) (bool, error) {
-	if err := validateLifecycleStartupHistory(ctx, a.currentLifecycleReader(), a.pin, latest); err != nil {
-		return false, err
-	}
 	if err := a.requireSettledHistory(ctx, latest.Sequence); err != nil {
 		return false, err
 	}
@@ -151,9 +133,6 @@ func (a *StartupAttempt) prepareSuccessor(ctx context.Context, request Establish
 		return false, err
 	}
 	if pending {
-		if latest.Inputs.Kind == StartupUpgrade {
-			return false, task.ErrLockBusy
-		}
 		if err = a.matchPendingRootOwner(ctx, request, latest); err != nil {
 			return false, err
 		}
@@ -216,10 +195,10 @@ func (a *StartupAttempt) checkPriorSettlement(ctx context.Context, sequence uint
 	if err != nil {
 		return err
 	}
-	return validateSettledLifecycleStartup(ctx, a.currentLifecycleReader(), a.pin, boot, reference)
+	return a.journal.reobserveSettlement(ctx, reference, boot)
 }
 
-func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextReference, request EstablishmentRequest, last uint64, starter capturedProducerStarter) (StartupIntent, error) {
+func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextReference, request EstablishmentRequest, last uint64) (StartupIntent, error) {
 	if last == ^uint64(0) {
 		return StartupIntent{}, ErrIdentity
 	}
@@ -236,15 +215,8 @@ func (a *StartupAttempt) newIntent(artifacts Artifacts, launch LaunchContextRefe
 	if err != nil {
 		return StartupIntent{}, err
 	}
-	provenance := starter.provenance
-	if provenance.Kind == StarterOutside {
-		provenance.Root, provenance.RootID = a.pin.Root(), a.pin.RootID()
-	}
-	protocol := ProtocolVersion
-	if inputs.Initial != (InitialOperation{}) {
-		protocol = startupInitialOperationProtocolVersion
-	}
-	intent := StartupIntent{Protocol: protocol, Sequence: last + 1, Epoch: epoch, Inputs: inputs, InputsSHA256: digest, Starter: provenance, AcceptedAt: time.Now().UTC().Format(time.RFC3339Nano), Deadline: request.Deadline.UTC().Format(time.RFC3339Nano)}
+	protocol := RecordProtocolVersion
+	intent := StartupIntent{Protocol: protocol, Sequence: last + 1, Epoch: epoch, Inputs: inputs, InputsSHA256: digest, AcceptedAt: time.Now().UTC().Format(time.RFC3339Nano), Deadline: request.Deadline.UTC().Format(time.RFC3339Nano)}
 	return intent, intent.Validate()
 }
 
@@ -306,4 +278,29 @@ func unassumedStartupPending(intent StartupIntent, assumption *StartupAssumption
 		return false, err
 	}
 	return lifetime.CompareBootIDs(intent.Inputs.BootID, boot) == lifetime.BootSame && !expired, nil
+}
+
+func (a *StartupAttempt) requireOwnerContact(ctx context.Context, intent StartupIntent, evidence settlementEvidence) error {
+	reference, err := ReferenceStartup(intent)
+	if err != nil {
+		return err
+	}
+	if evidence.assumption == nil || evidence.publication == nil {
+		return task.ErrLockBusy
+	}
+	process, err := evidence.assumption.Process.Reference()
+	if err != nil {
+		return err
+	}
+	present, err := lifetime.ProcessPresent(process)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return task.ErrLockBusy
+	}
+	if err = a.checkRoot(ctx); err != nil {
+		return err
+	}
+	return &OwnerContactRequiredError{Startup: reference}
 }

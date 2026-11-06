@@ -20,7 +20,7 @@ from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_dis
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_lease_evidence
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_status_row
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_stop_evidence
-from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
+from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 from scripts.delegate_acceptance.private_cli.capacity_ownership import lease_candidate_specifications
 from scripts.delegate_acceptance.private_cli.admission import observe_created_admission
 from scripts.delegate_acceptance.private_cli.commands import run_json
@@ -369,7 +369,7 @@ def initial_stop_evidence(provider_fixture, task_evidence):
             "mode": "production-default",
             "timing_claim": "observed native lifecycle timestamps; no fixed latency guarantee",
         },
-        "fingerprints": {"provider_fixture": file_fingerprint(provider_fixture)},
+        "fingerprints": {"provider_fixture": installed_executable_observation(provider_fixture)},
         "tasks": task_evidence,
         "cleanup": {
             "fixture_waiter_entries": "pending",

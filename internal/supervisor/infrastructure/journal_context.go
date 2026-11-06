@@ -254,7 +254,7 @@ func readVerifiedContextChunk(ctx context.Context, reader contextRecordReader, d
 	if err != nil {
 		return empty, err
 	}
-	if chunk.Protocol != ProtocolVersion || len(chunk.Data) != expected || actual != digest {
+	if chunk.Protocol != RecordProtocolVersion || len(chunk.Data) != expected || actual != digest {
 		return empty, ErrIdentity
 	}
 	if last {

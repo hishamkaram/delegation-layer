@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +25,7 @@ const (
 	nativeProofPackageHashEnv = "DELEGATE_NATIVE_PROOF_PACKAGE_SHA256"
 	nativeProofGateHashEnv    = "DELEGATE_NATIVE_PROOF_GATE_SHA256"
 	nativeProofReceiptLimit   = 16 * 1024
+	nativeProofSchemaVersion  = 2
 	nativeProofEvidenceLimit  = 8
 )
 
@@ -60,7 +60,7 @@ type nativeSourceIdentity struct {
 
 type nativeBinaryIdentity struct {
 	Name      string `json:"name"`
-	SHA256    string `json:"sha256"`
+	Path      string `json:"path"`
 	SizeBytes int64  `json:"size_bytes"`
 	GoVersion string `json:"go_version"`
 }
@@ -122,7 +122,7 @@ func TestNativeBackendProof(t *testing.T) {
 func newNativeBackendProofReceipt(t *testing.T, outputPath string) *nativeBackendProofReceipt {
 	t.Helper()
 	receipt := &nativeBackendProofReceipt{
-		SchemaVersion:      1,
+		SchemaVersion:      nativeProofSchemaVersion,
 		ClaimClass:         "native-lifetime",
 		LastStage:          "receipt-finalizer-installed",
 		CleanupStatus:      "pending",
@@ -135,7 +135,7 @@ func newNativeBackendProofReceipt(t *testing.T, outputPath string) *nativeBacken
 		},
 		Verdict: "inconclusive",
 		PrimitiveReceipt: nativePrimitiveReceipt{
-			SchemaVersion: 1,
+			SchemaVersion: nativeProofSchemaVersion,
 			HostOS:        runtime.GOOS,
 			Architecture:  runtime.GOARCH,
 			Test:          "TestNativeBackendProof",
@@ -275,12 +275,19 @@ func populateNativeProofIdentities(t *testing.T, receipt *nativeBackendProofRece
 	if err != nil {
 		t.Fatalf("resolve native proof test binary: %v", err)
 	}
-	binaryHash, binarySize, err := hashNativeProofFile(executable, 256*1024*1024)
+	executable, err = filepath.EvalSymlinks(executable)
 	if err != nil {
-		t.Fatalf("fingerprint native proof test binary: %v", err)
+		t.Fatalf("resolve installed native proof test binary: %v", err)
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		t.Fatalf("observe native proof test binary metadata: %v", err)
+	}
+	if !filepath.IsAbs(executable) || !info.Mode().IsRegular() || info.Size() <= 0 {
+		t.Fatal("native proof test binary metadata is invalid")
 	}
 	receipt.PrimitiveReceipt.Binary = nativeBinaryIdentity{
-		Name: filepath.Base(executable), SHA256: binaryHash, SizeBytes: binarySize, GoVersion: runtime.Version(),
+		Name: filepath.Base(executable), Path: executable, SizeBytes: info.Size(), GoVersion: runtime.Version(),
 	}
 	receipt.setStage("identities-populated")
 }
@@ -332,30 +339,6 @@ func nativeProofKernel(workDir string) (string, error) {
 		}
 	}
 	return kernel, nil
-}
-
-func hashNativeProofFile(path string, maximum int64) (digest string, size int64, resultErr error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", 0, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	info, err := file.Stat()
-	if err != nil {
-		return "", 0, err
-	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximum {
-		return "", 0, fmt.Errorf("file size or type is outside the native proof bound")
-	}
-	hasher := sha256.New()
-	readBytes, err := io.Copy(hasher, io.LimitReader(file, maximum+1))
-	if err != nil {
-		return "", 0, err
-	}
-	if readBytes != info.Size() {
-		return "", 0, fmt.Errorf("file size changed during native proof fingerprinting")
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), info.Size(), nil
 }
 
 func writeNativeBackendProofReceipt(path string, receipt nativeBackendProofReceipt) error {

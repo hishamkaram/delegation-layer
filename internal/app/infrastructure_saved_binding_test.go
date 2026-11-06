@@ -132,7 +132,7 @@ func checkInfrastructureSavedBindingCase(t *testing.T, kind infrastructure.Saved
 	if state == "cancelled" {
 		cancel()
 	}
-	before := rootClosureSnapshot(t, fixture.store.Root)
+	before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
 	binding, err := resolveInfrastructureSavedBinding(ctx, fixture.store, fixture.source)
 	if state == "matching" {
 		if err != nil || binding != fixture.binding {
@@ -144,7 +144,7 @@ func checkInfrastructureSavedBindingCase(t *testing.T, kind infrastructure.Saved
 	if state == "cancelled" && !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation lost: %v", err)
 	}
-	if after := rootClosureSnapshot(t, fixture.store.Root); !reflect.DeepEqual(before, after) {
+	if after := snapshotContinuationSuccessorTestState(t, fixture.store.Root); !reflect.DeepEqual(before, after) {
 		t.Fatal("saved source resolution changed rooted state")
 	}
 }

@@ -295,6 +295,32 @@ Missing task files and corrupt evidence are distinct; see
 [scheduled result handling](result-handling.md#scheduled-execution-results)
 for freshness, no-result states, response bounds, exit codes and recovery.
 
+## Supervisor owner control
+
+```sh
+delegate supervisor stop-owner --json
+```
+
+Use only when the installed build advertises this command. Preserve the explicit
+root for work bound to a custom or historical root. This command contacts one
+existing infrastructure owner; it does not initialize, repair or start one.
+It leaves Pueue and admitted tasks running. Startup, accepted operations and
+unresolved cleanup can make the owner busy.
+
+The `supervisor_owner` response separates `state` (`serving_released`,
+`not_initialized`, `busy` or `unknown`) from `process_closure` (`closed`,
+`pending` or `unknown`). A released owner can remain alive as the sole waiter for
+its daemon; serving release is not proof of process exit or root quiescence.
+The optional `process` value (`pid`, `start_token`) identifies the validated
+selected `startup`; it does not establish liveness. It is omitted when no owner
+was selected or validated. Observe that exact incarnation after daemon shutdown;
+a new root-selected stop can address a newer owner.
+An absent root reports `not_initialized` with unknown process closure.
+Exit `0` reports the observed release or uninitialized state, `3` reports busy,
+and `1` reports a control or observation fault. Preserve an uncertain result;
+the command does not resend an uncertain stop request. Human output exposes
+the same separate observations.
+
 ## Scheduler runtime
 
 Check `delegate help` for the installed build's command surface. Use `serve`,
@@ -487,9 +513,11 @@ Inspection-backed admission can return `status: "ready"` with
 `verification: "runtime"` after its probe. Managed runtime-only admission
 keeps the catalog projection; its supervised worker checks compatibility before
 provider execution. Collect the created task to establish the result.
-Optional protocol members `version` and `executable_sha256` are diagnostics,
-not launch authority. Live acceptance remains separate (`not_run`, `passed`,
-or `blocked`); a blocked prerequisite is unresolved.
+Provider versions are optional diagnostics. Historical executable-digest members
+remain readable as recorded data. Do not depend on these fields or calculate new
+executable fingerprints for diagnostics or admission. Required behavior and the
+selected installed executable govern compatibility. Live acceptance remains separate (`not_run`,
+`passed`, or `blocked`); a blocked prerequisite is unresolved.
 
 ## Choosing models and effort
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
@@ -20,30 +21,55 @@ func PrivateTerminalEventRunnerPath(stateRoot string) string {
 	return filepath.Join(stateRoot, privateSupervisorDirectory, privateTerminalEventRunnerName)
 }
 
-// PrivateTerminalEventCallback returns the exact Pueue callback command for a
-// Delegate-owned state root. It contains only state-root paths and Pueue's
-// constrained numeric task/exit-code template fields; provider command text
-// is never interpolated into the callback shell command.
-func PrivateTerminalEventCallback(stateRoot string) (string, error) {
-	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
-		return "", ErrConfiguration
-	}
-	return privateTerminalEventCallback(filepath.Join(stateRoot, privateSupervisorDirectory)), nil
+func privateTerminalEventCallback(base string) string {
+	return privateTerminalEventCallbackForRunner(filepath.Dir(base), filepath.Join(base, privateTerminalEventRunnerName))
 }
 
-func privateTerminalEventCallback(base string) string {
-	stateRoot := filepath.Dir(base)
-	return escapedCommand(
-		filepath.Join(base, privateTerminalEventRunnerName),
-		"--terminal-event",
-		"--root", stateRoot,
-		"--pueue-id", "{{id}}",
-		"--exit-code", "{{exit_code}}",
-	)
+func privateTerminalEventCallbackForRunner(stateRoot, runner string) string {
+	return escapedCommand(runner, "--terminal-event", "--root", stateRoot,
+		"--pueue-id", "{{id}}", "--exit-code", "{{exit_code}}")
+}
+
+// privateInstalledTerminalEventCallback keeps the selected path spelling. In
+// particular, versioned installation links are not resolved into another path.
+func privateInstalledTerminalEventCallback(stateRoot, runner string) (string, error) {
+	if !filepath.IsAbs(runner) || filepath.Clean(runner) != runner || strings.ContainsRune(runner, 0) {
+		return "", ErrConfiguration
+	}
+	return privateTerminalEventCallbackForRunner(stateRoot, runner), nil
+}
+
+func privateTerminalCallbackRunner(base string, callback *string) (string, bool) {
+	if callback == nil {
+		return "", false
+	}
+	suffix := " " + escapedCommand("--terminal-event", "--root", filepath.Dir(base),
+		"--pueue-id", "{{id}}", "--exit-code", "{{exit_code}}")
+	if !strings.HasSuffix(*callback, suffix) {
+		return "", false
+	}
+	runner := strings.TrimSuffix(*callback, suffix)
+	if len(runner) >= 2 && runner[0] == '\'' && runner[len(runner)-1] == '\'' {
+		runner = runner[1 : len(runner)-1]
+		runner = strings.ReplaceAll(runner, "'\\''", "'")
+		runner = strings.ReplaceAll(runner, "'\\!'", "!")
+	}
+	expected, err := privateInstalledTerminalEventCallback(filepath.Dir(base), runner)
+	return runner, err == nil && expected == *callback
 }
 
 func privateTerminalEventsConfigured(base string, callback *string) bool {
-	return callback != nil && *callback == privateTerminalEventCallback(base)
+	_, configured := privateTerminalCallbackRunner(base, callback)
+	return configured
+}
+
+func privateTerminalEventsConfiguredForBinding(base string, callback *string, binding task.SupervisorRef) bool {
+	if binding.ExecutableIdentity == "" {
+		return callback != nil && *callback == privateTerminalEventCallback(base)
+	}
+	runner, configured := privateTerminalCallbackRunner(base, callback)
+	return binding.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 && configured &&
+		runner != filepath.Join(base, privateTerminalEventRunnerName)
 }
 
 func privateTerminalEventBase(stateRoot string) (string, error) {

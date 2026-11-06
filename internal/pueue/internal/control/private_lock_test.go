@@ -94,8 +94,8 @@ func TestRetainBootstrapLockReportsDeferredReleaseFailure(t *testing.T) {
 		t.Fatal("retained bootstrap lock ownership was not transferred")
 	}
 	awaitBootstrapCleanup(t, owner)
-	if !errors.Is(owner.Err(), os.ErrClosed) || !owner.CleanupPending() || !errors.Is(owner.Close(), os.ErrClosed) {
-		t.Fatalf("failed native close lost its cleanup custody/error: %v", owner.Err())
+	if !errors.Is(owner.Err(), os.ErrClosed) || owner.CleanupPending() || !errors.Is(owner.Close(), os.ErrClosed) {
+		t.Fatalf("failed native close lost its release fault or retained an unusable handle: %v", owner.Err())
 	}
 	select {
 	case releaseErr := <-reported:
@@ -337,7 +337,7 @@ func TestPrivateClientReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.options.ObservationTimeout = 20 * time.Millisecond
-	ready, err := privateClientReady(context.Background(), client)
+	ready, err := client.availableForBootstrap(context.Background())
 	if err != nil || !ready {
 		t.Fatalf("late version probe did not lead to a ready client: ready=%v err=%v", ready, err)
 	}

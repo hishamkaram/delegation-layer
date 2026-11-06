@@ -30,18 +30,8 @@ func DispatchContext(ctx context.Context, request DispatchRequest, options Dispa
 		return dispatchFailure(result, DispatchOpenState, "open-state", err)
 	}
 	defer func() {
-		result.StoreCleanup, result.StoreCloseError = closeAdmissionStore(store, result.RootAdmissionCleanup, result.Err())
+		result.StoreCleanup, result.StoreCloseError = closeAdmissionStore(store, result.Err())
 	}()
-	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.Creation.RootAdmission, options.Creation.Admission.Supervisor.Control)
-	if lease != nil && options.Creation.RootAdmission == nil {
-		defer func() {
-			result.RootAdmissionCleanup, result.RootAdmissionReleaseError = releaseRootAdmission(lease, result.Err())
-		}()
-	}
-	if err != nil {
-		return dispatchFailure(result, DispatchOpenState, "root-admission", err)
-	}
-	options.Creation.RootAdmission = lease
 	result.RootID = store.RootID
 	id, err := dispatchTaskID(request)
 	if err != nil {

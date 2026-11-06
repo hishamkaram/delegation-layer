@@ -1,11 +1,8 @@
 package app
 
 import (
-	"context"
 	"errors"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -13,31 +10,16 @@ import (
 )
 
 // workspaceCommandResources owns cleanup for one coordinator invocation. The
-// store's native pin remains authoritative; options and contexts only borrow
-// the acquired root resource. Close stops at a failed prerequisite and retains
+// Store's native pin remains authoritative. Close stops at a failed
+// prerequisite and retains
 // every dependent handle. A callback's borrowed store is never closed here.
 type workspaceCommandResources struct {
-	store         *taskdir.Store
-	ownsStore     bool
-	rootAdmission *taskdir.RootAdmissionLease
-	resource      *workspace.Resource
-	childOwner    *taskdir.LifetimeOwnerLease
-	useOwner      *taskdir.LifetimeOwnerLease
-	admission     *workspacescore.Admission
-}
-
-func (r *workspaceCommandResources) acquire(ctx context.Context, borrowed *taskdir.RootAdmissionLease, options pueue.Options) (context.Context, *taskdir.RootAdmissionLease, error) {
-	lease, err := supervisorcore.AcquireOrBorrowRootAdmissionContext(ctx, r.store, borrowed, pueue.PrivateControlTimeout(options))
-	if lease != nil && lease != borrowed {
-		r.rootAdmission = lease
-	}
-	if err != nil {
-		return ctx, lease, err
-	}
-	if options.ControlOwnerExecutable != "" {
-		ctx = pueue.WithControlLease(ctx, lease)
-	}
-	return ctx, lease, nil
+	store      *taskdir.Store
+	ownsStore  bool
+	resource   *workspace.Resource
+	childOwner *taskdir.LifetimeOwnerLease
+	useOwner   *taskdir.LifetimeOwnerLease
+	admission  *workspacescore.Admission
 }
 
 func (r *workspaceCommandResources) closeAfter(cause error) error {
@@ -94,12 +76,7 @@ func (r *workspaceCommandResources) close() error {
 		}
 		r.resource = nil
 	}
-	if r.rootAdmission != nil {
-		if err := r.rootAdmission.Release(); err != nil {
-			return err
-		}
-		r.rootAdmission = nil
-	}
+
 	if r.ownsStore && r.store != nil {
 		if err := r.store.Close(); err != nil {
 			return err
@@ -124,7 +101,7 @@ func (e *workspaceCommandCleanupError) Unwrap() error { return e.cause }
 
 func (e *workspaceCommandCleanupError) RetainedStore() *taskdir.Store {
 	owner := e.owner
-	if owner.admission.CleanupPending() || owner.childOwner.CleanupPending() || owner.useOwner.CleanupPending() || owner.resource != nil || owner.rootAdmission.CleanupPending() || (owner.ownsStore && owner.store != nil) {
+	if owner.admission.CleanupPending() || owner.childOwner.CleanupPending() || owner.useOwner.CleanupPending() || owner.resource != nil || (owner.ownsStore && owner.store != nil) {
 		return owner.store
 	}
 	if task.AnyErrorNode(e.cause, func(node error) bool {
@@ -136,8 +113,7 @@ func (e *workspaceCommandCleanupError) RetainedStore() *taskdir.Store {
 		if errors.As(node, &admission) && admission != nil && admission.Admission().CleanupPending() {
 			return true
 		}
-		var root *supervisorcore.RootAdmissionCleanupError
-		return errors.As(node, &root) && root.Lease().RetainsStore(owner.store)
+		return false
 	}) {
 		return owner.store
 	}

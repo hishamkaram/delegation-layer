@@ -226,6 +226,7 @@ func requireCancelledPendingCollect(t *testing.T, code int, response Response) {
 }
 
 func TestCollectWatchReevaluatesOfferAfterUserStopInSameWatch(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		var fixture *watchStopFixture
 		fixture, interpreter := newWatchStopFixture(t, stopAfterFirstPass(t, func() *watchStopFixture { return fixture }, 0))

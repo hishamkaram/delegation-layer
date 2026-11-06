@@ -20,7 +20,7 @@ const (
 // ownerServer borrows a successfully born entry. It owns connection/work admission,
 // the immutable initial outcome and delivery, and the daemon Wait collection. Its caller must drain it before
 // closing the entry; transport/accept faults never close resident resources or
-// stop daemons. There is no public serving entrypoint before lifecycle wiring.
+// stop daemons.
 type ownerServer struct {
 	entry    *ownedResidentEntry
 	host     EntryHost
@@ -38,7 +38,6 @@ type ownerServer struct {
 	drained           chan struct{}
 	drainedClosed     bool
 	initial           int
-	initialStarted    bool
 	initialDone       chan struct{}
 	initialCompleted  bool
 	initialOutcome    PreparationOutcome
@@ -49,8 +48,6 @@ type ownerServer struct {
 	deliveryCompleted bool
 	cleanupFailure    error
 	requestDiagnostic error
-	paused            bool
-	operationsDrained chan struct{}
 }
 
 func newOwnerServer(ctx context.Context, entry *ownedResidentEntry, host EntryHost) (*ownerServer, error) {
@@ -98,9 +95,6 @@ func (s *ownerServer) prepareInitial(ctx context.Context) (disposition Dispositi
 	if s == nil {
 		return disposition, os.ErrInvalid
 	}
-	if err := s.claimInitial(); err != nil {
-		return disposition, err
-	}
 	var outcome PreparationOutcome
 	dispatched := false
 	defer func() {
@@ -134,14 +128,14 @@ func (s *ownerServer) prepareInitial(ctx context.Context) (disposition Dispositi
 	if err != nil {
 		return disposition, err
 	}
-	work := acceptedOwnerWork{operation: s.entry.operation, selected: selected, selectedReference: reference, request: ownerRequest{Owner: startup, Action: preparationAction(initial), Source: initial.Source, Migration: initial.Migration}}
+	work := acceptedOwnerWork{operation: s.entry.operation, selected: selected, selectedReference: reference, request: ownerRequest{Owner: startup, Action: preparationAction(initial), Source: initial.Source}}
 	dispatched = true
 	outcome, resultErr = s.executePreparation(operation, work)
 	return outcome.Disposition, resultErr
 }
 
 // serve owns each accepted connection until its one request has finished. A
-// failure returns to the lifecycle caller with the borrowed entry still owned.
+// failure returns to the serving caller with the borrowed entry still owned.
 func (s *ownerServer) serve(ctx context.Context) (resultErr error) {
 	if s == nil || ctx == nil {
 		return os.ErrInvalid
@@ -213,9 +207,6 @@ func (s *ownerServer) admitConnection(connection *net.UnixConn, action ownerActi
 	if s.closing {
 		return os.ErrClosed
 	}
-	if s.paused && action != ownerStatus {
-		return errOwnerWorkBusy
-	}
 	if _, present := s.connections[connection]; !present {
 		return os.ErrClosed
 	}
@@ -261,6 +252,11 @@ func (s *ownerServer) isClosing() bool {
 func (s *ownerServer) stopAccepting() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stopAcceptingHeld()
+}
+
+// Caller holds the admission mutex so a successful stop cannot race a new slot.
+func (s *ownerServer) stopAcceptingHeld() {
 	s.closing = true
 	select {
 	case <-s.admissionStopped:
@@ -280,9 +276,9 @@ func (s *ownerServer) stopAccepting() {
 	s.signalDrained()
 }
 
-// stopAcceptAndDrain closes Wait registration only after every handler and
-// initial preparation has returned. A timeout retains all borrowers for retry;
-// it is not permission to close the entry or join a still-live daemon Wait.
+// stopAcceptAndDrain settles callbacks, not their retained canonical workers.
+// The runtime keeps Wait registration open until those workers also complete.
+// A timeout retains borrowers; it grants no entry or daemon closure.
 func (s *ownerServer) stopAcceptAndDrain(ctx context.Context) error {
 	if s == nil || ctx == nil {
 		return os.ErrInvalid
@@ -290,7 +286,6 @@ func (s *ownerServer) stopAcceptAndDrain(ctx context.Context) error {
 	s.stopAccepting()
 	select {
 	case <-s.drained:
-		s.waits.closeRegistration()
 		return s.fault()
 	case <-ctx.Done():
 		return ctx.Err()
@@ -299,7 +294,6 @@ func (s *ownerServer) stopAcceptAndDrain(ctx context.Context) error {
 
 // Signal only under mu, after both admission has closed and all work stopped.
 func (s *ownerServer) signalDrained() {
-	s.signalOperationsDrained()
 	if s.closing && !s.serving && len(s.connections) == 0 && s.initial == 0 && !s.drainedClosed {
 		close(s.drained)
 		s.drainedClosed = true
@@ -317,7 +311,7 @@ func (s *ownerServer) registerInitial() error {
 	if s.closing {
 		return os.ErrClosed
 	}
-	if s.paused || s.connectionCount(ownerConnectionOperation) >= ownerOperationLimit {
+	if s.connectionCount(ownerConnectionOperation) >= ownerOperationLimit {
 		return errOwnerWorkBusy
 	}
 	s.initial++
@@ -379,99 +373,4 @@ func (s *ownerServer) cleanupFault(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recordCleanupFault(err)
-}
-
-// pauseOperationsAndDrain is reversible and leaves Status, the listener, the
-// entry and Wait registration alive. Its lifecycle caller must first release
-// ALL RootAdmission, Generation and resource guards. It must run outside every
-// handler: a future lifecycle handler only replies pending and signals that
-// external loop, never drains itself. This method writes no lifecycle record.
-func (s *ownerServer) pauseOperationsAndDrain(ctx context.Context) error {
-	if s == nil || ctx == nil {
-		return os.ErrInvalid
-	}
-	s.mu.Lock()
-	if s.closing {
-		s.mu.Unlock()
-		return os.ErrClosed
-	}
-	if !s.paused {
-		s.paused = true
-		s.operationsDrained = make(chan struct{})
-	}
-	s.signalOperationsDrained()
-	drained := s.operationsDrained
-	s.mu.Unlock()
-	select {
-	case <-drained:
-		return s.fault()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// The server mutex owns the operation-admission boundary and its drain signal.
-func (s *ownerServer) signalOperationsDrained() {
-	if !s.paused || s.initial != 0 || s.connectionCount(ownerConnectionOperation) != 0 {
-		return
-	}
-	select {
-	case <-s.operationsDrained:
-	default:
-		close(s.operationsDrained)
-	}
-}
-
-// resumeOperationsAfterVerifiedAbort does NOT verify a durable Abort itself.
-// Its only permitted caller is the private lifecycle loop AFTER that loop has
-// verified the durable Aborted commit and released ALL RootAdmission,
-// Generation and resource guards. It rechecks this resident and a fully drained
-// pause. Permanent stop is irreversible; entry and Wait collection never change.
-func (s *ownerServer) resumeOperationsAfterVerifiedAbort(ctx context.Context) error {
-	if s == nil || ctx == nil {
-		return os.ErrInvalid
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	drained, err := s.resumablePause()
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if _, _, _, _, err = s.readResident(ctx); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, err := s.resumablePause()
-	if err != nil {
-		return err
-	}
-	if current != drained {
-		return errOwnerWorkBusy
-	}
-	if err = ctx.Err(); err != nil {
-		return err
-	}
-	s.paused = false
-	s.operationsDrained = nil
-	return nil
-}
-
-// Called only with mu held. Channel identity rejects a stale pause observation.
-func (s *ownerServer) resumablePause() (<-chan struct{}, error) {
-	if s.closing {
-		return nil, os.ErrClosed
-	}
-	if !s.paused {
-		return nil, os.ErrInvalid
-	}
-	select {
-	case <-s.operationsDrained:
-		return s.operationsDrained, nil
-	default:
-		return nil, errOwnerWorkBusy
-	}
 }

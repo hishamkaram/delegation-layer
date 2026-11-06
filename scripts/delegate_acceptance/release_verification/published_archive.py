@@ -5,7 +5,7 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 from .assets import release_paths
-from .contract import BINARIES, REVISION_RE, TAG_RE, VerificationError, _validate_archive_header
+from .contract import installed_executables, BINARIES, REVISION_RE, TAG_RE, VerificationError, _validate_archive_header
 from .filesystem import read_receipt
 from .published_contract import ArchiveFacts, PublishedRequest
 from .verification import _verify_archived_artifact, _verify_archived_binaries
@@ -32,7 +32,7 @@ def published_paths(request: PublishedRequest) -> tuple[Path, Path, Path]:
 def load_archive_facts(request: PublishedRequest, info: dict[str, str]) -> ArchiveFacts:
     """Bind the caller's archive receipt, retained assets and extracted binaries to one release.
 
-    The returned hashes are those of the extracted binaries after the receipt's
+    The returned selection is the extracted installation after the receipt's
     checksum and attestation chain was re-validated, never entries of checksums.txt.
     """
     if not TAG_RE.fullmatch(request.tag) or not REVISION_RE.fullmatch(request.source_revision):
@@ -48,5 +48,5 @@ def load_archive_facts(request: PublishedRequest, info: dict[str, str]) -> Archi
     return ArchiveFacts(
         tag=request.tag, package_version=package_version,
         release_commit=release_identity["commit_sha"], archive_sha256=artifact["archive_sha256"],
-        binaries=tuple((name, ledger["binaries"][name]["sha256"]) for name in BINARIES),
+        binaries=installed_executables({name: Path(ledger["binaries"][name]["path"]) for name in BINARIES}),
     )

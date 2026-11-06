@@ -19,11 +19,19 @@ func TestConfiguredSupervisorDoesNotFallBackToPath(t *testing.T) {
 		}
 	}
 	t.Setenv("PATH", pathDir)
-	configured := filepath.Join(t.TempDir(), "configured", "pueue")
-	for _, name := range []string{"pueue", "pueued"} {
-		if _, err := resolveBundledExecutable(configured, name); !errors.Is(err, pueue.ErrConfiguration) {
-			t.Fatalf("configured supervisor %s fell back to PATH: %v", name, err)
-		}
+	for _, missing := range []string{"pueue", "pueued"} {
+		t.Run(missing, func(t *testing.T) {
+			directory := t.TempDir()
+			for _, name := range []string{"pueue", "pueued"} {
+				if name != missing {
+					supervisorfixture.WriteExecutable(t, filepath.Join(directory, name), "#!/bin/sh\n")
+				}
+			}
+			lookup := ExecutableLookup{InitialExecutable: filepath.Join(directory, "pueue")}
+			if _, _, err := ResolvePrivateSupervisorExecutables("", lookup); !errors.Is(err, pueue.ErrConfiguration) {
+				t.Fatalf("configured supervisor missing %s fell back to PATH: %v", missing, err)
+			}
+		})
 	}
 }
 
@@ -96,10 +104,11 @@ func TestManagedRunnerResolvesFromSymlinkedHomebrewExecutable(t *testing.T) {
 	}
 
 	linkedRunner := filepath.Join(bin, "delegate-run")
-	if err := os.Symlink(runner, linkedRunner); err != nil {
-		t.Fatal(err)
+	if linkErr := os.Symlink(runner, linkedRunner); linkErr != nil {
+		t.Fatal(linkErr)
 	}
-	if _, err := ResolveRunner(linkedRunner, ""); !errors.Is(err, pueue.ErrConfiguration) {
-		t.Fatalf("explicit symlinked runner error = %v, want configuration error", err)
+	selected, err := ResolveRunner(linkedRunner, "")
+	if err != nil || selected != want {
+		t.Fatalf("explicit installed alias = %q, want canonical runner %q: %v", selected, want, err)
 	}
 }

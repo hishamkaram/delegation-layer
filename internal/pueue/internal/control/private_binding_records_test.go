@@ -98,27 +98,19 @@ func TestReplacePrivateSchedulingEvidenceReportsSchedulingContext(t *testing.T) 
 	}
 }
 
-func TestStartDaemonRevalidatesIdentityBeforeStart(t *testing.T) {
+func TestStartDaemonRejectsNonExecutableBeforeStart(t *testing.T) {
 	base := canonicalTemp(t)
-	configPath := filepath.Join(base, "pueue.yml")
 	daemonPath := filepath.Join(base, "pueued")
-	writeExecutable(t, daemonPath, privateDaemonFixture)
-	originalDigest, err := hashExecutable(daemonPath)
-	if err != nil {
+	if err := os.WriteFile(daemonPath, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, nil, 0o600); err != nil {
-		t.Fatal(err)
+	called := false
+	guard := daemonStartGuardFunc(func(context.Context, string, func() error) error { called = true; return nil })
+	if err := startDaemon(t.Context(), base, daemonPath, filepath.Join(base, "pueue.yml"), base, Options{DaemonStartGuard: guard}); !errors.Is(err, ErrBinding) {
+		t.Fatalf("non-executable daemon accepted: %v", err)
 	}
-	if err := os.WriteFile(daemonPath, []byte(privateDaemonFixture+"\nchanged\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := startDaemon(context.Background(), base, daemonPath, originalDigest, configPath, base, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}}); !errors.Is(err, ErrBinding) {
-		t.Fatalf("changed daemon identity was started: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(base, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("daemon started after pre-start identity drift: %v", err)
+	if called {
+		t.Fatal("invalid metadata reached native start authority")
 	}
 }
 
@@ -140,8 +132,10 @@ func TestRecoverPrivateRejectsDeletedConfigBeforeRestart(t *testing.T) {
 	if err = os.Remove(configPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = RecoverPrivate(context.Background(), stateRoot, first.Binding(), clientPath, daemonPath, options); !errors.Is(err, ErrBinding) {
-		t.Fatalf("recovery accepted a deleted saved config: %v", err)
+	recovery, err := AttemptPrivateRecovery(context.Background(), stateRoot, first.Binding(), clientPath, daemonPath, options)
+	assertPrivateRecoveryHasNoResult(t, recovery)
+	if !errors.Is(err, ErrBinding) {
+		t.Fatalf("recovery accepted a deleted saved config: result=%+v err=%v", recovery, err)
 	}
 	if _, err = os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovery recreated a deleted saved config: %v", err)
@@ -205,17 +199,26 @@ func writeExecutable(t *testing.T, path, source string) {
 	}
 }
 
-func seedPrivateDaemonIdentity(t *testing.T, base, daemonPath string) {
+func seedPrivateDaemonIdentity(t *testing.T, base, clientPath, daemonPath string) {
 	t.Helper()
-	resolved, err := canonicalExecutable(daemonPath)
+	resolution, err := resolutionContext(os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := hashExecutable(resolved)
+	configPath, _, err := ensurePrivateConfigContext(t.Context(), filepath.Dir(base), resolution, allowPrivateGenerationForTest{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publishPrivateDaemonIdentity(base, task.SupervisorRef{DaemonExecutable: resolved, DaemonSHA256: digest}); err != nil {
+	client := &Client{runtimeBinding: task.SupervisorRef{ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, ClientExecutable: canonicalPrivateTestExecutable(t, clientPath), ConfigPath: configPath, ObservedVersion: FixtureVersion}, options: Options{Resolution: &resolution}}
+	binding, err := client.readBinding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.DaemonExecutable = canonicalPrivateTestExecutable(t, daemonPath)
+	if err = publishPrivateDaemonIdentity(base, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err = clearPrivateBootstrapPending(filepath.Dir(base)); err != nil {
 		t.Fatal(err)
 	}
 }

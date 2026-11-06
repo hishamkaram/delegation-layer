@@ -156,11 +156,12 @@ class PredecessorShutdownTests(unittest.TestCase):
             self.addCleanup(target.backup_handle.close)
             return target
 
-        with patch.object(upgrade_impl, "install_fixture"), \
+        with patch.object(upgrade_impl, "install_supervisor_pair"), \
+                patch.object(upgrade_impl, "install_package_layout", return_value=(self.base / "pending-package/install", self.base / "pending-package/install", self.base / "pending-package/libexec")), \
                 patch.object(upgrade_impl, "capture_predecessor_shutdown_target", side_effect=capture):
             staged = upgrade_impl.stage_pending_package(
                 attempted_task_ids=[TASK_ID], base=self.base, config=self.config, env={}, package_owner=owner,
-                real_client=self.client, real_daemon=self.directory / "pueued", state=self.state,
+                real_client=self.client, source_root=self.directory, state=self.state,
                 supervisor_cleanups=self.lifetime.supervisor_cleanups,
             )
         return owner, staged

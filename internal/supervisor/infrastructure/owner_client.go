@@ -22,37 +22,25 @@ var (
 // and native socket peer. The caller retains the borrowed reader. Success says
 // nothing about private-supervisor readiness or permission to create an owner.
 func ProbeOwner(ctx context.Context, store *taskdir.ReadOnlyStore) (StartupReference, error) {
-	observed, err := probeOwnerStatus(ctx, store)
-	return observed.reference, err
-}
-
-// This per-call observation binds later data reads to the authenticated status
-// subject. It is neither a cached owner head nor permission to create one.
-type ownerStatusObservation struct {
-	request   ownerRequest
-	pin       taskdir.RootPin
-	reference StartupReference
-}
-
-func probeOwnerStatus(ctx context.Context, store *taskdir.ReadOnlyStore) (ownerStatusObservation, error) {
-	request, pin, err := currentOwnerRequest(ctx, store, ownerStatus)
+	request, pin, err := currentOwnerRequestAtStartup(ctx, store, ownerStatus, StartupReference{})
 	if err != nil {
-		return ownerStatusObservation{}, err
+		return StartupReference{}, err
 	}
+	reply, err := classifiedOwnerContact(ctx, store, pin, request)
+	return reply.OwnerRef, err
+}
+
+func classifiedOwnerContact(ctx context.Context, store *taskdir.ReadOnlyStore, pin taskdir.RootPin, request ownerRequest) (ownerReply, error) {
 	reply, err := contactOwner(ctx, store, pin, request)
 	if reply == (ownerReply{}) {
-		return ownerStatusObservation{}, err
+		return reply, err
 	}
-	observed := ownerStatusObservation{request: request, pin: pin, reference: reply.OwnerRef}
-	return observed, errors.Join(err, ownerReplyCause(reply.Code))
+	return reply, errors.Join(err, ownerReplyCause(reply.Code))
 }
 
 // Selection is a short-lived observation, not another owner head. contactOwner
 // rereads the same subject before sending and after receiving its bound reply.
 // A finite caller deadline owns this contact independently of startup expiry.
-func currentOwnerRequest(ctx context.Context, store *taskdir.ReadOnlyStore, action ownerAction) (ownerRequest, taskdir.RootPin, error) {
-	return currentOwnerRequestAtStartup(ctx, store, action, StartupReference{})
-}
 
 // A bound selection refuses a replacement before reading its owner records.
 // Zero keeps the public client's ordinary current-owner selection behavior.
@@ -142,4 +130,12 @@ func ownerReplyCause(code ownerReplyCode) error {
 		return ErrOwnerRequest
 	}
 	return ErrIdentity
+}
+
+// OwnerContactRequiredError is an observation, not a joined startup or a
+// native grant. The caller must authenticate the referenced existing owner.
+type OwnerContactRequiredError struct{ Startup StartupReference }
+
+func (e *OwnerContactRequiredError) Error() string {
+	return "current infrastructure owner requires authenticated contact"
 }

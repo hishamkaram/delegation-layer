@@ -11,7 +11,7 @@ import (
 func TestFixtureReadersRefuseSpecialFiles(t *testing.T) {
 	dir := t.TempDir()
 	regular := filepath.Join(dir, "regular")
-	if err := os.WriteFile(regular, []byte("finite"), 0o700); err != nil {
+	if err := os.WriteFile(regular, []byte("finite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link, pipe := filepath.Join(dir, "link"), filepath.Join(dir, "pipe")
@@ -25,15 +25,19 @@ func TestFixtureReadersRefuseSpecialFiles(t *testing.T) {
 		if _, err := readRegular(path, 32); err == nil {
 			t.Fatalf("read accepted non-regular reference %s", path)
 		}
-		if _, err := hashRegular(path); err == nil {
-			t.Fatalf("hash accepted non-regular reference %s", path)
+		if _, err := canonicalExecutable(path); err == nil {
+			t.Fatalf("metadata accepted non-canonical or non-regular reference %s", path)
 		}
 	}
 	if data, err := readRegular(regular, 32); err != nil || string(data) != "finite" {
 		t.Fatalf("regular file changed: data=%q err=%v", data, err)
 	}
-	if digest, err := hashRegular(regular); err != nil || len(digest) != 64 {
-		t.Fatalf("regular executable hash failed: digest=%s err=%v", digest, err)
+	executable := filepath.Join(dir, "provider")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 0\n"), 0o111); err != nil {
+		t.Fatal(err)
+	}
+	if selected, err := canonicalExecutable(executable); err != nil || selected != executable {
+		t.Fatalf("executable metadata selection failed: path=%s err=%v", selected, err)
 	}
 }
 

@@ -27,9 +27,9 @@ func reconcileRunner(ctx context.Context, root string, response *Response, td *t
 	return client, observation, err
 }
 
-func resumeSupervisedRunner(ctx context.Context, response *Response, td *taskdir.TaskDir, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+func resumeSupervisedRunner(ctx context.Context, response *Response, td *taskdir.TaskDir, options tasklifecycle.SupervisorOptions) (*pueue.Client, pueue.Observation, error) {
 	observed := tasklifecycle.Observation{}
-	client, observation, err := tasklifecycle.ResumeSupervisedRunner(ctx, &observed, td, supervisorOptions)
+	client, observation, err := tasklifecycle.ResumeSupervisedRunner(ctx, &observed, td, options.Options, options.Lookup)
 	applyTaskObservation(response, observed, "")
 	return client, observation, err
 }

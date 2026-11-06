@@ -68,9 +68,6 @@ func (c *Client) submitInspectionStaged(ctx context.Context, permit InspectionSu
 	if permitErr != nil {
 		return unknown, permitErr
 	}
-	if resourceErr := c.checkAdmissionResource(ctx, identity.RootID, launch.RootPath); resourceErr != nil {
-		return unknown, resourceErr
-	}
 	launchErr := validateLaunch(launch, identity.RootID)
 	if launchErr != nil {
 		return unknown, launchErr
@@ -124,7 +121,7 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 	var observation InspectionObservation
 	err := c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
 		var addErr error
-		id, pending, addErr = c.stagedAdd(lockedContext, identity.RootID, launch.RootPath, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
+		id, pending, addErr = c.stagedAdd(lockedContext, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
 		if addErr != nil {
 			return addErr
 		}
@@ -138,7 +135,7 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 		if commitErr := commit(observation); commitErr != nil {
 			return commitErr
 		}
-		return c.enqueueStaged(lockedContext, identity.RootID, id)
+		return c.enqueueStaged(lockedContext, id)
 	})
 	if err != nil {
 		if !observation.Matched {
@@ -149,10 +146,6 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 		return observation, err
 	}
 	return observation, nil
-}
-
-func stagedInspectionCommand(launch Launch, identity InspectionIdentity) string {
-	return escapedCommand(inspectionWorkerArguments(launch, identity)...)
 }
 
 func (c *Client) requireStagedLaunchCapability(ctx context.Context, authorization SubmissionAuthorization) error {
@@ -284,9 +277,6 @@ func (c *Client) commitInspectionStagedObservation(ctx context.Context, staged I
 	if validationErr != nil {
 		return staged, validationErr
 	}
-	if resourceErr := c.checkAdmissionResource(ctx, staged.Identity.RootID, ""); resourceErr != nil {
-		return staged, resourceErr
-	}
 	controlContext, cancel, controlErr := c.privateControlContext(ctx)
 	if controlErr != nil {
 		return staged, controlErr
@@ -334,7 +324,7 @@ func (c *Client) commitInspectionStagedObservationWithQueueIdentityMutation(ctx 
 		if commitErr := commit(current); commitErr != nil {
 			return commitErr
 		}
-		if enqueueErr := c.enqueueStaged(identityContext, current.Identity.RootID, current.Job.ID); enqueueErr != nil {
+		if enqueueErr := c.enqueueStaged(identityContext, current.Job.ID); enqueueErr != nil {
 			result.Pending = pendingFrom(enqueueErr)
 			return enqueueErr
 		}

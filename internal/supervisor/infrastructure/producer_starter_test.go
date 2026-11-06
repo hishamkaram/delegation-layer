@@ -6,10 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -25,13 +24,6 @@ func TestProducerOutsideStarterOwnsCapturedEnvironment(t *testing.T) {
 	if !slices.Contains(starter.environment, "PRODUCER_CAPTURE_FIXTURE=original") || slices.Contains(starter.environment, "PRODUCER_CAPTURE_FIXTURE=changed") {
 		t.Fatal("starter borrowed mutable caller environment")
 	}
-	self, err := lifetime.ObserveProcess(os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if starter.provenance != (StartupProvenance{Kind: StarterOutside, PID: self.PID(), StartToken: self.StartToken()}) {
-		t.Fatal("outside snapshot selected another process or owner provenance")
-	}
 }
 
 func TestProducerResidentSnapshotUsesSharedAcceptanceWithoutSourceGuards(t *testing.T) {
@@ -45,15 +37,15 @@ func TestProducerResidentSnapshotUsesSharedAcceptanceWithoutSourceGuards(t *test
 	releaseProducerFixtureLease(t, target)
 	refused := errors.New("fixture refuses native Start after durable acceptance")
 	starts := 0
-	prepare := func(ctx context.Context, store *taskdir.Store) (Artifacts, error) {
+	prepare := func(ctx context.Context, store *taskdir.Store) (string, error) {
 		if !source.entry.mu.TryLock() {
 			t.Fatal("source resident guard retained across target work")
 		}
 		source.entry.mu.Unlock()
 		if leaseErr := source.entry.lease.WithHeld(ctx, func() error { return nil }); leaseErr != nil {
-			return Artifacts{}, leaseErr
+			return "", leaseErr
 		}
-		return target.host.PrepareOutsideArtifacts(ctx, store)
+		return target.host.PrepareOutsideRunner(ctx, store)
 	}
 	attempt, err := establishCaptured(t.Context(), target.journal.store, target.request,
 		capturedEstablishment{starter: starter, prepare: prepare}, producerNative{start: func(*exec.Cmd) error {
@@ -65,13 +57,7 @@ func TestProducerResidentSnapshotUsesSharedAcceptanceWithoutSourceGuards(t *test
 		t.Fatalf("shared acceptance/start ownership: starts=%d err=%v", starts, err)
 	}
 	intent := source.entry.operation.Intent()
-	if starter.provenance.Kind != StarterOwner || starter.provenance.Root != intent.Inputs.Root || starter.provenance.RootID != intent.Inputs.RootID || starter.provenance.Epoch != intent.Epoch {
-		t.Fatal("snapshot did not derive the actual resident provenance")
-	}
-	if attempt.intent.Starter != starter.provenance {
-		t.Fatal("target startup rewrote authenticated owner provenance")
-	}
-	if attempt.intent.Inputs.RootID == starter.provenance.RootID || attempt.NativeCompletion() != nil {
+	if attempt.intent.Inputs.RootID == intent.Inputs.RootID || attempt.NativeCompletion() != nil {
 		t.Fatal("target used source identity or invented a native child after refused Start")
 	}
 }
@@ -101,34 +87,26 @@ func TestProducerResidentSnapshotRequiresActualOpenGrant(t *testing.T) {
 	}
 }
 
-func TestProducerSameRootStarterRefusedBeforeTargetPreparation(t *testing.T) {
+func TestProducerSameRootOwnerRequestRefusedBeforeTargetPreparation(t *testing.T) {
 	requireComponentEntryTestHost(t)
 	source := newOwnerServerFixture(t, &ownerServerTestHost{})
-	starter, err := source.entry.captureOwnerProducer(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
 	before, err := source.entry.journal.control.RecordNamesContext(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifacts := source.entry.operation.Artifacts()
-	request := EstablishmentRequest{
-		Context: source.entry.operation.context.Clone(), Deadline: time.Now().Add(time.Minute),
-		Requirements: ArtifactRequirements{
-			RequiredRuntimeSHA256: artifacts.RunnerSHA256,
-			RequiredClientSHA256:  artifacts.ClientSHA256, RequiredDaemonSHA256: artifacts.DaemonSHA256,
-		},
+	request := source.request(t, ownerEnsureOther)
+	// A different claimed ID passes the wire's same-owner rejection. The actual
+	// source path must still fail target pin validation after authentication.
+	request.Target = originRecord{Root: source.root, RootID: strings.Repeat("f", 32)}
+	request.Context = source.entry.operation.defaultContextReference()
+	source.start()
+	connection := source.dial(t)
+	if err = writeOwnerFrame(connection, request); err != nil {
+		t.Fatal(err)
 	}
-	preparations := 0
-	prepare := func(context.Context, *taskdir.Store) (Artifacts, error) {
-		preparations++
-		return artifacts, nil
-	}
-	attempt, err := establishCaptured(t.Context(), source.entry.store, request, capturedEstablishment{starter: starter, prepare: prepare}, producerNative{})
-	ownProducerAttempt(t, attempt)
-	if !errors.Is(err, ErrIdentity) || attempt != nil || preparations != 0 {
-		t.Fatalf("same-root owner reached target election/preparation: preparations=%d err=%v", preparations, err)
+	reply := readServerReply(t, connection)
+	if reply.Code != ownerFault || reply.Startup != (StartupReference{}) {
+		t.Fatalf("same-root owner request reached target establishment: %+v", reply)
 	}
 	after, err := source.entry.journal.control.RecordNamesContext(t.Context())
 	if err != nil {
@@ -137,7 +115,7 @@ func TestProducerSameRootStarterRefusedBeforeTargetPreparation(t *testing.T) {
 	slices.Sort(before)
 	slices.Sort(after)
 	if !slices.Equal(before, after) {
-		t.Fatal("same-root owner changed target journal")
+		t.Fatal("same-root owner request changed target journal")
 	}
 }
 
@@ -155,7 +133,7 @@ func TestProducerResidentSnapshotRevalidatesPublishedEndpoint(t *testing.T) {
 		}
 	})
 	starter, err := source.entry.captureOwnerProducer(t.Context())
-	if err == nil || starter.provenance != (StartupProvenance{}) || starter.environment != nil {
+	if err == nil || starter.environment != nil {
 		t.Fatalf("missing canonical endpoint minted a starter: %v", err)
 	}
 }

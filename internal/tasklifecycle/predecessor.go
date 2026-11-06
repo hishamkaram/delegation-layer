@@ -41,15 +41,7 @@ func ResolvePredecessor(store *taskdir.Store, options PredecessorOptions, reques
 }
 
 func ResolvePredecessorContext(ctx context.Context, store *taskdir.Store, options PredecessorOptions, request task.TaskRecord, id string) (prior *task.PriorSession, resultErr error) {
-	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.RootAdmission, options.Supervisor.Control)
-	if lease != nil && options.RootAdmission == nil {
-		defer func() { resultErr = supervisorcore.ReleaseOwnedRootAdmission(lease, resultErr) }()
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if err = task.ValidateTaskID(id); err != nil {
+	if err := task.ValidateTaskID(id); err != nil {
 		return nil, err
 	}
 	td, err := store.OpenTask(id)
@@ -78,7 +70,7 @@ func ResolvePredecessorContext(ctx context.Context, store *taskdir.Store, option
 	if !submitted {
 		return nil, task.ErrRequestConflict
 	}
-	if err = PredecessorTerminatedContext(ctx, store.Root, td, predecessorReq, SupervisorOptions{AdmissionStore: store, RootAdmission: lease, Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore, Routing: options.Supervisor.Routing}); err != nil {
+	if err = PredecessorTerminatedContext(ctx, store.Root, td, predecessorReq, SupervisorOptions{AdmissionStore: store, Options: options.Supervisor.Control, Lookup: options.Supervisor.Lookup(), OpenStore: options.Supervisor.OpenStore, Routing: options.Supervisor.Routing}); err != nil {
 		return nil, err
 	}
 	return prior, nil

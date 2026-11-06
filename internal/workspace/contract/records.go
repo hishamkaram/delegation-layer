@@ -105,18 +105,19 @@ type ReservationClosed struct {
 
 // OperationRequest authorizes one finite helper, independently of task budget.
 type OperationRequest struct {
-	SchemaVersion    int                `json:"schema_version"`
-	RootID           string             `json:"root_id"`
-	OperationID      string             `json:"operation_id"`
-	WorkspaceID      string             `json:"workspace_id"`
-	Kind             string             `json:"kind"`
-	Subject          Subject            `json:"subject"`
-	Deadline         string             `json:"deadline"`
-	WorkerExecutable string             `json:"worker_executable"`
-	WorkerSHA256     string             `json:"worker_sha256"`
-	Supervisor       task.SupervisorRef `json:"supervisor"`
-	Arguments        []string           `json:"arguments,omitempty"`
-	Discard          bool               `json:"discard,omitempty"`
+	SchemaVersion      int                     `json:"schema_version"`
+	RootID             string                  `json:"root_id"`
+	OperationID        string                  `json:"operation_id"`
+	WorkspaceID        string                  `json:"workspace_id"`
+	Kind               string                  `json:"kind"`
+	Subject            Subject                 `json:"subject"`
+	Deadline           string                  `json:"deadline"`
+	WorkerExecutable   string                  `json:"worker_executable"`
+	WorkerSHA256       string                  `json:"worker_sha256,omitempty"`
+	ExecutableIdentity task.ExecutableIdentity `json:"executable_identity,omitempty"`
+	Supervisor         task.SupervisorRef      `json:"supervisor"`
+	Arguments          []string                `json:"arguments,omitempty"`
+	Discard            bool                    `json:"discard,omitempty"`
 	// Checkpoint is present exactly for checkpoint creation; absent for every
 	// earlier kind, so their canonical bytes and digests are unchanged.
 	Checkpoint *CheckpointSelection `json:"checkpoint,omitempty"`
@@ -211,7 +212,7 @@ func ValidateOperation(request OperationRequest, rootID string) (time.Time, erro
 	if !filepath.IsAbs(request.WorkerExecutable) || filepath.Clean(request.WorkerExecutable) != request.WorkerExecutable || strings.ContainsRune(request.WorkerExecutable, 0) {
 		return time.Time{}, task.ErrIdentityMismatch
 	}
-	if err = task.ValidateSHA256(request.WorkerSHA256); err != nil {
+	if err = validateOperationExecutableIdentity(request); err != nil {
 		return time.Time{}, err
 	}
 	if err = task.ValidateFreshSupervisorRef(request.Supervisor); err != nil {
@@ -221,6 +222,19 @@ func ValidateOperation(request OperationRequest, rootID string) (time.Time, erro
 		return time.Time{}, err
 	}
 	return deadline, nil
+}
+
+func validateOperationExecutableIdentity(request OperationRequest) error {
+	if err := request.ExecutableIdentity.Validate(); err != nil {
+		return err
+	}
+	if request.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+		if request.WorkerSHA256 != "" {
+			return task.ErrIdentityMismatch
+		}
+		return nil
+	}
+	return task.ValidateSHA256(request.WorkerSHA256)
 }
 
 func ValidateOperationArguments(request OperationRequest) error {

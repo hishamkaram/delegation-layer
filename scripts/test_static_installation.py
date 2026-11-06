@@ -22,7 +22,9 @@ class ShellCheckInstallationTests(unittest.TestCase):
             root = Path(directory)
             (root / "bin").mkdir()
             installed = root / "bin/shellcheck"
-            installed.write_bytes(b"existing executable")
+            installed.write_bytes(b"#!/bin/sh\nprintf '%s\\n' 'existing executable'\n")
+            installed.chmod(0o755)
+            before = installed.stat()
             with mock.patch.object(tools, "ROOT", root), mock.patch.object(
                     tools, "shellcheck_target", return_value=("fixture.tar.gz", digest(archive))), mock.patch.object(
                     tools, "checked", side_effect=download_fixture(b"corrupt archive")), mock.patch.object(
@@ -31,7 +33,10 @@ class ShellCheckInstallationTests(unittest.TestCase):
                     tools.install_shellcheck()
             open_archive.assert_not_called()
             copy.assert_not_called()
-            self.assertEqual(installed.read_bytes(), b"existing executable")
+            after = installed.stat()
+            self.assertEqual((after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns),
+                             (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns))
+            tools.require_banner([str(installed)], "existing executable")
 
     def test_supported_archives_install_only_the_verified_executable(self):
         targets = (
@@ -44,7 +49,8 @@ class ShellCheckInstallationTests(unittest.TestCase):
             with self.subTest(system=system, machine=machine), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root / "bin").mkdir()
-                executable = f"executable for {system}/{machine}".encode()
+                marker = f"executable for {system}/{machine}"
+                executable = f"#!/bin/sh\nprintf '%s\\n' '{marker}'\n".encode()
                 archive = shellcheck_archive(executable)
                 with mock.patch.object(tools, "ROOT", root), mock.patch.object(
                         tools.platform, "system", return_value=system), mock.patch.object(
@@ -53,7 +59,7 @@ class ShellCheckInstallationTests(unittest.TestCase):
                         tools, "checked", side_effect=download_fixture(archive)) as download:
                     tools.install_shellcheck()
                 installed = root / "bin/shellcheck"
-                self.assertEqual(installed.read_bytes(), executable)
+                tools.require_banner([str(installed)], marker)
                 self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
                 command = download.call_args.args[0]
                 self.assertTrue(command[-1].endswith(f"/shellcheck-v0.11.0.{suffix}.tar.gz"))

@@ -16,13 +16,13 @@ import (
 // CheckpointOperationRequest is a fixture request for one checkpoint creation
 // or removal; the caller supplies its canonical subject and selection.
 func CheckpointOperationRequest(store *taskdir.Store, operationID, kind, workspaceID string, subject workspace.Subject, selection *workspace.CheckpointSelection, deadline time.Time) workspace.OperationRequest {
-	workerDigest := task.ComputeSHA256([]byte("checkpoint-worker-" + operationID))
+	historicalSupervisorDigest := strings.Repeat("a", 64)
 	return workspace.OperationRequest{
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: operationID,
 		WorkspaceID: workspaceID, Kind: kind, Subject: subject, Checkpoint: selection,
 		Deadline:         deadline.UTC().Format(time.RFC3339Nano),
-		WorkerExecutable: "/fixture/delegate-run", WorkerSHA256: workerDigest,
-		Supervisor: supervisorfixture.ContinuationSupervisorRef(store.Root, workerDigest, "unix:/fixture/pueue.sock"),
+		WorkerExecutable: "/fixture/delegate-run", ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
+		Supervisor: supervisorfixture.ContinuationSupervisorRef(store.Root, historicalSupervisorDigest, "unix:/fixture/pueue.sock"),
 	}
 }
 

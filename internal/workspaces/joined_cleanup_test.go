@@ -58,7 +58,6 @@ func joinedLifetimeChild(t *testing.T, store *taskdir.Store, id string) (*taskdi
 type joinedAdmissionChildren struct {
 	store     *taskdir.Store
 	admission *Admission
-	root      *taskdir.RootAdmissionLease
 	first     *taskdir.LifetimeOwnerLease
 	second    *taskdir.LifetimeOwnerLease
 	foreign   *taskdir.LifetimeOwnerLease
@@ -87,19 +86,15 @@ func newJoinedAdmissionChildren(t *testing.T) *joinedAdmissionChildren {
 	first, _, firstErr := joinedLifetimeChild(t, store, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	second, fault, secondErr := joinedLifetimeChild(t, store, "cccccccccccccccccccccccccccccccc")
 	store.SetFaultInjector(nil)
-	root, err := store.AcquireRootAdmissionContext(t.Context())
-	admission := &Admission{resource: resource, rootAdmission: root}
+	admission := &Admission{resource: resource}
 	t.Cleanup(func() {
 		store.SetFaultInjector(nil)
 		if closeErr := admission.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	return &joinedAdmissionChildren{
-		store: store, admission: admission, root: root,
+		store: store, admission: admission,
 		first: first, second: second, foreign: foreign, fault: fault,
 		cause: errors.Join(historical, foreignErr, firstErr, fmt.Errorf("nested: %w", secondErr), firstErr),
 	}
@@ -109,7 +104,7 @@ func (f *joinedAdmissionChildren) requireFailedCloseRetainsParents(t *testing.T)
 	t.Helper()
 	f.store.SetFaultInjector(f.fault)
 	before := f.fault.attempts
-	if err := f.admission.Close(); err == nil || f.fault.attempts != before+1 || !f.root.CleanupPending() || !f.second.CleanupPending() {
+	if err := f.admission.Close(); err == nil || f.fault.attempts != before+1 || !f.second.CleanupPending() {
 		t.Fatal("failed first explicit child cleanup retried or released remaining ownership")
 	}
 }
@@ -127,7 +122,7 @@ func TestJoinedAdmissionRetainsAllExactStoreChildren(t *testing.T) {
 	if err := admission.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.first.CleanupPending() || fixture.second.CleanupPending() || admission.CleanupPending() || fixture.root.CleanupPending() {
+	if fixture.first.CleanupPending() || fixture.second.CleanupPending() || admission.CleanupPending() {
 		t.Fatal("explicit admission cleanup dropped a joined pending sibling")
 	}
 	if !fixture.foreign.CleanupPending() {

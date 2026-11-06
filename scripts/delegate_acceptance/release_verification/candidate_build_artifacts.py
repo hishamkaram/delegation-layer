@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..directories.operations import DirectoryOwner
-from .assets import extract_archive, remember_directory, verify_checksum
+from .assets import extract_archive, inspect_binaries, remember_directory, verify_checksum
 from .candidate_build_plan import (
     STAGE, VCS_STAMPED_BINARIES, BuildRequest, packed_filename, require_vcs_identity,
 )
@@ -21,8 +21,8 @@ from .candidate_manifest import (
     CHECKSUMS_PATH, HOMEBREW_FORMULA_PATH, PLATFORMS, ArtifactKind, entry_limit, expected_inventory,
 )
 from .commands import command
-from .contract import MAX_BINARY, VerificationError, expected_archive
-from .filesystem import _bounded_children, _bounded_file_bytes, bounded_digest, bounded_fingerprint
+from .contract import VerificationError, expected_archive
+from .filesystem import _bounded_children, _bounded_file_bytes, bounded_fingerprint
 
 
 FETCH_TIMEOUT_SECONDS = 900
@@ -120,14 +120,6 @@ def render_formula(context: BuildContext) -> None:
     write_new(context.output / HOMEBREW_FORMULA_PATH, formula)
 
 
-def _require_bundled_pueue(context: BuildContext, extracted: Path, os_name: str, arch: str) -> None:
-    fetched = context.clone / PUEUE_ROOT / os_name.lower() / arch
-    for name in ("pueue", "pueued"):
-        if (bounded_digest(extracted / name, MAX_BINARY, "bundled_binary_unreadable")
-                != bounded_digest(fetched / name, MAX_BINARY, "fetched_binary_unreadable")):
-            raise VerificationError("bundled_pueue_mismatch", STAGE)
-
-
 def _require_vcs_stamps(context: BuildContext, extracted: Path) -> None:
     for name in VCS_STAMPED_BINARIES:
         stamp = run(context, "go-version-m", ["go", "version", "-m", str(extracted / name)],
@@ -136,13 +128,13 @@ def _require_vcs_stamps(context: BuildContext, extracted: Path) -> None:
 
 
 def verify_bundles(context: BuildContext) -> None:
-    """Prove each archive matches its checksum, bundles the fetched Pueue and keeps the Go stamp."""
+    """Prove each archive matches its checksum, contains the required roles and keeps the Go stamp."""
     for os_name, arch in PLATFORMS:
         name = expected_archive({"os": os_name, "arch": arch}, context.request.tag)
         archive = verify_checksum(context.output, name, context.receipt)
         extracted = context.work / f"extract-{os_name}-{arch}"
         extract_archive(archive, extracted, context.owner, context.receipt)
-        _require_bundled_pueue(context, extracted, os_name, arch)
+        inspect_binaries(extracted, {"binaries": {}})
         _require_vcs_stamps(context, extracted)
 
 

@@ -28,7 +28,7 @@ func TestWarmOwnerBoundContactRejectsReplacementBeforeOwnerRecords(t *testing.T)
 			before := producerBudgetTree(t, f.journal.pin.Root())
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			outcome, err := RequestBoundPreparation(ctx, reader, expected, PreparationRequest{Context: current.Inputs.Context, Requirements: f.request.Requirements})
+			outcome, err := RequestBoundPreparation(ctx, reader, expected, PreparationRequest{Context: current.Inputs.Context})
 			if !errors.Is(err, task.ErrLockBusy) || task.RecordAbsent(err) || outcome != (PreparationOutcome{}) {
 				t.Fatalf("bound contact selected replacement owner records: outcome=%v err=%v", outcome, err)
 			}
@@ -46,7 +46,7 @@ func TestWarmOwnerBoundContactRejectsStaleReferenceBeforeDial(t *testing.T) {
 	stale := f.auth.request.Owner
 	stale.Sequence++
 	for _, expected := range []StartupReference{stale, {}} {
-		outcome, err := RequestBoundPreparation(ctx, f.reader, expected, PreparationRequest{Context: f.auth.intent.Inputs.Context, Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
+		outcome, err := RequestBoundPreparation(ctx, f.reader, expected, PreparationRequest{Context: f.auth.intent.Inputs.Context})
 		want := task.ErrLockBusy
 		if expected == (StartupReference{}) {
 			want = ErrIdentity

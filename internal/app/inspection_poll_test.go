@@ -33,11 +33,11 @@ func TestStagedAuxiliaryRecoveryPreservesPendingBeforeRaceFallback(t *testing.T)
 		}
 	})
 	readbacks := 0
-	_, err = supervisor.RecoverStagedAuxiliaryObservation(t.Context(), client, store.Root, observation,
+	_, err = supervisor.RecoverStagedAuxiliaryObservationChecked(t.Context(), client, store.Root, observation,
 		func(current pueue.InspectionObservation) error {
 			return operation.RecordReceiptContext(t.Context(), current.Job.ID)
 		},
-		func(int64) error { readbacks++; return nil }, nil)
+		func(int64) error { readbacks++; return nil }, nil, operation.CheckLaunchPermission)
 	pending := assertRetainedInspectionPending(t, err)
 	if readbacks != 0 {
 		t.Errorf("pending command reached completed-race receipt fallback %d times", readbacks)

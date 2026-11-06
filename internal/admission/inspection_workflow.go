@@ -29,6 +29,10 @@ func InspectProviderContext(parent context.Context, options InspectionOptions, s
 	if err != nil {
 		return nil, time.Time{}, err
 	}
+	binding, err = inspectionReplayBinding(parent, store, req, candidate, binding)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
 	inspectionTimeout := inspection.TimeoutForRevision(binding.DefinitionRevision)
 	concurrent := ConcurrentInspection(store.Root, binding)
 	if !concurrent && !inspectionGroupReady {
@@ -66,10 +70,6 @@ func prepareInspectionBinding(options InspectionOptions, candidate commonprovide
 	if err != nil {
 		return "", nil, inspection.Binding{}, AnnotateMissingInspectionStage("resolving worker", err)
 	}
-	workerSHA, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		return "", nil, inspection.Binding{}, AnnotateMissingInspectionStage("fingerprinting worker", err)
-	}
 	definition, definitionSHA, err := candidate.Inspection.Snapshot()
 	if err != nil {
 		return "", nil, inspection.Binding{}, AnnotateMissingInspectionStage("snapshotting definition", err)
@@ -86,16 +86,20 @@ func prepareInspectionBinding(options InspectionOptions, candidate commonprovide
 	if err != nil {
 		return "", nil, inspection.Binding{}, AnnotateMissingInspectionStage("preparing inspection supervisor", err)
 	}
-	binding := inspection.Binding{
-		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA, CapabilitySHA256: capabilitySHA,
-		HelperExecutable: definition.Executable, HelperSHA256: definition.ExecutableSHA256,
-		WorkerExecutable: runner, WorkerSHA256: workerSHA,
-		RunnerOwnership: options.RunnerOwnership,
-		WorkerExitProof: inspection.WorkerExitProofGuardianWaitV1,
-		Environment:     append([]string(nil), definition.Environment...), EnvironmentRecorded: true,
-		Supervisor: supervisor.Binding(),
-	}
+	binding := installedInspectionBinding(options, definition, definitionSHA, capabilitySHA, runner, supervisor.Binding())
 	return runner, inspectionSupervisor, binding, nil
+}
+
+func installedInspectionBinding(options InspectionOptions, definition commonprovider.InspectionDefinition, definitionSHA, capabilitySHA, runner string, supervisor task.SupervisorRef) inspection.Binding {
+	return inspection.Binding{
+		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA, CapabilitySHA256: capabilitySHA,
+		HelperExecutable: definition.Executable, WorkerExecutable: runner,
+		ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
+		RunnerOwnership:    options.RunnerOwnership,
+		WorkerExitProof:    inspection.WorkerExitProofGuardianWaitV1,
+		Environment:        append([]string(nil), definition.Environment...), EnvironmentRecorded: true,
+		Supervisor: supervisor,
+	}
 }
 
 func ensureInspectionGroup(ctx context.Context, options InspectionOptions, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) error {

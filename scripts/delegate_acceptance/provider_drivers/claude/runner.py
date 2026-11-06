@@ -74,7 +74,6 @@ class ClaudeAcceptance:
         self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         require_discovery("claude", self.claude)
         require_discovery("pueue", self.pueue)
@@ -227,11 +226,10 @@ class ClaudeAcceptance:
         write_json(self.output / "binding.json", {
             "provider": PROVIDER, "mode": MODE, "approval": APPROVAL,
             "claude": str(self.claude), "claude_version": self.provider_version,
-            "claude_sha256": self.provider_sha256, "delegate": str(self.delegate),
-            "delegate_sha256": digest(self.delegate), "runner": str(self.runner),
-            "runner_sha256": digest(self.runner), "pueue": str(self.pueue),
-            "pueue_sha256": digest(self.pueue), "pueued": str(self.pueued),
-            "pueued_sha256": digest(self.pueued), "pueue_version": self.pueue_version,
+            "schema_version": 2, "representation": "installed-paths",
+            "delegate": str(self.delegate), "runner": str(self.runner),
+            "pueue": str(self.pueue), "pueued": str(self.pueued),
+            "pueue_version": self.pueue_version,
             "pueued_version": self.pueued_version, "pueue_base": str(self.pueue_base),
             "pueue_config": str(self.pueue_config), "config_sha256": digest(self.pueue_config),
             "state": str(self.state), "workspace": str(self.workspace), "sibling": str(self.sibling),

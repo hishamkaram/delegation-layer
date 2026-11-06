@@ -4,7 +4,7 @@ The caller owns candidate validation, the receipt and the workspace lifetime; th
 only observes installations. Every installer and default-path child runs through
 ConsumerPorts.run in a scrubbed environment whose PATH starts with a curl shim, so
 install.sh (directly or as the packaged install-cli child) can fetch only the two intended
-release URLs, served from local files. After the installed hashes and the fresh default
+release URLs, served from local files. After the installed layout and the fresh default
 state match, the caller's required BootstrapProbe runs one fixture task through the
 installed delegate; that probe, not this module, owns its children and resources.
 Any failure leaves the workspace to the caller's retain-for-investigation path.
@@ -27,10 +27,10 @@ from .candidate_install_contract import (
 from .candidate_install_brew import observe_brew_install, require_brew_host
 from .candidate_install_shim import CurlShim, prepare_shim
 from .candidate_manifest import entry_limit
-from .contract import MAX_SOURCE_FILE, VerificationError, parse_binary_digests
+from .contract import MAX_SOURCE_FILE, VerificationError, installed_executables
 from .filesystem import bounded_digest
 from .published_contract import (
-    NPM_PACKAGE, UNRESOLVED_OWNERSHIP_CODES, compare_hashes, installed_binary_hashes,
+    NPM_PACKAGE, UNRESOLVED_OWNERSHIP_CODES, compare_hashes,
     npm_environment,
 )
 from .published_files import (
@@ -202,8 +202,7 @@ def _observe(channel: _Channel) -> InstallObservation:
     require_exact_binaries(channel.bin_dir)
     scratch: dict = {"binaries": {}, "commands": channel.receipt["commands"]}
     paths = inspect_binaries(channel.bin_dir, scratch)
-    installed = installed_binary_hashes(scratch["binaries"])
-    compare_hashes(channel.request.binary_hashes(), installed, "installed_binary_hash_mismatch", "verify-binaries")
+    installed = installed_executables(paths)
     skill_files = 0
     if channel.name == CHANNEL_NPM:
         skill = installed_skill_digests(channel.skill_dir)
@@ -216,12 +215,12 @@ def _observe(channel: _Channel) -> InstallObservation:
         cwd=channel.layout.cwd)
     state = scratch["default_path_observation"]
     # The archive layout ships the supervisor pair beside delegate, in the one PATH directory.
-    expected = parse_binary_digests(channel.request.binary_hashes(), "verify-binaries")
+    expected = installed
     bootstrap = require_bootstrap(channel.probe(BootstrapTarget(
         command_directory=channel.bin_dir, delegate=paths["delegate"],
         supervisor_directory=channel.bin_dir, binaries=expected)), expected)
     return InstallObservation(
-        channel=channel.name, requests=requests, binaries=tuple(sorted(installed.items())),
+        channel=channel.name, requests=requests, binaries=installed,
         skill_files=skill_files, delegate_version=scratch["delegate_build_identity"]["version"],
         default_state=(state["state_before"], state["observed_state"], state["state_after"]),
         bootstrap=bootstrap, installer_sha256=channel.installer_sha256)
@@ -234,7 +233,7 @@ def verify_candidate_install(
     """Install the candidate per channel and prove binaries, skill and default-path behavior.
 
     ``probe`` runs each channel's installed default fixture turn only after that
-    channel's hashes and fresh default state matched; it is never skipped.
+    channel's selected layout and fresh default state matched; it is never skipped.
     ``info`` is the caller's expected platform; the facts record the observed host
     platform, and a mismatch is refused before any child. Raises VerificationError with
     the failing code; the caller must retain the workspace on every failure (a timed-out

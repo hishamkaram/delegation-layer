@@ -11,7 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestProbeSavedPrivateMissingDerivedDirectoryDoesNotPrepare(t *testing.T) {
+func TestProbeSavedPrivateCompatibleMissingDerivedDirectoryDoesNotPrepare(t *testing.T) {
 	for _, name := range []string{"data", "run"} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newCompletedPrivateSuccessorTestFixture(t, false)
@@ -23,7 +23,7 @@ func TestProbeSavedPrivateMissingDerivedDirectoryDoesNotPrepare(t *testing.T) {
 			controlMarker := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "probe-control-started")
 			fixture.options.Environment = append(os.Environ(), "PRIVATE_CONTROL_MARKER="+controlMarker)
 			before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-			client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+			client, err := ProbeSavedPrivateCompatible(t.Context(), fixture.stateRoot, fixture.saved, fixture.options, nil)
 			closeSavedProbeTestClient(t, client, err)
 			if client != nil || err != nil {
 				t.Fatalf("missing derived directory: client present=%t err=%v", client != nil, err)
@@ -37,7 +37,7 @@ func TestProbeSavedPrivateMissingDerivedDirectoryDoesNotPrepare(t *testing.T) {
 	}
 }
 
-func TestProbeSavedPrivateMissingDirectoryRetainsValidationErrors(t *testing.T) {
+func TestProbeSavedPrivateCompatibleMissingDirectoryRetainsValidationErrors(t *testing.T) {
 	for _, name := range []string{"missing config", "malformed config", "malformed binding", "missing alias config", "malformed alias", "unprotected lease", "symlink config", "symlink runtime", "non-directory runtime"} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newCompletedPrivateSuccessorTestFixture(t, false)
@@ -46,7 +46,7 @@ func TestProbeSavedPrivateMissingDirectoryRetainsValidationErrors(t *testing.T) 
 			}
 			want, missing := prepareSavedProbeConfigFailure(t, fixture, name)
 			before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-			client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+			client, err := ProbeSavedPrivateCompatible(t.Context(), fixture.stateRoot, fixture.saved, fixture.options, nil)
 			closeSavedProbeTestClient(t, client, err)
 			if client != nil || !errors.Is(err, want) || (missing && !errors.Is(err, os.ErrNotExist)) {
 				t.Fatalf("invalid dependency: client present=%t err=%v, want %v (missing=%t)", client != nil, err, want, missing)
@@ -107,21 +107,6 @@ func prepareSavedProbeConfigFailure(t *testing.T, fixture completedPrivateSucces
 	return want, missing
 }
 
-func TestProbeSavedPrivateAttachesPublishedGenerationWithoutWrites(t *testing.T) {
-	fixture := newCompletedPrivateSuccessorTestFixture(t, true)
-	before := snapshotSavedProbeTestState(t, fixture.stateRoot)
-	client, err := ProbeSavedPrivate(t.Context(), fixture.stateRoot, fixture.successor, fixture.clientPath, fixture.daemonPath, fixture.options)
-	closeSavedProbeTestClient(t, client, err)
-	if err != nil || client == nil {
-		t.Fatalf("published generation: client present=%t err=%v", client != nil, err)
-	}
-	if client.Binding() != fixture.successor || client.RuntimeBinding() != fixture.successor {
-		t.Fatal("warm probe changed published generation")
-	}
-	assertSavedProbeTestUnchanged(t, fixture.stateRoot, before)
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
-}
-
 func TestRecoverPrivatePreparesMissingDerivedDirectoriesUnderExclusiveLock(t *testing.T) {
 	fixture := newCompletedPrivateSuccessorTestFixture(t, false)
 	for _, name := range []string{"data", "run"} {
@@ -144,11 +129,9 @@ func TestRecoverPrivatePreparesMissingDerivedDirectoriesUnderExclusiveLock(t *te
 			t.Error(err)
 		}
 	})
-	var err error
-	recovered, err = RecoverPrivate(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-	if err != nil || recovered == nil {
-		t.Fatalf("exclusive recovery: client present=%t err=%v", recovered != nil, err)
-	}
+	recovery, err := AttemptPrivateRecovery(t.Context(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+	recovered = recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	if recovered.Binding() != fixture.saved || recovered.RuntimeBinding() != fixture.successor {
 		t.Fatal("recovery changed saved or published generation")
 	}

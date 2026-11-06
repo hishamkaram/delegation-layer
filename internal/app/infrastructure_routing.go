@@ -15,23 +15,28 @@ import (
 )
 
 // The command owns its immutable invocation capture. Each request owns its
-// selected context and constraints; canonical root records own the artifacts,
+// selected context; canonical root records own the artifacts,
 // accepted operation and current owner. No task-selected environment can mint
 // an outside starter or replace the original invocation's routing locator.
 type infrastructureOwnerRouting struct {
 	invocation    *capturedInfrastructureInvocation
 	defaultRunner string
-	lookup        supervisor.ExecutableLookup
 }
 
 var _ supervisor.OwnerRouting = infrastructureOwnerRouting{}
 
 func (d Dependencies) infrastructureRouting() supervisor.OwnerRouting {
-	return infrastructureOwnerRouting{invocation: d.invocationSource, defaultRunner: d.RunnerExecutable, lookup: d.supervisorLookup()}
+	if d.ownerRouting != nil {
+		return d.ownerRouting
+	}
+	return infrastructureOwnerRouting{invocation: d.invocationSource, defaultRunner: d.RunnerExecutable}
 }
 
 func (d storeDependencies) infrastructureRouting() supervisor.OwnerRouting {
-	return infrastructureOwnerRouting{invocation: d.invocationSource, defaultRunner: d.runnerExecutable, lookup: d.supervisorLookup}
+	if d.ownerRouting != nil {
+		return d.ownerRouting
+	}
+	return infrastructureOwnerRouting{invocation: d.invocationSource, defaultRunner: d.runnerExecutable}
 }
 
 func (r infrastructureOwnerRouting) EnsurePrivate(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, error) {
@@ -49,23 +54,17 @@ func (r infrastructureOwnerRouting) PrepareContinuation(ctx context.Context, sto
 	return outcome.Disposition, err
 }
 
-func (r infrastructureOwnerRouting) MigrateReferenced(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext, reference infrastructure.MigrationReference) (infrastructure.Disposition, infrastructure.MigrationResult, error) {
-	outcome, err := r.prepare(ctx, store, selected, infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateReferenced, Migration: reference})
-	return outcome.Disposition, outcome.MigrationResult, err
-}
-
 func (r infrastructureOwnerRouting) MigrateOwn(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error) {
 	outcome, err := r.prepare(ctx, store, selected, infrastructure.InitialOperation{Kind: infrastructure.InitialMigrateOwn})
 	return outcome.Disposition, outcome.Report, err
 }
 
 type infrastructureRoutingSelection struct {
-	initial      infrastructure.InitialOperation
-	context      infrastructure.LaunchContext
-	reference    infrastructure.LaunchContextReference
-	requirements infrastructure.ArtifactRequirements
-	owner        infrastructure.StartupReference
-	probeErr     error
+	initial   infrastructure.InitialOperation
+	context   infrastructure.LaunchContext
+	reference infrastructure.LaunchContextReference
+	owner     infrastructure.StartupReference
+	probeErr  error
 }
 
 func (r infrastructureOwnerRouting) prepare(ctx context.Context, target *taskdir.Store, selected infrastructure.LaunchContext, initial infrastructure.InitialOperation) (outcome infrastructure.PreparationOutcome, resultErr error) {
@@ -102,8 +101,8 @@ func (r infrastructureOwnerRouting) prepare(ctx context.Context, target *taskdir
 	if err = requireInfrastructureRoutingPin(ctx, resources.reader, pin); err != nil {
 		return outcome, err
 	}
-	constraints, err := host.preparationRequirements(ctx, target, resources.reader)
-	selection.requirements, selection.owner, selection.probeErr = constraints.requirements, constraints.owner, constraints.probeErr
+	observed, err := host.probePreparationOwner(ctx, resources.reader)
+	selection.owner, selection.probeErr = observed.owner, observed.probeErr
 	if err != nil {
 		return outcome, err
 	}
@@ -120,7 +119,7 @@ func (r infrastructureOwnerRouting) prepare(ctx context.Context, target *taskdir
 	}
 	outcome, err = infrastructure.RequestBoundPreparation(ctx, resources.reader, established.Owner, infrastructure.PreparationRequest{
 		Operation: selection.initial, Context: selection.reference,
-		InitialResultFor: established.InitialResultFor, Requirements: selection.requirements,
+		InitialResultFor: established.InitialResultFor,
 	})
 	return outcome, errors.Join(infrastructurePreparationOutcomeError(outcome), err)
 }
@@ -142,7 +141,7 @@ func (r infrastructureOwnerRouting) selectPreparation(ctx context.Context, pin t
 			return infrastructureRoutingSelection{}, infrastructureEstablishmentHost{}, infrastructure.ErrIdentity
 		}
 	}
-	host := newInfrastructureEstablishmentHost(r.defaultRunner, r.lookup, initial)
+	host := newInfrastructureEstablishmentHost(r.defaultRunner, initial)
 	return infrastructureRoutingSelection{initial: initial, context: selected.Clone(), reference: reference}, host, nil
 }
 
@@ -175,12 +174,12 @@ func (r infrastructureOwnerRouting) establish(ctx context.Context, resources *in
 		if err != nil {
 			return infrastructure.EstablishedOwner{}, err
 		}
-		return infrastructure.RequestOtherEstablishment(ctx, resources.origin, owner, target, selection.reference, selection.requirements, selection.initial)
+		return infrastructure.RequestOtherEstablishment(ctx, resources.origin, owner, target, selection.reference, selection.initial)
 	}
 	deadline, _ := ctx.Deadline() // prepare requires the caller's finite deadline.
 	var err error
 	resources.attempt, err = r.invocation.source.EstablishOutside(ctx, resources.target, infrastructure.EstablishmentRequest{
-		Context: selection.context, Initial: selection.initial, Requirements: selection.requirements, Deadline: deadline,
+		Context: selection.context, Initial: selection.initial, Deadline: deadline,
 	}, host)
 	if resources.attempt == nil {
 		if contact, ok := infrastructureRoutingContact(err); ok {

@@ -4,13 +4,13 @@ from pathlib import Path
 import time
 
 from scripts.delegate_acceptance.evidence.records import _read_control_record
-from scripts.delegate_acceptance.evidence.validation import require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require, _hex_digest, _task_identity
 from scripts.delegate_acceptance.private_cli.nested_observation import (
-    lifetime_checkpoint, await_actor_closure, reconcile_prepared_actor,
+    lifetime_checkpoint, await_actor_closure, reconcile_prepared_actor, bound_private_client,
 )
 from scripts.delegate_acceptance.evidence.files import path_present, write_json
 from scripts.delegate_acceptance.private_cli.supervisor import (
-    await_observed_disposal_readiness, shutdown_custody_roots,
+    await_observed_disposal_readiness, shutdown_custody_roots, shutdown_private_supervisor, shutdown_remaining,
 )
 from scripts.delegate_acceptance.private_cli.disposal_observer import public_status_observer
 
@@ -20,10 +20,10 @@ def fence_creator(case, deadline):
     if not path_present(fence):
         write_json(fence, {"nonce": case.configuration["nonce"], "requested_at_unix_ns": time.time_ns()})
     request = _read_control_record(fence, "leader fence request")
-    require(request.get("nonce") == case.configuration["nonce"]
-            and type(request.get("requested_at_unix_ns")) is int and request["requested_at_unix_ns"] > 0,
-            "leader fence request changed identity")
-    requested_ns = request["requested_at_unix_ns"]
+    requested_ns = request.get("requested_at_unix_ns")
+    if not (request.get("nonce") == case.configuration["nonce"]
+            and type(requested_ns) is int and requested_ns > 0):
+        raise AcceptanceFailure("leader fence request changed identity")
     leader = case.responses.get("leader")
     if leader is None:
         if not path_present(case.a / "tasks" / case.configuration["leader"]):
@@ -45,10 +45,11 @@ def fence_creator(case, deadline):
         if (case.controls.directory / "fenced.json").is_file():
             acknowledgement = _read_control_record(case.controls.directory / "fenced.json", "leader fence")
             launch = case.match_launch(case.a, leader, acknowledgement)
+            observed_ns = acknowledgement.get("observed_at_unix_ns")
             require(acknowledgement.get("pid") == launch["pid"]
                     and acknowledgement.get("nonce") == case.configuration["nonce"]
-                    and type(acknowledgement.get("observed_at_unix_ns")) is int
-                    and acknowledgement["observed_at_unix_ns"] >= requested_ns, "leader fence was not acknowledged")
+                    and type(observed_ns) is int
+                    and observed_ns >= requested_ns, "leader fence was not acknowledged")
             return
         time.sleep(0.02)
     raise TimeoutError("leader creator could not be fenced before child recovery")
@@ -92,7 +93,7 @@ def cancel_actor(case, role, state, deadline):
             and record.get("cause") == "user", "cleanup permanent stop changed task identity")
 
 
-def cleanup_case(case, deadline):
+def cleanup_case(case, deadline, disposal):
     if not case.lifetime.attempted_task_ids and not case.b_ids:
         forget_uninitialized_roots(case)
         case.evidence["cleanup"]["status"] = "no-task-or-supervisor-created"
@@ -110,7 +111,7 @@ def cleanup_case(case, deadline):
                 await_actor_closure(case, case.b, case.responses[role], deadline)
     if case.b.exists() and case.b != case.a:
         cancel_owned_setup(case, case.b, case.b_ids, deadline)
-        close_root(case, case.b, case.b_ids, deadline)
+        close_root(case, case.b, case.b_ids, deadline, disposal)
     elif not case.b.exists() and case.b != case.a:
         # No creator can still initialize this exact root after the fence.
         case.lifetime.managed_state_roots.remove((case.b, case.b_ids))
@@ -120,7 +121,7 @@ def cleanup_case(case, deadline):
     case.release("leader")
     cancel_actor(case, "leader", case.a, deadline)
     cancel_owned_setup(case, case.a, case.lifetime.attempted_task_ids, deadline)
-    close_root(case, case.a, case.lifetime.attempted_task_ids, deadline)
+    close_root(case, case.a, case.lifetime.attempted_task_ids, deadline, disposal)
     descendant = case.controls.directory / "descendant.json"
     if descendant.exists():
         original = _read_control_record(descendant, "ordinary descendant")
@@ -152,10 +153,63 @@ def cancel_owned_setup(case, state, task_ids, deadline):
         cancel_actor(case, role, state, deadline)
 
 
-def close_root(case, state, task_ids, deadline):
+def close_root(case, state, task_ids, deadline, disposal):
+    if state in case.lifetime.closed_roots:
+        return
+    require(disposal is not None, "nested root closure requires the finalizer disposal owner")
     observer = public_status_observer(Path(case.configuration["delegate"]), state, case.lifetime.env,
                                       capture_root=case.lifetime.capture_token)
     closure = await_observed_disposal_readiness(state, tuple(task_ids), shutdown_custody_roots(state, case.lifetime.env),
                                                deadline, observer, reader=case.read_closure)
     for task_id in closure["tasks"]:
         await_actor_closure(case, state, {"root_id": closure["root_id"], "task_id": task_id}, deadline)
+    config = state / ".supervisor" / "pueue.yml"
+    selected = bound_private_client(state, case.lifetime.env) if path_present(config) else None
+    result = case.command(state, ["supervisor", "stop-owner"], "cleanup-owner-" + state.name,
+                          expected=(0, 1, 3), deadline=deadline)
+    process = selected_owner_process(result, closure["root_id"], config)
+    closed = None
+    if process is not None:
+        if selected is not None:
+            client, environment = selected
+            closure = shutdown_private_supervisor(client, config, environment, timeout=shutdown_remaining(deadline),
+                                                  state=state, task_ids=tuple(task_ids), capture_root=case.lifetime.capture_token,
+                                                  disposal=disposal, reader=case.read_closure)
+        await_selected_owner_absence(case, process, deadline)
+        if selected is not None:
+            closed = {"closure": closure, "disposal": disposal.require_held(state)}
+    # The selected incarnation alone is proven closed, not any future startup.
+    case.lifetime.closed_roots[state] = closed
+    case.lifetime.supervisor_cleanups[:] = [entry for entry in case.lifetime.supervisor_cleanups
+                                           if entry.get("state") != state]
+
+
+def selected_owner_process(response, root_id, config):
+    require(isinstance(response, dict) and not response.get("error") and response.get("root_id") == root_id,
+            "owner stop failed or changed the selected root")
+    owner = response.get("supervisor_owner")
+    require(isinstance(owner, dict) and owner.get("action") == "stop-owner", "owner stop omitted its result")
+    if owner.get("state") == "not_initialized":
+        require(not path_present(config), "owner not initialized but private daemon config remains; retain root")
+        return None
+    require(owner.get("state") == "serving_released", "selected owner serving release was not proven: " + str(owner.get("state")))
+    startup = owner.get("startup")
+    require(isinstance(startup, dict) and type(startup.get("sequence")) is int and startup["sequence"] > 0
+            and _task_identity(startup.get("epoch")) and _hex_digest(startup.get("intent_sha256")),
+            "owner stop omitted its validated startup identity")
+    process = owner.get("process")
+    require(isinstance(process, dict) and type(process.get("pid")) is int and process["pid"] > 0
+            and isinstance(process.get("start_token"), str) and process["start_token"]
+            and "\x00" not in process["start_token"], "owner stop omitted its selected process identity")
+    return process
+
+
+def await_selected_owner_absence(case, process, deadline):
+    while time.monotonic() < deadline:
+        observed = case.native(process["pid"], expected_start=process["start_token"], deadline=deadline)
+        require(type(observed.get("present")) is bool and type(observed.get("identity_matches")) is bool,
+                "selected owner native closure is unknown")
+        if not observed["present"] or observed["identity_matches"] is False:
+            return
+        time.sleep(0.02)
+    raise TimeoutError("selected resident incarnation remained present after daemon shutdown")

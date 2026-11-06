@@ -35,12 +35,8 @@ func TestDaemonGuardStartedChildAlwaysReaped(t *testing.T) {
 			})
 			executable := filepath.Join(root, "daemon")
 			writeExecutable(t, executable, "#!/bin/sh\nprintf '%s\\n' \"$$\" >> '"+pidPath+"'\n")
-			digest, err := hashExecutable(executable)
-			if err != nil {
-				t.Fatal(err)
-			}
 			guard := daemonGuardReapingFixture(t, tc.twice, tc.result)
-			err = startDaemon(t.Context(), root, executable, digest, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
+			err := startDaemon(t.Context(), root, executable, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
 			if tc.result == nil && err != nil || tc.result != nil && !errors.Is(err, tc.result) {
 				t.Fatalf("start result = %v, want %v", err, tc.result)
 			}

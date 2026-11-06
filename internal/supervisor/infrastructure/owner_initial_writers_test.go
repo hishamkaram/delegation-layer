@@ -174,7 +174,7 @@ func TestOwnerFailedReplayWriteDoesNotConsumeTerminalDelivery(t *testing.T) {
 	}
 	f.start()
 	owner := f.request(t, ownerStatus).Owner
-	request := PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
+	request := PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	reader := contextPassiveReader(t, f.entry.journal)
@@ -182,7 +182,7 @@ func TestOwnerFailedReplayWriteDoesNotConsumeTerminalDelivery(t *testing.T) {
 	if outcome != (PreparationOutcome{}) || writes.Load() != 1 {
 		t.Fatalf("failed write was automatically replayed: outcome=%v writes=%d err=%v", outcome, writes.Load(), err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+	requireOwnerContactError(t, err)
 	select {
 	case <-f.server.initialDelivered:
 		t.Fatal("partial frame consumed terminal handoff")

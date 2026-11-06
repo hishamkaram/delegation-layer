@@ -35,7 +35,7 @@ func newPrivateRestoreFixture(t *testing.T, compressed bool) privateRestoreFixtu
 		t.Fatal(err)
 	}
 	f.resolution = ResolutionContext{OS: runtime.GOOS, Home: filepath.Dir(f.root), DataLocalDirectory: filepath.Join(filepath.Dir(f.root), "data-local"), ConfigDirectory: filepath.Join(filepath.Dir(f.root), "config"), Username: "restore-fixture"}
-	config, err := privateConfigYAMLForResolution(f.base, f.resolution)
+	config, err := privateConfigYAMLForResolution(f.base, f.resolution, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +164,8 @@ func TestObservePrivateRestoreRequiresFullPublishedGeneration(t *testing.T) {
 			selected := f.binding
 			switch change {
 			case "client":
-				selected.ClientSHA256 = task.ComputeSHA256([]byte("future client D"))
+				selected.ClientExecutable += "-different"
 			case "daemon":
-				selected.DaemonSHA256 = task.ComputeSHA256([]byte("future daemon D"))
 				selected.DaemonExecutable = "/bin/sh"
 			case "missing publication":
 				if err := os.Remove(privateSupervisorBindingPath(f.root)); err != nil {

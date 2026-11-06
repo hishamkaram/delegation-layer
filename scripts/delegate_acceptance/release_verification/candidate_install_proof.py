@@ -1,6 +1,6 @@
 """Test one CI artifact's installation through one channel on this host.
 
-The loader verifies the ZIP and manifest; the archive reader verifies binaries.
+The loader verifies the ZIP and manifest; the archive reader verifies its safe executable inventory.
 Shell installs execute install.sh from the exact manifest source commit.
 Existing installation and bootstrap owners check the installed default path
 and one closed fixture turn. finish_gate owns workspace cleanup and retains
@@ -28,7 +28,7 @@ from .candidate_install_contract import (
 from .candidate_manifest import ArtifactKind, CandidateManifest
 from .candidate_source_observation import read_regular_blobs
 from .cleanup import finish_gate
-from .contract import BINARIES, VerificationError, new_receipt, parse_binary_digests
+from .contract import VerificationError, new_receipt
 from .filesystem import _acquire_receipt_lock, write_new_file
 from .github import GitHubClient
 from .published_contract import UNRESOLVED_OWNERSHIP_CODES
@@ -135,7 +135,7 @@ def _new_proof_receipt(request: ProofRequest, gate: str) -> dict:
     receipt["unresolved_limits"] = [
         "No authenticated provider acceptance; the one executed task is a local shell fixture "
         "turn through the installed delegate, runner and supervisor pair.",
-        "Binary digests cannot distinguish byte-identical copies from the installed files.",
+        "Installed paths record selection; required native behavior determines compatibility.",
         "Descendant process closure of installer children is not proven; any failure retains "
         "the workspace for investigation.",
         "This receipt records the installation test result.",
@@ -216,7 +216,6 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
     extracted = workspace / "extracted"
     extract_archive(files.archive, extracted, owner, receipt)
     inspect_binaries(extracted, receipt)
-    binaries = parse_binary_digests({name: receipt["binaries"][name]["sha256"] for name in BINARIES}, STAGE)
     rule = CHANNEL_RULES[request.channel]
     source = None
     if rule.installer_kind is None:
@@ -235,7 +234,7 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
             ports, receipt, locator.repository, manifest.source.commit, github_env).digests().items()))
     install_request = CandidateInstallRequest(
         tag=manifest.build_tag, repo=locator.repository, installer=installer, files=files,
-        binaries=tuple(sorted(binaries.as_mapping().items())), skill=skill)
+        skill=skill)
     layout = open_workspace(owner=owner, parent=workspace, receipt=receipt)
     receipt["candidate_install"]["bootstrap_parent"] = str(bootstrap_parent)
     probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=bootstrap_parent)

@@ -18,7 +18,10 @@ Use current [architecture](../../docs/architecture.md) for implementation facts.
 
 Start from the assigned scope/base, real consumers, state owners, compatibility
 requirements and observable success/failure cases. A dated plan is a pointer;
-verify it against source and the user's latest direction.
+verify it against source and the user's latest direction. Apply the
+[installed-executable rule](../../agents/_data/product-boundary.md#installed-executables)
+to runtime, recovery and contributor designs; prior implementation is not an
+exception to that rule.
 
 ## Work
 

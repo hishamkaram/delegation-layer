@@ -247,7 +247,6 @@ class CandidateCase(unittest.TestCase):
         return CandidateInstallRequest(
             tag=self.tag, repo=repo, installer=REPO_ROOT / "install.sh",
             files=CandidateFiles(archive, checksums, package or self.package),
-            binaries=tuple(sorted((name, sha256(self.binaries[name])) for name in BINARIES)),
             skill=tuple(sorted((checkout_skill_digests() if skill is None else skill).items())))
 
     def verify(self, request: CandidateInstallRequest, *, channels: tuple[str, ...],

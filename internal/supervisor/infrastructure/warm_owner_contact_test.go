@@ -12,27 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/hishamkaram/delegation-layer/internal/task"
 )
-
-func TestWarmOwnerOtherRootArtifactMismatchNeverContacts(t *testing.T) {
-	b := newOwnerServerFixture(t, &ownerServerTestHost{})
-	a := newOwnerServerFixture(t, &ownerServerTestHost{})
-	work := warmOtherWork(t, a, b.entry.operation.Intent(), b.entry.operation.defaultContextReference(), b.entry.operation.Artifacts())
-	work.request.Requirements.RequiredClientSHA256 = task.ComputeSHA256([]byte("different client"))
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	before := producerBudgetTree(t, filepath.Join(b.root, "infrastructure"))
-	established, err := a.server.prepareOtherRoot(ctx, work)
-	if !errors.Is(err, ErrIncompatible) || established != (EstablishedOwner{}) {
-		t.Fatalf("artifact mismatch selected warm contact: owner=%v err=%v", established, err)
-	}
-	requireNoOwnerContactConnection(t, b.server.listener)
-	if !maps.Equal(before, producerBudgetTree(t, filepath.Join(b.root, "infrastructure"))) {
-		t.Fatal("incompatible request changed B birth evidence")
-	}
-}
 
 func TestWarmOwnerOtherRootUnknownContactNeverFallsBack(t *testing.T) {
 	b := newOwnerContactFixture(t)
@@ -54,11 +34,11 @@ func TestWarmOwnerOtherRootUnknownContactNeverFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := RequestBoundPreparation(ctx, b.reader, established.Owner, PreparationRequest{Requirements: work.request.Requirements, Context: work.request.Context})
+	outcome, err := RequestBoundPreparation(ctx, b.reader, established.Owner, PreparationRequest{Context: work.request.Context})
 	if err == nil || established.Owner != b.auth.request.Owner {
 		t.Fatalf("unknown owner contact became success/election: ref=%v disposition=%v err=%v", established.Owner, outcome.Disposition, err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactMayHaveWritten, true)
+	requireOwnerContactError(t, err)
 	if joinErr := join(); joinErr != nil {
 		t.Fatal(joinErr)
 	}
@@ -120,7 +100,7 @@ func warmOtherWork(t *testing.T, a *ownerServerFixture, intent StartupIntent, se
 	t.Helper()
 	request := a.request(t, ownerEnsureOther)
 	request.Target = originRecord{Root: intent.Inputs.Root, RootID: intent.Inputs.RootID}
-	request.Context, request.Requirements = selected, warmOwnerRequirements(artifacts)
+	request.Context = selected
 	return acceptedOwnerWork{request: request, operation: a.entry.operation}
 }
 
@@ -136,11 +116,11 @@ func TestWarmOwnerOtherRootNativeAuthenticationFailureNeverFallsBack(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := RequestBoundPreparation(ctx, b.reader, established.Owner, PreparationRequest{Requirements: work.request.Requirements, Context: work.request.Context})
+	outcome, err := RequestBoundPreparation(ctx, b.reader, established.Owner, PreparationRequest{Context: work.request.Context})
 	if !errors.Is(err, ErrIdentity) || established.Owner != b.auth.request.Owner {
 		t.Fatalf("native authentication failure became success/election: ref=%v disposition=%v err=%v", established.Owner, outcome.Disposition, err)
 	}
-	requireOwnerContactPhase(t, err, ownerContactBeforeWrite, false)
+	requireOwnerContactError(t, err)
 	join()
 	if !maps.Equal(before, producerBudgetTree(t, filepath.Join(b.journal.pin.Root(), "infrastructure"))) {
 		t.Fatal("native authentication failure changed startup evidence")

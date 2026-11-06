@@ -19,12 +19,14 @@ const (
 	foregroundController controllerKind = "foreground"
 )
 
+// BuildID is retained only as historical data. Fresh installed hosts omit it;
+// native peer/process identity and the protocol authenticate live controls.
 type epochRecord struct {
 	Protocol int            `json:"protocol"`
 	RootID   string         `json:"root_id"`
 	Sequence uint64         `json:"sequence"`
 	Epoch    string         `json:"epoch"`
-	BuildID  string         `json:"build_id"`
+	BuildID  string         `json:"build_id,omitempty"`
 	Host     Identity       `json:"host"`
 	UID      int            `json:"uid"`
 	Endpoint string         `json:"endpoint"`
@@ -87,7 +89,7 @@ func latestSequence(names []string) (uint64, error) {
 }
 
 func (r epochRecord) validate(rootID string) error {
-	if r.RootID != rootID || r.Sequence == 0 || r.Protocol <= 0 || r.BuildID == "" || r.UID != os.Geteuid() {
+	if r.RootID != rootID || r.Sequence == 0 || r.Protocol <= 0 || r.UID != os.Geteuid() {
 		return ErrIdentity
 	}
 	if err := r.Kind.validateEndpoint(r.Endpoint); err != nil {

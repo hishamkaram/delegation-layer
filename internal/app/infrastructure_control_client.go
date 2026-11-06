@@ -17,7 +17,7 @@ func (d Dependencies) supervisorControlClientOpener() tasklifecycle.ControlClien
 	routing := d.infrastructureRouting()
 	return func(ctx context.Context, root string, saved task.SupervisorRef, source infrastructure.SavedBindingSource, options pueue.Options, lookup supervisor.ExecutableLookup) (*pueue.Client, error) {
 		if !pueue.IsPrivateConfig(root, saved.ConfigPath) {
-			return supervisor.NewControlClient(ctx, root, saved, options, lookup, openNativeSupervisorStore)
+			return supervisor.NewControlClient(ctx, root, saved, options, lookup)
 		}
 		runtime := supervisor.ControlRuntime{Options: options, Lookup: lookup, Routing: routing, OpenStore: openNativeSupervisorStore}
 		return runtime.OpenSaved(ctx, root, saved, source)

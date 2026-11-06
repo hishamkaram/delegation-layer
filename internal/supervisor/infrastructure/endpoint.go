@@ -40,8 +40,7 @@ type endpointError struct {
 func (e *endpointError) Error() string {
 	return fmt.Sprintf("infrastructure endpoint %s failed (path bytes=%d)", e.operation, e.pathBytes)
 }
-func (e *endpointError) Unwrap() error  { return e.cause }
-func (e *endpointError) PathBytes() int { return e.pathBytes }
+func (e *endpointError) Unwrap() error { return e.cause }
 
 // ownedEndpoint owns the listener and identity-bound socket cleanup. Its Store
 // is borrowed and must outlive cleanup. The caller keeps the protected parent
@@ -69,17 +68,12 @@ func (e *ownedEndpoint) Identity() EndpointIdentity { return e.identity }
 
 // listenEndpoint binds only an initially absent sequence endpoint. Any residue
 // for that sequence is refused. Prior sequence paths are inert and preserved;
-// proving a valid successor belongs to the future coordinator.
+// proving a valid successor belongs to the startup settlement owner.
 // Any nonnil result transfers cleanup ownership, even when err is nonnil.
-func (j *intentJournal) listenEndpoint(ctx context.Context, lease *Lease, reference StartupReference) (*ownedEndpoint, error) {
+func (j *intentJournal) listenEndpoint(ctx context.Context, lease *Lease, reference StartupReference) (endpoint *ownedEndpoint, resultErr error) {
 	if j == nil {
 		return nil, &endpointError{operation: "listen", cause: os.ErrInvalid}
 	}
-	return j.listenEndpointWithObserver(ctx, lease, reference, j.store)
-}
-
-// Any nonnil result transfers cleanup ownership, even when err is nonnil.
-func (j *intentJournal) listenEndpointWithObserver(ctx context.Context, lease *Lease, reference StartupReference, observer endpointRootObserver) (endpoint *ownedEndpoint, resultErr error) {
 	resultErr = j.withOpen(ctx, func() error {
 		if lease == nil || lease.path != filepath.Join(j.pin.Root(), instanceLeaseName) {
 			return ErrIdentity
@@ -89,16 +83,12 @@ func (j *intentJournal) listenEndpointWithObserver(ctx context.Context, lease *L
 			if err != nil {
 				return err
 			}
-			endpoint, err = bindInitialEndpoint(ctx, observer, j.pin, intent)
+			endpoint, err = bindInitialEndpoint(ctx, j.store, j.pin, intent)
 			return err
 		})
 	})
 	if resultErr != nil {
-		size := 0
-		if j != nil {
-			size = len(ownerEndpointPath(j.pin.Root(), reference.Sequence))
-		}
-		return endpoint, &endpointError{operation: "listen", pathBytes: size, cause: resultErr}
+		return endpoint, &endpointError{operation: "listen", pathBytes: len(ownerEndpointPath(j.pin.Root(), reference.Sequence)), cause: resultErr}
 	}
 	return endpoint, nil
 }

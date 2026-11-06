@@ -15,6 +15,7 @@ from scripts.delegate_acceptance.paths.policy import historical_clean_absolute_p
 
 _SUPERVISOR_JSON_ORDER = (
     "client_executable", "client_sha256", "daemon_executable", "daemon_sha256",
+    "executable_identity",
     "resolution_os", "resolution_home", "resolution_data_local", "resolution_config",
     "resolution_runtime", "resolution_username", "resolution_cwd",
     "resolved_config_sha256", "endpoint", "config_path", "config_digest",
@@ -23,7 +24,7 @@ _SUPERVISOR_JSON_ORDER = (
 
 
 _SUPERVISOR_BINDING_KEYS = {
-    "client_executable", "client_sha256", "resolved_config_sha256", "endpoint",
+    "client_executable", "resolved_config_sha256", "endpoint",
     "config_path", "config_digest", "observed_version",
 }
 
@@ -37,7 +38,8 @@ _SUPERVISOR_RESOLUTION_KEYS = {
 
 
 _SUPERVISOR_BINDING_OPTIONAL_KEYS = {
-    "daemon_executable", "daemon_sha256", *_SUPERVISOR_RESOLUTION_KEYS,
+    "client_sha256", "daemon_executable", "daemon_sha256", "executable_identity",
+    *_SUPERVISOR_RESOLUTION_KEYS,
 }
 
 
@@ -68,20 +70,32 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
     if not isinstance(value, dict):
         raise AcceptanceFailure(f"{label} is not an object")
     _exact_keys(value, _SUPERVISOR_BINDING_KEYS, _SUPERVISOR_BINDING_OPTIONAL_KEYS, label)
+    identity = value.get("executable_identity")
+    require(identity is None or identity == "installed-path-v1",
+            f"{label} executable identity is unsupported")
+    if identity == "installed-path-v1":
+        require("client_sha256" not in value and "daemon_sha256" not in value,
+                f"{label} installed identity contains executable SHA")
+    else:
+        require(_hex_digest(value.get("client_sha256")),
+                f"{label} historical client_sha256 is invalid")
     for key in ("client_executable", "config_path"):
         path = value.get(key)
         require(historical_clean_absolute_path(path),
                 f"{label} {key} is invalid")
-    for key in ("client_sha256", "resolved_config_sha256", "config_digest"):
+    for key in ("resolved_config_sha256", "config_digest"):
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
+    if "client_sha256" in value:
+        require(_hex_digest(value["client_sha256"]), f"{label} historical client_sha256 is invalid")
     daemon_executable = value.get("daemon_executable")
     daemon_sha256 = value.get("daemon_sha256")
-    require((daemon_executable is None) == (daemon_sha256 is None),
-            f"{label} daemon provenance is incomplete")
+    require(daemon_sha256 is None or daemon_executable is not None,
+            f"{label} historical daemon provenance is incomplete")
     if daemon_executable is not None:
         require(historical_clean_absolute_path(daemon_executable),
                 f"{label} daemon_executable is invalid")
-        require(_hex_digest(daemon_sha256), f"{label} daemon_sha256 is invalid")
+    if "daemon_sha256" in value:
+        require(_hex_digest(daemon_sha256), f"{label} historical daemon_sha256 is invalid")
     require(isinstance(value.get("endpoint"), str) and value["endpoint"],
             f"{label} endpoint is invalid")
     observed_pueue_version(value.get("observed_version"), "pueue")

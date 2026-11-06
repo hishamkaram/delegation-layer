@@ -42,8 +42,8 @@ func observePublishedTestPairContext(t *testing.T, stateRoot string, derive func
 }
 
 // Config-only drift of a complete, present pair is a fact only when the
-// canonical config parsed and resolved and both executables proved their
-// published provenance. Every fault beside the drift returns no fact. No
+// canonical config parsed and resolved and both installed executables passed
+// metadata validation. Every fault beside the drift returns no fact. No
 // observation changes a record or starts a daemon.
 func TestObservePublishedPairConfigDriftRequiresCleanProof(t *testing.T) {
 	cases := []configDriftCase{
@@ -69,15 +69,15 @@ func TestObservePublishedPairConfigDriftRequiresCleanProof(t *testing.T) {
 		{name: "resolve fault", causes: []error{errUnixSocketPathTooLong}, detail: "", inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
 			writePrivateTestFile(t, published.ConfigPath, "shared: {unix_socket_path: '/"+strings.Repeat("s", 107)+"'}")
 		}},
-		{name: "changed client", causes: []error{ErrBinding}, provenance: true, inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
-			writeExecutable(t, published.ClientExecutable, privateClientFixture+"\n# changed\n")
-		}},
-		{name: "changed daemon", causes: []error{ErrBinding}, provenance: true, inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
-			data, err := os.ReadFile(published.DaemonExecutable)
-			if err != nil {
+		{name: "non-executable client", causes: []error{ErrBinding, ErrConfiguration}, detail: "executable must be an executable regular file", inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
+			if err := os.Chmod(published.ClientExecutable, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			writeExecutable(t, published.DaemonExecutable, string(data)+"\n# changed\n")
+		}},
+		{name: "non-executable daemon", causes: []error{ErrBinding, ErrConfiguration}, detail: "executable must be an executable regular file", inject: func(t *testing.T, published task.SupervisorRef, _ []byte) {
+			if err := os.Chmod(published.DaemonExecutable, 0o600); err != nil {
+				t.Fatal(err)
+			}
 		}},
 		{name: "canceled", cause: context.Canceled, derive: func(ctx context.Context) (context.Context, context.CancelFunc) {
 			canceled, cancel := context.WithCancel(ctx)
@@ -117,9 +117,6 @@ type configDriftCase struct {
 	// detail is its wrapping text where a sentinel alone is shared.
 	causes []error
 	detail string
-	// provenance is an executable mismatch: bare ErrBinding, never a config
-	// read fault.
-	provenance bool
 }
 
 // assertObserved requires a clean drift to be the fact with no error, and a
@@ -145,9 +142,6 @@ func (c configDriftCase) assertCauses(t *testing.T, err error) {
 	t.Helper()
 	if c.detail != "" && !strings.Contains(err.Error(), c.detail) {
 		t.Fatalf("fault = %v, want the reader's %q cause", err, c.detail)
-	}
-	if c.provenance && errors.Is(err, ErrConfiguration) {
-		t.Fatalf("executable mismatch = %v, want no config read fault", err)
 	}
 	for _, cause := range c.causes {
 		if !errors.Is(err, cause) {

@@ -15,6 +15,7 @@ import (
 func infrastructureSupervisorOptions(artifacts infrastructure.Artifacts, launch infrastructure.LaunchContext) pueue.Options {
 	return withDefaultSupervisorCallbacks(pueue.Options{
 		ControlOwnerExecutable:        artifacts.Runner,
+		PrivateTerminalEventRunner:    artifacts.Runner,
 		Environment:                   slices.Clone(launch.ControlEnvironment),
 		PrivateMaintenanceEnvironment: slices.Clone(launch.MaintenanceEnvironment),
 	})

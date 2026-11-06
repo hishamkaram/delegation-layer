@@ -11,6 +11,7 @@ from unittest.mock import patch, Mock
 from types import SimpleNamespace
 
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
+from scripts.acceptance_tests.invalid_calls import invoke_invalid
 from scripts.delegate_acceptance.private_cli.nested_policy import (
     require_backend, require_challenge, require_descendant_absent, require_setup_margin, require_worker_deadline,
     queue_ended_evidence,
@@ -21,9 +22,9 @@ from scripts.delegate_acceptance.private_cli.capture import borrow_capture_root,
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, rollback_owned_directories
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.private_cli.nested_observation import await_record
-from scripts.delegate_acceptance.private_cli.nested_cleanup import fence_creator
+from scripts.delegate_acceptance.private_cli.nested_cleanup import cleanup_case, fence_creator
 from scripts.delegate_acceptance.evidence.records import _read_control_record
-from scripts.delegate_acceptance.private_cli.leases import ordinary_lifetime_owner_live
+from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, ordinary_lifetime_owner_live
 from scripts.delegate_acceptance.private_cli.nested_fixture import wait_gate, dispatch_worker
 
 
@@ -224,7 +225,9 @@ class NestedSurvivalOracleTests(unittest.TestCase):
     def test_cleanup_hook_precedes_readiness_and_shares_deadline(self):
         lifetime = FixtureLifetime()
         events = []
-        lifetime.prepare_cleanup = lambda deadline: events.append(("prepare", deadline))
+        disposal = DisposalLeases()
+        self.addCleanup(disposal.release_all)
+        lifetime.prepare_cleanup = lambda deadline, borrowed: events.append(("prepare", deadline, borrowed))
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config"
             config.touch()
@@ -232,18 +235,72 @@ class NestedSurvivalOracleTests(unittest.TestCase):
             lifetime.managed_state_roots.append((Path(directory), ["a" * 32]))
             with patch("scripts.delegate_acceptance.private_cli.finalization.await_primary_readiness",
                        side_effect=lambda *args, **kwargs: events.append(("readiness", args[3]))):
-                _, ready, deadline = release_fixture_workers(SimpleNamespace(scenario="nested-survival"),
-                                                             [], lifetime, False)
+                _, ready, deadline, failed = release_fixture_workers(SimpleNamespace(scenario="nested-survival"),
+                                                                     [], lifetime, False, disposal=disposal)
         self.assertTrue(ready)
-        self.assertEqual(events, [("prepare", deadline), ("readiness", deadline)])
+        self.assertFalse(failed)
+        self.assertEqual(events, [("prepare", deadline, disposal), ("readiness", deadline)])
 
     def test_failed_cleanup_hook_blocks_parent_readiness(self):
         lifetime = FixtureLifetime()
-        lifetime.prepare_cleanup = lambda deadline: (_ for _ in ()).throw(RuntimeError("child unresolved"))
+        lifetime.prepare_cleanup = lambda deadline, disposal: (_ for _ in ()).throw(RuntimeError("child unresolved"))
         errors = []
-        _, ready, _ = release_fixture_workers(SimpleNamespace(scenario="nested-survival"), errors, lifetime, False)
+        _, ready, _, failed = release_fixture_workers(SimpleNamespace(scenario="nested-survival"), errors, lifetime, False)
         self.assertFalse(ready)
+        self.assertTrue(failed)
         self.assertIn("child unresolved", str(errors[0]))
+
+    def test_no_admission_forgets_only_empty_owned_roots_without_controls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            a, b = Path(directory) / "a", Path(directory) / "b"
+            a.mkdir()
+            b.mkdir()
+            lifetime = invoke_invalid(FixtureLifetime, managed_state_roots=[(a, []), (b, [])],
+                                      supervisor_cleanups=[{"state": a}, {"state": b}])
+            case = SimpleNamespace(a=a, b=b, b_ids=[], lifetime=lifetime, command=Mock(), evidence={"cleanup": {}})
+            cleanup_case(case, time.monotonic() + 1, None)
+            case.command.assert_not_called()
+            self.assertEqual(lifetime.managed_state_roots, [])
+            self.assertEqual(lifetime.supervisor_cleanups, [])
+            self.assertEqual(case.evidence["cleanup"]["status"], "no-task-or-supervisor-created")
+            (a / "unknown").touch()
+            with self.assertRaisesRegex(AcceptanceFailure, "unknown state"):
+                cleanup_case(case, time.monotonic() + 1, None)
+
+    def test_cleanup_closes_child_before_parent_and_shared_root_once(self):
+        for shared in (False, True):
+            with self.subTest(shared=shared), tempfile.TemporaryDirectory() as directory:
+                a = Path(directory) / "a"
+                a.mkdir()
+                b = a if shared else Path(directory) / "b"
+                b.mkdir(exist_ok=True)
+                tasks = ["setup"]
+                child_tasks = tasks if shared else ["child-setup"]
+                lifetime = FixtureLifetime(attempted_task_ids=tasks)
+                events = []
+                case = SimpleNamespace(a=a, b=b, b_ids=child_tasks, lifetime=lifetime, responses={},
+                                       configuration={"leader": "leader", "w1": "w1", "w2": "w2"},
+                                       release=lambda role: events.append(("release", role)),
+                                       controls=SimpleNamespace(directory=Path(directory)), evidence={"cleanup": {}})
+                disposal = object()
+                deadline = time.monotonic() + 1
+
+                def close(_case, state, task_ids, observed_deadline, borrowed):
+                    self.assertIs(borrowed, disposal)
+                    self.assertEqual(observed_deadline, deadline)
+                    self.assertEqual(task_ids, tasks if state == a else child_tasks)
+                    events.append(("close", state))
+
+                with patch("scripts.delegate_acceptance.private_cli.nested_cleanup.fence_creator"), \
+                        patch("scripts.delegate_acceptance.private_cli.nested_cleanup.reconcile_children"), \
+                        patch("scripts.delegate_acceptance.private_cli.nested_cleanup.cancel_actor"), \
+                        patch("scripts.delegate_acceptance.private_cli.nested_cleanup.cancel_owned_setup"), \
+                        patch("scripts.delegate_acceptance.private_cli.nested_cleanup.close_root", side_effect=close):
+                    cleanup_case(case, deadline, disposal)
+                self.assertEqual([state for event, state in events if event == "close"], [a] if shared else [b, a])
+                if not shared:
+                    self.assertLess(events.index(("close", b)), events.index(("release", "leader")))
+                self.assertEqual(case.evidence["cleanup"]["status"], "canonical-closure-proven")
 
     def test_capture_borrow_fences_replaced_directory_without_taking_deletion(self):
         with tempfile.TemporaryDirectory() as directory:

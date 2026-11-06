@@ -12,7 +12,6 @@ const (
 	InitialEnsureOwn           InitialOperationKind = "ensure-own"
 	InitialRecoverSaved        InitialOperationKind = "recover-saved"
 	InitialPrepareContinuation InitialOperationKind = "prepare-continuation"
-	InitialMigrateReferenced   InitialOperationKind = "migrate-referenced"
 	InitialMigrateOwn          InitialOperationKind = "migrate-own"
 )
 
@@ -20,16 +19,15 @@ const (
 // startup intent. Its zero value preserves the legacy EnsureOwn operation.
 // Subject records remain authoritative; these selectors confer no authority.
 type InitialOperation struct {
-	Kind      InitialOperationKind `json:"kind"`
-	Source    SavedBindingSource   `json:"source,omitzero"`
-	Migration MigrationReference   `json:"migration,omitzero"`
+	Kind   InitialOperationKind `json:"kind"`
+	Source SavedBindingSource   `json:"source,omitzero"`
 }
 
 func (o InitialOperation) Validate(rootID string) error {
 	if err := task.ValidateRootID(rootID); err != nil {
 		return fmt.Errorf("%w: invalid initial operation root: %w", ErrIdentity, err)
 	}
-	if (o.Kind == InitialRecoverSaved || o.Kind == InitialPrepareContinuation) && o.Source.RootID != rootID || o.Kind == InitialMigrateReferenced && o.Migration.RootID != rootID {
+	if (o.Kind == InitialRecoverSaved || o.Kind == InitialPrepareContinuation) && o.Source.RootID != rootID {
 		return ErrIdentity
 	}
 	return o.validateSubject()
@@ -38,7 +36,7 @@ func (o InitialOperation) Validate(rootID string) error {
 func (o InitialOperation) validateSubject() error {
 	switch o.Kind {
 	case "", InitialEnsureOwn, InitialMigrateOwn:
-		if o.Source != (SavedBindingSource{}) || o.Migration != (MigrationReference{}) {
+		if o.Source != (SavedBindingSource{}) {
 			return fmt.Errorf("%w: initial operation has an unexpected subject", ErrIdentity)
 		}
 	case InitialPrepareContinuation:
@@ -47,15 +45,7 @@ func (o InitialOperation) validateSubject() error {
 		}
 		fallthrough
 	case InitialRecoverSaved:
-		if o.Migration != (MigrationReference{}) {
-			return ErrIdentity
-		}
 		return o.Source.Validate()
-	case InitialMigrateReferenced:
-		if o.Source != (SavedBindingSource{}) {
-			return ErrIdentity
-		}
-		return o.Migration.Validate()
 	default:
 		return fmt.Errorf("%w: unknown initial operation", ErrIdentity)
 	}

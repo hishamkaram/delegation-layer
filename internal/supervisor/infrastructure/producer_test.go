@@ -27,14 +27,14 @@ type producerTestHost struct {
 	prepare   func(context.Context, *taskdir.Store) error
 }
 
-func (h *producerTestHost) PrepareOutsideArtifacts(ctx context.Context, target *taskdir.Store) (Artifacts, error) {
+func (h *producerTestHost) PrepareOutsideRunner(ctx context.Context, target *taskdir.Store) (string, error) {
 	h.calls++
 	if h.prepare != nil {
 		if err := h.prepare(ctx, target); err != nil {
-			return Artifacts{}, err
+			return "", err
 		}
 	}
-	return h.artifacts, nil
+	return h.artifacts.Runner, nil
 }
 
 type producerDataFixture struct {
@@ -44,14 +44,23 @@ type producerDataFixture struct {
 	host    *producerTestHost
 }
 
+func producerInvocation(t *testing.T) InvocationSource {
+	t.Helper()
+	source, err := CaptureInvocationSource(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
 func producerFixture(t *testing.T) producerDataFixture {
 	t.Helper()
 	requireComponentEntryTestHost(t)
 	j, lease := journalFixture(t)
-	artifacts := Artifacts{Runner: filepath.Join(j.pin.Root(), "runner"), RunnerSHA256: task.ComputeSHA256([]byte("runner")), Client: filepath.Join(j.pin.Root(), "pueue"), ClientSHA256: task.ComputeSHA256([]byte("client")), Daemon: filepath.Join(j.pin.Root(), "pueued"), DaemonSHA256: task.ComputeSHA256([]byte("daemon"))}
+	artifacts := Artifacts{Runner: filepath.Join(j.pin.Root(), "runner")}
 	record := contextForJournal(t, j)
 	record.OS = runtime.GOOS
-	request := EstablishmentRequest{Context: record, Deadline: time.Now().Add(time.Minute), Requirements: ArtifactRequirements{RequiredRuntimeSHA256: artifacts.RunnerSHA256, RequiredClientSHA256: artifacts.ClientSHA256, RequiredDaemonSHA256: artifacts.DaemonSHA256}}
+	request := EstablishmentRequest{Context: record, Deadline: time.Now().Add(time.Minute)}
 	return producerDataFixture{j, lease, request, &producerTestHost{artifacts: artifacts}}
 }
 
@@ -97,9 +106,9 @@ func TestProducerBusyEquivalentJoinsWithoutPreparation(t *testing.T) {
 	f := producerFixture(t)
 	intent := seedProducerIntent(t, f, 1, false)
 	request := f.request
-	// New requests obey the startup window; joining still preserves the older deadline.
+	// A fresh request never renews the accepted attempt's deadline.
 	request.Deadline = time.Now().Add(30 * time.Second)
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, request, f.host)
 	ownProducerAttempt(t, attempt)
 	if err != nil || attempt == nil || attempt.Reference() != settlementReference(t, intent) || f.host.calls != 0 || attempt.NativeCompletion() != nil {
 		t.Fatalf("busy join: host calls=%d err=%v", f.host.calls, err)
@@ -114,7 +123,7 @@ func TestProducerFreeFutureIntentJoinsWithoutNewStart(t *testing.T) {
 	intent := seedProducerIntent(t, f, 1, false)
 	releaseProducerFixtureLease(t, f)
 	starts := 0
-	attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
 	ownProducerAttempt(t, attempt)
 	if err != nil || attempt == nil || attempt.Reference() != settlementReference(t, intent) || starts != 0 || f.host.calls != 0 {
 		t.Fatalf("future join: starts=%d prepare=%d err=%v", starts, f.host.calls, err)
@@ -138,7 +147,7 @@ func TestProducerBirthUsesCheckedRawScopeNotSelectedConfiguration(t *testing.T) 
 	raw := os.Environ()
 	refused := errors.New("owned native boundary refusal")
 	starts := 0
-	attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(command *exec.Cmd) error {
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(command *exec.Cmd) error {
 		starts++
 		if !slices.Equal(command.Env, raw) {
 			t.Error("birth used selected control scope instead of checked raw native scope")
@@ -172,7 +181,7 @@ func TestProducerRequiresAllPriorSettlementsBeforeSuccessor(t *testing.T) {
 	seedProducerIntent(t, f, 2, true)
 	releaseProducerFixtureLease(t, f)
 	starts := 0
-	attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
 	ownProducerAttempt(t, attempt)
 	if err == nil || starts != 0 || f.host.calls != 0 {
 		t.Fatalf("unsettled history allowed successor: starts=%d prepare=%d err=%v", starts, f.host.calls, err)
@@ -187,7 +196,7 @@ func TestProducerExpiredUnassumedSettlesBeforeNewAcceptance(t *testing.T) {
 	old := seedProducerIntent(t, f, 1, true)
 	releaseProducerFixtureLease(t, f)
 	refusal := errors.New("stop before actual native Start")
-	attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { return refusal }})
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { return refusal }})
 	ownProducerAttempt(t, attempt)
 	if !errors.Is(err, refusal) || attempt == nil || attempt.Reference().Sequence != 2 {
 		t.Fatalf("expired successor: %v", err)
@@ -199,15 +208,13 @@ func TestProducerExpiredUnassumedSettlesBeforeNewAcceptance(t *testing.T) {
 }
 
 func TestProducerMismatchAndCancellationRefuseWithoutPreparation(t *testing.T) {
-	for _, fault := range []string{"runtime", "context", "canceled"} {
+	for _, fault := range []string{"context", "canceled"} {
 		t.Run(fault, func(t *testing.T) {
 			f := producerFixture(t)
 			seedProducerIntent(t, f, 1, false)
 			request := f.request
 			ctx := t.Context()
 			switch fault {
-			case "runtime":
-				request.Requirements.RequiredRuntimeSHA256 = task.ComputeSHA256([]byte("other runtime"))
 			case "context":
 				request.Context.ControlEnvironment = append(slices.Clone(request.Context.ControlEnvironment), "DIFFERENT=context")
 			case "canceled":
@@ -215,7 +222,7 @@ func TestProducerMismatchAndCancellationRefuseWithoutPreparation(t *testing.T) {
 				cancel()
 				ctx = canceled
 			}
-			attempt, err := EstablishOutside(ctx, f.journal.store, request, f.host)
+			attempt, err := producerInvocation(t).EstablishOutside(ctx, f.journal.store, request, f.host)
 			ownProducerAttempt(t, attempt)
 			if err == nil || f.host.calls != 0 {
 				t.Fatalf("invalid join prepared target: %v", err)
@@ -246,7 +253,7 @@ func TestProducerBusyTerminalAttemptRefusesJoin(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
+			attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
 			ownProducerAttempt(t, attempt)
 			if !errors.Is(err, task.ErrLockBusy) || attempt != nil || f.host.calls != 0 {
 				t.Fatalf("busy terminal attempt joined: attempt=%t err=%v", attempt != nil, err)
@@ -267,7 +274,7 @@ func TestProducerObservationExpiredUnassumedRefusesPending(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if _, ready, observeErr := attempt.Observe(ctx); !errors.Is(observeErr, context.DeadlineExceeded) || ready {
+	if ready, observeErr := attempt.Observe(ctx); !errors.Is(observeErr, context.DeadlineExceeded) || ready {
 		t.Fatalf("expired unassumed remained pending: ready=%t err=%v", ready, observeErr)
 	}
 }
@@ -276,32 +283,32 @@ func TestProducerBusyCorruptSettlementPreservesFault(t *testing.T) {
 	f := producerFixture(t)
 	seedProducerIntent(t, f, 1, false)
 	if err := f.journal.control.WithLock(t.Context(), func(tx *taskdir.ControlTransaction) error {
-		_, putErr := tx.Put(settlementName(1), startupSettlement{Protocol: ProtocolVersion})
+		_, putErr := tx.Put(settlementName(1), startupSettlement{Protocol: RecordProtocolVersion})
 		return putErr
 	}); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
 	ownProducerAttempt(t, attempt)
 	if err == nil || errors.Is(err, task.ErrLockBusy) || attempt != nil || f.host.calls != 0 {
 		t.Fatalf("corrupt settlement became clean busy/join: attempt=%t err=%v", attempt != nil, err)
 	}
 }
 
-func TestProducerStartupWindowRefusesBeforeTargetWrites(t *testing.T) {
+func TestProducerExpiredDeadlineRefusesBeforeTargetWrites(t *testing.T) {
 	f := producerFixture(t)
 	releaseProducerFixtureLease(t, f)
 	before := producerBudgetTree(t, f.journal.pin.Root())
 	request := f.request
-	request.Deadline = time.Now().Add(3 * time.Minute)
+	request.Deadline = time.Now().Add(-time.Nanosecond)
 	starts := 0
-	attempt, err := establishOutside(t.Context(), f.journal.store, request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected native Start") }})
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected native Start") }})
 	ownProducerAttempt(t, attempt)
-	if !errors.Is(err, ErrUnsupportedStartupBudget) || attempt != nil || f.host.calls != 0 || starts != 0 {
-		t.Fatalf("oversized startup window accepted: attempt=%t prepare=%d starts=%d err=%v", attempt != nil, f.host.calls, starts, err)
+	if !errors.Is(err, context.DeadlineExceeded) || attempt != nil || f.host.calls != 0 || starts != 0 {
+		t.Fatalf("expired startup deadline accepted: attempt=%t prepare=%d starts=%d err=%v", attempt != nil, f.host.calls, starts, err)
 	}
 	if !maps.Equal(before, producerBudgetTree(t, f.journal.pin.Root())) {
-		t.Fatal("startup-window refusal changed target bytes, modes or modification times")
+		t.Fatal("deadline refusal changed target bytes, modes or modification times")
 	}
 }
 
@@ -338,16 +345,12 @@ func producerBudgetTree(t *testing.T, root string) map[string]producerBudgetPath
 	return result
 }
 
-func TestProducerDeadlineWindowBoundaries(t *testing.T) {
+func TestProducerDeadlineValidity(t *testing.T) {
 	now := time.Date(2026, time.November, 4, 12, 0, 0, 0, time.UTC)
-	// The verified default private-control window is 85 seconds, below this cap.
-	for _, offset := range []time.Duration{time.Nanosecond, 85 * time.Second, MaximumStartupWindow - time.Nanosecond, MaximumStartupWindow} {
+	for _, offset := range []time.Duration{time.Nanosecond, 85 * time.Second, 24 * time.Hour} {
 		if err := validateProducerDeadline(now.Add(offset), now); err != nil {
-			t.Fatalf("within-window deadline refused: %v", err)
+			t.Fatalf("valid finite deadline refused: %v", err)
 		}
-	}
-	if err := validateProducerDeadline(now.Add(MaximumStartupWindow+time.Nanosecond), now); !errors.Is(err, ErrUnsupportedStartupBudget) {
-		t.Fatalf("above-window deadline accepted: %v", err)
 	}
 	for _, deadline := range []time.Time{now, now.Add(-time.Nanosecond)} {
 		if err := validateProducerDeadline(deadline, now); !errors.Is(err, context.DeadlineExceeded) {
@@ -356,5 +359,18 @@ func TestProducerDeadlineWindowBoundaries(t *testing.T) {
 	}
 	if err := validateProducerDeadline(time.Time{}, now); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("zero deadline accepted: %v", err)
+	}
+	if err := validateProducerDeadline(time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC), now); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("non-canonical deadline accepted: %v", err)
+	}
+}
+
+func TestProducerDeadlineAcceptsCanonicalMigrationControlBudget(t *testing.T) {
+	now := time.Date(2026, time.November, 5, 12, 0, 0, 0, time.UTC)
+	// PrivateControlTimeout covers 17 phases. A supported 17-second
+	// observation timeout therefore gives the caller a 289-second deadline.
+	deadline := now.Add(289 * time.Second)
+	if err := validateProducerDeadline(deadline, now); err != nil {
+		t.Fatalf("canonical control deadline rejected by the startup owner: %v", err)
 	}
 }

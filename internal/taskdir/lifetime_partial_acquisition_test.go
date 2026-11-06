@@ -36,9 +36,9 @@ func (f *partialOwnerFault) OnFlock(path string, operation int) error {
 	return nil
 }
 
-func partialLifetimeSubject(t *testing.T, kind string) (*rootAdmissionFixture, func(context.Context, bool) (*LifetimeOwnerLease, error), *LifetimeOwnerLease) {
+func partialLifetimeSubject(t *testing.T, kind string) (*storeOwnerFixture, func(context.Context, bool) (*LifetimeOwnerLease, error), *LifetimeOwnerLease) {
 	t.Helper()
-	fixture := newRootAdmissionFixture(t)
+	fixture := newStoreOwnerFixture(t)
 	other := fixture.other(t)
 	var controls []*ControlDir
 	var tasks []*TaskDir
@@ -267,7 +267,7 @@ func assertPartialCanceledOwner(t *testing.T, kind string) {
 
 func assertPartialBusyConsumer(t *testing.T, name string) {
 	t.Helper()
-	fixture := newRootAdmissionFixture(t)
+	fixture := newStoreOwnerFixture(t)
 	peerStore := fixture.other(t)
 	req, meta, brief := preparedInput(t, fixture.store)
 	td, err := fixture.store.CreateTask(req.TaskID, req, brief, meta)

@@ -26,12 +26,11 @@ func (c PreparationCondition) Validate() error {
 // transport and Close errors returned by its consumer. Zero means no verified
 // reply. References and observations do not certify live readiness.
 type PreparationOutcome struct {
-	Condition       PreparationCondition  `json:"condition,omitempty"`
-	Startup         StartupReference      `json:"startup,omitzero"`
-	Disposition     Disposition           `json:"disposition,omitzero"`
-	MigrationResult MigrationResult       `json:"migration_result,omitempty"`
-	Report          ManualMigrationReport `json:"report,omitzero"`
-	Failure         PreparationFailure    `json:"failure,omitzero"`
+	Condition   PreparationCondition  `json:"condition,omitempty"`
+	Startup     StartupReference      `json:"startup,omitzero"`
+	Disposition Disposition           `json:"disposition,omitzero"`
+	Report      ManualMigrationReport `json:"report,omitzero"`
+	Failure     PreparationFailure    `json:"failure,omitzero"`
 }
 
 // Validate checks data shape and the shared report table, not action-specific
@@ -53,11 +52,6 @@ func (o PreparationOutcome) Validate() error {
 			return err
 		}
 	}
-	if o.MigrationResult != "" {
-		if err := o.MigrationResult.Validate(); err != nil {
-			return err
-		}
-	}
 	if err := o.Failure.Validate(); err != nil {
 		return err
 	}
@@ -71,16 +65,12 @@ type PreparationRequest struct {
 	Operation        InitialOperation       `json:"operation,omitzero"`
 	Context          LaunchContextReference `json:"context,omitzero"`
 	InitialResultFor StartupReference       `json:"initial_result_for,omitzero"`
-	Requirements     ArtifactRequirements   `json:"requirements,omitzero"`
 }
 
 // Validate runs before dial against the independently selected expected owner.
 // A zero context selects that owner's recorded default context.
 func (r PreparationRequest) Validate(rootID string, expected StartupReference) error {
 	if err := expected.Validate(); err != nil {
-		return err
-	}
-	if err := r.Requirements.Validate(); err != nil {
 		return err
 	}
 	if err := r.Operation.Validate(rootID); err != nil {

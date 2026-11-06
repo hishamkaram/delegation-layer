@@ -20,12 +20,12 @@ type childProcess struct {
 // startChild owns Start and creates exactly one Wait on success. A returned
 // process must always be joined, including when observing its identity failed.
 func startChild(config Config) (*childProcess, error) {
-	digest, err := verifiedexec.Fingerprint(config.Executable)
+	selected, err := verifiedexec.LocatePath(config.Executable)
 	if err != nil {
 		return nil, err
 	}
-	if digest != config.BuildID {
-		return nil, ErrIncompatible
+	if selected != config.Executable {
+		return nil, ErrIdentity
 	}
 	controlRead, controlWrite, err := os.Pipe()
 	if err != nil {

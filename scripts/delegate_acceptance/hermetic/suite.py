@@ -1,14 +1,14 @@
 """Compose independently owned finite cases and publish their summary."""
 
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.hermetic.case import Case
 from scripts.delegate_acceptance.hermetic.chain import run_session_chain
 from scripts.delegate_acceptance.hermetic.chain import run_session_chain_baseline
 from scripts.delegate_acceptance.hermetic.contract import PARENT_EXIT_BUDGET
 from scripts.delegate_acceptance.hermetic.contract import PARENT_EXIT_CHILD_LIFETIME_MS
-from scripts.delegate_acceptance.hermetic.files import canonical_executable
+from scripts.delegate_acceptance.hermetic.installation import require_source_root
+from scripts.delegate_acceptance.hermetic.installation import SOURCE_PACKAGES
 from scripts.delegate_acceptance.hermetic.scenarios_admission import run_a01
 from scripts.delegate_acceptance.hermetic.scenarios_admission import run_a02_duplicate
 from scripts.delegate_acceptance.hermetic.scenarios_admission import run_a02_empty
@@ -55,19 +55,20 @@ from scripts.delegate_acceptance.hermetic.scenarios_scheduler import run_s01_sch
 import sys
 import traceback
 
-# scheduler-fixture is the scheduler facade's test binary (make
-# supervisor-fixtures); only SCHEDULER-COMPAT runs it.
-TOOL_NAMES = ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe", "scheduler-fixture")
+# The scheduler test binary is installed only by SCHEDULER-COMPAT's case owner.
+TOOL_ROLES = (
+    ("delegate", "harness_delegate"), ("delegate-run", "harness_runner"),
+    ("provider", "fake_provider"), ("pueue-fake", "fake_supervisor"),
+    ("harnessprobe", "harness_probe"), ("scheduler-fixture", "scheduler_fixture"),
+)
 
 
 class HermeticSuite:
-    def __init__(self, tools, output):
-        self.tools = Path(tools).resolve(strict=True)
+    def __init__(self, source_root, output):
+        self.source_root = require_source_root(source_root)
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.results = []
-        for name in TOOL_NAMES:
-            canonical_executable(self.tools / name)
 
     def run_case(self, case_id, fn, **kwargs):
         case = None
@@ -97,13 +98,8 @@ class HermeticSuite:
         summary = {
             "schema_version": 1,
             "suite": "fake-supervisor-hermetic",
-            "tools": {
-                name: {
-                    "path": str(self.tools / name),
-                    "sha256": digest(self.tools / name),
-                }
-                for name in TOOL_NAMES
-            },
+            "source_root": str(self.source_root),
+            "tools": {name: SOURCE_PACKAGES[role] for name, role in TOOL_ROLES},
             "cases": self.results,
             "counts": {
                 "pass": sum(item["status"] == "pass" for item in self.results),

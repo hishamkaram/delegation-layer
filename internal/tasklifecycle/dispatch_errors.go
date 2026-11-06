@@ -25,7 +25,7 @@ func (result DispatchResult) Err() error {
 		err = joinWorkflowClose(err, result.Workspace.DescriptionError)
 		err = joinWorkflowClose(err, result.Workspace.CloseError)
 	}
-	return joinWorkflowClose(joinWorkflowClose(err, result.RootAdmissionReleaseError), result.StoreCloseError)
+	return joinWorkflowClose(err, result.StoreCloseError)
 }
 
 func (result ExistingTaskResult) Err() error {
@@ -39,7 +39,7 @@ func (result ExistingTaskResult) Err() error {
 			err = SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted)
 		}
 	}
-	err = joinWorkflowClose(joinWorkflowClose(err, result.TaskCloseError), result.RootAdmissionReleaseError)
+	err = joinWorkflowClose(err, result.TaskCloseError)
 	if err != nil {
 		err = admissioncore.WithStage("existing-task", err)
 	}

@@ -153,16 +153,16 @@ case "$1" in
                 tasks='{"fresh":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
                 sessions='{"fresh":"fixture-session"}'
                 versions='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":"1.0"}'
-                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0","sha256":"1111111111111111111111111111111111111111111111111111111111111111"}}'
+                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0"}}'
             else
                 tasks='{"fresh":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","resume":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
                 sessions='{"fresh":"fixture-session","resume":"fixture-session"}'
                 versions='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":"1.0","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":"1.1"}'
-                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0","sha256":"1111111111111111111111111111111111111111111111111111111111111111"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}}'
+                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1"}}'
             fi
             if [ "$scenario" = timeout-resume ]; then
                 versions='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":"1.0","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":"1.1"}'
-                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0","sha256":"1111111111111111111111111111111111111111111111111111111111111111"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}}'
+                runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1"}}'
             fi
             production_acp=
             if [ "$provider" = opencode:run ]; then
@@ -170,7 +170,7 @@ case "$1" in
             fi
             closure=$("$REAL_PYTHON" -c 'import json, sys; sys.path[:0] = ["scripts", "."]; from scripts.acceptance_tests.native.support import lifetime_closure_source; print(json.dumps(lifetime_closure_source(json.loads(sys.argv[1]))))' "$tasks")
             printf '{"gate":"acceptance-native","status":"passed","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","tasks":%s,"provider_sessions":%s,"provider_versions":%s,"provider_runtime_identities":%s,"natural_daemon_shutdown":true,"lifetime_closure":%s%s}\\n' "$model_json" "$provider" "$mode" "$scenario" "$tasks" "$sessions" "$versions" "$runtimes" "$closure" "$production_acp" >"$output/success.json"
-            printf '{"requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","provider_identity_scope":"first-admitted-task","provider_task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider_executable":"/fixture/provider","provider_version":"1.0","provider_sha256":"1111111111111111111111111111111111111111111111111111111111111111","delegate_sha256":"2222222222222222222222222222222222222222222222222222222222222222","runner_sha256":"3333333333333333333333333333333333333333333333333333333333333333","pueue_sha256":"4444444444444444444444444444444444444444444444444444444444444444","pueued_sha256":"5555555555555555555555555555555555555555555555555555555555555555"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/binding.json"
+            printf '{"requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","provider_identity_scope":"first-admitted-task","provider_task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider_executable":"/fixture/provider","provider_version":"1.0","schema_version":2,"representation":"installed-paths","installed_executables":{"delegate":"/fixture/delegate","delegate-run":"/fixture/delegate-run","pueue":"/fixture/pueue","pueued":"/fixture/pueued"}}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/binding.json"
             printf '{"status":"removed","supervisor_shutdown_observed":true,"raw_process_captures":"removed"}\\n' >"$output/cleanup.json"
         elif [ "$code" -eq 2 ]; then
             printf '{"gate":"acceptance-native","status":"BLOCKED","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/failure.json"
@@ -297,7 +297,7 @@ def queue_oracle_owner(root: Path, runtime_only: bool, check: unittest.TestCase)
         "task_id": task,
         "provider_executable": str(runner),
         "provider_version": "" if runtime_only else "fixture-v1",
-        "effective_config": {"policy": {"runtime_sha256": gate.digest(runner)}},
+        "effective_config": {"policy": {}},
     }
     if runtime_only:
         metadata.update({
@@ -305,12 +305,11 @@ def queue_oracle_owner(root: Path, runtime_only: bool, check: unittest.TestCase)
             "environment_recorded": True,
         })
     gate.write_json(task_directory / "meta.json", metadata)
-    started = None
+    started: dict[str, object] | None = None
     if runtime_only:
         started = {
             "provider_executable": str(runner),
             "provider_version": "fixture-v1",
-            "provider_sha256": gate.digest(runner),
         }
     operation._record_provider_runtime_identity(task, metadata, started_evidence=started)
     return operation, task, runner
@@ -358,7 +357,6 @@ def queue_oracle(root: Path, with_inspection: bool = True,
             "inspection_exit_authority": {"mode": "queue"},
             "request": {"binding": {
                 "helper_executable": str(runner),
-                "helper_sha256": gate.digest(runner),
             }},
             "result": {"reason": "eligible"},
         }

@@ -199,13 +199,13 @@ func RecoverySource(f *RecoveryFixture) workspace.Source {
 
 func RecoveryOperationRequest(t *testing.T, fixture *RecoveryFixture, operationID, kind string, subject workspace.Subject) workspace.OperationRequest {
 	t.Helper()
-	workerDigest := task.ComputeSHA256([]byte("workspace-recovery-worker-" + operationID))
+	historicalSupervisorDigest := strings.Repeat("a", 64)
 	return workspace.OperationRequest{
 		SchemaVersion: task.SchemaVersion, RootID: fixture.Store.RootID, OperationID: operationID,
 		WorkspaceID: fixture.Resource.Request().WorkspaceID, Kind: kind, Subject: subject,
 		Deadline:         time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
-		WorkerExecutable: "/fixture/delegate-run", WorkerSHA256: workerDigest,
-		Supervisor: supervisorfixture.ContinuationSupervisorRef(fixture.Store.Root, workerDigest, "unix:/fixture/pueue.sock"),
+		WorkerExecutable: "/fixture/delegate-run", ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
+		Supervisor: supervisorfixture.ContinuationSupervisorRef(fixture.Store.Root, historicalSupervisorDigest, "unix:/fixture/pueue.sock"),
 	}
 }
 

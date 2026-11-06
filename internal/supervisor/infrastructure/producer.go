@@ -3,7 +3,6 @@ package infrastructure
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,20 +13,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// MaximumStartupWindow bounds new owner startup, including initial preparation.
-// It does not constrain provider/task budgets or the resident lifetime.
-const MaximumStartupWindow = 2 * time.Minute
-
-var ErrUnsupportedStartupBudget = errors.New("unsupported infrastructure startup budget")
-
 // EstablishmentRequest is an immutable selection, never executable provenance
 // or native placement authority. Deadline belongs only to a newly accepted
 // attempt; joining never replaces the existing attempt's deadline.
 type EstablishmentRequest struct {
-	Context      LaunchContext
-	Initial      InitialOperation
-	Requirements ArtifactRequirements
-	Deadline     time.Time
+	Context  LaunchContext
+	Initial  InitialOperation
+	Deadline time.Time
 }
 
 // StartupAttempt owns parent-side startup resources, not the resident lifetime.
@@ -47,28 +39,8 @@ type StartupAttempt struct {
 	closeErr error
 }
 
-// EstablishOutside implements only the trusted independently invoked path.
-// Positive containment is refused before target preparation. A nil native
-// observation is not an attestation against deliberately erased launch context.
-// Authenticated-owner forwarding is a separate, currently unsupported path.
-func EstablishOutside(ctx context.Context, target *taskdir.Store, request EstablishmentRequest, host EstablishmentHost) (*StartupAttempt, error) {
-	return establishOutside(ctx, target, request, host, producerNative{})
-}
-
-func establishOutside(ctx context.Context, target *taskdir.Store, request EstablishmentRequest, host EstablishmentHost, native producerNative) (*StartupAttempt, error) {
-	if ctx == nil || target == nil || host == nil {
-		return nil, os.ErrInvalid
-	}
-	environment := os.Environ()
-	starter, err := captureOutsideProducer(ctx, environment)
-	if err != nil {
-		return nil, err
-	}
-	return establishCaptured(ctx, target, request, capturedEstablishment{starter: starter, prepare: host.PrepareOutsideArtifacts}, native)
-}
-
 // Both trusted entry paths use the same acceptance, election and native child
-// owner. The captured starter is private; a request cannot select its provenance.
+// owner. The captured environment is private; requests cannot replace it.
 func establishCaptured(ctx context.Context, target *taskdir.Store, request EstablishmentRequest, source capturedEstablishment, native producerNative) (*StartupAttempt, error) {
 	if ctx == nil || target == nil || source.prepare == nil {
 		return nil, os.ErrInvalid
@@ -80,7 +52,7 @@ func establishCaptured(ctx context.Context, target *taskdir.Store, request Estab
 	}
 	request.Initial = request.Initial.normalized()
 	attempt := &StartupAttempt{target: target}
-	if err := attempt.open(ctx, request, source.starter); err != nil {
+	if err := attempt.open(ctx, request); err != nil {
 		return finishProducerFailure(attempt, err)
 	}
 	lease, acquired, err := TryAcquireLease(ctx, filepath.Join(attempt.pin.Root(), instanceLeaseName))
@@ -107,7 +79,7 @@ func establishCaptured(ctx context.Context, target *taskdir.Store, request Estab
 	return attempt, nil
 }
 
-func (a *StartupAttempt) open(ctx context.Context, request EstablishmentRequest, starter capturedProducerStarter) error {
+func (a *StartupAttempt) open(ctx context.Context, request EstablishmentRequest) error {
 	if err := validateProducerDeadline(request.Deadline, time.Now()); err != nil {
 		return err
 	}
@@ -115,14 +87,8 @@ func (a *StartupAttempt) open(ctx context.Context, request EstablishmentRequest,
 	if err != nil {
 		return err
 	}
-	if err = starter.validateTarget(pin); err != nil {
-		return err
-	}
 	a.pin = pin
 	if err = request.Initial.Validate(pin.RootID()); err != nil {
-		return err
-	}
-	if err = request.Requirements.Validate(); err != nil {
 		return err
 	}
 	if err = request.Context.Validate(); err != nil {
@@ -231,18 +197,15 @@ func (a *StartupAttempt) Close() error {
 	return a.closeErr
 }
 
-// Only new request admission has a maximum window. Persisted records retain
-// their own deadlines; joins never rewrite them. Wall-clock changes are not a
-// hard elapsed-time guarantee.
+// New requests require a future deadline. Accepted records retain their own
+// deadlines; joins never rewrite them. Wall-clock changes are not a hard
+// elapsed-time guarantee.
 func validateProducerDeadline(deadline, now time.Time) error {
 	if _, err := canonicalStartupTime(deadline.UTC().Format(time.RFC3339Nano)); err != nil || deadline.IsZero() {
 		return errors.Join(ErrIdentity, err)
 	}
 	if !deadline.After(now) {
 		return context.DeadlineExceeded
-	}
-	if deadline.Sub(now) > MaximumStartupWindow {
-		return fmt.Errorf("%w: maximum startup window is %s", ErrUnsupportedStartupBudget, MaximumStartupWindow)
 	}
 	return nil
 }

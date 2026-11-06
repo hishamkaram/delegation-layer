@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,7 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestRemoveCompletedTaskUsesExactSupervisorRow(t *testing.T) {
+func TestPrivateMaintenanceRemovesExactSupervisorRow(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	rootID := strings.Repeat("a", 32)
@@ -35,16 +34,8 @@ func TestRemoveCompletedTaskUsesExactSupervisorRow(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	identity := Identity{
-		RootID:        rootID,
-		TaskID:        taskID,
-		SpecSHA256:    strings.Repeat("c", 64),
-		MetaSHA256:    strings.Repeat("d", 64),
-		NumericTaskID: &numericTaskID,
-	}
-	if err := client.RemoveCompletedTask(context.Background(), identity); err != nil {
-		t.Fatalf("completed task cleanup failed: %v", err)
-	}
+	client.options.SuccessfulCleanupAuthorizer = allowSuccessfulCleanupForTest
+	startPrivateMaintenancePass(t, client, func() {}).requireCompleted(t)
 	data, err := os.ReadFile(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id"))
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +45,7 @@ func TestRemoveCompletedTaskUsesExactSupervisorRow(t *testing.T) {
 	}
 }
 
-func TestRemoveCompletedTaskDefersExactRunningSupervisorRow(t *testing.T) {
+func TestPrivateMaintenanceKeepsExactRunningSupervisorRow(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	rootID := strings.Repeat("a", 32)
@@ -73,16 +64,8 @@ func TestRemoveCompletedTaskDefersExactRunningSupervisorRow(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	identity := Identity{
-		RootID:        rootID,
-		TaskID:        taskID,
-		SpecSHA256:    strings.Repeat("c", 64),
-		MetaSHA256:    strings.Repeat("d", 64),
-		NumericTaskID: &numericTaskID,
-	}
-	if err := client.RemoveCompletedTask(context.Background(), identity); !errors.Is(err, ErrCleanupDeferred) {
-		t.Fatalf("running completed-task cleanup error=%v, want ErrCleanupDeferred", err)
-	}
+	client.options.SuccessfulCleanupAuthorizer = allowSuccessfulCleanupForTest
+	startPrivateMaintenancePass(t, client, func() {}).requireCompleted(t)
 	if _, err := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "test-kill-task-id")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("running task was removed or removal marker was unavailable: %v", err)
 	}
@@ -165,10 +148,9 @@ func TestRecoverPrivateRestartsStoppedSupervisor(t *testing.T) {
 	removePrivateTestPID(t, stateRoot)
 	saved := first.Binding()
 	saved.ResolutionCwd = filepath.Join(base, "removed-before-recovery")
-	recovered, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, options)
-	if err != nil {
-		t.Fatal(err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), stateRoot, saved, clientPath, daemonPath, options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	if recovered.Binding() != saved {
 		t.Fatalf("recovery changed the saved supervisor binding: saved=%+v recovered=%+v", saved, recovered.Binding())
 	}
@@ -193,10 +175,10 @@ func TestRecoverPrivatePredecessorAdoptsLiveCompletedSuccessor(t *testing.T) {
 	historyBefore := readPrivateSupervisorFile(t, privateMigrationHistoryPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory)))
 	identityBefore := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-	if err != nil {
-		t.Fatalf("predecessor recovery against live successor failed: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
+	fixture.setCleanupClient(recovered)
 	if recovered.Binding() != fixture.saved {
 		t.Fatalf("recovery changed durable predecessor binding: got=%+v want=%+v", recovered.Binding(), fixture.saved)
 	}
@@ -230,10 +212,10 @@ func TestRecoverPrivatePredecessorAdoptsLiveSuccessorWithCompatiblePair(t *testi
 	identityBefore := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory)))
 	supervisorBefore := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
-	if err != nil {
-		t.Fatalf("predecessor recovery did not adopt live successor through compatible pair: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
+	fixture.setCleanupClient(recovered)
 	if recovered.Binding() != fixture.saved {
 		t.Fatalf("recovery changed durable predecessor binding: got=%+v want=%+v", recovered.Binding(), fixture.saved)
 	}
@@ -261,10 +243,10 @@ func TestRecoverPrivateRestartsExactCompletedSuccessorForPredecessor(t *testing.
 	identityBefore := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory)))
 	supervisorBefore := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-	if err != nil {
-		t.Fatalf("predecessor recovery did not restart completed successor: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
+	fixture.setCleanupClient(recovered)
 	if recovered.Binding() != fixture.saved {
 		t.Fatalf("recovery changed durable predecessor binding: got=%+v want=%+v", recovered.Binding(), fixture.saved)
 	}
@@ -303,8 +285,10 @@ func TestRecoverPrivateRejectsUnrelatedPredecessorWithoutStartingSuccessor(t *te
 	supervisorBefore := readPrivateSupervisorFile(t, privateSupervisorBindingPath(fixture.stateRoot))
 	historyBefore := readPrivateSupervisorFile(t, privateMigrationHistoryPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory)))
 
-	if _, err := RecoverPrivate(context.Background(), fixture.stateRoot, unrelated, fixture.clientPath, fixture.daemonPath, fixture.options); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("unrelated saved predecessor was accepted: %v", err)
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, unrelated, fixture.clientPath, fixture.daemonPath, fixture.options)
+	assertPrivateRecoveryHasNoResult(t, recovery)
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("unrelated saved predecessor was accepted: result=%+v err=%v", recovery, err)
 	}
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 	if got := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory))); !bytes.Equal(got, identityBefore) {
@@ -321,10 +305,10 @@ func TestRecoverPrivateRejectsUnrelatedPredecessorWithoutStartingSuccessor(t *te
 func TestRecoverPrivateStartsCompletedSuccessorInsteadOfStagedPair(t *testing.T) {
 	fixture := newCompletedPrivateSuccessorTestFixture(t, false)
 	stagedClient, stagedDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "staged"))
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, stagedClient, stagedDaemon, fixture.options)
-	if err != nil {
-		t.Fatalf("recovery with staged successor inventory failed: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, stagedClient, stagedDaemon, fixture.options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
+	fixture.setCleanupClient(recovered)
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
 	assertPrivateDaemonIdentityMatchesBinding(t, fixture.stateRoot, fixture.successor)
 	if err := recovered.Shutdown(context.Background()); err != nil {
@@ -341,10 +325,9 @@ func TestRecoverPrivateRestoresExactLegacyGenerationWhenCompletedBindingMissing(
 		t.Fatal(err)
 	}
 	removePrivateTestPID(t, fixture.stateRoot)
-	recovered, err := RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
-	if err != nil {
-		t.Fatalf("exact legacy generation was not restored: %v", err)
-	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, fixture.clientPath, fixture.daemonPath, fixture.options)
+	recovered := recovery.Client()
+	assertPrivateRecoverySucceeded(t, recovery, err)
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
 	assertPrivateDaemonIdentityMatchesBinding(t, fixture.stateRoot, fixture.saved)
 	persisted, found, err := loadPrivateSupervisorBinding(fixture.stateRoot)
@@ -367,13 +350,17 @@ func TestRecoverPrivateRejectsDifferentPairWhenCompletedBindingMissing(t *testin
 	differentClient, differentDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "different"))
 	different := fixture.saved
 	different.ClientExecutable = canonicalPrivateTestExecutable(t, differentClient)
-	different.ClientSHA256 = hashPrivateTestExecutable(t, differentClient)
+	different.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	different.ClientSHA256, different.DaemonSHA256 = "", ""
 	different.DaemonExecutable = canonicalPrivateTestExecutable(t, differentDaemon)
-	different.DaemonSHA256 = hashPrivateTestExecutable(t, differentDaemon)
+	different.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	different.ClientSHA256, different.DaemonSHA256 = "", ""
 	identityBefore := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory)))
 
-	if _, err := RecoverPrivate(context.Background(), fixture.stateRoot, different, differentClient, differentDaemon, fixture.options); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("different saved generation was accepted without a completed binding: %v", err)
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, different, differentClient, differentDaemon, fixture.options)
+	assertPrivateRecoveryHasNoResult(t, recovery)
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("different saved generation was accepted without a completed binding: result=%+v err=%v", recovery, err)
 	}
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 	if got := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory))); !bytes.Equal(got, identityBefore) {
@@ -393,59 +380,65 @@ func TestAttemptPrivateRecoveryReportsMissingPairFact(t *testing.T) {
 	if !errors.Is(recovery.Cause(), ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("missing-pair cause lost its identity: %v", recovery.Cause())
 	}
-	// The compatibility projection keeps the existing public error.
-	if _, err = RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("RecoverPrivate projection = %v, want migration required", err)
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+}
+
+func TestCompletedPrivateRecoveryKeepsOperationalFaultsJoinedWithMissingFile(t *testing.T) {
+	fixture := newCompletedPrivateSuccessorTestFixture(t, false)
+	for _, test := range []struct {
+		name  string
+		cause error
+	}{
+		{name: "options", cause: ErrConfiguration},
+		{name: "config", cause: ErrBinding},
+		{name: "permission", cause: os.ErrPermission},
+		{name: "verification", cause: errors.New("published pair verification failed")},
+		{name: "close", cause: errors.New("published client close failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// This is the existing preparation result port, not a filesystem
+			// lookup oracle: a joined ENOENT never erases an operational fault.
+			fault := errors.Join(test.cause, os.ErrNotExist)
+			recovery, err := recoverUnpreparedPublishedPrivate(t.Context(), unpreparedPublishedPrivate{
+				stateRoot: fixture.stateRoot, saved: fixture.saved, published: fixture.successor,
+				clientExecutable: fixture.clientPath, daemonExecutable: fixture.daemonPath,
+				options: fixture.options, prepared: true, pairErr: os.ErrNotExist, prepareErr: fault,
+			})
+			if !errors.Is(err, test.cause) || !errors.Is(err, os.ErrNotExist) || recovery.PairUnavailable() || recovery.Client() != nil {
+				t.Fatalf("operational fault was converted to pair availability: recovery=%+v err=%v", recovery, err)
+			}
+		})
 	}
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 }
 
-// TestCompletedMigrationRecoveryInspectsUnverifiablePresentPair keeps the
-// compatible-client contract for a completed generation whose present pair no
-// longer verifies: a live endpoint is inspected through the caller's
-// compatible pair without a start, and a stopped endpoint is an operational
-// failure rather than the missing-pair fact.
-func TestCompletedMigrationRecoveryInspectsUnverifiablePresentPair(t *testing.T) {
+func TestAttemptPrivateRecoveryRefusesNonExecutablePresentPair(t *testing.T) {
 	for _, live := range []bool{true, false} {
-		t.Run(fmt.Sprintf("live %t", live), func(t *testing.T) {
-			assertCompletedMigrationRecoveryUnverifiablePresentPair(t, live)
-		})
-	}
-}
-
-// assertCompletedMigrationRecoveryUnverifiablePresentPair runs one live or
-// stopped scenario of the unverifiable-present-pair contract. The expected
-// start count covers only the fixture's own starts: recovery starts nothing.
-func assertCompletedMigrationRecoveryUnverifiablePresentPair(t *testing.T, live bool) {
-	t.Helper()
-	fixture := newCompletedPrivateSuccessorTestFixture(t, live)
-	compatibleClient, compatibleDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
-	if err := os.WriteFile(fixture.daemonPath, []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
-	if client := recovery.Client(); client != nil {
-		t.Cleanup(func() {
-			if closeErr := client.Close(); closeErr != nil {
-				t.Error(closeErr)
+		t.Run(map[bool]string{true: "live", false: "stopped"}[live], func(t *testing.T) {
+			fixture := newCompletedPrivateSuccessorTestFixture(t, live)
+			compatibleClient, compatibleDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
+			t.Cleanup(func() {
+				if err := os.Chmod(fixture.daemonPath, 0o700); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := os.Chmod(fixture.daemonPath, 0o600); err != nil {
+				t.Fatal(err)
 			}
+			before := snapshotSavedProbeTestState(t, fixture.stateRoot)
+			recovery, err := AttemptPrivateRecovery(t.Context(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
+			closeSavedProbeTestClient(t, recovery.Client(), err)
+			if recovery.Client() != nil || recovery.PairUnavailable() || !errors.Is(err, ErrBinding) || !errors.Is(err, ErrConfiguration) {
+				t.Fatalf("invalid installed metadata did not remain an operational fault: recovery=%+v err=%v", recovery, err)
+			}
+			assertSavedProbeTestUnchanged(t, fixture.stateRoot, before)
+			starts := 1
+			if live {
+				starts = 2
+			}
+			assertPrivateDaemonStartCount(t, fixture.stateRoot, starts)
 		})
 	}
-	t.Logf("live=%t recovery=%+v err=%v", live, recovery, err)
-	if recovery.PairUnavailable() {
-		t.Fatalf("a present pair was reported as the missing-pair fact: %+v", recovery)
-	}
-	if live && (err != nil || recovery.Client() == nil) {
-		t.Fatalf("live completed generation was not inspected through the compatible pair: %+v %v", recovery, err)
-	}
-	if !live && (recovery.Client() != nil || !errors.Is(err, ErrPrivateSupervisorMigrationRequired)) {
-		t.Fatalf("stopped unverifiable pair = %+v %v, want an operational migration-required failure", recovery, err)
-	}
-	starts := 1
-	if live {
-		starts = 2
-	}
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, starts)
 }
 
 // TestCompletedMigrationPreparationFaultCannotFallThrough keeps an unreadable
@@ -474,6 +467,7 @@ func newCompletedPrivateSuccessorTestFixture(t *testing.T, live bool) completedP
 	currentClient, currentDaemon := installPrivateSupervisorPair(t, filepath.Join(base, "completed"))
 	options := Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: privateTestObservationTimeout}
 	legacy := bindPrivateSetupForTest(t, stateRoot, oldClient, oldDaemon, options)
+	options = legacy.options
 	saved := legacy.Binding()
 	if err := legacy.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
@@ -503,6 +497,7 @@ func newCompletedPrivateSuccessorTestFixture(t *testing.T, live bool) completedP
 	if err != nil {
 		t.Fatal(err)
 	}
+	setCleanupClient := ownCompletedSuccessorClient(t, successorClient, live)
 	if err := attachPrivateDaemon(successorClient, currentDaemon); err != nil {
 		t.Fatal(err)
 	}
@@ -524,19 +519,38 @@ func newCompletedPrivateSuccessorTestFixture(t *testing.T, live bool) completedP
 		if err := successorClient.StartPrivate(context.Background(), stateRoot); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() {
-			if cleanupErr := successorClient.Shutdown(context.Background()); cleanupErr != nil {
-				t.Logf("stop completed successor fixture: %v", cleanupErr)
-			}
-			if waitErr := successorClient.WaitUnavailable(context.Background()); waitErr != nil {
-				t.Logf("wait for completed successor fixture: %v", waitErr)
-			}
-		})
 	}
 	return completedPrivateSuccessorTestFixture{
 		base: base, stateRoot: stateRoot, clientPath: currentClient, daemonPath: currentDaemon,
-		saved: saved, successor: successor, options: options,
+		saved: saved, successor: successor, options: options, setCleanupClient: setCleanupClient,
 	}
+}
+
+// Register before Start so the fixture's real daemon Wait joins before client
+// teardown. A compatible recovery client may take over marker cleanup when
+// the test removes the original installation; both clients still close.
+func ownCompletedSuccessorClient(t *testing.T, original *Client, live bool) func(*Client) {
+	t.Helper()
+	cleanupClient := original
+	t.Cleanup(func() {
+		if live {
+			if err := cleanupClient.Shutdown(context.Background()); err != nil {
+				t.Errorf("stop completed successor fixture: %v", err)
+			}
+			if err := cleanupClient.WaitUnavailable(context.Background()); err != nil {
+				t.Errorf("wait for completed successor fixture: %v", err)
+			}
+		}
+		if cleanupClient != original {
+			if err := cleanupClient.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := original.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return func(client *Client) { cleanupClient = client }
 }
 
 func newCompletedPrivateLegacyTestFixture(t *testing.T) completedPrivateLegacyTestFixture {
@@ -555,4 +569,35 @@ func newCompletedPrivateLegacyTestFixture(t *testing.T) completedPrivateLegacyTe
 		t.Fatal(err)
 	}
 	return completedPrivateLegacyTestFixture{base: base, stateRoot: stateRoot, clientPath: clientPath, daemonPath: daemonPath, saved: client.Binding(), options: options}
+}
+
+func TestPublishedPrivatePairSelectionKeepsOperationalFaults(t *testing.T) {
+	for _, fault := range []string{"historical-copy", "configuration", "other-member-stat"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture := newGenerationGuardFixture(t)
+			binding := fixture.client.Binding()
+			options := fixture.client.options
+			switch fault {
+			case "historical-copy":
+				removePrivateTestPath(t, binding.ClientExecutable)
+				options.RuntimeClientExecutable = filepath.Join(fixture.base, "pueue-pair-"+strings.Repeat("a", 64), "pueue")
+			case "configuration":
+				removePrivateTestPath(t, binding.DaemonExecutable)
+				options.ObservationTimeout = -1
+			case "other-member-stat":
+				removePrivateTestPath(t, binding.ClientExecutable)
+				removePrivateTestPath(t, binding.DaemonExecutable)
+				if err := os.Symlink(binding.DaemonExecutable, binding.DaemonExecutable); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client, pairErr, err := preparePublishedPrivatePair(t.Context(), binding, options)
+			if client != nil || pairErr != nil || err == nil {
+				t.Fatalf("operational %s became unavailable pair: client=%t pairErr=%v err=%v", fault, client != nil, pairErr, err)
+			}
+			if fault == "configuration" && !errors.Is(err, ErrConfiguration) {
+				t.Fatalf("configuration cause was lost: %v", err)
+			}
+		})
+	}
 }

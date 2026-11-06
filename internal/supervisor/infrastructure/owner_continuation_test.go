@@ -30,7 +30,7 @@ func exerciseOwnerContinuationSubject(t *testing.T, kind SavedBindingKind) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	_, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: selected, Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts)})
+	_, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Operation: selected})
 	if !errors.Is(err, ErrIdentity) {
 		t.Fatalf("non-metadata bound subject: %v", err)
 	}

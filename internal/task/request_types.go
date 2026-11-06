@@ -58,22 +58,23 @@ type PriorSession struct {
 // SupervisorRef records the private supervisor config and endpoint plus the
 // executable and resolver provenance selected by the dispatching CLI.
 type SupervisorRef struct {
-	ClientExecutable     string `json:"client_executable,omitempty"`
-	ClientSHA256         string `json:"client_sha256,omitempty"`
-	DaemonExecutable     string `json:"daemon_executable,omitempty"`
-	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
-	ResolutionOS         string `json:"resolution_os,omitempty"`
-	ResolutionHome       string `json:"resolution_home,omitempty"`
-	ResolutionDataLocal  string `json:"resolution_data_local,omitempty"`
-	ResolutionConfig     string `json:"resolution_config,omitempty"`
-	ResolutionRuntime    string `json:"resolution_runtime,omitempty"`
-	ResolutionUsername   string `json:"resolution_username,omitempty"`
-	ResolutionCwd        string `json:"resolution_cwd,omitempty"`
-	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
-	Endpoint             string `json:"endpoint"`
-	ConfigPath           string `json:"config_path"`
-	ConfigDigest         string `json:"config_digest"`
-	ObservedVersion      string `json:"observed_version"`
+	ClientExecutable     string             `json:"client_executable,omitempty"`
+	ClientSHA256         string             `json:"client_sha256,omitempty"`
+	DaemonExecutable     string             `json:"daemon_executable,omitempty"`
+	DaemonSHA256         string             `json:"daemon_sha256,omitempty"`
+	ExecutableIdentity   ExecutableIdentity `json:"executable_identity,omitempty"`
+	ResolutionOS         string             `json:"resolution_os,omitempty"`
+	ResolutionHome       string             `json:"resolution_home,omitempty"`
+	ResolutionDataLocal  string             `json:"resolution_data_local,omitempty"`
+	ResolutionConfig     string             `json:"resolution_config,omitempty"`
+	ResolutionRuntime    string             `json:"resolution_runtime,omitempty"`
+	ResolutionUsername   string             `json:"resolution_username,omitempty"`
+	ResolutionCwd        string             `json:"resolution_cwd,omitempty"`
+	ResolvedConfigSHA256 string             `json:"resolved_config_sha256,omitempty"`
+	Endpoint             string             `json:"endpoint"`
+	ConfigPath           string             `json:"config_path"`
+	ConfigDigest         string             `json:"config_digest"`
+	ObservedVersion      string             `json:"observed_version"`
 }
 
 // SameSupervisorIdentity reports whether two refs point to the same

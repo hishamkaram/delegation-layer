@@ -13,8 +13,8 @@ func creationFailure(result CreationResult, stage CreationStage, err error) Crea
 
 func (result CreationResult) Err() error {
 	if result.Submission == nil {
-		return errors.Join(result.Failure, result.RootAdmissionReleaseError)
+		return result.Failure
 	}
 	err := annotateMissingDispatchStage("submitting ordinary task", result.Submission.Err())
-	return errors.Join(result.Failure, result.RootAdmissionReleaseError, SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted))
+	return errors.Join(result.Failure, SubmissionFailure(err, result.Submission.Admission == task.AdmissionAdmitted))
 }

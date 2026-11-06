@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -24,12 +22,12 @@ const savedPrivateCancelStatusTime = "2026-09-14T00:00:00.123456789Z"
 // task store, and one admitted queue row. The pair is a shell fixture, not a
 // native Pueue daemon; it proves the public command composition only.
 type savedPrivateCancelFixture struct {
+	component                            *componentSupervisorFixture
 	root, client, daemon, runner         string
 	statusPath, commandLog, daemonStarts string
 	readyPath                            string
 	options                              pueue.Options
 	saved                                task.SupervisorRef
-	bound                                *pueue.Client
 	store                                *taskdir.Store
 	td                                   *taskdir.TaskDir
 	taskID                               string
@@ -77,9 +75,11 @@ type savedPrivateCancelDone struct {
 
 func newSavedPrivateCancelFixture(t *testing.T, state pueue.State) *savedPrivateCancelFixture {
 	t.Helper()
-	base := testsupport.CanonicalTempDir(t)
+	owner := newComponentSupervisorFixture(t, componentPersistentDaemon)
+	base := owner.base
 	fixture := &savedPrivateCancelFixture{
-		root:         filepath.Join(base, "state"),
+		component:    owner,
+		root:         owner.root,
 		client:       filepath.Join(base, "pair", "pueue"),
 		daemon:       filepath.Join(base, "pair", "pueued"),
 		runner:       filepath.Join(base, "runner"),
@@ -100,19 +100,21 @@ func newSavedPrivateCancelFixture(t *testing.T, state pueue.State) *savedPrivate
 	writeRunnerFixture(t, fixture.daemon, historicalSupervisorDaemonScript("A", fixture.readyPath, pidPath, fixture.daemonStarts))
 	writeRunnerFixture(t, fixture.runner, "#!/bin/sh\nexit 0\n")
 	store, err := taskdir.InitStore(fixture.root)
+	owner.ownStore(t, store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.store = store
 	t.Cleanup(func() { fixture.close(t) })
-	fixture.bound, err = pueue.BindPrivate(t.Context(), fixture.client, fixture.daemon, fixture.root, fixture.options)
+	bound, err := owner.bindPrivate(t.Context(), fixture.client, fixture.daemon, fixture.options)
 	if err != nil {
 		t.Fatalf("bind saved private pair: %v", err)
 	}
-	fixture.saved = fixture.bound.Binding()
-	if fixture.saved.DaemonExecutable == "" || fixture.saved.DaemonSHA256 == "" {
+	fixture.saved = bound.Binding()
+	if fixture.saved.DaemonExecutable != fixture.daemon || fixture.saved.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || fixture.saved.DaemonSHA256 != "" {
 		t.Fatalf("saved private pair lacks daemon provenance: %+v", fixture.saved)
 	}
+	listenSupervisorProbeTestEndpoint(t, fixture.saved.Endpoint)
 	fixture.admitTask(t, workspace, state)
 	if err = os.WriteFile(fixture.commandLog, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -183,39 +185,8 @@ func writeSavedPrivateCancelStatus(t *testing.T, path, label string, state pueue
 
 func (f *savedPrivateCancelFixture) close(t *testing.T) {
 	t.Helper()
-	if f.bound != nil {
-		if _, err := os.Stat(f.readyPath); err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(f.options))
-			if shutdownErr := f.bound.Shutdown(ctx); shutdownErr != nil {
-				t.Error(shutdownErr)
-			} else if waitErr := f.bound.WaitUnavailable(ctx); waitErr != nil {
-				t.Error(waitErr)
-			}
-			cancel()
-		}
-		if err := f.bound.Close(); err != nil {
-			t.Error(err)
-		}
-	}
-	for _, closer := range []func() error{f.tdClose, f.storeClose} {
-		if err := closer(); err != nil {
-			t.Error(err)
-		}
-	}
-}
-
-func (f *savedPrivateCancelFixture) tdClose() error {
-	if f.td == nil {
-		return nil
-	}
-	return f.td.Close()
-}
-
-func (f *savedPrivateCancelFixture) storeClose() error {
-	if f.store == nil {
-		return nil
-	}
-	return f.store.Close()
+	f.component.ownTask(f.td)
+	f.component.cleanup(t)
 }
 
 func (f *savedPrivateCancelFixture) cancel(t *testing.T) (int, Response) {
@@ -227,6 +198,7 @@ func (f *savedPrivateCancelFixture) cancel(t *testing.T) (int, Response) {
 		InitialSupervisorExecutable: f.client,
 		RunnerExecutable:            f.runner,
 	}
+	deps.SupervisorOptions.ControlOwnerExecutable = canonicalAppTestExecutable(t)
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"cancel", f.taskID, "--root", f.root, "--json"}, &stdout, &stderr, deps)
 	return code, decodeHistoricalResponse(t, stdout.Bytes(), stderr.Bytes(), code)

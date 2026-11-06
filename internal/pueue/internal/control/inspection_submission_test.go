@@ -37,7 +37,6 @@ func TestInspectionPermitAcceptsSupervisorInstallProvenanceDrift(t *testing.T) {
 	fake := newInspectionSupervisor(t, "ok")
 	candidate := fake.client.Binding()
 	candidate.ClientExecutable = "/old/install/pueue"
-	candidate.ClientSHA256 = task.ComputeSHA256([]byte("old client"))
 	candidate.ObservedVersion = "pueue " + FixtureVersion
 	if err := validateInspectionPermitSupervisor(candidate, fake.client.Binding()); err != nil {
 		t.Fatalf("same private supervisor identity rejected after install provenance changed: %v", err)

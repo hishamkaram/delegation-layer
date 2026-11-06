@@ -7,18 +7,20 @@ import re
 from .contract import (
     _lifecycle_summary,
     EvidenceError,
-    HEX_DIGEST,
     MAX_RECEIPT_BYTES,
     MatrixRow,
     SAFE_TEXT,
-    _compact_provider_runtime_identities,
-    _compact_runtime_identity,
     _digest_bytes,
     _expected_task_aliases,
     _safe_proof_text,
-    _runtime_identity_matches,
     _source_requested_options,
     _task_identifier_values,
+)
+from .identities import (
+    _compact_installed_paths,
+    _compact_runtime_identity,
+    _compact_provider_runtime_identities,
+    _runtime_identity_matches,
 )
 from .production_acp import compact_production_acp, requires_production_acp
 from .filesystem import (
@@ -136,31 +138,34 @@ def _binary_identities(
         case_directory: Path,
         source: dict[str, object] | None) -> dict[str, object]:
     binding, binding_digest = _read_optional_object(case_directory / "binding.json")
-    hashes: dict[str, str] = {}
+    paths: dict[str, str] = {}
     versions: dict[str, str] = {}
     binding_matches = (binding is not None
+                       and binding.get("schema_version") == 2
+                       and binding.get("representation") == "installed-paths"
                        and binding.get("provider") == row.definition.provider
                        and binding.get("mode") == row.definition.permission
                        and binding.get("scenario") == row.definition.scenario)
     provider_binding: dict[str, str] | None = None
     if binding_matches:
         for key, value in binding.items():
-            if key.endswith("_sha256") and isinstance(value, str) and HEX_DIGEST.fullmatch(value):
-                hashes[key] = value
-            elif key.endswith("_version") and isinstance(value, str):
+            if key.endswith("_version") and isinstance(value, str):
                 safe = _safe_proof_text(value)
                 if safe is not None:
                     versions[key] = safe
         provider_task_id = binding.get("provider_task_id")
         provider_identity = _compact_runtime_identity({
-            key: binding["provider_" + key] for key in ("executable", "version", "sha256")
+            key: binding["provider_" + key] for key in ("executable", "version")
             if "provider_" + key in binding})
         if (binding.get("provider_identity_scope") == "first-admitted-task"
                 and isinstance(provider_task_id, str)
                 and re.fullmatch(r"[0-9a-f]{32}", provider_task_id) is not None
                 and provider_identity is not None):
-            provider_binding = {"task_id": provider_task_id, **provider_identity}
+            provider_binding = {"task_id": provider_task_id, **{key: value for key, value in provider_identity.items() if key != "sha256"}}
     provider_runtimes = _compact_provider_runtime_identities(source) if source is not None else None
+    if provider_runtimes is not None:
+        provider_runtimes = {task: {key: value for key, value in identity.items() if key != "sha256"}
+                             for task, identity in provider_runtimes.items()}
     if source is not None:
         provider_versions = _compact_provider_versions(source)
         if provider_versions is not None:
@@ -181,17 +186,18 @@ def _binary_identities(
         and _runtime_identity_matches(provider_runtimes.get(provider_binding["task_id"], {}),
                                       provider_binding)
     )
-    required_hashes = {
-        "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
-    }
+    selected = binding.get("installed_executables") if binding_matches else None
+    paths = _compact_installed_paths(selected, complete=True) or {}
     version_diagnostics_valid = (source is not None and (
         "provider_versions" not in source or provider_versions is not None))
-    state = ("complete" if binding_matches and required_hashes.issubset(hashes)
+    state = ("complete" if binding_matches and bool(paths)
              and runtime_coverage and provider_binding_matches
              and version_diagnostics_valid else "unavailable")
     result: dict[str, object] = {
         "state": state,
-        "sha256": dict(sorted(hashes.items())),
+        "schema_version": 2,
+        "representation": "installed-paths",
+        "paths": dict(sorted(paths.items())),
         "task_ids": source_task_ids,
         "provider_binding": provider_binding,
         "provider_runtime_identities": provider_runtimes or {},

@@ -18,7 +18,7 @@ func (s *ownerServer) executeOtherPreparation(ctx context.Context, work accepted
 	return reply
 }
 
-// Capture A's authenticated provenance before opening ANY B resource. No A
+// Capture A's environment before opening ANY B resource. No A
 // guard survives capture. Accepted server work remains registered throughout B
 // establishment, publication observation and parent cleanup. Preparation belongs
 // to the client's direct, bound B request.
@@ -51,10 +51,16 @@ func (s *ownerServer) prepareOtherRoot(ctx context.Context, work acceptedOwnerWo
 		return established, ErrIdentity
 	}
 	deadline, _ := ctx.Deadline() // Authenticated wire requests require one.
-	source := capturedEstablishment{starter: starter, prepare: func(operation context.Context, store *taskdir.Store) (Artifacts, error) {
-		return s.host.StageTargetArtifacts(operation, work.operation, work.request.Requirements, store)
+	source := capturedEstablishment{starter: starter, prepare: func(operation context.Context, _ *taskdir.Store) (string, error) {
+		if err := operation.Err(); err != nil {
+			return "", err
+		}
+		if err := work.operation.Validate(); err != nil {
+			return "", err
+		}
+		return work.operation.Artifacts().Runner, nil
 	}}
-	attempt, establishErr := establishCaptured(ctx, target, EstablishmentRequest{Context: selected, Initial: work.request.Initial, Requirements: work.request.Requirements, Deadline: deadline}, source, producerNative{})
+	attempt, establishErr := establishCaptured(ctx, target, EstablishmentRequest{Context: selected, Initial: work.request.Initial, Deadline: deadline}, source, producerNative{})
 	resources.attempt = attempt
 	return prepareEstablishedRoot(ctx, attempt, establishErr)
 }

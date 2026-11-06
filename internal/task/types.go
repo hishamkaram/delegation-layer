@@ -200,29 +200,30 @@ type SubmitRecord struct {
 
 // SupervisorReceipt is stored in supervisor.ref.json.
 type SupervisorReceipt struct {
-	MetaSHA256           string `json:"meta_sha256,omitempty"`
-	ConfigPath           string `json:"config_path,omitempty"`
-	ClientExecutable     string `json:"client_executable,omitempty"`
-	ClientSHA256         string `json:"client_sha256,omitempty"`
-	DaemonExecutable     string `json:"daemon_executable,omitempty"`
-	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
-	ResolutionOS         string `json:"resolution_os,omitempty"`
-	ResolutionHome       string `json:"resolution_home,omitempty"`
-	ResolutionDataLocal  string `json:"resolution_data_local,omitempty"`
-	ResolutionConfig     string `json:"resolution_config,omitempty"`
-	ResolutionRuntime    string `json:"resolution_runtime,omitempty"`
-	ResolutionUsername   string `json:"resolution_username,omitempty"`
-	ResolutionCwd        string `json:"resolution_cwd,omitempty"`
-	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
-	SchemaVersion        int    `json:"schema_version"`
-	RootID               string `json:"root_id"`
-	TaskID               string `json:"task_id"`
-	SpecSHA256           string `json:"spec_sha256"`
-	NumericTaskID        int64  `json:"numeric_task_id"`
-	Label                string `json:"label"`
-	ConfigDigest         string `json:"config_digest"`
-	Endpoint             string `json:"endpoint"`
-	ObservedVersion      string `json:"observed_version"`
+	MetaSHA256           string             `json:"meta_sha256,omitempty"`
+	ConfigPath           string             `json:"config_path,omitempty"`
+	ClientExecutable     string             `json:"client_executable,omitempty"`
+	ClientSHA256         string             `json:"client_sha256,omitempty"`
+	DaemonExecutable     string             `json:"daemon_executable,omitempty"`
+	DaemonSHA256         string             `json:"daemon_sha256,omitempty"`
+	ExecutableIdentity   ExecutableIdentity `json:"executable_identity,omitempty"`
+	ResolutionOS         string             `json:"resolution_os,omitempty"`
+	ResolutionHome       string             `json:"resolution_home,omitempty"`
+	ResolutionDataLocal  string             `json:"resolution_data_local,omitempty"`
+	ResolutionConfig     string             `json:"resolution_config,omitempty"`
+	ResolutionRuntime    string             `json:"resolution_runtime,omitempty"`
+	ResolutionUsername   string             `json:"resolution_username,omitempty"`
+	ResolutionCwd        string             `json:"resolution_cwd,omitempty"`
+	ResolvedConfigSHA256 string             `json:"resolved_config_sha256,omitempty"`
+	SchemaVersion        int                `json:"schema_version"`
+	RootID               string             `json:"root_id"`
+	TaskID               string             `json:"task_id"`
+	SpecSHA256           string             `json:"spec_sha256"`
+	NumericTaskID        int64              `json:"numeric_task_id"`
+	Label                string             `json:"label"`
+	ConfigDigest         string             `json:"config_digest"`
+	Endpoint             string             `json:"endpoint"`
+	ObservedVersion      string             `json:"observed_version"`
 }
 
 // ProviderStartRecord is stored in provider.start.

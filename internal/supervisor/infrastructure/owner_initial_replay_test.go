@@ -12,7 +12,7 @@ import (
 )
 
 func TestOwnerInitialDispatcherAndExplicitReplay(t *testing.T) {
-	for _, kind := range []InitialOperationKind{InitialPrepareContinuation, InitialRecoverSaved, InitialMigrateReferenced, InitialMigrateOwn} {
+	for _, kind := range []InitialOperationKind{InitialPrepareContinuation, InitialRecoverSaved, InitialMigrateOwn} {
 		t.Run(string(kind), func(t *testing.T) { exerciseOwnerInitialReplay(t, kind) })
 	}
 }
@@ -47,24 +47,20 @@ func exerciseOwnerInitialReplay(t *testing.T, kind InitialOperationKind) {
 			check(c, InitialRecoverSaved)
 			return Disposition{Kind: DispositionWarmReuse}, nil
 		},
-		migrate: func(_ context.Context, _ Operation, c LaunchContext, _ MigrationReference, _ ResidentGuards, _ DaemonWaitOwner) (Disposition, MigrationResult, error) {
-			check(c, InitialMigrateReferenced)
-			return Disposition{Kind: DispositionWarmReuse}, MigrationCompleted, nil
-		},
 		manual: func(_ context.Context, _ Operation, c LaunchContext, _ ResidentGuards, _ DaemonWaitOwner) (Disposition, ManualMigrationReport, error) {
 			check(c, InitialMigrateOwn)
 			return Disposition{}, ManualMigrationReport{State: ManualMigrationNotInitialized, Legacy: ManualMigrationLegacyNotPresent, Active: ManualMigrationActiveNone}, nil
 		},
 	}
 	f := newOwnerServerFixtureWithSelection(t, host, ownerServerFixtureSelection{initial: kind})
-	expected = f.entry.operation.context.Clone()
+	expected = f.birthContext(t)
 	expectedSource = f.entry.operation.Intent().Inputs.Initial.Source
 	if _, err := f.server.prepareInitial(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	f.start()
 	expectedOwner := f.request(t, ownerStatus).Owner
-	request := PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: expectedOwner}
+	request := PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: expectedOwner}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	var first PreparationOutcome
@@ -100,7 +96,7 @@ func TestOwnerFreshSavedAfterFailureRunsAgain(t *testing.T) {
 	owner := f.request(t, ownerStatus).Owner
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	request := PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial}
+	request := PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial}
 	for _, condition := range []PreparationCondition{PreparationFault, PreparationOK} {
 		outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, request)
 		if err != nil || outcome.Condition != condition {
@@ -118,7 +114,7 @@ func TestOwnerReplaySelectorRefusedBeforeDialOrHost(t *testing.T) {
 	defer cancel()
 	wrong := f.auth.request.Owner
 	wrong.Sequence++
-	if _, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{Requirements: warmOwnerRequirements(f.auth.intent.Inputs.Artifacts), InitialResultFor: wrong}); !errors.Is(err, ErrIdentity) {
+	if _, err := RequestBoundPreparation(ctx, f.reader, f.auth.request.Owner, PreparationRequest{InitialResultFor: wrong}); !errors.Is(err, ErrIdentity) {
 		t.Fatalf("wrong selector not refused: %v", err)
 	}
 	requireNoOwnerContactConnection(t, f.auth.listener)
@@ -129,7 +125,7 @@ func TestOwnerReplaySelectorRefusedBeforeDialOrHost(t *testing.T) {
 	}}, ownerServerFixtureSelection{initial: InitialRecoverSaved})
 	b.start()
 	owner := b.request(t, ownerStatus).Owner
-	selection := PreparationRequest{Requirements: warmOwnerRequirements(b.entry.operation.Artifacts()), Operation: b.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
+	selection := PreparationRequest{Operation: b.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
 	selection.Operation.Source.OwnerID = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, b.entry.journal), owner, selection)
 	if err != nil || outcome.Condition != PreparationRefused || calls.Load() != 0 {
@@ -153,7 +149,7 @@ func TestOwnerEarlyInitialExitClosesReplayCompletion(t *testing.T) {
 	owner := f.request(t, ownerStatus).Owner
 	replay, cancelReplay := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancelReplay()
-	outcome, err := RequestBoundPreparation(replay, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner})
+	outcome, err := RequestBoundPreparation(replay, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner})
 	if err != nil || outcome.Condition != PreparationFault || outcome.Failure.Causes&PreparationCauseCanceled == 0 {
 		t.Fatalf("early error lost from retained outcome: %v %v", outcome, err)
 	}
@@ -215,7 +211,7 @@ func TestOwnerReplayTimeoutDoesNotCancelInitial(t *testing.T) {
 	initial := awaitOwnerServerHost(t, entered)
 	f.start()
 	owner := f.request(t, ownerStatus).Owner
-	request := PreparationRequest{Requirements: warmOwnerRequirements(f.entry.operation.Artifacts()), Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
+	request := PreparationRequest{Operation: f.entry.operation.Intent().Inputs.Initial, InitialResultFor: owner}
 	short, cancelShort := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	outcome, err := RequestBoundPreparation(short, contextPassiveReader(t, f.entry.journal), owner, request)
 	cancelShort()
@@ -255,7 +251,7 @@ func TestOwnerOwnInitialSuccessSelectorRetainsLegacyRerun(t *testing.T) {
 	owner := f.request(t, ownerStatus).Owner
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{InitialResultFor: owner, Requirements: warmOwnerRequirements(f.entry.operation.Artifacts())})
+	outcome, err := RequestBoundPreparation(ctx, contextPassiveReader(t, f.entry.journal), owner, PreparationRequest{InitialResultFor: owner})
 	if err != nil || outcome.Condition != PreparationOK || calls.Load() != 2 {
 		t.Fatalf("Own selector changed legacy success behavior: calls=%d outcome=%v err=%v", calls.Load(), outcome, err)
 	}

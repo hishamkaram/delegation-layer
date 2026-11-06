@@ -120,6 +120,7 @@ func custodyObservedResult(t *testing.T, result commandResult) string {
 // never changes the command result; the next observation releases the exact
 // recorded pool.
 func TestStatusAndCollectReleaseCustodyOnEveryClosedPath(t *testing.T) {
+	t.Parallel()
 	causes := []string{task.LifetimeTerminationBudget, task.LifetimeTerminationRequested, task.LifetimeTerminationCompleted}
 	for name, run := range custodyObservationCommands() {
 		for _, cause := range causes {
@@ -255,6 +256,7 @@ func newCustodyRebootFixture(t *testing.T, holdRunnerLease bool, cause string) (
 // elected owner's custody phase then releases the exact recorded pool without
 // changing that result.
 func TestStatusAndCollectRequestCustodyReleaseWhenOfferDerivationFails(t *testing.T) {
+	t.Parallel()
 	commands := map[string]func(*testing.T, *rebootFixture) commandResult{"status": rebootStatus, "collect": rebootCollect}
 	for name, run := range commands {
 		t.Run(name, func(t *testing.T) {

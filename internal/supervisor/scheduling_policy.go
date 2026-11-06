@@ -180,5 +180,8 @@ func validatePrivateOrdinarySchedulingBinding(binding task.SupervisorRef) error 
 	if !canonicalAbsolutePath(binding.DaemonExecutable) {
 		return task.ErrEvidenceFault
 	}
+	if binding.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+		return nil
+	}
 	return task.ValidateSHA256(binding.DaemonSHA256)
 }

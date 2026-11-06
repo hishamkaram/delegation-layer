@@ -42,8 +42,8 @@ func Serve(ctx context.Context, config Config) error {
 }
 
 func serve(ctx context.Context, config Config, clock clockwork.Clock) (resultErr error) {
-	if ctx == nil || config.Store == nil || config.BuildID == "" || !filepath.IsAbs(config.Executable) || !filepath.IsAbs(config.Directory) || config.Environment == nil {
-		return fmt.Errorf("scheduler host requires an existing root and explicit executable, context, cwd, build and environment")
+	if ctx == nil || config.Store == nil || !filepath.IsAbs(config.Executable) || !filepath.IsAbs(config.Directory) || config.Environment == nil {
+		return fmt.Errorf("scheduler host requires an existing root and explicit executable, context, cwd and environment")
 	}
 	config.Args, config.Environment = slices.Clone(config.Args), slices.Clone(config.Environment)
 	lease, err := acquireServeLease(ctx, config.Store)
@@ -86,11 +86,11 @@ func (s *service) prepare(ctx context.Context) (resultErr error) {
 		return err
 	}
 	s.endpoint = endpoint
-	s.epoch = epochRecord{Protocol: ProtocolVersion, RootID: s.config.Store.RootID, Sequence: sequence, Epoch: epoch, BuildID: s.config.BuildID, Host: identity(host), UID: os.Geteuid(), Endpoint: endpoint.path}
+	s.epoch = epochRecord{Protocol: ProtocolVersion, RootID: s.config.Store.RootID, Sequence: sequence, Epoch: epoch, Host: identity(host), UID: os.Geteuid(), Endpoint: endpoint.path}
 	if _, err = publishRecord(ctx, s.journal, epochName(sequence), s.epoch); err != nil {
 		return errors.Join(err, endpoint.close())
 	}
-	s.status = Status{State: "starting", Epoch: epoch, Protocol: ProtocolVersion, BuildID: s.config.BuildID, Host: s.epoch.Host}
+	s.status = Status{State: "starting", Epoch: epoch, Protocol: ProtocolVersion, Host: s.epoch.Host}
 	return nil
 }
 
@@ -151,11 +151,7 @@ func (s *service) launch(ctx context.Context) {
 	child, err := startChild(s.config)
 	s.child = child
 	if child == nil {
-		if errors.Is(err, ErrIncompatible) {
-			s.degrade("incompatible_build")
-		} else {
-			s.scheduleRetry("child_start_failed", 0)
-		}
+		s.scheduleRetry("child_start_failed", 0)
 		return
 	}
 	intent.Child = child.identity

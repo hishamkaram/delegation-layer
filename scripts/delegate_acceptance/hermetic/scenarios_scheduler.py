@@ -10,7 +10,6 @@ stay byte-identical, and every ordinary command must keep working.
 
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.hermetic.chain import configure_chain_task
 from scripts.delegate_acceptance.hermetic.chain import dispatch_chain_task
@@ -40,7 +39,7 @@ STATUS_FIELDS = ("task_id", "publication", "outcome", "payload")
 
 
 def run_s01_scheduler_compatibility(case):
-    fixture = canonical_executable(case.suite.tools / "scheduler-fixture")
+    fixture = canonical_executable(case.scheduler_fixture)
     old = configure_chain_task(case=case, label="old", answer="older task answer\n",
                                session_id="scheduler-old-" + case.task_id,
                                task_value=case.task_id, brief=case.brief)
@@ -59,7 +58,7 @@ def run_s01_scheduler_compatibility(case):
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_json(destination / "scheduler-compatibility.json", {
         "schema_version": 1,
-        "fixture_sha256": digest(fixture),
+        "fixture_executable": str(fixture),
         "old_task": old["task_id"],
         "old_tree": old_tree,
         "old_reads": baseline,

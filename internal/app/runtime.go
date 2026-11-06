@@ -40,7 +40,7 @@ Commands:
   logs          Return validated output descriptors
   preflight     Check one provider without creating a task
   continue      Continue one terminal task through its exact session
-  supervisor    Inspect or migrate Delegate's private supervisor
+  supervisor    Inspect or migrate the private supervisor, or stop its infrastructure owner
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
   schedule      Manage recurring definitions and inspect executions
@@ -57,6 +57,8 @@ Global flags:
 Supervisor recovery:
   supervisor status --json
   supervisor migrate --json
+  supervisor stop-owner --json
+  stop-owner releases infrastructure serving; it does not stop Pueue or tasks.
 
 Managed Git workspaces (optional):
   dispatch ... --cwd ABS --isolation git-worktree [--base REV]
@@ -150,8 +152,11 @@ type Dependencies struct {
 	// not captured yet: the first command entrypoint captures os.Environ once
 	// and every later consumer reads that snapshot. A nonnil empty slice is an
 	// explicit empty environment and is kept.
-	Environment        []string
-	invocationSource   *capturedInfrastructureInvocation
+	Environment      []string
+	invocationSource *capturedInfrastructureInvocation
+	// ownerRouting is an immutable command composition choice. Nil selects
+	// native routing; component tests can lend their existing lifecycle owner.
+	ownerRouting       supervisorcore.OwnerRouting
 	useCatalogExisting bool
 }
 
@@ -184,6 +189,7 @@ type storeDependencies struct {
 	runnerExecutable  string
 	environment       []string
 	invocationSource  *capturedInfrastructureInvocation
+	ownerRouting      supervisorcore.OwnerRouting
 	observeSupervisor bool
 }
 
@@ -200,6 +206,7 @@ func (d Dependencies) storeDependencies() storeDependencies {
 		runnerExecutable:  d.RunnerExecutable,
 		environment:       slices.Clone(d.Environment),
 		invocationSource:  d.invocationSource,
+		ownerRouting:      d.ownerRouting,
 		observeSupervisor: true,
 	}
 }
@@ -239,7 +246,7 @@ func (d Dependencies) normalized() Dependencies {
 		d.PublisherVersion = defaultPublisher
 	}
 	if d.SupervisorOptions.ControlOwnerExecutable == "" {
-		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable()
+		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable(d.RunnerExecutable)
 	}
 	d.SupervisorOptions = withDefaultSupervisorCallbacks(d.SupervisorOptions)
 	return d

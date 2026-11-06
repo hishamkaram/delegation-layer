@@ -52,6 +52,9 @@ func TestStartupSettlementExpiredUnassumedIsCreateOnce(t *testing.T) {
 	if err != nil || stored != record {
 		t.Fatalf("history: %v", err)
 	}
+	if err = j.reobserveSettlement(t.Context(), reference, j.bootID); err != nil {
+		t.Fatalf("ordinary history lost settled startup: %v", err)
+	}
 }
 
 func TestStartupSettlementRefusesUnexpiredOrLiveAssumption(t *testing.T) {
@@ -228,7 +231,7 @@ func corruptSettlementFixture(t *testing.T, j *intentJournal, lease *Lease, inte
 	case "corrupt settlement":
 		writeSettlementFixtureBytes(t, j, settlementName(1), []byte("{"))
 	case "conflicting settlement":
-		record := startupSettlement{Protocol: ProtocolVersion, Startup: assumption.Startup, AssumptionSHA256: task.ComputeSHA256([]byte("absent evidence")), ObservedBootID: j.bootID, SettledAt: time.Now().UTC().Format(time.RFC3339Nano), Reason: settlementAssumedAbsent}
+		record := startupSettlement{Protocol: RecordProtocolVersion, Startup: assumption.Startup, AssumptionSHA256: task.ComputeSHA256([]byte("absent evidence")), ObservedBootID: j.bootID, SettledAt: time.Now().UTC().Format(time.RFC3339Nano), Reason: settlementAssumedAbsent}
 		err := j.control.WithLock(t.Context(), func(tx *taskdir.ControlTransaction) error {
 			_, putErr := tx.Put(settlementName(1), record)
 			return putErr
@@ -349,7 +352,7 @@ func TestStartupSettlementRootReplacementRetainsOriginal(t *testing.T) {
 
 func TestStartupSettlementShapeIsDataOnly(t *testing.T) {
 	intent := startupIntentFixture(t)
-	record := startupSettlement{Protocol: ProtocolVersion, Startup: settlementReference(t, intent), ObservedBootID: intent.Inputs.BootID, SettledAt: intent.Deadline, Reason: settlementUnassumedExpired}
+	record := startupSettlement{Protocol: RecordProtocolVersion, Startup: settlementReference(t, intent), ObservedBootID: intent.Inputs.BootID, SettledAt: intent.Deadline, Reason: settlementUnassumedExpired}
 	if err := record.Validate(intent); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +451,7 @@ func TestStartupSettlementReplayStillRefusesLiveIncarnation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := startupSettlement{Protocol: ProtocolVersion, Startup: fixture.assumption.Startup, AssumptionSHA256: digest, ObservedBootID: fixture.journal.bootID, SettledAt: time.Now().UTC().Format(time.RFC3339Nano), Reason: settlementAssumedAbsent}
+	record := startupSettlement{Protocol: RecordProtocolVersion, Startup: fixture.assumption.Startup, AssumptionSHA256: digest, ObservedBootID: fixture.journal.bootID, SettledAt: time.Now().UTC().Format(time.RFC3339Nano), Reason: settlementAssumedAbsent}
 	// A corrupt but structurally valid claim is historical data, not proof of
 	// native absence. Only the actual settlement writer may observe that fact.
 	err = fixture.journal.control.WithLock(t.Context(), func(tx *taskdir.ControlTransaction) error {
@@ -465,6 +468,9 @@ func TestStartupSettlementReplayStillRefusesLiveIncarnation(t *testing.T) {
 	_, created, err := fixture.journal.settleStartup(t.Context(), fixture.lease, record.Startup)
 	if err == nil || created {
 		t.Fatalf("existing claim replaced live native evidence: created=%t err=%v", created, err)
+	}
+	if err = fixture.journal.reobserveSettlement(t.Context(), record.Startup, fixture.journal.bootID); err == nil {
+		t.Fatal("ordinary history treated a live incarnation as settled")
 	}
 	data, err = fixture.journal.readSettlement(t.Context(), record.Startup)
 	if err != nil || data != record {

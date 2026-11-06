@@ -80,9 +80,6 @@ func TestObservePublishedPairReportsFactsBeforeMutation(t *testing.T) {
 		{name: "missing member", want: PublishedPairMemberMissing, inject: func(t *testing.T, _ privateSupervisorTestFixture, original, _ task.SupervisorRef) {
 			removePrivateTestPath(t, original.ClientExecutable)
 		}},
-		{name: "corrupt present member", inject: func(t *testing.T, _ privateSupervisorTestFixture, original, _ task.SupervisorRef) {
-			writeExecutable(t, original.ClientExecutable, privateClientFixture+"\n# changed\n")
-		}},
 		{name: "unreadable launch witness", reason: "state_unreadable", inject: func(t *testing.T, _ privateSupervisorTestFixture, original, _ task.SupervisorRef) {
 			writePrivateTestFile(t, privateDaemonIdentityPath(filepath.Dir(original.ConfigPath)), "{")
 		}},
@@ -124,7 +121,9 @@ func reconcilePublishedTestAttempt(t *testing.T, fixture privateSupervisorTestFi
 	var outcome PublishedPairReconciliation
 	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
 		var attemptErr error
-		outcome, attemptErr = ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, candidate.ClientExecutable, candidate.DaemonExecutable, Options{ObservationTimeout: privateTestObservationTimeout})
+		outcome, attemptErr = ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, func(context.Context) (string, string, error) {
+			return candidate.ClientExecutable, candidate.DaemonExecutable, nil
+		}, Options{ObservationTimeout: privateTestObservationTimeout})
 		return attemptErr
 	})
 	return outcome, err
@@ -142,8 +141,8 @@ func TestReconcileAttemptSeparatesCleanDeferralFromReadFault(t *testing.T) {
 		want   PublishedPairReconciliation
 		reason string
 	}{
-		{name: "history references pair", want: PublishedPairTransitionPending, reason: "transition_pending", inject: func(t *testing.T, fixture privateSupervisorTestFixture, original, candidate task.SupervisorRef) {
-			injectPrivateReconciliationFault(t, fixture, original, candidate, privateDaemonIdentityForBinding(original), "history-predecessor")
+		{name: "history references pair", want: PublishedPairTransitionPending, reason: "transition_pending", inject: func(t *testing.T, fixture privateSupervisorTestFixture, original, _ task.SupervisorRef) {
+			injectPrivateReconciliationFault(t, fixture, original, privateDaemonIdentityForBinding(original), "history-predecessor")
 			removePrivateTestPath(t, original.ClientExecutable)
 		}},
 		{name: "restart intent beside readable migration", want: PublishedPairTransitionPending, reason: "transition_pending", inject: func(t *testing.T, fixture privateSupervisorTestFixture, original, candidate task.SupervisorRef) {
@@ -183,9 +182,89 @@ func TestReconcileAttemptSeparatesCleanDeferralFromReadFault(t *testing.T) {
 
 func publishTestPairRestartIntent(t *testing.T, stateRoot string, original, candidate task.SupervisorRef) {
 	t.Helper()
-	if err := publishPrivatePairRestartIntent(stateRoot, privatePairRestartIntent{Predecessor: original, Target: candidate}); err != nil {
-		t.Fatal(err)
+	writePrivateSuccessorTestRecord(t, privateBootstrapRecordPath(stateRoot), privateBootstrapRecord{
+		SchemaVersion: task.SchemaVersion,
+		Restart:       &privatePairRestartIntent{Predecessor: original, Target: candidate},
+	})
+}
+
+func TestRestartAttemptRefusesIncompleteOrStoppedTargetBeforeSelection(t *testing.T) {
+	for _, fault := range []string{"missing publication", "missing witness", "stopped target"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture, original, candidate := newPrivateReconciliationFixture(t)
+			publishTestPairRestartIntent(t, fixture.stateRoot, original, candidate)
+			switch fault {
+			case "missing publication":
+				removePrivateTestPath(t, privateSupervisorBindingPath(fixture.stateRoot))
+			case "missing witness":
+				removePrivateTestPath(t, privateDaemonIdentityPath(filepath.Dir(original.ConfigPath)))
+			case "stopped target":
+				removePrivateTestPath(t, filepath.Join(filepath.Dir(original.ConfigPath), "ready"))
+			}
+			before := snapshotPublishedPairRecords(t, fixture.stateRoot)
+			if availability, err := observePublishedTestPair(t, fixture.stateRoot); err != nil || availability != PublishedPairIncomplete {
+				t.Fatalf("pending restart availability = %d, %v; want incomplete", availability, err)
+			}
+			selected := false
+			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+				outcome, attemptErr := ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, func(context.Context) (string, string, error) {
+					selected = true
+					return "", "", os.ErrPermission
+				}, Options{ObservationTimeout: privateTestObservationTimeout})
+				return errors.Join(attemptErr, outcome.ProjectedError())
+			})
+			if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) || selected {
+				t.Fatalf("incomplete restart = %v, selected=%t; want refusal before selection", err, selected)
+			}
+			if fault == "stopped target" && privateRecoveryReason(err) != "transition_pending" {
+				t.Fatalf("stopped exact target reason = %q, want transition_pending: %v", privateRecoveryReason(err), err)
+			}
+			before.assertUnchanged(t, fixture.stateRoot)
+		})
 	}
+}
+
+func TestReconciliationPreservesSelectorFaults(t *testing.T) {
+	for _, selectionErr := range []error{os.ErrPermission, context.Canceled, ErrCompatiblePairUnavailable} {
+		t.Run(selectionErr.Error(), func(t *testing.T) {
+			fixture, original, _ := newPrivateReconciliationFixture(t)
+			removePrivateTestPath(t, original.ClientExecutable)
+			before := snapshotPublishedPairRecords(t, fixture.stateRoot)
+			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+				outcome, attemptErr := ReconcilePublishedPrivatePairAttemptWithLock(ctx, fixture.stateRoot, func(context.Context) (string, string, error) {
+					return "", "", selectionErr
+				}, Options{})
+				if outcome != 0 {
+					t.Errorf("selector fault returned reconciliation outcome %d", outcome)
+				}
+				return attemptErr
+			})
+			if !errors.Is(err, selectionErr) {
+				t.Fatalf("selector error = %v, want %v", err, selectionErr)
+			}
+			before.assertUnchanged(t, fixture.stateRoot)
+		})
+	}
+}
+
+func TestRestartPublicationRefusesNewTargetBeforeMatchingReplay(t *testing.T) {
+	fixture, original, target := newPrivateReconciliationFixture(t)
+	publishTestPairRestartIntent(t, fixture.stateRoot, original, target)
+	writePrivateSuccessorTestRecord(t, privateIdentityPublicationPath(fixture.stateRoot), privateIdentityPublicationRecord{
+		SchemaVersion: task.SchemaVersion, Binding: target,
+	})
+	other := target
+	other.ClientExecutable += "-other"
+	before := snapshotPublishedPairRecords(t, fixture.stateRoot)
+	pendingBefore := readPrivateSupervisorFile(t, privateIdentityPublicationPath(fixture.stateRoot))
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(context.Context) error {
+		return publishPrivateDaemonIdentity(filepath.Dir(target.ConfigPath), other)
+	})
+	if !errors.Is(err, ErrBinding) || privateRecoveryReason(err) != "identity_conflict" {
+		t.Fatalf("conflicting new publisher = %v; want identity_conflict", err)
+	}
+	before.assertUnchanged(t, fixture.stateRoot)
+	assertPrivateTestFileUnchanged(t, privateIdentityPublicationPath(fixture.stateRoot), pendingBefore, true)
 }
 
 func writePrivateTestFile(t *testing.T, path, data string) {

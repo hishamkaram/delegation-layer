@@ -99,7 +99,7 @@ func snapshotExecutionTargetTree(t *testing.T, root string) map[string]string {
 			return err
 		}
 		value := fmt.Sprintf("%v %d %d", info.Mode(), info.Size(), info.ModTime().UnixNano())
-		if info.Mode().IsRegular() {
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr

@@ -51,6 +51,19 @@ func resumeInspectionSupervisorGenerationWithLock(ctx context.Context, store *ta
 		return err
 	}
 	if pending {
+		matches, matchErr := pueue.PrivateMigrationTargetsWithLock(store.Root, supervisor.Binding())
+		if matchErr != nil {
+			return matchErr
+		}
+		retargetable, readErr := pueue.PrivateMigrationRetargetableWithLock(store.Root)
+		if readErr != nil {
+			return readErr
+		}
+		if !matches && retargetable {
+			// The group callback must append the selected proposal before the
+			// private owner replaces its reversible target or stops anything.
+			return nil
+		}
 		if err = supervisor.MigratePrivateSupervisorWithLock(ctx, store.Root); err != nil {
 			return err
 		}

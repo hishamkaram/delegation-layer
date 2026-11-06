@@ -39,9 +39,6 @@ func TestControlRuntimeSavedCapturedPATHRefusalDoesNotRouteOwner(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
 	removeCompatibleControlExecutable(t, fixture.target.ClientExecutable)
 	removeCompatibleControlExecutable(t, fixture.legacy.ClientExecutable)
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
-	}
 	available := supervisorfixture.CanonicalTempDir(t)
 	supervisorfixture.WriteExecutable(t, filepath.Join(available, "pueue"), parentMigrationClient)
 	supervisorfixture.WriteExecutable(t, filepath.Join(available, "pueued"), "#!/bin/sh\nexit 0\n")
@@ -72,26 +69,40 @@ func TestControlRuntimeSavedCapturedPATHRefusalDoesNotRouteOwner(t *testing.T) {
 	}
 }
 
-func TestPrepareAdmissionSupervisorRefusesDifferentDaemonBeforeScheduling(t *testing.T) {
+func TestPrepareAdmissionSupervisorAcceptsCompatibleDaemonBeforeScheduling(t *testing.T) {
 	fixture, _ := newWarmContinuationFixture(t)
 	source := routedMetadataSourceForTask(t, fixture, fixture.target, strings.Repeat("b", 32))
 	transport := compatibleControlTransport(t, fixture, "client")
+	runtimeBinding := fixture.target
+	runtimeBinding.ClientExecutable, runtimeBinding.DaemonExecutable = transport.ClientExecutable, transport.DaemonExecutable
+	writeContinuationFixtureRecord(t, filepath.Join(fixture.store.Root, ".supervisor", "ordinary-scheduling.json"), privateOrdinarySchedulingRecord{
+		SchemaVersion: task.SchemaVersion, Revision: privateOrdinarySchedulingRevision, Supervisor: runtimeBinding,
+		StagedLaunch: pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true},
+	})
 	selection := AdmissionSelection{SavedSupervisor: &fixture.target, ContinuationSource: source}
 	runtime := AdmissionOptions{Control: fixture.options, InitialExecutable: transport.ClientExecutable}
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := PrepareAdmissionSupervisorContext(t.Context(), selection, runtime, fixture.store, false, "", true)
-	if client != nil {
-		defer func() {
-			if closeErr := client.CloseAfterPending(err); closeErr != nil {
-				t.Error(closeErr)
-			}
-		}()
+	requireCompatibleControlClient(t, client, err, fixture.target, runtimeBinding)
+	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
+		t.Fatal("compatible transport changed canonical generation, scheduling receipt, task records or queue-repair state")
 	}
+}
+
+func TestPrivateAdmissionRuntimeRefusesDifferentLogicalGenerationWithoutAuthorization(t *testing.T) {
+	fixture, _ := newWarmContinuationFixture(t)
+	selected := fixture.target
+	selected.ConfigDigest = task.ComputeSHA256([]byte("different bound configuration"))
+	before := parentMigrationTree(t, fixture.store.Root)
+	err := pueue.CheckPrivateAdmissionRuntime(t.Context(), fixture.store.Root, selected)
 	if !errors.Is(err, pueue.ErrPrivateSupervisorSubmissionIncomplete) {
-		t.Fatalf("incompatible runtime reached admission scheduling: %v", err)
+		t.Fatalf("different logical generation gained admission: %v", err)
+	}
+	if _, present, readErr := pueue.ReadPrivateSchedulingEvidence(fixture.store.Root); readErr != nil || present {
+		t.Fatalf("refused generation published scheduling authority: present=%t err=%v", present, readErr)
 	}
 	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
-		t.Fatal("early runtime refusal changed receipt, task records or queue-repair state")
+		t.Fatal("early generation refusal changed canonical records or queue-repair state")
 	}
 }
 
@@ -131,9 +142,6 @@ func TestControlRuntimeSavedUnavailablePairStillRoutesOwner(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
 	removeCompatibleControlExecutable(t, fixture.target.ClientExecutable)
 	removeCompatibleControlExecutable(t, fixture.legacy.ClientExecutable)
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
-	}
 	want := errors.New("owner route result")
 	calls := 0
 	routing := selectedControlRouting{saved: func(_ context.Context, store *taskdir.Store, _ infrastructure.LaunchContext, observed infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
@@ -143,7 +151,9 @@ func TestControlRuntimeSavedUnavailablePairStillRoutesOwner(t *testing.T) {
 		}
 		return infrastructure.Disposition{}, want
 	}}
-	lookup := ExecutableLookup{InitialExecutable: filepath.Join(fixture.store.Root, "unavailable-installation", "pueue")}
+	transport := capturedPATHControlPair(t, fixture.target)
+	lookup := ExecutableLookup{InitialExecutable: transport.ClientExecutable}
+	fixture.options.Environment = append(fixture.options.Environment, "CONTROL_FIXTURE_UNAVAILABLE=1")
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: routing}).RecoverSaved(t.Context(), fixture.store, fixture.legacy, source)
 	if client != nil {
@@ -157,17 +167,14 @@ func TestControlRuntimeSavedUnavailablePairStillRoutesOwner(t *testing.T) {
 	}
 }
 
-func TestControlRuntimeSavedEmptyCapturedPATHRoutesOwnerOnce(t *testing.T) {
+func TestControlRuntimeSavedEmptyCapturedPATHRefusesOwnerRoute(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
 	removeCompatibleControlExecutable(t, fixture.target.ClientExecutable)
 	removeCompatibleControlExecutable(t, fixture.legacy.ClientExecutable)
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
-	}
 	ambient := capturedPATHControlPair(t, fixture.target)
 	t.Setenv("PATH", filepath.Dir(ambient.ClientExecutable))
 	lookup := ExecutableLookup{Environment: []string{"PATH=" + supervisorfixture.CanonicalTempDir(t)}}
-	want := errors.New("canonical owner contacted after captured PATH absence")
+	want := exec.ErrNotFound
 	calls := 0
 	routing := selectedControlRouting{saved: func(_ context.Context, store *taskdir.Store, _ infrastructure.LaunchContext, observed infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
 		calls++
@@ -181,8 +188,8 @@ func TestControlRuntimeSavedEmptyCapturedPATHRoutesOwnerOnce(t *testing.T) {
 	if client != nil {
 		t.Fatal(ClosePrivateAdmissionTransition(client, errors.New("empty captured PATH used an ambient client")))
 	}
-	if !errors.Is(err, want) || calls != 1 {
-		t.Fatalf("captured PATH absence blocked or repeated owner contact: calls=%d err=%v", calls, err)
+	if !errors.Is(err, want) || calls != 0 {
+		t.Fatalf("captured PATH absence reached owner contact or ambient fallback: calls=%d err=%v", calls, err)
 	}
 	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
 		t.Fatal("captured PATH absence performed local preparation")
@@ -195,9 +202,6 @@ func TestControlRuntimeSavedReadsCapturedPATHTransport(t *testing.T) {
 	transport := capturedPATHControlPair(t, fixture.target)
 	for _, path := range []string{fixture.target.ClientExecutable, fixture.target.DaemonExecutable} {
 		removeCompatibleControlExecutable(t, path)
-	}
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
 	}
 	t.Setenv("PATH", supervisorfixture.CanonicalTempDir(t))
 	lookup := ExecutableLookup{Environment: []string{"PATH=" + filepath.Dir(transport.ClientExecutable)}}
@@ -222,7 +226,8 @@ func capturedPATHControlPair(t *testing.T, saved task.SupervisorRef) task.Superv
 	directory := supervisorfixture.CanonicalTempDir(t)
 	client, daemon := parentMigrationClient+"\n# captured PATH transport\n", "#!/bin/sh\nexit 0\n# captured PATH daemon\n"
 	saved.ClientExecutable, saved.DaemonExecutable = filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
-	saved.ClientSHA256, saved.DaemonSHA256 = task.ComputeSHA256([]byte(client)), task.ComputeSHA256([]byte(daemon))
+	saved.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	saved.ClientSHA256, saved.DaemonSHA256 = "", ""
 	supervisorfixture.WriteExecutable(t, saved.ClientExecutable, client)
 	supervisorfixture.WriteExecutable(t, saved.DaemonExecutable, daemon)
 	return saved
@@ -261,11 +266,10 @@ func TestControlContinuationPreservesLegacyClientUpdateAndUnusedInventoryFault(t
 	if err := os.WriteFile(fixture.target.ClientExecutable, changed, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(base, stateSupervisorPairRecordName), []byte("invalid unused inventory"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(base, "pueue-pair.json"), []byte("invalid unused inventory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	want := fixture.target
-	want.ClientSHA256 = task.ComputeSHA256(changed)
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: "/unavailable-installation/pueue"}}).PrepareContinuation(t.Context(), fixture.store, source)
 	requireCompatibleControlClient(t, client, err, fixture.target, want)
@@ -306,9 +310,6 @@ func compatibleControlTransport(t *testing.T, fixture parentMigrationFixture, da
 	transport := parentMigrationPair(t, fixture, "compatible-transport")
 	// Model a supported legacy publication without an inventory pointer. The
 	// available installation remains explicit; PATH cannot supply its pair.
-	if err := os.Remove(filepath.Join(fixture.store.Root, ".supervisor", stateSupervisorPairRecordName)); err != nil {
-		t.Fatal(err)
-	}
 	switch damaged {
 	case "client":
 		removeCompatibleControlExecutable(t, fixture.target.ClientExecutable)
@@ -336,6 +337,10 @@ func removeCompatibleControlExecutable(t *testing.T, path string) {
 
 func requireCompatibleControlClient(t *testing.T, client *pueue.Client, err error, saved, runtime task.SupervisorRef) {
 	t.Helper()
+	// The fixture's expected paths/config remain independent; runtime transport
+	// always uses the installed-path representation, never historical byte SHAs.
+	runtime.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	runtime.ClientSHA256, runtime.DaemonSHA256 = "", ""
 	if client != nil {
 		defer func() {
 			if closeErr := client.CloseAfterPending(err); closeErr != nil {

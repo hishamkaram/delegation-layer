@@ -19,16 +19,10 @@ func TestPrivateAdmissionRuntimeRefusalUsesCanonicalReadyPredicate(t *testing.T)
 		refused bool
 	}{
 		{"exact", func(*privateGenerationFacts, *task.SupervisorRef) {}, false},
-		{"client prime", func(_ *privateGenerationFacts, r *task.SupervisorRef) {
-			r.ClientSHA256 = task.ComputeSHA256([]byte("client prime"))
-		}, false},
 		{"different client path", func(_ *privateGenerationFacts, r *task.SupervisorRef) { r.ClientExecutable = "/different/pueue" }, false},
 		{"exact alias", func(f *privateGenerationFacts, _ *task.SupervisorRef) { f.aliasPresent = true }, false},
 		{"migration present", func(f *privateGenerationFacts, _ *task.SupervisorRef) { f.migrationPresent = true }, false},
-		{"daemon path", func(_ *privateGenerationFacts, r *task.SupervisorRef) { r.DaemonExecutable = "/different/pueued" }, true},
-		{"daemon digest", func(_ *privateGenerationFacts, r *task.SupervisorRef) {
-			r.DaemonSHA256 = task.ComputeSHA256([]byte("different daemon"))
-		}, true},
+		{"daemon path", func(_ *privateGenerationFacts, r *task.SupervisorRef) { r.DaemonExecutable = "/different/pueued" }, false},
 		{"logical identity", func(_ *privateGenerationFacts, r *task.SupervisorRef) {
 			r.ConfigDigest = task.ComputeSHA256([]byte("different config"))
 		}, true},

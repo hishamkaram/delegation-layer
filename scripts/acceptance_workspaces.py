@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Native managed-workspace acceptance through the shipped Delegate CLI.
 
-This driver is deliberately fixture-only.  It uses the rebuilt Delegate and
-runner supplied by the caller, plus the real pueue pair, while the provider is
+This driver is deliberately fixture-only. It builds Delegate and its runner
+from the selected checkout and installs the verified pinned Pueue archive, while the provider is
 the existing finite private fixture.  Process ownership, command capture,
 lease observation, and directory rollback remain in the shared acceptance
 helpers.

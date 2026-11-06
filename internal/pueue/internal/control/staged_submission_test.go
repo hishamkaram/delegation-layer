@@ -128,7 +128,7 @@ func writeStagedInspectionStatus(t *testing.T, fake *fakeSupervisor, identity In
 
 func writeStagedInspectionStatusWithLaunch(t *testing.T, fake *fakeSupervisor, identity InspectionIdentity, id int64, state State, launch Launch) {
 	t.Helper()
-	writeStagedInspectionStatusStateWithCommand(t, fake, identity, id, stagedStateForTest(t, state), "", identity.Group(), stagedInspectionCommand(launch, identity))
+	writeStagedInspectionStatusStateWithCommand(t, fake, identity, id, stagedStateForTest(t, state), "", identity.Group(), escapedCommand(inspectionWorkerArguments(launch, identity)...))
 }
 
 func writeStagedInspectionStatusState(t *testing.T, fake *fakeSupervisor, identity InspectionIdentity, id int64, state map[string]any, label, group string) {
@@ -282,7 +282,7 @@ func inspectionQueuedStatusWithLaunch(t *testing.T, identity InspectionIdentity,
 	t.Helper()
 	job := statusTestJob(id, identity.Label(), stagedStateForTest(t, StateQueued))
 	job["group"] = identity.Group()
-	command := stagedInspectionCommand(launch, identity)
+	command := escapedCommand(inspectionWorkerArguments(launch, identity)...)
 	job["original_command"] = command
 	job["command"] = command
 	parallel := uint64(1)
@@ -676,7 +676,7 @@ func TestSubmitStagedExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
 	configureExternalPendingEnqueue(t, fake)
 	fixture := newTaskFixture(t, fake.client.Binding())
-	ctx := WithControlLease(t.Context(), admissionTestLease(t, fixture.store))
+	ctx := t.Context()
 	permit, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
 	if err != nil {
 		t.Fatal(err)
@@ -695,7 +695,7 @@ func TestSubmitStagedExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 func TestSubmitConcurrentInspectionExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
 	configureExternalPendingEnqueue(t, fake)
-	ctx := WithControlLease(t.Context(), admissionTestLease(t, store))
+	ctx := t.Context()
 	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
 	permit := &concurrentInspectionTestPermit{
 		inspectionTestPermit: &inspectionTestPermit{

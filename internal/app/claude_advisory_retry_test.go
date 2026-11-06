@@ -43,12 +43,13 @@ func TestSameIDDispatchRecoversUnsubmittedBaselineClaudePrintTask(t *testing.T) 
 // baselineClaudePrintTask is one unsubmitted task recorded as the baseline
 // release admitted it, in a state root whose claude CLI logs every call.
 type baselineClaudePrintTask struct {
-	store     *taskdir.Store
-	td        *taskdir.TaskDir
-	request   task.TaskRecord
-	brief     []byte
-	runner    string
-	nativeLog string
+	store                *taskdir.Store
+	td                   *taskdir.TaskDir
+	request              task.TaskRecord
+	brief                []byte
+	runner               string
+	nativeLog            string
+	supervisorExecutable string
 }
 
 func newBaselineClaudePrintTask(t *testing.T, mode string) *baselineClaudePrintTask {
@@ -68,6 +69,13 @@ func newBaselineClaudePrintTask(t *testing.T, mode string) *baselineClaudePrintT
 		t.Fatal(err)
 	}
 	f := &baselineClaudePrintTask{brief: []byte("baseline brief"), runner: filepath.Join(base, "delegate-run"), nativeLog: filepath.Join(cliDir, "native.log")}
+	supervisor, _, _, _ := newOrdinarySubmissionReceiptSupervisor(t)
+	f.supervisorExecutable = supervisor.Binding().ClientExecutable
+	t.Cleanup(func() {
+		if closeErr := supervisor.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	writeRunnerFixture(t, filepath.Join(cliDir, "claude"), fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s'\nprintf '%%s\\n' 'Usage: --print'\n", f.nativeLog))
 	writeRunnerFixture(t, f.runner, "custom runner")
 	t.Setenv("HOME", cliDir)
@@ -101,7 +109,7 @@ func testBaselineClaudePrintRetry(t *testing.T, mode string) {
 	f := newBaselineClaudePrintTask(t, mode)
 	before := readTaskFile(t, f.td.Dir, "meta.json")
 	result := dispatch(Arguments{Root: f.store.Root, TaskID: f.request.TaskID, Provider: f.request.Provider, Cwd: f.request.CanonicalCwd, Config: f.request.RequestedConfig, BriefBytes: f.brief, Runner: f.runner},
-		Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ()})
+		Dependencies{ResourceChecker: fixtureResources, Environment: os.Environ(), InitialSupervisorExecutable: f.supervisorExecutable})
 	// The recorded profile gate refuses an unmatched capability digest with an
 	// identity mismatch. Passing it, the retry reaches submission, where the
 	// inert recorded supervisor refuses its binding.

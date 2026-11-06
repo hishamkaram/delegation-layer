@@ -63,9 +63,12 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	if !filepath.IsAbs(configPath) || filepath.Clean(configPath) != configPath {
 		return nil, ErrConfiguration
 	}
+	if isLegacySupervisorClientPath(filepath.Dir(filepath.Dir(configPath)), path) {
+		return nil, fmt.Errorf("%w: historical executable copy requires installed client selection", ErrBinding)
+	}
 	c := &Client{
 		options:       options,
-		binding:       task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath},
+		binding:       task.SupervisorRef{ExecutableIdentity: task.ExecutableIdentityInstalledPathV1, ClientExecutable: path, ConfigPath: configPath},
 		workOwner:     &clientWorkOwner{},
 		ownsWorkOwner: true,
 	}
@@ -81,11 +84,7 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	current.ObservedVersion = version
 	c.binding = current
 	c.runtimeBinding = current
-	if root, private := privateStateRoot(configPath); private {
-		// Binding any resolvable configuration remains read-only-compatible.
-		// Optional shutdown qualification is retained for its actual consumer.
-		c.privateConstructionErr = recordPrivateClientConstruction(c, root)
-	}
+	qualifyPrivateClientConstruction(c)
 	return c, nil
 }
 
@@ -95,11 +94,9 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 // user configuration. When inspection remains in flight, the returned client
 // owns the pending command and must be closed with CloseAfterPending.
 //
-// A saved private pair also authenticates its recorded daemon from the
-// current bytes, so the binding is as complete as the one the task recorded.
-// Changed installation provenance remains observable; the strict mutation
-// gates own the exact comparison and refuse it. External references keep a
-// client-only binding and never require their recorded daemon file.
+// The canonical saved reference remains unchanged. Selected installed clients
+// prove compatibility through the bounded version/status protocol; recorded
+// executable fingerprints are historical data and are never recalculated.
 func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
 	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
 		return nil, err
@@ -108,7 +105,11 @@ func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (
 	if err != nil {
 		return nil, err
 	}
-	client, err := Bind(ctx, saved.ClientExecutable, saved.ConfigPath, resolved)
+	selected, err := selectRecoveryClient(saved, options.RuntimeClientExecutable)
+	if err != nil {
+		return nil, err
+	}
+	client, err := Bind(ctx, selected, saved.ConfigPath, resolved)
 	if err != nil {
 		return client, err
 	}
@@ -116,19 +117,16 @@ func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (
 		return client, ErrBinding
 	}
 	if _, private := privateStateRoot(saved.ConfigPath); private && saved.DaemonExecutable != "" {
-		if err = attachPrivateDaemon(client, saved.DaemonExecutable); err != nil {
+		daemon, daemonErr := selectRecoveryDaemon(saved, filepath.Join(filepath.Dir(selected), "pueued"))
+		if daemonErr != nil {
+			return client, daemonErr
+		}
+		if err = attachPrivateDaemon(client, daemon); err != nil {
 			return client, err
 		}
 	}
+	client.binding = saved
 	return client, nil
-}
-
-// BindSavedForMigration reopens a saved supervisor while permitting a logical
-// private-config drift to be inspected by the migration owner. It retains the
-// saved binding as durable authority and uses a separately verified runtime
-// binding for the bounded status/shutdown commands.
-func BindSavedForMigration(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
-	return BindSavedForMigrationWithClient(ctx, saved, saved.ClientExecutable, options)
 }
 
 // BindSavedForMigrationWithClient is the migration form of BindSaved with an
@@ -144,9 +142,13 @@ func BindSavedForMigrationWithClient(ctx context.Context, saved task.SupervisorR
 		return nil, err
 	}
 	if clientExecutable == "" {
-		clientExecutable = saved.ClientExecutable
+		clientExecutable = options.RuntimeClientExecutable
 	}
-	return bindSavedForMigrationWithClient(ctx, saved, clientExecutable, resolved)
+	selected, err := selectRecoveryClient(saved, clientExecutable)
+	if err != nil {
+		return nil, err
+	}
+	return bindSavedForMigrationWithClient(ctx, saved, selected, resolved)
 }
 
 func bindSavedForMigrationWithClient(ctx context.Context, saved task.SupervisorRef, clientExecutable string, options Options) (*Client, error) {
@@ -170,6 +172,9 @@ func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBinding, err)
 	}
+	if err := validateRuntimeClientSelection(saved, options.RuntimeClientExecutable); err != nil {
+		return nil, err
+	}
 	options, err := normalizeOptions(options)
 	if err != nil {
 		return nil, err
@@ -186,10 +191,33 @@ func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 			options.Environment = environmentForResolution(options.Environment, resolution)
 		}
 	}
+	runtimeBinding := saved
+	runtimeBinding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+	runtimeBinding.ClientSHA256, runtimeBinding.DaemonSHA256 = "", ""
+	if options.RuntimeClientExecutable != "" {
+		runtimeBinding.ClientExecutable = options.RuntimeClientExecutable
+	}
 	return &Client{
-		binding: saved, runtimeBinding: saved, options: options,
+		binding: saved, runtimeBinding: runtimeBinding, options: options,
 		workOwner: &clientWorkOwner{}, ownsWorkOwner: true,
 	}, nil
+}
+
+func validateRuntimeClientSelection(saved task.SupervisorRef, runtimeClient string) error {
+	if runtimeClient == "" && isLegacyStateSupervisorClient(saved) {
+		return fmt.Errorf("%w: legacy managed supervisor requires installed client selection", ErrBinding)
+	}
+	selected := runtimeClient
+	if selected == "" {
+		selected = saved.ClientExecutable
+	}
+	if isLegacySupervisorClientPath(filepath.Dir(filepath.Dir(saved.ConfigPath)), selected) {
+		return fmt.Errorf("%w: historical executable copy is not installed transport", ErrBinding)
+	}
+	if runtimeClient != "" && (!filepath.IsAbs(runtimeClient) || filepath.Clean(runtimeClient) != runtimeClient) {
+		return fmt.Errorf("%w: installed runtime client path must be canonical and absolute", ErrConfiguration)
+	}
+	return nil
 }
 
 func normalizeOptions(options Options) (Options, error) {
@@ -220,12 +248,6 @@ func (c *Client) ControlTimeout() time.Duration {
 		return 0
 	}
 	return PrivateControlTimeout(c.options)
-}
-
-// UsesControlOwner reports the selected process ownership mode without exposing
-// options, environments or callbacks.
-func (c *Client) UsesControlOwner() bool {
-	return c != nil && c.options.ControlOwnerExecutable != ""
 }
 
 // RuntimeBinding returns the verified executable/configuration generation

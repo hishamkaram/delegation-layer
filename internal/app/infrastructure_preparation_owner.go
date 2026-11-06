@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -11,12 +12,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// One host invocation owns this Store and its outer admission lease. The entry
-// lends its resident guards; canonical consumers own their inner resources.
-// A failed inner cleanup keeps both outer resources reachable from the error.
+// One host invocation owns this Store. The entry lends its resident guards;
+// canonical consumers own inner resources. An unresolved child retains its Store.
 type infrastructurePreparationOwner struct {
 	store       *taskdir.Store
-	admission   *taskdir.RootAdmissionLease
 	options     pueue.Options
 	lookup      supervisor.ExecutableLookup
 	observation *infrastructure.PreparationObservation
@@ -40,8 +39,8 @@ func openInfrastructurePreparation(ctx context.Context, operation infrastructure
 	}
 	owner := &infrastructurePreparationOwner{options: options, observation: observation}
 	owner.lookup = supervisor.ExecutableLookup{
-		InitialExecutable: artifacts.Client, Environment: []string{},
-		AcceptedBootstrapPair: supervisor.BootstrapPair{Client: artifacts.Client, Daemon: artifacts.Daemon},
+		InitialExecutable: selected.SupervisorExecutable, Environment: []string{},
+		AcceptedBootstrapPair: supervisor.BootstrapPair{Client: selected.SupervisorExecutable, Daemon: filepath.Join(filepath.Dir(selected.SupervisorExecutable), "pueued")},
 	}
 	owner.store, err = openNativeSupervisorStore(ctx, intent.Inputs.Root)
 	if err != nil {
@@ -54,8 +53,7 @@ func openInfrastructurePreparation(ctx context.Context, operation infrastructure
 	if pin.Root() != intent.Inputs.Root || pin.RootID() != intent.Inputs.RootID || pin.Device() != intent.Inputs.RootDevice || pin.Inode() != intent.Inputs.RootInode {
 		return owner, infrastructure.ErrIdentity
 	}
-	owner.admission, err = supervisor.AcquireOrBorrowRootAdmissionContext(ctx, owner.store, nil, pueue.PrivateControlTimeout(options))
-	return owner, err
+	return owner, nil
 }
 
 func (o *infrastructurePreparationOwner) disposition() infrastructure.Disposition {
@@ -69,14 +67,23 @@ func (o *infrastructurePreparationOwner) close(cause error) error {
 	if o == nil {
 		return cause
 	}
-	cause = supervisor.ReleaseOwnedRootAdmission(o.admission, cause)
-	if o.admission.RetainsStore(o.store) {
-		return &infrastructurePreparationCleanupError{owner: o, cause: cause}
+	// This runs inside the operation's owned worker, after canonical client
+	// closure. Observation expiry never releases its parent resources.
+	bootstrapPending, releaseFault, bootstrapErr := collectInfrastructureBootstrapCleanup(cause)
+	cause = errors.Join(cause, bootstrapErr)
+	if bootstrapPending || cleanupRetainsStore(cause, o.store) {
+		return newInfrastructurePreparationCleanupError(o, cause)
 	}
 	if o.store != nil {
 		if err := o.store.Close(); err != nil {
-			return &infrastructurePreparationCleanupError{owner: o, cause: errors.Join(cause, err)}
+			return newInfrastructurePreparationCleanupError(o, errors.Join(cause, err))
 		}
+		o.store = nil
+	}
+	if releaseFault {
+		// A retired Go handle is not proof of successful native release. Even
+		// without usable handles this fault must stop resident admission.
+		return newInfrastructurePreparationCleanupError(o, cause)
 	}
 	return cause
 }
@@ -84,6 +91,16 @@ func (o *infrastructurePreparationOwner) close(cause error) error {
 type infrastructurePreparationCleanupError struct {
 	owner *infrastructurePreparationOwner
 	cause error
+	done  <-chan struct{}
+}
+
+func newInfrastructurePreparationCleanupError(owner *infrastructurePreparationOwner, cause error) infrastructure.ResidentCleanupCompletion {
+	if cause == nil {
+		cause = os.ErrInvalid
+	}
+	done := make(chan struct{})
+	close(done)
+	return &infrastructurePreparationCleanupError{owner: owner, cause: cause, done: done}
 }
 
 func (e *infrastructurePreparationCleanupError) Error() string {
@@ -95,3 +112,9 @@ func (e *infrastructurePreparationCleanupError) Unwrap() error { return e.cause 
 // RetainsResidentCleanup tells the resident to retain this error's resource
 // graph and stop new admission. It is no native closure or launch permission.
 func (*infrastructurePreparationCleanupError) RetainsResidentCleanup() {}
+
+func (e *infrastructurePreparationCleanupError) CleanupDone() <-chan struct{} { return e.done }
+func (e *infrastructurePreparationCleanupError) CleanupErr() error            { return e.cause }
+func (e *infrastructurePreparationCleanupError) CleanupPending() bool {
+	return e.owner != nil && e.owner.store != nil
+}

@@ -14,7 +14,7 @@ import (
 // This extra owns no admission authority. It deterministically releases the
 // actual resource after the canonical Add checks but before its duplication.
 type admissionReleaseDuringDup struct {
-	resource   *taskdir.RootAdmissionLease
+	resource   *taskdir.LifetimeOwnerLease
 	original   *os.File
 	armed      bool
 	started    bool
@@ -53,15 +53,15 @@ func (l *admissionReleaseDuringDup) DuplicateControlLeaseFiles() ([]*os.File, er
 func TestControlAdmissionReleasedDuringDupDoesNotConsumePermit(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
 	fixture, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
-	resource := admissionTestLease(t, fixture.store)
+	resource := consumeTestLifetimeLease(t, fixture.store)
 	original := consumeTestDecoy(t)
 	interposer := &admissionReleaseDuringDup{resource: resource, original: original}
 	ctx := WithControlLease(WithControlLease(t.Context(), interposer), resource)
 	fake.client.options.ControlOwnerExecutable = os.Args[0]
 	fake.client.options.Observer = interposer.observe
 	_, err := fake.client.SubmitStaged(ctx, permit, launch, func(Observation) error { return nil })
-	if !errors.Is(err, os.ErrClosed) {
-		t.Errorf("released actual SH lost its cause: %v", err)
+	if !errors.Is(err, task.ErrPermitAlreadyUsed) || errors.Is(err, ErrSubmissionUncertain) {
+		t.Errorf("released actual lease did not refuse before Add: %v", err)
 	}
 	if permit.IsConsumed() {
 		t.Error("failed actual lease duplication spent the submission permit")
@@ -78,19 +78,23 @@ func TestControlAdmissionReleasedDuringDupDoesNotConsumePermit(t *testing.T) {
 	if closeErr := fake.client.Close(); closeErr != nil {
 		t.Error(closeErr)
 	}
-	exclusive, acquireErr := fixture.store.TryAcquireRootAdmissionExclusiveContext(t.Context())
-	if acquireErr != nil {
-		t.Errorf("failed preparation retained Root SH: %v", acquireErr)
+	control, openErr := fixture.store.OpenInfrastructureContext(t.Context(), true)
+	if openErr != nil {
+		t.Fatal(openErr)
 	}
-	if releaseErr := exclusive.Release(); releaseErr != nil {
-		t.Error(releaseErr)
+	candidate, acquireErr := control.TryAcquireLifetimeOwnerContext(t.Context())
+	if closeErr := errors.Join(candidate.Release(), control.Close()); closeErr != nil {
+		t.Error(closeErr)
+	}
+	if acquireErr != nil {
+		t.Errorf("released lifetime resource still busy: %v", acquireErr)
 	}
 }
 
 func TestControlOwnerConsumeFailureClosesPreparedResources(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
 	fixture := newTaskFixture(t, fake.client.Binding())
-	resource := admissionTestLease(t, fixture.store)
+	resource := consumeTestLifetimeLease(t, fixture.store)
 	interposer := &admissionReleaseDuringDup{original: consumeTestDecoy(t), armed: true}
 	ctx := WithControlLease(WithControlLease(t.Context(), resource), interposer)
 	fake.client.options.ControlOwnerExecutable = os.Args[0]
@@ -111,12 +115,16 @@ func TestControlOwnerConsumeFailureClosesPreparedResources(t *testing.T) {
 	if closeErr := fake.client.Close(); closeErr != nil {
 		t.Error(closeErr)
 	}
-	exclusive, acquireErr := fixture.store.TryAcquireRootAdmissionExclusiveContext(t.Context())
-	if releaseErr := exclusive.Release(); releaseErr != nil {
-		t.Error(releaseErr)
+	control, openErr := fixture.store.OpenInfrastructureContext(t.Context(), true)
+	if openErr != nil {
+		t.Fatal(openErr)
 	}
-	if !task.AllErrorCauses(acquireErr, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) }) {
-		t.Errorf("closing prepared copies unlocked the caller's actual SH: %v", acquireErr)
+	candidate, acquireErr := control.TryAcquireLifetimeOwnerContext(t.Context())
+	if closeErr := errors.Join(candidate.Release(), control.Close()); closeErr != nil {
+		t.Error(closeErr)
+	}
+	if !errors.Is(acquireErr, task.ErrLockBusy) {
+		t.Errorf("closing copies released caller's lifetime resource: %v", acquireErr)
 	}
 }
 
@@ -141,4 +149,22 @@ func assertConsumeDuplicatesClosed(t *testing.T, descriptors []*os.File) {
 			t.Errorf("prepared descriptor remains reachable: %v", err)
 		}
 	}
+}
+
+func consumeTestLifetimeLease(t *testing.T, store *taskdir.Store) *taskdir.LifetimeOwnerLease {
+	t.Helper()
+	control, err := store.OpenInfrastructureContext(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := control.AcquireLifetimeOwner(t.Context())
+	t.Cleanup(func() {
+		if closeErr := errors.Join(lease.Release(), control.Close()); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lease
 }

@@ -3,28 +3,15 @@ package infrastructure
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 )
 
 // The server mutex owns completion and delivery. Intent remains the sole owner
 // of the immutable purpose, context and original deadline.
-func (s *ownerServer) claimInitial() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.initialStarted {
-		return os.ErrClosed
-	}
-	s.initialStarted = true
-	return nil
-}
-
+// The runtime prepares once; that call's defer publishes completion once.
 func (s *ownerServer) completeInitial(outcome PreparationOutcome, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.initialCompleted {
-		return
-	}
 	if outcome != (PreparationOutcome{}) {
 		reference, referenceErr := ReferenceStartup(s.entry.operation.Intent())
 		if referenceErr != nil {
@@ -48,11 +35,11 @@ func (s *ownerServer) matchesInitial(work acceptedOwnerWork) bool {
 func (s *ownerServer) checkInitialRequest(work acceptedOwnerWork) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.terminalHandoff && !s.matchesInitial(work) {
-		return errOwnerWorkBusy
-	}
 	if work.request.InitialResultFor != (StartupReference{}) && !s.matchesInitial(work) {
 		return ErrIdentity
+	}
+	if s.terminalHandoff && !s.matchesInitial(work) {
+		return errOwnerWorkBusy
 	}
 	return nil
 }

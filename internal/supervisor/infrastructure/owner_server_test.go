@@ -35,7 +35,6 @@ type ownerServerTestHost struct {
 	recoverSaved func(context.Context, Operation, LaunchContext, SavedBindingSource, ResidentGuards, DaemonWaitOwner) (Disposition, error)
 	manual       func(context.Context, Operation, LaunchContext, ResidentGuards, DaemonWaitOwner) (Disposition, ManualMigrationReport, error)
 	classify     func(error) PreparationFailure
-	migrate      func(context.Context, Operation, LaunchContext, MigrationReference, ResidentGuards, DaemonWaitOwner) (Disposition, MigrationResult, error)
 }
 
 func (h *ownerServerTestHost) EnsureOwnRoot(ctx context.Context, operation Operation, selected LaunchContext, guard ResidentGuards, waits DaemonWaitOwner) (Disposition, error) {
@@ -57,13 +56,6 @@ func (h *ownerServerTestHost) PrepareContinuation(ctx context.Context, operation
 		return h.componentEntryHost.PrepareContinuation(ctx, operation, selected, source, guards, waits)
 	}
 	return h.continuation(ctx, operation, selected, source, guards, waits)
-}
-
-func (h *ownerServerTestHost) MigrateReferenced(ctx context.Context, operation Operation, selected LaunchContext, ref MigrationReference, guards ResidentGuards, waits DaemonWaitOwner) (Disposition, MigrationResult, error) {
-	if h.migrate == nil {
-		return h.componentEntryHost.MigrateReferenced(ctx, operation, selected, ref, guards, waits)
-	}
-	return h.migrate(ctx, operation, selected, ref, guards, waits)
 }
 
 func (h *ownerServerTestHost) MigrateOwnRoot(ctx context.Context, op Operation, selected LaunchContext, guards ResidentGuards, waits DaemonWaitOwner) (Disposition, ManualMigrationReport, error) {
@@ -148,6 +140,15 @@ func newOwnerServerFixtureWithSelection(t *testing.T, host *ownerServerTestHost,
 	return fixture
 }
 
+func (f *ownerServerFixture) birthContext(t *testing.T) LaunchContext {
+	t.Helper()
+	selected, err := f.entry.journal.readContext(t.Context(), f.entry.operation.defaultContextReference())
+	if err != nil {
+		t.Fatalf("read fixture birth context: %v", err)
+	}
+	return selected
+}
+
 func ownerServerIntentFixture(t *testing.T, journal *intentJournal, reference LaunchContextReference, selection ownerServerFixtureSelection) StartupIntent {
 	t.Helper()
 	intent := liveJournalIntent(t, journal)
@@ -156,7 +157,7 @@ func ownerServerIntentFixture(t *testing.T, journal *intentJournal, reference La
 		intent.Inputs.Artifacts = selection.artifacts
 	}
 	if intent.Inputs.Initial != (InitialOperation{}) {
-		intent.Protocol = startupInitialOperationProtocolVersion
+		intent.Protocol = RecordProtocolVersion
 	}
 	if !selection.deadline.IsZero() {
 		intent.Deadline = selection.deadline.UTC().Format(time.RFC3339Nano)
@@ -305,7 +306,7 @@ func TestOwnerServerStatusAndEnsureUseActualPublicationAndSelectedContext(t *tes
 	}
 }
 
-func TestOwnerServerDisconnectDoesNotCancelAcceptedWorkAndDrainClosesRegistration(t *testing.T) {
+func TestOwnerServerDisconnectDoesNotCancelAcceptedWorkAndDrainPreservesRegistration(t *testing.T) {
 	entered := make(chan context.Context, 1)
 	release := make(chan struct{})
 	var once sync.Once
@@ -368,8 +369,10 @@ func TestOwnerServerDisconnectDoesNotCancelAcceptedWorkAndDrainClosesRegistratio
 	default:
 		t.Fatal("handlers not drained")
 	}
-	if err := f.server.waits.RegisterDaemonWait(f.root, 1, done); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("late Wait registration accepted: %v", err)
+	// Callback drain does not join the canonical worker retained by the host.
+	// Resident cleanup owns the later registration boundary.
+	if err := f.server.waits.RegisterDaemonWait(f.root, 1, done); err != nil {
+		t.Fatalf("callback drain closed registration before resident cleanup: %v", err)
 	}
 	if err := f.entry.validateResident(t.Context()); err != nil {
 		t.Fatalf("transport fault closed resident: %v", err)
@@ -390,7 +393,7 @@ func awaitOwnerServerHost(t *testing.T, entered <-chan context.Context) context.
 func TestOwnerServerFixtureSelectsNativeContext(t *testing.T) {
 	fixture := newOwnerServerFixture(t, &ownerServerTestHost{})
 	operation := fixture.entry.operation
-	selected := operation.context.Clone()
+	selected := fixture.birthContext(t)
 	if selected.OS != runtime.GOOS {
 		t.Fatal("resident fixture selected a foreign operating system")
 	}

@@ -20,7 +20,7 @@ func (a *StartupAttempt) WaitForContact(ctx context.Context) error {
 func (a *StartupAttempt) waitForContact(ctx context.Context, ticks <-chan time.Time) error {
 	done := a.NativeCompletion()
 	for {
-		_, contacted, err := a.Observe(ctx)
+		contacted, err := a.Observe(ctx)
 		if err != nil {
 			return err
 		}
@@ -43,7 +43,7 @@ func (a *StartupAttempt) waitForContact(ctx context.Context, ticks <-chan time.T
 }
 
 func (a *StartupAttempt) completedBeforeContact(ctx context.Context) error {
-	_, _, observeErr := a.Observe(ctx)
+	_, observeErr := a.Observe(ctx)
 	waitErr, _ := a.NativeWaitError()
 	return errors.Join(fmt.Errorf("%w: accepted owner child exited before contact", ErrIdentity), observeErr, waitErr)
 }

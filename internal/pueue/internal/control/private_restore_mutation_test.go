@@ -124,7 +124,7 @@ func TestPrivateRestoreGenerationIsRecheckedAfterRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	changed := f.binding
-	changed.ClientSHA256 = task.ComputeSHA256([]byte("new generation"))
+	changed.ConfigDigest = task.ComputeSHA256([]byte("new config generation"))
 	writePrivateRestoreBinding(t, f, changed)
 	if err := checkPrivateRestoreGeneration(t.Context(), f.pin, f.binding); !errors.Is(err, ErrBinding) {
 		t.Fatalf("replacement publication: %v", err)

@@ -14,9 +14,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestRemoveCompletedTaskSerializesSubmissionAndRejectsReusedID(t *testing.T) {
+func TestPrivateMaintenanceSerializesSubmissionAndRejectsReusedID(t *testing.T) {
 	fixture := newNumericIDRemovalTestFixture(t)
-	removal := holdNumericIDRemovalTestCommand(t, fixture.supervisor.client, fixture.oldIdentity)
+	removal, release := holdNumericIDRemovalTestCommand(t, fixture.supervisor.client)
 
 	// Removal has already observed the old terminal row and started remove.
 	// A valid Submit must wait before it can consume its permit or issue add.
@@ -29,7 +29,8 @@ func TestRemoveCompletedTaskSerializesSubmissionAndRejectsReusedID(t *testing.T)
 	if !errors.Is(submitErr, context.DeadlineExceeded) || blocked.Matched {
 		t.Fatalf("submission interleaved with numeric-ID removal: observation=%+v err=%v", blocked, submitErr)
 	}
-	removal.finish(t)
+	release()
+	removal.requireCompleted(t)
 	gatePath := filepath.Join(filepath.Dir(fixture.supervisor.configPath), "numeric-remove-release")
 	if removeErr := os.Remove(gatePath); removeErr != nil {
 		t.Fatal(removeErr)
@@ -50,8 +51,13 @@ func assertNumericIDRemovalTestReuse(t *testing.T, fixture numericIDRemovalTestF
 	if addErr != nil || !added.Matched || added.NumericTaskID != 0 || added.State != StateQueued {
 		t.Fatalf("submission did not reuse the empty queue's ID after removal: observation=%+v err=%v", added, addErr)
 	}
-	if staleErr := fixture.supervisor.client.RemoveCompletedTask(ctx, fixture.oldIdentity); !errors.Is(staleErr, ErrUnknown) {
-		t.Fatalf("stale identity was allowed to remove a different terminal task at reused ID zero: %v", staleErr)
+	run := newPrivateQueueMaintenanceRun(fixture.supervisor.client, false)
+	staleErr := run.withBegunGeneration(ctx, func(lockedContext context.Context) error {
+		_, removeErr := run.worker.removeCapturedPrivateCleanup(lockedContext, fixture.capture)
+		return removeErr
+	})
+	if !errors.Is(staleErr, ErrCleanupAuthorization) {
+		t.Fatalf("stale capture was allowed to remove a different terminal task at reused ID zero: %v", staleErr)
 	}
 	retained, reconcileErr := fixture.supervisor.client.Reconcile(ctx, added.Identity)
 	if reconcileErr != nil || !retained.Matched || retained.NumericTaskID != 0 || retained.State != StateEnded {
@@ -64,10 +70,10 @@ func assertNumericIDRemovalTestReuse(t *testing.T, fixture numericIDRemovalTestF
 }
 
 type numericIDRemovalTestFixture struct {
-	supervisor  *fakeSupervisor
-	permit      *taskdir.SubmissionPermit
-	launch      Launch
-	oldIdentity Identity
+	supervisor *fakeSupervisor
+	permit     *taskdir.SubmissionPermit
+	launch     Launch
+	capture    privateCleanupCapture
 }
 
 func newNumericIDRemovalTestFixture(t *testing.T) numericIDRemovalTestFixture {
@@ -76,7 +82,7 @@ func newNumericIDRemovalTestFixture(t *testing.T) numericIDRemovalTestFixture {
 	writeExecutable(t, private.clientPath, numericIDRemovalTestScript+privateClientFixture)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second})
+	client, err := BindPrivate(ctx, private.clientPath, private.daemonPath, private.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: 10 * time.Second, SuccessfulCleanupAuthorizer: allowSuccessfulCleanupForTest})
 	supervisorLeaseTestSettleClient(t, client, err)
 	if err != nil {
 		t.Fatal(err)
@@ -117,13 +123,22 @@ func newNumericIDRemovalTestFixture(t *testing.T) numericIDRemovalTestFixture {
 	replacement := *fake
 	replacement.statusPath = filepath.Join(base, "numeric-replacement.json")
 	writeStatusFor(t, &replacement, record.RootID, record.TaskID, id, StateEnded)
+	var capture privateCleanupCapture
+	run := newPrivateQueueMaintenanceRun(client, false)
+	if err = run.withBegunGeneration(ctx, func(lockedContext context.Context) error {
+		var captureErr error
+		capture, captureErr = run.worker.capturePrivateCleanup(lockedContext, false)
+		return captureErr
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return numericIDRemovalTestFixture{
-		supervisor: fake, permit: permit, oldIdentity: oldIdentity,
+		supervisor: fake, permit: permit, capture: capture,
 		launch: Launch{RunnerExecutable: private.clientPath, RootPath: newTask.store.Root},
 	}
 }
 
-func holdNumericIDRemovalTestCommand(t *testing.T, client *Client, identity Identity) *supervisorLeaseTestCallback {
+func holdNumericIDRemovalTestCommand(t *testing.T, client *Client) (*privateMaintenancePassRun, func()) {
 	t.Helper()
 	gatePath := filepath.Join(filepath.Dir(client.Binding().ConfigPath), "numeric-remove-release")
 	if err := unix.Mkfifo(gatePath, 0o600); err != nil {
@@ -142,39 +157,21 @@ func holdNumericIDRemovalTestCommand(t *testing.T, client *Client, identity Iden
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	call := &supervisorLeaseTestCallback{entered: make(chan struct{}), done: make(chan struct{})}
-	signalStarted := sync.OnceFunc(func() { close(call.entered) })
+	started := make(chan struct{})
+	signalStarted := sync.OnceFunc(func() { close(started) })
 	remover.options.Observer = func(event CommandEvent) {
 		if event.Stage == "started" && len(event.Argv) > 3 && event.Argv[3] == "remove" {
 			signalStarted()
 		}
 	}
-	call.release = sync.OnceFunc(func() {
+	release := sync.OnceFunc(func() {
 		if _, writeErr := gate.WriteString("release\n"); writeErr != nil {
 			t.Error(writeErr)
 		}
 	})
-	t.Cleanup(func() {
-		call.release()
-		cancel()
-		<-call.done
-		for _, pending := range pendingHandles(call.err) {
-			waitPending(t, pending)
-		}
-	})
-	go func() {
-		call.err = remover.RemoveCompletedTask(ctx, identity)
-		close(call.done)
-	}()
-	select {
-	case <-call.entered:
-	case <-call.done:
-		t.Fatalf("removal returned before its mutation command started: %v", call.err)
-	case <-ctx.Done():
-		t.Fatalf("removal did not reach its controlled command boundary: %v", ctx.Err())
-	}
-	return call
+	pass := startPrivateMaintenancePass(t, remover, release)
+	pass.awaitBeforeCompletion(t, started, "cleanup removal command")
+	return pass, release
 }
 
 const numericIDRemovalTestScript = `#!/bin/sh

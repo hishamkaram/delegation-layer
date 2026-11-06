@@ -40,31 +40,32 @@ HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
-class BinaryDigests:
-    """The SHA-256 of each bundled binary, one field per name in ``BINARIES``."""
+class InstalledExecutables:
+    """The installation resolver's four selected paths, never executable byte identities."""
 
-    delegate: str
-    delegate_run: str
-    pueue: str
-    pueued: str
+    delegate: Path
+    delegate_run: Path
+    pueue: Path
+    pueued: Path
 
     def __post_init__(self) -> None:
-        if not all(isinstance(value, str) and HEX_SHA256.fullmatch(value) is not None
-                   for value in self.as_mapping().values()):
-            raise VerificationError("binary_digests_invalid", "validate-binaries")
+        if not all(isinstance(path, Path) and path.is_absolute()
+                   and not any(char in str(path) for char in "\t\r\n\0")
+                   and ".." not in path.parts for path in self.as_mapping().values()):
+            raise VerificationError("installed_executables_invalid", "validate-binaries")
 
-    def as_mapping(self) -> dict[str, str]:
+    def as_mapping(self) -> dict[str, Path]:
         return dict(zip(BINARIES, (self.delegate, self.delegate_run, self.pueue, self.pueued)))
 
+    def to_record(self) -> dict[str, object]:
+        return {"schema_version": 1, "representation": "installed-paths",
+                "paths": {name: str(path) for name, path in self.as_mapping().items()}}
 
-def parse_binary_digests(value: object, stage: str) -> BinaryDigests:
-    """Read the exact binary-name to digest object; no name may be missing or extra."""
-    if not isinstance(value, dict) or set(value) != set(BINARIES):
-        raise VerificationError("binary_digests_invalid", stage)
-    try:
-        return BinaryDigests(*(value[name] for name in BINARIES))
-    except VerificationError:
-        raise VerificationError("binary_digests_invalid", stage) from None
+
+def installed_executables(paths: dict[str, Path]) -> InstalledExecutables:
+    if set(paths) != set(BINARIES):
+        raise VerificationError("installed_executables_invalid", "validate-binaries")
+    return InstalledExecutables(*(paths[name] for name in BINARIES))
 
 
 TAG_RE = re.compile(r"^v([0-9]+\.[0-9]+\.[0-9]+)$")
@@ -120,7 +121,8 @@ def binary_version(output: bytes, name: str) -> str:
 def new_receipt(kind: str, tag: str, revision: str) -> dict:
     match = TAG_RE.fullmatch(tag)
     return {
-        "schema_version": 1, "claim": "packaged-default-path", "gate": kind,
+        "schema_version": 1, "executable_representation": "installed-paths-v1",
+        "claim": "packaged-default-path", "gate": kind,
         "verdict": "in_progress", "stage": "initialize", "tag": tag,
         "package_version": match.group(1) if match else None,
         # source_revision is retained as a compatibility label for older
@@ -242,24 +244,17 @@ def _native_case_hashes(aggregate: dict, receipt: dict) -> list[dict]:
     aggregate_cases = aggregate.get("cases")
     if not isinstance(aggregate_cases, list):
         raise VerificationError("aggregate_receipt_invalid", "validate-aggregate-receipt")
-    expected_case_binaries = {
-        "delegate_sha256": receipt["binaries"]["delegate"]["sha256"],
-        "runner_sha256": receipt["binaries"]["delegate-run"]["sha256"],
-        "pueue_sha256": receipt["binaries"]["pueue"]["sha256"],
-        "pueued_sha256": receipt["binaries"]["pueued"]["sha256"],
-    }
+    expected = {name: value["path"] for name, value in receipt["binaries"].items()}
     for case in aggregate_cases:
-        if (not isinstance(case, dict) or case.get("status") != "PASS"
-                or case.get("evidence_status") != "RESOLVED"):
+        if not isinstance(case, dict):
+            raise VerificationError("aggregate_receipt_invalid", "validate-aggregate-receipt")
+        if case.get("status") != "PASS" or case.get("evidence_status") != "RESOLVED":
             continue
         identities = case.get("binary_identities")
-        hashes = identities.get("sha256") if isinstance(identities, dict) else None
-        if (not isinstance(hashes, dict) or identities.get("state") != "complete"
-                or any(hashes.get(key) != digest
-                       for key, digest in expected_case_binaries.items())):
-            raise VerificationError(
-                "native_case_binary_identity_mismatch", "validate-binary-identity",
-            )
+        if (not isinstance(identities, dict) or identities.get("schema_version") != 2
+                or identities.get("representation") != "installed-paths"
+                or identities.get("state") != "complete" or identities.get("paths") != expected):
+            raise VerificationError("native_case_binary_selection_mismatch", "validate-binary-identity")
     case_hashes = [
         {
             "case_id": case["case_id"], "provider": case["provider"],

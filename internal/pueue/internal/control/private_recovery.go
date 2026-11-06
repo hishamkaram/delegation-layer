@@ -133,38 +133,6 @@ func (c *Client) persistPrivateRecoveryData(stateRoot string, data []byte) error
 	return recoverPrivateRecoveryPublication(stateRoot)
 }
 
-// ClearPrivateRecoveryBinding removes a completed legacy runtime alias. It
-// is idempotent and only removes a record that matches the requested legacy
-// logical identity. The caller holds the root bootstrap lock for exact replay.
-// An actual removal requires a Client method carrying resident authority.
-func ClearPrivateRecoveryBinding(stateRoot string, saved task.SupervisorRef) error {
-	return clearPrivateRecoveryBindingContext(context.Background(), stateRoot, &saved, nil)
-}
-
-// ClearPrivateRecoveryBindingIfPresent is idempotent after an authorized
-// cleanup. If alias artifacts remain without their record, it refuses to
-// remove ambiguous recovery data; RetirePrivateRecoveryBinding owns that
-// cleanup after proving the completed successor and migration history. The
-// caller holds the root bootstrap lock; present aliases require resident authority.
-func ClearPrivateRecoveryBindingIfPresent(stateRoot string) error {
-	return clearPrivateRecoveryBindingContext(context.Background(), stateRoot, nil, nil)
-}
-
-// RetirePrivateRecoveryBinding removes a legacy runtime alias after the caller
-// has proved that the published successor is ready. The alias predecessor must
-// resolve through the completed migration history to the exact supplied
-// successor, including its full executable and resolver provenance. Production
-// callers hold the state-root bootstrap lock while invoking this function.
-func RetirePrivateRecoveryBinding(stateRoot string, successor task.SupervisorRef) error {
-	return retirePrivateRecoveryBinding(context.Background(), stateRoot, successor, nil, nil)
-}
-
-// RetirePrivateRecoveryBindingContext is the bounded form used by lifecycle
-// owners that already carry a transition deadline.
-func RetirePrivateRecoveryBindingContext(ctx context.Context, stateRoot string, successor task.SupervisorRef) error {
-	return retirePrivateRecoveryBinding(ctx, stateRoot, successor, nil, nil)
-}
-
 // Only same-generation explicit migration supplies authorizeQuiescent. The
 // callback is used for a validated self-alias without completed history and
 // runs under the caller's existing EX lease before the canonical removal.
@@ -328,7 +296,7 @@ func privateRecoveryRuntimeMatchesPublished(stateRoot string, runtime, published
 	return privateBindingsMatch(record.Supervisor, published) && privateBindingsMatch(runtime, published), nil
 }
 
-func clearPrivateRecoveryBindingContext(ctx context.Context, stateRoot string, expected *task.SupervisorRef, guard PrivateGenerationGuard) error {
+func clearPrivateRecoveryBindingContext(ctx context.Context, stateRoot string, expected task.SupervisorRef, guard PrivateGenerationGuard) error {
 	if ctx == nil {
 		return context.Canceled
 	}
@@ -348,7 +316,7 @@ func clearPrivateRecoveryBindingContext(ctx context.Context, stateRoot string, e
 		return clearPrivateRecoveryAliasWithoutRecord(stateRoot, false)
 	}
 	return guardPrivateGeneration(ctx, stateRoot, guard, func() error {
-		return clearPrivateRecoveryBindingAuthorized(stateRoot, expected, false)
+		return clearPrivateRecoveryBindingAuthorized(stateRoot, &expected, false)
 	})
 }
 
@@ -632,22 +600,33 @@ func recoverPrivateRecoveryBinding(ctx context.Context, stateRoot string, saved 
 	return bindPrivateRecoveryClient(ctx, stateRoot, record, saved, clientExecutable, daemonExecutable, options)
 }
 
-func bindPrivateRecoveryClient(ctx context.Context, operationRoot string, record privateRecoveryBindingRecord, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, bool, error) {
+func bindPrivateRecoveryTransport(ctx context.Context, record privateRecoveryBindingRecord, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
 	client, err := Bind(ctx, clientExecutable, record.ConfigPath, options)
 	if err != nil {
-		return nil, false, true, errors.Join(err, client.CloseAfterPending(err))
+		return nil, errors.Join(err, client.CloseAfterPending(err))
 	}
 	if client.Binding().Endpoint != saved.Endpoint {
-		return nil, false, true, errors.Join(ErrBinding, client.Close())
+		return nil, errors.Join(ErrBinding, client.Close())
 	}
 	if err = attachPrivateDaemon(client, daemonExecutable); err != nil {
-		return nil, false, true, errors.Join(err, client.Close())
+		return nil, errors.Join(err, client.Close())
 	}
 	client.binding = saved
+	return client, nil
+}
+
+func bindPrivateRecoveryClient(ctx context.Context, operationRoot string, record privateRecoveryBindingRecord, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, bool, error) {
+	client, err := bindPrivateRecoveryTransport(ctx, record, saved, clientExecutable, daemonExecutable, options)
+	if err != nil {
+		return nil, false, true, err
+	}
 	if constructionErr := recordPrivateClientConstruction(client, operationRoot); constructionErr != nil {
 		return nil, false, true, errors.Join(constructionErr, client.CloseAfterPending(constructionErr))
 	}
 	observation, err := client.availableForTransition(ctx, true)
+	if err == nil && !observation.ready() {
+		err = client.validatePrivateGenerationLaunch(operationRoot)
+	}
 	if err == nil {
 		err = client.closeRefusedPrivateEndpoint(ctx, observation)
 	}
@@ -657,7 +636,7 @@ func bindPrivateRecoveryClient(ctx context.Context, operationRoot string, record
 	if observation.ready() {
 		return client, false, true, nil
 	}
-	if err = startDaemon(ctx, operationRoot, client.runtimeBinding.DaemonExecutable, client.runtimeBinding.DaemonSHA256, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
+	if err = startDaemon(ctx, operationRoot, client.runtimeBinding.DaemonExecutable, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
 		return nil, false, true, errors.Join(err, client.Close())
 	}
 	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
@@ -692,7 +671,7 @@ func (c *Client) ClearPrivateRecoveryBindingWithLock(ctx context.Context, stateR
 	if c == nil {
 		return ErrConfiguration
 	}
-	return clearPrivateRecoveryBindingContext(ctx, stateRoot, &saved, c.options.PrivateGenerationGuard)
+	return clearPrivateRecoveryBindingContext(ctx, stateRoot, saved, c.options.PrivateGenerationGuard)
 }
 
 // RetirePrivateRecoveryBindingContext uses this client's resident authority for

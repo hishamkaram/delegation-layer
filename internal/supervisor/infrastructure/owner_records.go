@@ -124,12 +124,11 @@ type OwnerPublication struct {
 	Protocol         int              `json:"protocol"`
 	Startup          StartupReference `json:"startup"`
 	AssumptionSHA256 string           `json:"assumption_sha256"`
-	RuntimeSHA256    string           `json:"runtime_sha256"`
 	Endpoint         EndpointIdentity `json:"endpoint"`
 }
 
 func (p OwnerPublication) Validate(intent StartupIntent, assumption StartupAssumption) error {
-	if p.Protocol != ProtocolVersion {
+	if p.Protocol != RecordProtocolVersion {
 		return ErrIdentity
 	}
 	if err := p.Startup.validateIntent(intent); err != nil {
@@ -139,14 +138,9 @@ func (p OwnerPublication) Validate(intent StartupIntent, assumption StartupAssum
 	if err != nil {
 		return err
 	}
-	if digest != p.AssumptionSHA256 || task.ValidateSHA256(p.RuntimeSHA256) != nil {
+	if digest != p.AssumptionSHA256 {
 		return ErrIdentity
 	}
-	if intent.Inputs.Kind == StartupRootOwner && p.RuntimeSHA256 != intent.Inputs.Artifacts.RunnerSHA256 {
-		return fmt.Errorf("%w: published runtime differs from startup custody", ErrIdentity)
-	}
-	// Upgrade runtime identity is checked against its sole lifecycle artifact
-	// authority by the lifecycle owner, before fixed entry publishes anything.
 	return p.Endpoint.validate(intent)
 }
 

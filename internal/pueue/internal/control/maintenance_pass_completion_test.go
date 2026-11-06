@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 )
 
 // privateMaintenancePassRun is one opportunistic maintenance attempt observed
@@ -24,24 +25,28 @@ type privateMaintenancePassRun struct {
 // command returned by the attempt exits naturally, so the fixture client
 // closes only after the pass releases its resources.
 func startPrivateMaintenancePass(t *testing.T, client *Client, release func()) *privateMaintenancePassRun {
+	return startPrivateMaintenancePassContext(t, t.Context(), client, release)
+}
+
+func startPrivateMaintenancePassContext(t *testing.T, parent context.Context, client *Client, release func()) *privateMaintenancePassRun {
 	t.Helper()
 	finish, _, available := client.beginPrivateMaintenance()
 	if finish == nil {
 		t.Fatalf("private maintenance work was not admitted: available=%t", available)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), privateQueueMaintenanceTimeout(client.options.ObservationTimeout))
+	ctx, cancel := context.WithTimeout(parent, privateQueueMaintenanceTimeout(client.options.ObservationTimeout))
 	pass := &privateMaintenancePassRun{ctx: ctx, done: make(chan struct{})}
 	t.Cleanup(func() {
 		release()
 		cancel()
 		<-pass.done
-		if !retainPrivateQueueWorkUntilPending(pass.err, finish) {
-			finish()
-		}
 	})
 	go func() {
 		defer close(pass.done)
 		pass.skipped, pass.err = newPrivateQueueMaintenanceRun(client, false).attempt(ctx)
+		if !retainPrivateQueueWorkUntilPending(pass.err, finish) {
+			finish()
+		}
 	}()
 	return pass
 }
@@ -63,18 +68,26 @@ func (pass *privateMaintenancePassRun) awaitBeforeCompletion(t *testing.T, event
 // finished its pass without error within the derived budget.
 func (pass *privateMaintenancePassRun) requireCompleted(t *testing.T) {
 	t.Helper()
+	skipped, err := pass.result(t)
+	if skipped || err != nil {
+		t.Fatalf("private maintenance pass did not complete: skipped=%t err=%v", skipped, err)
+	}
+}
+
+// result keeps failure tests attached to the actual pass completion. Expiring
+// its observer does not release fixture paths before the pass returns.
+func (pass *privateMaintenancePassRun) result(t *testing.T) (bool, error) {
+	t.Helper()
 	select {
 	case <-pass.done:
 	case <-pass.ctx.Done():
 		select {
 		case <-pass.done:
-		default:
-			t.Fatalf("private maintenance pass exceeded its derived budget: %v", pass.ctx.Err())
+		case <-time.After(DefaultObservationTimeout):
+			t.Fatalf("private maintenance pass did not return after its derived budget: %v", pass.ctx.Err())
 		}
 	}
-	if pass.skipped || pass.err != nil {
-		t.Fatalf("private maintenance pass did not complete: skipped=%t err=%v", pass.skipped, pass.err)
-	}
+	return pass.skipped, pass.err
 }
 
 // assertDeferredMaintenanceStatusOnly proves that a deferred opportunistic

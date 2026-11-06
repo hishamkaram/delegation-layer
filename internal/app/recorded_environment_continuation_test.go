@@ -179,6 +179,7 @@ type candidateCapture struct {
 }
 
 type recordedEnvironmentFixture struct {
+	component  *componentSupervisorFixture
 	testCase   recordedEnvironmentCase
 	root       string
 	workspace  string
@@ -247,6 +248,10 @@ func newRecordedEnvironmentFixtureWith(t *testing.T, testCase recordedEnvironmen
 		saved: newLaunchSelectors(t, base, "saved"), caller: newLaunchSelectors(t, base, "caller"), ambient: newLaunchSelectors(t, base, "ambient"),
 		predecessorID: strings.Repeat("a", 32),
 	}
+	if options.supervisor == recordedPrivateSupervisor {
+		fixture.component = newComponentSupervisorFixtureIn(t, componentFiniteDaemon, base)
+		fixture.root = fixture.component.root
+	}
 	for _, dir := range []string{fixture.workspace, fixture.cliDir} {
 		if err = os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -259,6 +264,7 @@ func newRecordedEnvironmentFixtureWith(t *testing.T, testCase recordedEnvironmen
 	}
 	writeRunnerFixture(t, filepath.Join(fixture.cliDir, testCase.binary), providerScript)
 	supervisorOptions, clientPath := fixture.bindSupervisor(t, options.supervisor)
+	supervisorOptions.ControlOwnerExecutable = canonicalAppTestExecutable(t)
 	t.Cleanup(func() {
 		if err := fixture.supervisor.Close(); err != nil {
 			t.Error(err)
@@ -268,6 +274,9 @@ func newRecordedEnvironmentFixtureWith(t *testing.T, testCase recordedEnvironmen
 		ResourceChecker: fixtureResources,
 		Catalog:         fixture.capturingCatalog(t), SupervisorOptions: supervisorOptions, RunnerExecutable: fixture.runner,
 		InitialSupervisorExecutable: clientPath,
+	}
+	if fixture.component != nil {
+		fixture.deps = withSupervisorProbeRouting(t, fixture.deps, fixture.component)
 	}
 	fixture.saved.apply(t, fixture.cliDir)
 	fixture.admitSealedPredecessor(t)
@@ -296,7 +305,7 @@ func (f *recordedEnvironmentFixture) bindSupervisor(t *testing.T, kind recordedS
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	supervisor, options, clientPath := bindRefusedContinuePair(t, f.root, rootID)
+	supervisor, options, clientPath := bindRefusedContinuePair(t, f.component, rootID)
 	f.supervisor, f.submissions = supervisor, filepath.Join(filepath.Dir(supervisor.Binding().ConfigPath), "submissions")
 	return options, clientPath
 }

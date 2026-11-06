@@ -390,18 +390,12 @@ func newInspectionWorkerStartupFixtureWithExitProof(t *testing.T, runnerOwnershi
 		t.Fatal(closeErr)
 	}
 	worker := canonicalAppTestExecutable(t)
-	workerSHA, err := commonprovider.FingerprintExecutable(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
+	workerSHA := strings.Repeat("b", 64) // historical executable identity DATA
 	helper, err := filepath.EvalSymlinks("/usr/bin/true")
 	if err != nil {
 		t.Fatal(err)
 	}
-	helperSHA, err := commonprovider.FingerprintExecutable(helper)
-	if err != nil {
-		t.Fatal(err)
-	}
+	helperSHA := strings.Repeat("c", 64) // historical executable identity DATA
 	operation, err := inspection.OpenOperation(store, newBareInspectionRequest(t, store), inspection.Binding{
 		DefinitionRevision: "inspection-v1",
 		DefinitionSHA256:   strings.Repeat("a", 64),
@@ -416,7 +410,7 @@ func newInspectionWorkerStartupFixtureWithExitProof(t *testing.T, runnerOwnershi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = validateInspectionWorkerStartup(t.Context(), store.Root, operation, operation.Request().Binding); err != nil {
+	if err = validateInspectionWorkerStartup(t.Context(), store.Root, operation, operation.Request().Binding, ""); err != nil {
 		t.Fatalf("invalid inspection-worker startup fixture: %v", err)
 	}
 	t.Cleanup(func() {

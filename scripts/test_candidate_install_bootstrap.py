@@ -16,7 +16,6 @@ from pathlib import Path
 import os
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 from typing import TypeVar
 from unittest import mock
@@ -28,6 +27,9 @@ from scripts.acceptance_tests import candidate_fixtures as fx
 from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
 from scripts.delegate_acceptance.directories import operations
 from scripts.delegate_acceptance.private_cli import capture, finalization, leases, root_cleanup, supervisor
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import (
+    FixtureLifetime, SupervisorCleanup, PredecessorCleanup,
+)
 from scripts.delegate_acceptance.private_cli.packaged_defaults import (
     INSTALLED_BINARIES, AdmittedTask, InstalledBootstrap, isolated_default_state_path, register_installed_default,
     shutdown_installed_default,
@@ -38,7 +40,7 @@ from scripts.delegate_acceptance.release_verification import candidate_install_b
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
     BOOTSTRAP_SHUTDOWN, BootstrapTarget,
 )
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.delegate_acceptance.release_verification.contract import VerificationError, installed_executables
 
 
 ROOT_ID = "1" * 32
@@ -71,7 +73,7 @@ class ProbeCase(unittest.TestCase):
             path.chmod(0o755)
         self.target = BootstrapTarget(
             command_directory=self.installed, delegate=(self.installed / "delegate").resolve(),
-            supervisor_directory=self.installed, binaries=fx.NATIVE_BINARIES)
+            supervisor_directory=self.installed, binaries=installed_executables({name: (self.installed / name).resolve() for name in INSTALLED_BINARIES}))
         self.receipt: dict = {"candidate_install": {}}
         self.locations: dict[str, Path] = {}
         self.probe = bootstrap.InstalledBootstrapProbe(receipt=self.receipt, locations=self.locations,
@@ -178,8 +180,8 @@ class ProbeCase(unittest.TestCase):
 class SuccessTests(ProbeCase):
     def test_a_closed_turn_maps_to_the_observation_and_removes_the_root(self):
         result = InstalledBootstrap(
-            root_id=ROOT_ID, task_id=TASK_ID, delegate_sha256="4" * 64, runner_sha256="5" * 64,
-            client_sha256="6" * 64, daemon_sha256="7" * 64, outcome="committed", worker_result="success",
+            root_id=ROOT_ID, task_id=TASK_ID, delegate=self.target.binaries.delegate, runner=self.target.binaries.delegate_run,
+            client=self.target.binaries.pueue, daemon=self.target.binaries.pueued, outcome="committed", worker_result="success",
             termination_cause="completed", scope_empty=True)
         def closed(installed, _ledger):
             self.make_state(installed)
@@ -187,7 +189,7 @@ class SuccessTests(ProbeCase):
 
         with self.core(closed):
             observation = self.probe(self.target)
-        self.assertEqual(observation, fx.bootstrap(fx.NATIVE_BINARIES))
+        self.assertEqual(observation, fx.bootstrap(self.target.binaries))
         self.assertEqual(observation.shutdown, BOOTSTRAP_SHUTDOWN)
         (installed, capture), = self.installs
         root = self.locations["bootstrap_root"]
@@ -196,7 +198,7 @@ class SuccessTests(ProbeCase):
         self.assertEqual(installed.delegate, self.installed / "delegate")
         self.assertEqual(installed.env["PATH"].split(":")[0], str(self.installed))
         self.assertEqual(installed.env["HOME"], str(root / "h"))
-        self.assertEqual(dict(installed.digests), fx.NATIVE_BINARIES.as_mapping())
+        self.assertEqual(dict(installed.executables), self.target.binaries.as_mapping())
         self.assertEqual(capture.directory, root / "c")
         self.assertEqual((self.facts()["status"], self.facts()["task_id"]), ("verified", TASK_ID))
 
@@ -344,8 +346,8 @@ class OwnershipTests(ProbeCase):
 
     def verified(self, outcome=None):
         result = InstalledBootstrap(
-            root_id=ROOT_ID, task_id=TASK_ID, delegate_sha256="4" * 64, runner_sha256="5" * 64,
-            client_sha256="6" * 64, daemon_sha256="7" * 64, outcome="committed", worker_result="success",
+            root_id=ROOT_ID, task_id=TASK_ID, delegate=self.target.binaries.delegate, runner=self.target.binaries.delegate_run,
+            client=self.target.binaries.pueue, daemon=self.target.binaries.pueued, outcome="committed", worker_result="success",
             termination_cause="completed", scope_empty=True)
 
         def run(installed, ledger):
@@ -460,8 +462,8 @@ class DisposalLeaseTests(ProbeCase):
         if after is not None:
             after(installed, disposal)
         return InstalledBootstrap(
-            root_id=ROOT_ID, task_id=TASK_ID, delegate_sha256="4" * 64, runner_sha256="5" * 64,
-            client_sha256="6" * 64, daemon_sha256="7" * 64, outcome="committed",
+            root_id=ROOT_ID, task_id=TASK_ID, delegate=self.target.binaries.delegate, runner=self.target.binaries.delegate_run,
+            client=self.target.binaries.pueue, daemon=self.target.binaries.pueued, outcome="committed",
             worker_result=task["worker_wait"]["result"], termination_cause="completed", scope_empty=True)
 
     def shut_down_core(self, *, after=None):
@@ -669,7 +671,7 @@ class FailureTests(ProbeCase):
         (shadow / "delegate").write_bytes(b"#!/bin/sh\nexit 0\n")
         (shadow / "delegate").chmod(0o755)
         self.target = BootstrapTarget(command_directory=shadow, delegate=self.target.delegate,
-                                      supervisor_directory=self.installed, binaries=fx.NATIVE_BINARIES)
+                                      supervisor_directory=self.installed, binaries=installed_executables({name: (self.installed / name).resolve() for name in INSTALLED_BINARIES}))
         with self.core(lambda _installed, _ledger: self.fail("the core must not run")):
             self.assertRetained("candidate_bootstrap_delegate_mismatch")
         self.assertEqual(self.facts()["delegate"], str(shadow / "delegate"))
@@ -743,9 +745,9 @@ class PendingSupervisorCloserTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-pending-closer-")
         self.addCleanup(temporary.cleanup)
         self.config = Path(temporary.name) / "pueue.yml"
-        self.pending = {"client": Path("pueue"), "config": self.config, "env": {}, "state": Path(temporary.name),
+        self.pending: SupervisorCleanup = {"client": Path("pueue"), "config": self.config, "env": {}, "state": Path(temporary.name),
                         "task_ids": [TASK_ID]}
-        self.ledger = [self.pending]
+        self.ledger: list[SupervisorCleanup | PredecessorCleanup] = [self.pending]
 
     def test_an_absent_config_is_no_closure_and_keeps_the_entry(self):
         with mock.patch.object(supervisor, "shutdown_private_supervisor") as down:
@@ -772,15 +774,17 @@ class PendingSupervisorCloserTests(unittest.TestCase):
                       supervisor.shutdown_pending_private_supervisor)
         self.assertIs(bootstrap.shutdown_pending_private_supervisor,
                       supervisor.shutdown_pending_private_supervisor)
-        lifetime = SimpleNamespace(
-            supervisor_cleanups=self.ledger, base_token="root-token", capture_token="capture-token")
+        lifetime = FixtureLifetime(
+            supervisor_cleanups=self.ledger, capture_token=mock.Mock(spec=operations.OwnedDirectory))
         errors = []
         disposal = object()
         with mock.patch.object(finalization, "shutdown_pending_private_supervisor",
                                side_effect=RuntimeError("unverified")) as closer:
             self.assertEqual(
                 finalization.shutdown_supplemental_supervisors(errors, lifetime, disposal=disposal), frozenset())
-        closer.assert_called_once_with(self.pending, self.ledger, capture_root="capture-token", disposal=disposal)
+        closer.assert_called_once_with(
+            self.pending, self.ledger, capture_root=lifetime.capture_token, disposal=disposal,
+            reader=None, deadline=None)
         self.assertEqual(len(errors), 1)
         self.assertIn("packaged default supervisor shutdown remained unverified", str(errors[0]))
 

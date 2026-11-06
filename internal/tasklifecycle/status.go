@@ -66,7 +66,7 @@ func StatusContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDi
 		result.Pending = uncertaintyPending(err)
 	case client != nil:
 		defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
-		observation, reconcileErr = reconcileStatusAttempt(ctx, store.Root, td, req, meta, spec, metaHash, prepared, &result.Observation, store, options.RootAdmission)
+		observation, reconcileErr = reconcileStatusAttempt(ctx, store.Root, td, req, meta, spec, metaHash, prepared, &result.Observation)
 	default:
 		observation, reconcileErr = ReconcileStatus(ctx, store.Root, td, req, meta, spec, metaHash, options, &result.Observation)
 	}
@@ -125,8 +125,5 @@ func ReconcileStatus(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		return pueue.Observation{}, supervisorcore.ClosePrivateAdmissionTransition(client, err)
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
-	if options.AdmissionStore != nil {
-		return ReconcileStatusWithClientAndAdmissionContext(ctx, options.AdmissionStore, options.RootAdmission, td, req, meta, spec, metaHash, client, observed)
-	}
 	return ReconcileStatusWithClient(ctx, root, td, req, meta, spec, metaHash, client, observed)
 }

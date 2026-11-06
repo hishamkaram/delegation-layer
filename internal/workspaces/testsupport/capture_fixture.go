@@ -24,6 +24,12 @@ func NewResource(t *testing.T) (*taskdir.Store, *workspace.Resource) {
 			t.Error(closeErr)
 		}
 	})
+	return store, NewResourceInStore(t, store)
+}
+
+// NewResourceInStore borrows the caller-owned Store and owns only the Resource.
+func NewResourceInStore(t *testing.T, store *taskdir.Store) *workspace.Resource {
+	t.Helper()
 	resource, err := workspace.EstablishResource(t.Context(), store, workspace.ResourceRequest{
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID,
 		WorkspaceID: strings.Repeat("b", 32), TaskID: strings.Repeat("c", 32),
@@ -39,7 +45,7 @@ func NewResource(t *testing.T) (*taskdir.Store, *workspace.Resource) {
 			t.Error(closeErr)
 		}
 	})
-	return store, resource
+	return resource
 }
 
 func RecordRecoveredCaptureCandidate(t *testing.T, fixture *RecoveryFixture, operation *workspace.Operation) {

@@ -11,7 +11,7 @@ import subprocess
 from typing import TypedDict
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
-from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
+from scripts.delegate_acceptance.private_cli.leases import DisposalLeases, LockedReleaseGate, _HeldDisposal
 from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget
 
 
@@ -30,6 +30,13 @@ class PredecessorCleanup(TypedDict):
     env: dict[str, str]
     task_ids: list[str]
     predecessor: PredecessorShutdownTarget
+
+
+class ClosedRoot(TypedDict):
+    """Shutdown's authorizing closure borrowed under the exact still-held disposal lease."""
+
+    closure: dict[str, object]
+    disposal: _HeldDisposal
 
 
 @dataclass
@@ -52,6 +59,9 @@ class FixtureLifetime:
     upgraded_libexec: Path | None = None
     supervisor_cleanups: list[SupervisorCleanup | PredecessorCleanup] = field(default_factory=list)
     managed_state_roots: list[tuple[Path, list[str]]] = field(default_factory=list)
+    # Scenario cleanup adds a root only after its owner and daemon fully close.
+    # Finalization reads this ledger to avoid new observation or double teardown.
+    closed_roots: dict[Path, ClosedRoot | None] = field(default_factory=dict)
     handoff_cleanup_bindings: list[SupervisorCleanup] = field(default_factory=list)
     attempted_task_ids: list[str] = field(default_factory=list)
     # Bound only by a composition whose selected Delegate CLI and attempted IDs
@@ -60,7 +70,7 @@ class FixtureLifetime:
     primary_observer: Callable[[str, float], str] | None = None
     # Scenario-owned preparation runs before primary readiness, under the same
     # absolute deadline. It must close child roots before parent disposal.
-    prepare_cleanup: Callable[[float], None] | None = None
+    prepare_cleanup: Callable[[float, DisposalLeases], None] | None = None
     # The canonical reader remains the default. A scenario may bind its
     # explicit canonical Go never-launched proof port; no result is cached.
     closure_reader: Callable[[Path, tuple[str, ...]], dict[str, object]] | None = None

@@ -57,8 +57,8 @@ func evidenceForIntent(t *testing.T, intent StartupIntent) (StartupAssumption, O
 		t.Fatal(err)
 	}
 	publication := OwnerPublication{
-		Protocol: ProtocolVersion, Startup: reference, AssumptionSHA256: digest,
-		RuntimeSHA256: intent.Inputs.Artifacts.RunnerSHA256,
+		Protocol: RecordProtocolVersion, Startup: reference, AssumptionSHA256: digest,
+
 		Endpoint: EndpointIdentity{
 			Path:         ownerEndpointPath(intent.Inputs.Root, intent.Sequence),
 			DirectoryDev: intent.Inputs.RootDevice, DirectoryInode: intent.Inputs.RootInode, SocketInode: 24,
@@ -198,7 +198,6 @@ func checkOwnerJournalStaleBinding(t *testing.T, changed string) {
 		intent.Inputs.RootInode++
 	case "root":
 		intent.Inputs.Root = testOrigin(t).Root()
-		intent.Starter.Root = intent.Inputs.Root
 	}
 	refreshIntentDigest(t, &intent)
 	putHistoricalFixture(t, journal, intent)
@@ -348,7 +347,7 @@ func TestOwnerJournalRejectsTamperedPublication(t *testing.T) {
 		t.Fatalf("publication: %v %v", created, err)
 	}
 	changed := fixture.publication
-	changed.RuntimeSHA256 = task.ComputeSHA256([]byte("different runtime"))
+	changed.AssumptionSHA256 = task.ComputeSHA256([]byte("different accepted assumption"))
 	data, err := task.MarshalCanonical(changed)
 	if err != nil {
 		t.Fatal(err)
@@ -433,4 +432,22 @@ func TestOwnerJournalNegativeIncarnationFixtureRemainsValid(t *testing.T) {
 			t.Fatalf("negative incarnation fixture became malformed: %v", err)
 		}
 	}
+}
+
+func (j *intentJournal) readAssumption(ctx context.Context, reference StartupReference) (record StartupAssumption, resultErr error) {
+	resultErr = j.withHistoricalRecords(ctx, func(reader ownerRecordReader, pin taskdir.RootPin) error {
+		var err error
+		record, err = readAssumptionRecord(ctx, reader, pin, reference)
+		return err
+	})
+	return record, resultErr
+}
+
+func (j *intentJournal) readPublication(ctx context.Context, reference StartupReference) (record OwnerPublication, resultErr error) {
+	resultErr = j.withHistoricalRecords(ctx, func(reader ownerRecordReader, pin taskdir.RootPin) error {
+		var err error
+		record, err = readPublicationRecord(ctx, reader, pin, reference)
+		return err
+	})
+	return record, resultErr
 }

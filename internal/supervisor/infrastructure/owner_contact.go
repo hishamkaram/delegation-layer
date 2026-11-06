@@ -20,9 +20,9 @@ import (
 // must never authorize a fresh Start. Verified replies survive cleanup errors;
 // callers must retain that known outcome alongside any cleanup diagnostic.
 func contactOwner(ctx context.Context, store *taskdir.ReadOnlyStore, pin taskdir.RootPin, request ownerRequest) (reply ownerReply, resultErr error) {
-	phase := ownerContactBeforeWrite
+	verified := false
 	var contextErr, cleanupErr error
-	defer func() { reply, resultErr = completeOwnerContact(phase, reply, resultErr, contextErr, cleanupErr) }()
+	defer func() { reply, resultErr = completeOwnerContact(verified, reply, resultErr, contextErr, cleanupErr) }()
 	operation, cancel, err := ownerContactContext(ctx, request)
 	if err != nil {
 		return ownerReply{}, err
@@ -57,7 +57,6 @@ func contactOwner(ctx context.Context, store *taskdir.ReadOnlyStore, pin taskdir
 	if err = checkOwnerContactEndpoint(operation, store, pin, publication.Endpoint); err != nil {
 		return ownerReply{}, err
 	}
-	phase = ownerContactMayHaveWritten
 	if err = writeOwnerFrame(unixConnection, request); err != nil {
 		return ownerReply{}, err
 	}
@@ -71,7 +70,7 @@ func contactOwner(ctx context.Context, store *taskdir.ReadOnlyStore, pin taskdir
 	if err = readOwnerContactAfterReply(operation, store, pin, request, reply); err != nil {
 		return ownerReply{}, err
 	}
-	phase = ownerContactReplyVerified
+	verified = true
 	return reply, nil
 }
 
@@ -292,20 +291,9 @@ func watchOwnerContactCancellation(ctx context.Context, connection *net.UnixConn
 	}
 }
 
-// The contact owns this monotonic exchange state. Writing is conservatively
-// entered before the write attempt, and verification requires both reply binding
-// and the final current-record reread; neither transport success nor cleanup does.
-type ownerContactPhase uint8
-
-const (
-	ownerContactBeforeWrite ownerContactPhase = iota
-	ownerContactMayHaveWritten
-	ownerContactReplyVerified
-)
-
 // completeOwnerContact keeps an acknowledged result independent from late
 // observation cancellation. Only a failed exchange needs the context-race cause.
-func completeOwnerContact(phase ownerContactPhase, reply ownerReply, exchangeErr, contextErr, cleanupErr error) (ownerReply, error) {
+func completeOwnerContact(verified bool, reply ownerReply, exchangeErr, contextErr, cleanupErr error) (ownerReply, error) {
 	if exchangeErr != nil {
 		exchangeErr = errors.Join(exchangeErr, contextErr)
 	}
@@ -313,24 +301,14 @@ func completeOwnerContact(phase ownerContactPhase, reply ownerReply, exchangeErr
 	if resultErr == nil {
 		return reply, nil
 	}
-	if phase != ownerContactReplyVerified {
+	if !verified {
 		reply = ownerReply{}
 	}
-	return reply, ownerContactError{phase: phase, cause: resultErr}
+	return reply, ownerContactError{cause: resultErr}
 }
 
-// A verified reply is preserved even alongside a cleanup error. OutcomeUnknown
-// identifies only an unacknowledged write attempt, never mere cleanup failure.
-// A forwarder must not turn an unknown outcome into a fresh Start or retry.
-type ownerContactError struct {
-	phase ownerContactPhase
-	cause error
-}
+// Redact contact diagnostics while preserving all causes for classification.
+type ownerContactError struct{ cause error }
 
-func (ownerContactError) Error() string          { return "infrastructure owner contact failed" }
-func (e ownerContactError) Unwrap() error        { return e.cause }
-func (e ownerContactError) OutcomeUnknown() bool { return e.phase == ownerContactMayHaveWritten }
-
-// ReplyVerified distinguishes an acknowledged reply with cleanup faults from a
-// failure before sending; OutcomeUnknown alone is false in both cases.
-func (e ownerContactError) ReplyVerified() bool { return e.phase == ownerContactReplyVerified }
+func (ownerContactError) Error() string   { return "infrastructure owner contact failed" }
+func (e ownerContactError) Unwrap() error { return e.cause }

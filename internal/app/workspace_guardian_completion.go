@@ -24,11 +24,6 @@ func reconcileWorkspaceAfterGuardian(store *taskdir.Store, parsed runnerArgument
 	options := workspaceRuntimeOptions(deps)
 	resources := &workspaceCommandResources{store: store}
 	defer func() { resultErr = errors.Join(resultErr, resources.closeAfter(resultErr)) }()
-	ctx, lease, err := resources.acquire(ctx, options.RootAdmission, deps.SupervisorOptions)
-	if err != nil {
-		return err
-	}
-	options.RootAdmission = lease
 	if parsed.WorkspaceOperation {
 		workspaceID, err = workspaceForGuardian(ctx, store, parsed)
 		if err != nil || workspaceID == "" {

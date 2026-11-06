@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -55,11 +54,8 @@ func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspace
 	request.Arguments = []string{"/fixture/verify"}
 	request.Supervisor = supervisor.Binding()
 	request.WorkerExecutable = executablePath(t)
-	digest, err := commonprovider.FingerprintExecutable(request.WorkerExecutable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.WorkerSHA256 = digest
+	request.WorkerSHA256 = ""
+	request.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
 	operation, err := workspace.OpenOperation(t.Context(), fixture.Store, request)
 	if err != nil {
 		t.Fatal(err)

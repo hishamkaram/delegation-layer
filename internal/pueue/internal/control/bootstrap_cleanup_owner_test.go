@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +41,8 @@ func TestBootstrapCleanupOwnerRetainsNativeLockAndPendingGraph(t *testing.T) {
 	lateErr := errors.New("late command failure")
 	transport.CompletePending(second, CommandResult{Err: lateErr})
 	awaitBootstrapCleanup(t, fixture.owner)
-	if fixture.owner.CleanupPending() || !errors.Is(fixture.owner.Err(), lateErr) || !errors.Is(resultErr, lateErr) {
-		t.Fatalf("late result error is unreachable: %v", resultErr)
+	if fixture.owner.CleanupPending() || !errors.Is(fixture.owner.Err(), lateErr) || errors.Is(resultErr, lateErr) {
+		t.Fatalf("late result crossed the diagnostics/error-policy boundary: %v", fixture.owner.Err())
 	}
 	fixture.assertReleased(t)
 }
@@ -79,8 +80,8 @@ func TestBootstrapCleanupLateNestedPendingRetainsNativeLock(t *testing.T) {
 	childErr := errors.New("nested completion fault")
 	transport.CompletePending(child, CommandResult{Err: childErr})
 	awaitBootstrapCleanup(t, fixture.owner)
-	if !errors.Is(resultErr, childErr) {
-		t.Fatalf("late nested result was lost: %v", resultErr)
+	if !errors.Is(fixture.owner.Err(), childErr) || errors.Is(resultErr, childErr) {
+		t.Fatalf("late nested diagnostics were lost or changed policy: %v", fixture.owner.Err())
 	}
 	fixture.assertReleased(t)
 }
@@ -114,8 +115,14 @@ func TestBootstrapCleanupReleaseFaultIsOwnedAndReported(t *testing.T) {
 	owner := retainBootstrapLock(&lock, []*Pending{pending}, func(err error) { reported <- err })
 	transport.CompletePending(pending, CommandResult{})
 	awaitBootstrapCleanup(t, owner)
-	if !errors.Is(owner.Err(), os.ErrClosed) || !owner.CleanupPending() {
-		t.Fatalf("failed native close lost its actual cleanup owner: %v", owner.Err())
+	if !errors.Is(owner.Err(), os.ErrClosed) || owner.CleanupPending() || !errors.Is(owner, os.ErrClosed) {
+		t.Fatalf("failed native close lost its release fault or reused a Go handle: %v", owner.Err())
+	}
+	if task.AllErrorCauses(owner, func(err error) bool { return errors.Is(err, ErrInFlight) }) {
+		t.Fatal("release fault was softened into command uncertainty")
+	}
+	if !strings.Contains(owner.Error(), "completed with release fault") || !strings.Contains(owner.Error(), os.ErrClosed.Error()) {
+		t.Fatalf("release diagnostic hid the completed close fault: %v", owner)
 	}
 	select {
 	case err := <-reported:
@@ -126,7 +133,7 @@ func TestBootstrapCleanupReleaseFaultIsOwnedAndReported(t *testing.T) {
 		t.Fatal("legacy release report was dropped")
 	}
 	if !errors.Is(owner.Close(), os.ErrClosed) {
-		t.Fatal("retry discarded unresolved close fault")
+		t.Fatal("cleanup status discarded unresolved release fault")
 	}
 }
 
@@ -145,9 +152,50 @@ func TestBootstrapCleanupRepeatedCloseKeepsHistoryAfterNativeRelease(t *testing.
 		if !errors.Is(fixture.owner.Close(), commandErr) || fixture.owner.CleanupPending() {
 			t.Fatalf("historical fault confused native custody: %v", fixture.owner.Err())
 		}
-		if !errors.Is(fixture.owner.Err(), commandErr) || !errors.Is(resultErr, commandErr) {
-			t.Fatal("cleanup retry erased historical command failure")
+		if !errors.Is(fixture.owner.Err(), commandErr) || errors.Is(resultErr, commandErr) {
+			t.Fatal("cleanup status erased diagnostics or changed the callback policy")
 		}
 		fixture.assertReleased(t)
 	}
+}
+
+func TestBootstrapCleanupRetirementBlocksNewControlLeaseDuplicates(t *testing.T) {
+	fixture := newBootstrapCleanupFixture(t)
+	original := fixture.lock
+	accepted, err := original.duplicateForControlOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedClosed := false
+	t.Cleanup(func() {
+		if !acceptedClosed {
+			if closeErr := accepted.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		}
+	})
+	pending := fixture.pending()
+	resultErr := error(&InFlightError{Pending: pending})
+	finishPrivateBootstrap(&fixture.lock, &resultErr)
+	if !errors.As(resultErr, &fixture.owner) {
+		t.Fatal("cleanup owner missing")
+	}
+	duplicate, duplicateErr := original.duplicateForControlOwner()
+	if duplicate != nil {
+		duplicateErr = errors.Join(duplicateErr, duplicate.Close())
+	}
+	if !errors.Is(duplicateErr, os.ErrClosed) {
+		t.Fatalf("stale non-shutdown scope duplicated a retired lock: %v", duplicateErr)
+	}
+	if _, statErr := accepted.Stat(); statErr != nil {
+		t.Fatalf("retirement invalidated an accepted duplicate: %v", statErr)
+	}
+	transport.CompletePending(pending, CommandResult{})
+	awaitBootstrapCleanup(t, fixture.owner)
+	fixture.assertLocked(t)
+	if err = accepted.Close(); err != nil {
+		t.Fatal(err)
+	}
+	acceptedClosed = true
+	fixture.assertReleased(t)
 }

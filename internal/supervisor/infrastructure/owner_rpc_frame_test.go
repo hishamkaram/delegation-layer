@@ -14,14 +14,12 @@ import (
 
 const (
 	ownerWireEmptySource          = `"source":{"root_id":"","kind":"","owner_id":"","record_id":"","binding_sha256":""}`
-	ownerWireEmptyMigration       = `"migration":{"root_id":"","record_sha256":"","history_index":0}`
-	ownerWireEmptyRequirements    = `"requirements":{"required_runtime_sha256":"","required_client_sha256":"","required_daemon_sha256":""}`
-	ownerWireEmptyRequestSubjects = `,` + ownerWireEmptySource + `,` + ownerWireEmptyMigration + `,` + ownerWireEmptyRequirements + `}`
-	ownerWireEmptyReplySubjects   = `,"context":{"sha256":""},` + ownerWireEmptySource + `,` + ownerWireEmptyMigration + `,` + ownerWireEmptyRequirements + `,"disposition":{"kind":"","context":{"sha256":""}}}`
+	ownerWireEmptyRequestSubjects = `,` + ownerWireEmptySource + `}`
+	ownerWireEmptyReplySubjects   = `,"context":{"sha256":""},` + ownerWireEmptySource + `,"disposition":{"kind":"","context":{"sha256":""}}}`
 	ownerWireRoot                 = "0123456789abcdef0123456789abcdef"
 	ownerWireDigest               = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	ownerWireRequestJSON          = `{"protocol":2,"root_id":"` + ownerWireRoot + `","owner":{"sequence":1,"epoch":"` + ownerWireRoot + `","intent_sha256":"` + ownerWireDigest + `"},"publication_sha256":"` + ownerWireDigest + `","client":{"pid":7,"start_token":"fixture:7"},"action":"status","target":{"root":"","root_id":""},"context":{"sha256":""},"deadline":"2026-11-03T00:00:30Z"` + ownerWireEmptyRequestSubjects + "\n"
-	ownerWireReplyJSON            = `{"protocol":2,"root_id":"` + ownerWireRoot + `","owner_ref":{"sequence":1,"epoch":"` + ownerWireRoot + `","intent_sha256":"` + ownerWireDigest + `"},"publication_sha256":"` + ownerWireDigest + `","action":"status","target":{"root":"","root_id":""},"startup":{"sequence":0,"epoch":"","intent_sha256":""},"code":"ok"` + ownerWireEmptyReplySubjects + "\n"
+	ownerWireRequestJSON          = `{"protocol":4,"root_id":"` + ownerWireRoot + `","owner":{"sequence":1,"epoch":"` + ownerWireRoot + `","intent_sha256":"` + ownerWireDigest + `"},"publication_sha256":"` + ownerWireDigest + `","client":{"pid":7,"start_token":"fixture:7"},"action":"status","target":{"root":"","root_id":""},"context":{"sha256":""},"deadline":"2026-11-03T00:00:30Z"` + ownerWireEmptyRequestSubjects + "\n"
+	ownerWireReplyJSON            = `{"protocol":4,"root_id":"` + ownerWireRoot + `","owner_ref":{"sequence":1,"epoch":"` + ownerWireRoot + `","intent_sha256":"` + ownerWireDigest + `"},"publication_sha256":"` + ownerWireDigest + `","action":"status","target":{"root":"","root_id":""},"startup":{"sequence":0,"epoch":"","intent_sha256":""},"code":"ok"` + ownerWireEmptyReplySubjects + "\n"
 )
 
 func ownerRequestFixture() ownerRequest {
@@ -59,11 +57,11 @@ func TestOwnerFramesMatchIndependentWireFixtures(t *testing.T) {
 
 func TestOwnerRequestStrictRejectionsReturnZero(t *testing.T) {
 	for _, replacement := range [][2]string{
-		{`"protocol":2`, `"protocol":1`},
-		{`"protocol":2,`, ``},
-		{`"protocol":2`, `"Protocol":1`},
-		{`"protocol":2`, `"protocol":2,"protocol":2`},
-		{`"protocol":2`, `"protocol":2,"unknown":"sensitive"`},
+		{`"protocol":4`, `"protocol":1`},
+		{`"protocol":4,`, ``},
+		{`"protocol":4`, `"Protocol":1`},
+		{`"protocol":4`, `"protocol":4,"protocol":4`},
+		{`"protocol":4`, `"protocol":4,"unknown":"sensitive"`},
 		{`"client":{`, `"client":{"unknown":"sensitive",`},
 		{`"pid":7`, `"pid":0`},
 		{`"sequence":1`, `"sequence":0`},
@@ -71,6 +69,9 @@ func TestOwnerRequestStrictRejectionsReturnZero(t *testing.T) {
 		{`"publication_sha256":"` + ownerWireDigest + `"`, `"publication_sha256":"bad"`},
 		{`"client":{"pid":7,"start_token":"fixture:7"}`, `"client":null`},
 		{`"action":"status"`, `"action":"upgrade"`},
+		{`"action":"status"`, `"action":"migrate-referenced"`},
+		{`"action":"status"`, `"action":"status","migration":{}`},
+		{`"action":"status"`, `"action":"status","migration":null`},
 		{`"deadline":"2026-11-03T00:00:30Z"`, `"deadline":"2026-11-03T00:00:30+00:00"`},
 		{`"deadline":"2026-11-03T00:00:30Z"`, `"deadline":"0001-01-01T00:00:00Z"`},
 		{`"target":{"root":"","root_id":""}`, `"target":null`},
@@ -81,6 +82,27 @@ func TestOwnerRequestStrictRejectionsReturnZero(t *testing.T) {
 		got, err := readOwnerFrame[ownerRequest](bufio.NewReaderSize(strings.NewReader(input), 17))
 		if err == nil || !errors.Is(err, ErrIdentity) || errors.Is(err, task.ErrEvidenceFault) || got != (ownerRequest{}) {
 			t.Fatalf("strict rejection %q: zero=%t err=%v", replacement[0], got == (ownerRequest{}), err)
+		}
+	}
+}
+
+func TestOwnerFramesRejectPreviousPreparationCodec(t *testing.T) {
+	for _, wire := range []string{ownerWireRequestJSON, ownerWireReplyJSON} {
+		previous := strings.Replace(wire, `"protocol":4`, `"protocol":3`, 1)
+		previous = strings.TrimSuffix(strings.TrimSpace(previous), "}") + `,"migration":{"root_id":"","record_sha256":"","history_index":0}}` + "\n"
+		decoded, err := readOwnerFrame[ownerRequest](bufio.NewReader(strings.NewReader(previous)))
+		if !errors.Is(err, ErrOwnerIncompatible) || !errors.Is(err, ErrIdentity) || decoded != (ownerRequest{}) {
+			t.Fatalf("previous owner codec lost explicit incompatibility: %v", err)
+		}
+	}
+}
+
+func TestOwnerReplyRejectsRemovedMigrationFields(t *testing.T) {
+	for _, extra := range []string{`"migration":{}`, `"migration_result":"completed"`} {
+		wire := strings.TrimSuffix(strings.TrimSpace(ownerWireReplyJSON), "}") + "," + extra + "}\n"
+		reply, err := readOwnerFrame[ownerReply](bufio.NewReader(strings.NewReader(wire)))
+		if !errors.Is(err, ErrIdentity) || reply != (ownerReply{}) {
+			t.Fatalf("removed migration reply field accepted: %v", err)
 		}
 	}
 }
@@ -198,9 +220,6 @@ func TestOwnerRequestActionSubjects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			request := ownerRequestFixture()
 			request.Action, request.Target, request.Context = tc.action, tc.target, tc.context
-			if tc.action == ownerEnsureOther {
-				request.Requirements = ownerRequirementsFixture()
-			}
 			var wire bytes.Buffer
 			err := writeOwnerFrame(&wire, request)
 			if (err == nil) != tc.valid {
@@ -272,7 +291,7 @@ func TestOwnerWriterRejectsOversizeBeforeIO(t *testing.T) {
 	request := ownerRequestFixture()
 	request.Action = ownerEnsureOther
 	request.Target = originRecord{Root: "/" + strings.Repeat("x", task.MaxControlRecordSize), RootID: strings.Repeat("b", 32)}
-	request.Requirements = ownerRequirementsFixture()
+
 	request.Context = LaunchContextReference{SHA256: ownerWireDigest}
 	writer := &ownerTestWriter{}
 	if err := writeOwnerFrame(writer, request); !errors.Is(err, task.ErrControlRecordTooBig) || writer.calls != 0 {
@@ -283,7 +302,6 @@ func TestOwnerWriterRejectsOversizeBeforeIO(t *testing.T) {
 func ownerReplyWithRequiredObservation(reply ownerReply) ownerReply {
 	if reply.Action == ownerEnsureOther {
 		reply.Context = LaunchContextReference{SHA256: ownerWireDigest}
-		reply.Requirements = ownerRequirementsFixture()
 	}
 	if reply.Code == ownerOK && ownPreparationAction(reply.Action) {
 		reply.Disposition = Disposition{Kind: DispositionWarmReuse}

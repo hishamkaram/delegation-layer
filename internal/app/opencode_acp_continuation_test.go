@@ -38,6 +38,7 @@ func TestOpenCodeRunPredecessorContinuesThroughACP(t *testing.T) {
 		for _, testCase := range openCodeMigrationCases(t, revision) {
 			for _, entry := range outputUpgradeEntryPoints() {
 				t.Run(revision+"/"+testCase.mode+"/v"+testCase.source.Version+"/"+entry.name, func(t *testing.T) {
+					t.Parallel()
 					runOpenCodeACPSuccessor(t, newOutputUpgradeFixture(t, testCase), entry)
 				})
 			}
@@ -58,8 +59,8 @@ func runOpenCodeACPSuccessor(t *testing.T, f *outputUpgradeFixture, entry output
 	if !meta.Predicate.Equal(openCodeACPReference(t, f.testCase.mode)) || meta.EffectiveConfig.Policy == nil || meta.EffectiveConfig.Policy.ProfileRevision != "opencode-acp-v1" {
 		t.Fatalf("successor predicate=%+v, want the ACP contract", meta.Predicate)
 	}
-	if !slices.Equal(meta.Environment, f.meta.Environment) || !slices.Equal(meta.EffectiveConfig.Policy.WritableRoots, f.meta.EffectiveConfig.Policy.WritableRoots) {
-		t.Fatalf("successor environment (%s) or writable roots differ from the predecessor", summarizeValues(meta.Environment))
+	if !slices.Equal(meta.Environment, f.meta.Environment) || !slices.Equal(meta.EffectiveConfig.Policy.WritableRoots, f.meta.EffectiveConfig.Policy.WritableRoots) || meta.ProviderExecutable != f.meta.ProviderExecutable {
+		t.Fatalf("successor executable, environment (%s) or writable roots differ from the predecessor", summarizeValues(meta.Environment))
 	}
 	assertOpenCodeACPSuccessorLaunch(t, f, request, meta)
 	assertOpenCodeACPSuccessorCollection(t, f, result.response.TaskID)
@@ -294,6 +295,7 @@ func TestOpenCodeACPSuccessorCollectionRequiresTheResumedTurn(t *testing.T) {
 		}
 		for name, failure := range openCodeACPResumeFailures(testCase.mode) {
 			t.Run(testCase.mode+"/"+name, func(t *testing.T) {
+				t.Parallel()
 				f := newOutputUpgradeFixture(t, testCase)
 				result := outputUpgradeEntryPoints()[0].run(f)
 				if result.err != nil || result.response.TaskID == "" {
@@ -362,11 +364,11 @@ func TestOpenCodeRunSuccessorPreparesItsOwnACPRecord(t *testing.T) {
 // historical record and reconstructs the ACP record that successor persists.
 func requireOpenCodeSuccessorOwnRecord(t *testing.T, testCase outputUpgradeCase) {
 	t.Helper()
-	installOutputUpgradeProvider(t, testCase.executable())
+	environment := installOutputUpgradeProvider(t, testCase.executable())
 	request := outputUpgradeSuccessorRequest(t, testCase)
 	catalog := NativeCatalog()
-	predecessor := outputUpgradeStoredRecord(t, catalog, testCase, request, testCase.source)
-	candidate, err := catalog.SuccessorCandidate(request, predecessor, os.Environ())
+	predecessor := outputUpgradeStoredRecord(t, catalog, testCase, request, testCase.source, environment)
+	candidate, err := catalog.SuccessorCandidate(request, predecessor, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +379,7 @@ func requireOpenCodeSuccessorOwnRecord(t *testing.T, testCase outputUpgradeCase)
 	}
 	successor := outputUpgradePreparationOf(t, candidate, profile)
 	own := tasklifecycle.NewMeta(request, profile, task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
-	rebuilt, err := catalog.ExistingCandidate(request, own, os.Environ())
+	rebuilt, err := catalog.ExistingCandidate(request, own, environment)
 	if err != nil {
 		t.Fatal(err)
 	}

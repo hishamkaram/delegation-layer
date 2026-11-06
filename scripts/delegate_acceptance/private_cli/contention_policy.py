@@ -3,6 +3,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts.delegate_acceptance.paths.policy import _raw_clean_absolute_path
+from scripts.delegate_acceptance.evidence.validation import _hex_digest
+
 
 MODERN_CONTENTION_SCENARIO = "modern-two-binary-contention"
 MODERN_CONTENTION_TASK_COUNT = 2
@@ -28,22 +31,47 @@ class MigrationExpectation:
 
 
 LOGICAL_IDENTITY_FIELDS = ("config_path", "config_digest", "resolved_config_sha256", "endpoint")
-DAEMON_IDENTITY_FIELDS = ("executable", "sha256", *LOGICAL_IDENTITY_FIELDS)
+DAEMON_IDENTITY_FIELDS = ("executable", "executable_identity", "sha256", *LOGICAL_IDENTITY_FIELDS)
+INSTALLED_IDENTITY = "installed-path-v1"
+
+
+def _require_executable_identity(record: dict[str, object], *, binding: bool) -> None:
+    marker = record.get("executable_identity")
+    hashes = ("client_sha256", "daemon_sha256") if binding else ("sha256",)
+    if marker == INSTALLED_IDENTITY:
+        if any(record.get(field) for field in hashes):
+            raise RuntimeError("modern installed-path identity contains an executable digest")
+    elif marker not in (None, "") or any(not _hex_digest(record.get(field)) for field in hashes):
+        raise RuntimeError("modern executable identity marker or historical record shape is invalid")
+    paths = (("client_executable", "pueue"), ("daemon_executable", "pueued")) if binding else (("executable", "pueued"),)
+    for field, name in paths:
+        value = record.get(field)
+        if (not _raw_clean_absolute_path(value) or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                or Path(value).name != name):
+            raise RuntimeError("modern executable identity does not name its installed role")
 
 
 def _validated_migration_facts(
     facts: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Validate scenario facts and return the existing daemon/writer identities."""
+    """Validate installed selections and canonical records; grant no lifecycle mutation authority."""
     published, daemon, writer = (facts.get(name) for name in ("published", "daemon", "writer"))
     if not isinstance(published, dict) or not isinstance(daemon, dict) or not isinstance(writer, dict):
         raise RuntimeError("modern migration omitted published or resolved writer identity")
+    _require_executable_identity(published, binding=True)
+    _require_executable_identity(daemon, binding=False)
+    _require_executable_identity(writer, binding=False)
+    if writer.get("executable_identity") != INSTALLED_IDENTITY:
+        raise RuntimeError("modern migration writer must select an installed-path identity")
     for field in LOGICAL_IDENTITY_FIELDS:
-        if not isinstance(published.get(field), str) or not published[field] or daemon.get(field) != published[field]:
+        if (not isinstance(published.get(field), str) or not published[field]
+                or daemon.get(field) != published[field]
+                or not isinstance(writer.get(field), str) or not writer[field]):
             raise RuntimeError("modern migration published logical identity is inconsistent")
-    for field in ("executable", "sha256"):
-        if daemon.get(field) != published.get("daemon_" + field) or not isinstance(writer.get(field), str):
-            raise RuntimeError("modern migration published daemon provenance is inconsistent")
+    if (daemon.get("executable") != published.get("daemon_executable")
+            or daemon.get("executable_identity") != published.get("executable_identity")
+            or daemon.get("sha256") != published.get("daemon_sha256")):
+        raise RuntimeError("modern migration published daemon provenance is inconsistent")
     if facts.get("unsettled_records"):
         raise RuntimeError("modern migration has an unsupported pending publication or bootstrap")
     alias = facts.get("alias")
@@ -53,7 +81,7 @@ def _validated_migration_facts(
         saved = alias.get("supervisor")
         if not isinstance(saved, dict) or any(saved.get(field) != published[field] for field in LOGICAL_IDENTITY_FIELDS):
             raise RuntimeError("modern migration recovery alias does not name the published predecessor")
-        for field in ("client_executable", "client_sha256", "daemon_executable", "daemon_sha256"):
+        for field in ("executable_identity", "client_executable", "client_sha256", "daemon_executable", "daemon_sha256"):
             if saved.get(field) not in (None, "", published.get(field)):
                 raise RuntimeError("modern migration recovery alias changed executable provenance")
         if alias.get("config_sha256") != facts.get("alias_config_sha256"):
@@ -70,7 +98,8 @@ def require_migration_facts(facts: dict[str, object]) -> None:
 
 def migration_expectation(facts: dict[str, object], *, active: bool) -> MigrationExpectation:
     daemon, writer = _validated_migration_facts(facts)
-    same = all(daemon[field] == writer[field] for field in ("executable", "sha256"))
+    same = all(daemon.get(field) == writer.get(field) for field in
+               ("executable", "executable_identity", *LOGICAL_IDENTITY_FIELDS))
     pending = facts.get("migration")
     if pending is not None:
         if not isinstance(pending, dict) or type(pending.get("schema_version")) is not int or pending["schema_version"] != 1:
@@ -80,9 +109,12 @@ def migration_expectation(facts: dict[str, object], *, active: bool) -> Migratio
         if any(type(flag) is not bool or flag for flag in flags) or pending.get("legacy_pid", 0) != 0 or pending.get("legacy_process_start", ""):
             raise RuntimeError("modern migration crossed its prepared-only phase")
         legacy, successor = pending.get("legacy"), pending.get("successor")
-        if not isinstance(legacy, dict) or any(legacy.get(field) != daemon[field] for field in DAEMON_IDENTITY_FIELDS):
+        if not isinstance(legacy, dict) or any(legacy.get(field) != daemon.get(field) for field in DAEMON_IDENTITY_FIELDS):
             raise RuntimeError("modern migration journal changed predecessor provenance")
-        if not isinstance(successor, dict) or any(successor.get(field) != writer[field] for field in DAEMON_IDENTITY_FIELDS):
+        if not isinstance(successor, dict):
+            raise RuntimeError("modern migration successor identity is invalid")
+        _require_executable_identity(successor, binding=False)
+        if any(successor.get(field) != writer.get(field) for field in ("executable", *LOGICAL_IDENTITY_FIELDS)):
             raise RuntimeError("modern migration writer differs from the recorded prepared successor; separate negative control required")
     if same and (pending is not None or facts.get("alias") is not None):
         raise RuntimeError("modern baseline prepared/alias writer needs a separate negative control")

@@ -32,12 +32,12 @@ func assertConfigDriftPreparedJournal(t *testing.T, fixture *historicalSuperviso
 	var journal historicalPrivateMigrationRecord
 	readHistoricalRecord(t, filepath.Join(fixture.root, ".supervisor", "migration.json"), &journal)
 	config := readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))
-	daemonB := readSupervisorProbeTestFile(t, fixture.daemonB)
+	daemonB := canonicalAppTestPath(t, fixture.daemonB)
 	successor := journal.Successor
 	if journal.Legacy != historicalPrivateDaemonIdentityFor(fixture.predecessor) {
 		t.Fatalf("journal predecessor = %+v, want %+v", journal.Legacy, fixture.predecessor)
 	}
-	if successor.ConfigPath != pueue.PrivateConfigPath(fixture.root) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.SHA256 != task.ComputeSHA256(daemonB) {
+	if successor.ConfigPath != pueue.PrivateConfigPath(fixture.root) || successor.ConfigDigest != task.ComputeSHA256(config) || successor.Endpoint != "unix:"+retargetedPrivateSocketPath(t, fixture.predecessor) || successor.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 || successor.Executable != daemonB || successor.SHA256 != "" {
 		t.Fatalf("journal successor does not select the drifted config and installed daemon: %+v", successor)
 	}
 	if journal.LegacyPID != 0 || journal.LegacyProcessStart != "" || journal.LegacyShutdownRequested || journal.LegacyShutdownDispatched || journal.LegacyStopped {
@@ -67,7 +67,7 @@ func assertConfigDriftReserializedAlias(t *testing.T, fixture *historicalSupervi
 func assertConfigDriftAliasRetirementRefused(t *testing.T, fixture *historicalSupervisorFixture) {
 	t.Helper()
 	err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
-		return pueue.RetirePrivateRecoveryBindingContext(ctx, fixture.root, fixture.predecessor)
+		return fixture.predecessorClient.RetirePrivateRecoveryBindingContext(ctx, fixture.root, fixture.predecessor)
 	})
 	if !errors.Is(err, pueue.ErrBinding) || !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) || !strings.Contains(err.Error(), "not ready to retire its recovery alias") {
 		t.Fatalf("prepared drifted journal did not keep the alias retirement fence: %v", err)

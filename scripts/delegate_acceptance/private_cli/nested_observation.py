@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import time
 import uuid
 
@@ -15,6 +17,7 @@ from scripts.delegate_acceptance.private_cli.capacity_records import capacity_le
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp
 from scripts.delegate_acceptance.lifetime.evidence import _read_lifetime_launches
 from scripts.delegate_acceptance.private_cli.capacity_ownership import lease_candidate_specifications
+from scripts.delegate_acceptance.private_cli.fixture_lifetime import ClosedRoot
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort, ordinary_lifetime_owner_live
 from scripts.delegate_acceptance.private_cli.nested_fixture import native_observation
 from scripts.delegate_acceptance.private_cli.nested_fixture import fixture_environment
@@ -57,29 +60,51 @@ def compare_native_tokens(configuration, capture, observed, persisted, *, deadli
     return result["identity_matches"]
 
 
-def prove_task_absence(configuration, capture, state, root, task_id, *, deadline=None):
+def prove_task_absence(configuration, capture, state, root, task_id, *, deadline=None, closed: ClosedRoot | None = None):
     """Invoke the maintained task-store authority; never reconstruct its locks."""
+    expected_refusal = None
+    if closed is not None:
+        held = closed["disposal"]
+        require(held.state == state, "closed-root disposal lease names another state root")
+        held.require_current()
+        closure = closed["closure"]
+        tasks = closure.get("tasks")
+        previous = tasks.get(task_id) if isinstance(tasks, dict) else None
+        if not (closure.get("root_id") == root and isinstance(previous, dict)
+                and previous.get("disposition") == "never-launched" and _hex_digest(previous.get("refusal_sha256"))):
+            raise AcceptanceFailure("closed-root shutdown did not authorize this never-launched task")
+        expected_refusal = previous["refusal_sha256"]
     directory = state / "tasks" / task_id
     receipt_path = directory / "supervisor.ref.json"
     if path_present(receipt_path):
         receipt = _read_control_record(receipt_path, "never-launched admission")
         metadata = _read_control_record(directory / "meta.json", "never-launched metadata")
+        supervisor_config = metadata["supervisor_config"]
+        if not isinstance(supervisor_config, dict):
+            raise AcceptanceFailure(f"ordinary supervisor receipt binding changed for {task_id}")
         label, _numeric, _meta_digest = _read_ordinary_supervisor_receipt(
-            metadata["supervisor_config"], directory, directory / "meta.json", root, digest(directory / "task.json"), task_id)
+            supervisor_config, directory, directory / "meta.json", root, digest(directory / "task.json"), task_id)
         client, selected = bound_private_client(state, configuration["observer_environment"])
         published = _read_control_record(state / ".supervisor" / "supervisor.identity.json", "private binding")["binding"]
+        if not isinstance(published, dict):
+            raise AcceptanceFailure("never-launched admission names another supervisor generation")
         require(all(receipt.get(key) == published.get(key) for key in ("config_path", "config_digest", "endpoint")),
                 "never-launched admission names another supervisor generation")
-        queue = pueue_snapshot(client, state / ".supervisor" / "pueue.yml", selected,
-                               phase="nested-external-observer", capture_root=capture, deadline=deadline)
-        require(task_row_by_label(queue, label) is None,
-                "never-launched proof requires its exact queue row removed first")
+        if closed is None:
+            queue = pueue_snapshot(client, state / ".supervisor" / "pueue.yml", selected,
+                                   phase="nested-external-observer", capture_root=capture, deadline=deadline)
+            require(task_row_by_label(queue, label) is None,
+                    "never-launched proof requires its exact queue row removed first")
     else:
         require(not path_present(directory / "submit.json"),
                 "retained: submitted task has no settled immutable queue receipt")
     proof = observe_task_store(configuration, capture, state, root, task_id, "task-absence", deadline=deadline)
     require(proof.get("never_started") is True and _hex_digest(proof.get("refusal_sha256")),
             "canonical task owner did not prove never-launched disposition")
+    if closed is not None:
+        closed["disposal"].require_current()
+        require(proof["refusal_sha256"] == expected_refusal,
+                "never-launched refusal changed after authorized shutdown")
     return proof
 
 
@@ -175,8 +200,9 @@ def supervisor_continuity(state, configuration, capture, scope):
     config = state / ".supervisor" / "pueue.yml"
     publication = _read_control_record(state / ".supervisor" / "supervisor.identity.json", "private binding")
     binding = publication.get("binding")
-    require(publication.get("schema_version") == 1 and isinstance(binding, dict)
-            and binding.get("config_path") == str(config), "private binding does not name the owned root")
+    if not (publication.get("schema_version") == 1 and isinstance(binding, dict)
+            and binding.get("config_path") == str(config)):
+        raise AcceptanceFailure("private binding does not name the owned root")
     _validate_supervisor_binding(binding, "nested private supervisor")
     provenance = _read_control_record(state / ".supervisor" / "daemon.identity.json", "daemon launch provenance")
     require(provenance.get("executable") == binding.get("daemon_executable")
@@ -193,6 +219,8 @@ def supervisor_continuity(state, configuration, capture, scope):
 def bound_private_client(state, environment):
     publication = _read_control_record(state / ".supervisor" / "supervisor.identity.json", "private binding")
     binding = publication.get("binding")
+    if not isinstance(binding, dict):
+        raise AcceptanceFailure("nested private supervisor is not an object")
     _validate_supervisor_binding(binding, "nested private supervisor")
     require(binding["config_path"] == str(state / ".supervisor" / "pueue.yml"), "observer binding escaped owned root")
     selected = dict(environment)
@@ -202,8 +230,27 @@ def bound_private_client(state, environment):
         if source in binding:
             selected[target] = binding[source]
     client = Path(binding["client_executable"])
-    require(not client.is_symlink() and digest(client) == binding["client_sha256"], "published private client changed")
+    require(client.is_absolute() and str(client) == binding["client_executable"],
+            "published private client path is not canonical")
+    require(not _historical_private_client_copy(state, binding, client),
+            "published private client is a historical state copy; installed selection is required")
+    try:
+        metadata = client.lstat()
+        canonical = client.resolve(strict=True)
+        executable = os.access(client, os.X_OK)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise AcceptanceFailure("published private client is unavailable") from error
+    require(stat.S_ISREG(metadata.st_mode) and canonical == client and executable,
+            "published private client is not a canonical installed executable")
     return client, selected
+
+
+def _historical_private_client_copy(state, binding, client):
+    """Match Go control/legacy_executable.go's validated client-layout classifier."""
+    directory = client.parent
+    return (binding.get("executable_identity") is None and client.name == "pueue"
+            and directory.parent == state / ".supervisor" and directory.name.startswith("pueue-pair-")
+            and _hex_digest(directory.name.removeprefix("pueue-pair-")))
 
 
 def require_same_supervisor(before, after, *, same_identity):

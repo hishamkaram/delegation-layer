@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 	"golang.org/x/sys/unix"
@@ -22,9 +21,6 @@ func TestWorkspaceNestedLifetimeCleanupPreservesResourceOwner(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	if _, _, acquireErr := resources.acquire(t.Context(), nil, pueue.Options{}); acquireErr != nil {
-		t.Fatal(acquireErr)
-	}
 	parent, err := resource.AcquireUseOwner(t.Context())
 	resources.useOwner = parent
 	if err != nil {

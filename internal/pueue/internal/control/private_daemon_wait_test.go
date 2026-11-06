@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,18 +59,68 @@ func TestDaemonWaitHelper(t *testing.T) {
 	}
 }
 
+// children owns every observed child, connection and actual Wait. Accessors
+// derive the single-child views used by the original tests.
+type daemonWaitChild struct {
+	pid        int
+	root       string
+	done       <-chan struct{}
+	connection net.Conn
+	handshake  bool
+}
+
 type daemonWaitFixture struct {
-	nativeStarted    bool
-	root             string
-	executable       string
-	digest           string
-	listener         *net.TCPListener
-	connection       net.Conn
-	done             <-chan struct{}
-	pid              int
-	registrations    int
-	registrationRoot string
-	registrationPID  int
+	mu            sync.Mutex
+	nativeStarted bool
+	root          string
+	executable    string
+	listener      *net.TCPListener
+	children      []daemonWaitChild
+}
+
+func (f *daemonWaitFixture) childLocked(pid int) *daemonWaitChild {
+	for index := range f.children {
+		if f.children[index].pid == pid {
+			return &f.children[index]
+		}
+	}
+	f.children = append(f.children, daemonWaitChild{pid: pid})
+	return &f.children[len(f.children)-1]
+}
+
+func (f *daemonWaitFixture) pid() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.children) == 0 {
+		return 0
+	}
+	return f.children[len(f.children)-1].pid
+}
+
+func (f *daemonWaitFixture) registration() daemonWaitChild {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for index := len(f.children) - 1; index >= 0; index-- {
+		if f.children[index].done != nil {
+			return f.children[index]
+		}
+	}
+	return daemonWaitChild{}
+}
+
+func (f *daemonWaitFixture) done() <-chan struct{}    { return f.registration().done }
+func (f *daemonWaitFixture) registrationPID() int     { return f.registration().pid }
+func (f *daemonWaitFixture) registrationRoot() string { return f.registration().root }
+func (f *daemonWaitFixture) registrations() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, child := range f.children {
+		if child.done != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func newDaemonWaitFixture(t *testing.T) *daemonWaitFixture {
@@ -92,17 +143,15 @@ func newDaemonWaitFixture(t *testing.T) *daemonWaitFixture {
 	fixture.executable = filepath.Join(fixture.root, "daemon")
 	source := "#!/bin/sh\nexec '" + strings.ReplaceAll(binary, "'", "'\"'\"'") + "' -test.run '^TestDaemonWaitHelper$' -test.timeout 10s\n"
 	writeExecutable(t, fixture.executable, source)
-	fixture.digest, err = hashExecutable(fixture.executable)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return fixture
 }
 
 func (f *daemonWaitFixture) options(registrationErr error) Options {
 	return Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, Environment: append(os.Environ(), daemonWaitHelperAddress+"="+f.listener.Addr().String()), DaemonWaitOwner: daemonWaitOwnerFunc(func(root string, pid int, done <-chan struct{}) error {
-		f.registrations++
-		f.registrationRoot, f.registrationPID, f.done = root, pid, done
+		f.mu.Lock()
+		child := f.childLocked(pid)
+		child.root, child.done = root, done
+		f.mu.Unlock()
 		return registrationErr
 	})}
 }
@@ -113,71 +162,137 @@ func (f *daemonWaitFixture) start(ctx context.Context, options Options) error {
 		return guard.GuardDaemonStart(startContext, root, func() error {
 			err := start()
 			if err == nil {
+				f.mu.Lock()
 				f.nativeStarted = true
+				f.mu.Unlock()
 			}
 			return err
 		})
 	})
-	return startDaemon(ctx, f.root, f.executable, f.digest, filepath.Join(f.root, "config"), f.root, options)
+	return startDaemon(ctx, f.root, f.executable, filepath.Join(f.root, "config"), f.root, options)
+}
+
+func (f *daemonWaitFixture) acceptChild() (err error) {
+	if err = f.listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	connection, err := f.listener.AcceptTCP()
+	if err != nil {
+		return err
+	}
+	assigned := false
+	defer func() {
+		if !assigned {
+			// The caller reports both the handshake failure and any close failure.
+			err = errors.Join(err, connection.Close())
+		}
+	}()
+	if err = connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	line, err := bufio.NewReader(connection).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		return fmt.Errorf("invalid ready PID %q: %w", line, err)
+	}
+	if pid <= 0 {
+		return fmt.Errorf("invalid ready PID %d", pid)
+	}
+	f.mu.Lock()
+	child := f.childLocked(pid)
+	if child.handshake {
+		f.mu.Unlock()
+		return fmt.Errorf("duplicate handshake from child %d", pid)
+	}
+	child.connection, child.handshake = connection, true
+	f.mu.Unlock()
+	assigned = true
+	return nil
 }
 
 func (f *daemonWaitFixture) ready(t *testing.T) {
 	t.Helper()
-	if err := f.listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := f.acceptChild(); err != nil {
 		t.Fatal(err)
-	}
-	connection, err := f.listener.AcceptTCP()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.connection = connection
-	if err = connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	line, err := bufio.NewReader(connection).ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.pid, err = strconv.Atoi(strings.TrimSpace(line))
-	if err != nil || f.pid <= 0 {
-		t.Fatalf("invalid ready PID: %v", err)
 	}
 }
 
 func (f *daemonWaitFixture) release(t *testing.T) {
 	t.Helper()
-	if f.connection != nil {
-		if err := f.connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Error(err)
-			return
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for index := range f.children {
+		child := &f.children[index]
+		if child.connection == nil {
+			continue
 		}
-		f.connection = nil
+		if err := child.connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Error(err)
+			continue
+		}
+		child.connection = nil
+	}
+}
+
+func (f *daemonWaitFixture) acceptPendingChildren(t *testing.T) bool {
+	t.Helper()
+	// Every registered child must cross its real producer handshake, including
+	// a buggy duplicate. Explicit connection closure releases each child.
+	for {
+		f.mu.Lock()
+		pending := false
+		for _, child := range f.children {
+			pending = pending || child.done != nil && !child.handshake
+		}
+		f.mu.Unlock()
+		if !pending {
+			return true
+		}
+		if err := f.acceptChild(); err != nil {
+			t.Errorf("retain daemon fixture %s: child handshake: %v", f.root, err)
+			return false
+		}
 	}
 }
 
 func (f *daemonWaitFixture) close(t *testing.T) {
 	t.Helper()
+	clean := f.acceptPendingChildren(t)
 	f.release(t)
 	if f.listener != nil {
 		if err := f.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			t.Errorf("retain daemon fixture %s: listener close: %v", f.root, err)
-			return
+			clean = false
 		}
 	}
-	if f.nativeStarted && f.done == nil {
-		t.Errorf("retain daemon fixture %s: PID %d completion registration missing", f.root, f.pid)
-		return
+	f.mu.Lock()
+	children := append([]daemonWaitChild(nil), f.children...)
+	started := f.nativeStarted
+	f.mu.Unlock()
+	if started && f.registrations() == 0 {
+		t.Errorf("retain daemon fixture %s: completion registration missing", f.root)
+		clean = false
 	}
-	if f.done != nil && !joinDaemonWait(t, f.done) {
-		t.Errorf("retain daemon fixture %s: PID %d Wait unresolved", f.root, f.registrationPID)
-		return
+	for _, child := range children {
+		if child.done == nil {
+			t.Errorf("retain daemon fixture %s: PID %d completion registration missing", f.root, child.pid)
+			clean = false
+		} else if !joinDaemonWait(t, child.done) {
+			t.Errorf("retain daemon fixture %s: PID %d Wait unresolved", f.root, child.pid)
+			clean = false
+		}
+		if child.connection != nil {
+			t.Errorf("retain daemon fixture %s: PID %d connection closure unresolved", f.root, child.pid)
+			clean = false
+		}
 	}
-	if f.connection != nil {
-		t.Errorf("retain daemon fixture %s: connection closure unresolved", f.root)
-		return
-	}
-	if err := os.RemoveAll(f.root); err != nil {
-		t.Error(err)
+	if clean {
+		if err := os.RemoveAll(f.root); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
@@ -219,10 +334,10 @@ func exerciseDaemonWaitRegistration(t *testing.T, guardErr, registrationErr erro
 	err := f.start(t.Context(), options)
 	requireDaemonWaitLaunchErrors(t, err, guardErr, registrationErr)
 	f.ready(t)
-	if f.registrations != 1 || f.registrationRoot != f.root || f.registrationPID != f.pid || f.done == nil {
-		t.Fatalf("wait registration differs: count=%d root=%t pid=%d want=%d", f.registrations, f.registrationRoot == f.root, f.registrationPID, f.pid)
+	if f.registrations() != 1 || f.registrationRoot() != f.root || f.registrationPID() != f.pid() || f.done() == nil {
+		t.Fatalf("wait registration differs: count=%d root=%t pid=%d want=%d", f.registrations(), f.registrationRoot() == f.root, f.registrationPID(), f.pid())
 	}
-	reference, err := lifetime.ObserveProcess(f.pid)
+	reference, err := lifetime.ObserveProcess(f.pid())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,12 +346,12 @@ func exerciseDaemonWaitRegistration(t *testing.T, guardErr, registrationErr erro
 		t.Fatalf("ready child is not alive: %v", err)
 	}
 	select {
-	case <-f.done:
+	case <-f.done():
 		t.Fatal("Wait completion closed while gated child is alive")
 	default:
 	}
 	f.release(t)
-	joinDaemonWait(t, f.done)
+	joinDaemonWait(t, f.done())
 	return f
 }
 
@@ -262,7 +377,7 @@ func TestDaemonWaitDoesNotRegisterFailedStart(t *testing.T) {
 	if err := f.start(t.Context(), options); !errors.Is(err, os.ErrNotExist) || !errors.Is(err, ErrBinding) {
 		t.Fatalf("start failure cause lost: %v", err)
 	}
-	if f.registrations != 0 || f.done != nil {
+	if f.registrations() != 0 || f.done() != nil {
 		t.Fatal("failed Start registered a completion handle")
 	}
 }
@@ -276,5 +391,5 @@ func TestDaemonWaitClosesAfterChildExitError(t *testing.T) {
 	}
 	f.ready(t)
 	f.release(t)
-	joinDaemonWait(t, f.done)
+	joinDaemonWait(t, f.done())
 }

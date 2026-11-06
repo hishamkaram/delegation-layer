@@ -16,7 +16,7 @@ func TestProbeSavedPrivateCompatibleRechecksSelectedPublication(t *testing.T) {
 	dClient, dDaemon := installPrivateSupervisorPair(t, filepath.Join(f.base, "available-D"))
 	client, err := ProbeSavedPrivateCompatible(t.Context(), f.stateRoot, f.saved, f.options, func(context.Context) (string, string, error) {
 		changed := f.successor
-		changed.ClientSHA256 = task.ComputeSHA256([]byte("replacement publication"))
+		changed.ClientExecutable += "-replacement"
 		writePrivateSuccessorTestRecord(t, privateSupervisorBindingPath(f.stateRoot), privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: changed})
 		return dClient, dDaemon, nil
 	})

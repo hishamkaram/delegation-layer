@@ -26,7 +26,7 @@ from scripts.delegate_acceptance.release_verification.source import source_seeds
 
 REVISION = "a" * 40
 OTHER_REVISION = "b" * 40
-BINARIES = {"runner_sha256": "3" * 64, "pueue_sha256": "4" * 64, "pueued_sha256": "5" * 64}
+BINARIES = {"delegate-run": "/fixture/delegate-run", "pueue": "/fixture/pueue", "pueued": "/fixture/pueued"}
 FINGERPRINT = "7" * 64
 HARNESS = {"harness_revision": REVISION, "harness_sha256": FINGERPRINT, "committed": True}
 SCOPE = {"tmpdir_scopes": dict(supplemental.CONTINUATION_TMPDIR_SCOPES), "writable_roots": "own-tmpdir",
@@ -47,7 +47,10 @@ def _snapshot(root: Path) -> dict[str, str]:
             entries[os.path.relpath(Path(current) / name, root)] = "directory"
         for name in files:
             path = Path(current) / name
-            entries[os.path.relpath(path, root)] = hashlib.sha256(path.read_bytes()).hexdigest()
+            if path.name in {"delegate", "delegate-run", "pueue", "pueued", "foreign-delegate", "runner"}:
+                entries[os.path.relpath(path, root)] = "installed-path"
+            else:
+                entries[os.path.relpath(path, root)] = hashlib.sha256(path.read_bytes()).hexdigest()
     return entries
 
 
@@ -62,7 +65,11 @@ class SupplementalFixture:
         self.root = root
         self.delegate = root / "delegate"
         self.delegate.write_bytes(b"candidate delegate\n")
-        self.binaries = {"delegate_sha256": hashlib.sha256(self.delegate.read_bytes()).hexdigest(), **BINARIES}
+        self.binaries = {"delegate": str(self.delegate.resolve())}
+        for name in BINARIES:
+            path = root / name
+            path.write_text("installed fixture\n", encoding="utf-8")
+            self.binaries[name] = str(path.resolve())
         self.serial = 0
         self.canonical = root / "canonical"
         self.supplemental = root / "supplemental"
@@ -77,7 +84,7 @@ class SupplementalFixture:
 
     def write_case(self, directory: Path, case, tasks: dict[str, str], **extra) -> None:
         session = "session-" + case.case_id
-        runtimes = {task: {"executable": "/fixture/provider", "version": "1.0", "sha256": "1" * 64}
+        runtimes = {task: {"executable": "/fixture/provider", "version": "1.0"}
                     for task in tasks.values()}
         sessions = {alias: session for alias in tasks}
         _write(directory / "success.json", {
@@ -103,7 +110,8 @@ class SupplementalFixture:
             "provider_identity_scope": "first-admitted-task", "provider_task_id": first,
             "requested_model": None, "requested_effort": None,
             "provider_executable": "/fixture/provider", "provider_version": "1.0",
-            "provider_sha256": "1" * 64, **self.binaries, **overrides,
+            "schema_version": 2, "representation": "installed-paths",
+            "installed_executables": dict(self.binaries), **overrides,
         })
 
     def build_canonical(self, revision: str = REVISION) -> Path:
@@ -268,7 +276,7 @@ class SupplementalValidationTests(unittest.TestCase):
         corruptions = {
             "supplemental_binary_mismatch": lambda: self.fixture.write_binding(
                 directory, case.provider, case.permission, case.scenario,
-                cases[case.case_id]["fresh"], runner_sha256="9" * 64),
+                cases[case.case_id]["fresh"], installed_executables={**self.fixture.binaries, "delegate-run": "/foreign/delegate-run"}),
             "supplemental_command_not_continue": lambda: _rewrite(source, continuation_command="dispatch"),
             "supplemental_task_overlap": lambda: self.fixture.write_continue_case(
                 directory, case, {"fresh": f"{1:032x}", "resume": tasks["resume"]}),
@@ -372,7 +380,8 @@ class SupplementalValidationTests(unittest.TestCase):
 
     def test_candidate_delegate_must_be_the_canonical_binary(self):
         receipt, _ = self.built()
-        self.fixture.delegate.write_bytes(b"another build\n")
+        self.fixture.delegate = self.fixture.root / "foreign-delegate"
+        self.fixture.delegate.write_bytes(b"another installation\n")
         self.refused_unchanged(receipt, "candidate_delegate_mismatch")
 
     def test_dispatch_substitution_is_refused(self):
@@ -397,7 +406,7 @@ class SupplementalValidationTests(unittest.TestCase):
         self.refused_unchanged(receipt, case.case_id + ": source_proof_incomplete")
         source.write_text(good, encoding="utf-8")
         aggregate = json.loads(receipt.read_text())
-        aggregate["cases"][0]["binary_identities"]["sha256"]["runner_sha256"] = "9" * 64
+        aggregate["cases"][0]["binary_identities"]["paths"]["delegate-run"] = "/foreign/delegate-run"
         _write(receipt, aggregate)
         self.refused_unchanged(receipt, "aggregate_")
 
@@ -497,7 +506,7 @@ class PiControlValidationTests(unittest.TestCase):
         tasks = self.fixture.build_pi_control()
         self.fixture.write_binding(self.fixture.pi_control, "pi:json", "read-only",
                                    PI_SESSION_MISS_SCENARIO, tasks["fresh"],
-                                   pueued_sha256="8" * 64)
+                                   installed_executables={**self.fixture.binaries, "pueued": "/foreign/pueued"})
         with self.assertRaisesRegex(EvidenceError, "pi_control_binary_mismatch"):
             supplemental.validate_pi_control(self.fixture.pi_control, self.candidate, set())
 
@@ -529,14 +538,14 @@ class CanonicalCandidateTests(unittest.TestCase):
         self.assertEqual(candidate.aggregate_sha256, self.fixture.aggregate_sha256)
         runner = self.root / "runner"
         runner.write_bytes(b"runner\n")
-        matching = {**candidate.binaries, "runner_sha256": hashlib.sha256(b"runner\n").hexdigest()}
+        matching = {**candidate.binaries, "delegate-run": str(runner.resolve())}
         supplemental.require_selected_binaries(
             supplemental.Candidate(candidate.harness, candidate.aggregate_sha256, matching, candidate.task_ids),
-            {"runner_sha256": runner})
-        with self.assertRaisesRegex(EvidenceError, "candidate_runner_mismatch"):
-            supplemental.require_selected_binaries(candidate, {"runner_sha256": runner})
+            {"delegate-run": runner})
+        with self.assertRaisesRegex(EvidenceError, "candidate_delegate-run_mismatch"):
+            supplemental.require_selected_binaries(candidate, {"delegate-run": runner})
         with self.assertRaisesRegex(EvidenceError, "candidate_binary_selection_invalid"):
-            supplemental.require_selected_binaries(candidate, {"provider_sha256": runner})
+            supplemental.require_selected_binaries(candidate, {"provider": runner})
 
 
 class HarnessObservationTests(unittest.TestCase):

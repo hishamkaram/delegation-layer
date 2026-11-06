@@ -21,7 +21,7 @@ func inspectScheduleHost(ctx context.Context, a Arguments, deps Dependencies) (o
 	if err != nil {
 		return observed, err
 	}
-	observed.ServeCommand = []string{self.Path, "--root", root, "scheduler", "serve"}
+	observed.ServeCommand = []string{self, "--root", root, "scheduler", "serve"}
 	reader, err := taskdir.OpenReadOnlyStoreContext(ctx, root, deps.storeDependencies().registry())
 	if onlyNotExist(err) {
 		return observed, nil
@@ -30,15 +30,15 @@ func inspectScheduleHost(ctx context.Context, a Arguments, deps Dependencies) (o
 		return observed, err
 	}
 	defer func() { err = errors.Join(err, reader.Close()) }()
-	status, err := host.Observe(ctx, host.Query{Store: reader, BuildID: self.SHA256})
+	status, err := host.Observe(ctx, host.Query{Store: reader})
 	command := observed.ServeCommand
 	observed = projectSchedulerStatus(status)
 	observed.ServeCommand = command
 	if err != nil {
 		return observed, err
 	}
-	if status.State != "no_host_observed" && status.State != "stopped" && status.BuildID != "" {
-		err = host.CheckCompatible(status, self.SHA256)
+	if status.State != "no_host_observed" && status.State != "stopped" {
+		err = host.CheckCompatible(status)
 	}
 	return observed, err
 }

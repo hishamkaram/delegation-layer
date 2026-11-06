@@ -157,10 +157,22 @@ class FakeWorld:
             self.install_skill(Path(tail[tail.index("--target") + 1]))
         return b""
 
+    def binary_source(self, name):
+        """Model channel installation from the distribution archive, never installed executable copies."""
+        if name in self.binary_override:
+            return self.binary_override[name]
+        archive = self.extract.parent / verifier.expected_archive(verifier.platform_identity(), TAG)
+        with tarfile.open(archive, "r:gz") as bundle:
+            source = bundle.extractfile(name)
+            if source is None:
+                raise AssertionError("fixture archive is missing " + name)
+            with source:
+                return source.read()
+
     def install_binaries(self, directory):
         directory.mkdir(parents=True)
         for name in verifier.BINARIES:
-            data = self.binary_override.get(name, (self.extract / name).read_bytes())
+            data = self.binary_source(name)
             (directory / name).write_bytes(data)
             (directory / name).chmod(0o755)
         if self.stray:
@@ -305,7 +317,7 @@ class PublishedBase(unittest.TestCase):
 
 
 class PublishedNpmTests(PublishedBase):
-    def test_explicit_and_default_install_bind_archive_hashes_and_tagged_skill(self):
+    def test_explicit_and_default_install_record_selection_and_bind_tagged_skill(self):
         self.assertEqual(self.publish(), 0)
         receipt = self.receipt()
         self.assertEqual(receipt["verdict"], "pass")
@@ -315,7 +327,8 @@ class PublishedNpmTests(PublishedBase):
         self.assertEqual(verified["latest"]["default_pass"], "run")
         self.assertEqual({item["path"] for item in verified["skill_source"]["files"]}, set(SKILL_SOURCE))
         self.assertEqual(receipt["published"]["archive_binaries"], {
-            name: hashlib.sha256(binary_script(name).encode()).hexdigest() for name in verifier.BINARIES})
+            "schema_version": 1, "representation": "installed-paths",
+            "paths": {name: str((self.extract / name).resolve()) for name in verifier.BINARIES}})
         names = [call["name"] for call in self.world.calls]
         self.assertIn("npm-exec-explicit-install-cli", names)
         self.assertIn("npm-exec-default-skill", names)
@@ -401,11 +414,10 @@ class PublishedNpmTests(PublishedBase):
         self.world.tarball = package_tarball({**SKILL_SOURCE, "SKILL.md": b"# drifted\n"})
         self.assertFailed("npm_pack_skill_mismatch")
 
-    def test_installed_binary_must_equal_extracted_archive_hash(self):
+    def test_compatible_installed_update_is_allowed(self):
         self.world.binary_override = {"pueued": b"#!/bin/sh\nprintf 'pueued 9\\n'\n"}
-        receipt = self.assertFailed("installed_binary_hash_mismatch")
-        self.assertEqual(receipt["failure"]["stage"], "verify-binaries")
-        self.assertNotIn("explicit_install", receipt["published"]["verified"])
+        self.assertEqual(self.publish(), 0)
+        self.assertEqual(self.receipt()["verdict"], "pass")
 
     def test_installer_stray_entries_are_rejected(self):
         self.world.stray = True
@@ -461,18 +473,18 @@ class PublishedNpmTests(PublishedBase):
 
     def test_other_failures_do_not_claim_unresolved_ownership(self):
         self.world.binary_override = {"delegate": b"#!/bin/sh\nexit 0\n"}
-        receipt = self.assertFailed("installed_binary_hash_mismatch")
+        receipt = self.assertFailed("version_output_invalid")
         self.assertNotIn("unresolved_ownership", receipt["published"])
 
-    def test_archive_binding_rejects_wrong_tag_tampered_binary_and_replaced_directory(self):
+    def test_archive_binding_rejects_wrong_tag_and_missing_executable(self):
         with self.subTest("tag"):
             self.assertEqual(self.publish(tag="v1.2.4"), 1)
             self.assertEqual(self.receipt()["failure"]["code"], "archive_receipt_not_passing")
         self.receipt_path.unlink()
         with self.subTest("binary"):
-            (self.extract / "pueue").write_bytes(b"#!/bin/sh\nexit 3\n")
+            (self.extract / "pueue").unlink()
             self.assertEqual(self.publish(), 1)
-            self.assertEqual(self.receipt()["failure"]["code"], "release_binary_identity_changed")
+            self.assertEqual(self.receipt()["failure"]["code"], "release_binary_missing")
         self.assertEqual(self.workspaces(), [])
 
 

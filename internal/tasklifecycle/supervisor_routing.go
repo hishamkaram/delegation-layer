@@ -23,5 +23,5 @@ func (options SupervisorOptions) observeSubmittedSupervisor(ctx context.Context,
 	if err != nil {
 		return supervisorcore.TaskSupervisorObservation{}, err
 	}
-	return supervisorcore.ObserveTaskSupervisorWithAdmissionContext(ctx, store, submission.Supervisor, meta, supervisorcore.TaskSupervisorObservationOptions{Control: options.Options, Lookup: options.Lookup, RunnerExecutable: runner, OpenStore: options.OpenStore, RootAdmission: options.RootAdmission, Routing: options.Routing, Source: source})
+	return supervisorcore.ObserveTaskSupervisorWithOptions(ctx, store, submission.Supervisor, meta, supervisorcore.TaskSupervisorObservationOptions{Control: options.Options, Lookup: options.Lookup, RunnerExecutable: runner, OpenStore: options.OpenStore, Routing: options.Routing, Source: source})
 }

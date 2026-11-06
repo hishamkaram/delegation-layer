@@ -140,6 +140,12 @@ func requireObservationFailureProjection(t *testing.T, test observationFailureCa
 func newManagedTaskUse(t *testing.T) (*taskdir.Store, *workspace.Resource, appTaskUse) {
 	t.Helper()
 	store, resource := testsupport.NewResource(t)
+	return store, resource, newManagedTaskUseInStore(t, store, resource)
+}
+
+// newManagedTaskUseInStore borrows the Store and Resource to seed this task's use.
+func newManagedTaskUseInStore(t *testing.T, store *taskdir.Store, resource *workspace.Resource) appTaskUse {
+	t.Helper()
 	template, _ := newAppTaskInStore(t, store, strings.Repeat("f", 32), false, nil)
 	t.Cleanup(func() {
 		if closeErr := template.Close(); closeErr != nil {
@@ -149,7 +155,7 @@ func newManagedTaskUse(t *testing.T) (*taskdir.Store, *workspace.Resource, appTa
 	if err := resource.RecordSource(t.Context(), workspace.Source{Root: "/fixture/source", CommonDir: "/fixture/source/.git", GitDir: "/fixture/source/.git", RelativeCwd: ".", BaseOID: strings.Repeat("a", 40), ObjectFormat: "sha1"}); err != nil {
 		t.Fatal(err)
 	}
-	return store, resource, seedAppTaskUse(t, store, template, resource, resource.Request().TaskID)
+	return seedAppTaskUse(t, store, template, resource, resource.Request().TaskID)
 }
 
 // resumableTaskProjection is a collect result for a budget-stopped turn that

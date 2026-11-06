@@ -175,15 +175,14 @@ supervisor-fixtures: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/harnessprobe ./internal/testutil/harnessprobe
 	CGO_ENABLED=0 go test -c -buildvcs=false -o bin/harness-tools/scheduler-fixture ./internal/scheduler
 
-acceptance-supervisor: supervisor-fixtures
+acceptance-supervisor: tool-versions
 	./scripts/acceptance-supervisor.sh
 
-acceptance-private-cli: build
+acceptance-private-cli: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Private CLI acceptance evidence: $$receipt_dir/receipt.json"; \
 	python3 scripts/acceptance_private_cli.py \
-		--delegate "$(BIN_DIR)/delegate" \
-		--runner "$(BIN_DIR)/delegate-run" \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--parallel-tasks 200 \
@@ -191,21 +190,20 @@ acceptance-private-cli: build
 		--output "$$receipt_dir/receipt.json"
 
 .PHONY: acceptance-scheduler
-acceptance-scheduler: build supervisor-fixtures
+acceptance-scheduler: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/scheduler-acceptance.XXXXXX"); \
 	echo "Scheduler acceptance output: $$receipt_dir/results"; \
 	python3 scripts/acceptance_scheduler.py \
-		--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--output "$$receipt_dir/results"
 
-acceptance-private-cli-default-stop: build
+acceptance-private-cli-default-stop: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Default stop acceptance evidence: $$receipt_dir/receipt.json"; \
 	python3 scripts/acceptance_private_cli.py \
-		--delegate "$(BIN_DIR)/delegate" \
-		--runner "$(BIN_DIR)/delegate-run" \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario default-stop \
@@ -219,12 +217,12 @@ nested-survival-fixture: tool-versions
 
 # The expectation is an assertion, never a backend selector. Exact Linux proof
 # is requested explicitly; normal CI hosts assert their cooperative backend.
-acceptance-nested-survival: build nested-survival-fixture
+acceptance-nested-survival: nested-survival-fixture
 	@for topology in shared-warm other-warm other-cold; do \
 		receipt_dir=$$(mktemp -d "$(BIN_DIR)/nested-survival.XXXXXX") || exit $$?; \
 		echo "Nested survival $$topology evidence: $$receipt_dir/receipt.json"; \
 		python3 scripts/acceptance_private_cli.py \
-			--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+			--source-root "$(CURDIR)" \
 			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 			--scenario nested-survival --nested-topology "$$topology" \
@@ -234,12 +232,11 @@ acceptance-nested-survival: build nested-survival-fixture
 			--output "$$receipt_dir/receipt.json" || exit $$?; \
 	done
 
-acceptance-supervisor-handoff: build
+acceptance-supervisor-handoff: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Supervisor handoff acceptance evidence: $$receipt_dir/receipt.json"; \
 	python3 scripts/acceptance_private_cli.py \
-		--delegate "$(BIN_DIR)/delegate" \
-		--runner "$(BIN_DIR)/delegate-run" \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario external-inspection-handoff \
@@ -247,11 +244,11 @@ acceptance-supervisor-handoff: build
 		--dispatch-workers 2 \
 		--output "$$receipt_dir/receipt.json"
 
-acceptance-supervisor-upgrade-recovery: build
+acceptance-supervisor-upgrade-recovery: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Supervisor upgrade recovery evidence: $$receipt_dir/receipt.json"; \
 	python3 scripts/acceptance_private_cli.py \
-		--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario supervisor-upgrade-recovery --parallel-tasks 2 \
@@ -259,15 +256,12 @@ acceptance-supervisor-upgrade-recovery: build
 
 # Fixture-only managed workspace regressions (lifecycle, lineage, checkpoint); not real provider acceptance.
 # Each scenario writes its own receipt under bin/managed-workspace-acceptance.XXXXXX; the script owns cleanup.
-acceptance-workspaces: build
+acceptance-workspaces: tool-versions
 	@for scenario in lifecycle lineage checkpoint; do \
 		receipt_dir=$$(mktemp -d "$(BIN_DIR)/managed-workspace-acceptance.XXXXXX") || exit $$?; \
 		echo "Managed workspace $$scenario acceptance evidence: $$receipt_dir/receipt.json"; \
 		python3 scripts/acceptance_workspaces.py \
-			--delegate "$(BIN_DIR)/delegate" \
-			--runner "$(BIN_DIR)/delegate-run" \
-			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
-			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+			--source-root "$(CURDIR)" \
 			--scenario "$$scenario" \
 			--output "$$receipt_dir/receipt.json" || exit $$?; \
 	done
@@ -319,8 +313,8 @@ acceptance-independent-startup: tool-versions
 	DELEGATE_TEST_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
 	DELEGATE_TEST_PUEUED="$(BIN_DIR)/test-supervisor/pueued" \
 	go test -race -count=1 -timeout=4m -v \
-		-run '^TestIndependentStartup(NativeProof|PeerProof|CustodyNativeProof|OwnStatePairProof)$$' \
-		./internal/lifetime ./internal/scheduler/host ./internal/supervisor
+		-run '^TestIndependentStartup(NativeProof|PeerProof)$$' \
+		./internal/lifetime ./internal/scheduler/host
 	# Check native identity and shutdown leases before resident fixtures.
 	go test -race -count=1 -timeout=4m -v \
 		-run '^Test(SameProcess|NewProcessRefRejectsMalformedRecognizedDarwinTokens|DarwinProcessPresent|NestedNativeObservationPreservesCallerContext)' ./internal/lifetime
@@ -334,28 +328,20 @@ acceptance-independent-startup: tool-versions
 	DELEGATE_SHUTDOWN_LEASE_CONTROL_FIXTURE="$(BIN_DIR)/test-supervisor/private-control-fixture.test" \
 	DELEGATE_SHUTDOWN_LEASE_CONTROL_OWNER="$(BIN_DIR)/test-supervisor/delegate-run" \
 	go test -race -count=1 -timeout=4m -v -run '^TestManagedShutdownLease' ./internal/lifetime
-	DELEGATE_ADMISSION_LEASE_PROOF=1 \
-	DELEGATE_SHUTDOWN_LEASE_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
-	DELEGATE_SHUTDOWN_LEASE_CONTROL_FIXTURE="$(BIN_DIR)/test-supervisor/private-control-fixture.test" \
-	DELEGATE_SHUTDOWN_LEASE_CONTROL_OWNER="$(BIN_DIR)/test-supervisor/delegate-run" \
 	go test -race -count=1 -timeout=4m -v \
-		-run '^(TestManagedAdmissionLeaseNativeProof|TestAdmissionNativeCBORRejectsMalformedFrames)$$' ./internal/lifetime
-	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(Infrastructure|ValidateInfrastructure|OutsideRuntimeObservation|StatePairContentStaging|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|RootAdmission|IntentJournal|Context|IntentRequires|Endpoint|DecodeStrictByteSlice|WithoutProcessScopeMarker|ConfigureProcessScopeEnvironment)' \
+		-run '^Test(Infrastructure|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|IntentJournal|Context|IntentRequires|Endpoint|DecodeStrictByteSlice|WithoutProcessScopeMarker|ConfigureProcessScopeEnvironment)' \
 		./internal/supervisor ./internal/taskdir ./internal/task ./internal/lifetime
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(ContinuationPair|ContinuationAbsentInventory|ControlContinuation|ControlRuntimeSaved|RecoveryCandidate|PrepareAdmissionSupervisorRefusesDifferentDaemonBeforeScheduling|PrepareTaskSupervisorDefersCompatibleRuntimeMaintenance|ReadTaskMetadataSupervisor|RoutedCleanup)' \
+		-run '^Test(ContinuationPair|ResolveSavedSupervisorClient|AcceptedSupervisorPair|ControlContinuation|ControlRuntimeSaved|RecoveryCandidate|PrepareAdmissionSupervisorAcceptsCompatibleDaemonBeforeScheduling|PrivateAdmissionRuntimeRefusesDifferentLogicalGenerationWithoutAuthorization|PrepareTaskSupervisorDefersCompatibleRuntimeMaintenance|ReadTaskMetadataSupervisor|RoutedCleanup)' \
 		./internal/supervisor ./internal/tasklifecycle
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(InfrastructureRouting|ModelDiscoveryPrivatePreparationUsesCapturedRoutingFault|ModelDiscoveryCleanupRetainsRoutingStore|SchedulerObservationCleanupRetainsRoutingStore|SchedulerCleanup|SchedulerObserveRetains|SchedulerDispatchRetains|RoutedManualMigration|ManualMigrationReport)' ./internal/app
+		-run '^Test(Issue135PublicContinuation|InfrastructureEstablishmentHost|InfrastructureRouting|ModelDiscoveryPrivatePreparationUsesCapturedRoutingFault|ModelDiscoveryCleanupRetainsRoutingStore|SchedulerObservationCleanupRetainsRoutingStore|SchedulerCleanup|SchedulerObserveRetains|SchedulerDispatchRetains|RoutedManualMigration|ManualMigrationReport)' ./internal/app
 	go test -race -count=1 -timeout=4m -v \
 		-run '^Test(Scheduler(CleanupUnresolved|TaskCleanupMarker|SelectedResult|RunJoinsRemainingWorker)|Host(PermanentChildFault|CleanupFrame|UnverifiedCleanup|ReportsOneCleanup))' \
 		./internal/scheduler/runtime ./internal/scheduler/host
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(ObservePrivateRestore|PrivateRestore|ProbeSavedPrivateCompatible|ExactPrivatePairComparisonReadFaultStaysHard|PrivateAdmissionRuntime|CheckPrivateAdmissionRuntime|PrivateBootstrap|ManagedShutdown|LegacyUnscopedShutdown|StopRecoveredWithinBootstrap|BootstrapCleanup|FinishPrivateBootstrap|RetainBootstrapLock)' ./internal/pueue/internal/control
+		-run '^Test(ObservePrivateRestore|PrivateRestore|ProbeSavedPrivateCompatible|ProbeSavedPrivateTaskObservation|ExactPrivatePairComparisonReadFaultStaysHard|PrivateAdmissionRuntime|CheckPrivateAdmissionRuntime|PrivateBootstrap|ManagedShutdown|LegacyUnscopedShutdown|StopRecoveredWithinBootstrap|BootstrapCleanup|FinishPrivateBootstrap|RetainBootstrapLock)' ./internal/pueue/internal/control
 	go test -race -count=1 -timeout=4m -v ./internal/supervisor/infrastructure
-	python3 scripts/native_init_census.py --output "$(BIN_DIR)/independent-startup-proof/init-census"
-	python3 scripts/repair_editor_counterfactuals.py --output "$(BIN_DIR)/independent-startup-proof/editor-survivors" --pueue "$(BIN_DIR)/test-supervisor/pueue"
 
 acceptance-native-lifetime: tool-versions
 	python3 -m unittest discover -s scripts -p 'test_native_lifetime_proof.py' -v
@@ -395,5 +381,5 @@ inspection-fixtures: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/inspection-helper ./internal/testutil/inspectionfixture/cmd/inspection-helper
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/provider ./internal/testutil/fakeprovider/cmd/provider
 
-acceptance-inspection: inspection-fixtures test-native-harness
+acceptance-inspection: tool-versions test-native-harness
 	./scripts/acceptance-inspection.sh

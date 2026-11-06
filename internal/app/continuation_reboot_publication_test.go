@@ -150,6 +150,7 @@ func requireTerminalRebootContinuation(t *testing.T, fixture *rebootFixture) {
 }
 
 func TestContinueCollectsSealedRebootPredecessorFirst(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, sealedRebootSetup())
 	requireSealedUncollectedReboot(t, fixture)
 	before := snapshotRebootTaskFiles(t, fixture.td.Dir)
@@ -164,6 +165,7 @@ func TestContinueCollectsSealedRebootPredecessorFirst(t *testing.T) {
 }
 
 func TestPredecessorResolutionRefusesSealedRebootPredecessor(t *testing.T) {
+	t.Parallel()
 	t.Run("predecessor terminated", func(t *testing.T) {
 		fixture := newRebootFixture(t, sealedRebootSetup())
 		requireSealedUncollectedReboot(t, fixture)
@@ -187,6 +189,7 @@ func TestPredecessorResolutionRefusesSealedRebootPredecessor(t *testing.T) {
 // reports it as pending publication, so it is never an interruption. Without a
 // seal, collect cannot publish it either; every continuation consumer refuses.
 func TestOrphanPayloadRebootPredecessorIsNeverHandedOff(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
 	writeRebootTaskFile(t, fixture, "result.txt", []byte("answer\n"))
 	requireOrphanPayloadReboot(t, fixture)
@@ -221,6 +224,7 @@ func requireOrphanPayloadReboot(t *testing.T, fixture *rebootFixture) {
 
 // Observation keeps the interruption offer for unpublished turns only.
 func TestStatusOffersInterruptionOnlyWithoutPublication(t *testing.T) {
+	t.Parallel()
 	sealed := newRebootFixture(t, sealedRebootSetup())
 	observed := rebootStatus(t, sealed)
 	if observed.code != 0 || observed.err != nil || observed.response.Status == "interrupted" || observed.response.Continuation != nil || observed.response.Failure != nil {
@@ -242,6 +246,7 @@ func TestStatusOffersInterruptionOnlyWithoutPublication(t *testing.T) {
 // The unsealed interruption handoff still releases with the preferred
 // closure witness: the empty-scope termination record.
 func TestRebootInterruptionReleasesWithClosureWitness(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot})
 	requireRebootClosedPreconditions(t, fixture)
 	evidence, err := taskdir.LoadLifetimeEvidenceContext(t.Context(), fixture.td)
@@ -255,6 +260,7 @@ func TestRebootInterruptionReleasesWithClosureWitness(t *testing.T) {
 }
 
 func TestHeldRunnerLeaseBlocksRebootInterruption(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true, holdRunnerLease: true})
 	before := snapshotRebootTaskFiles(t, fixture.td.Dir)
 	if err := tasklifecycle.PredecessorTerminated(fixture.root, fixture.td, &fixture.req, rebootSupervisorOptions(fixture)); !errors.Is(err, task.ErrSessionBusy) {
@@ -275,6 +281,7 @@ func TestHeldRunnerLeaseBlocksRebootInterruption(t *testing.T) {
 // A valid budget stop is checked first and keeps its own handoff digest even
 // when the lifetime also closed.
 func TestBudgetStopHandoffPrecedesClosedLifetime(t *testing.T) {
+	t.Parallel()
 	fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot})
 	recordRebootStop(t, fixture, "budget", "budget")
 	records, err := fixture.td.ReadStopRecords()
@@ -291,6 +298,7 @@ func TestBudgetStopHandoffPrecedesClosedLifetime(t *testing.T) {
 // and never hands off the session. A sealed turn is never an interruption, yet
 // its malformed closure still fails reconciliation explicitly.
 func TestMalformedRebootEvidenceIsReportedNotHandedOff(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		seal bool

@@ -194,3 +194,42 @@ func (l *Lease) Close() error {
 	l.file = nil
 	return file.Close()
 }
+
+// probeExistingLease observes one existing instance inode under a temporary
+// exclusive hold. It cannot create an election inode or confer resident/start
+// authority. The callback observes only; Close releases this probe's reference.
+func probeExistingLease(ctx context.Context, path string, observe func() error) (resultErr error) {
+	if ctx == nil || observe == nil {
+		return os.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateParent(path); err != nil {
+		return err
+	}
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	lease, err := adoptLease(file, path)
+	if err != nil {
+		return errors.Join(err, file.Close())
+	}
+	defer func() { resultErr = errors.Join(resultErr, lease.Close()) }()
+	err = lease.WithHeldFile(ctx, func(held *os.File) error {
+		lockErr := unix.Flock(int(held.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if errors.Is(lockErr, unix.EWOULDBLOCK) || errors.Is(lockErr, unix.EAGAIN) {
+			return nil
+		}
+		if lockErr != nil {
+			return lockErr
+		}
+		if checkErr := lease.validate(); checkErr != nil {
+			return checkErr
+		}
+		return errors.Join(observe(), lease.validate())
+	})
+	return err
+}

@@ -62,10 +62,7 @@ func TestPrivateSupervisorMigrationCompleteRejectsMismatchedDaemonIdentity(t *te
 	root, bindings := newPrivateSuccessorTestState(t)
 	seedPrivateSuccessorTestHistory(t, root, bindings, [][2]string{{"A", "B"}}, "B")
 	base := filepath.Join(root, privateSupervisorDirectory)
-	writePrivateSuccessorTestRecord(t, privateDaemonIdentityPath(base), privateDaemonIdentity{
-		Executable: bindings["A"].DaemonExecutable,
-		SHA256:     bindings["A"].DaemonSHA256,
-	})
+	writePrivateSuccessorTestRecord(t, privateDaemonIdentityPath(base), privateDaemonIdentityForBinding(bindings["A"]))
 	complete, err := PrivateSupervisorMigrationComplete(root, bindings["B"])
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +108,7 @@ func TestPrivateSupervisorMigrationEdgeCompleteRequiresExactStoppedSuccessor(t *
 			}
 			if testCase.wantGuardError {
 				if err = WithBootstrapLock(ctx, root, func() error {
-					return PublishPrivateSupervisorBindingIfAbsentWithOptionsContext(t.Context(), root, bindings["A"], Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}})
+					return publishPrivateSupervisorBindingIfAbsentContext(t.Context(), root, bindings["A"], allowPrivateGenerationForTest{})
 				}); !errors.Is(err, ErrBinding) {
 					t.Fatalf("unrelated successor relaxed the predecessor binding guard: %v", err)
 				}
@@ -148,7 +145,7 @@ func TestPrivateSupervisorMigrationEdgePublishedAllowsPendingRecoveryCleanup(t *
 	}
 }
 
-func TestPrivateSupervisorMigrationEdgeCompleteRejectsChangedSuccessorDigest(t *testing.T) {
+func TestPrivateSupervisorMigrationEdgeCompleteRejectsDifferentSuccessorPath(t *testing.T) {
 	root, bindings := newPrivateSuccessorTestState(t)
 	seedPrivateSuccessorTestHistory(t, root, bindings, [][2]string{{"A", "B"}}, "B")
 	base := filepath.Join(root, privateSupervisorDirectory)
@@ -162,7 +159,7 @@ func TestPrivateSupervisorMigrationEdgeCompleteRejectsChangedSuccessorDigest(t *
 			LegacyStopped: true,
 		}},
 	}
-	history.Migrations[0].Successor.SHA256 = task.ComputeSHA256([]byte("different successor bytes"))
+	history.Migrations[0].Successor.Executable += "-different"
 	writePrivateSuccessorTestRecord(t, privateMigrationHistoryPath(base), history)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -259,9 +256,10 @@ func newPrivateSuccessorTestState(t *testing.T) (string, map[string]task.Supervi
 		binding.ResolvedConfigSHA256 = task.ComputeSHA256([]byte("resolved " + name))
 		binding.Endpoint = "unix:" + filepath.Join(base, "run", name+".sock")
 		binding.ClientExecutable = filepath.Join(base, "removed-"+name, "pueue")
-		binding.ClientSHA256 = task.ComputeSHA256([]byte("client " + name))
+		binding.ExecutableIdentity = task.ExecutableIdentityInstalledPathV1
+		binding.ClientSHA256 = ""
 		binding.DaemonExecutable = filepath.Join(base, "removed-"+name, "pueued")
-		binding.DaemonSHA256 = task.ComputeSHA256([]byte("daemon " + name))
+		binding.DaemonSHA256 = ""
 		bindings[name] = binding
 	}
 	return root, bindings
@@ -358,7 +356,7 @@ func snapshotPrivateSuccessorTestState(t *testing.T, root string) map[string]pri
 			return infoErr
 		}
 		file := privateSuccessorTestFile{mode: info.Mode(), modified: info.ModTime()}
-		if !entry.IsDir() {
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 == 0 {
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
 				return readErr

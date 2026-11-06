@@ -140,6 +140,16 @@ func newHistoricalInspectionMigrationScenario(t *testing.T) *historicalInspectio
 	if err != nil {
 		t.Fatal(err)
 	}
+	predecessorWaits := fixture.component.daemonWaits()
+	// Keep A's original shutdown client usable until its actual Wait closes.
+	t.Cleanup(func() {
+		if componentDaemonsClosed(predecessorWaits) {
+			return
+		}
+		if restoreErr := os.WriteFile(configPath, config, 0o600); restoreErr != nil {
+			t.Error(restoreErr)
+		}
+	})
 	changedConfig := retargetedPrivateSocketConfig(t, config, fixture.predecessor)
 	if err = os.WriteFile(configPath, changedConfig, 0o600); err != nil {
 		t.Fatal(err)
@@ -147,7 +157,8 @@ func newHistoricalInspectionMigrationScenario(t *testing.T) *historicalInspectio
 	var successor *pueue.Client
 	err = pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
 		var prepareErr error
-		successor, prepareErr = pueue.PreparePrivateForMigrationWithLock(t.Context(), fixture.clientB, fixture.daemonB, fixture.root, fixture.options)
+		successor, prepareErr = pueue.PreparePrivateForMigrationWithLock(t.Context(), fixture.clientB, fixture.daemonB, fixture.root, fixture.component.setupOptions(fixture.options))
+		fixture.component.ownClient(successor, prepareErr)
 		return prepareErr
 	})
 	if err != nil {
@@ -204,12 +215,14 @@ func injectHistoricalInspectionMigrationCrash(t *testing.T, scenario *historical
 	t.Helper()
 	fixture := scenario.fixture
 	crash := errors.New("simulated process exit before group completion")
+	beforeWaits := len(fixture.component.daemonWaits())
 	err := pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
 		if prepareErr := inspection.PrepareGroupMigration(t.Context(), fixture.store, scenario.legacyGroup, scenario.successorGroup); prepareErr != nil {
 			return prepareErr
 		}
-		if publishErr := pueue.PublishPrivateSupervisorBindingIfAbsent(fixture.root, fixture.predecessor); publishErr != nil {
-			return publishErr
+		published, found, readErr := pueue.ReadPrivateSupervisorBinding(fixture.root)
+		if readErr != nil || !found || published != fixture.predecessor {
+			return errors.Join(pueue.ErrBinding, readErr)
 		}
 		if migrateErr := fixture.current.MigratePrivateSupervisorWithLock(t.Context(), fixture.root); migrateErr != nil {
 			return migrateErr
@@ -229,6 +242,7 @@ func injectHistoricalInspectionMigrationCrash(t *testing.T, scenario *historical
 		}
 		return crash
 	})
+	fixture.component.ownDaemonClients(fixture.current, beforeWaits)
 	if !errors.Is(err, crash) {
 		t.Fatalf("crash injection did not reach the successor-published boundary: %v", err)
 	}
@@ -389,7 +403,12 @@ func assertHistoricalInspectionRecoveryAliasRetired(t *testing.T, fixture *histo
 }
 
 func TestMigrateInspectionGroupRetiresOlderRecoveryAlias(t *testing.T) {
-	store := newBareInspectionStore(t)
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	store, err := taskdir.InitStore(owner.root)
+	owner.ownStore(t, store)
+	if err != nil {
+		t.Fatal(err)
+	}
 	legacySupervisor, logPath, _ := newUncertainGroupSupervisorWithConfig(t, store.RootID, pueue.PrivateConfigPath(store.Root))
 	privateBase := filepath.Join(store.Root, ".supervisor")
 	// A one-byte socket directly under the private base fits wherever the
@@ -425,7 +444,8 @@ func TestMigrateInspectionGroupRetiresOlderRecoveryAlias(t *testing.T) {
 		"FAKE_AFTER="+filepath.Join(filepath.Dir(logPath), "status-after.json"),
 		"FAKE_DONE="+filepath.Join(filepath.Dir(logPath), "group-done"),
 	)
-	legacySupervisor, err = pueue.Bind(context.Background(), legacySupervisor.Binding().ClientExecutable, pueue.PrivateConfigPath(store.Root), pueue.Options{Environment: environment, ObservationTimeout: 3 * time.Second})
+	legacySupervisor, err = pueue.Bind(t.Context(), legacySupervisor.Binding().ClientExecutable, pueue.PrivateConfigPath(store.Root), componentPublicationOptions(t, store.Root, owner, pueue.Options{Environment: environment, ObservationTimeout: 3 * time.Second}))
+	owner.ownClient(legacySupervisor, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,10 +520,7 @@ func TestPrivateAdmissionRejectsUnreachableNoJournalSupervisorWithIdentity(t *te
 	if err := os.Remove(filepath.Join(filepath.Dir(logPath), "status.json")); err != nil {
 		t.Fatal(err)
 	}
-	digest, err := commonprovider.FingerprintExecutable("/usr/bin/true")
-	if err != nil {
-		t.Fatal(err)
-	}
+	digest := strings.Repeat("a", 64)
 	identity, err := json.Marshal(map[string]string{"executable": "/usr/bin/true", "sha256": digest})
 	if err != nil {
 		t.Fatal(err)

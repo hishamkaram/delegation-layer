@@ -450,8 +450,9 @@ class InspectionHarnessTests(unittest.TestCase):
                     if digest is not None:
                         started["provider_sha256"] = digest
                         exited["provider_sha256"] = digest
-                    expected: dict[str, object] = {"executable": "/fixture/provider-v2",
-                                "version": version or "", "sha256": digest or ""}
+                    expected: dict[str, object] = {"executable": "/fixture/provider-v2", "version": version or ""}
+                    if digest is not None:
+                        expected["sha256"] = digest
                     self.assertEqual(provider_common.validate_provider_runtime_metadata(
                         meta, started_evidence=started), expected)
                     self.assertEqual(provider_common.validate_provider_runtime_metadata(
@@ -504,14 +505,26 @@ class InspectionHarnessTests(unittest.TestCase):
             "provider_sha256": "b" * 64,
         }
         for field, value in (("provider_executable", "/fixture/provider-v3"),
-                             ("provider_version", "fixture-v3"),
-                             ("provider_sha256", "c" * 64),
-                             ("provider_version", ""), ("provider_sha256", "")):
+                             ("provider_version", "fixture-v3"), ("provider_version", "")):
             with self.subTest(field=field, value=value):
                 exited = dict(started, **{field: value})
                 with self.assertRaisesRegex(AcceptanceFailure, "runtime identities differ"):
                     provider_common.validate_provider_runtime_metadata(
                         meta, launch_evidence=(started, exited))
+
+    def test_historical_program_sha_remains_data_without_comparison_or_mutation(self):
+        meta: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": ""}
+        started: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": "fixture-v2",
+                   "provider_sha256": "b" * 64}
+        for historical in (None, "", "c" * 64):
+            exited: dict[str, object] = {"provider_executable": "/fixture/provider", "provider_version": "fixture-v2"}
+            if historical is not None:
+                exited["provider_sha256"] = historical
+            before = deepcopy((started, exited))
+            self.assertEqual(provider_common.validate_provider_runtime_metadata(
+                meta, launch_evidence=(started, exited)), {
+                    "executable": "/fixture/provider", "version": "fixture-v2", "sha256": "b" * 64})
+            self.assertEqual((started, exited), before)
 
     def test_provider_runtime_metadata_accepts_started_only_interrupted_identity(self):
         meta: dict[str, object] = {

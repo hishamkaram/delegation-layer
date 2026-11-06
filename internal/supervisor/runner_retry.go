@@ -9,11 +9,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func RefreshManagedRetryRunner(selection AdmissionSelection, defaultRunner string, root string, store *taskdir.Store, td *taskdir.TaskDir, meta *task.MetaRecord) (AdmissionSelection, bool, error) {
-	return RefreshManagedRetryRunnerContext(context.Background(), selection, defaultRunner, root, store, td, meta)
-}
-
-func RefreshManagedRetryRunnerContext(ctx context.Context, selection AdmissionSelection, defaultRunner string, root string, store *taskdir.Store, td *taskdir.TaskDir, meta *task.MetaRecord) (AdmissionSelection, bool, error) {
+func RefreshManagedRetryRunnerContext(ctx context.Context, selection AdmissionSelection, defaultRunner string, root string, td *taskdir.TaskDir, meta *task.MetaRecord) (AdmissionSelection, bool, error) {
 	ownership, err := RunnerOwnershipForTaskContext(ctx, root, td, meta)
 	if err != nil {
 		return selection, false, err
@@ -27,21 +23,13 @@ func RefreshManagedRetryRunnerContext(ctx context.Context, selection AdmissionSe
 		}
 		return selection, false, nil
 	}
-	pinnedRunner, pinned, err := LegacyInspectionRetryRunnerContext(ctx, store, td, meta)
+	recorded, err := ContinuationRunner(root, meta.RunnerExecutable, ownership)
 	if err != nil {
 		return selection, false, err
 	}
-	if pinned {
-		selection.Runner = pinnedRunner
-		return selection, false, nil
-	}
-	runner, err := ResolveRunner("", defaultRunner)
+	runner, err := ResolveRunner(recorded, defaultRunner)
 	if err != nil {
 		return selection, false, fmt.Errorf("resolve current managed task runner: %w", err)
-	}
-	runner, err = InstallStateRunner(root, runner)
-	if err != nil {
-		return selection, false, fmt.Errorf("install current managed task runner: %w", err)
 	}
 	if meta.RunnerOwnership == "" {
 		if err = RecordManagedRunnerMigration(ctx, root, td, meta); err != nil {

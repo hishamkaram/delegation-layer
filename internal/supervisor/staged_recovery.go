@@ -9,16 +9,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// recoverStagedAuxiliaryObservation owns the scheduling receipt/enqueue race
-// for both inspections and workspace helpers. Each journal supplies exact
-// receipt publication and verification; this function never grants a new add.
-func RecoverStagedAuxiliaryObservation(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
-	if supervisor != nil && supervisor.UsesControlOwner() {
-		return observation, fmt.Errorf("%w: managed auxiliary recovery requires current launch permission", task.ErrInvalidPermit)
-	}
-	return recoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, receiptCommit, receiptMatches, commit)
-}
-
 // Receipt replay remains historical evidence. Check current execution
 // permission separately, after its transaction returns and directly before
 // the canonical queue callback enqueues. The caller already owns outer RootSH.
@@ -49,6 +39,9 @@ type auxiliaryLaunchPermissionError struct{ cause error }
 func (auxiliaryLaunchPermissionError) Error() string   { return "auxiliary launch permission refused" }
 func (e auxiliaryLaunchPermissionError) Unwrap() error { return e.cause }
 
+// recoverStagedAuxiliaryObservation owns the scheduling receipt/enqueue race
+// for both inspections and workspace helpers. Each journal supplies exact
+// receipt publication and verification; this function never grants a new add.
 func recoverStagedAuxiliaryObservation(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
 	recovered, recoverErr := supervisor.RecoverInspectionStagedWithGate(ctx, observation.Identity, observation.Job.ID, SubmissionGate(root), receiptCommit)
 	var permissionErr auxiliaryLaunchPermissionError

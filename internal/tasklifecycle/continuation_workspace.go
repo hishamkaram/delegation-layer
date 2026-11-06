@@ -31,6 +31,5 @@ func PrepareContinuationWorkspaceContext(ctx context.Context, root string, optio
 		}
 	}()
 	deps := options.Workspace
-	deps.RootAdmission = options.Creation.RootAdmission
 	return workspacescore.PrepareContinuation(ctx, store, predecessor, deps)
 }

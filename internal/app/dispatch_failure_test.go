@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
@@ -42,6 +44,39 @@ func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
 		decoded.Failure.Stage != "start-supervisor" ||
 		decoded.Failure.NextAction != "stop_and_report" {
 		t.Fatalf("dispatch failure recovery contract changed: %+v", decoded)
+	}
+}
+
+func TestDispatchHistoricalRefusalDoesNotSuggestMigration(t *testing.T) {
+	private := "/private/fixture/historical-supervisor"
+	cause := &pueue.PrivateRecoveryError{
+		ReasonCode: "historical_target_not_ready",
+		Err:        errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, pueue.ErrHistoricalTargetNotReady, errors.New(private)),
+	}
+	for _, record := range []string{"not_created", "created", "unknown"} {
+		t.Run(record, func(t *testing.T) {
+			response := newResponse("dispatch")
+			response.TaskRecord = record
+			var output bytes.Buffer
+			if err := writeJSONResponse(&output, "dispatch", &response, admission.WithStage("start-supervisor", cause)); err != nil {
+				t.Fatal(err)
+			}
+			var decoded Response
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			wantAction := "stop_and_report"
+			if record == "created" {
+				wantAction = "check_status"
+			}
+			failure := decoded.Failure
+			if failure == nil || failure.Code != "supervisor_upgrade_required" || failure.ReasonCode != "historical_target_not_ready" || failure.NextAction != wantAction || failure.RecoveryCommand != "" {
+				t.Fatalf("historical refusal lost bounded recovery guidance: %+v", failure)
+			}
+			if !strings.Contains(decoded.Error, "Automatic migration of a stopped historical generation is unavailable") || strings.Contains(decoded.Error, private) || strings.Contains(decoded.Error, "supervisor migrate") {
+				t.Fatalf("historical refusal omitted its limitation or exposed misleading detail: %s", decoded.Error)
+			}
+		})
 	}
 }
 
@@ -99,7 +134,16 @@ func TestContinueResponseUsesDispatchFailureEnvelope(t *testing.T) {
 }
 
 func TestContinuePreDispatchFailureHasSpecificRecoveryEnvelope(t *testing.T) {
-	result := continueTask(Arguments{Root: t.TempDir(), TaskID: strings.Repeat("a", 32)}, Dependencies{ResourceChecker: fixtureResources})
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	result := continueTask(Arguments{Root: store.Root, TaskID: strings.Repeat("a", 32)}, Dependencies{ResourceChecker: fixtureResources})
 	if result.err == nil {
 		t.Fatal("continuation unexpectedly loaded a predecessor from an empty root")
 	}

@@ -76,8 +76,8 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
         self.assertEqual(proof["state"], "complete")
         binaries = proof["binary_identities"]
         self.assertEqual(binaries["provider_binding"], {
-            "task_id": self.task_id, "executable": "/actual/provider", "version": "", "sha256": ""})
-        self.assertNotIn("provider_sha256", binaries["sha256"])
+            "task_id": self.task_id, "executable": "/actual/provider", "version": ""})
+        self.assertNotIn("sha256", binaries)
         self.validate_binaries(binaries)
         self.assertEqual(self.validate_proof(proof), proof)
 
@@ -131,16 +131,18 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
         source = self.produce({"provider_version": "runtime-v2", "provider_sha256": "d" * 64})
         proof = self.source_proof(source)
         self.assertEqual(proof["state"], "complete")
-        self.assertEqual(proof["binary_identities"]["sha256"]["provider_sha256"], "d" * 64)
+        self.assertNotIn("sha256", proof["binary_identities"])
+        self.assertNotIn("provider_sha256", read_json(self.root / "binding.json"))
         self.validate_binaries(proof["binary_identities"])
 
     def test_missing_compact_diagnostics_and_version_map_are_accepted(self):
         source = self.produce()
         del source["provider_versions"]
         for identity in source["provider_runtime_identities"].values():
-            del identity["version"], identity["sha256"]
+            del identity["version"]
+            identity.pop("sha256", None)
         binding = read_json(self.root / "binding.json")
-        del binding["provider_version"], binding["provider_sha256"]
+        del binding["provider_version"]
         write_json(self.root / "binding.json", binding, replace=True)
         proof = self.source_proof(source)
         self.assertEqual(proof["state"], "complete")
@@ -149,7 +151,7 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
     def test_independently_omitted_diagnostics_do_not_unbind_actual_path(self):
         source = self.produce({"provider_version": "runtime-v2", "provider_sha256": "d" * 64})
         binding = read_json(self.root / "binding.json")
-        del binding["provider_version"], binding["provider_sha256"]
+        del binding["provider_version"]
         write_json(self.root / "binding.json", binding, replace=True)
         proof = self.source_proof(source)
         self.assertEqual(proof["state"], "complete")
@@ -157,7 +159,7 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
         # Private historical projections may omit either optional diagnostic independently.
         binaries = proof["binary_identities"]
         del binaries["provider_runtime_identities"][self.task_id]["version"]
-        del binaries["provider_runtime_identities"][self.task_id]["sha256"]
+        binaries["provider_runtime_identities"][self.task_id].pop("sha256", None)
         self.validate_binaries(binaries)
 
     def test_present_invalid_diagnostics_and_paths_refuse_proof(self):
@@ -170,13 +172,13 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
                 changed["provider_runtime_identities"][self.task_id][field] = value
                 self.assertEqual(self.source_proof(changed)["state"], "unresolved")
 
-    def test_owned_hashes_and_actual_task_coverage_remain_strict(self):
+    def test_owned_selection_and_actual_task_coverage_remain_strict(self):
         source = self.produce()
         binding = read_json(self.root / "binding.json")
-        for field in ("delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256"):
+        for field in ("delegate", "delegate-run", "pueue", "pueued"):
             for value in (None, "bad"):
                 with self.subTest(field=field, value=value):
-                    write_json(self.root / "binding.json", dict(binding, **{field: value}), replace=True)
+                    write_json(self.root / "binding.json", dict(binding, installed_executables={**binding["installed_executables"], field: value}), replace=True)
                     self.assertEqual(self.source_proof(source)["state"], "unresolved")
         write_json(self.root / "binding.json", binding, replace=True)
         changed = deepcopy(source)
@@ -187,9 +189,9 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
         source = self.produce()
         binding = read_json(self.root / "binding.json")
         for field, value in (("provider_version", None), ("provider_version", "bad\n"),
-                             ("provider_sha256", None), ("provider_sha256", "bad")):
+                             ("provider_executable", None), ("provider_executable", "relative")):
             with self.subTest(field=field, value=value):
-                write_json(self.root / "binding.json", dict(binding, **{field: value}), replace=True)
+                write_json(self.root / "binding.json", dict(binding, installed_executables={**binding["installed_executables"], field: value}), replace=True)
                 self.assertEqual(self.source_proof(source)["state"], "unresolved")
         write_json(self.root / "binding.json", binding, replace=True)
         for value in (None, {self.task_id: None}, {self.task_id: "bad\n"}, {"c" * 32: ""}):
@@ -226,11 +228,11 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
                 changed["provider_runtime_identities"][self.task_id][field] = value
                 with self.assertRaises(contract.EvidenceError):
                     self.validate_binaries(changed)
-        for field in ("delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256"):
+        for field in ("delegate", "delegate-run", "pueue", "pueued"):
             with self.subTest(field=field):
                 changed = deepcopy(binaries)
-                del changed["sha256"][field]
-                with self.assertRaisesRegex(contract.EvidenceError, "binary_identity_incomplete"):
+                del changed["paths"][field]
+                with self.assertRaisesRegex(contract.EvidenceError, "binary_selection_invalid"):
                     self.validate_binaries(changed)
         for field, value in (("version", None), ("sha256", None), ("sha256", "bad"),
                              ("executable", "relative")):

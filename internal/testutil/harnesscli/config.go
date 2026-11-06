@@ -1,11 +1,8 @@
 package harnesscli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +46,6 @@ type HookConfig struct {
 type HarnessConfig struct {
 	SchemaVersion        int        `json:"schema_version"`
 	ProviderExecutable   string     `json:"provider_executable"`
-	ProviderSHA256       string     `json:"provider_sha256"`
 	ProviderConfig       string     `json:"provider_config"`
 	ProviderConfigSHA256 string     `json:"provider_config_sha256"`
 	SupervisorExecutable string     `json:"supervisor_executable"`
@@ -129,10 +125,8 @@ func validateHarnessConfig(cfg HarnessConfig) error {
 	if err := validateEventsDirectory(cfg.EventsDirectory); err != nil {
 		return err
 	}
-	for _, digest := range []string{cfg.ProviderSHA256, cfg.ProviderConfigSHA256} {
-		if err := task.ValidateSHA256(digest); err != nil {
-			return err
-		}
+	if err := task.ValidateSHA256(cfg.ProviderConfigSHA256); err != nil {
+		return err
 	}
 	if err := validateEnvironment(cfg.Environment); err != nil {
 		return err
@@ -223,24 +217,4 @@ func readRegular(path string, limit int64) (data []byte, err error) {
 		return nil, fmt.Errorf("supervisor fixture file must be regular: %w", errInvalidHarnessReference)
 	}
 	return task.ReadBounded(f, limit)
-}
-
-func hashRegular(path string) (digest string, err error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return "", fmt.Errorf("opening supervisor provider executable: %w", err)
-	}
-	defer func() { err = errors.Join(err, f.Close()) }()
-	info, err := f.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", fmt.Errorf("supervisor provider executable must be executable regular file: %w", errInvalidHarnessReference)
-	}
-	h := sha256.New()
-	if _, err = io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
 }

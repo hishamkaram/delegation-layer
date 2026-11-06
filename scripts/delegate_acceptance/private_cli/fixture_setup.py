@@ -13,8 +13,10 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
 from scripts.delegate_acceptance.private_cli.configuration import PRIVATE_ACCEPTANCE_PREFIX
 from scripts.delegate_acceptance.private_cli.configuration import SUPERVISOR_UPGRADE_RECOVERY_SCENARIO
-from scripts.delegate_acceptance.private_cli.installation import install_fixture
+from scripts.delegate_acceptance.private_cli.installation import install_adjacent_candidate
 from scripts.delegate_acceptance.private_cli.installation import install_package_layout
+from scripts.delegate_acceptance.private_cli.installation import install_supervisor_pair
+from scripts.delegate_acceptance.private_cli.installation import require_source_root
 from scripts.delegate_acceptance.private_cli.noexec_state import require_execution_refused
 from scripts.delegate_acceptance.private_cli.fixtures import install_pi_fixture
 from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
@@ -23,11 +25,9 @@ from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
 def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory, run_receipt):
     if not os.access("/bin/ps", os.X_OK):
         raise AcceptanceBlocked("shutdown-probe-unavailable")
+    source = require_source_root(args.source_root)
+    upgraded_source = require_source_root(args.upgraded_source_root or source)
     try:
-        delegate_binary = args.delegate.resolve(strict=True)
-        runner_binary = args.runner.resolve(strict=True)
-        upgraded_delegate_binary = (args.upgraded_delegate or args.delegate).resolve(strict=True)
-        upgraded_runner_binary = (args.upgraded_runner or args.runner).resolve(strict=True)
         pueue_binary = args.pueue.resolve(strict=True)
         pueued_binary = args.pueued.resolve(strict=True)
     except OSError as error:
@@ -45,10 +45,9 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     state_parent, temporary_root = prepare_state_parent(args, lifetime, run_receipt)
     lifetime.private_config = state_parent / "state" / ".supervisor" / "pueue.yml"
     lifetime.gate = lifetime.base / "blocker-gate"
-    waiter_directory = lifetime.base / "provider-waiters"
     old_root = lifetime.old_layout_ownership.create("old package root", lifetime.base / "old", lifetime.base).directory
     lifetime.old_install, old_bin, lifetime.old_libexec = install_package_layout(
-        lifetime.old_layout_ownership, delegate_binary, runner_binary, old_root, not legacy_mode
+        lifetime.old_layout_ownership, source, old_root, not legacy_mode
     )
     lifetime.old_layout_owned = lifetime.old_layout_ownership.transfer()
     upgraded_root = lifetime.ownership.create(
@@ -66,7 +65,7 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     if args.scenario not in (EXTERNAL_INSPECTION_HANDOFF_SCENARIO, EXTERNAL_NOEXEC_STATE_SCENARIO):
         lifetime.managed_state_roots.append((state, lifetime.attempted_task_ids))
     upgraded_install, upgraded_bin, lifetime.upgraded_libexec = install_package_layout(
-        lifetime.ownership, upgraded_delegate_binary, upgraded_runner_binary, upgraded_root, True
+        lifetime.ownership, upgraded_source, upgraded_root, True
     )
     response_directory.mkdir(mode=0o700)
     old_daemon_marker = lifetime.base / "old-daemon-starts"
@@ -75,11 +74,19 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     install_pi_fixture(provider_bin, lifetime.gate, waiter_directory, lease_nonce)
 
     brief = configure_private_environment(home, lifetime, provider_bin, temporary_root)
+    packaged_sources = ()
+    if args.scenario == "capacity":
+        packaged_sources = tuple(install_adjacent_candidate(
+            lifetime.ownership, upgraded_source, lifetime.base / "adjacent-package",
+        ).items())
+    run_receipt.observe_installations(fixture_installation_paths(
+        old_bin, upgraded_bin, lifetime.old_libexec, lifetime.upgraded_libexec,
+    ))
     return FixtureInstallation(
-        delegate_binary=delegate_binary,
-        runner_binary=runner_binary,
-        upgraded_delegate_binary=upgraded_delegate_binary,
-        upgraded_runner_binary=upgraded_runner_binary,
+        delegate_binary=old_bin / "delegate",
+        runner_binary=old_bin / "delegate-run",
+        upgraded_delegate_binary=upgraded_bin / "delegate",
+        upgraded_runner_binary=upgraded_bin / "delegate-run",
         pueue_binary=pueue_binary,
         pueued_binary=pueued_binary,
         workspace=workspace,
@@ -91,7 +98,19 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
         state=state,
         waiter_directory=waiter_directory,
         lease_nonce=lease_nonce,
+        packaged_sources=packaged_sources,
+        source_root=upgraded_source,
     )
+
+
+def fixture_installation_paths(old_bin, upgraded_bin, old_libexec, upgraded_libexec):
+    """Derive receipt roles from the fixture's selected installation directories."""
+    return {
+        "delegate": old_bin / "delegate", "delegate-run": old_bin / "delegate-run",
+        "upgraded-delegate": upgraded_bin / "delegate", "upgraded-delegate-run": upgraded_bin / "delegate-run",
+        "old-pueue": old_libexec / "pueue", "old-pueued": old_libexec / "pueued",
+        "upgraded-pueue": upgraded_libexec / "pueue", "upgraded-pueued": upgraded_libexec / "pueued",
+    }
 
 
 def prepare_state_parent(args, lifetime, run_receipt):
@@ -122,8 +141,7 @@ def prepare_state_parent(args, lifetime, run_receipt):
 def install_supervisor_wrappers(args, lifetime, old_daemon_marker, pueue_binary, pueued_binary, upgraded_daemon_marker):
     if args.scenario == SUPERVISOR_UPGRADE_RECOVERY_SCENARIO:
         for destination in (lifetime.old_libexec, lifetime.upgraded_libexec):
-            install_fixture(pueue_binary, destination / "pueue")
-            install_fixture(pueued_binary, destination / "pueued")
+            install_supervisor_pair(destination)
     else:
         install_wrapper(
             lifetime.old_libexec / "pueue", pueue_binary, lifetime.base / "old-client-starts", "old-install", "client"

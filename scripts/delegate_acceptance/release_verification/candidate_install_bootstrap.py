@@ -43,7 +43,7 @@ from ..private_cli.packaged_defaults import (
 from ..private_cli.root_cleanup import remove_private_acceptance_root
 from ..private_cli.supervisor import private_shutdown_evidence, shutdown_pending_private_supervisor
 from .candidate_install_contract import BOOTSTRAP_SHUTDOWN, BootstrapObservation, BootstrapTarget
-from .contract import BinaryDigests, VerificationError
+from .contract import InstalledExecutables, VerificationError
 
 
 STAGE = "candidate-bootstrap"
@@ -113,8 +113,8 @@ class InstalledBootstrapProbe:
 def _observation(result: InstalledBootstrap) -> BootstrapObservation:
     return BootstrapObservation(
         root_id=result.root_id, task_id=result.task_id,
-        binaries=BinaryDigests(delegate=result.delegate_sha256, delegate_run=result.runner_sha256,
-                               pueue=result.client_sha256, pueued=result.daemon_sha256),
+        binaries=InstalledExecutables(delegate=result.delegate, delegate_run=result.runner,
+                                       pueue=result.client, pueued=result.daemon),
         outcome=result.outcome, worker_result=result.worker_result,
         termination_cause=result.termination_cause, scope_empty=result.scope_empty,
         shutdown=BOOTSTRAP_SHUTDOWN)
@@ -213,10 +213,10 @@ def _run(owner: DirectoryOwner, capture: OwnedDirectory, *, root: Path, target: 
     facts.update({"path": env["PATH"], "delegate": found, "supervisor_directory": str(target.supervisor_directory)})
     if found is None or Path(found).resolve() != target.delegate:
         raise VerificationError("candidate_bootstrap_delegate_mismatch", STAGE)
-    digests = target.binaries.as_mapping()
+    paths = target.binaries.as_mapping()
     installed = InstalledDefaults(
         delegate=Path(found), supervisor_directory=target.supervisor_directory,
-        digests=tuple((name, digests[name]) for name in INSTALLED_BINARIES), env=env,
+        executables=tuple((name, paths[name]) for name in INSTALLED_BINARIES), env=env,
         state=isolated_default_state_path(home), workspace=workspace, brief=brief, response_directory=responses)
     facts["state"] = str(installed.state)
     closed = prove_installed_default_bootstrap(

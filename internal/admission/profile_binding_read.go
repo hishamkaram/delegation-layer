@@ -20,11 +20,11 @@ func ValidateInspectionCandidate(ctx context.Context, operation *inspection.Oper
 	if operation == nil || candidate.Inspection == nil {
 		return task.ErrEvidenceFault
 	}
-	definition, digest, err := candidate.Inspection.Snapshot()
-	if err != nil {
-		return task.ErrEvidenceFault
-	}
 	record := operation.Request()
+	definition, digest, err := inspectionDefinitionForBinding(*candidate.Inspection, record.Binding)
+	if err != nil {
+		return err
+	}
 	if err = validateInspectionTaskBinding(record, req, definition); err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func ValidateInspectionCandidate(ctx context.Context, operation *inspection.Oper
 }
 
 func validateMixedInspectionCandidate(ctx context.Context, operation *inspection.Operation, record inspection.RequestRecord, definition commonprovider.InspectionDefinition, digest string) error {
-	if !definition.ProviderExecutable() && (record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256) {
+	if !definition.ProviderExecutable() && (record.Binding.HelperExecutable != definition.Executable || !inspectionHelperDigestMatches(record.Binding, definition)) {
 		return task.ErrEvidenceFault
 	}
 	if !slices.Equal(record.Binding.Environment, definition.Environment) {

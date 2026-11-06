@@ -6,7 +6,6 @@ import (
 
 func creationCommandResult(response Response, provider string, created tasklifecycle.CreationResult) commandResult {
 	result := creationPrimaryCommandResult(response, provider, created)
-	retainTaskAdmissionCleanup(&result, created.RootAdmissionCleanup, nil, created.RootAdmissionReleaseError)
 	return result
 }
 

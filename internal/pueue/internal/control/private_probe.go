@@ -263,6 +263,10 @@ func completePrivateProbeBinding(stateRoot string, required privateGenerationPha
 	if err != nil {
 		return task.SupervisorRef{}, false, err
 	}
+	return facts.probeBinding(required, privateGenerationGeneral)
+}
+
+func (facts privateGenerationFacts) probeBinding(required privateGenerationPhase, purpose privateGenerationPurpose) (task.SupervisorRef, bool, error) {
 	if facts.publishedErr != nil || !facts.publishedFound {
 		return task.SupervisorRef{}, false, facts.publishedErr
 	}
@@ -270,7 +274,7 @@ func completePrivateProbeBinding(stateRoot string, required privateGenerationPha
 		complete, completeErr := facts.complete(facts.published, false)
 		return facts.published, complete, completeErr
 	}
-	phase, err := facts.phase(facts.published)
+	phase, err := facts.phaseFor(facts.published, purpose)
 	return facts.published, phase >= required, err
 }
 
@@ -311,59 +315,31 @@ func privateProbeDirectoriesReady(resolved ResolvedConfig) (bool, error) {
 	return true, nil
 }
 
-// A published version describes the exact executable bytes in its binding.
-// Reopening that same pair checks the bytes and endpoint again without a
-// redundant version subprocess. A different supplied pair remains successor
-// inventory; this probe always reopens the exact published pair.
+// Probe the published generation through its recorded installed paths while
+// present. A caller-supplied installed transport is used only after positive
+// absence or for a recognized historical state copy.
 func probePublishedPrivateClient(ctx context.Context, published task.SupervisorRef, clientExecutable, daemonExecutable, configPath string, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
-	options, resolution, pairChanged, resolutionChanged, err := publishedPrivateProbeOptions(published, clientExecutable, daemonExecutable, resolution, options)
+	var err error
+	options, err = optionsForPublishedPrivateBinding(published, options)
 	if err != nil {
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
-	if !pairChanged && resolutionChanged {
-		return probeChangedResolutionPrivateClient(ctx, clientExecutable, daemonExecutable, configPath, options, scope)
-	}
-	return probeExactPublishedPrivateClient(ctx, published, resolution, options, scope)
-}
-
-func publishedPrivateProbeOptions(published task.SupervisorRef, clientExecutable, daemonExecutable string, resolution ResolutionContext, options Options) (Options, ResolutionContext, bool, bool, error) {
-	publishedResolution, present, err := resolutionFromBinding(published)
+	selected, err := selectRecoveryClient(published, clientExecutable)
 	if err != nil {
-		return Options{}, ResolutionContext{}, false, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, privatePublishedRecoveryError(err)
 	}
-	pairChanged := published.ClientExecutable != clientExecutable || published.DaemonExecutable != daemonExecutable
-	resolutionChanged := present && !sameEnvironmentResolution(publishedResolution, resolution)
-	if !pairChanged || !present {
-		return options, resolution, pairChanged, resolutionChanged, nil
+	options.RuntimeClientExecutable = selected
+	if options.Resolution != nil {
+		resolution = *options.Resolution
 	}
-	resolution = publishedResolution
-	options.Resolution = &resolution
-	options.resolutionPinned = true
-	if options.Environment == nil || len(options.Environment) > 0 {
-		options.Environment = environmentForResolution(options.Environment, resolution)
-	}
-	return options, resolution, pairChanged, resolutionChanged, nil
-}
-
-func probeChangedResolutionPrivateClient(ctx context.Context, clientExecutable, daemonExecutable, configPath string, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
-	client, observation, err := bindPrivateTransitionClient(ctx, clientExecutable, daemonExecutable, configPath, options, false)
-	if err != nil || !observation.ready() {
-		return client, QueueSnapshot{}, observation, err
-	}
-	snapshot, err := client.Snapshot(ctx)
+	selectedDaemon, err := selectRecoveryDaemon(published, daemonExecutable)
 	if err != nil {
-		return client, QueueSnapshot{}, PrivateEndpointObservation{}, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, privatePublishedRecoveryError(err)
 	}
-	if scope == privateProbeGroups {
-		return client, QueueSnapshot{Groups: snapshot.Groups}, observation, nil
-	}
-	if scope == privateProbeSnapshot {
-		return client, snapshot, observation, nil
-	}
-	return nil, QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrConfiguration, client.CloseAfterPending(nil))
+	return probeExactPublishedPrivateClient(ctx, published, selectedDaemon, resolution, options, scope)
 }
 
-func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
+func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, daemonExecutable string, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	options.Resolution = &resolution
 	client, err := NewClient(published, options)
 	if err != nil {
@@ -375,11 +351,8 @@ func probeExactPublishedPrivateClient(ctx context.Context, published task.Superv
 		}
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
-	if err = attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
+	if err = attachPrivateDaemon(client, daemonExecutable); err != nil {
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
-	}
-	if client.binding.DaemonSHA256 != published.DaemonSHA256 {
-		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, nil
 	}
 	return probeVerifiedPrivateClient(ctx, client, scope)
 }
@@ -406,7 +379,7 @@ func probeVerifiedPrivateClient(ctx context.Context, client *Client, scope priva
 }
 
 func preparePrivateClient(ctx context.Context, stateRoot string, options Options, resolution ResolutionContext, clientPath, daemonPath, base string, migrationOnly, cleanupSuccessful bool) (*Client, error) {
-	configPath, _, err := privateBindingConfig(ctx, stateRoot, base, resolution, nil, options.PrivateGenerationGuard)
+	configPath, _, err := privateBindingConfig(ctx, stateRoot, base, resolution, nil, options)
 	if err != nil {
 		return nil, err
 	}

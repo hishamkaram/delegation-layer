@@ -17,7 +17,10 @@ type otherPreparationResources struct {
 
 func (r *otherPreparationResources) finish(operationErr error) error {
 	if cleanupErr := r.close(); cleanupErr != nil {
-		return errors.Join(operationErr, &otherPreparationCleanupError{resources: r, cause: cleanupErr})
+		done := make(chan struct{})
+		close(done) // The synchronous Close attempt above has actually returned.
+		var retained ResidentCleanupCompletion = &otherPreparationCleanupError{resources: r, cause: cleanupErr, done: done}
+		return errors.Join(operationErr, retained)
 	}
 	return operationErr
 }
@@ -47,6 +50,7 @@ func (r *otherPreparationResources) close() error {
 type otherPreparationCleanupError struct {
 	resources *otherPreparationResources
 	cause     error
+	done      <-chan struct{}
 }
 
 func (*otherPreparationCleanupError) Error() string {
@@ -54,3 +58,10 @@ func (*otherPreparationCleanupError) Error() string {
 }
 func (e *otherPreparationCleanupError) Unwrap() error         { return e.cause }
 func (*otherPreparationCleanupError) RetainsResidentCleanup() {}
+func (e *otherPreparationCleanupError) CleanupDone() <-chan struct{} {
+	return e.done
+}
+func (e *otherPreparationCleanupError) CleanupErr() error { return e.cause }
+func (e *otherPreparationCleanupError) CleanupPending() bool {
+	return e.resources.attempt != nil || e.resources.reader != nil || e.resources.target != nil
+}

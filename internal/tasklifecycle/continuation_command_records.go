@@ -23,18 +23,12 @@ const (
 	ContinueRunner
 	ContinueSession
 	ContinueGenerateID
-	ContinueSupervisor
 	ContinueResources
 )
 
 type ContinuationResult struct {
-	// RootAdmissionCleanup owns only a newly acquired lease retained behind dependent cleanup or failed Release.
-	// The caller closes dependent cleanup, then retries Release before closing Store.
-	RootAdmissionCleanup *taskdir.RootAdmissionLease
 	// StoreCleanup owns the Store retained behind a failed lease release or Close.
-	StoreCleanup *taskdir.Store
-
-	RootAdmissionReleaseError   error
+	StoreCleanup                *taskdir.Store
 	StoreCloseError             error
 	Root, RootID, PredecessorID string
 	Workspace                   *workspaces.Description

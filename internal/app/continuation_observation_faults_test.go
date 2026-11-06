@@ -57,6 +57,7 @@ func runRebootStatusJSON(t *testing.T, fixture *rebootFixture) (int, Response) {
 // fault. The optional continuation offer, and the guidance derived from it,
 // must not ride along with the failed exit.
 func TestStatusConcreteFaultCarriesNoAutomaticContinuation(t *testing.T) {
+	t.Parallel()
 	malformed := []byte("{")
 	var decodeProbe struct{}
 	wantDiagnostic := json.Unmarshal(malformed, &decodeProbe)
@@ -277,6 +278,7 @@ func TestBudgetTimeoutWithoutAnySessionIsUnavailable(t *testing.T) {
 }
 
 func TestBudgetTimeoutFailsClosedOnInvalidSessionEvidence(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		damage func(*testing.T, *rebootFixture)

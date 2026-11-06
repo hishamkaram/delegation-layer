@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 )
@@ -11,7 +10,7 @@ import (
 // The predecessor metadata owns the original binding. Canonical generation
 // resolution owns its successor; this fixed host borrows resident authority
 // while preparing that successor and never rewrites the predecessor.
-func (infrastructureEntryHost) PrepareContinuation(ctx context.Context, operation infrastructure.Operation, selected infrastructure.LaunchContext, source infrastructure.SavedBindingSource, guards infrastructure.ResidentGuards, wait infrastructure.DaemonWaitOwner) (disposition infrastructure.Disposition, resultErr error) {
+func (infrastructureEntryHost) prepareContinuation(ctx context.Context, operation infrastructure.Operation, selected infrastructure.LaunchContext, source infrastructure.SavedBindingSource, guards infrastructure.ResidentGuards, wait infrastructure.DaemonWaitOwner) (disposition infrastructure.Disposition, resultErr error) {
 	preparation, err := openInfrastructurePreparation(ctx, operation, selected, guards, wait)
 	defer func() {
 		disposition = preparation.disposition()
@@ -20,7 +19,6 @@ func (infrastructureEntryHost) PrepareContinuation(ctx context.Context, operatio
 	if err != nil {
 		return infrastructure.Disposition{}, err
 	}
-	ctx = pueue.WithControlLease(ctx, preparation.admission)
 	original, err := supervisor.ReadTaskMetadataSupervisor(ctx, preparation.store, source)
 	if err != nil {
 		return infrastructure.Disposition{}, err
@@ -37,7 +35,7 @@ func (infrastructureEntryHost) PrepareContinuation(ctx context.Context, operatio
 	if err != nil {
 		return infrastructure.Disposition{}, err
 	}
-	client, preparationErr := supervisor.NewClient(ctx, preparation.store.Root, successor, preparation.options, true, preparation.lookup, openNativeSupervisorStore)
+	client, preparationErr := supervisor.RecoverPrivateClient(ctx, preparation.store, successor, preparation.options, preparation.lookup)
 	if client != nil && preparationErr == nil {
 		preparation.observation.RecordReady()
 	}

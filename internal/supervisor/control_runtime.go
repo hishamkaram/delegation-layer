@@ -22,7 +22,6 @@ type OwnerRouting interface {
 	EnsurePrivate(context.Context, *taskdir.Store, infrastructure.LaunchContext) (infrastructure.Disposition, error)
 	RecoverSaved(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error)
 	PrepareContinuation(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error)
-	MigrateReferenced(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.MigrationReference) (infrastructure.Disposition, infrastructure.MigrationResult, error)
 	MigrateOwn(context.Context, *taskdir.Store, infrastructure.LaunchContext) (infrastructure.Disposition, infrastructure.ManualMigrationReport, error)
 }
 
@@ -46,7 +45,7 @@ func (r ControlRuntime) OpenSaved(ctx context.Context, root string, saved task.S
 		return nil, err
 	}
 	if !pueue.IsPrivateConfig(root, saved.ConfigPath) {
-		return pueue.NewClient(saved, r.Options)
+		return NewClient(ctx, root, saved, r.Options, r.Lookup)
 	}
 	if r.OpenStore == nil {
 		return nil, ErrInfrastructureAuthorityUnavailable
@@ -86,7 +85,7 @@ func (r ControlRuntime) PreparePrivateAdmission(ctx context.Context, store *task
 	if r.Routing == nil {
 		return nil, ErrInfrastructureAuthorityUnavailable
 	}
-	selected, err := captureInfrastructureLaunchContext(pin, r.Options)
+	selected, err := r.captureLaunchContext(pin)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +109,24 @@ func (r ControlRuntime) PreparePrivateAdmission(ctx context.Context, store *task
 // RecoverSaved observes the exact saved generation before contacting its owner.
 // The locator names a durable record which that owner must independently read.
 func (r ControlRuntime) RecoverSaved(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, source infrastructure.SavedBindingSource) (*pueue.Client, error) {
+	return r.recoverSaved(ctx, store, saved, source, pueue.ProbeSavedPrivateCompatible)
+}
+
+// RecoverSavedTaskObservation borrows the caller's Store and may observe an
+// equivalent recovery alias. Callers must determine maintenance eligibility
+// separately; the alias grants no submission or cleanup authority.
+func (r ControlRuntime) RecoverSavedTaskObservation(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, source infrastructure.SavedBindingSource) (*pueue.Client, error) {
+	return r.recoverSaved(ctx, store, saved, source, pueue.ProbeSavedPrivateTaskObservation)
+}
+
+type savedPrivateProbe func(context.Context, string, task.SupervisorRef, pueue.Options, pueue.CompatiblePairSelector) (*pueue.Client, error)
+
+func (r ControlRuntime) recoverSaved(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, source infrastructure.SavedBindingSource, probe savedPrivateProbe) (*pueue.Client, error) {
 	if ctx == nil || store == nil {
 		return nil, os.ErrInvalid
 	}
 	if !pueue.IsPrivateConfig(store.Root, saved.ConfigPath) {
-		return pueue.NewClient(saved, r.Options)
+		return NewClient(ctx, store.Root, saved, r.Options, r.Lookup)
 	}
 	operation, cancel := ControlContextWithParent(ctx, r.Options)
 	defer cancel()
@@ -122,7 +134,7 @@ func (r ControlRuntime) RecoverSaved(ctx context.Context, store *taskdir.Store, 
 	if err != nil {
 		return nil, err
 	}
-	client, err := r.probeSaved(operation, store, pin, saved)
+	client, err := r.probeSavedWith(operation, store, pin, saved, probe)
 	if err != nil || client != nil {
 		return client, err
 	}
@@ -135,7 +147,7 @@ func (r ControlRuntime) RecoverSaved(ctx context.Context, store *taskdir.Store, 
 	if r.Routing == nil {
 		return nil, ErrInfrastructureAuthorityUnavailable
 	}
-	selected, err := captureInfrastructureLaunchContext(pin, r.Options)
+	selected, err := r.captureLaunchContext(pin)
 	if err != nil {
 		return nil, err
 	}
@@ -146,18 +158,18 @@ func (r ControlRuntime) RecoverSaved(ctx context.Context, store *taskdir.Store, 
 	if err = disposition.Validate(); err != nil {
 		return nil, err
 	}
-	client, err = r.probeSaved(operation, store, pin, saved)
+	client, err = r.probeSavedWith(operation, store, pin, saved, probe)
 	if err != nil || client != nil {
 		return client, err
 	}
 	return nil, fmt.Errorf("%w: saved preparation reply has no verified ready supervisor", ErrInfrastructureAuthorityUnavailable)
 }
 
-func (r ControlRuntime) probeSaved(ctx context.Context, store *taskdir.Store, pin taskdir.RootPin, saved task.SupervisorRef) (*pueue.Client, error) {
+func (r ControlRuntime) probeSavedWith(ctx context.Context, store *taskdir.Store, pin taskdir.RootPin, saved task.SupervisorRef, probe savedPrivateProbe) (*pueue.Client, error) {
 	if err := checkInfrastructureTarget(ctx, store, pin); err != nil {
 		return nil, err
 	}
-	client, err := pueue.ProbeSavedPrivateCompatible(ctx, pin.Root(), saved, r.Options, func(selection context.Context) (string, string, error) {
+	client, err := probe(ctx, pin.Root(), saved, r.Options, func(selection context.Context) (string, string, error) {
 		if err := selection.Err(); err != nil {
 			return "", "", err
 		}
@@ -165,11 +177,7 @@ func (r ControlRuntime) probeSaved(ctx context.Context, store *taskdir.Store, pi
 		if err != nil || available {
 			return client, daemon, errors.Join(err, selection.Err())
 		}
-		client, daemon, err = ResolvePrivateSupervisorExecutables(pin.Root(), r.Lookup)
-		if unavailableBundledPair(err) && selection.Err() == nil {
-			return "", "", pueue.ErrCompatiblePairUnavailable
-		}
-		return client, daemon, errors.Join(err, selection.Err())
+		return resolveCompatiblePrivatePair(selection, pin.Root(), r.Lookup)
 	})
 	if err != nil {
 		return client, err

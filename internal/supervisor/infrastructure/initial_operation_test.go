@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,10 +15,7 @@ import (
 
 func initialOperationFixtures(t *testing.T, rootID string) []InitialOperation {
 	t.Helper()
-	operations := []InitialOperation{{}, {Kind: InitialEnsureOwn}, {Kind: InitialMigrateOwn}, {
-		Kind:      InitialMigrateReferenced,
-		Migration: MigrationReference{RootID: rootID, RecordSHA256: strings.Repeat("e", 64), HistoryIndex: 3},
-	}}
+	operations := []InitialOperation{{}, {Kind: InitialEnsureOwn}, {Kind: InitialMigrateOwn}}
 	for _, kind := range []SavedBindingKind{SavedBindingTaskMetadata, SavedBindingTaskSubmission, SavedBindingTaskStop, SavedBindingWorkspaceRequest} {
 		source, _ := savedBindingSourceFixture(t, kind)
 		source.RootID = rootID
@@ -36,18 +36,12 @@ func TestInitialOperationClosedSubjects(t *testing.T) {
 	}
 	source, _ := savedBindingSourceFixture(t, SavedBindingTaskMetadata)
 	source.RootID = rootID
-	migration := MigrationReference{RootID: rootID, RecordSHA256: strings.Repeat("e", 64)}
 	for _, operation := range []InitialOperation{
 		{Kind: "unknown"},
 		{Source: source},
 		{Kind: InitialEnsureOwn, Source: source},
-		{Kind: InitialMigrateOwn, Migration: migration},
 		{Kind: InitialRecoverSaved},
 		{Kind: InitialPrepareContinuation},
-		{Kind: InitialPrepareContinuation, Source: source, Migration: migration},
-		{Kind: InitialMigrateReferenced},
-		{Kind: InitialRecoverSaved, Source: source, Migration: migration},
-		{Kind: InitialMigrateReferenced, Source: source, Migration: migration},
 	} {
 		if err := operation.Validate(rootID); !errors.Is(err, ErrIdentity) {
 			t.Fatalf("invalid union accepted: %+v: %v", operation, err)
@@ -65,6 +59,7 @@ func TestInitialOperationStrictJSON(t *testing.T) {
 		`null`, `{}`, `{"kind":""}`, `{"kind":"unknown"}`, `{"kind":null}`,
 		`{"kind":"migrate-own","extra":true}`, `{"kind":"migrate-own","source":null}`,
 		`{"kind":"migrate-own","source":{}}`, `{"kind":"migrate-referenced","migration":{"root_id":"bad"}}`,
+		`{"kind":"migrate-referenced"}`, `{"kind":"migrate-own","migration":{}}`,
 	} {
 		var operation InitialOperation
 		if err := task.DecodeStrict([]byte(data), &operation); err == nil {
@@ -81,7 +76,7 @@ func TestInitialOperationStrictJSON(t *testing.T) {
 			t.Fatalf("descriptor round trip: %s: %v", data, err)
 		}
 		if operation.Source == (SavedBindingSource{}) && bytes.Contains(data, []byte(`"source"`)) ||
-			operation.Migration == (MigrationReference{}) && bytes.Contains(data, []byte(`"migration"`)) {
+			bytes.Contains(data, []byte(`"migration"`)) {
 			t.Fatalf("zero subject was serialized: %s", data)
 		}
 	}
@@ -89,7 +84,7 @@ func TestInitialOperationStrictJSON(t *testing.T) {
 
 func TestStartupInitialOperationProtocol(t *testing.T) {
 	for _, operation := range initialOperationFixtures(t, originTestRootID) {
-		for _, protocol := range []int{ProtocolVersion, startupInitialOperationProtocolVersion, 3} {
+		for _, protocol := range []int{1, 2, RecordProtocolVersion, RecordProtocolVersion + 1} {
 			intent := startupIntentFixture(t)
 			intent.Inputs.Initial, intent.Protocol = operation, protocol
 			digest, err := intent.Inputs.Digest()
@@ -97,86 +92,75 @@ func TestStartupInitialOperationProtocol(t *testing.T) {
 				t.Fatal(err)
 			}
 			intent.InputsSHA256 = digest
-			wantValid := protocol == ProtocolVersion && operation == (InitialOperation{}) ||
-				protocol == startupInitialOperationProtocolVersion && operation != (InitialOperation{}) && operation.Kind != InitialEnsureOwn
+			wantValid := protocol == RecordProtocolVersion
 			if err = intent.Validate(); (err == nil) != wantValid {
 				t.Fatalf("protocol=%d operation=%+v valid=%t: %v", protocol, operation, wantValid, err)
 			}
 		}
 	}
-	inputs := startupIntentFixture(t).Inputs
-	inputs.Kind, inputs.Artifacts, inputs.Context = StartupUpgrade, Artifacts{}, LaunchContextReference{}
-	inputs.UpgradeID, inputs.UpgradeSHA256 = originTestRootID, strings.Repeat("a", 64)
-	if err := inputs.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	for _, operation := range initialOperationFixtures(t, originTestRootID)[1:] {
-		inputs.Initial = operation
-		if err := inputs.Validate(); !errors.Is(err, ErrIdentity) {
-			t.Fatalf("upgrade accepted initial operation: %v", err)
-		}
-	}
 }
 
-// The legacy schema is deliberately independent of StartupInputs, including
-// its field order and tags. Native fixture paths are encoded by encoding/json.
+// This historical format is independent of the current installed-role type.
+// Its executable digests are recorded fixture data, never observations of programs.
+type legacyStartupArtifacts struct {
+	Runner       string `json:"runner"`
+	RunnerSHA256 string `json:"runner_sha256"`
+	Client       string `json:"client"`
+	ClientSHA256 string `json:"client_sha256"`
+	Daemon       string `json:"daemon"`
+	DaemonSHA256 string `json:"daemon_sha256"`
+}
+
 type legacyStartupInputs struct {
-	Kind          StartupKind            `json:"kind"`
-	Root          string                 `json:"root"`
-	RootID        string                 `json:"root_id"`
-	BootID        string                 `json:"boot_id"`
-	RootDevice    uint64                 `json:"root_device"`
-	RootInode     uint64                 `json:"root_inode"`
-	Artifacts     Artifacts              `json:"artifacts"`
-	Context       LaunchContextReference `json:"launch_context"`
-	UpgradeID     string                 `json:"upgrade_id,omitempty"`
-	UpgradeSHA256 string                 `json:"upgrade_sha256,omitempty"`
+	Kind       StartupKind            `json:"kind"`
+	Root       string                 `json:"root"`
+	RootID     string                 `json:"root_id"`
+	BootID     string                 `json:"boot_id"`
+	RootDevice uint64                 `json:"root_device"`
+	RootInode  uint64                 `json:"root_inode"`
+	Artifacts  legacyStartupArtifacts `json:"artifacts"`
+	Context    LaunchContextReference `json:"launch_context"`
 }
 
-func TestStartupLegacyInitialOperationBytesAndDigest(t *testing.T) {
-	intent := startupIntentFixture(t)
-	i := intent.Inputs
-	legacy := legacyStartupInputs{i.Kind, i.Root, i.RootID, i.BootID, i.RootDevice, i.RootInode, i.Artifacts, i.Context, "", ""}
-	expected, err := json.Marshal(legacy)
+func TestStartupHistoricalExecutableRecordsRefuseWithoutReplay(t *testing.T) {
+	f := producerFixture(t)
+	intent := journalIntent(t, f.journal, 1)
+	input := intent.Inputs
+	legacy := legacyStartupInputs{
+		Kind: input.Kind, Root: input.Root, RootID: input.RootID, BootID: input.BootID, RootDevice: input.RootDevice, RootInode: input.RootInode,
+		Artifacts: legacyStartupArtifacts{Runner: input.Artifacts.Runner, RunnerSHA256: strings.Repeat("a", 64), Client: filepath.Join(input.Root, "pueue"), ClientSHA256: strings.Repeat("b", 64), Daemon: filepath.Join(input.Root, "pueued"), DaemonSHA256: strings.Repeat("c", 64)}, Context: input.Context,
+	}
+	inputs, err := task.MarshalCanonical(legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected = append(expected, '\n')
-	actual, err := task.MarshalCanonical(i)
-	if err != nil || !bytes.Equal(actual, expected) {
-		t.Fatalf("legacy inputs bytes changed: %s: %v", actual, err)
-	}
-	if i.Initial != (InitialOperation{}) || intent.InputsSHA256 != task.ComputeSHA256(expected) {
-		t.Fatal("legacy Own input digest changed")
-	}
-	var decoded StartupInputs
-	if err = task.DecodeStrict(expected, &decoded); err != nil || decoded != i {
-		t.Fatalf("legacy inputs without initial descriptor: %v", err)
-	}
-	// Independently replace only the inputs with the verified legacy bytes.
-	data, err := task.MarshalCanonical(intent)
+	historical := struct {
+		Protocol     int             `json:"protocol"`
+		Sequence     uint64          `json:"sequence"`
+		Epoch        string          `json:"epoch"`
+		Inputs       json.RawMessage `json:"inputs"`
+		InputsSHA256 string          `json:"inputs_sha256"`
+		Starter      json.RawMessage `json:"starter"`
+		AcceptedAt   string          `json:"accepted_at"`
+		Deadline     string          `json:"deadline"`
+	}{1, intent.Sequence, intent.Epoch, bytes.TrimSpace(inputs), task.ComputeSHA256(inputs), json.RawMessage(`{"kind":"outside","root":"/old-root","root_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pid":7,"start_token":"fixture:7"}`), intent.AcceptedAt, intent.Deadline}
+	data, err := task.MarshalCanonical(historical)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var legacyIntent struct {
-		Protocol     int               `json:"protocol"`
-		Sequence     uint64            `json:"sequence"`
-		Epoch        string            `json:"epoch"`
-		Inputs       json.RawMessage   `json:"inputs"`
-		InputsSHA256 string            `json:"inputs_sha256"`
-		Starter      StartupProvenance `json:"starter"`
-		AcceptedAt   string            `json:"accepted_at"`
-		Deadline     string            `json:"deadline"`
+	path := filepath.Join(f.journal.pin.Root(), "infrastructure", intentName(1))
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	legacyIntent.Protocol, legacyIntent.Sequence, legacyIntent.Epoch = 1, intent.Sequence, intent.Epoch
-	legacyIntent.Inputs, legacyIntent.InputsSHA256 = bytes.TrimSpace(expected), task.ComputeSHA256(expected)
-	legacyIntent.Starter, legacyIntent.AcceptedAt, legacyIntent.Deadline = intent.Starter, intent.AcceptedAt, intent.Deadline
-	expectedIntent, err := task.MarshalCanonical(legacyIntent)
-	if err != nil || !bytes.Equal(data, expectedIntent) {
-		t.Fatalf("legacy intent bytes changed: %v", err)
+	releaseProducerFixtureLease(t, f)
+	starts := 0
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected native Start") }})
+	ownProducerAttempt(t, attempt)
+	if err == nil || task.RecordAbsent(err) || starts != 0 || f.host.calls != 0 {
+		t.Fatalf("unreadable accepted history authorized replay: starts=%d prepares=%d error=%v", starts, f.host.calls, err)
 	}
-	digest, err := intent.Digest()
-	if err != nil || digest != task.ComputeSHA256(expectedIntent) {
-		t.Fatalf("legacy intent digest changed: %v", err)
+	after, readErr := os.ReadFile(path)
+	if readErr != nil || !bytes.Equal(after, data) {
+		t.Fatalf("historical refusal changed accepted bytes: %v", readErr)
 	}
 }

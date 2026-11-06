@@ -17,17 +17,18 @@ import (
 )
 
 func TestDispatchDuringPreparedMigrationRefusesBeforeTaskCreation(t *testing.T) {
-	store, deps, legacy := newSupervisorProbeTestFixture(t)
+	store, deps, legacy, owner := newOwnedSupervisorProbeTestFixture(t)
+	deps = withSupervisorProbeRouting(t, deps, owner)
 	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), deps.SupervisorOptions)
 	defer cancelControl()
-	warm, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, deps.SupervisorOptions)
+	warm, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, deps.supervisorLookup(), store, componentPublicationOptions(t, store.Root, owner, deps.SupervisorOptions))
 	if err != nil || warm == nil {
 		t.Fatalf("prepare complete admission fixture: client=%v err=%v", warm, err)
 	}
 	if err = warm.Close(); err != nil {
 		t.Fatal(err)
 	}
-	prepareBusyAdmissionMigration(t, store.Root, legacy.Binding(), deps.SupervisorOptions)
+	prepareBusyAdmissionMigration(t, store.Root, legacy.Binding(), deps.SupervisorOptions, owner)
 	journalPath := filepath.Join(store.Root, ".supervisor", "migration.json")
 	journalBefore := readSupervisorProbeTestFile(t, journalPath)
 	provider := preflightFixture{root: store.Root, cwd: testsupport.CanonicalTempDir(t)}
@@ -63,18 +64,18 @@ func TestDispatchDuringPreparedMigrationRefusesBeforeTaskCreation(t *testing.T) 
 	assertSupervisorProbeTestFile(t, journalPath, journalBefore)
 }
 
-func prepareBusyAdmissionMigration(t *testing.T, root string, binding task.SupervisorRef, options pueue.Options) {
+func prepareBusyAdmissionMigration(t *testing.T, root string, binding task.SupervisorRef, options pueue.Options, owner *componentSupervisorFixture) {
 	t.Helper()
+	options = componentPublicationOptions(t, root, owner, options)
 	path := filepath.Join(testsupport.CanonicalTempDir(t), "next-pueued")
-	data := readSupervisorProbeTestFile(t, binding.DaemonExecutable)
-	writeRunnerFixture(t, path, string(data)+"\n# next installation\n")
+	writeSupervisorProbeDaemon(t, path)
 	options.PrivateMigrationAuthorizer = func(context.Context, string, task.SupervisorRef, []pueue.Job) error {
 		return pueue.ErrPrivateSupervisorMigrationBusy
 	}
 	err := pueue.WithBootstrapLockContext(t.Context(), root, func(ctx context.Context) error {
 		successor, prepareErr := pueue.PreparePrivateForMigrationWithLock(ctx, binding.ClientExecutable, path, root, options)
 		if prepareErr != nil {
-			return prepareErr
+			return errors.Join(prepareErr, successor.CloseAfterPending(prepareErr))
 		}
 		migrationErr := successor.MigratePrivateSupervisorWithLock(ctx, root)
 		return errors.Join(migrationErr, successor.CloseAfterPending(migrationErr))

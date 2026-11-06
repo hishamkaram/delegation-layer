@@ -10,10 +10,13 @@ from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_s
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
+from scripts.delegate_acceptance.processes.contracts import command_closure_unproven
 import hashlib
-from scripts.delegate_acceptance.private_cli.installation import install_fixture
-from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
+from scripts.delegate_acceptance.private_cli.installation import (
+    install_package_layout, install_supervisor_pair,
+)
 import json
+import os
 from scripts.delegate_acceptance.private_cli.supervisor import predecessor_closed
 from scripts.delegate_acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort
@@ -24,109 +27,81 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.finalization import release_pending_predecessor
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor, shutdown_predecessor_supervisor
 from scripts.delegate_acceptance.tasks.publication import snapshot
 import time
 import uuid
 from scripts.delegate_acceptance.processes.observation import wait_until
-from scripts.delegate_acceptance.evidence.files import write_json
 
 
-def seed_historical_private_paths(state, libexec, *, split):
-    """Seed only historical mutable provenance under production lock ordering."""
+def observe_installed_package(state, libexec):
+    """Read the actual current generation without fabricating historical provenance."""
     with private_fixture_transition(state) as supervisor:
         for name in ("migration.json", "bootstrap.pending", "identity.pending.json"):
-            require(not (supervisor / name).exists(), "historical seed found pending " + name)
-        record = read_json(supervisor / "supervisor.identity.json")
-        binding = record["binding"]
+            require(not (supervisor / name).exists(), "package observation found pending " + name)
+        binding = read_json(supervisor / "supervisor.identity.json")["binding"]
         identity = read_json(supervisor / "daemon.identity.json")
-        for member, field in (("pueue", "client"), ("pueued", "daemon")):
-            require(
-                hashlib.sha256((libexec / member).read_bytes()).hexdigest() == binding[field + "_sha256"],
-                "historical seed changed executable bytes",
-            )
-            binding[field + "_executable"] = str(libexec / member)
-        write_json(supervisor / "supervisor.identity.json", record, replace=True)
-        if not split:
-            identity["executable"] = binding["daemon_executable"]
-            write_json(supervisor / "daemon.identity.json", identity, replace=True)
+        require(binding.get("executable_identity") == "installed-path-v1"
+                and identity.get("executable_identity") == "installed-path-v1",
+                "package observation requires installed-path identities")
+        require(not binding.get("client_sha256") and not binding.get("daemon_sha256")
+                and not identity.get("sha256"), "current installation recorded an executable digest")
+        assert_state_supervisor_pair(state, libexec)
         return binding
 
 
 def run_pending_package_upgrade(
-    delegate,
-    client,
-    libexec,
-    real_client,
-    real_daemon,
-    state,
-    config,
-    env,
-    receipts,
-    supervisor_cleanups,
-    attempted_task_ids,
-    *,
-    capture_root,
-    fixture_base,
+    delegate, client, real_client, state, config, env, receipts,
+    supervisor_cleanups, attempted_task_ids, *, capture_root, fixture_base, source_root,
 ):
-    """Interrupt a real migration, remove its seeded legacy package, and resume.
-
-    The pending package, legacy control config and retarget markers live in
-    ``fixture_base``; ``capture_root`` holds only control command captures.
-    """
-    base = fixture_base
+    """Refuse a removed accepted successor without rewriting its identity or replaying it."""
     package_owner = DirectoryOwner()
+    failure = None
     try:
         pending_libexec, active, legacy_config, original_config, legacy_cleanup = stage_pending_package(
-            attempted_task_ids=attempted_task_ids, base=base, config=config, env=env, package_owner=package_owner,
-            real_client=real_client, real_daemon=real_daemon, state=state, supervisor_cleanups=supervisor_cleanups
+            attempted_task_ids=attempted_task_ids, base=fixture_base, config=config, env=env,
+            package_owner=package_owner, real_client=real_client,
+            state=state, supervisor_cleanups=supervisor_cleanups, source_root=source_root,
         )
-        new_socket = interrupt_pending_migration(
-            active=active,
+        interrupt_pending_migration(
+            active=active, capture_root=capture_root, client=client, config=config,
+            delegate=pending_libexec.parent / "install" / "delegate", env=env,
+            legacy_config=legacy_config, original_config=original_config, package_owner=package_owner,
+            pending_libexec=pending_libexec, receipts=receipts, state=state,
+        )
+        accepted_paths = (state / ".supervisor" / "migration.json", state / "inspection-group" / "migration.json")
+        accepted = {path: path.read_bytes() for path in accepted_paths}
+        refused = run_json(
+            delegate, env, ["--root", str(state), "supervisor", "migrate", "--json"], expected=(1,),
+            receipt=receipts / "upgrade-missing-successor.json", capture_root=capture_root, capture_response=True,
+        )
+        require(refused.get("supervisor_control", {}).get("state") == "blocked",
+                "migration did not refuse its removed accepted successor")
+        require(all(path.read_bytes() == content for path, content in accepted.items()),
+                "missing-successor refusal rewrote accepted migration evidence")
+        require(read_json(state / ".supervisor" / "supervisor.identity.json")["binding"] == active,
+                "missing-successor refusal replaced the active generation")
+        shutdown_predecessor_supervisor(
+            real_client, legacy_cleanup["predecessor"], env, task_ids=tuple(attempted_task_ids),
             capture_root=capture_root,
-            client=client,
-            config=config,
-            delegate=delegate,
-            env=env,
-            legacy_config=legacy_config,
-            original_config=original_config,
-            package_owner=package_owner,
-            pending_libexec=pending_libexec,
-            receipts=receipts,
-            state=state,
-        )
-        install_wrapper(libexec / "pueue", real_client, base / "retarget-client", "retarget-install", "client")
-        install_wrapper(libexec / "pueued", real_daemon, base / "retarget-daemon", "retarget-install", "daemon")
-        migrated = run_json(
-            delegate,
-            env,
-            ["--root", str(state), "supervisor", "migrate", "--json"],
-            receipt=receipts / "upgrade-retarget.json",
-            capture_root=capture_root,
-            capture_response=True,
-        )
-        require(
-            migrated.get("supervisor_control", {}).get("state") == "migrated",
-            "native migration did not retarget its removed pre-shutdown successor",
         )
         await_pending_predecessor(capture_root, legacy_cleanup["predecessor"])
-        pair = assert_state_supervisor_pair(state, libexec)
-        published = read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]
-        require(
-            published["daemon_executable"] == str(pair / "pueued") and published["endpoint"] == "unix:" + new_socket,
-            "native retarget did not publish the actual ready generation",
-        )
         release_pending_predecessor(legacy_cleanup, supervisor_cleanups)
         return {
-            "historical_state": "seeded-legacy-target-before-shutdown",
-            "active_work_refused": True,
-            "removed_successor_package": True,
-            "committed_retarget": True,
-            "predecessor_shutdown": "verified",
-            "active_binding": published,
+            "successor": "actual-owned-installation", "active_work_refused": True,
+            "removed_successor_package": True, "missing_successor_refused": True,
+            "accepted_migration_preserved": True, "predecessor_shutdown": "verified",
+            "active_binding": active,
         }
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        package_owner.rollback()
+        if failure is not None and command_closure_unproven(failure):
+            failure.add_note("installation child closure is unproven; retained " + str(fixture_base / "pending-package"))
+            package_owner.release()
+        else:
+            package_owner.rollback()
 
 
 def run_supervisor_upgrade_recovery(
@@ -148,21 +123,21 @@ def run_supervisor_upgrade_recovery(
     attempted_task_ids,
     remove_old_package,
     real_client,
-    real_daemon,
     supervisor_cleanups,
     *,
     capture_root,
     fixture_base,
+    source_root,
 ):
-    """Prove seeded historical path splits and removed-package recovery with real Pueue."""
-    evidence = {"historical_state": "seeded-provenance", "tasks": []}
+    """Prove warm installed control, package removal, and missing accepted-target refusal."""
+    evidence = {"historical_state": "original-installed-records", "tasks": []}
     run_receipt.add_details(supervisor_upgrade_recovery=evidence)
 
     dispatch, collect = _upgrade_task_operations(
         attempted_task_ids=attempted_task_ids, capture_root=capture_root, delegate=delegate, env=env,
         evidence=evidence, receipts=receipts, run_receipt=run_receipt, state=state, workspace=workspace
     )
-    pair, legacy_binding, historical, historical_directory, history = prepare_upgrade_history(
+    legacy_binding, historical, historical_directory, history = prepare_upgrade_history(
         attempted_task_ids=attempted_task_ids,
         brief=brief,
         capture_root=capture_root,
@@ -191,15 +166,14 @@ def run_supervisor_upgrade_recovery(
         env=env,
         evidence=evidence,
         fixture_base=fixture_base,
+        source_root=source_root,
         gate=gate,
         historical=historical,
         historical_directory=historical_directory,
         history=history,
         lease_nonce=lease_nonce,
         legacy_binding=legacy_binding,
-        pair=pair,
         real_client=real_client,
-        real_daemon=real_daemon,
         receipts=receipts,
         run_receipt=run_receipt,
         state=state,
@@ -209,32 +183,26 @@ def run_supervisor_upgrade_recovery(
     )
 
 
-def _retarget_pending_successor(pending_libexec, state, supervisor):
+def require_pending_successor(pending_libexec, state, supervisor):
+    """Validate the accepted real installation; never edit its proposal or executable paths."""
     migration = read_json(supervisor / "migration.json")
-    require(
-        not any(
-            migration.get(name, False)
-            for name in ("legacy_shutdown_requested", "legacy_shutdown_dispatched", "legacy_stopped")
-        ),
-        "native migration crossed shutdown before its active-work refusal",
-    )
-    group_path = state / "inspection-group" / "migration.json"
-    group = read_json(group_path)
-    require(
-        group["successor_sha256"] == hashlib.sha256(canonical_go_json(group["successor"])).hexdigest(),
-        "native migration fixture did not preserve Go's exact proposal identity",
-    )
+    require(not any(migration.get(name, False) for name in
+                    ("legacy_shutdown_requested", "legacy_shutdown_dispatched", "legacy_stopped")),
+            "native migration crossed shutdown before its active-work refusal")
+    group = read_json(state / "inspection-group" / "migration.json")
+    require(group["successor_sha256"] == hashlib.sha256(canonical_go_json(group["successor"])).hexdigest(),
+            "native migration fixture did not preserve Go's exact proposal identity")
     target = group["successor"]["supervisor"]
+    require(target.get("executable_identity") == "installed-path-v1"
+            and not target.get("client_sha256") and not target.get("daemon_sha256"),
+            "accepted successor did not use installed-path identities")
     for member, field in (("pueue", "client"), ("pueued", "daemon")):
-        require(
-            hashlib.sha256((pending_libexec / member).read_bytes()).hexdigest() == target[field + "_sha256"],
-            "legacy pending target seed changed executable bytes",
-        )
-        target[field + "_executable"] = str(pending_libexec / member)
-    migration["successor"]["executable"] = target["daemon_executable"]
-    group["successor_sha256"] = hashlib.sha256(canonical_go_json(group["successor"])).hexdigest()
-    write_json(supervisor / "migration.json", migration, replace=True)
-    write_json(group_path, group, replace=True)
+        selected = pending_libexec / member
+        require(selected.is_file() and os.access(selected, os.X_OK)
+                and target[field + "_executable"] == str(selected),
+                "accepted successor did not select its actual installed " + member)
+    require(migration["successor"]["executable"] == target["daemon_executable"],
+            "accepted daemon identity disagrees with the installation proposal")
 
 
 def _upgrade_task_operations(
@@ -337,12 +305,12 @@ def _prove_recovered_capacity(
 
 
 def stage_pending_package(
-    *, attempted_task_ids, base, config, env, package_owner, real_client, real_daemon, state, supervisor_cleanups
+    *, attempted_task_ids, base, config, env, package_owner, real_client, state, supervisor_cleanups,
+    source_root,
 ):
     package = package_owner.create("pending successor package", base / "pending-package", base).directory
-    pending_libexec = package_owner.create("pending successor libexec", package / "libexec", package).directory
-    install_fixture(real_client, pending_libexec / "pueue")
-    install_fixture(real_daemon, pending_libexec / "pueued")
+    _install, _canonical, pending_libexec = install_package_layout(package_owner, source_root, package, False)
+    install_supervisor_pair(pending_libexec)
     active = read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]
     legacy_config = base / "upgrade-legacy-control.yml"
     with private_fixture_transition(state):
@@ -360,7 +328,7 @@ def stage_pending_package(
     return pending_libexec, active, legacy_config, original_config, legacy_cleanup
 
 
-def prove_split_provenance(
+def prove_warm_installation(
     *, attempted_task_ids,
     brief,
     capture_root,
@@ -379,14 +347,16 @@ def prove_split_provenance(
     pair = assert_state_supervisor_pair(state, old_libexec)
     identity_path = state / ".supervisor" / "daemon.identity.json"
     identity_before = identity_path.read_bytes()
-    seed_historical_private_paths(state, old_libexec, split=True)
-    split = dispatch(delegate, "upgrade-path-split", brief)
-    collect(split, "upgrade-path-split")
-    require(identity_path.read_bytes() == identity_before, "path-only repair rewrote the existing daemon identity")
+    binding_path = state / ".supervisor" / "supervisor.identity.json"
+    binding_before = binding_path.read_bytes()
+    warm = dispatch(delegate, "upgrade-warm-installation", brief)
+    collect(warm, "upgrade-warm-installation")
+    require(identity_path.read_bytes() == identity_before, "warm installed control rewrote the daemon identity")
+    require(binding_path.read_bytes() == binding_before, "warm installed control rewrote the published binding")
     require(
         read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]["daemon_executable"]
         == str(pair / "pueued"),
-        "path-only repair did not select retained launch provenance",
+        "warm installed control changed the daemon installation",
     )
     shutdown_private_supervisor(
         client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root
@@ -437,7 +407,7 @@ def interrupt_pending_migration(
         "native migration did not preserve the stashed blocker",
     )
     with private_fixture_transition(state) as supervisor:
-        _retarget_pending_successor(pending_libexec, state, supervisor)
+        require_pending_successor(pending_libexec, state, supervisor)
     row = pueue_snapshot(client, legacy_config, env, capture_root=capture_root)["tasks"].get(numeric)
     require(
         isinstance(row, dict) and row.get("label") == label and pueue_state(row) == "Stashed",
@@ -465,7 +435,7 @@ def record_historical_package(
     state,
     workspace,
 ):
-    legacy_binding = seed_historical_private_paths(state, old_libexec, split=False)
+    legacy_binding = observe_installed_package(state, old_libexec)
     run_json(
         old_delegate,
         env,
@@ -501,15 +471,14 @@ def finish_upgrade_recovery(
     env,
     evidence,
     fixture_base,
+    source_root,
     gate,
     historical,
     historical_directory,
     history,
     lease_nonce,
     legacy_binding,
-    pair,
     real_client,
-    real_daemon,
     receipts,
     run_receipt,
     state,
@@ -525,13 +494,14 @@ def finish_upgrade_recovery(
     require(snapshot(historical_directory) == history, "upgrade recovery mutated historical task evidence")
     active = read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]
     require(
-        active["client_executable"] == str(pair / "pueue") and active["daemon_executable"] == str(pair / "pueued"),
-        "removed-package recovery did not publish actual retained launch paths",
+        active["client_executable"] == str(upgraded_libexec / "pueue")
+        and active["daemon_executable"] == str(upgraded_libexec / "pueued"),
+        "removed-package recovery did not select the current installation",
     )
     require(
-        active["client_sha256"] == legacy_binding["client_sha256"]
-        and active["daemon_sha256"] == legacy_binding["daemon_sha256"],
-        "removed-package recovery changed binary generation",
+        active.get("executable_identity") == "installed-path-v1"
+        and not active.get("client_sha256") and not active.get("daemon_sha256"),
+        "removed-package recovery did not publish installed-path identity",
     )
     for name in ("migration.json", "bootstrap.pending", "identity.pending.json"):
         require(not (state / ".supervisor" / name).exists(), "recovery stranded " + name)
@@ -539,9 +509,7 @@ def finish_upgrade_recovery(
     evidence["pending_package_upgrade"] = run_pending_package_upgrade(
         delegate=delegate,
         client=client,
-        libexec=upgraded_libexec,
         real_client=real_client,
-        real_daemon=real_daemon,
         state=state,
         config=config,
         env=env,
@@ -550,14 +518,11 @@ def finish_upgrade_recovery(
         attempted_task_ids=attempted_task_ids,
         capture_root=capture_root,
         fixture_base=fixture_base,
+        source_root=source_root,
     )
-    collect(historical, "upgrade-history-after-retarget")
-    require(snapshot(historical_directory) == history, "explicit retarget mutated historical task evidence")
-    shutdown_private_supervisor(
-        client, config, env, state=state, task_ids=tuple(attempted_task_ids), capture_root=capture_root
-    )
+    require(snapshot(historical_directory) == history, "missing-successor refusal mutated historical task evidence")
     evidence.update(
-        relocated_binding=active,
+        retired_binding=legacy_binding,
         active_binding=read_json(state / ".supervisor" / "supervisor.identity.json")["binding"],
         preserved_task_snapshot=history,
         recovered_running_tasks=2,
@@ -570,7 +535,7 @@ def await_pending_predecessor(capture_root, predecessor):
     wait_until(
         lambda: predecessor_closed(predecessor, stop_deadline, capture_root=capture_root),
         timeout=30,
-        description="retargeted predecessor process and endpoint closure",
+        description="captured predecessor process and endpoint closure",
     )
 
 
@@ -591,7 +556,7 @@ def prepare_upgrade_history(
     state,
     workspace,
 ):
-    pair = prove_split_provenance(
+    prove_warm_installation(
         attempted_task_ids=attempted_task_ids,
         brief=brief,
         capture_root=capture_root,
@@ -621,4 +586,4 @@ def prepare_upgrade_history(
         state=state,
         workspace=workspace,
     )
-    return pair, legacy_binding, historical, historical_directory, history
+    return legacy_binding, historical, historical_directory, history

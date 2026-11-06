@@ -26,7 +26,7 @@ func requireDaemonWaitECHILD(t *testing.T, pid int) {
 
 func TestDaemonWaitDoneMeansChildAlreadyReaped(t *testing.T) {
 	f := exerciseDaemonWaitRegistration(t, nil, nil)
-	requireDaemonWaitECHILD(t, f.pid)
+	requireDaemonWaitECHILD(t, f.pid())
 }
 
 func TestDaemonWaitRunsBeforeGuardReturns(t *testing.T) {
@@ -56,22 +56,22 @@ func TestDaemonWaitRunsBeforeGuardReturns(t *testing.T) {
 	launched = true
 	go func() { finished <- f.start(t.Context(), options) }()
 	f.ready(t)
-	if f.registrations != 0 {
+	if f.registrations() != 0 {
 		t.Fatal("wait registered before guard returned")
 	}
 	pidPath := filepath.Join(f.root, "pid")
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(f.pid)), 0o600); err != nil {
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(f.pid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.release(t)
 	// Observe actual disappearance, then the nonreaping ECHILD oracle. No
 	// scheduling delay or zombie-as-absent observation establishes this result.
 	waitDaemonGuardChildReaped(t, pidPath)
-	requireDaemonWaitECHILD(t, f.pid)
+	requireDaemonWaitECHILD(t, f.pid())
 	release.Do(func() { close(gate) })
 	join()
-	if !errors.Is(result, postStart) || f.registrations != 1 || f.registrationPID != f.pid || f.registrationRoot != f.root {
-		t.Fatalf("post-guard registration lost: %v count=%d", result, f.registrations)
+	if !errors.Is(result, postStart) || f.registrations() != 1 || f.registrationPID() != f.pid() || f.registrationRoot() != f.root {
+		t.Fatalf("post-guard registration lost: %v count=%d", result, f.registrations())
 	}
-	joinDaemonWait(t, f.done)
+	joinDaemonWait(t, f.done())
 }

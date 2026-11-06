@@ -121,7 +121,6 @@ func (f *ownerAuthFixture) records(t *testing.T) {
 	f.intent.Inputs.Root, f.intent.Inputs.RootID = pin.Root(), pin.RootID()
 	f.intent.Inputs.RootDevice, f.intent.Inputs.RootInode = pin.Device(), pin.Inode()
 	f.intent.Inputs.BootID = bootID
-	f.intent.Starter.Root, f.intent.Starter.RootID = pin.Root(), pin.RootID()
 	// A legitimate prior assumption remains authentic after its original deadline.
 	now := time.Now().UTC()
 	f.intent.AcceptedAt = now.Add(-3 * time.Nanosecond).Format(time.RFC3339Nano)
@@ -136,7 +135,7 @@ func (f *ownerAuthFixture) records(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.publication = OwnerPublication{Protocol: ProtocolVersion, Startup: reference, RuntimeSHA256: f.intent.Inputs.Artifacts.RunnerSHA256, Endpoint: EndpointIdentity{Path: ownerEndpointPath(f.root, 1), DirectoryDev: pin.Device(), DirectoryInode: pin.Inode(), SocketDev: uint64(socket.Dev), SocketInode: uint64(socket.Ino)}}
+	f.publication = OwnerPublication{Protocol: RecordProtocolVersion, Startup: reference, Endpoint: EndpointIdentity{Path: ownerEndpointPath(f.root, 1), DirectoryDev: pin.Device(), DirectoryInode: pin.Inode(), SocketDev: uint64(socket.Dev), SocketInode: uint64(socket.Ino)}}
 	f.rebind(t)
 	f.request = ownerRequest{Protocol: ownerProtocolVersion, RootID: pin.RootID(), Owner: reference, Client: f.assumption.Process, Action: ownerStatus, Deadline: now.Add(time.Minute).Format(time.RFC3339Nano)}
 	digest, err := f.publication.Digest(f.intent, f.assumption)
@@ -180,6 +179,21 @@ func TestOwnerAuthenticationAcceptsActualPeerAfterStartupDeadline(t *testing.T) 
 	}
 }
 
+func TestOwnerAuthenticationRefusesEnsureOtherForSameOwner(t *testing.T) {
+	fixture := newOwnerAuthFixture(t)
+	request := fixture.request
+	request.Action = ownerEnsureOther
+	request.Context = LaunchContextReference{SHA256: strings.Repeat("d", 64)}
+	request.Target = originRecord{Root: filepath.Join(fixture.root, "other"), RootID: strings.Repeat("e", 32)}
+	if err := authenticateOwnerRequest(t.Context(), fixture.server, fixture.intent, fixture.assumption, fixture.publication, request); err != nil {
+		t.Fatalf("valid other-root request failed native authentication: %v", err)
+	}
+	request.Target = originRecord{Root: fixture.root, RootID: fixture.intent.Inputs.RootID}
+	if err := authenticateOwnerRequest(t.Context(), fixture.server, fixture.intent, fixture.assumption, fixture.publication, request); !errors.Is(err, ErrIdentity) {
+		t.Fatalf("authenticated owner accepted its own root as EnsureOther: %v", err)
+	}
+}
+
 func TestOwnerAuthenticationRefusesChangedClientAndSubject(t *testing.T) {
 	fixture := newOwnerAuthFixture(t)
 	for _, kind := range []string{"pid", "token", "epoch", "namespace", "publication", "reference", "action", "target"} {
@@ -215,7 +229,7 @@ func requireOwnerAuthRefusal(t *testing.T, err error) {
 
 func TestOwnerAuthenticationRefusesChangedOwnerRecords(t *testing.T) {
 	fixture := newOwnerAuthFixture(t)
-	for _, kind := range []string{"pid", "token", "uid", "assumption-digest", "runtime", "endpoint"} {
+	for _, kind := range []string{"pid", "token", "uid", "assumption-digest", "endpoint"} {
 		assumption, publication, request := changedOwnerAuthenticationRecords(t, fixture, kind)
 		requireOwnerAuthRefusal(t, authenticateOwnerPeer(t.Context(), fixture.client, fixture.intent, assumption, publication))
 		requireOwnerAuthRefusal(t, authenticateOwnerRequest(t.Context(), fixture.server, fixture.intent, assumption, publication, request))
@@ -234,8 +248,6 @@ func changedOwnerAuthenticationRecords(t *testing.T, fixture *ownerAuthFixture, 
 		assumption.UID++
 	case "assumption-digest":
 		publication.AssumptionSHA256 = strings.Repeat("e", 64)
-	case "runtime":
-		publication.RuntimeSHA256 = strings.Repeat("e", 64)
 	case "endpoint":
 		publication.Endpoint.Path = filepath.Join(fixture.root, "wrong")
 	}
@@ -301,7 +313,7 @@ func TestOwnerAuthenticationPreservesContextAndNativeErrors(t *testing.T) {
 
 func TestOwnerReplyBindingKeepsExactActionAndTargetSubject(t *testing.T) {
 	fixture := newOwnerAuthFixture(t)
-	for _, action := range []ownerAction{ownerStatus, ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced} {
+	for _, action := range []ownerAction{ownerStatus, ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation} {
 		request, reply := ownerReplySubjectFixture(fixture, action)
 		if err := validateOwnerReplyBinding(fixture.intent, fixture.assumption, fixture.publication, request, reply); err != nil {
 			t.Fatalf("valid %s binding: %v", action, err)
@@ -338,16 +350,11 @@ func ownerReplySubjectFixture(fixture *ownerAuthFixture, action ownerAction) (ow
 	reply := ownerReply{Protocol: ownerProtocolVersion, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: action, Code: ownerOK}
 	switch action {
 	case ownerStatus:
-	case ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced:
+	case ownerRecoverSaved, ownerPrepareContinuation:
 		selected := ownerPreparationSubjectFixture(action)
-		request.Source, request.Migration, request.Context = selected.Source, selected.Migration, selected.Context
-		if action == ownerRecoverSaved || action == ownerPrepareContinuation {
-			request.Source.RootID = request.RootID
-		} else {
-			request.Migration.RootID = request.RootID
-			reply.MigrationResult = MigrationCompleted
-		}
-		reply.Source, reply.Migration, reply.Context = request.Source, request.Migration, request.Context
+		request.Source, request.Context = selected.Source, selected.Context
+		request.Source.RootID = request.RootID
+		reply.Source, reply.Context = request.Source, request.Context
 		reply.Target = originRecord{Root: fixture.root, RootID: request.RootID}
 		reply.Startup = request.Owner
 		reply.Disposition = Disposition{Kind: DispositionWarmReuse}
@@ -362,8 +369,8 @@ func ownerReplySubjectFixture(fixture *ownerAuthFixture, action ownerAction) (ow
 	case ownerEnsureOther:
 		request.Target = originRecord{Root: filepath.Join(fixture.root, "target"), RootID: strings.Repeat("e", 32)}
 		request.Context = LaunchContextReference{SHA256: strings.Repeat("d", 64)}
-		request.Requirements = ownerRequirementsFixture()
-		reply.Context, reply.Requirements = request.Context, request.Requirements
+
+		reply.Context = request.Context
 		// Establishment returns B's startup only; preparation is a direct B RPC.
 		reply.Target = request.Target
 		reply.Startup = StartupReference{Sequence: 2, Epoch: strings.Repeat("d", 32), IntentSHA256: strings.Repeat("d", 64)}

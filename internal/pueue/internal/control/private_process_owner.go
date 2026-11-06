@@ -15,13 +15,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func startDaemon(ctx context.Context, operationRoot, executable, expectedSHA256, configPath, base string, options Options) error {
-	digest, err := hashExecutable(executable)
-	if err != nil {
-		return fmt.Errorf("%w: verify private pueued identity before start: %w", ErrBinding, err)
+func startDaemon(ctx context.Context, operationRoot, executable, configPath, base string, options Options) error {
+	if err := refusePendingPrivateRestart(operationRoot); err != nil {
+		return err
 	}
-	if digest != expectedSHA256 {
-		return fmt.Errorf("%w: private pueued identity changed before start", ErrBinding)
+	selected, err := canonicalExecutable(executable)
+	if err != nil || selected != executable {
+		return errors.Join(ErrBinding, err)
 	}
 	cmd := exec.Command(executable, "-c", configPath)
 	cmd.Dir = base
@@ -161,7 +161,7 @@ func (l *bootstrapLock) duplicateForControlOwner() (*os.File, error) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closed || l.file == nil {
+	if l.closed || l.retired || l.file == nil {
 		return nil, os.ErrClosed
 	}
 	duplicate, err := duplicateCloseOnExec(l.file, "delegate-supervisor-generation-lease")
@@ -236,13 +236,14 @@ func closeBootstrapLock(lock *bootstrapLock) error {
 	if lock.closed {
 		return nil
 	}
+	lock.retired = true
 	var unlockErr error
 	if !lock.transferred {
 		unlockErr = unix.Flock(int(lock.file.Fd()), unix.LOCK_UN)
 	}
 	closeErr := lock.file.Close()
-	if closeErr == nil {
-		lock.closed = true
-	}
+	// os.File.Close retires the Go handle even when native release reports an
+	// error. Preserve the fault; a second attempt cannot retry native custody.
+	lock.closed = true
 	return errors.Join(unlockErr, closeErr)
 }

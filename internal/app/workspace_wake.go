@@ -31,11 +31,6 @@ func wakeManagedTaskWorkspace(ctx context.Context, store *taskdir.Store, td *tas
 	options := workspaceRuntimeOptions(deps)
 	resources := &workspaceCommandResources{store: store}
 	defer func() { resultErr = errors.Join(resultErr, resources.closeAfter(resultErr)) }()
-	ctx, lease, err := resources.acquire(ctx, options.RootAdmission, deps.SupervisorOptions)
-	if err != nil {
-		return err
-	}
-	options.RootAdmission = lease
 	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
 	resources.resource = resource
 	if err != nil {

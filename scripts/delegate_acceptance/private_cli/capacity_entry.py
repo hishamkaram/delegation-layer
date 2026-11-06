@@ -47,7 +47,7 @@ def run_capacity_scenario(
         env=lifetime.env,
         old_layout=lifetime.base / "old",
         old_layout_owned=lifetime.old_layout_owned,
-        client=initial.initial_pair_directory / "pueue",
+        client=lifetime.upgraded_libexec / "pueue",
         config=lifetime.private_config,
         parallel_tasks=args.parallel_tasks,
         dispatch_workers=dispatch_workers,
@@ -63,7 +63,7 @@ def run_capacity_scenario(
     # never present those consumed handles to the final rollback.
     lifetime.old_layout_owned = ()
     shutdown_observed_private_supervisor(
-        initial.initial_pair_directory / "pueue",
+        lifetime.upgraded_libexec / "pueue",
         lifetime.private_config,
         lifetime.env,
         state=fixture.state,

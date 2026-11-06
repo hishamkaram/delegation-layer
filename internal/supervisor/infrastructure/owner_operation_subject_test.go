@@ -8,10 +8,6 @@ import (
 	"testing"
 )
 
-func ownerRequirementsFixture() ArtifactRequirements {
-	return ArtifactRequirements{RequiredRuntimeSHA256: ownerWireDigest, RequiredClientSHA256: strings.Repeat("b", 64), RequiredDaemonSHA256: strings.Repeat("c", 64)}
-}
-
 func ownerPreparationSubjectFixture(action ownerAction) ownerRequest {
 	r := ownerRequestFixture()
 	r.Action = action
@@ -19,12 +15,10 @@ func ownerPreparationSubjectFixture(action ownerAction) ownerRequest {
 	switch action {
 	case ownerRecoverSaved, ownerPrepareContinuation:
 		r.Source = SavedBindingSource{RootID: r.RootID, Kind: SavedBindingTaskMetadata, OwnerID: strings.Repeat("b", 32), BindingSHA256: strings.Repeat("c", 64)}
-	case ownerMigrateReferenced:
-		r.Migration = MigrationReference{RootID: r.RootID, RecordSHA256: strings.Repeat("b", 64), HistoryIndex: 3}
 	case ownerEnsureOwn, ownerMigrateOwn:
 	case ownerEnsureOther:
 		r.Target = originRecord{Root: "/other", RootID: strings.Repeat("b", 32)}
-		r.Requirements = ownerRequirementsFixture()
+
 	case ownerStatus:
 		r.Context = LaunchContextReference{}
 	}
@@ -32,7 +26,7 @@ func ownerPreparationSubjectFixture(action ownerAction) ownerRequest {
 }
 
 func TestOwnerPreparationSubjectsRoundTripAndRefuseMixedAuthority(t *testing.T) {
-	for _, action := range []ownerAction{ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced} {
+	for _, action := range []ownerAction{ownerEnsureOwn, ownerEnsureOther, ownerRecoverSaved, ownerPrepareContinuation} {
 		t.Run(string(action), func(t *testing.T) {
 			request := ownerPreparationSubjectFixture(action)
 			var wire bytes.Buffer
@@ -43,18 +37,12 @@ func TestOwnerPreparationSubjectsRoundTripAndRefuseMixedAuthority(t *testing.T) 
 			if err != nil || got != request {
 				t.Fatalf("selected subject changed: %v", err)
 			}
-			for _, kind := range []string{"source", "migration", "requirements", "context", "target"} {
+			for _, kind := range []string{"source", "context", "target"} {
 				changed := request
 				switch kind {
 				case "source":
 					changed.Source = ownerPreparationSubjectFixture(ownerRecoverSaved).Source
 					changed.Source.RootID = strings.Repeat("e", 32)
-				case "migration":
-					changed.Migration = ownerPreparationSubjectFixture(ownerMigrateReferenced).Migration
-					changed.Migration.RootID = strings.Repeat("e", 32)
-				case "requirements":
-					changed.Requirements = ownerRequirementsFixture()
-					changed.Requirements.RequiredDaemonSHA256 = "invalid"
 				case "context":
 					changed.Context.SHA256 = "invalid"
 				case "target":
@@ -70,19 +58,13 @@ func TestOwnerPreparationSubjectsRoundTripAndRefuseMixedAuthority(t *testing.T) 
 
 func TestOwnerReplyBindsSelectedContextAndExactCanonicalLocators(t *testing.T) {
 	fixture := newOwnerAuthFixture(t)
-	for _, action := range []ownerAction{ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation, ownerMigrateReferenced} {
+	for _, action := range []ownerAction{ownerEnsureOwn, ownerRecoverSaved, ownerPrepareContinuation} {
 		request := ownerPreparationSubjectFixture(action)
 		request.Owner, request.RootID, request.PublicationSHA256, request.Client = fixture.request.Owner, fixture.request.RootID, fixture.request.PublicationSHA256, fixture.request.Client
 		if action == ownerRecoverSaved || action == ownerPrepareContinuation {
 			request.Source.RootID = request.RootID
 		}
-		if action == ownerMigrateReferenced {
-			request.Migration.RootID = request.RootID
-		}
-		reply := ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: action, Target: originRecord{Root: fixture.root, RootID: request.RootID}, Startup: request.Owner, Code: ownerOK, Context: request.Context, Source: request.Source, Migration: request.Migration, Disposition: Disposition{Kind: DispositionStarted, Context: request.Context}}
-		if action == ownerMigrateReferenced {
-			reply.MigrationResult = MigrationCompleted
-		}
+		reply := ownerReply{Protocol: request.Protocol, RootID: request.RootID, OwnerRef: request.Owner, PublicationSHA256: request.PublicationSHA256, Action: action, Target: originRecord{Root: fixture.root, RootID: request.RootID}, Startup: request.Owner, Code: ownerOK, Context: request.Context, Source: request.Source, Disposition: Disposition{Kind: DispositionStarted, Context: request.Context}}
 		if err := validateOwnerReplyBinding(fixture.intent, fixture.assumption, fixture.publication, request, reply); err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +82,7 @@ func TestOwnerReplyBindsSelectedContextAndExactCanonicalLocators(t *testing.T) {
 
 func assertOwnerReplyLocatorBinding(t *testing.T, fixture *ownerAuthFixture, request ownerRequest, reply ownerReply) {
 	t.Helper()
-	for _, kind := range []string{"context", "source", "migration"} {
+	for _, kind := range []string{"context", "source"} {
 		changed := reply
 		switch kind {
 		case "context":
@@ -110,11 +92,6 @@ func assertOwnerReplyLocatorBinding(t *testing.T, fixture *ownerAuthFixture, req
 				continue
 			}
 			changed.Source.BindingSHA256 = strings.Repeat("d", 64)
-		case "migration":
-			if request.Action != ownerMigrateReferenced {
-				continue
-			}
-			changed.Migration.HistoryIndex++
 		}
 		// The altered reply is independently valid. Refusal must come from
 		// binding it to the original request, not malformed-value rejection.

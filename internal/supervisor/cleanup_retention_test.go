@@ -15,7 +15,7 @@ func (cleanupAsProjectionError) Error() string { return "typed cleanup projectio
 func (e cleanupAsProjectionError) As(target any) bool { return errors.As(e.owner, target) }
 
 func TestCleanupRetainsStorePreservesCustomAsOwnerProjection(t *testing.T) {
-	for _, kind := range []string{"root", "lifetime"} {
+	for _, kind := range []string{"lifetime"} {
 		t.Run(kind, func(t *testing.T) {
 			store, settle, cause := customAsCleanupOwner(t, kind)
 			assertCustomAsCleanupRetention(t, store, cause, settle)
@@ -23,23 +23,10 @@ func TestCleanupRetainsStorePreservesCustomAsOwnerProjection(t *testing.T) {
 	}
 }
 
-func customAsCleanupOwner(t *testing.T, kind string) (*taskdir.Store, func() error, error) {
+func customAsCleanupOwner(t *testing.T, _ string) (*taskdir.Store, func() error, error) {
 	t.Helper()
-	if kind == "lifetime" {
-		fixture, lease, child := joinedLifetimeFailure(t)
-		return fixture.store, lease.Release, child
-	}
-	store := newGenerationStore(t)
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	t.Cleanup(func() {
-		if closeErr := lease.Release(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store, lease.Release, RetainOwnedRootAdmission(lease, errors.New("unresolved child"))
+	fixture, lease, child := joinedLifetimeFailure(t)
+	return fixture.store, lease.Release, child
 }
 
 func assertCustomAsCleanupRetention(t *testing.T, store *taskdir.Store, cause error, settle func() error) {
@@ -77,48 +64,5 @@ func TestCleanupRetainedStoreTraversesVirtualViewsAndSettledSiblings(t *testing.
 	child.store = nil
 	if CleanupHasRetainedStore(cause) || CleanupHasRetainedStore(nil) || CleanupHasRetainedStore(errors.New("ordinary fault")) {
 		t.Fatal("settled or ordinary failure retained ancestor dependency")
-	}
-}
-
-func TestRoutedCleanupFromReopenedStoreRetainsOwnedParentLease(t *testing.T) {
-	store := newGenerationStore(t)
-	childStore, err := taskdir.OpenStore(store.Root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := childStore.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	t.Cleanup(func() {
-		if closeErr := lease.Release(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = lease.CheckRootContext(t.Context(), childStore); err != nil {
-		t.Fatal(err)
-	}
-	child := &routedStoreRetentionError{store: childStore, cause: errors.New("active routed child")}
-	retained := ReleaseOwnedRootAdmission(lease, cleanupAsProjectionError{owner: child})
-	var parent *RootAdmissionCleanupError
-	if !errors.As(retained, &parent) || parent == nil || parent.Lease() != lease || !lease.CleanupPending() {
-		t.Fatal("virtual child on reopened Store lost parent lease owner")
-	}
-	child.store = nil
-	if err = lease.Release(); err != nil {
-		t.Fatal(err)
-	}
-	child.store = childStore
-	retained = ReleaseOwnedRootAdmission(lease, child)
-	if errors.As(retained, &parent) {
-		t.Fatal("released parent was reported as new cleanup ownership")
-	}
-	if retained = ReleaseOwnedRootAdmission(nil, child); errors.As(retained, &parent) {
-		t.Fatal("nil parent was reported as cleanup ownership")
 	}
 }

@@ -174,7 +174,7 @@ func TestPrivateShutdownSelectsTaggedBootstrapAmongMergedLeases(t *testing.T) {
 				return err
 			}
 			duplicates, err := duplicateControlLeaseFiles(scoped)
-			files := duplicates.files
+			files := duplicates
 			if err != nil {
 				return err
 			}
@@ -260,7 +260,7 @@ func nonIsolatedShutdownFixture(t *testing.T) (privateSupervisorTestFixture, str
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, _, err := ensurePrivateConfig(fixture.stateRoot, resolution)
+	config, _, err := ensurePrivateConfigContext(t.Context(), fixture.stateRoot, resolution, allowPrivateGenerationForTest{}, privateInstalledCallbackForTest(t, fixture.stateRoot))
 	if err != nil {
 		t.Fatal(err)
 	}

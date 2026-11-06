@@ -12,9 +12,6 @@ import (
 )
 
 func BeginForget(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps OperationOptions, budget time.Duration) (ack ActionAcknowledgement, resultErr error) {
-	if err := checkWorkspaceRootAdmission(ctx, store, deps.RootAdmission); err != nil {
-		return ack, err
-	}
 	if _, done, err := workspaceForgetAlreadyComplete(ctx, resource); done {
 		ack.authorized = err == nil
 		return ack, err

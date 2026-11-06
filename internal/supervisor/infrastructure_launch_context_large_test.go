@@ -27,7 +27,7 @@ func TestInfrastructureLaunchContextPreservesNativeSizedEnvironments(t *testing.
 	}
 	record, err := captureInfrastructureLaunchContext(pin, pueue.Options{
 		Environment: environment, PrivateMaintenanceEnvironment: slices.Clone(environment),
-	})
+	}, "/installed/pueue")
 	if err != nil {
 		t.Fatalf("native-valid snapshot refused by infrastructure capture: %v", err)
 	}

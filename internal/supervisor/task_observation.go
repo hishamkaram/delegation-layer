@@ -11,30 +11,20 @@ import (
 )
 
 // TaskSupervisorObservationOptions groups immutable runtime dependencies and
-// the caller's actual borrowed SH resource. Pure ready observations borrow no
-// new native resource; repair owns acquisition before generation/bootstrap work.
+// the caller's actual Store. Generation/bootstrap owners serialize repair;
+// pure ready observations acquire no new outer resource.
 type TaskSupervisorObservationOptions struct {
 	Control          pueue.Options
 	Lookup           ExecutableLookup
 	RunnerExecutable string
 	OpenStore        StoreOpener
-	RootAdmission    *taskdir.RootAdmissionLease
 	Routing          OwnerRouting
 	Source           infrastructure.SavedBindingSource
 }
 
-// ObserveTaskSupervisor keeps existing-task observation independent of fresh
-// admission. Complete generations retain the existing scheduling and runner
-// repair owners. A prepared generation can only use saved-binding recovery.
-func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, lookup ExecutableLookup, runnerExecutable string, openStore StoreOpener) (TaskSupervisorObservation, error) {
-	return ObserveTaskSupervisorWithAdmissionContext(ctx, store, binding, meta, TaskSupervisorObservationOptions{Control: baseOptions, Lookup: lookup, RunnerExecutable: runnerExecutable, OpenStore: openStore})
-}
-
-// ObserveTaskSupervisorWithAdmissionContext keeps the warm ready prefix
+// ObserveTaskSupervisorWithOptions keeps the warm ready prefix
 // observational. Any nonnil Client is caller-owned, including beside an error.
-// A failed owned RootSH release remains reachable through its cleanup error;
-// the borrowed Store must stay open until that resource closes.
-func ObserveTaskSupervisorWithAdmissionContext(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, options TaskSupervisorObservationOptions) (result TaskSupervisorObservation, resultErr error) {
+func ObserveTaskSupervisorWithOptions(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, options TaskSupervisorObservationOptions) (result TaskSupervisorObservation, resultErr error) {
 	if store == nil || meta == nil || !pueue.IsPrivateConfig(store.Root, binding.ConfigPath) {
 		return TaskSupervisorObservation{}, nil
 	}
@@ -57,27 +47,15 @@ func ObserveTaskSupervisorWithAdmissionContext(ctx context.Context, store *taskd
 		}
 		return TaskSupervisorObservation{Client: ready}, nil
 	}
-	lease, err := AcquireOrBorrowRootAdmissionContext(ctx, store, options.RootAdmission, pueue.PrivateControlTimeout(control))
-	if lease != nil && options.RootAdmission == nil {
-		defer func() { resultErr = ReleaseOwnedRootAdmission(lease, resultErr) }()
-	}
-	if err != nil {
-		return TaskSupervisorObservation{}, err
-	}
-	if control.ControlOwnerExecutable != "" {
-		ctx = pueue.WithControlLease(ctx, lease)
-	}
-	// The readiness observation ended before acquisition. Reprobe under the
-	// actual outer root hold, then use the existing canonical repair owner.
 	return observeTaskSupervisorRepair(ctx, store, binding, meta, options)
 }
 
 func probeReadyTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, control pueue.Options, runnerExecutable string) (*pueue.Client, error) {
-	client, err := ProbePrivateAdmissionSupervisor(ctx, store, "", "", control)
+	client, err := probeWarmTaskSupervisor(ctx, store, control)
 	if err != nil || client == nil {
 		return client, err
 	}
-	target, err := PlanQueuedRunnerRepairTarget(store, runnerExecutable)
+	target, err := PlanQueuedRunnerRepairTarget(runnerExecutable)
 	if err != nil {
 		return nil, ClosePrivateAdmissionTransition(client, err)
 	}
@@ -98,6 +76,22 @@ func probeReadyTaskSupervisor(ctx context.Context, store *taskdir.Store, binding
 	return client, nil
 }
 
+// A missing published pair only defers the exact warm probe. Saved-task
+// observation still validates compatible selection under its shared lease.
+func probeWarmTaskSupervisor(ctx context.Context, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		missing, missingErr := pueue.PrivateSupervisorPairMissing(published)
+		if missingErr != nil || missing {
+			return nil, missingErr
+		}
+	}
+	return ProbePrivateAdmissionSupervisor(ctx, store, "", "", options)
+}
+
 func observeTaskSupervisorRepair(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, configuration TaskSupervisorObservationOptions) (TaskSupervisorObservation, error) {
 	if store == nil || meta == nil || !pueue.IsPrivateConfig(store.Root, binding.ConfigPath) {
 		return TaskSupervisorObservation{}, nil
@@ -108,12 +102,12 @@ func observeTaskSupervisorRepair(ctx context.Context, store *taskdir.Store, bind
 	ctx, cancel := context.WithTimeout(ctx, pueue.RunnerCommandUpgradeTimeout)
 	defer cancel()
 	options := OptionsWithEnvironment(configuration.Control, meta.Environment)
-	client, err := ProbePrivateAdmissionSupervisor(ctx, store, "", "", options)
+	client, err := probeWarmTaskSupervisor(ctx, store, options)
 	if err != nil {
 		return TaskSupervisorObservation{}, err
 	}
 	if client != nil {
-		client, err = prepareTaskSupervisorRunner(ctx, store, client, binding, configuration.RunnerExecutable)
+		client, err = prepareWarmTaskSupervisorRunner(ctx, store, client, binding, configuration.RunnerExecutable)
 	} else {
 		observed, complete, completeErr := recoverTaskObservationSupervisor(ctx, store, binding, meta, configuration)
 		if completeErr != nil {
@@ -131,12 +125,12 @@ func observeTaskSupervisorRepair(ctx context.Context, store *taskdir.Store, bind
 		return TaskSupervisorObservation{Client: client}, nil
 	}
 	if err != nil && !TaskMaintenanceCompletionRefused(err) {
-		return TaskSupervisorObservation{}, ClosePrivateAdmissionTransition(client, err)
+		return TaskSupervisorObservation{}, err
 	}
 	// A readiness result never authorizes the later repair. If migration won
 	// its EX lease first, recover the saved task afresh instead of accepting
 	// the old client or treating the refused repair as a successful mutation.
-	observed, observeErr := recoverObservedTaskClient(ctx, store, binding, meta, configuration)
+	observed, observeErr := recoverObservedTaskReadClient(ctx, store, binding, meta, configuration)
 	if observeErr != nil {
 		return TaskSupervisorObservation{}, errors.Join(err, ClosePrivateAdmissionTransition(observed, observeErr))
 	}
@@ -144,7 +138,7 @@ func observeTaskSupervisorRepair(ctx context.Context, store *taskdir.Store, bind
 }
 
 func recoverTaskObservationSupervisor(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, meta *task.MetaRecord, configuration TaskSupervisorObservationOptions) (*pueue.Client, bool, error) {
-	client, err := recoverObservedTaskClient(ctx, store, saved, meta, configuration)
+	client, err := recoverObservedTaskReadClient(ctx, store, saved, meta, configuration)
 	if err != nil {
 		return nil, false, ClosePrivateAdmissionTransition(client, err)
 	}
@@ -153,6 +147,14 @@ func recoverTaskObservationSupervisor(ctx context.Context, store *taskdir.Store,
 		return nil, false, ClosePrivateAdmissionTransition(client, err)
 	}
 	return client, complete, nil
+}
+
+func recoverObservedTaskReadClient(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, configuration TaskSupervisorObservationOptions) (*pueue.Client, error) {
+	runtime, source, err := taskSavedRecoveryConfiguration(meta, configuration)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.RecoverSavedTaskObservation(ctx, store, binding, source)
 }
 
 // This is eligibility only. The existing transition and mutation owners

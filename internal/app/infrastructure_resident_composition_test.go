@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -42,10 +41,7 @@ func TestInfrastructurePreparationCommitUsesGrantWithoutRecordingStart(t *testin
 
 func TestInfrastructurePreparationCleanupRetainsExactOwner(t *testing.T) {
 	store := supervisorfixture.NewInspectionStore(t)
-	lease, err := store.AcquireRootAdmissionContext(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	lease := appCleanupLifetimeLease(t, store)
 	t.Cleanup(func() {
 		store.SetFaultInjector(nil)
 		if closeErr := lease.Release(); closeErr != nil {
@@ -54,8 +50,8 @@ func TestInfrastructurePreparationCleanupRetainsExactOwner(t *testing.T) {
 	})
 	fault := errors.New("resident admission release failed")
 	store.SetFaultInjector(&workspaceAdmissionUnlockFault{cause: fault})
-	owner := &infrastructurePreparationOwner{store: store, admission: lease}
-	cleanupErr := owner.close(nil)
+	owner := &infrastructurePreparationOwner{store: store}
+	cleanupErr := owner.close(lease.ReleaseWithError(nil))
 	var retained *infrastructurePreparationCleanupError
 	if !errors.Is(cleanupErr, fault) || !errors.As(cleanupErr, &retained) || retained.owner != owner {
 		t.Fatalf("resident lost its exact cleanup owner: %v", cleanupErr)
@@ -68,30 +64,12 @@ func TestInfrastructurePreparationCleanupRetainsExactOwner(t *testing.T) {
 	if !errors.As(cleanupErr, &marker) {
 		t.Fatal("resident server cannot retain the cleanup-owning error")
 	}
-	if _, err = store.PinRootContext(t.Context()); err != nil {
+	if _, err := store.PinRootContext(t.Context()); err != nil {
 		t.Fatalf("resident closed the borrowed Store: %v", err)
 	}
 	store.SetFaultInjector(nil)
-	if err = lease.Release(); err != nil {
+	if err := lease.Release(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestInfrastructureMigrationResultConversion(t *testing.T) {
-	for _, test := range []struct {
-		input pueue.PrivateMigrationResult
-		want  infrastructure.MigrationResult
-	}{
-		{pueue.PrivateMigrationCompleted, infrastructure.MigrationCompleted},
-		{pueue.PrivateMigrationWarmReuse, infrastructure.MigrationWarmReuse},
-	} {
-		result, err := infrastructureMigrationResult(test.input)
-		if err != nil || result != test.want {
-			t.Fatalf("canonical migration result changed: got %q, error %v", result, err)
-		}
-	}
-	if result, err := infrastructureMigrationResult("unexpected"); result != "" || !errors.Is(err, infrastructure.ErrIdentity) {
-		t.Fatalf("unknown migration result accepted: %q, %v", result, err)
 	}
 }
 

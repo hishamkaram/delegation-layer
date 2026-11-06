@@ -36,7 +36,7 @@ func (r ControlRuntime) PrepareContinuation(ctx context.Context, store *taskdir.
 	if r.Routing == nil {
 		return nil, ErrInfrastructureAuthorityUnavailable
 	}
-	selected, err := captureInfrastructureLaunchContext(pin, r.Options)
+	selected, err := r.captureLaunchContext(pin)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +82,8 @@ func (r ControlRuntime) probeContinuation(ctx context.Context, store *taskdir.St
 		if present && !task.SameSupervisorIdentity(alias, generation.Active) {
 			return nil
 		}
-		client, err = r.probeSaved(locked, store, pin, generation.Active)
-		if err != nil || client == nil {
-			return err
-		}
-		return nil
+		client, err = r.probeSavedWith(locked, store, pin, generation.Active, pueue.ProbeSavedPrivateCompatible)
+		return err
 	})
 	if !entered && errors.Is(resultErr, pueue.ErrPrivateSupervisorNotInitialized) {
 		return nil, nil

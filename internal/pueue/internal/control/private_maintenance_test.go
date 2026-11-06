@@ -21,7 +21,7 @@ func TestRecoverPrivateDoesNotRestartDispatchedPredecessor(t *testing.T) {
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	t.Cleanup(func() {
 		if err := current.Shutdown(context.Background()); err != nil {
 			t.Error(err)
@@ -57,8 +57,10 @@ func TestRecoverPrivateDoesNotRestartDispatchedPredecessor(t *testing.T) {
 	}
 	removePrivateTestPath(t, shutdownMarker)
 
-	if _, err = RecoverPrivate(context.Background(), fixture.stateRoot, legacy.Binding(), fixture.clientPath, fixture.daemonPath, options); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
-		t.Fatalf("dispatched predecessor was recovered: %v", err)
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, legacy.Binding(), fixture.clientPath, fixture.daemonPath, options)
+	assertPrivateRecoveryHasNoResult(t, recovery)
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("dispatched predecessor was recovered: result=%+v err=%v", recovery, err)
 	}
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 	assertPrivateTestPathMissing(t, shutdownMarker)
@@ -92,9 +94,11 @@ func testResumePublishedPrivateSuccessor(t *testing.T, upgrade bool) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	options := privateMigrationTestOptions(fixture.stateRoot, 10*time.Second)
 	legacy := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, options)
+	ownPrivateMigrationTestClient(t, legacy)
+	options = legacy.options
 	nextPath := filepath.Join(filepath.Dir(fixture.daemonPath), "proof-successor")
 	writeExecutable(t, nextPath, privateDaemonFixture+"\n# successor\n")
-	current := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
+	current := preparePrivateCandidateForTest(t, fixture.stateRoot, fixture.clientPath, nextPath, options)
 	var err error
 	base := filepath.Dir(current.Binding().ConfigPath)
 	pending := privateMigrationRecord{SchemaVersion: task.SchemaVersion, Legacy: privateDaemonIdentityForBinding(legacy.Binding()), Successor: privateDaemonIdentityForBinding(current.Binding())}
@@ -120,7 +124,9 @@ func testResumePublishedPrivateSuccessor(t *testing.T, upgrade bool) {
 	if err = replacePrivateMigrationRecord(base, saved, stopped); err != nil {
 		t.Fatal(err)
 	}
-	if err = current.RestartPrivate(context.Background(), fixture.stateRoot); err != nil {
+	if err = WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		return current.StartPrivate(ctx, fixture.stateRoot)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if upgrade {
@@ -130,7 +136,7 @@ func testResumePublishedPrivateSuccessor(t *testing.T, upgrade bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		nextPath = latestPath
+		ownPrivateMigrationTestClient(t, current)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), PrivateControlTimeout(options))
 	defer cancel()
@@ -138,23 +144,25 @@ func testResumePublishedPrivateSuccessor(t *testing.T, upgrade bool) {
 	if err != nil {
 		t.Fatalf("resume failed: %v", err)
 	}
-	assertPrivateDaemonIdentityMatchesPair(t, fixture.stateRoot, nextPath)
-	if upgrade {
-		assertRecordedPrivateSuccessorCompleted(t, base, stopped)
-	}
-	if _, found, err := loadPrivateMigrationRecord(base); err != nil || found {
-		t.Fatalf("journal not cleared: found=%v error=%v", found, err)
-	}
+	assertPublishedPrivateSuccessorReplay(t, current, stopped)
 }
 
-func assertRecordedPrivateSuccessorCompleted(t *testing.T, base string, stopped privateMigrationRecord) {
+func assertPublishedPrivateSuccessorReplay(t *testing.T, current *Client, stopped privateMigrationRecord) {
 	t.Helper()
-	history, found, err := loadPrivateMigrationHistory(base)
-	if err != nil || !found || len(history.Migrations) != 2 {
-		t.Fatalf("migration history: %+v found=%v err=%v", history, found, err)
+	base := filepath.Dir(stopped.Successor.ConfigPath)
+	root := filepath.Dir(base)
+	assertPrivateDaemonIdentityMatchesPair(t, root, stopped.Successor.Executable)
+	if err := current.Ready(t.Context()); err != nil {
+		t.Fatalf("accepted successor is not ready after replay: %v", err)
 	}
-	if history.Migrations[0] != stopped {
-		t.Fatal("recorded successor was retargeted after shutdown")
+	history, found, err := loadPrivateMigrationHistory(base)
+	if err != nil || !found || len(history.Migrations) != 1 || history.Migrations[0] != stopped {
+		t.Fatalf("replay changed the accepted stopped edge: history=%+v found=%t err=%v", history, found, err)
+	}
+	assertPrivateDaemonStartCount(t, root, 2)
+	_, pending, migrationErr := loadPrivateMigrationRecord(base)
+	if migrationErr != nil || pending {
+		t.Fatalf("journal not cleared: found=%v error=%v", pending, migrationErr)
 	}
 }
 

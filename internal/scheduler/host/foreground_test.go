@@ -26,7 +26,7 @@ func TestForegroundRunFencesOlderManagedHostReceipt(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	foreground, err := lease.AnnounceForeground(t.Context(), config.Store, config.BuildID)
+	foreground, err := lease.AnnounceForeground(t.Context(), config.Store)
 	if err != nil {
 		t.Fatal(err)
 	}

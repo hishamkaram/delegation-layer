@@ -32,7 +32,7 @@ from scripts.delegate_acceptance.release_verification.candidate_install_contract
 from scripts.delegate_acceptance.release_verification import commands
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import (
-    BINARIES, EXPECTED_DEFAULT_STATE, VerificationError, new_receipt, parse_binary_digests,
+    BINARIES, EXPECTED_DEFAULT_STATE, VerificationError, new_receipt, installed_executables,
 )
 from scripts.delegate_acceptance.release_verification.published_contract import homebrew_prefixes
 from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
@@ -122,11 +122,10 @@ class BrewCase(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def request(self, *, binaries: dict[str, bytes] | None = None) -> CandidateInstallRequest:
-        expected = self.binaries if binaries is None else binaries
         return CandidateInstallRequest(
             tag=TAG, repo=REPO, installer=REPO_ROOT / "install.sh",
             files=CandidateFiles(self.archive, formula=self.formula),
-            binaries=tuple(sorted((name, sha(data)) for name, data in expected.items())), skill=())
+            skill=())
 
     def observe(self, request: CandidateInstallRequest | None = None):
         return observe_brew_install(request or self.request(), ports=self.recording.ports(), probe=self.probe,
@@ -216,7 +215,7 @@ class ObservationTest(BrewCase):
         self.assertEqual(observation.channel, "brew")
         self.assertEqual((observation.requests, observation.skill_files), ((), 0))
         self.assertEqual(observation.installer_sha256, sha(FORMULA))
-        self.assertEqual(dict(observation.binaries), {name: sha(data) for name, data in self.binaries.items()})
+        self.assertEqual(observation.binaries.as_mapping(), {name: (self.keg / ("libexec" if name in {"pueue", "pueued"} else "bin") / name).resolve() for name in BINARIES})
         self.assertEqual((observation.delegate_version, observation.default_state), (VERSION, EXPECTED_DEFAULT_STATE))
         names = self.recording.names()
         self.assertEqual(names[:5], ["homebrew-prefix", "homebrew-taps", "homebrew-installed",
@@ -271,7 +270,7 @@ class ObservationTest(BrewCase):
         self.probe = RecordingProbe(observe)
         observation = self.observe()
         keg = self.keg.resolve()
-        expected = parse_binary_digests({name: sha(data) for name, data in self.binaries.items()}, "test")
+        expected = installed_executables({name: keg / ("libexec" if name in {"pueue", "pueued"} else "bin") / name for name in BINARIES})
         self.assertEqual(self.probe.targets, [BootstrapTarget(
             command_directory=self.prefix / "bin", delegate=keg / "bin" / "delegate",
             supervisor_directory=keg / "libexec", binaries=expected)])
@@ -287,15 +286,16 @@ class ObservationTest(BrewCase):
             other.write_bytes(standalone[name])
             other.chmod(0o755)
         self.probe = RecordingProbe(lambda target: fx.bootstrap(replace(
-            target.binaries, pueue=sha(standalone["pueue"]), pueued=sha(standalone["pueued"]))))
+            target.binaries, pueue=self.prefix / "bin" / "pueue", pueued=self.prefix / "bin" / "pueued")))
         self.assertCode("install_bootstrap_mismatch")
         self.assertEqual(len(self.probe.targets), 1)
         self.assertNotIn("candidate-brew-test", self.recording.names())
 
-    def test_a_keg_hash_mismatch_refuses_before_the_probe(self):
-        changed = {**self.binaries, "pueued": b"#!/bin/sh\nprintf 'pueued 4.0.4\\n'\n# changed\n"}
-        self.assertCode("installed_binary_hash_mismatch", self.request(binaries=changed))
-        self.assertEqual(self.probe.targets, [])
+    def test_compatible_in_place_keg_update_reaches_the_probe(self):
+        self.binaries["pueued"] = b"#!/bin/sh\nprintf 'pueued 4.0.4\\n'\n# compatible update\n"
+        observation = self.observe()
+        self.assertEqual(observation.bootstrap.outcome, "committed")
+        self.assertEqual(len(self.probe.targets), 1)
 
     def test_linked_delegate_must_resolve_to_the_verified_keg(self):
         def install_elsewhere(argv, env):
@@ -455,10 +455,7 @@ class RefusalTest(BrewCase):
         self.assertEqual(Path(self.receipt["candidate_brew"]["cache"]["path"]).read_bytes(), b"foreign")
         self.assertNotIn("candidate-brew-install", self.recording.names())
 
-    def test_wrong_binaries_version_and_layout_are_refused(self):
-        other = dict(self.binaries, **{"delegate-run": b"#!/bin/sh\nexit 3\n"})
-        self.assertCode("installed_binary_hash_mismatch", self.request(binaries=other))
-        self.tearDown_case()
+    def test_wrong_version_and_layout_are_refused(self):
         self.binaries["delegate"] = fake_binary("delegate", "0.0.1")
         self.assertCode("delegate_version_mismatch", self.request())
         self.assertEqual(self.receipt["delegate_build_identity"], {"version": "0.0.1"})
@@ -501,7 +498,7 @@ class RefusalTest(BrewCase):
 
     def test_formula_is_required_and_an_unsupported_os_is_refused_before_any_child(self):
         request = CandidateInstallRequest(TAG, REPO, REPO_ROOT / "install.sh", CandidateFiles(self.archive),
-                                          self.request().binaries, ())
+                                          ())
         self.assertCode("candidate_formula_missing", request)
         for info in (UNSUPPORTED, {"kernel": "6", "arch": "amd64"}):
             with self.subTest(info=info), self.assertRaises(VerificationError) as caught:
@@ -545,7 +542,7 @@ class ComposerTest(BrewCase):
                          {"archive": sha(self.archive.read_bytes()), "formula": sha(FORMULA)})
         (observation,) = facts.installs
         self.assertEqual((observation.channel, observation.installer_sha256), ("brew", sha(FORMULA)))
-        self.assertEqual(dict(observation.binaries), {name: sha(data) for name, data in self.binaries.items()})
+        self.assertEqual(observation.binaries.as_mapping(), {name: (self.keg / ("libexec" if name in {"pueue", "pueued"} else "bin") / name).resolve() for name in BINARIES})
         self.assertEqual((observation.delegate_version, observation.default_state), (VERSION, EXPECTED_DEFAULT_STATE))
         self.assertEqual((self.tap_dir / "Formula" / "delegation-layer.rb").read_bytes(), FORMULA)
         cache = self.receipt["candidate_brew"]["cache"]

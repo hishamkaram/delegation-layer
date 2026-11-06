@@ -23,10 +23,9 @@ func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Op
 		return inspectionSubmissionState{}, err
 	}
 	record := operation.Request()
-	// The worker executable is part of the immutable inspection binding. It was
-	// fingerprinted before the durable claim, so revalidate the exact path and
-	// bytes immediately before handing the launch to the supervisor. A changed
-	// worker consumes the create-once claim but can never reach an external add.
+	// The recorded worker path and any canonical managed-successor authorization
+	// are checked before handing the create-once launch to the supervisor.
+	// Installed executable contents remain owned by the user installation.
 	if err = supervisorcore.ValidateInspectionRunner(operation, runner); err != nil {
 		return inspectionSubmissionState{}, err
 	}

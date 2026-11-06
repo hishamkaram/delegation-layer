@@ -38,6 +38,10 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	}
 	if supervisorFailureCode(code) {
 		failure.ReasonCode = supervisorFailureReason(err)
+		if taskRecord == "not_created" && failure.ReasonCode == "historical_target_not_ready" {
+			failure.NextAction = "stop_and_report"
+			failure.RecoveryCommand = ""
+		}
 	}
 	if code == "invalid_request" {
 		failure.ReasonCode = runnerRequestReason(err)
@@ -192,7 +196,7 @@ func dispatchCauseFailureCode(err error) string {
 		return code
 	}
 	switch {
-	case errors.Is(err, infrastructure.ErrOwnerIncompatible), errors.Is(err, infrastructure.ErrIncompatible):
+	case errors.Is(err, infrastructure.ErrOwnerIncompatible):
 		return "supervisor_owner_incompatible"
 	case errors.Is(err, commonprovider.ErrUnsupportedOption):
 		return "unsupported_option"

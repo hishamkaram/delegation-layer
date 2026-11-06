@@ -13,19 +13,11 @@ import (
 
 // BeginOrdinaryCheckpoint authorizes and submits one finite checkpoint helper
 // for an ordinary checkout selected by OrdinaryCheckpointSelection. It owns no
-// workspace resource or reservation; its outer root admission is acquired or
-// borrowed before preparing the operation. The returned
+// workspace resource or reservation. The returned
 // acknowledgement is authorized with the checkpoint ID once the immutable
 // request is durable; ErrPending then reports the scheduled helper, and any
 // other error leaves that same request for observation to redrive.
 func BeginOrdinaryCheckpoint(ctx context.Context, store *taskdir.Store, deps OperationOptions, selection workspace.CheckpointSelection, budget time.Duration) (ack ActionAcknowledgement, resultErr error) {
-	borrowed := deps.RootAdmission
-	lease, err := acquireWorkspaceRootAdmission(ctx, store, deps)
-	defer func() { resultErr = workspaceRootAdmissionError(resultErr, lease, borrowed) }()
-	if err != nil {
-		return ack, err
-	}
-	deps.RootAdmission = lease
 	if selection.Kind != workspace.CheckpointOrdinary || selection.CwdIdentity == nil {
 		return ack, task.ErrIdentityMismatch
 	}
@@ -105,13 +97,6 @@ func BeginManagedCheckpoint(ctx context.Context, store *taskdir.Store, resource 
 // removal: an existing registered head, the newly registered attempt, or a
 // concurrent winner. ErrPending then reports that attempt still running.
 func BeginCheckpointRemoval(ctx context.Context, store *taskdir.Store, deps OperationOptions, checkpointID string, budget time.Duration) (ack ActionAcknowledgement, resultErr error) {
-	borrowed := deps.RootAdmission
-	lease, err := acquireWorkspaceRootAdmission(ctx, store, deps)
-	defer func() { resultErr = workspaceRootAdmissionError(resultErr, lease, borrowed) }()
-	if err != nil {
-		return ack, err
-	}
-	deps.RootAdmission = lease
 	control, cancel := workspaceSchedulingControl(ctx, deps)
 	defer cancel()
 	original, err := loadCheckpointCreation(control, store, checkpointID)

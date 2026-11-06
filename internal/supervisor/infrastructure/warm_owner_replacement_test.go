@@ -14,7 +14,7 @@ import (
 
 func TestWarmOwnerJoinedPostObservationRefusesReplacedStartup(t *testing.T) {
 	f := newProducerNativeFixture(t)
-	attempt, err := establishOutside(t.Context(), f.store, f.request, f.host, f.native(t, nil))
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.store, f.request, f.host, f.native(t, nil))
 	if attempt != nil {
 		f.attempts = append(f.attempts, attempt)
 	}
@@ -31,7 +31,7 @@ func TestWarmOwnerJoinedPostObservationRefusesReplacedStartup(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if _, ready, observeErr := joined.Observe(ctx); observeErr != nil || !ready || joined.NativeCompletion() != nil {
+	if ready, observeErr := joined.Observe(ctx); observeErr != nil || !ready || joined.NativeCompletion() != nil {
 		t.Fatalf("joined native S1 observation: ready=%t err=%v", ready, observeErr)
 	}
 	expected := joined.Reference()
@@ -52,7 +52,7 @@ func TestWarmOwnerJoinedPostObservationRefusesReplacedStartup(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	outcome, err := RequestBoundPreparation(ctx, joined.reader, expected, PreparationRequest{Context: current.Inputs.Context, Requirements: f.request.Requirements})
+	outcome, err := RequestBoundPreparation(ctx, joined.reader, expected, PreparationRequest{Context: current.Inputs.Context})
 	if !errors.Is(err, task.ErrLockBusy) || task.RecordAbsent(err) || outcome != (PreparationOutcome{}) {
 		t.Fatalf("post-observation contact selected S2: outcome=%v err=%v", outcome, err)
 	}

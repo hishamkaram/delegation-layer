@@ -16,6 +16,7 @@ import scripts.delegate_acceptance.processes.operations as processes_operations
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.processes.operations import Processes
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.workspaces.scenarios.context import (
     MANAGED_LIFETIME_CLOSURE_TIMEOUT, AcceptanceSetupFailure,
 )
@@ -143,13 +144,12 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         context.processes.start("git-init", self._argv(), context.source).wait(0)
 
     def _make(self, *, layout=None, prepare=None):
-        binaries = dict.fromkeys(("delegate", "runner", "pueue", "pueued"), Path("/binary"))
         with (
             mock.patch.object(application, "_create_layout", side_effect=layout or self._layout),
             mock.patch.object(application, "_prepare_source",
                               side_effect=prepare or self._run_git),
         ):
-            return application._make_context(mock.Mock(workspace_budget="5m"), binaries)
+            return application._make_context(mock.Mock(workspace_budget="5m", source_root=Path("/source")))
 
     def _setup_failure(self, **options):
         with self.assertRaises(AcceptanceSetupFailure) as raised:
@@ -243,6 +243,24 @@ class SetupProcessOwnershipTests(unittest.TestCase):
         failure = self._setup_failure(layout=mock.Mock(side_effect=RuntimeError("layout refused")))
         self.assertIsNone(failure.processes)
         self._assert_exact_root_removed(failure)
+
+    def _assert_unproven_installation_retains(self, reason):
+        bounded = BoundedCommandError(reason)
+        wrapped = RuntimeError("installation failed")
+        wrapped.__cause__ = bounded
+        failure = self._setup_failure(layout=mock.Mock(side_effect=wrapped))
+        self.assertIsNone(failure.processes)
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "setup-installation-closure-unproven"))
+        self.assertTrue(failure.root_token.directory.exists())
+        self._assert_pinned_then_released(failure)
+
+    def test_unproven_installation_child_closure_retains_the_setup_root_without_a_registry(self):
+        self._assert_unproven_installation_retains(CommandFailure.TERMINATION_TIMEOUT)
+
+    def test_failed_installation_child_termination_retains_the_setup_root_without_a_registry(self):
+        self._assert_unproven_installation_retains(CommandFailure.TERMINATION_FAILED)
 
     def test_empty_registry_failure_removes_the_exact_root(self):
         failure = self._setup_failure(prepare=mock.Mock(side_effect=RuntimeError("layout refused")))
@@ -611,16 +629,13 @@ class SetupProcessOwnershipTests(unittest.TestCase):
 
     def _main(self, *, run=None, **options):
         output = Path(tempfile.mkdtemp(dir=self.home)) / "receipt.json"
-        binary = Path(application.__file__)
-        arguments = ["--delegate", str(binary), "--runner", str(binary), "--pueue", str(binary),
-                     "--pueued", str(binary), "--output", str(output)]
+        arguments = ["--output", str(output)]
         passed = ("passed", "managed workspace fixture acceptance passed")
         with (
             mock.patch.object(application, "_create_layout", side_effect=options.get("layout") or self._layout),
             mock.patch.object(application, "_prepare_source",
                               side_effect=options.get("prepare") or self._run_git),
             mock.patch.object(application, "_run", side_effect=run or (lambda *_arguments: passed)),
-            mock.patch.object(application, "_require_executable", return_value=binary),
             mock.patch.object(application.sys.stdout, "write"),
         ):
             code = application.main(arguments)

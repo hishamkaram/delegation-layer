@@ -66,28 +66,19 @@ func AdmissionQueueRepairRunner(selection AdmissionSelection, runtime AdmissionO
 
 func AdmissionSupervisorExecutablePair(selection AdmissionSelection, root string, runtime AdmissionOptions) (string, string, error) {
 	if selection.ContinuationSource != (infrastructure.SavedBindingSource{}) {
-		client, daemon, found, err := ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+		client, daemon, found, err := publishedContinuationSupervisorPair(root, runtime.Lookup())
 		if err != nil || found {
 			return client, daemon, err
 		}
-		client, daemon, found, err = publishedContinuationSupervisorPair(root, runtime.Lookup())
-		if err != nil || found {
-			return client, daemon, err
-		}
-	}
-	if selection.SavedSupervisor != nil && PrivateSupervisorExecutablesAvailable(selection.SavedSupervisor.ClientExecutable, selection.SavedSupervisor.DaemonExecutable) {
-		return selection.SavedSupervisor.ClientExecutable, selection.SavedSupervisor.DaemonExecutable, nil
 	}
 	if selection.SavedSupervisor != nil {
-		return ResolvePrivateSupervisorExecutables(root, runtime.Lookup())
+		return ResolveRecoveryPrivateSupervisorExecutables(root, *selection.SavedSupervisor, runtime.Lookup())
 	}
-	// Fresh admission stages the active install as successor inventory. The
-	// completed publication remains the ordinary active-generation authority.
 	return ResolveCurrentPrivateSupervisorExecutables(root, runtime.Lookup())
 }
 
-// Without inventory, the published generation owns the recovery candidate.
-// Its recorded paths follow recovery's existing integrity policy and missing
+// The published generation owns the recovery candidate.
+// Its recorded installation paths remain preferred, and missing
 // paths use canonical discovery. Selection grants no native launch authority.
 func publishedContinuationSupervisorPair(root string, lookup ExecutableLookup) (string, string, bool, error) {
 	published, found, err := pueue.ReadPrivateSupervisorBinding(root)

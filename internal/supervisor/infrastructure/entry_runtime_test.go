@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,7 +39,8 @@ func TestOwnerRuntimeJoinsInitialPreparationBeforeClosingBorrowers(t *testing.T)
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	liveWait := make(chan struct{})
-	t.Cleanup(func() { close(liveWait) })
+	var waitOnce sync.Once
+	completeWait := func() { waitOnce.Do(func() { close(liveWait) }) }
 	f := newOwnerServerFixture(t, &ownerServerTestHost{ensure: func(ctx context.Context, op Operation, _ LaunchContext, _ DaemonStartGuard, waits DaemonWaitOwner) (Disposition, error) {
 		if err := waits.RegisterDaemonWait(op.Intent().Inputs.Root, os.Getpid(), liveWait); err != nil {
 			return Disposition{}, err
@@ -48,13 +50,36 @@ func TestOwnerRuntimeJoinsInitialPreparationBeforeClosingBorrowers(t *testing.T)
 		return Disposition{Kind: DispositionWarmReuse}, nil
 	}})
 	cancel, done, join := startRuntimeFixture(t, f)
-	t.Cleanup(func() { cancel(); unblock(); join() })
+	t.Cleanup(func() { cancel(); unblock(); completeWait(); join() })
 	initial := awaitOwnerServerHost(t, entered)
 	cancel()
+	assertInitialRuntimeBorrower(t, f, initial, done)
+	unblock()
+	select {
+	case <-f.server.drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runtime did not drain accepted handlers")
+	}
+	select {
+	case <-done:
+		t.Fatal("runtime discarded the daemon's outstanding sole Wait")
+	case <-time.After(100 * time.Millisecond):
+	}
+	awaitServingResourceRelease(t, f.entry, done)
+	assertRuntimeInstanceLeaseFree(t, f.root)
+	completeWait() // The actual command owner alone reports completion.
+	join()
+	if f.entry.store != nil || f.entry.journal != nil || f.entry.lease != nil || f.entry.endpoint != nil {
+		t.Fatal("runtime retained borrowers after handlers and actual Wait settled")
+	}
+}
+
+func assertInitialRuntimeBorrower(t *testing.T, f *ownerServerFixture, initial context.Context, done <-chan struct{}) {
+	t.Helper()
 	if err := initial.Err(); err != nil {
 		t.Fatalf("lifetime cancellation changed initial startup deadline: %v", err)
 	}
-	if err := f.entry.validateResident(t.Context()); err != nil {
+	if err := f.entry.validateResident(initial); err != nil {
 		t.Fatalf("runtime closed initial borrow: %v", err)
 	}
 	select {
@@ -62,15 +87,43 @@ func TestOwnerRuntimeJoinsInitialPreparationBeforeClosingBorrowers(t *testing.T)
 		t.Fatal("runtime returned before initial preparation completion")
 	default:
 	}
-	unblock()
-	join()
-	if f.entry.store != nil || f.entry.journal != nil || f.entry.lease != nil || f.entry.endpoint != nil {
-		t.Fatal("runtime retained borrowers after actual drain")
+}
+
+func assertRuntimeInstanceLeaseFree(t *testing.T, root string) {
+	t.Helper()
+	lease, acquired, err := TryAcquireLease(t.Context(), filepath.Join(root, instanceLeaseName))
+	if lease != nil {
+		defer func() {
+			if closeErr := lease.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		}()
 	}
-	select {
-	case <-liveWait:
-		t.Fatal("runtime exit treated daemon Wait as stopped")
-	default:
+	if err != nil || !acquired {
+		t.Fatalf("settled serving role kept the instance lease while waiting: acquired=%t error=%v", acquired, err)
+	}
+}
+
+func awaitServingResourceRelease(t *testing.T, entry *ownedResidentEntry, exited <-chan struct{}) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		entry.mu.Lock()
+		released := entry.endpoint == nil && entry.lease == nil && entry.journal == nil && entry.store == nil
+		entry.mu.Unlock()
+		if released {
+			return
+		}
+		select {
+		case <-exited:
+			t.Fatal("resident exited with an outstanding daemon Wait")
+		case <-deadline.C:
+			t.Fatal("wait-only stage retained serving resources")
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -126,6 +179,10 @@ func TestOwnerRuntimeDrainsAcceptedHandlerAndPreservesCleanupFault(t *testing.T)
 }
 
 func startRuntimeFixture(t *testing.T, f *ownerServerFixture) (context.CancelFunc, <-chan struct{}, func()) {
+	return startRuntimeFixtureExpecting(t, f, context.Canceled)
+}
+
+func startRuntimeFixtureExpecting(t *testing.T, f *ownerServerFixture, expected error) (context.CancelFunc, <-chan struct{}, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -136,8 +193,8 @@ func startRuntimeFixture(t *testing.T, f *ownerServerFixture) (context.CancelFun
 		once.Do(func() {
 			select {
 			case <-done:
-				if !errors.Is(result, context.Canceled) {
-					t.Errorf("runtime lost serving cancellation: %v", result)
+				if !errors.Is(result, expected) {
+					t.Errorf("runtime lost expected error %v: %v", expected, result)
 				}
 				f.expectedCleanupFault = result
 				// Runtime already drained and closed this listener; its own cleanup

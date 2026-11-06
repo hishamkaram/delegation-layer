@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,10 +30,7 @@ func TestSubmitInspectionOnceUsesConcurrentAddReceiptWithoutQueueSnapshot(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	runnerSHA, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	runnerSHA := strings.Repeat("a", 64)
 	request := supervisorfixture.NewInspectionRequest(t, store)
 	operation, err := inspection.OpenConcurrentOperation(store, request, inspection.Binding{
 		DefinitionRevision: commonprovider.RuntimeInspectionRevision,
@@ -110,10 +108,7 @@ func TestAdmissionInspectionReplayAcceptsAuthorizedManagedSuccessor(t *testing.T
 		t.Fatal(err)
 	}
 
-	workerDigest, err := commonprovider.FingerprintExecutable(fixture.Replacement.NewRunner)
-	if err != nil {
-		t.Fatal(err)
-	}
+	workerDigest := strings.Repeat("c", 64)
 	binding := original.Binding
 	binding.WorkerExecutable = fixture.Replacement.NewRunner
 	binding.WorkerSHA256 = workerDigest
@@ -121,7 +116,11 @@ func TestAdmissionInspectionReplayAcceptsAuthorizedManagedSuccessor(t *testing.T
 		t.Fatalf("unverified managed successor was accepted: %v", err)
 	}
 
-	if err = supervisorcore.AuthorizeQueuedInspectionRunnerUpgrade(t.Context(), fixture.Store, fixture.Replacement); err != nil {
+	target, err := supervisorcore.PlanQueuedRunnerRepairTarget(fixture.Replacement.NewRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = supervisorcore.AuthorizeQueuedInspectionRunnerUpgrade(t.Context(), fixture.Store, fixture.Replacement, target); err != nil {
 		t.Fatal(err)
 	}
 	if err = os.Remove(fixture.OldRunner); err != nil {

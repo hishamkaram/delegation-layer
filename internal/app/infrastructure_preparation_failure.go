@@ -22,7 +22,7 @@ func infrastructurePreparationMappings() [21]infrastructureCauseMapping {
 	return [21]infrastructureCauseMapping{
 		{infrastructure.PreparationCausePrivateMigrationRequired, pueue.ErrPrivateSupervisorMigrationRequired},
 		{infrastructure.PreparationCausePrivateMigrationBusy, pueue.ErrPrivateSupervisorMigrationBusy},
-		{infrastructure.PreparationCauseReferencedMigrationUnsupported, pueue.ErrReferencedMigrationUnsupported},
+		{infrastructure.PreparationCauseHistoricalTargetUnsupported, pueue.ErrHistoricalTargetUnsupported},
 		{infrastructure.PreparationCauseInspectionMigrationRequired, inspection.ErrGroupMigrationRequired},
 		{infrastructure.PreparationCauseInspectionMigrationBusy, inspection.ErrGroupMigrationBusy},
 		{infrastructure.PreparationCauseInspectionMigrationUnsupported, inspection.ErrGroupMigrationUnsupported},

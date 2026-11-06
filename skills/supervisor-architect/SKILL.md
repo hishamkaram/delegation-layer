@@ -9,6 +9,8 @@ Use for supervisor binding, migration, observation, maintenance or cleanup
 changes. Load the [recovery rules](../../agents/_data/maintainability-contract.md#recovery-and-verification)
 and [admission ordering](../../agents/_data/delegation-invariants.md#4-supervisor-admission-ordering).
 For native changes, also use [native checks](../../agents/_data/maintainability-contract.md#native-platform-checks).
+Apply the [installed-executable rule](../../agents/_data/product-boundary.md#installed-executables)
+to supervisor, worker, callback and migration executable selection.
 
 ## Inputs
 

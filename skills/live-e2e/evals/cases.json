@@ -3,17 +3,17 @@
   "skill": "live-e2e",
   "cases": [
     {
-      "id": "executed-binary-differs-with-same-version",
+      "id": "executed-path-differs-with-same-version",
       "visible": {
-        "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the receipt's result and the snapshot as trusted facts from their owners. Your bounded judgment is only byte binding: whether the binary the receipt says it executed is the binary recorded for the snapshot. Do not judge any other acceptance requirement. Write acceptance/result.json with fields status ('bound' or 'BLOCKED') and reason.",
+        "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the selected installation and reported invocation as trusted facts from their owners. Judge only whether the reported invocation used the selected installed executable path and required protocol. Do not inspect, copy or fingerprint executables, and do not claim byte immutability or full acceptance. Write acceptance/result.json with fields status (bound or BLOCKED) and reason.",
         "inputs": [
           {
             "path": "evidence/snapshot.json",
-            "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+            "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.3.1\",\n    \"path\": \"/owned/installation/delegate\",\n    \"protocol\": \"delegate-control-v1\"\n  }\n}\n"
           },
           {
             "path": "evidence/acceptance-receipt.json",
-            "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"2222222222222222222222222222222222222222222222222222222222222222\"\n  }\n}\n"
+            "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.3.1\",\n    \"path\": \"/other/installation/delegate\",\n    \"protocol\": \"delegate-control-v1\"\n  }\n}\n"
           }
         ]
       },
@@ -45,20 +45,20 @@
             }
           ]
         },
-        "rationale": "Synthetic scope: only byte binding is judged. The executed binary digest differs from the snapshot binary, and the identical version string does not bind them."
+        "rationale": "Synthetic selection judgment: identical release strings do not excuse a different installed executable path. No executable-content binding is requested."
       },
       "control": {
-        "id": "executed-binary-matches-snapshot",
+        "id": "executed-path-matches-selection",
         "visible": {
-          "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the receipt's result and the snapshot as trusted facts from their owners. Your bounded judgment is only byte binding: whether the binary the receipt says it executed is the binary recorded for the snapshot. Do not judge any other acceptance requirement. Write acceptance/result.json with fields status ('bound' or 'BLOCKED') and reason.",
+          "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the selected installation and reported invocation as trusted facts from their owners. Judge only whether the reported invocation used the selected installed executable path and required protocol. Do not inspect, copy or fingerprint executables, and do not claim byte immutability or full acceptance. Write acceptance/result.json with fields status (bound or BLOCKED) and reason.",
           "inputs": [
             {
               "path": "evidence/snapshot.json",
-              "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+              "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.3.1\",\n    \"path\": \"/owned/installation/delegate\",\n    \"protocol\": \"delegate-control-v1\"\n  }\n}\n"
             },
             {
               "path": "evidence/acceptance-receipt.json",
-              "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+              "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.3.1\",\n    \"path\": \"/owned/installation/delegate\",\n    \"protocol\": \"delegate-control-v1\"\n  }\n}\n"
             }
           ]
         },
@@ -90,7 +90,7 @@
               }
             ]
           },
-          "rationale": "Synthetic scope: only byte binding is judged. The digests are equal, so the receipt is bound to the snapshot. This is not a claim that live acceptance as a whole is satisfied."
+          "rationale": "Synthetic selection judgment: the reported path and protocol match the selected installation. This proves only the supplied invocation facts, not byte identity or live acceptance."
         }
       }
     },
@@ -168,6 +168,158 @@
           },
           "rationale": "Synthetic eligibility only: removal requires the canonical owner closure, independently of deleted schedule or committed publication."
         }
+      }
+    },
+    {
+      "visible": {
+        "prompt": "This is a synthetic project-policy judgment. No real command or host inspection is allowed. The project forbids copying installed executables and calculating their content fingerprints, including in fixtures and contributor tools. Authorized copies and integrity digests of task-result data remain allowed. Read evidence/proposal.json and judge only this boundary. Write acceptance/policy.json with status forbidden or allowed and a short reason. Do not modify the proposal.",
+        "inputs": [
+          {
+            "path": "evidence/proposal.json",
+            "content": "{\n  \"operation\": \"sha256\",\n  \"subject\": \"installed-executable\",\n  \"owned_destination\": true\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "blocked",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "evidence/proposal.json"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "evidence/proposal.json"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "acceptance/policy.json",
+              "check": "json-field",
+              "locator": "/status",
+              "value": "forbidden"
+            }
+          ]
+        },
+        "rationale": "Judge the subject of the operation: installed executable copies/content hashes are forbidden; authorized task-result data copies/integrity hashes are allowed."
+      },
+      "id": "executable-content-hash-forbidden",
+      "control": {
+        "visible": {
+          "prompt": "This is a synthetic project-policy judgment. No real command or host inspection is allowed. The project forbids copying installed executables and calculating their content fingerprints, including in fixtures and contributor tools. Authorized copies and integrity digests of task-result data remain allowed. Read evidence/proposal.json and judge only this boundary. Write acceptance/policy.json with status forbidden or allowed and a short reason. Do not modify the proposal.",
+          "inputs": [
+            {
+              "path": "evidence/proposal.json",
+              "content": "{\n  \"operation\": \"sha256\",\n  \"subject\": \"task-result-data\",\n  \"owned_destination\": true\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "pass",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "evidence/proposal.json"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "evidence/proposal.json"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "acceptance/policy.json",
+                "check": "json-field",
+                "locator": "/status",
+                "value": "allowed"
+              }
+            ]
+          },
+          "rationale": "Judge the subject of the operation: installed executable copies/content hashes are forbidden; authorized task-result data copies/integrity hashes are allowed."
+        },
+        "id": "executable-content-hash-forbidden-data-control"
+      }
+    },
+    {
+      "visible": {
+        "prompt": "This is a synthetic project-policy judgment. No real command or host inspection is allowed. The project forbids copying installed executables and calculating their content fingerprints, including in fixtures and contributor tools. Authorized copies and integrity digests of task-result data remain allowed. Read evidence/proposal.json and judge only this boundary. Write acceptance/policy.json with status forbidden or allowed and a short reason. Do not modify the proposal.",
+        "inputs": [
+          {
+            "path": "evidence/proposal.json",
+            "content": "{\n  \"operation\": \"copy\",\n  \"subject\": \"installed-executable\",\n  \"owned_destination\": true\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "blocked",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "evidence/proposal.json"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "evidence/proposal.json"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "acceptance/policy.json",
+              "check": "json-field",
+              "locator": "/status",
+              "value": "forbidden"
+            }
+          ]
+        },
+        "rationale": "Judge the subject of the operation: installed executable copies/content hashes are forbidden; authorized task-result data copies/integrity hashes are allowed."
+      },
+      "id": "installed-executable-copy-forbidden",
+      "control": {
+        "visible": {
+          "prompt": "This is a synthetic project-policy judgment. No real command or host inspection is allowed. The project forbids copying installed executables and calculating their content fingerprints, including in fixtures and contributor tools. Authorized copies and integrity digests of task-result data remain allowed. Read evidence/proposal.json and judge only this boundary. Write acceptance/policy.json with status forbidden or allowed and a short reason. Do not modify the proposal.",
+          "inputs": [
+            {
+              "path": "evidence/proposal.json",
+              "content": "{\n  \"operation\": \"copy\",\n  \"subject\": \"task-result-data\",\n  \"owned_destination\": true\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "pass",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "evidence/proposal.json"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "evidence/proposal.json"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "acceptance/policy.json",
+                "check": "json-field",
+                "locator": "/status",
+                "value": "allowed"
+              }
+            ]
+          },
+          "rationale": "Judge the subject of the operation: installed executable copies/content hashes are forbidden; authorized task-result data copies/integrity hashes are allowed."
+        },
+        "id": "installed-executable-copy-forbidden-data-control"
       }
     }
   ]

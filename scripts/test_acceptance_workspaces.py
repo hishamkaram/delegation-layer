@@ -511,16 +511,13 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 "authorized": False, "decision": "failure-evidence-retained",
                 "retained_owned_directories": ["owned-fixture"],
             }
-            binary = Path(driver.__file__)
             with (
-                mock.patch.object(scenario_application, "_require_executable", return_value=binary),
                 mock.patch.object(scenario_application, "_make_context", return_value=(context, {})),
                 mock.patch.object(scenario_application, "_run", side_effect=RuntimeError("injected scenario failure")),
                 mock.patch.object(driver.sys.stdout, "write"),
             ):
                 result = driver.main([
-                    "--delegate", str(binary), "--runner", str(binary),
-                    "--pueue", str(binary), "--pueued", str(binary),
+                    "--source-root", str(scenario_application.REPOSITORY),
                     "--output", str(output),
                 ])
             self.assertEqual(result, 1)
@@ -713,7 +710,6 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             output = Path(temporary) / "receipt.json"
             context = mock.Mock(spec=driver.WorkspaceContext)
             context.cleanup.return_value = cleanup
-            binary = Path(driver.__file__)
             make = mock.Mock(return_value=(context, {}))
             if setup_cleanup is not None:
                 failure = driver.AcceptanceSetupFailure(
@@ -722,7 +718,6 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 make = mock.Mock(side_effect=failure)
             finalize = driver.ReceiptFinalizer.finalize
             with (
-                mock.patch.object(scenario_application, "_require_executable", return_value=binary),
                 mock.patch.object(scenario_application, "_make_context", make),
                 mock.patch.object(scenario_application, "_run", side_effect=run),
                 mock.patch.object(driver.ReceiptFinalizer, "finalize", autospec=True,
@@ -730,8 +725,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 mock.patch.object(driver.sys.stdout, "write"),
             ):
                 result = driver.main([
-                    "--delegate", str(binary), "--runner", str(binary),
-                    "--pueue", str(binary), "--pueued", str(binary), "--output", str(output),
+                    "--source-root", str(scenario_application.REPOSITORY), "--output", str(output),
                 ])
             return result, json.loads(output.read_text()), [call.args[1:3] for call in finalized.call_args_list]
 

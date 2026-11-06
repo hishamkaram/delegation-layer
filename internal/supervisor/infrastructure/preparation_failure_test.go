@@ -7,10 +7,16 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+func TestHistoricalTargetCauseKeepsRecordedBit(t *testing.T) {
+	if PreparationCauseHistoricalTargetUnsupported != 1<<2 {
+		t.Fatal("historical target classification changed its recorded bit")
+	}
+}
+
 func preparationCauseFixtures() []PreparationCauses {
 	return []PreparationCauses{
 		PreparationCausePrivateMigrationRequired, PreparationCausePrivateMigrationBusy,
-		PreparationCauseReferencedMigrationUnsupported, PreparationCauseInspectionMigrationRequired,
+		PreparationCauseHistoricalTargetUnsupported, PreparationCauseInspectionMigrationRequired,
 		PreparationCauseInspectionMigrationBusy, PreparationCauseInspectionMigrationUnsupported,
 		PreparationCauseTransitionIncomplete, PreparationCauseNotInitialized,
 		PreparationCauseEndpointRefused, PreparationCauseBinding, PreparationCauseConfiguration,
@@ -50,7 +56,7 @@ func preparationReasonFixtures() []PreparationReason {
 		PreparationReasonPublishedPairUnavailableLive, PreparationReasonActiveWork,
 		PreparationReasonStateUnreadable, PreparationReasonPredecessorPairUnavailable,
 		PreparationReasonObservationFailed, PreparationReasonEndpointOwnerUnknown,
-		PreparationReasonEndpointRefusedLive,
+		PreparationReasonEndpointRefusedLive, PreparationReasonHistoricalTargetNotReady,
 	}
 }
 

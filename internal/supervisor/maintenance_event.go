@@ -11,10 +11,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func RunTerminalEvent(root string, numericTaskID int64, exitCode string, options pueue.Options, lookup ExecutableLookup) error {
-	return RunTerminalEventWithRuntime(root, numericTaskID, exitCode, AdmissionOptions{Control: options, InitialExecutable: lookup.InitialExecutable, Environment: lookup.Environment})
-}
-
 func RunTerminalEventWithRuntime(root string, numericTaskID int64, exitCode string, runtime AdmissionOptions) error {
 	eventContext, cancelEvent := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
 	recorded, eventErr := pueue.RecordPrivateTerminalEventForMaintenance(eventContext, root, numericTaskID, exitCode)
@@ -54,10 +50,6 @@ func RunTerminalEventWithRuntime(root string, numericTaskID int64, exitCode stri
 	return nil
 }
 
-func RunQueueMaintenance(root string, options pueue.Options, lookup ExecutableLookup) error {
-	return RunQueueMaintenanceWithRuntime(root, AdmissionOptions{Control: options, InitialExecutable: lookup.InitialExecutable, Environment: lookup.Environment})
-}
-
 func RunQueueMaintenanceWithRuntime(root string, runtime AdmissionOptions) (resultErr error) {
 	options := runtime.Control
 	binding, found, err := pueue.ReadPrivateSupervisorBinding(root)
@@ -69,6 +61,11 @@ func RunQueueMaintenanceWithRuntime(root string, runtime AdmissionOptions) (resu
 			return err
 		}
 	}
+	selectedClient, err := ResolveSavedSupervisorClient(root, binding, runtime.Lookup())
+	if err != nil {
+		return err
+	}
+	options.RuntimeClientExecutable = selectedClient
 	supervisor, err := pueue.NewClient(binding, options)
 	if err != nil {
 		return err

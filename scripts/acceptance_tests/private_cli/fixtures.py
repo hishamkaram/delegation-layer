@@ -12,6 +12,22 @@ from scripts import acceptance_private_cli as private_cli
 from scripts import acceptance_supervisor_common as common
 
 
+def materialize_candidate_pair(_source_root, destination, delegate_source="#!/bin/sh\nexit 0\n"):
+    """Model the build edge from original fixture source; never read an installed file."""
+    for name, source in (("delegate", delegate_source), ("delegate-run", "#!/bin/sh\nexit 0\n")):
+        target = destination / name
+        target.write_text(source)
+        target.chmod(0o700)
+
+
+def materialize_supervisor_pair(destination):
+    """Model extraction with original finite fixture source, without executing it."""
+    for name in ("pueue", "pueued"):
+        target = destination / name
+        target.write_text("#!/bin/sh\nexit 0\n")
+        target.chmod(0o700)
+
+
 # Go's verifiedexec pool marker: its file name and the exact mode taskdir.CheckPrivateStat accepts.
 POOL_MARKER_NAME = ".identity"
 POOL_MARKER_MODE = 0o600

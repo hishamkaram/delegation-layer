@@ -138,6 +138,7 @@ func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id stri
 type taskMaintenanceObserver struct {
 	root    string
 	options pueue.Options
+	lookup  supervisorcore.ExecutableLookup
 }
 
 func (o taskMaintenanceObserver) observe(td *taskdir.TaskDir) {
@@ -193,7 +194,7 @@ func (o taskMaintenanceObserver) observeEndedRow(ctx context.Context, td *taskdi
 	if err != nil || !found {
 		return false, nil, err
 	}
-	client, err := pueue.NewClient(current, supervisorcore.OptionsWithEnvironment(o.options, meta.Environment))
+	client, err := supervisorcore.NewClient(ctx, o.root, current, supervisorcore.OptionsWithEnvironment(o.options, meta.Environment), o.lookup)
 	if err != nil {
 		return false, nil, err
 	}

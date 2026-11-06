@@ -28,7 +28,6 @@ func TestOwnerInitialFailureEndpointAfterReply(t *testing.T) {
 		{name: "absent-busy", mutation: "absent", code: ownerBusy, valid: true},
 		{name: "absent-incompatible", mutation: "absent", code: ownerIncompatible, valid: true},
 		{name: "absent-timeout", mutation: "absent", code: ownerTimeout, valid: true},
-		{name: "absent-migration-completed", mutation: "absent", code: ownerFault, initial: InitialMigrateReferenced, valid: true},
 		{name: "absent-manual-report", mutation: "absent", code: ownerFault, initial: InitialMigrateOwn, valid: true},
 		{name: "live-same-socket", code: ownerFault, valid: true},
 		{name: "explicit-default", mutation: "absent", code: ownerFault, explicitDefault: true, valid: true},
@@ -105,7 +104,7 @@ func exerciseInitialContactCase(t *testing.T, row initialContactCase) {
 		if contactErr == nil || got != (ownerReply{}) {
 			t.Fatalf("stale endpoint/subject accepted: got=%v err=%v", got, contactErr)
 		}
-		requireOwnerContactPhase(t, contactErr, ownerContactMayHaveWritten, true)
+		requireOwnerContactError(t, contactErr)
 	}
 }
 
@@ -113,7 +112,7 @@ func initialFailureContactFrames(t *testing.T, f ownerContactFixture, row initia
 	t.Helper()
 	request := f.auth.request
 	request.Action = preparationAction(f.auth.intent.Inputs.Initial)
-	request.Source, request.Migration = f.auth.intent.Inputs.Initial.Source, f.auth.intent.Inputs.Initial.Migration
+	request.Source = f.auth.intent.Inputs.Initial.Source
 	if !row.fresh {
 		request.InitialResultFor = request.Owner
 	}
@@ -144,9 +143,6 @@ func initialFailureContactFrames(t *testing.T, f ownerContactFixture, row initia
 	}
 	if row.code == ownerOK {
 		reply.Disposition = Disposition{Kind: DispositionWarmReuse}
-	}
-	if row.initial == InitialMigrateReferenced {
-		reply.MigrationResult = MigrationCompleted
 	}
 	if row.initial == InitialMigrateOwn {
 		reply.Report = ManualMigrationReport{State: ManualMigrationMigrated, Legacy: ManualMigrationLegacyRecovered, Active: ManualMigrationActiveNone}

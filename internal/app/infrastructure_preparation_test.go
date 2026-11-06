@@ -57,8 +57,8 @@ func newInfrastructurePreparationFixture(t *testing.T) infrastructurePreparation
 		t.Fatal(err)
 	}
 	defaulted := infrastructure.LaunchContext{
-		Protocol: infrastructure.ProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
-		ControlEnvironment: []string{"CONTROL=epoch-default"}, MaintenanceEnvironment: []string{"MAINTENANCE=epoch-default"},
+		Protocol: infrastructure.RecordProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
+		ControlEnvironment: []string{"CONTROL=epoch-default"}, MaintenanceEnvironment: []string{"MAINTENANCE=epoch-default"}, SupervisorExecutable: filepath.Join(store.Root, "pueue"),
 	}
 	selected := defaulted.Clone()
 	selected.ControlEnvironment = []string{"CONTROL=request-selected"}

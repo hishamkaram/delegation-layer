@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +15,9 @@ import (
 )
 
 const fixtureConfig = "{\"kind\":\"finite-protocolfixture\",\"containment\":\"fixture-local\",\"approval\":\"never\"}\n"
+
+// This is a fixture protocol diagnostic, never executable byte provenance.
+const fixtureRuntimeVersion = "protocolfixture-v1"
 
 type prepareOptions struct {
 	root, taskID, cwd, briefFile, provider, mode string
@@ -106,10 +107,6 @@ func fixtureMetadata(s *taskdir.Store, req *task.TaskRecord) (*task.MetaRecord, 
 	if err != nil {
 		return nil, err
 	}
-	build, err := fixtureBuildIdentity(executable)
-	if err != nil {
-		return nil, err
-	}
 	spec, err := task.MarshalCanonical(req)
 	if err != nil {
 		return nil, err
@@ -121,22 +118,9 @@ func fixtureMetadata(s *taskdir.Store, req *task.TaskRecord) (*task.MetaRecord, 
 	return &task.MetaRecord{
 		SchemaVersion: task.SchemaVersion, RootID: s.RootID, TaskID: req.TaskID, SpecSHA256: task.ComputeSHA256(spec),
 		RequestedConfig: req.RequestedConfig, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-local", Approval: "never", Digest: task.ComputeSHA256([]byte(fixtureConfig))},
-		Containment: "fixture-local", Approval: "never", ProviderExecutable: executable, ProviderVersion: "protocolfixture-v1", PublisherBuild: build, PublisherVersion: "1",
+		Containment: "fixture-local", Approval: "never", ProviderExecutable: executable, ProviderVersion: fixtureRuntimeVersion, PublisherBuild: fixtureRuntimeVersion, PublisherVersion: "1",
 		Predicate: task.FixturePredicateRef(), SupervisorConfig: sup, CreatedAt: "2026-09-13T00:00:00Z",
 	}, nil
-}
-
-func fixtureBuildIdentity(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	digest := sha256.New()
-	_, readErr := io.Copy(digest, f)
-	if err = errors.Join(readErr, f.Close()); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 func runPrepare(args []string) int {

@@ -64,9 +64,14 @@ type componentSupervisorFixture struct {
 
 func newComponentSupervisorFixture(t *testing.T, lifetime componentDaemonLifetime) *componentSupervisorFixture {
 	t.Helper()
+	return newComponentSupervisorFixtureIn(t, lifetime, "")
+}
+
+func newComponentSupervisorFixtureIn(t *testing.T, lifetime componentDaemonLifetime, parent string) *componentSupervisorFixture {
+	t.Helper()
 	owner := &componentSupervisorFixture{lifetime: lifetime}
 	t.Cleanup(func() { owner.cleanup(t) })
-	base, err := os.MkdirTemp("", "dl-sc-")
+	base, err := os.MkdirTemp(parent, "dl-sc-")
 	owner.base = base
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +157,8 @@ func (f *componentSupervisorFixture) RegisterDaemonWait(root string, pid int, do
 }
 
 func (f *componentSupervisorFixture) ownClient(client *pueue.Client, cause error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if client != nil && !slices.Contains(f.clients, client) {
 		f.clients = append(f.clients, client)
 	}
@@ -273,26 +280,43 @@ func (f *componentSupervisorFixture) daemonWaits() []componentDaemonCompletion {
 }
 
 func (f *componentSupervisorFixture) stopDaemons(ctx context.Context, waits []componentDaemonCompletion) error {
-	if f.lifetime != componentPersistentDaemon {
+	if f.lifetime != componentPersistentDaemon || componentDaemonsClosed(waits) {
 		return nil
 	}
+	return pueue.WithBootstrapLockContext(ctx, f.root, func(locked context.Context) error {
+		for _, wait := range waits {
+			if err := stopComponentDaemon(locked, wait); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func componentDaemonsClosed(waits []componentDaemonCompletion) bool {
 	for _, wait := range waits {
 		select {
 		case <-wait.done:
-			continue
 		default:
-		}
-		if wait.client == nil {
-			return fmt.Errorf("started component daemon %d has no shutdown client", wait.pid)
-		}
-		if err := wait.client.Shutdown(ctx); err != nil {
-			return err
-		}
-		if err := wait.client.WaitUnavailable(ctx); err != nil {
-			return err
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+func stopComponentDaemon(ctx context.Context, wait componentDaemonCompletion) error {
+	select {
+	case <-wait.done:
+		return nil
+	default:
+	}
+	if wait.client == nil {
+		return fmt.Errorf("started component daemon %d has no shutdown client", wait.pid)
+	}
+	if err := wait.client.Shutdown(ctx); err != nil {
+		return err
+	}
+	return wait.client.WaitUnavailable(ctx)
 }
 
 func awaitComponentDaemons(ctx context.Context, waits []componentDaemonCompletion) error {

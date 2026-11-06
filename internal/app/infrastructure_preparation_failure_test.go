@@ -21,7 +21,7 @@ func TestInfrastructurePreparationFailurePreservesExactDomainLeaves(t *testing.T
 	}{
 		{pueue.ErrPrivateSupervisorMigrationRequired, infrastructure.PreparationCausePrivateMigrationRequired},
 		{pueue.ErrPrivateSupervisorMigrationBusy, infrastructure.PreparationCausePrivateMigrationBusy},
-		{pueue.ErrReferencedMigrationUnsupported, infrastructure.PreparationCauseReferencedMigrationUnsupported},
+		{pueue.ErrHistoricalTargetUnsupported, infrastructure.PreparationCauseHistoricalTargetUnsupported},
 		{inspection.ErrGroupMigrationRequired, infrastructure.PreparationCauseInspectionMigrationRequired},
 		{inspection.ErrGroupMigrationBusy, infrastructure.PreparationCauseInspectionMigrationBusy},
 		{inspection.ErrGroupMigrationUnsupported, infrastructure.PreparationCauseInspectionMigrationUnsupported},
@@ -107,6 +107,47 @@ func TestInfrastructurePreparationFailureReasonCannotHideOpaqueFault(t *testing.
 	}
 	if strings.Contains(projected.Error(), private) {
 		t.Fatal("projection exposed opaque host diagnostic")
+	}
+}
+
+func TestInfrastructurePreparationHistoricalRefusalSurvivesWire(t *testing.T) {
+	private := "/private/fixture/historical-close-fault"
+	for _, opaque := range []bool{false, true} {
+		t.Run(map[bool]string{false: "historical refusal", true: "joined opaque fault"}[opaque], func(t *testing.T) {
+			cause := errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, pueue.ErrHistoricalTargetNotReady)
+			if opaque {
+				cause = errors.Join(cause, errors.New(private))
+			}
+			assertHistoricalPreparationWireRoundTrip(t, cause, private)
+		})
+	}
+}
+
+func assertHistoricalPreparationWireRoundTrip(t *testing.T, cause error, private string) {
+	t.Helper()
+	original := &pueue.PrivateRecoveryError{ReasonCode: "historical_target_not_ready", Err: cause}
+	failure := (infrastructureEntryHost{}).ClassifyPreparation(original)
+	if failure.Causes != infrastructure.PreparationCausePrivateMigrationRequired || failure.Reason != infrastructure.PreparationReasonHistoricalTargetNotReady || !failure.IndependentFault {
+		t.Fatalf("historical refusal lost its required cause, reason or unmapped fault: %+v", failure)
+	}
+	data, err := task.MarshalCanonical(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded infrastructure.PreparationFailure
+	if err = task.DecodeStrict(data, &decoded); err != nil || decoded != failure {
+		t.Fatalf("historical failure wire round trip: %+v: %v", decoded, err)
+	}
+	projected := infrastructurePreparationOutcomeError(infrastructure.PreparationOutcome{Condition: infrastructure.PreparationFault, Failure: decoded})
+	if !errors.Is(projected, pueue.ErrPrivateSupervisorMigrationRequired) || !errors.Is(projected, infrastructure.ErrOwnerRequest) {
+		t.Fatalf("historical refusal lost required or independent fault: %v", projected)
+	}
+	public := dispatchFailure(projected, "not_created")
+	if public.Code != "supervisor_upgrade_required" || public.ReasonCode != "historical_target_not_ready" || public.NextAction != "stop_and_report" || public.RecoveryCommand != "" {
+		t.Fatalf("historical wire refusal invited a migrate loop: %+v", public)
+	}
+	if strings.Contains(string(data), private) || strings.Contains(projected.Error(), private) {
+		t.Fatal("historical projection exposed an opaque host diagnostic")
 	}
 }
 

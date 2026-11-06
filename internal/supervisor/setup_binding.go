@@ -11,10 +11,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func PrepareAdmissionSupervisor(selection AdmissionSelection, runtime AdmissionOptions, store *taskdir.Store, requiresInspection bool, runner string, privateSupervisor bool) (*pueue.Client, error) {
-	return PrepareAdmissionSupervisorContext(context.Background(), selection, runtime, store, requiresInspection, runner, privateSupervisor)
-}
-
 // The caller owns admission resources carried by parent. Each control phase
 // retains its existing budget while deriving from that same context.
 func PrepareAdmissionSupervisorContext(parent context.Context, selection AdmissionSelection, runtime AdmissionOptions, store *taskdir.Store, requiresInspection bool, runner string, privateSupervisor bool) (*pueue.Client, error) {
@@ -71,7 +67,7 @@ func PrepareAdmissionSupervisorContext(parent context.Context, selection Admissi
 }
 
 func ensureAdmissionRunnerRepair(parent context.Context, store *taskdir.Store, supervisor *pueue.Client, runner string) error {
-	target, err := PlanQueuedRunnerRepairTarget(store, runner)
+	target, err := PlanQueuedRunnerRepairTarget(runner)
 	if err != nil {
 		return err
 	}

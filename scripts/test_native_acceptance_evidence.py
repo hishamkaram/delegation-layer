@@ -97,7 +97,6 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             task_id: {
                 "executable": f"/fixture/provider-{position + 1}",
                 "version": f"1.{position}",
-                "sha256": ("a" if position == 0 else "b") * 64,
             }
             for position, task_id in enumerate(tasks.values())
         }
@@ -129,9 +128,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             "requested_effort": requested_effort,
             "provider_executable": first_runtime["executable"],
             "provider_version": first_runtime["version"],
-            "provider_sha256": first_runtime["sha256"],
-            "delegate_sha256": "2" * 64, "runner_sha256": "3" * 64,
-            "pueue_sha256": "4" * 64, "pueued_sha256": "5" * 64,
+            "schema_version": 2, "representation": "installed-paths",
+            "installed_executables": {name: "/fixture/" + name for name in ("delegate", "delegate-run", "pueue", "pueued")},
         }), encoding="utf-8")
 
     def make_matrix(
@@ -411,12 +409,11 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         runtimes = binaries["provider_runtime_identities"]
         self.assertEqual(len(runtimes), 2)
         self.assertEqual({identity["version"] for identity in runtimes.values()}, {"1.0", "1.1"})
-        self.assertEqual({identity["sha256"] for identity in runtimes.values()}, {"a" * 64, "b" * 64})
+        self.assertTrue(all("sha256" not in identity for identity in runtimes.values()))
         first = binaries["provider_binding"]
         self.assertEqual(runtimes[first["task_id"]], {
             "executable": first["executable"],
             "version": first["version"],
-            "sha256": first["sha256"],
         })
 
     def test_pass_requires_exact_provider_runtime_task_coverage(self):
@@ -442,7 +439,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         case_directory = root / evidence.EXPECTED_CASES[0].case_output
         binding = case_directory / "binding.json"
         value = json.loads(binding.read_text(encoding="utf-8"))
-        value["provider_sha256"] = "f" * 64
+        value["provider_executable"] = "/foreign/provider"
         binding.write_text(json.dumps(value), encoding="utf-8")
 
         aggregate, code = evidence.build_aggregate(
@@ -569,7 +566,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(object_at(value, "cases", 0)["receipt_sha256"].__class__, str)
 
     def test_large_aggregate_replays_with_long_native_paths(self):
-        root = self.root / ("native-path-" + "x" * 150) / ("nested-" + "y" * 150)
+        root = self.root / ("native-path-" + "x" * 150) / ("nested-" + "y" * 150) / ("deeper-" + "z" * 200)
         self.build(root=root, status="PASS")
         receipt_path = root / evidence.AGGREGATE_RECEIPT_NAME
         original = receipt_path.read_bytes()

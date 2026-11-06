@@ -55,35 +55,27 @@ def acquire_lock(path, operation):
 
 
 def publish_pair(state, libexec, *, activate=True):
+    """Publish the actual fixture installation without copying or reading its programs."""
     supervisor = state / ".supervisor"
-    client = hashlib.sha256((libexec / "pueue").read_bytes()).hexdigest()
-    daemon = hashlib.sha256((libexec / "pueued").read_bytes()).hexdigest()
-    pair_digest = hashlib.sha256((client + "\n" + daemon).encode()).hexdigest()
-    pair = supervisor / ("pueue-pair-" + pair_digest)
-    pair.mkdir(exist_ok=True)
+    pair = libexec.resolve(strict=True)
     for member in ("pueue", "pueued"):
-        destination = pair / member
-        if not destination.exists():
-            destination.write_bytes((libexec / member).read_bytes())
-            destination.chmod(0o700)
-    (supervisor / "pueue-pair.json").write_text(
-        json.dumps({"schema_version": 1, "client_sha256": client, "daemon_sha256": daemon, "pair_sha256": pair_digest})
-    )
+        if not (pair / member).is_file() or not os.access(pair / member, os.X_OK):
+            raise RuntimeError("fixture installed role is unavailable: " + member)
     if activate:
         config = supervisor / "pueue.yml"
+        config_digest = hashlib.sha256(config.read_bytes()).hexdigest()
         logical = {
-            "config_path": str(config),
-            "config_digest": hashlib.sha256(config.read_bytes()).hexdigest(),
-            "resolved_config_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+            "config_path": str(config), "config_digest": config_digest,
+            "resolved_config_sha256": config_digest,
             "endpoint": "unix:" + str(supervisor / "run" / "pueue.sock"),
         }
         (supervisor / "daemon.identity.json").write_text(
-            json.dumps({"executable": str(pair / "pueued"), "sha256": daemon, **logical})
+            json.dumps({"executable": str(pair / "pueued"), "executable_identity": "installed-path-v1", **logical})
         )
         (supervisor / "supervisor.identity.json").write_text(
             json.dumps({"schema_version": 1, "binding": {
-                **logical, "client_executable": str(pair / "pueue"), "client_sha256": client,
-                "daemon_executable": str(pair / "pueued"), "daemon_sha256": daemon,
+                **logical, "executable_identity": "installed-path-v1",
+                "client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
             }})
         )
         runtime = supervisor / "run"
@@ -95,7 +87,8 @@ def publish_pair(state, libexec, *, activate=True):
 def migration_response(state, options, role, root_id, pair):
     supervisor = state / ".supervisor"
     published = json.loads((supervisor / "supervisor.identity.json").read_text())["binding"]
-    current = published["daemon_executable"] == str(pair / "pueued")
+    current = (published["daemon_executable"] == str(pair / "pueued")
+               and published.get("executable_identity") == "installed-path-v1")
     active = options.get("active", True)
     control = {"action": "migrate", "state": "migrated", "migration_phase": "complete",
                "active_work": "present" if active else "none", "next_action": "retry_dispatch"}
@@ -112,8 +105,9 @@ def migration_response(state, options, role, root_id, pair):
         }))
         if options.get("prepare_intent"):
             legacy = json.loads((supervisor / "daemon.identity.json").read_text())
-            successor = {**legacy, "executable": str(pair / "pueued"),
-                         "sha256": hashlib.sha256((pair / "pueued").read_bytes()).hexdigest()}
+            successor = {field: legacy[field] for field in
+                         ("config_path", "config_digest", "resolved_config_sha256", "endpoint")}
+            successor.update(executable=str(pair / "pueued"), executable_identity="installed-path-v1")
             (supervisor / "migration.json").write_text(
                 json.dumps({"schema_version": 1, "legacy": legacy, "successor": successor})
             )

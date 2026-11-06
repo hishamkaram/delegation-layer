@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestResidentGrantZeroNilAndInvalidContextRefuse(t *testing.T) {
@@ -24,7 +26,7 @@ func TestResidentGrantZeroNilAndInvalidContextRefuse(t *testing.T) {
 }
 
 func TestResidentGrantNativeComponentLifecycle(t *testing.T) {
-	for _, mode := range []string{"closed-grant", "malformed-context", "stale-grant", "close-race", "close-retry", "canceled-close-retry"} {
+	for _, mode := range []string{"closed-grant", "stale-grant", "close-race", "close-retry", "canceled-close-retry"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newComponentEntryFixture(t, "")
 			runComponentEntryChild(t, fixture, mode, componentArguments(t, fixture), nil)
@@ -39,9 +41,6 @@ func exerciseResidentComponent(t *testing.T, entry *ownedResidentEntry, mode str
 		checkResidentStartResult(t, entry)
 	case "closed-grant":
 		checkResidentClosedGrant(t, entry)
-	case "malformed-context":
-		entry.operation.context.ControlEnvironment = nil
-		requireResidentRefusal(t, entry, entry.operation.Intent().Inputs.Root)
 	case "stale-grant":
 		successor := entry.operation.Intent()
 		successor.Sequence++
@@ -230,5 +229,80 @@ func checkResidentCanceledCloseRetry(t *testing.T, entry *ownedResidentEntry) {
 	requireResidentRefusal(t, entry, entry.operation.Intent().Inputs.Root)
 	if err := entry.Close(); err != nil {
 		t.Fatalf("fresh cleanup retry: %v", err)
+	}
+}
+
+func TestResidentGenerationCommitPreservesExactResultAfterCancellation(t *testing.T) {
+	fixture := newOwnerServerFixture(t, &ownerServerTestHost{})
+	expected := &componentStartError{message: "exact binding commit result"}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	result := fixture.entry.grant.GuardPrivateGenerationCommit(ctx, fixture.root, func() error { calls++; cancel(); return expected })
+	requireExactComponentStartResult(t, result, expected)
+	if calls != 1 {
+		t.Fatalf("binding commit callback count=%d", calls)
+	}
+}
+
+func TestResidentMutationGuardsRetainCanonicalAuthority(t *testing.T) {
+	for _, member := range []string{"start", "generation"} {
+		for _, fault := range []string{"root", "canceled", "lease", "startup", "publication"} {
+			t.Run(member+"/"+fault, func(t *testing.T) { checkResidentMutationAuthority(t, member, fault) })
+		}
+	}
+}
+
+func checkResidentMutationAuthority(t *testing.T, member, fault string) {
+	t.Helper()
+	fixture := newOwnerServerFixture(t, &ownerServerTestHost{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	root := fixture.root
+	switch fault {
+	case "root":
+		root = filepath.Join(root, "foreign")
+	case "canceled":
+		cancel()
+	case "lease":
+		if err := fixture.entry.lease.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case "startup":
+		successor := fixture.entry.operation.Intent()
+		successor.Sequence++
+		successor.Epoch = strings.Repeat("f", 32)
+		requireJournalPut(t, fixture.entry.journal, fixture.entry.lease, successor)
+	case "publication":
+		changeResidentPublicationIdentity(t, fixture)
+	}
+	guard := fixture.entry.grant.GuardDaemonStart
+	if member == "generation" {
+		guard = fixture.entry.grant.GuardPrivateGenerationCommit
+	}
+	calls := 0
+	err := guard(ctx, root, func() error { calls++; return nil })
+	if err == nil || calls != 0 {
+		t.Fatalf("invalid %s authority reached %s callback: calls=%d err=%v", fault, member, calls, err)
+	}
+}
+
+func changeResidentPublicationIdentity(t *testing.T, fixture *ownerServerFixture) {
+	t.Helper()
+	reference, err := ReferenceStartup(fixture.entry.operation.Intent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication, err := fixture.entry.journal.readPublication(t.Context(), reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publication.Endpoint.SocketInode++
+	data, err := task.MarshalCanonical(publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(fixture.root, "infrastructure", publicationName(reference.Sequence)), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

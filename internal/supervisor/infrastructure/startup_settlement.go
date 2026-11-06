@@ -19,6 +19,7 @@ const (
 	settlementUnassumedExpired startupSettlementReason = "unassumed-expired"
 	settlementAssumedAbsent    startupSettlementReason = "assumed-absent"
 	settlementPreviousBoot     startupSettlementReason = "previous-boot"
+	settlementServingReleased  startupSettlementReason = "serving-released"
 )
 
 // The journal alone writes settlement under the actual instance lease. This
@@ -35,7 +36,7 @@ type startupSettlement struct {
 }
 
 func (s startupSettlement) Validate(intent StartupIntent) error {
-	if s.Protocol != ProtocolVersion {
+	if s.Protocol != RecordProtocolVersion {
 		return ErrIdentity
 	}
 	if err := s.Startup.validateIntent(intent); err != nil {
@@ -67,16 +68,25 @@ func (s startupSettlement) validateReason(intent StartupIntent, observed time.Ti
 		if relation != lifetime.BootSame || s.AssumptionSHA256 == "" {
 			return ErrIdentity
 		}
+	case settlementServingReleased:
+		if relation != lifetime.BootSame || s.AssumptionSHA256 == "" || s.PublicationSHA256 == "" {
+			return ErrIdentity
+		}
 	case settlementUnassumedExpired:
 		if relation != lifetime.BootSame || s.AssumptionSHA256 != "" || s.PublicationSHA256 != "" {
 			return ErrIdentity
 		}
-		expired, expireErr := intent.Expired(observed)
-		if expireErr != nil || !expired {
-			return errors.Join(ErrIdentity, expireErr)
-		}
+		return validateUnassumedSettlementExpiry(intent, observed)
 	default:
 		return ErrIdentity
+	}
+	return nil
+}
+
+func validateUnassumedSettlementExpiry(intent StartupIntent, observed time.Time) error {
+	expired, err := intent.Expired(observed)
+	if err != nil || !expired {
+		return errors.Join(ErrIdentity, err)
 	}
 	return nil
 }
@@ -129,6 +139,14 @@ func (e settlementEvidence) reobserve(record startupSettlement, bootID string) e
 	if err := e.validate(record); err != nil {
 		return err
 	}
+	// This resident-authored fence proves serving-role release, not process
+	// absence. Its old incarnation may still own the daemon's sole Wait.
+	if record.Reason == settlementServingReleased {
+		if lifetime.CompareBootIDs(e.intent.Inputs.BootID, bootID) == lifetime.BootUnknown {
+			return ErrIdentity
+		}
+		return nil
+	}
 	observedAt, err := canonicalStartupTime(record.SettledAt)
 	if err != nil {
 		return err
@@ -180,7 +198,7 @@ func (e settlementEvidence) observe(reference StartupReference, bootID string, o
 	if err != nil {
 		return startupSettlement{}, err
 	}
-	record := startupSettlement{Protocol: ProtocolVersion, Startup: reference, ObservedBootID: bootID, SettledAt: observedAt.Format(time.RFC3339Nano), Reason: reason}
+	record := startupSettlement{Protocol: RecordProtocolVersion, Startup: reference, ObservedBootID: bootID, SettledAt: observedAt.Format(time.RFC3339Nano), Reason: reason}
 	if err = e.bind(&record); err != nil {
 		return startupSettlement{}, err
 	}
@@ -422,4 +440,26 @@ func (r transactionStartupReader) publication(ctx context.Context, name string) 
 		return OwnerPublication{}, err
 	}
 	return record, ctx.Err()
+}
+
+// Prior startup history is reobserved without rewriting its original settlement.
+// The held journal pins the records; only same-boot process facts are probed.
+func (j *intentJournal) reobserveSettlement(ctx context.Context, reference StartupReference, boot string) error {
+	return j.withHistoricalRecords(ctx, func(reader ownerRecordReader, pin taskdir.RootPin) error {
+		evidence, err := loadSettlementEvidence(ctx, reader, pin, reference)
+		if err != nil {
+			return err
+		}
+		if err = validateSettlementBoot(evidence.intent, pin, boot); err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		var record startupSettlement
+		if err = j.control.Read(settlementName(reference.Sequence), &record); err != nil {
+			return errors.Join(task.ErrEvidenceFault, err)
+		}
+		return evidence.reobserve(record, boot)
+	})
 }

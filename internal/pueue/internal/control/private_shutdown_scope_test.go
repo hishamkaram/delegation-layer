@@ -99,7 +99,7 @@ func retainedShutdownContext(t *testing.T, fixture privateSupervisorTestFixture,
 		}
 		original = bootstrap.lock
 		duplicates, duplicateErr := duplicateControlLeaseFiles(scoped)
-		retained.files = duplicates.files
+		retained.files = duplicates
 		if duplicateErr != nil {
 			return duplicateErr
 		}

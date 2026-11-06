@@ -26,10 +26,10 @@ from .candidate_install_contract import (
     require_bootstrap,
 )
 from .candidate_manifest import ArtifactKind, entry_limit
-from .contract import MAX_BINARY, VerificationError, parse_binary_digests
+from .contract import InstalledExecutables, VerificationError, installed_executables
 from .filesystem import _reject_parent_components, _reject_symlink_components, bounded_digest, create_new_file
 from .published_contract import (
-    HOMEBREW_FORMULA, compare_hashes, homebrew_environment, homebrew_prefixes, parse_single_line,
+    HOMEBREW_FORMULA, homebrew_environment, homebrew_prefixes, parse_single_line,
 )
 from .published_homebrew import installed_layout, keg_binaries, require_fresh
 from .published_ports import ConsumerLayout, ConsumerPorts, tool_path
@@ -190,8 +190,8 @@ def _install(brew: _Brew, *, host_os: str, formula: Path, formula_sha256: str, a
 
 
 def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str], prefix: str,
-             probe: BootstrapProbe) -> tuple[dict[str, str], str, tuple[str, str, str], BootstrapObservation]:
-    """Layout, keg hashes, linked by-name delegate, exact libexec supervisors, default state, bootstrap."""
+             probe: BootstrapProbe) -> tuple[InstalledExecutables, str, tuple[str, str, str], BootstrapObservation]:
+    """Layout, selected keg paths, linked by-name delegate, exact libexec supervisors, default state, bootstrap."""
     version = request.package_version()
     try:
         document = json.loads(brew.run("candidate-brew-info", [brew.brew, "info", "--json=v2", "--formula", brew.spec],
@@ -200,9 +200,8 @@ def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str]
         raise VerificationError("homebrew_info_invalid", "homebrew-info") from None
     brew.receipt["candidate_brew"]["formula"] = installed_layout(document, version, brew.tap)
     paths = keg_binaries(Path(brew.line("candidate-brew-keg", "--prefix", brew.spec)))
-    observed = {name: bounded_digest(path, MAX_BINARY, "homebrew_binary_invalid") for name, path in paths.items()}
-    compare_hashes(request.binary_hashes(), observed, "installed_binary_hash_mismatch", "verify-binaries")
-    brew.receipt["binaries"] = {name: {"path": str(path), "sha256": observed[name]} for name, path in paths.items()}
+    observed = installed_executables(paths)
+    brew.receipt["binaries"] = {name: {"path": str(path)} for name, path in paths.items()}
     home = brew.base / "default-home"
     home.mkdir(mode=0o700)
     env, state_root = isolated_default_environment(directory=Path(prefix) / "bin", home=home, info=info)
@@ -218,7 +217,7 @@ def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str]
         package_version=version, receipt=brew.receipt)
     default_state = observe_default_state(run=run, state_root=state_root, home=home, receipt=brew.receipt)
     # The linked bin is the only PATH directory; the keg's libexec pair is selected, never searched.
-    expected = parse_binary_digests(request.binary_hashes(), "verify-binaries")
+    expected = observed
     bootstrap = require_bootstrap(probe(BootstrapTarget(
         command_directory=Path(prefix) / "bin", delegate=paths["delegate"],
         supervisor_directory=paths["pueue"].parent, binaries=expected)), expected)
@@ -233,7 +232,7 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
     ``info`` is the caller's observed host platform; only an OS with a supported Homebrew
     prefix (macOS or Linux) is accepted, before any child. The default-state tuple proves only the
     default root and that status created nothing; a fresh status returns before any supervisor
-    backend is selected. The bootstrap, run by ``probe`` after the keg hashes and that status,
+    backend is selected. The bootstrap, run by ``probe`` after the keg layout and that status,
     is the evidence of the linked delegate's runner and libexec pair selection, daemon startup
     and verified shutdown.
     """
@@ -255,6 +254,6 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
         if _digest(path, kind, "candidate_file_changed") != digest:
             raise VerificationError("candidate_file_changed", "verify-candidate")
     return InstallObservation(
-        channel=CHANNEL_BREW, requests=(), binaries=tuple(sorted(binaries.items())), skill_files=0,
+        channel=CHANNEL_BREW, requests=(), binaries=binaries, skill_files=0,
         delegate_version=version, default_state=default_state, bootstrap=bootstrap,
         installer_sha256=formula_sha256)

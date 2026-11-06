@@ -15,18 +15,28 @@ import (
 
 func TestOwnerServerInitialPreparationKeepsOriginalDeadline(t *testing.T) {
 	observed := make(chan time.Time, 1)
+	var calls atomic.Int32
 	host := &ownerServerTestHost{ensure: func(ctx context.Context, _ Operation, _ LaunchContext, _ DaemonStartGuard, _ DaemonWaitOwner) (Disposition, error) {
 		deadline, finite := ctx.Deadline()
 		if !finite {
 			t.Error("initial preparation has no finite deadline")
 		}
-		observed <- deadline
+		if calls.Add(1) == 1 {
+			observed <- deadline
+		}
 		return Disposition{Kind: DispositionWarmReuse}, nil
 	}}
 	f := newOwnerServerFixture(t, host)
-	disposition, err := f.server.prepareInitial(t.Context())
-	if err != nil || disposition.Kind != DispositionWarmReuse {
-		t.Fatalf("initial preparation: %+v %v", disposition, err)
+	server := f.server
+	cancel, _, join := startRuntimeFixture(t, f)
+	t.Cleanup(func() { cancel(); join() })
+	select {
+	case <-server.initialDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial preparation did not settle")
+	}
+	if server.initialError != nil || server.initialOutcome.Disposition.Kind != DispositionWarmReuse {
+		t.Fatalf("initial preparation: %+v %v", server.initialOutcome.Disposition, server.initialError)
 	}
 	expected, err := canonicalStartupTime(f.entry.operation.Intent().Deadline)
 	if err != nil {
@@ -35,8 +45,10 @@ func TestOwnerServerInitialPreparationKeepsOriginalDeadline(t *testing.T) {
 	if deadline := <-observed; !deadline.Equal(expected) {
 		t.Fatalf("initial deadline renewed: %v != %v", deadline, expected)
 	}
-	if _, err = f.server.prepareInitial(t.Context()); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("initial preparation ran twice: %v", err)
+	cancel()
+	join()
+	if calls.Load() != 1 {
+		t.Fatalf("runtime initial preparation calls = %d, want 1", calls.Load())
 	}
 }
 

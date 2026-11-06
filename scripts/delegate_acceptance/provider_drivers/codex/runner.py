@@ -84,7 +84,6 @@ class CodexAcceptance:
         self.provider_version = ""
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
-        self.provider_sha256 = ""
         self.profile_revision: str | None = None
         self.inspection_binding: dict[str, object] | None = None
         require_discovery("codex", self.codex)
@@ -287,20 +286,15 @@ class CodexAcceptance:
             approval=APPROVAL,
             codex=self.codex,
             codex_version=self.provider_version,
-            codex_digest=self.provider_sha256,
             delegate=self.delegate,
-            delegate_digest=digest(self.delegate),
             runner=self.runner,
-            runner_digest=digest(self.runner),
             pueue=self.pueue,
-            pueue_digest=digest(self.pueue),
             pueued=self.pueued,
-            pueued_digest=digest(self.pueued),
             pueue_version=version,
             pueued_version=daemon_version,
             pueue_base=self._require_pueue_base(),
             pueue_config=self._require_pueue_config(),
-            config_digest=digest(self.pueue_config),
+            config_digest=digest(self._require_pueue_config()),
             state=self.state,
             workspace=self.workspace,
             sibling=self.sibling,

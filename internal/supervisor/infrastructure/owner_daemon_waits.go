@@ -48,7 +48,7 @@ func (w *daemonWaitOwner) RegisterDaemonWait(root string, pid int, done <-chan s
 	}
 }
 
-// Serving policy must stop acceptance and drain handlers before calling this.
+// The runtime must drain callbacks and join retained preparation workers first.
 // This gate owns registration only; it neither closes a process nor cancels work.
 func (w *daemonWaitOwner) closeRegistration() {
 	w.mu.Lock()
@@ -57,9 +57,24 @@ func (w *daemonWaitOwner) closeRegistration() {
 	w.pruneCompleted()
 }
 
-// join is for Stop after canonical shutdown and independent native absence.
-// Owner-only upgrade preserves live daemons and must not call it. No collection
-// mutex is held while waiting; a timeout retains incomplete handles for retry.
+// pendingAfterDrain reads this resident's actual completion handles. Only the
+// runtime closes registration; an open registration grants no release.
+func (w *daemonWaitOwner) pendingAfterDrain() (bool, error) {
+	if w == nil {
+		return false, os.ErrInvalid
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.registrationClosed {
+		return false, os.ErrInvalid
+	}
+	w.pruneCompleted()
+	return len(w.active) != 0, nil
+}
+
+// join retains the resident until its actual daemon command owners complete.
+// It never shuts down a daemon. No collection mutex is held while waiting; a
+// canceled observation retains incomplete handles and grants no closure.
 func (w *daemonWaitOwner) join(ctx context.Context) error {
 	if w == nil || ctx == nil {
 		return os.ErrInvalid

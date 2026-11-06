@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -21,7 +23,7 @@ func TestWarmOwnerPublishedRootRequiresContactForEachContext(t *testing.T) {
 			}
 			before := producerBudgetTree(t, f.journal.pin.Root())
 			starts := 0
-			attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
+			attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
 			ownProducerAttempt(t, attempt)
 			var contact *OwnerContactRequiredError
 			if !errors.As(err, &contact) || contact.Startup != settlementReference(t, intent) || attempt != nil || starts != 0 || f.host.calls != 0 {
@@ -52,16 +54,16 @@ func exerciseWarmOwnerPendingContexts(t *testing.T, assumed bool) {
 			t.Fatalf("assume pending fixture: %t %v", created, err)
 		}
 	}
-	joined, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
+	joined, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
 	ownProducerAttempt(t, joined)
 	if err != nil || joined == nil || joined.intent != intent || joined.NativeCompletion() != nil {
 		t.Fatalf("matching pending context changed birth/deadline: %v", err)
 	}
 	f.request.Context.ControlEnvironment = []string{"WARM_OWNER_CONTEXT=C2"}
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
+	attempt, err := producerInvocation(t).EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
 	ownProducerAttempt(t, attempt)
 	var contact *OwnerContactRequiredError
-	if !errors.Is(err, task.ErrLockBusy) || errors.As(err, &contact) || errors.Is(err, ErrIncompatible) || attempt != nil || f.host.calls != 0 {
+	if !errors.Is(err, task.ErrLockBusy) || errors.As(err, &contact) || errors.Is(err, ErrOwnerIncompatible) || attempt != nil || f.host.calls != 0 {
 		t.Fatalf("different pending context joined or contacted: attempt=%t err=%v", attempt != nil, err)
 	}
 	stored, readErr := f.journal.readIntent(t.Context(), intent.Sequence)
@@ -70,20 +72,16 @@ func exerciseWarmOwnerPendingContexts(t *testing.T, assumed bool) {
 	}
 }
 
-func TestWarmOwnerArtifactMismatchAndAbsentOwnerNeverContactOrElect(t *testing.T) {
-	for _, fault := range []string{"artifact", "absent"} {
+func TestWarmOwnerAbsentOwnerNeverContactsOrElects(t *testing.T) {
+	for _, fault := range []string{"absent"} {
 		t.Run(fault, func(t *testing.T) {
 			f := producerFixture(t)
 			intent := seedProducerIntent(t, f, 1, false)
 			seedWarmOwnerEvidence(t, f, intent, fault == "absent")
 			want := task.ErrLockBusy
-			if fault == "artifact" {
-				f.request.Requirements.RequiredDaemonSHA256 = task.ComputeSHA256([]byte("other daemon"))
-				want = ErrIncompatible
-			}
 			before := producerBudgetTree(t, f.journal.pin.Root())
 			starts := 0
-			attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
+			attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
 			ownProducerAttempt(t, attempt)
 			var contact *OwnerContactRequiredError
 			if !errors.Is(err, want) || errors.As(err, &contact) || attempt != nil || starts != 0 || f.host.calls != 0 {
@@ -100,7 +98,7 @@ func seedWarmOwnerEvidence(t *testing.T, f producerDataFixture, intent StartupIn
 	t.Helper()
 	assumption, publication := evidenceForIntent(t, intent)
 	if absent {
-		process := absentLifecycleProcess(t)
+		process := absentWarmOwnerProcess(t)
 		assumption.Process = ProcessIdentity{PID: process.PID(), StartToken: process.StartToken()}
 		var err error
 		publication.AssumptionSHA256, err = assumption.Digest(intent)
@@ -128,63 +126,6 @@ func seedWarmOwnerEvidence(t *testing.T, f producerDataFixture, intent StartupIn
 	}
 }
 
-func TestWarmOwnerExitingLifecycleBlocksContact(t *testing.T) {
-	f := producerFixture(t)
-	intent := seedProducerIntent(t, f, 1, false)
-	seedWarmOwnerEvidence(t, f, intent, false)
-	body := journalLifecycleBody(t, f.journal, epochLifecycleOwnerUpgrade, 1)
-	body.Owner = settlementReference(t, intent)
-	requireLifecycleAccept(t, f.journal, f.lease, body)
-	requireLifecycleProgress(t, f.journal, f.lease, body, epochLifecycleClosing)
-	requireLifecycleProgress(t, f.journal, f.lease, body, epochLifecycleExiting)
-	f.request.Context.ControlEnvironment = []string{"WARM_OWNER_CONTEXT=C2"}
-	before := producerBudgetTree(t, f.journal.pin.Root())
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
-	ownProducerAttempt(t, attempt)
-	var contact *OwnerContactRequiredError
-	if !errors.Is(err, task.ErrLockBusy) || errors.As(err, &contact) || attempt != nil || f.host.calls != 0 {
-		t.Fatalf("Exiting lifecycle allowed contact or election: attempt=%t err=%v", attempt != nil, err)
-	}
-	if !maps.Equal(before, producerBudgetTree(t, f.journal.pin.Root())) {
-		t.Fatal("Exiting refusal mutated lifecycle/startup evidence")
-	}
-}
-
-func TestWarmOwnerUpgradeChecksCanonicalSuccessorArtifacts(t *testing.T) {
-	for _, mismatch := range []string{"none", "runtime", "client", "daemon"} {
-		t.Run(mismatch, func(t *testing.T) {
-			f, body, intent := lifecycleUpgradeFixture(t)
-			completeLiveUpgrade(t, f, body, intent)
-			f.request.Context.ControlEnvironment = []string{"WARM_OWNER_CONTEXT=C2"}
-			different := task.ComputeSHA256([]byte("different accepted artifact"))
-			switch mismatch {
-			case "none":
-			case "runtime":
-				f.request.Requirements.RequiredRuntimeSHA256 = different
-			case "client":
-				f.request.Requirements.RequiredClientSHA256 = different
-			case "daemon":
-				f.request.Requirements.RequiredDaemonSHA256 = different
-			}
-			before := producerBudgetTree(t, f.journal.pin.Root())
-			attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
-			ownProducerAttempt(t, attempt)
-			var contact *OwnerContactRequiredError
-			contacted := errors.As(err, &contact)
-			if mismatch == "none" {
-				if !contacted || contact.Startup != settlementReference(t, intent) {
-					t.Fatalf("canonical successor artifacts not used: %v", err)
-				}
-			} else if contacted || !errors.Is(err, ErrIncompatible) {
-				t.Fatalf("Upgrade dropped %s artifact requirement: %v", mismatch, err)
-			}
-			if attempt != nil || f.host.calls != 0 || !maps.Equal(before, producerBudgetTree(t, f.journal.pin.Root())) {
-				t.Fatal("Upgrade contact/refusal prepared or changed stored lifecycle/startup")
-			}
-		})
-	}
-}
-
 func TestWarmOwnerFreePendingContextMismatchRemainsBusy(t *testing.T) {
 	f := producerFixture(t)
 	intent := seedProducerIntent(t, f, 1, false)
@@ -192,7 +133,7 @@ func TestWarmOwnerFreePendingContextMismatchRemainsBusy(t *testing.T) {
 	f.request.Context.ControlEnvironment = []string{"WARM_OWNER_CONTEXT=C2"}
 	before := producerBudgetTree(t, f.journal.pin.Root())
 	starts := 0
-	attempt, err := establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
+	attempt, err := producerInvocation(t).establishOutside(t.Context(), f.journal.store, f.request, f.host, producerNative{start: func(*exec.Cmd) error { starts++; return errors.New("unexpected Start") }})
 	ownProducerAttempt(t, attempt)
 	var contact *OwnerContactRequiredError
 	if !errors.Is(err, task.ErrLockBusy) || errors.As(err, &contact) || attempt != nil || f.host.calls != 0 || starts != 0 {
@@ -204,54 +145,33 @@ func TestWarmOwnerFreePendingContextMismatchRemainsBusy(t *testing.T) {
 	}
 }
 
-func TestWarmOwnerUpgradeRejectsPublishedRuntimeOutsideSuccessorSelection(t *testing.T) {
-	f := producerFixture(t)
-	seedWarmHistoricalAbortedUpgrade(t, f)
-	before := producerBudgetTree(t, f.journal.pin.Root())
-	attempt, err := EstablishOutside(t.Context(), f.journal.store, f.request, f.host)
-	ownProducerAttempt(t, attempt)
-	var contact *OwnerContactRequiredError
-	if !errors.Is(err, ErrIdentity) || errors.Is(err, task.ErrEvidenceFault) || errors.As(err, &contact) || attempt != nil || f.host.calls != 0 {
-		t.Fatalf("Upgrade publication bypassed canonical runtime selection: attempt=%t prepare=%d err=%v", attempt != nil, f.host.calls, err)
-	}
-	if !maps.Equal(before, producerBudgetTree(t, f.journal.pin.Root())) {
-		t.Fatal("runtime rejection changed stored Upgrade evidence")
-	}
-}
-
-// Historical records deliberately leave an unsettled Upgrade beside an aborted
-// lifecycle. The ordinary history gate accepts this shape; the contact boundary
-// must independently reject its published runtime. No child is launched here.
-func seedWarmHistoricalAbortedUpgrade(t *testing.T, f producerDataFixture) {
+func absentWarmOwnerProcess(t *testing.T) lifetime.ProcessRef {
 	t.Helper()
-	body := journalLifecycleBody(t, f.journal, epochLifecycleOwnerUpgrade, 1)
-	body.SuccessorArtifacts = f.host.artifacts
-	requireLifecycleAccept(t, f.journal, f.lease, body)
-	requireLifecycleProgress(t, f.journal, f.lease, body, epochLifecycleClosing)
-	intent := liveJournalIntent(t, f.journal)
-	intent.Inputs.Kind = StartupUpgrade
-	intent.Inputs.Artifacts, intent.Inputs.Context = Artifacts{}, LaunchContextReference{}
-	intent.Inputs.UpgradeID, intent.Inputs.UpgradeSHA256 = body.ID, lifecycleReference(t, body).SHA256
-	refreshIntentDigest(t, &intent)
-	assumption, publication := evidenceForIntent(t, intent)
-	publication.RuntimeSHA256 = task.ComputeSHA256([]byte("runtime outside canonical successor artifacts"))
-	if err := publication.Validate(intent, assumption); err != nil {
-		t.Fatalf("negative fixture must be structurally valid Upgrade publication: %v", err)
-	}
-	progress := lifecycleProgress(t, body, epochLifecycleAborted)
-	if err := f.journal.control.WithLock(t.Context(), func(tx *taskdir.ControlTransaction) error {
-		if _, putErr := tx.Put(intentName(intent.Sequence), intent); putErr != nil {
-			return putErr
-		}
-		if _, putErr := tx.Put(assumptionName(intent.Sequence), assumption); putErr != nil {
-			return putErr
-		}
-		if _, putErr := tx.Put(publicationName(intent.Sequence), publication); putErr != nil {
-			return putErr
-		}
-		_, putErr := tx.Put(lifecycleProgressName(body.ID, epochLifecycleAborted), progress)
-		return putErr
-	}); err != nil {
+	executable, err := exec.LookPath("true")
+	if err != nil {
 		t.Fatal(err)
 	}
+	command := exec.Command(executable)
+	waited := false
+	t.Cleanup(func() {
+		if !waited && command.Process != nil {
+			if waitErr := command.Wait(); waitErr != nil {
+				t.Error(waitErr)
+			}
+		}
+	})
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	process, observeErr := lifetime.ObserveStartedProcess(command.Process.Pid)
+	waitErr := command.Wait()
+	waited = true
+	if observeErr != nil || waitErr != nil {
+		t.Fatalf("native incarnation observation/join: %v %v", observeErr, waitErr)
+	}
+	present, err := lifetime.ProcessPresent(process)
+	if err != nil || present {
+		t.Fatalf("exact joined child not absent: %t %v", present, err)
+	}
+	return process
 }

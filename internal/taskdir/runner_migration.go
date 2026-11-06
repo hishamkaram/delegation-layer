@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -14,18 +13,19 @@ import (
 const managedRunnerMigrationRecordName = "runner-migration.json"
 
 type managedRunnerMigrationRecord struct {
-	SchemaVersion    int    `json:"schema_version"`
-	RootID           string `json:"root_id"`
-	TaskID           string `json:"task_id"`
-	SpecSHA256       string `json:"spec_sha256"`
-	MetaSHA256       string `json:"meta_sha256"`
-	RunnerExecutable string `json:"runner_executable"`
-	RunnerSHA256     string `json:"runner_sha256"`
+	SchemaVersion      int                     `json:"schema_version"`
+	RootID             string                  `json:"root_id"`
+	TaskID             string                  `json:"task_id"`
+	SpecSHA256         string                  `json:"spec_sha256"`
+	MetaSHA256         string                  `json:"meta_sha256"`
+	RunnerExecutable   string                  `json:"runner_executable"`
+	RunnerSHA256       string                  `json:"runner_sha256,omitempty"`
+	ExecutableIdentity task.ExecutableIdentity `json:"executable_identity,omitempty"`
 }
 
 // RecordManagedRunnerMigration preserves verified managed ownership for a
 // legacy task whose immutable metadata predates RunnerOwnership.
-func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runnerSHA256 string) (resultErr error) {
+func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context) (resultErr error) {
 	if td == nil || td.store == nil {
 		return task.ErrInvalidPermit
 	}
@@ -40,21 +40,21 @@ func (td *TaskDir) RecordManagedRunnerMigrationContext(ctx context.Context, runn
 	if err != nil {
 		return err
 	}
-	if meta.RunnerOwnership != "" || meta.RunnerExecutable == "" || task.ValidateSHA256(runnerSHA256) != nil {
+	if meta.RunnerOwnership != "" || meta.RunnerExecutable == "" {
 		return task.ErrIdentityMismatch
 	}
 	record := managedRunnerMigrationRecord{
-		SchemaVersion:    task.SchemaVersion,
-		RootID:           td.store.RootID,
-		TaskID:           td.TaskID,
-		SpecSHA256:       specSHA256,
-		MetaSHA256:       metaSHA256,
-		RunnerExecutable: meta.RunnerExecutable,
-		RunnerSHA256:     runnerSHA256,
+		SchemaVersion:      task.SchemaVersion,
+		RootID:             td.store.RootID,
+		TaskID:             td.TaskID,
+		SpecSHA256:         specSHA256,
+		MetaSHA256:         metaSHA256,
+		RunnerExecutable:   meta.RunnerExecutable,
+		ExecutableIdentity: task.ExecutableIdentityInstalledPathV1,
 	}
 	return td.recordSameContext(ctx, managedRunnerMigrationRecordName, record, func() (bool, error) {
-		old, readErr := td.readManagedRunnerMigrationContext(ctx)
-		return readErr == nil && reflect.DeepEqual(old, &record), readErr
+		_, readErr := td.readManagedRunnerMigrationContext(ctx)
+		return readErr == nil, readErr
 	})
 }
 
@@ -94,8 +94,13 @@ func (td *TaskDir) readManagedRunnerMigrationContext(ctx context.Context) (*mana
 }
 
 func validateManagedRunnerMigrationRecord(record managedRunnerMigrationRecord) error {
-	if record.SchemaVersion != task.SchemaVersion || task.ValidateRootID(record.RootID) != nil || task.ValidateTaskID(record.TaskID) != nil || task.ValidateSHA256(record.SpecSHA256) != nil || task.ValidateSHA256(record.MetaSHA256) != nil || task.ValidateSHA256(record.RunnerSHA256) != nil {
+	if record.SchemaVersion != task.SchemaVersion || task.ValidateRootID(record.RootID) != nil || task.ValidateTaskID(record.TaskID) != nil || task.ValidateSHA256(record.SpecSHA256) != nil || task.ValidateSHA256(record.MetaSHA256) != nil {
 		return fmt.Errorf("%w: invalid managed runner migration record", task.ErrEvidenceFault)
+	}
+	if record.ExecutableIdentity.Validate() != nil ||
+		(record.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 && record.RunnerSHA256 != "") ||
+		(record.ExecutableIdentity == "" && task.ValidateSHA256(record.RunnerSHA256) != nil) {
+		return fmt.Errorf("%w: invalid managed runner migration executable identity", task.ErrEvidenceFault)
 	}
 	if !filepath.IsAbs(record.RunnerExecutable) || filepath.Clean(record.RunnerExecutable) != record.RunnerExecutable {
 		return fmt.Errorf("%w: invalid managed runner migration executable", task.ErrEvidenceFault)

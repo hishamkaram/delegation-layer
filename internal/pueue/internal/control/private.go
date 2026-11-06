@@ -129,5 +129,6 @@ type bootstrapLock struct {
 	mu          sync.Mutex
 	file        *os.File
 	transferred bool
+	retired     bool
 	closed      bool
 }

@@ -22,6 +22,7 @@ from scripts.delegate_acceptance.supervisor.config_policy import config_for
 from scripts.delegate_acceptance.private_cli.stop_policy import default_stop_dispatch_evidence
 from scripts.delegate_acceptance.private_cli.handoff_policy import external_handoff_closure_evidence
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
+from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 import hashlib
 import json
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort
@@ -366,7 +367,7 @@ def _initial_handoff_evidence(case, external_config, external_endpoint, external
         "task_budget": EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET,
         "provider": "pi:json",
         "fixture": "fake-pi-live-fifo",
-        "provider_fixture": file_fingerprint(case.provider_fixture),
+        "provider_fixture": installed_executable_observation(case.provider_fixture),
         "source_fingerprints": {
             "acceptance_private_cli.py": file_fingerprint(REPOSITORY / "scripts" / "acceptance_private_cli.py"),
             "acceptance_supervisor_common.py": file_fingerprint(

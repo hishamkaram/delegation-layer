@@ -16,19 +16,20 @@ import (
 
 // These public status tests remove the published queued-runner repair
 // receipt, so status preparation must rescan the queue before it observes the
-// task. The healthy fixture runs `status, group, status`: the binding probe and
-// then the task observation. A stale receipt adds exactly one `status --json`
-// before the task observation and republishes the same receipt, so the second
-// status command is the repair scan. requireRepairScanOrdinal re-establishes
-// that sequence for every fixture.
-const preparationRepairScanStatus = 2
+// task. This fixture has no listening socket, so healthy preparation runs two
+// saved-client readiness probes before the task observation. Its scheduling
+// receipt is already current, so no group command runs. A stale runner receipt
+// adds a repair scan as the third status command, before the task observation,
+// and republishes the same receipt. requireRepairScanOrdinal proves that
+// sequence for every fixture.
+const preparationRepairScanStatus = 3
 
 const (
-	healthyStatusCommands     = "A status\nA group\nA status\n"
-	staleRepairStatusCommands = "A status\nA group\nA status\nA status\n"
+	healthyStatusCommands     = "A status\nA status\nA status\n"
+	staleRepairStatusCommands = "A status\nA status\nA status\nA status\n"
 	// preparationStatusCommands ends at the repair scan: the task
 	// observation never started.
-	preparationStatusCommands = "A status\nA group\nA status\n"
+	preparationStatusCommands = "A status\nA status\nA status\n"
 )
 
 // Pure preparation uncertainty observed no queue row, but the local durable
@@ -36,6 +37,7 @@ const (
 // in-flight repair scan pending beside that offer, exits zero, and does not
 // invent supervisor or admission facts.
 func TestStatusPreparationInFlightUncertaintyKeepsLocalContinuation(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		stage      rebootLifetimeStage
@@ -59,6 +61,9 @@ func TestStatusPreparationInFlightUncertaintyKeepsLocalContinuation(t *testing.T
 			resetRebootCommandLog(t, fixture)
 			synctest.Test(t, func(t *testing.T) {
 				gate := newSupervisorStatusGate(t, preparationRepairScanStatus)
+				// Only new observer clients transfer pending cleanup. The daemon
+				// creator retains its captured options and sole Wait ownership.
+				fixture.options.WaitForPendingClose = false
 				fixture.options.Observer = gate.observe
 
 				code, response := runRebootStatusJSON(t, fixture)
@@ -79,6 +84,7 @@ func TestStatusPreparationInFlightUncertaintyKeepsLocalContinuation(t *testing.T
 // joined with ErrUnknown: status exits 1 and reports no offer, guidance, or
 // pending command.
 func TestStatusPreparationConcreteFaultSuppressesUncertaintyContinuation(t *testing.T) {
+	t.Parallel()
 	malformed := []byte("{")
 	var decodeProbe struct{}
 	decodeErr := json.Unmarshal(malformed, &decodeProbe)
@@ -104,7 +110,7 @@ func TestStatusPreparationConcreteFaultSuppressesUncertaintyContinuation(t *test
 			inject: func(t *testing.T, fixture *rebootFixture, receipt string) {
 				writeRunnerRepairReceipt(t, fixture, receipt, malformed)
 			},
-			wantCommands: "A status\nA group\n",
+			wantCommands: "A status\nA status\n",
 			diagnostics:  []string{decodeErr.Error()},
 		},
 	} {

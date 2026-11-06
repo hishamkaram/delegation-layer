@@ -14,14 +14,23 @@ func (m *Admission) Finish(store *taskdir.Store, cause error, taskCreated bool, 
 	return m.FinishContext(context.Background(), store, cause, taskCreated, recoverInspection)
 }
 
-// FinishContext preserves the caller's root admission values through the
-// existing independent cleanup budget. It never renews a helper deadline.
+// FinishContext uses the existing independent cleanup budget and retains
+// caller context values. It never renews a helper deadline.
 func (m *Admission) FinishContext(parent context.Context, store *taskdir.Store, cause error, taskCreated bool, recoverInspection InspectionRecovery) AdmissionFinish {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), workspace.DefaultBudget)
 	defer cancel()
 	finished := AdmissionFinish{OperationID: m.operationID}
 	if retained := m.retainLifetimeCleanup(store, cause); retained != nil {
 		finished.CloseError = retained
+		if m.resource != nil {
+			finished.Description, finished.DescriptionError = Describe(ctx, m.resource)
+			if m.operationID != "" {
+				finished.Description.OperationID = m.operationID
+			}
+			if descriptionCleanup := m.retainLifetimeCleanup(store, finished.DescriptionError); descriptionCleanup != nil {
+				finished.CloseError = errors.Join(finished.CloseError, descriptionCleanup)
+			}
+		}
 		return finished
 	}
 	if m.resource == nil {

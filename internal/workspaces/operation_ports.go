@@ -35,9 +35,6 @@ type InspectionRecovery func(context.Context, *inspection.Operation) error
 // checks validate it and a verification job receives it; nil is a missing
 // capture and fails instead of reading the process environment.
 type OperationOptions struct {
-	// RootAdmission is the caller-owned outer SH resource, borrowed by nested
-	// scheduling and recovery. The caller releases it after resource finalization.
-	RootAdmission      *taskdir.RootAdmissionLease
 	Runtime            OperationRuntime
 	ObservationTimeout time.Duration
 	RecoverInspection  InspectionRecovery

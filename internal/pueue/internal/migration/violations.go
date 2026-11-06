@@ -11,25 +11,26 @@ import (
 type ViolationCode string
 
 const (
-	ViolationRecordDecode      ViolationCode = "record_decode"
-	ViolationRecordSchema      ViolationCode = "record_schema"
-	ViolationLegacyIdentity    ViolationCode = "legacy_identity"
-	ViolationSuccessorIdentity ViolationCode = "successor_identity"
-	ViolationIdenticalIdentity ViolationCode = "identical_identity"
-	ViolationProcessState      ViolationCode = "process_state"
-	ViolationRecordEncode      ViolationCode = "record_encode"
-	ViolationHistoryDecode     ViolationCode = "history_decode"
-	ViolationHistorySchema     ViolationCode = "history_schema"
-	ViolationHistoryUnproven   ViolationCode = "history_unproven"
-	ViolationHistoryEncode     ViolationCode = "history_encode"
-	ViolationExecutablePath    ViolationCode = "executable_path"
-	ViolationExecutableDigest  ViolationCode = "executable_digest"
-	ViolationLogicalIdentity   ViolationCode = "logical_identity"
-	ViolationConfigPath        ViolationCode = "config_path"
-	ViolationConfigDigest      ViolationCode = "config_digest"
-	ViolationResolvedDigest    ViolationCode = "resolved_digest"
-	ViolationEndpointScheme    ViolationCode = "endpoint_scheme"
-	ViolationEndpointPath      ViolationCode = "endpoint_path"
+	ViolationRecordDecode       ViolationCode = "record_decode"
+	ViolationRecordSchema       ViolationCode = "record_schema"
+	ViolationLegacyIdentity     ViolationCode = "legacy_identity"
+	ViolationSuccessorIdentity  ViolationCode = "successor_identity"
+	ViolationIdenticalIdentity  ViolationCode = "identical_identity"
+	ViolationProcessState       ViolationCode = "process_state"
+	ViolationRecordEncode       ViolationCode = "record_encode"
+	ViolationHistoryDecode      ViolationCode = "history_decode"
+	ViolationHistorySchema      ViolationCode = "history_schema"
+	ViolationHistoryUnproven    ViolationCode = "history_unproven"
+	ViolationHistoryEncode      ViolationCode = "history_encode"
+	ViolationExecutablePath     ViolationCode = "executable_path"
+	ViolationExecutableDigest   ViolationCode = "executable_digest"
+	ViolationExecutableIdentity ViolationCode = "executable_identity"
+	ViolationLogicalIdentity    ViolationCode = "logical_identity"
+	ViolationConfigPath         ViolationCode = "config_path"
+	ViolationConfigDigest       ViolationCode = "config_digest"
+	ViolationResolvedDigest     ViolationCode = "resolved_digest"
+	ViolationEndpointScheme     ViolationCode = "endpoint_scheme"
+	ViolationEndpointPath       ViolationCode = "endpoint_path"
 )
 
 type ViolationError struct {
@@ -60,13 +61,13 @@ func violation(code ViolationCode, cause error) *ViolationError {
 }
 
 func ValidateDaemonIdentity(identity DaemonIdentity) *ViolationError {
-	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable || strings.ContainsRune(identity.Executable, 0) {
-		return violation(ViolationExecutablePath, nil)
-	}
-	if err := task.ValidateSHA256(identity.SHA256); err != nil {
-		return violation(ViolationExecutableDigest, err)
+	if invalid := validateDaemonExecutable(identity); invalid != nil {
+		return invalid
 	}
 	if !LogicalIdentityPresent(identity) {
+		if identity.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+			return violation(ViolationLogicalIdentity, nil)
+		}
 		return nil
 	}
 	if identity.ConfigPath == "" || identity.Endpoint == "" {
@@ -121,6 +122,23 @@ func ValidateProcessState(record Record) *ViolationError {
 func ValidateHistoryRecord(record Record) *ViolationError {
 	if !record.LegacyStopped || record.LegacyPID <= 0 {
 		return violation(ViolationHistoryUnproven, nil)
+	}
+	return nil
+}
+
+func validateDaemonExecutable(identity DaemonIdentity) *ViolationError {
+	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable || strings.ContainsRune(identity.Executable, 0) {
+		return violation(ViolationExecutablePath, nil)
+	}
+	if err := identity.ExecutableIdentity.Validate(); err != nil {
+		return violation(ViolationExecutableIdentity, err)
+	}
+	if identity.ExecutableIdentity == task.ExecutableIdentityInstalledPathV1 {
+		if identity.SHA256 != "" {
+			return violation(ViolationExecutableIdentity, errors.New("installed daemon identity contains an executable digest"))
+		}
+	} else if err := task.ValidateSHA256(identity.SHA256); err != nil {
+		return violation(ViolationExecutableDigest, err)
 	}
 	return nil
 }

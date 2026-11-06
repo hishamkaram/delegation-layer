@@ -101,7 +101,7 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
+	seedPrivateDaemonIdentity(t, privateBase, clientPath, daemonPath)
 	options := Options{
 		PrivateGenerationGuard: allowPrivateGenerationForTest{},
 		DaemonStartGuard:       allowDaemonStartForTest{},
@@ -151,7 +151,7 @@ func TestEnsurePrivateSupervisorBindingAdoptsLiveDaemonWithoutReplacingIdentity(
 	})
 	binding := client.Binding()
 	identityPath := privateDaemonIdentityPath(filepath.Dir(binding.ConfigPath))
-	writePrivateSuccessorTestRecord(t, identityPath, privateDaemonIdentity{Executable: binding.DaemonExecutable, SHA256: binding.DaemonSHA256})
+	writePrivateSuccessorTestRecord(t, identityPath, privateDaemonIdentityForBinding(binding))
 	if err := os.Remove(privateSupervisorBindingPath(fixture.stateRoot)); err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestEnsurePrivateSupervisorBindingPreservesPublishedGeneration(t *testing.T
 		}
 	})
 	published := client.Binding()
-	published.ClientSHA256 = strings.Repeat("f", 64)
+	published.ConfigDigest = strings.Repeat("f", 64)
 	path := privateSupervisorBindingPath(fixture.stateRoot)
 	writePrivateSuccessorTestRecord(t, path, privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: published})
 	before := readPrivateSupervisorFile(t, path)
@@ -369,7 +369,7 @@ func TestPublishPrivateSupervisorBindingHonorsContextBeforeStaging(t *testing.T)
 		{name: "missing", want: context.Canceled},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if err := PublishPrivateSupervisorBindingIfAbsentContext(test.ctx, fixture.stateRoot, client.Binding()); !errors.Is(err, test.want) {
+			if err := publishPrivateSupervisorBindingIfAbsentContext(test.ctx, fixture.stateRoot, client.Binding(), nil); !errors.Is(err, test.want) {
 				t.Fatalf("publication error=%v, want %v", err, test.want)
 			}
 			assertPrivateTestFileUnchanged(t, bindingPath, nil, false)
@@ -425,7 +425,7 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
+	seedPrivateDaemonIdentity(t, privateBase, clientPath, daemonPath)
 	startedMarker := filepath.Join(base, "status-started")
 	releaseMarker := filepath.Join(base, "status-release")
 	defer releasePrivateStatusOnCleanup(t, releaseMarker)
@@ -497,7 +497,7 @@ func TestBindPrivateDoesNotRestartOnMalformedReadyResponse(t *testing.T) {
 	daemonPath := filepath.Join(base, "pueued")
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
+	seedPrivateDaemonIdentity(t, privateBase, clientPath, daemonPath)
 	options := Options{
 		PrivateGenerationGuard: allowPrivateGenerationForTest{},
 		DaemonStartGuard:       allowDaemonStartForTest{},
@@ -532,7 +532,7 @@ func TestBindPrivateAdoptsReadyDaemonAfterExecutableDrift(t *testing.T) {
 	writeExecutable(t, clientPath, privateClientFixture)
 	writeExecutable(t, oldDaemonPath, privateDaemonFixture)
 	writeExecutable(t, daemonPath, privateDaemonFixture)
-	seedPrivateDaemonIdentity(t, privateBase, oldDaemonPath)
+	seedPrivateDaemonIdentity(t, privateBase, clientPath, oldDaemonPath)
 	identityBefore, err := os.ReadFile(privateDaemonIdentityPath(privateBase))
 	if err != nil {
 		t.Fatal(err)

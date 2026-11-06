@@ -15,7 +15,6 @@ func (options DispatchOptions) staticAdmission() admissioncore.StaticOptions {
 // environment Profiles owns, so Git validation sees the same scope.
 func (options DispatchOptions) workspaceOptions() workspaces.OperationOptions {
 	workspace := options.Workspace
-	workspace.RootAdmission = options.Creation.RootAdmission
 	workspace.Environment = options.Creation.Admission.Profiles.Environment()
 	return workspace
 }

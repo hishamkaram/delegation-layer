@@ -16,9 +16,8 @@ func PrepareDispatch(a DispatchRequest, deps OperationOptions, store *taskdir.St
 	return PrepareDispatchContext(context.Background(), a, deps, store, id, cwd, brief)
 }
 
-// PrepareDispatchContext holds root admission before opening a resource. A
-// returned Admission owns any new lease, including on a later preparation
-// error, and keeps it until FinishContext or Close completes.
+// PrepareDispatchContext owns a resource/use lease through preparation and
+// returns every partial owner for FinishContext or Close on failure.
 func PrepareDispatchContext(parent context.Context, a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte) (managed *Admission, effectiveCwd string, resultErr error) {
 	if a.Isolation == "" && a.WorkspaceID == "" {
 		return nil, cwd, RejectUnmanagedPath(cwd)
@@ -39,28 +38,17 @@ func PrepareDispatchContext(parent context.Context, a DispatchRequest, deps Oper
 	if err != nil {
 		return nil, "", err
 	}
-	lease, err := acquireWorkspaceRootAdmission(ctx, store, deps)
-	if lease != nil && lease != deps.RootAdmission {
-		managed = &Admission{rootAdmission: lease}
-	}
+	managed = &Admission{}
+	managed.resource, err = openDispatchResource(ctx, store, a, id, cwd, requestDigest, budget)
 	if err != nil {
 		return managed, "", err
 	}
-	deps.RootAdmission = lease
-	resource, err := openDispatchResource(ctx, store, a, id, cwd, requestDigest, budget)
-	if err != nil {
-		return managed, "", err
-	}
-	if managed == nil {
-		managed = &Admission{}
-	}
-	managed.resource = resource
 	effectiveCwd, resultErr = prepareDispatchUse(ctx, a, deps, store, id, cwd, brief, budget, managed)
 	return managed, effectiveCwd, resultErr
 }
 
 // prepareDispatchUse owns use-owner acquisition, immutable binding and
-// reservation preparation under the already held outer root admission.
+// reservation preparation under its resource use owner.
 func prepareDispatchUse(ctx context.Context, a DispatchRequest, deps OperationOptions, store *taskdir.Store, id, cwd string, brief []byte, budget time.Duration, managed *Admission) (string, error) {
 	if a.WorkspaceID != "" && a.WorkspaceBudget == "" {
 		budget = time.Duration(managed.resource.Request().BudgetNanos)
@@ -174,12 +162,7 @@ func (m *Admission) Close() (resultErr error) {
 		}
 		m.resource = nil
 	}
-	if m.rootAdmission != nil {
-		if err := m.rootAdmission.Release(); err != nil {
-			return err
-		}
-		m.rootAdmission = nil
-	}
+
 	return nil
 }
 

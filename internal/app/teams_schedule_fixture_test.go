@@ -175,6 +175,7 @@ func (f *teamsScheduleFixture) persistTasks(t *testing.T) {
 	deps := f.deps
 	deps.InitialSupervisorExecutable, deps.SupervisorOptions, deps.Environment = client.Binding().ClientExecutable, options, options.Environment
 	deps.SupervisorOptions.WaitForPendingClose, deps.PublisherVersion = true, "teams-schedule-test"
+	deps.SupervisorOptions.ControlOwnerExecutable = canonicalAppTestExecutable(t)
 	paths := supervisorfixture.CanonicalTempDir(t)
 	deps.RunnerExecutable = filepath.Join(paths, "runner")
 	writeRunnerFixture(t, deps.RunnerExecutable, "#!/bin/sh\nexit 98\n")

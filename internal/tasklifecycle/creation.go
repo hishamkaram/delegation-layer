@@ -23,15 +23,6 @@ func CreateTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 }
 
 func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSelection, options CreationOptions, store *taskdir.Store, req task.TaskRecord, brief []byte, briefPath string, gate *resourceGate) (result CreationResult) {
-	ctx, lease, err := ordinaryRootAdmission(ctx, store, options.RootAdmission, options.Admission.Supervisor.Control)
-	if lease != nil && options.RootAdmission == nil {
-		defer func() {
-			result.RootAdmissionCleanup, result.RootAdmissionReleaseError = releaseRootAdmission(lease, result.Err())
-		}()
-	}
-	if err != nil {
-		return creationFailure(result, CreationAdmission, err)
-	}
 	prepared, err := admissioncore.PrepareContext(ctx, selection, options.Admission, store, req)
 	if err != nil {
 		err = admissioncore.WithStage("prepare-admission", annotateMissingDispatchStage("preparing inspection admission", err))
@@ -71,7 +62,7 @@ func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 	if err = workspaces.RecordTaskCaptureContext(ctx, store, req); err != nil {
 		return creationFailure(result, CreationCapture, admissioncore.WithStage("record-workspace-capture", errors.Join(err, td.Close())))
 	}
-	submitted := SubmitWithProfileContext(ctx, td, &req, &meta, supervisor, profile, SubmissionOptions{Supervisor: SupervisorOptions{AdmissionStore: store, RootAdmission: lease}, RequestedRunner: runner, DefaultRunner: options.Admission.Supervisor.RunnerExecutable, OpenValidationStore: options.OpenValidationStore})
+	submitted := SubmitWithProfileContext(ctx, td, &req, &meta, supervisor, profile, SubmissionOptions{Supervisor: SupervisorOptions{AdmissionStore: store}, RequestedRunner: runner, DefaultRunner: options.Admission.Supervisor.RunnerExecutable, OpenValidationStore: options.OpenValidationStore})
 	result.Submission = &submitted
 	return result
 }

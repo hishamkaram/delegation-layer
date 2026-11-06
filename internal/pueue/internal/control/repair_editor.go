@@ -1,7 +1,6 @@
 package control
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,15 +9,12 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue/protocol"
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"golang.org/x/sys/unix"
 )
 
 const (
 	repairEditorMode  = "--supervisor-repair-editor"
 	repairEditorToken = "delegate-private-repair-v1"
-	repairEditorFD    = 3 // Sole ExtraFiles entry forwarded to the native CLI.
 	repairRootEnv     = "DELEGATE_PUEUE_EDIT_ROOT"
-	repairRootIDEnv   = "DELEGATE_PUEUE_EDIT_ROOT_ID"
 )
 
 // RunRepairEditorMode must be the first dispatch in delegate-run, before other
@@ -26,10 +22,6 @@ const (
 func RunRepairEditorMode(args []string) (int, bool) {
 	if len(args) == 0 || args[0] != repairEditorMode {
 		return 0, false
-	}
-	// The inherited copy must be gone even when later argument checks fail.
-	if err := closeRepairAdmission(os.Getenv(repairRootEnv), os.Getenv(repairRootIDEnv)); err != nil {
-		return 1, true
 	}
 	if len(args) != 2 {
 		return 2, true
@@ -51,34 +43,6 @@ func RunRepairEditorMode(args []string) (int, bool) {
 		return 1, true
 	}
 	return 0, true
-}
-
-func closeRepairAdmission(root, rootID string) (resultErr error) {
-	file := os.NewFile(repairEditorFD, "inherited-repair-admission")
-	if file == nil {
-		return os.ErrInvalid
-	}
-	// Never LOCK_UN: CLI and editor share the same open file description.
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	unix.CloseOnExec(repairEditorFD)
-	if task.ValidateRootID(rootID) != nil {
-		return ErrConfiguration
-	}
-	pin, err := readControlRootPin(context.Background(), root)
-	if err != nil {
-		return err
-	}
-	if pin.RootID() != rootID {
-		return task.ErrIdentityMismatch
-	}
-	if _, err = admissionFileIdentity(root, file); err != nil {
-		return err
-	}
-	after, err := readControlRootPin(context.Background(), root)
-	if err != nil || !pin.Equal(after) {
-		return errors.Join(task.ErrIdentityMismatch, err)
-	}
-	return nil
 }
 
 func privateRepairConfig(base, source, digest, editor string) (string, error) {

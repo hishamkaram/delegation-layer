@@ -8,7 +8,7 @@ type PreparationCauses uint32
 const (
 	PreparationCausePrivateMigrationRequired PreparationCauses = 1 << iota
 	PreparationCausePrivateMigrationBusy
-	PreparationCauseReferencedMigrationUnsupported
+	PreparationCauseHistoricalTargetUnsupported
 	PreparationCauseInspectionMigrationRequired
 	PreparationCauseInspectionMigrationBusy
 	PreparationCauseInspectionMigrationUnsupported
@@ -30,7 +30,7 @@ const (
 )
 
 const preparationKnownCauses = PreparationCausePrivateMigrationRequired |
-	PreparationCausePrivateMigrationBusy | PreparationCauseReferencedMigrationUnsupported |
+	PreparationCausePrivateMigrationBusy | PreparationCauseHistoricalTargetUnsupported |
 	PreparationCauseInspectionMigrationRequired | PreparationCauseInspectionMigrationBusy |
 	PreparationCauseInspectionMigrationUnsupported | PreparationCauseTransitionIncomplete |
 	PreparationCauseNotInitialized | PreparationCauseEndpointRefused | PreparationCauseBinding |
@@ -58,6 +58,7 @@ const (
 	PreparationReasonObservationFailed            PreparationReason = "observation_failed"
 	PreparationReasonEndpointOwnerUnknown         PreparationReason = "endpoint_owner_unknown"
 	PreparationReasonEndpointRefusedLive          PreparationReason = "endpoint_refused_live"
+	PreparationReasonHistoricalTargetNotReady     PreparationReason = "historical_target_not_ready"
 )
 
 func (r PreparationReason) Validate() error {
@@ -66,7 +67,7 @@ func (r PreparationReason) Validate() error {
 		PreparationReasonPublishedPairUnavailableLive, PreparationReasonActiveWork,
 		PreparationReasonStateUnreadable, PreparationReasonPredecessorPairUnavailable,
 		PreparationReasonObservationFailed, PreparationReasonEndpointOwnerUnknown,
-		PreparationReasonEndpointRefusedLive:
+		PreparationReasonEndpointRefusedLive, PreparationReasonHistoricalTargetNotReady:
 		return nil
 	default:
 		return ErrIdentity

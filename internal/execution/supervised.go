@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 // PreflightScope borrows an already-supervised lifetime. Its context cancels
@@ -63,14 +62,6 @@ func (s PreflightScope) StartCommand(cmd *exec.Cmd, start func() error) error {
 		return s.Start(start)
 	}
 	return s.Start(func() error { return s.lifetime.StartCommand(cmd, start) })
-}
-
-// BindCommand makes a private verified copy of one integrity-bound native
-// helper. The caller owns the returned command and closes it after Wait, or
-// after a refused start. Provider CLI commands are constructed directly and
-// never bound. Binding does not authorize a start; StartCommand owns that gate.
-func (s PreflightScope) BindCommand(request verifiedexec.CommandRequest) (*verifiedexec.Command, error) {
-	return verifiedexec.NewCommandFromRequest(request)
 }
 
 // FinishCommand lets the guardian drain residual descendants after the owned

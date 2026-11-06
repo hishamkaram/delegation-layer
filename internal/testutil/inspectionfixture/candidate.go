@@ -36,7 +36,7 @@ type effectiveBinding struct {
 // ordinary finite provider plan and predicate.
 func NewDependencies() app.Dependencies { return NewDependenciesForExecutable("") }
 
-// NewDependenciesForExecutable composes a copied acceptance wrapper. The
+// NewDependenciesForExecutable composes an installed acceptance wrapper. The
 // supervisor event recorder is intentionally disabled here: inspection fixture
 // wrappers have no recorder lifecycle of their own, and the pueue/execution
 // callbacks must not retain an unjoined recorder after this function returns.
@@ -74,7 +74,7 @@ func prepareInspectionCandidate(request task.TaskRecord, profile provider.Prepar
 	if err != nil || helper.SHA256 != loaded.Config.HelperConfigSHA256 {
 		return provider.ProfileCandidate{}, ErrInvalidConfig
 	}
-	sentinel, err := readCanonicalRegular(helper.Config.SentinelPath, maxSentinelBytes, false)
+	sentinel, err := readCanonicalRegular(helper.Config.SentinelPath, maxSentinelBytes)
 	if err != nil {
 		return provider.ProfileCandidate{}, ErrInvalidHelper
 	}
@@ -82,13 +82,12 @@ func prepareInspectionCandidate(request task.TaskRecord, profile provider.Prepar
 	clear(sentinel)
 
 	definition := provider.InspectionDefinition{
-		Revision:         HelperRevision,
-		Executable:       loaded.Config.HelperExecutable,
-		ExecutableSHA256: loaded.Config.HelperSHA256,
-		Arguments:        []string{loaded.Config.HelperConfig},
-		Directory:        profile.Plan.Directory,
-		Environment:      slices.Clone(loaded.Config.Environment),
-		OutputLimit:      inspectionOutputLimit,
+		Revision:    HelperRevision,
+		Executable:  loaded.Config.HelperExecutable,
+		Arguments:   []string{loaded.Config.HelperConfig},
+		Directory:   profile.Plan.Directory,
+		Environment: slices.Clone(loaded.Config.Environment),
+		OutputLimit: inspectionOutputLimit,
 	}
 	definition.Project = func(native []byte) (json.RawMessage, error) {
 		return projectHelper(native, sentinelSHA256, helper.Config.Eligible)
@@ -164,7 +163,7 @@ func clonePreparedProfile(profile provider.PreparedProfile) provider.PreparedPro
 	return clone
 }
 
-// Run is the copied delegate wrapper entry point.
+// Run is the installed delegate wrapper entry point.
 func Run(args []string, stdout, stderr io.Writer) int {
 	return app.Run(args, stdout, stderr, NewDependencies())
 }

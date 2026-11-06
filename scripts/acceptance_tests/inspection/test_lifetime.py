@@ -27,11 +27,12 @@ TASK = "b" * 32
 
 
 from scripts.acceptance_tests.record_fixtures import object_at
-from .fixtures import InspectionFixture, FixtureProcesses, ObservedDaemon
+from .fixtures import InspectionFixture, FixtureProcesses, ObservedDaemon, forbid_installed_content
 
 
 class InspectionHarnessTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(forbid_installed_content())
         self.fixture = InspectionFixture(self)
 
     def test_shutdown_requires_complete_success_proof_for_inspection(self):
@@ -72,22 +73,24 @@ class InspectionHarnessTests(unittest.TestCase):
             provider_common._validate_inspection_binding(binding, "inspection binding")
 
     def test_inspection_binding_validates_paired_daemon_provenance(self):
-        directory = self.fixture.inspection_records()
+        directory = self.fixture.inspection_records(legacy_executable_identity=True)
         binding = read_json(directory / "request.json")["binding"]
         supervisor = binding["supervisor"]
+        del supervisor["executable_identity"]
+        supervisor["client_sha256"] = "c" * 64
         supervisor["daemon_executable"] = "/fixture/pueued"
         supervisor["daemon_sha256"] = "a" * 64
 
         provider_common._validate_inspection_binding(binding, "inspection binding")
 
-        del supervisor["daemon_sha256"]
+        del supervisor["daemon_executable"]
         with self.assertRaisesRegex(AcceptanceFailure, "daemon provenance is incomplete"):
             provider_common._validate_inspection_binding(binding, "inspection binding")
 
     def test_model_discovery_closure_accepts_an_unhashed_installed_provider(self):
         directory = self.fixture.inspection_records(
             include_ordinary=False, revision="model-discovery-v1",
-            managed_exit_proof=True, helper_sha256="")
+            managed_exit_proof=True, helper_sha256="", legacy_executable_identity=True)
         request_bytes = (directory / "request.json").read_bytes()
         request = read_json(directory / "request.json")
         self.assertEqual(object_at(request, "binding")["helper_sha256"], "")
@@ -102,7 +105,7 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual((directory / "request.json").read_bytes(), request_bytes)
 
     def test_inspection_binding_rejects_malformed_optional_provider_diagnostics(self):
-        directory = self.fixture.inspection_records()
+        directory = self.fixture.inspection_records(legacy_executable_identity=True)
         binding = read_json(directory / "request.json")["binding"]
         for value in (None, False, 0, " ", "invalid", "e" * 63, "E" * 64):
             with self.subTest(value=value), self.assertRaisesRegex(
@@ -113,8 +116,8 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "missing fields"):
             provider_common._validate_inspection_binding(binding, "inspection binding")
 
-    def test_inspection_binding_keeps_definition_and_worker_digests_required(self):
-        directory = self.fixture.inspection_records()
+    def test_inspection_binding_keeps_historical_definition_and_worker_digests_required(self):
+        directory = self.fixture.inspection_records(legacy_executable_identity=True)
         binding = read_json(directory / "request.json")["binding"]
         for key in ("definition_sha256", "worker_sha256"):
             for value in ("", None, "invalid"):
@@ -126,13 +129,50 @@ class InspectionHarnessTests(unittest.TestCase):
     def test_model_discovery_closure_rejects_a_malformed_provider_digest(self):
         directory = self.fixture.inspection_records(
             include_ordinary=False, revision="model-discovery-v1",
-            managed_exit_proof=True)
+            managed_exit_proof=True, legacy_executable_identity=True)
         request = read_json(directory / "request.json")
         object_at(request, "binding")["helper_sha256"] = "E" * 64
         write_json(directory / "request.json", request, replace=True)
 
         with self.assertRaisesRegex(AcceptanceFailure, "helper_sha256 is invalid"):
             provider_common.validate_managed_lifetime_closure(self.fixture.state)
+
+    def test_installed_binding_matches_canonical_go_wire_semantics(self):
+        directory = self.fixture.inspection_records()
+        original = (directory / "request.json").read_bytes()
+        binding = read_json(directory / "request.json")["binding"]
+        self.assertEqual(binding["executable_identity"], "installed-path-v1")
+        self.assertNotIn("worker_sha256", binding)
+        self.assertNotIn("helper_sha256", binding)
+        provider_common._validate_inspection_binding(binding, "installed binding")
+        for field in ("helper_sha256", "worker_sha256"):
+            with self.subTest(field=field):
+                provider_common._validate_inspection_binding(
+                    dict(binding, **{field: ""}), "installed binding")
+                for value in (None, False, 0, "e" * 64, [], {}):
+                    with self.subTest(value=value), self.assertRaisesRegex(
+                            AcceptanceFailure, "installed identity contains executable SHA"):
+                        provider_common._validate_inspection_binding(
+                            dict(binding, **{field: value}), "installed binding")
+        for marker in ("future-identity", None, False):
+            with self.subTest(marker=marker), self.assertRaisesRegex(
+                    AcceptanceFailure, "executable identity is unsupported"):
+                provider_common._validate_inspection_binding(
+                    dict(binding, executable_identity=marker), "installed binding")
+        for marker in ("", "absent"):
+            truncated = dict(binding)
+            if marker == "absent":
+                del truncated["executable_identity"]
+            else:
+                truncated["executable_identity"] = marker
+            with self.subTest(marker=marker), self.assertRaisesRegex(AcceptanceFailure, "missing fields"):
+                provider_common._validate_inspection_binding(truncated, "truncated legacy binding")
+        for value in ("", None, "invalid"):
+            with self.subTest(definition=value), self.assertRaisesRegex(
+                    AcceptanceFailure, "definition_sha256 is invalid"):
+                provider_common._validate_inspection_binding(
+                    dict(binding, definition_sha256=value), "installed binding")
+        self.assertEqual((directory / "request.json").read_bytes(), original)
 
     def test_managed_guardian_wait_replaces_queue_worker_observation(self):
         directory = self.fixture.inspection_records(managed_exit_proof=True)

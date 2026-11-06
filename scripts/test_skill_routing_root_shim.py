@@ -238,7 +238,7 @@ class RoutingRootShimTests(RoutingFixture):
         fixture = self.prepare_fixture()
         runtime = gate.read_json(fixture / "runtime.json")
         self.assertEqual(runtime["delegate"], str(self.candidate))
-        self.assertEqual(runtime["delegate_sha256"], gate.digest(self.candidate))
+        self.assertNotIn("delegate_sha256", runtime)
         self.assertEqual(runtime["state_root"], str(self.state))
         self.assertEqual(self.environment["PATH"], path)
         self.assertEqual(self.environment["BASH_ENV"], bash_env)

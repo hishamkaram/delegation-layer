@@ -491,7 +491,7 @@ func TestScheduledPrivateMaintenanceUsesRequestedScope(t *testing.T) {
 		request func(context.Context, string) error
 		wantIDs []int64
 	}{
-		{name: "inspection", request: RequestPrivateInspectionQueueMaintenance, wantIDs: []int64{0}},
+		{name: "inspection", request: RequestPrivateCandidateQueueMaintenance, wantIDs: []int64{0}},
 		{name: "full", request: RequestPrivateQueueMaintenance, wantIDs: []int64{0, 1, 2}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

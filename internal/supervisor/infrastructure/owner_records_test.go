@@ -25,8 +25,8 @@ func ownerRecordFixture(t *testing.T) (StartupIntent, StartupAssumption, OwnerPu
 		t.Fatal(err)
 	}
 	publication := OwnerPublication{
-		Protocol: ProtocolVersion, Startup: ref, AssumptionSHA256: digest,
-		RuntimeSHA256: intent.Inputs.Artifacts.RunnerSHA256,
+		Protocol: RecordProtocolVersion, Startup: ref, AssumptionSHA256: digest,
+
 		Endpoint: EndpointIdentity{
 			Path:         ownerEndpointPath(intent.Inputs.Root, intent.Sequence),
 			DirectoryDev: intent.Inputs.RootDevice, DirectoryInode: intent.Inputs.RootInode, SocketInode: 24,
@@ -67,7 +67,6 @@ func TestOwnerPublicationRefusesInvalidReferences(t *testing.T) {
 		{"epoch", func(p *OwnerPublication) { p.Startup.Epoch = strings.Repeat("e", 32) }},
 		{"intent", func(p *OwnerPublication) { p.Startup.IntentSHA256 = strings.Repeat("e", 64) }},
 		{"assumption", func(p *OwnerPublication) { p.AssumptionSHA256 = strings.Repeat("e", 64) }},
-		{"runtime", func(p *OwnerPublication) { p.RuntimeSHA256 = strings.Repeat("e", 64) }},
 		{"endpoint", func(p *OwnerPublication) { p.Endpoint.Path = "relative" }},
 		{"legacy-fixed-endpoint", func(p *OwnerPublication) { p.Endpoint.Path = filepath.Join(filepath.Dir(p.Endpoint.Path), ".i") }},
 		{"other-sequence-endpoint", func(p *OwnerPublication) {

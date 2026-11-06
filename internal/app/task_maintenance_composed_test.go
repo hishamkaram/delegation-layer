@@ -174,7 +174,7 @@ func startBlockedCustodyOwner(t *testing.T, root string) *blockedCustodyOwner {
 		}
 	})
 	owner.start(func() error {
-		return supervisorcore.RunQueueMaintenance(root, deps.SupervisorOptions, deps.supervisorLookup())
+		return runQueueMaintenance(runnerArguments{Root: root}, deps)
 	})
 	select {
 	case <-owner.entered:
@@ -271,6 +271,7 @@ func historicalCommandCount(t *testing.T, fixture *historicalSupervisorFixture, 
 // dispatches the authorized removal. The fixture client only records the
 // remove command; it does not delete the row from its status file.
 func TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance(t *testing.T) {
+	t.Parallel()
 	scenario := newHistoricalInspectionMigrationScenario(t)
 	fixture := scenario.fixture
 	fixture.options = withCanonicalCleanupCallbacks(fixture.options)
@@ -285,7 +286,7 @@ func TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance(t *testin
 	releaseGuardianLifetimeCustody(fixture.root, operation, true)
 	requireTaskMaintenanceFullWake(t, fixture.root, before)
 	resetHistoricalSupervisorCommandLog(t, fixture)
-	result := supervisorMigrate(fixture.root, fixture.dependencies(), newSupervisorTestResponse())
+	result := supervisorMigrate(fixture.root, withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component), newSupervisorTestResponse())
 	if result.code != 0 || result.err != nil {
 		t.Fatalf("full migration with an unavailable custody pool = code %d err=%v", result.code, result.err)
 	}
@@ -311,7 +312,7 @@ func TestGuardianCustodyFaultSurvivesFullMigrationUntilFullMaintenance(t *testin
 	}
 
 	deps := fixture.dependencies().normalized()
-	if err = supervisorcore.RunQueueMaintenance(fixture.root, deps.SupervisorOptions, deps.supervisorLookup()); err != nil {
+	if err = runQueueMaintenance(runnerArguments{Root: fixture.root}, deps); err != nil {
 		t.Fatal(err)
 	}
 	if custodyTestPending(t, registration) {

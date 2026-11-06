@@ -1,11 +1,10 @@
-"""Resolve supervisor coordinates and bind observed executable/config bytes."""
+"""Resolve installed supervisor selection and logical configuration identity."""
 
 from __future__ import annotations
 
 import os
 import pwd
 import sys
-from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.supervisor.config_policy import resolved_supervisor_config_digest
 from pathlib import Path
@@ -19,7 +18,7 @@ def supervisor_binding(pueue: Path, config: Path, base: Path,
     pueue = Path(pueue).resolve()
     binding = {
         "client_executable": str(pueue),
-        "client_sha256": digest(pueue),
+        "executable_identity": "installed-path-v1",
         "resolved_config_sha256": resolved_supervisor_config_digest(base),
         "endpoint": "unix:" + str(base / "run" / "p.sock"),
         "config_path": str(config),

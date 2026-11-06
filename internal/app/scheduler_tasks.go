@@ -99,7 +99,7 @@ func closeSchedulerObservation(state *schedulerruntime.TaskState, resultErr *err
 func schedulerTaskCleanupError(cause error) error {
 	unresolved := tasklifecycle.CleanupUnresolved(cause) || task.AnyErrorNode(cause, func(node error) bool {
 		var cleanup *taskAdmissionCleanupError
-		return errors.As(node, &cleanup) && cleanup != nil && (cleanup.lease.CleanupPending() || cleanup.store != nil)
+		return errors.As(node, &cleanup) && cleanup != nil && cleanup.store != nil
 	})
 	if !unresolved || errors.Is(cause, schedulerruntime.ErrTaskCleanupUnresolved) {
 		return cause
