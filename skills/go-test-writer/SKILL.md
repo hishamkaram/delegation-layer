@@ -40,4 +40,4 @@ state owner and success/failure cases. Confirm only the tools the task needs.
 Return meaningful tests, exact commands/results and any unavailable scenario.
 Do not introduce a test framework or contributor proof format. A mocked test
 does not prove a real provider/account or [native host](../../agents/_data/maintainability-contract.md#native-platform-checks).
-Tests and fixtures meet the same maintained-code boundaries and budgets.
+Tests and fixtures follow the same engineering guidance and quality checks.

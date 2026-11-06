@@ -41,5 +41,5 @@ verify it against source and the user's latest direction.
 
 Return the selected design, ownership/dependency decisions, rejected alternatives
 that affect correctness, tests and unresolved facts. The boundary is ready when
-its consumers can implement without guessing and [maintainability policy](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
+its consumers can implement without guessing and [architecture guidance](../../agents/_data/maintainability-contract.md#architecture-guidance)
 is satisfied. Design agreement alone is not runtime or final-code approval.

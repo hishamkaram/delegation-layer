@@ -40,7 +40,7 @@ policy, and uncertain or mixed changes use the full project gate on stable sourc
 make check
 ```
 
-It covers Go race tests, Python discovery, architectural/static checks, package
+It covers Go race tests, Python discovery, static checks, package
 checks, formatting and vulnerability scanning. Do not run those suites again
 as separate targets after the aggregate unchanged. `make test-native-harness`
 is useful during acceptance-driver edits; its Python tests are already in
@@ -69,8 +69,8 @@ CI runs these shared source and workflow checks once on Linux; macOS installs
 `make tools-go` and runs `make check-platform`. Go vet, lint, builds, race tests,
 and Python/Node runtime tests still run on both native hosts. The default
 `make check` runs the shared checks followed by the platform gate.
-The source inventory is authoritative: `go run ./cmd/maintainability --sources
-python` (or `javascript`, `shell`, `go`) emits absolute NUL-separated paths,
+The source inventory command, `go run ./cmd/source-inventory --kind python`
+(or `javascript`, `shell`, `go`), emits absolute NUL-separated paths,
 including maintained untracked additions and excluding ignored scratch.
 
 Workflow syntax checks use the pinned jactionlint correctness profile, which
@@ -94,18 +94,13 @@ Tests which deliberately transfer work to another process keep their explicit
 helper exit path; normal tests must settle owned work before the suite ends.
 Neither check establishes native child-process closure by itself.
 
-### Maintainability
+### Architecture and maintained source
 
-The [maintainability policy](../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
-and [registry](../agents/_data/subsystems.json) own module boundaries and imports.
-Review a boundary before changing its permissions. The graph describes source;
-it does not approve observed dependencies. Tests and fixtures are maintained
-code. Unknown modules, cycles, parser failures and exceeded budgets fail.
-Strict mode requires an empty migration inventory and no size exceptions.
-
-Use `make verify-maintainability-strict` for focused architectural checks.
-`make fmt` and `make fmt-check` share the audit's maintained-file inventory,
-including untracked and build-excluded source, excluding ignored scratch.
+Use the [architecture guidance](../agents/_data/maintainability-contract.md#architecture-guidance)
+when changing ownership or dependencies. Tests and fixtures are maintained code.
+`make fmt` and `make fmt-check` use the Git source inventory, including untracked
+and build-excluded Go source and excluding ignored scratch. The formatter uses
+`--kind go --allow-empty` so a checkout with no Go files is a no-op.
 
 Python helpers import canonical implementations under scripts.delegate_acceptance.
 Use the existing process/directory owners and patch the namespace the consumer

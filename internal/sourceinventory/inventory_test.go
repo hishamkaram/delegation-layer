@@ -1,4 +1,4 @@
-package maintainability
+package sourceinventory
 
 import (
 	"os"
@@ -6,43 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/hishamkaram/delegation-layer/internal/maintainability/policy"
 )
 
-func TestDiagramAuthoringSourcesKeepDocumentationBudget(t *testing.T) {
-	cases := []struct {
-		path string
-		kind string
-		max  int
-	}{
-		{path: "docs/architecture.md", kind: "documentation", max: 1800},
-		{path: "diagrams/components.architecture.json", kind: "documentation", max: 1800},
-		{path: "diagrams/renamed.sequence.json", kind: "documentation", max: 1800},
-		{path: "diagrams/config.json", kind: "code", max: 800},
-		{path: "internal/layout.architecture.json", kind: "code", max: 800},
-	}
-	manifest := policy.Manifest{Limits: policy.Limits{Code: 800, Tests: 1000, Documentation: 1800, Function: 80}}
-	for _, test := range cases {
-		t.Run(test.path, func(t *testing.T) {
-			kind := sourceKind(test.path)
-			if kind != test.kind {
-				t.Fatalf("source kind = %q, want %q", kind, test.kind)
-			}
-			source := policy.Source{Path: test.path, Kind: kind, Lines: test.max}
-			if findings := policy.Check(manifest, []policy.Source{source}); len(findings) != 0 {
-				t.Fatalf("exact budget rejected: %+v", findings)
-			}
-			source.Lines++
-			findings := policy.Check(manifest, []policy.Source{source})
-			if len(findings) != 1 || findings[0].Kind != "size" || findings[0].Limit != test.max {
-				t.Fatalf("over-budget source not rejected: %+v", findings)
-			}
-		})
-	}
-}
-
-func TestSourcePathsSelectsMaintainedLanguage(t *testing.T) {
+func TestPathsSelectsMaintainedLanguage(t *testing.T) {
 	root := t.TempDir()
 	runFormatGit(t, root, "init", "--quiet")
 	runFormatGit(t, root, "config", "core.excludesFile", os.DevNull)
@@ -57,7 +23,7 @@ func TestSourcePathsSelectsMaintainedLanguage(t *testing.T) {
 			if err := os.Symlink(root, alias); err != nil {
 				t.Fatal(err)
 			}
-			paths, err := SourcePaths(alias, test.language)
+			paths, err := Paths(alias, test.language, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,35 +43,35 @@ func TestSourcePathsSelectsMaintainedLanguage(t *testing.T) {
 	}
 }
 
-func TestSourcePathsRejectsEmptySelection(t *testing.T) {
+func TestPathsRejectsEmptySelection(t *testing.T) {
 	root := t.TempDir()
 	runFormatGit(t, root, "init", "--quiet")
 	for _, language := range []string{"go", "python", "javascript", "shell"} {
-		paths, err := SourcePaths(root, language)
+		paths, err := Paths(root, language, false)
 		if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "no maintained "+language+" sources") {
 			t.Fatalf("empty %s selection = %q, %v", language, paths, err)
 		}
 	}
-	paths, err := GoSourcePaths(root)
+	paths, err := Paths(root, "go", true)
 	if err != nil || len(paths) != 0 {
-		t.Fatalf("legacy empty Go selection = %q, %v", paths, err)
+		t.Fatalf("formatter empty Go selection = %q, %v", paths, err)
 	}
 }
 
-func TestSourcePathsRejectsInvalidLanguage(t *testing.T) {
+func TestPathsRejectsInvalidLanguage(t *testing.T) {
 	for _, language := range []string{"", "ruby", "Python", ".py"} {
-		paths, err := SourcePaths(t.TempDir(), language)
-		if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "unsupported source language") {
+		paths, err := Paths(t.TempDir(), language, false)
+		if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "unsupported source kind") {
 			t.Fatalf("invalid language %q = %q, %v", language, paths, err)
 		}
 	}
 }
 
-func TestSourcePathsFailsWithoutGitInventory(t *testing.T) {
+func TestPathsFailsWithoutGitInventory(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", root)
 	writeFormatFile(t, root, "would-be-fallback.py", []byte("pass\n"), 0o600)
-	paths, err := SourcePaths(root, "python")
+	paths, err := Paths(root, "python", false)
 	if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "inventory maintained paths") {
 		t.Fatalf("non-Git language selection = %q, %v", paths, err)
 	}
@@ -116,6 +82,7 @@ func languageSourceFixture(t *testing.T, root, extension string) []string {
 	names := []string{
 		"tracked" + extension, "untracked" + extension,
 		"with space" + extension, "with\nnewline" + extension,
+		".hidden" + extension,
 	}
 	for _, name := range names {
 		writeFormatFile(t, root, name, []byte("source\n"), 0o600)

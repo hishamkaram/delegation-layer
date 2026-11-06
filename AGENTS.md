@@ -86,7 +86,7 @@ Load only the owner of the rule needed for the change:
 
 | Question | Authority |
 | --- | --- |
-| Architecture, dependencies and maintainability | [Maintainability](agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates) |
+| Architecture, dependencies and maintainability | [Maintainability](agents/_data/maintainability-contract.md#architecture-guidance) |
 | Task authority, durable writes, lifecycle/signals | [Delegation invariants](agents/_data/delegation-invariants.md) |
 | Provider preparation and interpretation | [Adapter contract](agents/_data/adapter-contract.md) |
 | Toolchain, lint and test floor | [Code quality](agents/_data/code-quality-floor.md) |
