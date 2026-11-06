@@ -62,7 +62,7 @@ func TestGoPathsUsesMaintainedInventory(t *testing.T) {
 
 func TestGoPathsFailsWithoutGitInventory(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("GIT_CEILING_DIRECTORIES", root)
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 	writeFormatFile(t, root, "would-be-fallback.go", []byte("package fixture\n"), 0o600)
 	paths, err := Paths(root, "go", true)
 	if err == nil || len(paths) != 0 {

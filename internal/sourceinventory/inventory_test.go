@@ -69,7 +69,7 @@ func TestPathsRejectsInvalidLanguage(t *testing.T) {
 
 func TestPathsFailsWithoutGitInventory(t *testing.T) {
 	root := t.TempDir()
-	t.Setenv("GIT_CEILING_DIRECTORIES", root)
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(root))
 	writeFormatFile(t, root, "would-be-fallback.py", []byte("pass\n"), 0o600)
 	paths, err := Paths(root, "python", false)
 	if len(paths) != 0 || err == nil || !strings.Contains(err.Error(), "inventory maintained paths") {
