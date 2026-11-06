@@ -201,7 +201,7 @@ func TestHistoricalMigrationJournalFailureClosesTemporaryRecoveryWithoutAlias(t 
 	if err != nil || !changed {
 		t.Fatalf("prepare installed callback config: changed=%t err=%v", changed, err)
 	}
-	config, err = configWithSocketPath(config, filepath.Join(base, "run", "successor.sock"))
+	config, err = configWithSocketPath(config, filepath.Join(base, "x"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +213,9 @@ func TestHistoricalMigrationJournalFailureClosesTemporaryRecoveryWithoutAlias(t 
 	})
 	if f.err != nil {
 		t.Fatal(f.err)
+	}
+	if f.candidate.Binding().Endpoint == f.historical.Endpoint {
+		t.Fatal("successor endpoint did not differ from the historical endpoint")
 	}
 	denied := errors.New("journal publication denied")
 	var temporary string

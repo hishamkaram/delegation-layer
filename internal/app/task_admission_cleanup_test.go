@@ -34,10 +34,10 @@ func TestTaskCommandProjectionRetainsAdmissionCleanup(t *testing.T) {
 		{name: "dispatched continuation", store: store, build: func() commandResult {
 			return continuationCommandResult(tasklifecycle.ContinuationResult{
 				Mode: commonprovider.ContinuationNative,
-				Dispatch: &tasklifecycle.DispatchResult{Creation: &tasklifecycle.CreationResult{
-					Submission: &tasklifecycle.SubmissionResult{},
-				}},
-				StoreCleanup: store, StoreCloseError: releaseErr,
+				Dispatch: &tasklifecycle.DispatchResult{
+					Creation:     &tasklifecycle.CreationResult{Submission: &tasklifecycle.SubmissionResult{}},
+					StoreCleanup: store, StoreCloseError: releaseErr,
+				},
 			})
 		}},
 	} {
@@ -110,19 +110,18 @@ func assertObservationCleanupStore(t *testing.T, kind string) {
 	}
 }
 
-func TestContinuedDispatchRetainsDistinctInnerOuterCleanup(t *testing.T) {
-	outer := supervisorfixture.NewInspectionStore(t)
-	inner, err := taskdir.OpenStore(outer.Root)
+func TestContinuedDispatchRetainsItsActualCleanupOwner(t *testing.T) {
+	store := supervisorfixture.NewInspectionStore(t)
+	other, err := taskdir.OpenStore(store.Root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if closeErr := inner.Close(); closeErr != nil {
+		if closeErr := other.Close(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
-	settleInner, innerFault := retainedContinuationProjectionLease(t, inner, strings.Repeat("a", 32))
-	settleOuter, outerFault := retainedContinuationProjectionLease(t, outer, strings.Repeat("b", 32))
+	settle, leaseFault := retainedContinuationProjectionLease(t, store, strings.Repeat("a", 32))
 	cause := errors.New("supervisor refuses continuation")
 	abort := errors.New("workspace abort failed")
 	description := errors.New("workspace description failed")
@@ -133,34 +132,30 @@ func TestContinuedDispatchRetainsDistinctInnerOuterCleanup(t *testing.T) {
 		AbortError:  abort, DescriptionError: description, CloseError: closeErr,
 	}
 	dispatched := tasklifecycle.DispatchResult{
-		Root: outer.Root, RootID: outer.RootID, TaskID: strings.Repeat("c", 32), Record: tasklifecycle.RecordAbsent,
+		Root: store.Root, RootID: store.RootID, TaskID: strings.Repeat("c", 32), Record: tasklifecycle.RecordAbsent,
 		Phase: tasklifecycle.DispatchPredecessor, Failure: admission.WithStage("resolve-predecessor", cause),
-		Workspace: &finished, Resources: &assessment, StoreCleanup: inner, StoreCloseError: innerFault,
+		Workspace: &finished, Resources: &assessment, StoreCleanup: store, StoreCloseError: leaseFault,
 	}
 	result := continuationCommandResult(tasklifecycle.ContinuationResult{
-		Root: outer.Root, RootID: outer.RootID, Dispatch: &dispatched,
-		StoreCleanup: outer, StoreCloseError: outerFault,
+		Root: store.Root, RootID: store.RootID, Dispatch: &dispatched,
 	})
-	assertContinueProjectionCleanup(t, result, []*taskdir.Store{inner, outer}, []error{cause, abort, description, closeErr, innerFault, outerFault})
+	assertContinueProjectionCleanup(t, result, []*taskdir.Store{store}, []error{cause, abort, description, closeErr, leaseFault})
 	if result.response.Workspace == nil || result.response.Workspace.ID != finished.Description.ID || result.response.ResourceAdmission == nil {
 		t.Fatal("Continue lost nested admission description or resource assessment")
 	}
-	if err = settleInner(); err != nil {
+	closeObservationStore(&result, other)
+	if _, pinErr := other.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
+		t.Fatalf("cleanup retained a nonowner Store for the same root: %v", pinErr)
+	}
+	if _, pinErr := store.PinRootContext(t.Context()); pinErr != nil {
+		t.Fatalf("closing nonowner Store closed the retained cleanup owner: %v", pinErr)
+	}
+	if err = settle(); err != nil {
 		t.Fatal(err)
 	}
-	closeObservationStore(&result, inner)
-	if _, pinErr := inner.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
-		t.Fatalf("settled inner cleanup did not close its exact Store: %v", pinErr)
-	}
-	if _, pinErr := outer.PinRootContext(t.Context()); pinErr != nil {
-		t.Fatalf("inner cleanup closed outer Store: %v", pinErr)
-	}
-	if err = settleOuter(); err != nil {
-		t.Fatal(err)
-	}
-	closeObservationStore(&result, outer)
-	if _, pinErr := outer.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
-		t.Fatalf("settled outer cleanup did not close its exact Store: %v", pinErr)
+	closeObservationStore(&result, store)
+	if _, pinErr := store.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
+		t.Fatalf("settled dispatch cleanup did not close its exact Store: %v", pinErr)
 	}
 }
 

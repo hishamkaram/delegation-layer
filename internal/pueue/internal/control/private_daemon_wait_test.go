@@ -131,6 +131,11 @@ func newDaemonWaitFixture(t *testing.T) *daemonWaitFixture {
 	}
 	fixture := &daemonWaitFixture{root: root}
 	t.Cleanup(func() { fixture.close(t) })
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.root = canonicalRoot
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)

@@ -84,8 +84,17 @@ func TestSchedulerDispatchRetainsCleanupBeforeAnyObservation(t *testing.T) {
 }
 
 func TestSchedulerObserveRetainsActualRoutedStoreAndStopsAdmission(t *testing.T) {
-	store, template, original := newAppTestTask(t, false)
-	t.Cleanup(func() { closeAppTestTask(t, store, template) })
+	store, err := taskdir.InitStore(supervisorfixture.CanonicalTempDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeSchedulerRoutingTestResources(t, store) })
+	template, original := newAppTaskInStore(t, store, strings.Repeat("c", 32), false, nil)
+	t.Cleanup(func() {
+		if closeErr := template.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	binding := schedulerPrivateSavedBinding(t, store)
 	_, meta, err := template.PreparedRecords()
 	if err != nil {

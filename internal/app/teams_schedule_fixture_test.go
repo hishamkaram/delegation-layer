@@ -49,6 +49,7 @@ type teamsScheduleFixture struct {
 func newTeamsScheduleFixture(t *testing.T) *teamsScheduleFixture {
 	t.Helper()
 	a := scheduleCreateArgs(t)
+	a.Root = supervisorfixture.CanonicalTempDir(t)
 	a.Auto, a.ScheduleID, a.ScheduleTimezone, a.ScheduleTimezoneSet = false, scheduleTestID, "UTC", true
 	a.TeamScope, a.TeamID, a.MemberID = "user", "review", "primary"
 	state, err := taskdir.InitStore(a.Root)

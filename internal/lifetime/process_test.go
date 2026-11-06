@@ -2,6 +2,7 @@ package lifetime
 
 import (
 	"os"
+	"runtime"
 	"testing"
 )
 
@@ -18,7 +19,19 @@ func TestObserveProcessMatchesCurrentIdentity(t *testing.T) {
 		t.Fatal("current process was reported absent")
 	}
 
-	reused, err := NewProcessRef(ref.PID(), ref.StartToken()+"-different")
+	differentToken := ref.StartToken() + "-different"
+	if runtime.GOOS == "darwin" {
+		parts, valid := parseDarwinIdentityToken(ref.StartToken(), "darwin-v2:", 3)
+		if !valid {
+			t.Fatal("native observer did not return a checked Darwin v2 identity")
+		}
+		otherID := "1"
+		if parts[2] == otherID {
+			otherID = "2"
+		}
+		differentToken = "darwin-v2:" + parts[0] + ":" + parts[1] + ":" + otherID
+	}
+	reused, err := NewProcessRef(ref.PID(), differentToken)
 	if err != nil {
 		t.Fatalf("NewProcessRef: %v", err)
 	}

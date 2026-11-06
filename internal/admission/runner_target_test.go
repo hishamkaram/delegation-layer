@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -18,7 +19,7 @@ func TestManagedSuccessorTargetLeavesUnchangedImageIndependentOfLookup(t *testin
 }
 
 func TestManagedSuccessorTargetComesFromConfiguredRole(t *testing.T) {
-	directory := t.TempDir()
+	directory := supervisorfixture.CanonicalPath(t, t.TempDir())
 	configured, other := filepath.Join(directory, "installed-worker"), filepath.Join(directory, "other-worker")
 	for _, path := range []string{configured, other} {
 		if err := os.WriteFile(path, []byte("not executed"), 0o700); err != nil {

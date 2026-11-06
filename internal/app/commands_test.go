@@ -258,7 +258,7 @@ func newCancelQueueRepairFixture(t *testing.T) cancelQueueRepairFixture {
 	configData, err := json.Marshal(map[string]any{"shared": map[string]string{
 		"pueue_directory":    filepath.Join(supervisorDir, "data"),
 		"runtime_directory":  filepath.Join(supervisorDir, "runtime"),
-		"unix_socket_path":   filepath.Join(supervisorDir, "runtime", "pueue.sock"),
+		"unix_socket_path":   filepath.Join(supervisorDir, "s"),
 		"alias_file":         filepath.Join(supervisorDir, "aliases"),
 		"pid_path":           filepath.Join(supervisorDir, "runtime", "pueue.pid"),
 		"shared_secret_path": filepath.Join(supervisorDir, "secret"),

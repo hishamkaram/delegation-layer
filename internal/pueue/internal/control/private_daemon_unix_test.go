@@ -156,7 +156,11 @@ func writePrivateDaemonTestExecutable(t *testing.T, directory, name, source stri
 	if err := os.WriteFile(path, []byte(source), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func writePrivateDaemonTestConfig(t *testing.T, directory string) string {

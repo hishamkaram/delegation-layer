@@ -4,7 +4,6 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
@@ -27,9 +26,6 @@ const (
 )
 
 type ContinuationResult struct {
-	// StoreCleanup owns the Store retained behind a failed lease release or Close.
-	StoreCleanup                *taskdir.Store
-	StoreCloseError             error
 	Root, RootID, PredecessorID string
 	Workspace                   *workspaces.Description
 	Mode                        commonprovider.ContinuationMode

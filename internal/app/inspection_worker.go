@@ -370,10 +370,14 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 	return nil
 }
 
-// validateCurrentInspectionWorker accepts the immutable worker identity or a
-// digest-verified state-root runner authorized by a durable managed upgrade.
+// validateCurrentInspectionWorker accepts the immutable worker path or an
+// installed runner selected by the resolver and authorized by a durable managed upgrade.
 func validateCurrentInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding, configuredRole string) error {
 	current, err := os.Executable()
+	if err != nil {
+		return task.ErrEvidenceFault
+	}
+	current, err = config.CanonicalizePath(current)
 	if err != nil {
 		return task.ErrEvidenceFault
 	}

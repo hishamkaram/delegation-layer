@@ -34,11 +34,14 @@ func (g *nilDaemonStartGuardForTest) GuardDaemonStart(_ context.Context, _ strin
 func TestDaemonStartRequiresGuard(t *testing.T) {
 	for _, guard := range []DaemonStartGuard{nil, (*nilDaemonStartGuardForTest)(nil), daemonStartGuardFunc(func(context.Context, string, func() error) error { return nil })} {
 		t.Run("refuses", func(t *testing.T) {
-			root := t.TempDir()
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			marker := filepath.Join(root, "started")
 			executable := filepath.Join(root, "daemon")
 			writeExecutable(t, executable, "#!/bin/sh\ntouch '"+marker+"'\n")
-			err := startDaemon(t.Context(), root, executable, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
+			err = startDaemon(t.Context(), root, executable, filepath.Join(root, "config"), root, Options{DaemonStartGuard: guard})
 			if !errors.Is(err, ErrInfrastructureOwnerRequired) {
 				t.Fatalf("guard refusal = %v", err)
 			}

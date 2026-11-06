@@ -40,13 +40,6 @@ func pendingAdmissionCleanup(cause error) bool {
 	})
 }
 
-func continuationWorkError(result ContinuationResult) error {
-	if result.Dispatch != nil {
-		return result.Dispatch.Err()
-	}
-	return result.Failure
-}
-
 func admissionCleanupFault(cause error) bool {
 	var lifetime *taskdir.LifetimeOwnerCleanupError
 	var admission *workspaces.AdmissionCleanupError

@@ -9,7 +9,7 @@ import (
 )
 
 func TestFixtureReadersRefuseSpecialFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTestDir(t)
 	regular := filepath.Join(dir, "regular")
 	if err := os.WriteFile(regular, []byte("finite"), 0o600); err != nil {
 		t.Fatal(err)
