@@ -375,6 +375,311 @@ func TestPublicSupervisorMigrateReplacesLiveMissingPairAndCallback(t *testing.T)
 	finishCallbackMigrationFixture(t, fixture, observerErrors)
 }
 
+func TestPublicSupervisorMigrateReplacesStoppedMissingPairAndCallback(t *testing.T) {
+	for _, withGroup := range []bool{true, false} {
+		name := "without inspection head"
+		if withGroup {
+			name = "with inspection head"
+		}
+		t.Run(name, func(t *testing.T) { runStoppedCallbackMigration(t, withGroup) })
+	}
+}
+
+func runStoppedCallbackMigration(t *testing.T, withGroup bool) {
+	t.Helper()
+	fixture, head, observerErrors := prepareStoppedCallbackMigration(t, withGroup)
+	before := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
+	privateBefore := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+	deps := fixture.dependencies()
+	err := dispatchPairFault(t, "stopped callback installation", func(ctx context.Context) (*pueue.Client, error) {
+		return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), fixture.store, fixture.options)
+	}, fixture.root)
+	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("ordinary admission did not refuse stopped missing installation: %v", err)
+	}
+	assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
+	result := migratePairFault(t, "stopped callback installation", fixture.root, deps, fixture.component)
+	control := result.response.SupervisorControl
+	if result.code != 0 || result.err != nil || control.State != "migrated" || control.NextAction != "retry_dispatch" {
+		t.Fatalf("public migration did not repair stopped missing callback installation: control=%+v err=%v", control, result.err)
+	}
+	if withGroup {
+		assertLiveCallbackMigrationCompleted(t, fixture, head)
+	} else {
+		active, found, readErr := pueue.ReadPrivateSupervisorBinding(fixture.root)
+		if readErr != nil || !found {
+			t.Fatalf("read cold successor: found=%t err=%v", found, readErr)
+		}
+		fixture.successor = active
+		assertInstalledSupervisorPair(t, active, fixture.clientB, fixture.daemonB)
+		assertHistoricalSupervisorState(t, fixture)
+		assertCallbackMigrationAliasRetired(t, fixture.root)
+	}
+	if starts := string(readSupervisorProbeTestFile(t, fixture.daemonStartLog)); starts != "A\nB\nB\n" {
+		t.Fatalf("cold migration starts=%q, want initial A, recovered A via B, then B", starts)
+	}
+	if waits := len(fixture.component.daemonWaits()); waits != 3 {
+		t.Fatalf("cold migration actual Wait count=%d, want three", waits)
+	}
+	if after := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID); !equalOutputUpgradeSnapshots(before, after) {
+		t.Fatal("cold callback migration changed original committed task bytes")
+	}
+	assertHistoricalTaskEvidence(t, fixture)
+	finishCallbackMigrationFixture(t, fixture, observerErrors)
+}
+
+func prepareStoppedCallbackMigration(t *testing.T, withGroup bool) (*historicalSupervisorFixture, inspection.GroupRequestRecord, <-chan error) {
+	t.Helper()
+	fixture := newHistoricalSupervisorFixturePaths(t)
+	prepareCommittedHistoricalCallbackTask(t, fixture)
+	var head inspection.GroupRequestRecord
+	if withGroup {
+		writeSupervisorGenerationTestGroup(t, fixture.store, fixture.predecessor)
+		head = historicalMigrationGroupHead(t, fixture)
+	}
+	observerErrors := observeStoppedInstalledMigrationGroup(t, fixture, head.Name)
+	writeCommittedHistoricalMigrationStatus(t, fixture)
+	restore := filepath.Join(fixture.root, ".supervisor", "data", "state.json")
+	if err := os.MkdirAll(filepath.Dir(restore), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(restore, readSupervisorProbeTestFile(t, fixture.statusPath), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stopHistoricalInstallationPredecessor(t, fixture)
+	if _, err := fixture.predecessorClient.Snapshot(t.Context()); err == nil {
+		t.Fatal("stopped predecessor fixture still answers status; cold migration is not established")
+	}
+	callbackB := filepath.Join(filepath.Dir(fixture.clientB), "delegate-run")
+	writeRunnerFixture(t, callbackB, "#!/bin/sh\nexit 0\n")
+	fixture.options.PrivateTerminalEventRunner = callbackB
+	for _, path := range []string{fixture.clientA, fixture.daemonA, fixture.runner} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fixture, head, observerErrors
+}
+
+func TestPublicStoppedCallbackMigrationRefusesUnsafeRestore(t *testing.T) {
+	for _, fault := range []string{"foreign active", "duplicate ended", "unresolved ended", "malformed managed ended"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture, head, observerErrors := prepareStoppedCallbackMigration(t, true)
+			writeUnsafeStoppedCallbackRestore(t, fixture, fault)
+			taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
+			privateBefore := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+			result := migratePairFault(t, fault, fixture.root, fixture.dependencies(), fixture.component)
+			control := result.response.SupervisorControl
+			if result.code == 0 || result.err == nil || control.State != "unavailable" || control.NextAction == "wait_for_legacy_work" {
+				t.Fatalf("unsafe cold restore did not refuse before recovery: control=%+v err=%v", control, result.err)
+			}
+			assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
+			assertCallbackMigrationHasNoIntent(t, fixture)
+			assertCallbackMigrationAliasRetired(t, fixture.root)
+			assertHistoricalMigrationGroupUnchanged(t, fixture, head)
+			if starts := string(readSupervisorProbeTestFile(t, fixture.daemonStartLog)); starts != "A\n" || len(fixture.component.daemonWaits()) != 1 {
+				t.Fatalf("unsafe raw restore started a recovery daemon: %q", starts)
+			}
+			if after := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID); !equalOutputUpgradeSnapshots(taskBefore, after) {
+				t.Fatal("refused raw restore changed committed task bytes")
+			}
+			finishCallbackMigrationFixture(t, fixture, observerErrors)
+		})
+	}
+}
+
+func writeUnsafeStoppedCallbackRestore(t *testing.T, fixture *historicalSupervisorFixture, fault string) {
+	t.Helper()
+	path := filepath.Join(fixture.root, ".supervisor", "data", "state.json")
+	var status struct {
+		Tasks  map[string]map[string]json.RawMessage `json:"tasks"`
+		Groups map[string]json.RawMessage            `json:"groups"`
+	}
+	if err := json.Unmarshal(readSupervisorProbeTestFile(t, path), &status); err != nil {
+		t.Fatal(err)
+	}
+	switch fault {
+	case "foreign active":
+		status.Tasks["7"]["label"] = json.RawMessage(`"foreign:active"`)
+		status.Tasks["7"]["status"] = json.RawMessage(`{"Running":{"enqueued_at":"2026-09-13T20:00:00Z","start":"2026-09-13T20:00:01Z"}}`)
+	case "duplicate ended":
+		duplicate := maps.Clone(status.Tasks["7"])
+		duplicate["id"] = json.RawMessage(`8`)
+		status.Tasks["8"] = duplicate
+	case "unresolved ended":
+		label, err := json.Marshal("delegate:" + fixture.store.RootID + ":" + strings.Repeat("f", 32))
+		if err != nil {
+			t.Fatal(err)
+		}
+		status.Tasks["7"]["label"] = label
+	case "malformed managed ended":
+		label, err := json.Marshal("delegate:" + fixture.store.RootID + ":invalid")
+		if err != nil {
+			t.Fatal(err)
+		}
+		status.Tasks["7"]["label"] = label
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoppedCallbackMigrationRetriesPreparationFault(t *testing.T) {
+	for _, afterRename := range []bool{false, true} {
+		name := "before config rename"
+		if afterRename {
+			name = "after config rename"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture, head, observerErrors := prepareStoppedCallbackMigration(t, true)
+			taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
+			failStoppedCallbackPreparation(t, fixture, afterRename)
+			assertHistoricalMigrationGroupUnchanged(t, fixture, head)
+			preparedConfig, err := os.Stat(fixture.predecessor.ConfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			preparedBytes := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)
+			result := migratePairFault(t, name+" public retry", fixture.root, fixture.dependencies(), fixture.component)
+			control := result.response.SupervisorControl
+			if result.code != 0 || result.err != nil || control.State != "migrated" || control.NextAction != "retry_dispatch" {
+				t.Fatalf("stopped callback preparation fault stranded public retry: control=%+v err=%v", control, result.err)
+			}
+			assertLiveCallbackMigrationCompleted(t, fixture, head)
+			if starts := string(readSupervisorProbeTestFile(t, fixture.daemonStartLog)); starts != "A\nB\nB\nB\n" || len(fixture.component.daemonWaits()) != 4 {
+				t.Fatalf("fault retry did not preserve exactly four actual Starts/Waits: %q", starts)
+			}
+			if afterRename {
+				assertStoppedCallbackRetryKeptConfig(t, fixture, preparedConfig, preparedBytes)
+			}
+			if after := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID); !equalOutputUpgradeSnapshots(taskBefore, after) {
+				t.Fatal("callback fault retry changed original committed task bytes")
+			}
+			assertHistoricalTaskEvidence(t, fixture)
+			finishCallbackMigrationFixture(t, fixture, observerErrors)
+		})
+	}
+}
+
+func failStoppedCallbackPreparation(t *testing.T, fixture *historicalSupervisorFixture, afterRename bool) {
+	t.Helper()
+	original := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)
+	denied := errors.New("injected callback preparation commit fault")
+	options := fixture.component.setupOptions(fixture.options)
+	options.PrivateGenerationGuard = infrastructurePreparationGuard(func(ctx context.Context, root string, commit func() error) error {
+		alias, present, err := pueue.ReadPrivateRecoveryBinding(root)
+		if err != nil {
+			return err
+		}
+		if present && task.SameSupervisorIdentity(alias, fixture.predecessor) && !afterRename {
+			return denied
+		}
+		if err = fixture.component.GuardPrivateGenerationCommit(ctx, root, commit); err != nil {
+			return err
+		}
+		if afterRename && !bytes.Equal(original, readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)) {
+			return denied
+		}
+		return nil
+	})
+	before := len(fixture.component.daemonWaits())
+	var candidate *pueue.Client
+	err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
+		var prepareErr error
+		candidate, prepareErr = pueue.PreparePrivateForMigrationWithLock(ctx, fixture.clientB, fixture.daemonB, fixture.root, options)
+		fixture.component.ownClient(candidate, prepareErr)
+		return prepareErr
+	})
+	fixture.component.ownDaemonClients(candidate, before)
+	if !errors.Is(err, denied) {
+		t.Fatalf("fixture did not reach callback commit fault: %v", err)
+	}
+	assertStoppedCallbackFaultState(t, fixture, original, afterRename)
+}
+
+func assertStoppedCallbackFaultState(t *testing.T, fixture *historicalSupervisorFixture, original []byte, afterRename bool) {
+	t.Helper()
+	published, found, err := pueue.ReadPrivateSupervisorBinding(fixture.root)
+	if err != nil || !found || published != fixture.predecessor {
+		t.Fatalf("preparation fault changed canonical A: found=%t err=%v", found, err)
+	}
+	alias, found, err := pueue.ReadPrivateRecoveryBinding(fixture.root)
+	if err != nil || !found || !task.SameSupervisorIdentity(alias, fixture.predecessor) {
+		t.Fatalf("preparation fault lost exact predecessor alias: found=%t err=%v", found, err)
+	}
+	changed := !bytes.Equal(original, readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath))
+	if changed != afterRename {
+		t.Fatalf("callback fault wrong rename phase: changed=%t want=%t", changed, afterRename)
+	}
+	if starts := string(readSupervisorProbeTestFile(t, fixture.daemonStartLog)); starts != "A\nB\n" || len(fixture.component.daemonWaits()) != 2 {
+		t.Fatalf("preparation fault did not own one temporary A Start: %q", starts)
+	}
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	if err = awaitComponentDaemons(ctx, fixture.component.daemonWaits()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(fixture.readyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("safe preparation fault retained a ready predecessor: %v", err)
+	}
+	assertCallbackMigrationHasNoIntent(t, fixture)
+}
+
+func assertStoppedCallbackRetryKeptConfig(t *testing.T, fixture *historicalSupervisorFixture, before os.FileInfo, contents []byte) {
+	t.Helper()
+	after, err := os.Stat(fixture.predecessor.ConfigPath)
+	if err != nil || !os.SameFile(before, after) || !bytes.Equal(contents, readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)) {
+		t.Fatalf("post-rename retry rewrote already-selected callback config: %v", err)
+	}
+}
+
+func TestStoppedCallbackMigrationRefusesDifferentIdentityAlias(t *testing.T) {
+	fixture := newHistoricalSupervisorFixturePaths(t)
+	legacy, observerErrors := prepareLiveCallbackMigration(t, fixture)
+	published := publishCallbackMigrationBeforeAliasCleanup(t, fixture, legacy)
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	waits := fixture.component.daemonWaits()
+	if err := fixture.component.stopDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	if err := awaitComponentDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+	status := readSupervisorProbeTestFile(t, fixture.statusPath)
+	clientC, _ := installInspectionMigrationTargetC(t, fixture)
+	if err := os.WriteFile(fixture.statusPath, status, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	callbackC := filepath.Join(filepath.Dir(clientC), "delegate-run")
+	writeRunnerFixture(t, callbackC, "#!/bin/sh\nexit 0\n")
+	fixture.options.PrivateTerminalEventRunner = callbackC
+	for _, path := range []string{fixture.clientB, fixture.daemonB} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+	starts := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
+	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = clientC
+	result := migratePairFault(t, "stopped different-identity alias", fixture.root, deps, fixture.component)
+	if result.code == 0 || result.err == nil || result.response.SupervisorControl.State != "unavailable" {
+		t.Fatalf("different alias authorized a stopped generation: control=%+v err=%v", result.response.SupervisorControl, result.err)
+	}
+	assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), before)
+	assertPublishedCallbackPredecessorRetained(t, fixture, published, legacy)
+	if !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) || len(fixture.component.daemonWaits()) != len(waits) {
+		t.Fatal("different-identity stopped alias started a daemon")
+	}
+	assertHistoricalTaskEvidence(t, fixture)
+	finishCallbackMigrationFixture(t, fixture, observerErrors)
+}
+
 func TestPublicSupervisorMigrateResumesPreparedCallback(t *testing.T) {
 	for _, busy := range []bool{false, true} {
 		name := "idle"
@@ -1448,6 +1753,100 @@ func TestExplicitMigrationSelectsInstalledSuccessorBeforeShutdown(t *testing.T) 
 			}
 			assertInstalledInspectionMigrationCompleted(t, scenario, selected)
 		})
+	}
+}
+
+// The private migration owner writes the stopped phase; the fault only denies
+// further progress after that durable commit, before any successor Start.
+func prepareStoppedInspectionMigration(t *testing.T, scenario *historicalInspectionMigrationScenario) {
+	t.Helper()
+	fixture := scenario.fixture
+	prepareInterruptedInspectionMigration(t, scenario, true)
+	denied := errors.New("injected fault after durable predecessor stop")
+	options := fixture.component.setupOptions(fixture.options)
+	options.PrivateGenerationGuard = infrastructurePreparationGuard(func(ctx context.Context, root string, commit func() error) error {
+		if err := fixture.component.GuardPrivateGenerationCommit(ctx, root, commit); err != nil {
+			return err
+		}
+		var phase historicalPrivateMigrationRecord
+		data, err := os.ReadFile(filepath.Join(root, ".supervisor", "migration.json"))
+		if err != nil {
+			return err
+		}
+		if err = json.Unmarshal(data, &phase); err != nil {
+			return err
+		}
+		if phase.LegacyStopped {
+			return denied
+		}
+		return nil
+	})
+	err := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
+		current, prepareErr := pueue.PreparePrivateForMigrationWithLock(ctx, fixture.clientB, fixture.daemonB, fixture.root, options)
+		fixture.component.ownClient(current, prepareErr)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		fixture.current = current
+		migrationErr := current.MigratePrivateSupervisorWithLock(ctx, fixture.root)
+		fixture.component.ownClient(current, migrationErr)
+		return migrationErr
+	})
+	if !errors.Is(err, denied) {
+		t.Fatalf("migration did not stop at the committed shutdown boundary: %v", err)
+	}
+	var phase historicalPrivateMigrationRecord
+	readHistoricalRecord(t, filepath.Join(fixture.root, ".supervisor", "migration.json"), &phase)
+	waits := fixture.component.daemonWaits()
+	if len(waits) != 1 || phase.LegacyPID != waits[0].pid || phase.LegacyProcessStart == "" || !phase.LegacyShutdownRequested || !phase.LegacyShutdownDispatched || !phase.LegacyStopped {
+		t.Fatalf("migration lacks actual predecessor shutdown provenance: %+v", phase)
+	}
+	assertHistoricalDaemonIdentity(t, "pinned successor", phase.Successor, scenario.successorGroup.Supervisor)
+	ctx, cancel := supervisor.ControlContextWithParent(t.Context(), fixture.options)
+	defer cancel()
+	if err = awaitComponentDaemons(ctx, waits); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExplicitMigrationRefusesMissingRecordedSuccessorAfterShutdown(t *testing.T) {
+	t.Parallel()
+	scenario := newHistoricalInspectionMigrationScenario(t)
+	fixture := scenario.fixture
+	t.Logf("owned component fixture: %s", fixture.component.base)
+	prepareStoppedInspectionMigration(t, scenario)
+	clientC, _ := installInspectionMigrationTargetC(t, fixture)
+	privateBase := filepath.Join(fixture.root, ".supervisor")
+	privateBefore := capturePairFaultWitness(t, privateBase)
+	configBefore := readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))
+	proposals := snapshotRetainedInspectionProposals(t, fixture.root)
+	requestPath := filepath.Join(fixture.root, "inspection-group", "request.json")
+	requestBefore := readSupervisorProbeTestFile(t, requestPath)
+	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
+	commands := readSupervisorProbeTestFile(t, fixture.commandLog)
+	starts := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
+	if string(starts) != "A\n" {
+		t.Fatalf("stopped boundary started a successor: %q", starts)
+	}
+	removeAcceptedInspectionInstallation(t, fixture)
+	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = clientC
+	result := supervisorMigrate(fixture.root, withSupervisorProbeRouting(t, deps, fixture.component), newSupervisorTestResponse())
+	assertPendingMissingInstallationCause(t, result.err)
+	control := result.response.SupervisorControl
+	if result.code == 0 || control == nil || control.ReasonCode != "transition_pending" || control.NextAction != "stop_and_report" {
+		t.Fatalf("missing pinned successor lost actionable refusal: code=%d control=%+v err=%v", result.code, control, result.err)
+	}
+	assertPairFaultWitness(t, privateBase, privateBefore)
+	assertRetainedInspectionProposals(t, proposals)
+	if !maps.EqualFunc(proposals, snapshotRetainedInspectionProposals(t, fixture.root), bytes.Equal) || !bytes.Equal(requestBefore, readSupervisorProbeTestFile(t, requestPath)) {
+		t.Fatal("refusal appended a replacement proposal or changed the original group request")
+	}
+	if !bytes.Equal(configBefore, readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))) || !bytes.Equal(commands, readSupervisorProbeTestFile(t, fixture.commandLog)) || !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) || len(fixture.component.daemonWaits()) != 1 {
+		t.Fatal("refusal changed configuration, issued a command, or started an alternate daemon")
+	}
+	if after := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID); !equalOutputUpgradeSnapshots(taskBefore, after) {
+		t.Fatal("refusal changed historical task evidence")
 	}
 }
 

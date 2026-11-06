@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
@@ -542,7 +543,7 @@ func privateInstalledCallbackConfig(data []byte, base, runner string) ([]byte, b
 // Explicit migration owns this config transition before any target is
 // accepted. The existing recovery alias retains the exact predecessor bytes;
 // interrupted preparation therefore resumes through the normal alias path.
-func preparePrivateInstalledCallback(ctx context.Context, root string, candidate *Client) (_ *Client, resultErr error) {
+func preparePrivateInstalledCallback(ctx context.Context, root string, candidate *Client) (*Client, error) {
 	if candidate == nil {
 		return nil, ErrConfiguration
 	}
@@ -573,25 +574,165 @@ func preparePrivateInstalledCallback(ctx context.Context, root string, candidate
 	if !found {
 		return nil, fmt.Errorf("%w: complete canonical predecessor is required for callback migration", ErrPrivateSupervisorMigrationRequired)
 	}
-	options := candidate.options
-	options.RuntimeClientExecutable = candidate.runtimeBinding.ClientExecutable
+	return candidate.preparePrivateCallbackTransition(ctx, root, published, data, replacement)
+}
+
+func (c *Client) preparePrivateCallbackTransition(ctx context.Context, root string, published task.SupervisorRef, data, replacement []byte) (_ *Client, resultErr error) {
+	options := c.options
+	options.RuntimeClientExecutable = c.runtimeBinding.ClientExecutable
 	previous, err := BindSaved(ctx, published, options)
+	recoveryOwned, stopRecoveryOnFailure := false, false
 	if previous != nil {
-		defer func() { resultErr = errors.Join(resultErr, previous.CloseAfterPending(resultErr)) }()
+		defer func() {
+			if resultErr != nil && stopRecoveryOnFailure {
+				resultErr = errors.Join(resultErr, previous.StopRecovered(ctx, options.ObservationTimeout, resultErr))
+			}
+			resultErr = errors.Join(resultErr, previous.CloseAfterPending(resultErr))
+		}()
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err = candidate.authorizePrivateMigrationQueue(ctx, root, previous); err != nil {
+	recovered, started, err := c.recoverStoppedPrivateCallback(ctx, root, published, previous)
+	if err != nil {
 		return nil, err
 	}
+	if recovered != previous {
+		closeErr := previous.CloseAfterPending(nil)
+		previous, recoveryOwned = recovered, started
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	if err = c.authorizePrivateMigrationQueue(ctx, root, previous); err != nil {
+		return nil, err
+	}
+	stopRecoveryOnFailure = recoveryOwned
 	if err = previous.PersistPrivateRecoveryBindingContext(ctx, root); err != nil {
 		return nil, err
 	}
-	if err = candidate.replacePrivateInstalledCallback(ctx, root, data, replacement); err != nil {
+	if recoveryOwned {
+		// A later config rename invalidates the primary transport. Preserve the
+		// recovery owner's stop path through its already-persisted exact alias.
+		transport, bindErr := c.bindPreparedPrivateCallbackAlias(ctx, root, published)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		closeErr := previous.CloseAfterPending(nil)
+		previous = transport
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	}
+	if err = c.replacePrivateInstalledCallback(ctx, root, data, replacement); err != nil {
 		return nil, err
 	}
-	return candidate.bindPrivateInstalledCallback(ctx)
+	return c.bindPrivateInstalledCallback(ctx)
+}
+
+func (c *Client) bindPreparedPrivateCallbackAlias(ctx context.Context, root string, published task.SupervisorRef) (*Client, error) {
+	alias, present, err := readPrivateRecoveryBinding(root)
+	if err != nil || !present {
+		return nil, errors.Join(ErrBinding, err)
+	}
+	return bindPrivateRecoveryTransport(ctx, alias, published, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+}
+
+// Offline state can refuse recovery, never authorize migration writes. Only
+// the live queue check after the existing recovery owner returns does that.
+func (c *Client) recoverStoppedPrivateCallback(ctx context.Context, root string, published task.SupervisorRef, previous *Client) (*Client, bool, error) {
+	if published.ExecutableIdentity != task.ExecutableIdentityInstalledPathV1 {
+		return previous, false, nil
+	}
+	facts, err := loadPrivateGenerationFacts(root)
+	if err != nil {
+		return nil, false, err
+	}
+	complete, err := facts.complete(published, facts.aliasPresent && facts.alias.matches(published))
+	if err != nil || !complete || facts.aliasPublishing || facts.aliasPublicationErr != nil {
+		return previous, false, errors.Join(err, facts.aliasPublicationErr)
+	}
+	if err = refusePendingPrivateRestart(root); err != nil {
+		return nil, false, err
+	}
+	missing, err := PrivateSupervisorPairMissing(published)
+	if err != nil || !missing {
+		return previous, false, err
+	}
+	observation, err := previous.availableForTransition(ctx, true)
+	if err != nil || observation.ready() {
+		return previous, false, err
+	}
+	if err = previous.requireStoppedPrivateCallback(observation); err != nil {
+		return nil, false, err
+	}
+	if err = c.checkStoppedPrivateCallbackRestore(ctx, root, published, previous); err != nil {
+		return nil, false, err
+	}
+	return RecoverSavedWithPair(ctx, root, published, c.runtimeBinding.ClientExecutable, c.runtimeBinding.DaemonExecutable, c.options)
+}
+
+func (c *Client) requireStoppedPrivateCallback(observation PrivateEndpointObservation) error {
+	if observation.State() != PrivateEndpointAbsent && observation.State() != PrivateEndpointRefused {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+	}
+	pid, recorded, err := c.privateDaemonPID()
+	if err != nil {
+		return privateRecoveryFailure("predecessor_pair_unavailable", err)
+	}
+	if !recorded {
+		if observation.State() == PrivateEndpointAbsent {
+			return nil
+		}
+		return privateRecoveryFailure("predecessor_pair_unavailable", observation.projectedError())
+	}
+	_, present, err := c.privateProcessIdentity(pid)
+	if err != nil || present {
+		return privateRecoveryFailure("predecessor_pair_unavailable", errors.Join(ErrBinding, err))
+	}
+	return nil
+}
+
+func (c *Client) checkStoppedPrivateCallbackRestore(ctx context.Context, root string, published task.SupervisorRef, previous *Client) error {
+	pin, err := readControlRootPin(ctx, root)
+	if err != nil {
+		return err
+	}
+	resolution, err := previous.resolution()
+	if err != nil {
+		return err
+	}
+	restore, err := ObservePrivateRestore(ctx, pin, published, resolution)
+	if err != nil {
+		return err
+	}
+	if restore.Presence() != PrivateRestorePresent {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrPrivateRestoreLayout)
+	}
+	if _, err = c.authorizePrivateMigrationJobs(ctx, root, published, restore.Snapshot().Jobs); err != nil {
+		if task.AllErrorCauses(err, func(leaf error) bool { return errors.Is(leaf, ErrPrivateSupervisorMigrationBusy) }) &&
+			!task.AnyErrorNode(err, func(node error) bool {
+				_, retained := node.(interface{ RetainsResidentCleanup() })
+				return retained
+			}) {
+			// A stopped raw queue cannot finish work. Do not retain Busy as a
+			// leaf, project wait_for_legacy_work, or publish a recovery alias.
+			return privateRecoveryFailure("predecessor_pair_unavailable", ErrBinding)
+		}
+		return err
+	}
+	rechecked, err := ObservePrivateRestore(ctx, pin, published, resolution)
+	if err != nil {
+		return err
+	}
+	if rechecked.Presence() != PrivateRestorePresent || rechecked.Source() != restore.Source() {
+		return privateRecoveryFailure("predecessor_pair_unavailable", ErrPrivateRestoreLayout)
+	}
+	observation, err := previous.availableForTransition(ctx, true)
+	if err != nil {
+		return err
+	}
+	return previous.requireStoppedPrivateCallback(observation)
 }
 
 func (c *Client) bindPrivateInstalledCallback(ctx context.Context) (*Client, error) {

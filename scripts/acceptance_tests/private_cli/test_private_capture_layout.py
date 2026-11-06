@@ -25,6 +25,7 @@ from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.acceptance_tests.private_cli.fixtures import (
     exception_capture_paths, materialize_candidate_pair, materialize_supervisor_pair, ready_path,
 )
+from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.private_cli import installation
 from scripts.delegate_acceptance.private_cli import capacity_entry
 from scripts.delegate_acceptance.private_cli import contention_controls
@@ -50,7 +51,7 @@ SLOW_TASK = "f" * 32
 FAKE_DELEGATE = """#!{python}
 import json, sys, time
 args = sys.argv[1:]
-command = next(name for name in ("dispatch", "status", "collect", "models") if name in args)
+command = next(name for name in ("dispatch", "status", "collect", "models", "supervisor") if name in args)
 if command == "dispatch":
     response = {{"task_id": args[args.index("--id") + 1], "task_record": "created", "admission": "admitted",
                 "root_id": "r" * 32}}
@@ -60,6 +61,8 @@ elif command == "status":
         time.sleep(30)
 elif command == "collect":
     response = {{"outcome": {{"verdict": "committed"}}}}
+elif command == "supervisor":
+    response = {{"supervisor_control": {{"state": "migrated", "next_action": "retry_dispatch"}}}}
 else:
     response = {{"status": "available", "models": [{{"id": "openai/gpt-4.1"}}]}}
 sys.stdout.write(json.dumps(response, sort_keys=True))
@@ -317,50 +320,231 @@ class CompositionCaptureRootTests(CaptureLayoutCase):
 
 
 class RecoveryAndHandoffPathTests(CaptureLayoutCase):
+    def published_binding_reader(self, state, binding):
+        read_json = upgrade.read_json
+
+        def read(path, *arguments, **options):
+            if path == state / ".supervisor/supervisor.identity.json":
+                return {"binding": binding}
+            return read_json(path, *arguments, **options)
+
+        return read
+
+    def close_recovery_current(self, fixture, delegate, client, config, env, **options):
+        self.assertEqual((delegate, client, config, env),
+                         (fixture.upgraded_install / "delegate", ready_path(self.lifetime.upgraded_libexec) / "pueue",
+                          ready_path(self.lifetime.private_config), self.lifetime.env))
+        self.assertEqual(options["state"], fixture.state)
+        self.assertEqual(options["task_ids"], tuple(self.lifetime.attempted_task_ids))
+        for name, owner in (("capture_root", self.lifetime.capture_token),
+                            ("supervisor_cleanups", self.lifetime.supervisor_cleanups),
+                            ("disposal", self.lifetime.disposal), ("reader", self.lifetime.closure_reader),
+                            ("closed_roots", self.lifetime.closed_roots), ("observe", self.lifetime.primary_observer)):
+            self.assertIs(options[name], owner)
+        self.assertNotEqual(self.receipt.safe_stage, "supervisor-upgrade-recovery-proved")
+        return fake_control(options["capture_root"], {"closed": True})
+
+    def test_recovery_current_close_failure_prevents_proved_stage(self):
+        fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
+        with patch.object(scenario_entry, "run_supervisor_upgrade_recovery") as scenario, \
+                patch.object(supervisor, "shutdown_terminal_private_supervisor",
+                             side_effect=RuntimeError("current generation closure unresolved")) as close:
+            with self.assertRaisesRegex(RuntimeError, "closure unresolved"):
+                scenario_entry.run_recovery_scenario("n" * 32, self.lifetime, self.responses, self.receipt, fixture)
+            scenario.assert_called_once()
+            close.assert_called_once()
+        self.assertNotEqual(self.receipt.safe_stage, "supervisor-upgrade-recovery-proved")
+
+    def test_recovery_migrates_after_package_removal_before_capacity_with_captured_response(self):
+        fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
+        before = self.base_entries() - {"old"}
+        pair = ready_path(self.lifetime.upgraded_libexec)
+        binding = {"client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
+                   "executable_identity": "installed-path-v1", "endpoint": "unix:/fixture.sock",
+                   "config_path": str(fixture.state / ".supervisor/pueue.yml"), "config_digest": "a" * 64,
+                   "resolved_config_sha256": "b" * 64}
+        events = []
+
+        def history(**options):
+            options["remove_old_package"]()
+            events.append("old-package-removed")
+            return binding, {}, self.root, "history"
+
+        run_json = upgrade.run_json
+
+        def migrate(*arguments, **options):
+            self.assertEqual(events, ["old-package-removed"])
+            self.assertFalse(ready_path(self.lifetime.old_libexec).exists())
+            events.append("public-migrate")
+            return run_json(*arguments, **options)
+
+        def capacity(**_options):
+            receipt = self.responses / "upgrade-supervisor-migrate.json"
+            self.assertTrue(receipt.is_file(), "recovered capacity started without public migration")
+            captured = json.loads(receipt.read_text())
+            self.assertEqual(captured["exit_code"], 0)
+            self.assertEqual(captured["response"]["supervisor_control"],
+                             {"state": "migrated", "next_action": "retry_dispatch"})
+            self.assertFalse(ready_path(self.lifetime.old_libexec).exists())
+            events.append("capacity")
+
+        def close(*arguments, **options):
+            self.assertEqual(events[-1], "pending-package")
+            result = self.close_recovery_current(fixture, *arguments, **options)
+            events.append("terminal-close")
+            return result
+
+        with patch.object(upgrade, "_upgrade_task_operations", return_value=(None, Mock())), \
+                patch.object(upgrade, "prepare_upgrade_history", side_effect=history), \
+                patch.object(upgrade, "_prove_recovered_capacity", side_effect=capacity) as prove, \
+                patch.object(upgrade, "snapshot", return_value="history"), \
+                patch.object(upgrade, "read_json", side_effect=self.published_binding_reader(fixture.state, binding)), \
+                patch.object(upgrade, "assert_state_supervisor_pair", return_value=pair), \
+                patch.object(upgrade, "run_pending_package_upgrade", side_effect=lambda **_k: events.append("pending-package")), \
+                patch.object(upgrade, "run_json", side_effect=migrate) as command, \
+                patch.object(supervisor, "shutdown_terminal_private_supervisor", side_effect=close) as closed:
+            scenario_entry.run_recovery_scenario("n" * 32, self.lifetime, self.responses, self.receipt, fixture)
+        self.assertEqual(events, ["old-package-removed", "public-migrate", "capacity", "pending-package", "terminal-close"])
+        closed.assert_called_once()
+        prove.assert_called_once()
+        command.assert_called_once()
+        self.assertEqual(command.call_args.args[:2], (fixture.upgraded_install / "delegate", self.lifetime.env))
+        self.assertEqual(command.call_args.args[2], ["--root", str(fixture.state), "supervisor", "migrate", "--json"])
+        self.assertEqual(command.call_args.kwargs["timeout"], 120)
+        self.assertTrue(command.call_args.kwargs["capture_response"])
+        self.assertEqual(command.call_args.kwargs["capture_root"], self.lifetime.capture_token)
+        self.assert_captures_outside_base(before, 4)
+
+    def test_recovery_rejected_migration_never_dispatches_capacity_or_stages_later_package(self):
+        fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
+        pair = ready_path(self.lifetime.upgraded_libexec)
+        binding = {"client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
+                   "executable_identity": "installed-path-v1", "endpoint": "unix:/fixture.sock",
+                   "config_path": str(fixture.state / ".supervisor/pueue.yml"), "config_digest": "a" * 64,
+                   "resolved_config_sha256": "b" * 64}
+        valid = 'response = {"supervisor_control": {"state": "migrated", "next_action": "retry_dispatch"}}'
+        cases = (
+            ("malformed", {"supervisor_control": []}, 0),
+            ("blocked", {"supervisor_control": {"state": "blocked", "next_action": "wait_for_legacy_work"}}, 0),
+            ("wrong action", {"supervisor_control": {"state": "migrated", "next_action": "stop_and_report"}}, 0),
+            ("refused", {"supervisor_control": {"state": "unavailable", "next_action": "stop_and_report"}}, 1),
+        )
+        for name, response, exit_code in cases:
+            source = FAKE_DELEGATE.format(python=sys.executable, slow=SLOW_TASK)
+            self.assertEqual(source.count(valid), 1)
+            source = source.replace(valid, "response = " + repr(response)) + "\nsys.exit(%d)\n" % exit_code
+            (fixture.upgraded_install / "delegate").write_text(source)
+            expected_error = "delegate command failed" if exit_code else "upgrade migration did not authorize recovered capacity"
+            collect = Mock()
+            with self.subTest(response=name), \
+                    patch.object(upgrade, "_upgrade_task_operations", return_value=(None, collect)), \
+                    patch.object(upgrade, "prepare_upgrade_history", return_value=(binding, {}, self.root, "history")), \
+                    patch.object(upgrade, "_prove_recovered_capacity") as capacity, \
+                    patch.object(upgrade, "snapshot", return_value="history"), \
+                    patch.object(upgrade, "read_json", side_effect=self.published_binding_reader(fixture.state, binding)), \
+                    patch.object(upgrade, "assert_state_supervisor_pair", return_value=pair), \
+                    patch.object(upgrade, "run_pending_package_upgrade") as pending, \
+                    patch.object(supervisor, "shutdown_terminal_private_supervisor") as close:
+                with self.assertRaisesRegex(RuntimeError, expected_error):
+                    scenario_entry.run_recovery_scenario("n" * 32, self.lifetime, self.responses, self.receipt, fixture)
+                capacity.assert_not_called()
+                pending.assert_not_called()
+                close.assert_not_called()
+                collect.assert_not_called()
+                captured = json.loads((self.responses / "upgrade-supervisor-migrate.json").read_text())
+                self.assertEqual(captured["exit_code"], exit_code)
+
     def test_recovery_pending_package_uses_fixture_base_and_owned_capture_child(self):
         fixture = self.prepare(SUPERVISOR_UPGRADE_RECOVERY_SCENARIO)
         base = ready_path(self.lifetime.base)
         before = self.base_entries()
         pair = ready_path(self.lifetime.upgraded_libexec)
         binding = {"client_executable": str(pair / "pueue"), "daemon_executable": str(pair / "pueued"),
-                   "executable_identity": "installed-path-v1", "endpoint": "unix:/fixture.sock"}
+                   "executable_identity": "installed-path-v1", "endpoint": "unix:/fixture.sock",
+                   "config_path": str(fixture.state / ".supervisor/pueue.yml"), "config_digest": "a" * 64,
+                   "resolved_config_sha256": "b" * 64}
         staged = {}
         cleanup = {"predecessor": object()}
 
+        initial = fixture.state / ".supervisor/supervisor.identity.json"
+        initial.parent.mkdir(parents=True, exist_ok=True)
+        for name in ("transition.lock", "bootstrap.lock"):
+            (initial.parent / name).touch(mode=0o600)
+        initial.write_bytes(canonical_go_json({"schema_version": 1, "binding": binding}))
+
         def stage(*, base, source_root, **_options):
             staged.update(base=base, source_root=source_root)
-            for path in (fixture.state / ".supervisor/migration.json",
-                         fixture.state / "inspection-group/migration.json"):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("accepted migration fixture record\n")
+            root_id = "a" * 32
+            source = {"schema_version": 1, "root_id": root_id, "supervisor": binding,
+                      "name": "delegation-inspection-" + root_id, "parallel_tasks": 1}
+            target = {**binding, "client_executable": str(base / "pending-package/libexec/pueue"),
+                      "daemon_executable": str(base / "pending-package/libexec/pueued"),
+                      "config_digest": "c" * 64, "resolved_config_sha256": "d" * 64,
+                      "endpoint": "unix:" + str(initial.parent / "run/upgrade.sock")}
+            successor = {**source, "supervisor": target}
+            request = fixture.state / "inspection-group/request.json"
+            request.parent.mkdir(parents=True, exist_ok=True)
+            request.write_bytes(canonical_go_json(source))
+            private = fixture.state / ".supervisor/migration.json"
+            private.parent.mkdir(parents=True, exist_ok=True)
+            private.write_text(json.dumps({"legacy": binding}))
+            group = {"schema_version": 1, "root_id": root_id,
+                     "legacy_sha256": hashlib.sha256(canonical_go_json(source)).hexdigest(),
+                     "successor_sha256": hashlib.sha256(canonical_go_json(successor)).hexdigest(),
+                     "successor": successor}
+            (request.parent / "migration.json").write_bytes(canonical_go_json(group))
+            staged["current"] = {**target, "client_executable": binding["client_executable"],
+                                 "daemon_executable": binding["daemon_executable"]}
             return base / "pending-package/libexec", binding, base / "upgrade-legacy-control.yml", "", cleanup
 
         def collect(*_args):
             return None
+
+        def control(_delegate, _environment, _arguments, *, capture_root, receipt, **_options):
+            if receipt == self.responses / "upgrade-supervisor-migrate.json":
+                response = {"supervisor_control": {"state": "migrated", "next_action": "retry_dispatch"}}
+            else:
+                self.assertEqual(receipt, self.responses / "upgrade-reversible-retarget.json")
+                directory = fixture.state / "inspection-group"
+                primary = json.loads((directory / "migration.json").read_text())
+                request = json.loads((directory / "request.json").read_text())
+                successor = {**request, "supervisor": staged["current"]}
+                completion = {"schema_version": 1, "root_id": request["root_id"],
+                              "legacy_sha256": primary["legacy_sha256"],
+                              "successor_sha256": hashlib.sha256(canonical_go_json(successor)).hexdigest(),
+                              "successor": successor}
+                initial.write_bytes(canonical_go_json({"schema_version": 1, "binding": staged["current"]}))
+                (initial.parent / "daemon.identity.json").write_bytes(canonical_go_json({"executable_identity": "installed-path-v1",
+                    "executable": binding["daemon_executable"]}))
+                (initial.parent / "migration.json").unlink()
+                for name in ("migration-complete.json", "migration-" + completion["successor_sha256"][:32] + ".json"):
+                    (directory / name).write_bytes(canonical_go_json(completion))
+                response = {"supervisor_control": {"state": "migrated", "next_action": "retry_dispatch"}}
+            return fake_control(capture_root, response)
 
         with patch.object(upgrade, "_upgrade_task_operations", return_value=(None, collect)), \
                 patch.object(upgrade, "prepare_upgrade_history",
                              return_value=(binding, {}, self.root, "history")), \
                 patch.object(upgrade, "_prove_recovered_capacity"), \
                 patch.object(upgrade, "snapshot", return_value="history"), \
-                patch.object(upgrade, "read_json", return_value={"binding": binding}), \
                 patch.object(upgrade, "assert_state_supervisor_pair", return_value=pair), \
                 patch.object(upgrade, "stage_pending_package", side_effect=stage), \
                 patch.object(upgrade, "interrupt_pending_migration",
                              side_effect=lambda *, capture_root, **_k: (
                                  fake_control(capture_root, {"blocked": True}), "/fixture.sock")[1]), \
-                patch.object(upgrade, "run_json",
-                             side_effect=lambda *_a, capture_root, **_k: fake_control(
-                                 capture_root, {"supervisor_control": {"state": "blocked"}})), \
+                patch.object(upgrade, "run_json", side_effect=control), \
                 patch.object(upgrade, "await_pending_predecessor",
                              side_effect=lambda capture_root, _target: pid_fallback(capture_root)), \
                 patch.object(upgrade, "release_pending_predecessor"), \
-                patch.object(upgrade, "shutdown_predecessor_supervisor",
-                             side_effect=lambda *_a, capture_root, **_k: pid_fallback(capture_root)):
+                patch.object(upgrade, "pueue_snapshot", side_effect=lambda *_a, capture_root, **_k:
+                             fake_control(capture_root, {"tasks": {"7": {"id": 7, "label": "original ended row"}}})), \
+                patch.object(supervisor, "shutdown_terminal_private_supervisor",
+                             side_effect=lambda *a, **k: self.close_recovery_current(fixture, *a, **k)) as close:
             scenario_entry.run_recovery_scenario("n" * 32, self.lifetime, self.responses, self.receipt, fixture)
         self.assertEqual(staged["base"], base)
         self.assertEqual(staged["source_root"], fixture.source_root)
-        directory, _ = self.assert_captures_outside_base(before, 8)
+        close.assert_called_once()
+        directory, _ = self.assert_captures_outside_base(before, 14)
         self.assertNotEqual(directory, staged["base"])
 
     def test_handoff_reads_the_base_client_call_log_and_captures_outside_base(self):

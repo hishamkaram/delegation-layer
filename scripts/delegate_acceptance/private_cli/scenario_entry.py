@@ -5,6 +5,7 @@ import uuid
 
 from scripts.delegate_acceptance.directories.operations import rollback_owned_directories
 from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_NOEXEC_STATE_SCENARIO
+from scripts.delegate_acceptance.private_cli import supervisor
 
 from scripts.delegate_acceptance.private_cli.wrapper_policy import compact_sequence_evidence
 from scripts.delegate_acceptance.private_cli.fixtures import install_pi_fixture
@@ -50,6 +51,13 @@ def run_recovery_scenario(lease_nonce, lifetime, response_directory, run_receipt
         capture_root=lifetime.capture_token,
         fixture_base=lifetime.base,
         source_root=fixture.source_root,
+    )
+    supervisor.shutdown_terminal_private_supervisor(
+        fixture.upgraded_install / "delegate", lifetime.upgraded_libexec / "pueue",
+        lifetime.private_config, lifetime.env,
+        state=fixture.state, task_ids=tuple(lifetime.attempted_task_ids), capture_root=lifetime.capture_token,
+        supervisor_cleanups=lifetime.supervisor_cleanups, disposal=lifetime.disposal,
+        reader=lifetime.closure_reader, closed_roots=lifetime.closed_roots, observe=lifetime.primary_observer,
     )
     run_receipt.stage("supervisor-upgrade-recovery-proved")
 

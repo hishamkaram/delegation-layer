@@ -527,23 +527,28 @@ func (c *Client) authorizePrivateMigrationQueue(ctx context.Context, stateRoot s
 	if err != nil {
 		return fmt.Errorf("%w: inspect previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
-	// The caller already owns the exclusive bootstrap transition for this
-	// predecessor. Preparation must not rebind or acquire another generation.
+	authorizerReached, err := c.authorizePrivateMigrationJobs(ctx, stateRoot, oldSupervisor.Binding(), snapshot.Jobs)
+	if authorizerReached && errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
+		if preserveErr := oldSupervisor.PersistPrivateRecoveryBindingContext(ctx, stateRoot); preserveErr != nil {
+			return errors.Join(ErrPrivateSupervisorMigrationBusy,
+				fmt.Errorf("%w: preserve previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, preserveErr))
+		}
+	}
+	return err
+}
+
+// The live queue remains mutation authority. The offline callback preflight
+// shares only these hooks, without the live wrapper's Busy-alias side effect.
+func (c *Client) authorizePrivateMigrationJobs(ctx context.Context, stateRoot string, binding task.SupervisorRef, jobs []Job) (authorizerReached bool, err error) {
+	if c.options.PrivateMigrationAuthorizer == nil {
+		return false, fmt.Errorf("%w: private migration policy is not configured", ErrMigrationAuthorization)
+	}
 	if c.options.PrivateTerminalEvidencePreparer != nil {
-		if err = c.options.PrivateTerminalEvidencePreparer(ctx, stateRoot, oldSupervisor.Binding(), append([]Job(nil), snapshot.Jobs...)); err != nil {
-			return err
+		if err = c.options.PrivateTerminalEvidencePreparer(ctx, stateRoot, binding, append([]Job(nil), jobs...)); err != nil {
+			return false, err
 		}
 	}
-	if err = c.options.PrivateMigrationAuthorizer(ctx, stateRoot, oldSupervisor.Binding(), append([]Job(nil), snapshot.Jobs...)); err != nil {
-		if errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
-			if preserveErr := oldSupervisor.PersistPrivateRecoveryBindingContext(ctx, stateRoot); preserveErr != nil {
-				return errors.Join(ErrPrivateSupervisorMigrationBusy,
-					fmt.Errorf("%w: preserve previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, preserveErr))
-			}
-		}
-		return err
-	}
-	return nil
+	return true, c.options.PrivateMigrationAuthorizer(ctx, stateRoot, binding, append([]Job(nil), jobs...))
 }
 
 func (c *Client) commitPrivateMigrationCompletion(ctx context.Context, root, base string, pending privateMigrationRecord) error {

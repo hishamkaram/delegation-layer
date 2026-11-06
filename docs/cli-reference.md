@@ -284,7 +284,7 @@ See [required options](../skills/agent-integration/references/command-reference.
 
 The default supervisor is private to the state root. Normal dispatch adopts a
 reachable compatible generation and recovers the saved generation when its
-endpoint is absent.
+endpoint is absent and its recorded installed pair remains available.
 An interrupted historical restart keeps its recorded target. If that target
 cannot be verified or is not ready, recovery and explicit migration refuse
 while preserving the record. This ambiguous legacy state has no automatic

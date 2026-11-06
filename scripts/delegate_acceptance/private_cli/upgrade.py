@@ -27,7 +27,7 @@ from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.finalization import release_pending_predecessor
-from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor, shutdown_predecessor_supervisor
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 from scripts.delegate_acceptance.tasks.publication import snapshot
 import time
 import uuid
@@ -50,11 +50,39 @@ def observe_installed_package(state, libexec):
         return binding
 
 
+def _inspection_source_identity(binding: object) -> dict[str, str]:
+    if not isinstance(binding, dict):
+        raise RuntimeError("inspection migration source binding is missing")
+    identity: dict[str, str] = {}
+    # Match inspection.GroupGeneration's Go struct order, including its newline.
+    for field in ("config_path", "config_digest", "resolved_config_sha256", "endpoint"):
+        value = binding.get(field)
+        if not isinstance(value, str) or not value:
+            raise RuntimeError("inspection migration source has invalid " + field)
+        identity[field] = value
+    return identity
+
+
+def _inspection_migration_directory(state, source):
+    identity = _inspection_source_identity(source)
+    directory = state / "inspection-group"
+    request = read_json(directory / "request.json")
+    require(isinstance(request, dict), "inspection root request is invalid")
+    if _inspection_source_identity(request.get("supervisor")) == identity:
+        return directory
+    generation = hashlib.sha256(canonical_go_json(identity)).hexdigest()[:16]
+    directory = state / ("inspection-group-" + generation)
+    request = read_json(directory / "request.json")
+    require(isinstance(request, dict) and _inspection_source_identity(request.get("supervisor")) == identity,
+            "inspection generation request disagrees with migration source")
+    return directory
+
+
 def run_pending_package_upgrade(
     delegate, client, real_client, state, config, env, receipts,
     supervisor_cleanups, attempted_task_ids, *, capture_root, fixture_base, source_root,
 ):
-    """Refuse a removed accepted successor without rewriting its identity or replaying it."""
+    """Retarget a reversible removed proposal, retaining immutable group history."""
     package_owner = DirectoryOwner()
     failure = None
     try:
@@ -69,29 +97,61 @@ def run_pending_package_upgrade(
             legacy_config=legacy_config, original_config=original_config, package_owner=package_owner,
             pending_libexec=pending_libexec, receipts=receipts, state=state,
         )
-        accepted_paths = (state / ".supervisor" / "migration.json", state / "inspection-group" / "migration.json")
+        private_journal = state / ".supervisor" / "migration.json"
+        private_migration = read_json(private_journal)
+        require(isinstance(private_migration, dict)
+                and _inspection_source_identity(private_migration.get("legacy")) == _inspection_source_identity(active),
+                "accepted migration source disagrees with the active generation")
+        group_directory = _inspection_migration_directory(state, active)
+        root_group = state / "inspection-group"
+        accepted_paths = (group_directory / "request.json", group_directory / "migration.json",
+                          root_group / "request.json", root_group / "migration.json")
         accepted = {path: path.read_bytes() for path in accepted_paths}
-        refused = run_json(
-            delegate, env, ["--root", str(state), "supervisor", "migrate", "--json"], expected=(1,),
-            receipt=receipts / "upgrade-missing-successor.json", capture_root=capture_root, capture_response=True,
+        completed = root_group / "migration-complete.json"
+        completed_history = completed.read_bytes() if completed.exists() else None
+        proposal = read_json(group_directory / "migration.json")
+        rows_before = pueue_snapshot(client, legacy_config, env, capture_root=capture_root).get("tasks")
+        require(isinstance(rows_before, dict), "retarget queue rows are unavailable")
+        retargeted = run_json(
+            delegate, env, ["--root", str(state), "supervisor", "migrate", "--json"], expected=(0,),
+            receipt=receipts / "upgrade-reversible-retarget.json", capture_root=capture_root, capture_response=True,
         )
-        require(refused.get("supervisor_control", {}).get("state") == "blocked",
-                "migration did not refuse its removed accepted successor")
-        require(all(path.read_bytes() == content for path, content in accepted.items()),
-                "missing-successor refusal rewrote accepted migration evidence")
-        require(read_json(state / ".supervisor" / "supervisor.identity.json")["binding"] == active,
-                "missing-successor refusal replaced the active generation")
-        shutdown_predecessor_supervisor(
-            real_client, legacy_cleanup["predecessor"], env, task_ids=tuple(attempted_task_ids),
-            capture_root=capture_root,
-        )
+        control = retargeted.get("supervisor_control")
+        require(isinstance(control, dict) and control.get("state") == "migrated"
+                and control.get("next_action") == "retry_dispatch",
+                "migration did not complete reversible retarget")
+        require(all(path.read_bytes() == content for path, content in accepted.items())
+                and (completed_history is None or completed.read_bytes() == completed_history),
+                "retarget rewrote immutable inspection proposal or root history")
+        current = observe_installed_package(state, client.parent)
+        require(current["client_executable"] == active["client_executable"]
+                and current["daemon_executable"] == active["daemon_executable"],
+                "retarget did not select the active installed pair")
+        require(current["config_path"] == str(config)
+                and current["endpoint"] == "unix:" + str(config.parent / "run" / "upgrade.sock"),
+                "retarget did not publish the upgrade endpoint")
+        completion = read_json(group_directory / "migration-complete.json")
+        require(isinstance(completion, dict) and isinstance(completion.get("successor"), dict),
+                "retarget completion is invalid")
+        successor_sha256 = hashlib.sha256(canonical_go_json(completion["successor"])).hexdigest()
+        require(completion.get("schema_version") == proposal["schema_version"]
+                and completion.get("root_id") == proposal["root_id"]
+                and completion.get("legacy_sha256") == proposal["legacy_sha256"]
+                and completion["successor"].get("supervisor") == current
+                and completion.get("successor_sha256") == successor_sha256
+                and successor_sha256 != proposal["successor_sha256"],
+                "retarget completion does not match the current generation")
+        require(read_json(group_directory / ("migration-" + successor_sha256[:32] + ".json")) == completion,
+                "retarget completion lacks its exact selected proposal")
+        require(pueue_snapshot(client, config, env, capture_root=capture_root).get("tasks") == rows_before,
+                "retarget changed or replayed queue rows")
         await_pending_predecessor(capture_root, legacy_cleanup["predecessor"])
         release_pending_predecessor(legacy_cleanup, supervisor_cleanups)
         return {
-            "successor": "actual-owned-installation", "active_work_refused": True,
-            "removed_successor_package": True, "missing_successor_refused": True,
-            "accepted_migration_preserved": True, "predecessor_shutdown": "verified",
-            "active_binding": active,
+            "successor": "available-current-installation", "active_work_refused": True,
+            "prepared_successor_removed": True, "reversible_retarget_completed": True,
+            "inspection_proposals_preserved": True, "queue_rows_preserved": True,
+            "predecessor_shutdown": "verified", "active_binding": current,
         }
     except BaseException as error:
         failure = error
@@ -129,7 +189,7 @@ def run_supervisor_upgrade_recovery(
     fixture_base,
     source_root,
 ):
-    """Prove warm installed control, package removal, and missing accepted-target refusal."""
+    """Prove warm installed control, package removal, and reversible successor retargeting."""
     evidence = {"historical_state": "original-installed-records", "tasks": []}
     run_receipt.add_details(supervisor_upgrade_recovery=evidence)
 
@@ -184,12 +244,16 @@ def run_supervisor_upgrade_recovery(
 
 
 def require_pending_successor(pending_libexec, state, supervisor):
-    """Validate the accepted real installation; never edit its proposal or executable paths."""
+    """Validate the reversible installed proposal without editing its executable paths."""
     migration = read_json(supervisor / "migration.json")
     require(not any(migration.get(name, False) for name in
                     ("legacy_shutdown_requested", "legacy_shutdown_dispatched", "legacy_stopped")),
             "native migration crossed shutdown before its active-work refusal")
-    group = read_json(state / "inspection-group" / "migration.json")
+    require(migration.get("legacy_pid", 0) == 0 and migration.get("legacy_process_start", "") == "",
+            "native migration captured shutdown provenance before its active-work refusal")
+    group_directory = _inspection_migration_directory(state, migration.get("legacy"))
+    group = read_json(group_directory / "migration.json")
+    require(isinstance(group, dict), "accepted group proposal is invalid")
     require(group["successor_sha256"] == hashlib.sha256(canonical_go_json(group["successor"])).hexdigest(),
             "native migration fixture did not preserve Go's exact proposal identity")
     target = group["successor"]["supervisor"]
@@ -486,6 +550,18 @@ def finish_upgrade_recovery(
     upgraded_libexec,
     waiter_directory,
 ):
+    migrated = run_json(
+        delegate, env, ["--root", str(state), "supervisor", "migrate", "--json"],
+        timeout=120,
+        receipt=receipts / "upgrade-supervisor-migrate.json",
+        phase="supervisor-migration",
+        capture_root=capture_root,
+        capture_response=True,
+    )
+    control = migrated.get("supervisor_control")
+    require(isinstance(control, dict) and control.get("state") == "migrated"
+            and control.get("next_action") == "retry_dispatch",
+            "upgrade migration did not authorize recovered capacity")
     _prove_recovered_capacity(
         brief=brief, collect=collect, delegate=delegate, dispatch=dispatch, evidence=evidence, gate=gate,
         lease_nonce=lease_nonce, run_receipt=run_receipt, state=state, waiter_directory=waiter_directory
@@ -520,13 +596,13 @@ def finish_upgrade_recovery(
         fixture_base=fixture_base,
         source_root=source_root,
     )
-    require(snapshot(historical_directory) == history, "missing-successor refusal mutated historical task evidence")
+    require(snapshot(historical_directory) == history, "reversible retarget mutated historical task evidence")
     evidence.update(
         retired_binding=legacy_binding,
         active_binding=read_json(state / ".supervisor" / "supervisor.identity.json")["binding"],
         preserved_task_snapshot=history,
         recovered_running_tasks=2,
-        supervisor_shutdown="verified",
+        predecessor_shutdown="verified",
     )
 
 
