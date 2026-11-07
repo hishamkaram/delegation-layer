@@ -37,7 +37,7 @@ func (c *Cleanup) authorizeCandidates(ctx context.Context, store *taskdir.Store,
 					decisions[index].settling = c.inspectSettlingInspection(ctx, store, group, candidate.taskID, candidate.job) == nil
 					continue
 				}
-				decisions[index].remove = c.inspectEndedJob(ctx, store, group, candidate.job, removable) == nil
+				decisions[index].remove = c.inspectEndedJob(ctx, store, group, candidate.job, endedTaskPublished, removable) == nil
 			}
 		}()
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
@@ -12,15 +13,22 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+type endedTaskRequirement uint8
+
+const (
+	endedTaskPublished endedTaskRequirement = iota
+	endedTaskClosedForMigration
+)
+
 // InspectEndedJob validates one ended row's native terminal evidence. It never
 // consults custody, so migration keeps its pool-free verdict.
 func (c *Cleanup) InspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job) error {
-	return c.inspectEndedJob(ctx, store, legacy, job, nil)
+	return c.inspectEndedJob(ctx, store, legacy, job, endedTaskClosedForMigration, nil)
 }
 
 // inspectEndedJob also applies validated, when non-nil, to an ended inspection
 // row whose terminal evidence was validated. Other rows never reach it.
-func (c *Cleanup) inspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
+func (c *Cleanup) inspectEndedJob(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, job pueue.Job, requirement endedTaskRequirement, validated func(context.Context, *inspection.Operation) error) (resultErr error) {
 	if store == nil {
 		return fmt.Errorf("%w: inspection state store is unavailable", inspection.ErrGroupMigrationRequired)
 	}
@@ -40,10 +48,10 @@ func (c *Cleanup) inspectEndedJob(ctx context.Context, store *taskdir.Store, leg
 	if inspectionWorker {
 		return c.inspectEndedInspection(ctx, store, legacy, taskID, job, validated)
 	}
-	return inspectLegacyEndedTask(ctx, store, legacy, taskID, job)
+	return inspectLegacyEndedTask(ctx, store, legacy, taskID, job, requirement)
 }
 
-func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job) (resultErr error) {
+func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy inspection.GroupRequestRecord, taskID string, job pueue.Job, requirement endedTaskRequirement) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -65,7 +73,29 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 		return fmt.Errorf("%w: ended Delegate task %s could not be inspected: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 	}
 	if !TaskTerminal(result) {
+		if requirement == endedTaskClosedForMigration && result.Publication == task.PublicationUnknown && !result.SealExists && !result.OutcomeExists {
+			return inspectClosedUnpublishedTask(ctx, td)
+		}
 		return fmt.Errorf("%w: ended Delegate task %s is awaiting publication", inspection.ErrGroupMigrationBusy, taskID)
+	}
+	return nil
+}
+
+// Migration preserves the row and task records. Unlike removal, it may proceed
+// after canonical native closure without manufacturing a publication outcome.
+func inspectClosedUnpublishedTask(ctx context.Context, td *taskdir.TaskDir) error {
+	if _, err := guardian.ReadClosureProof(ctx, td); err != nil {
+		if errors.Is(err, guardian.ErrProofPending) {
+			return fmt.Errorf("%w: ended Delegate task %s awaits lifetime closure", inspection.ErrGroupMigrationBusy, td.TaskID)
+		}
+		return fmt.Errorf("%w: ended Delegate task %s closure could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
+	}
+	released, err := td.RunnerLeaseReleased()
+	if err != nil {
+		return fmt.Errorf("%w: ended Delegate task %s runner lease could not be verified: %w", inspection.ErrGroupMigrationRequired, td.TaskID, err)
+	}
+	if !released {
+		return fmt.Errorf("%w: ended Delegate task %s runner remains owned", inspection.ErrGroupMigrationBusy, td.TaskID)
 	}
 	return nil
 }
