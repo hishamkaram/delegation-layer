@@ -54,7 +54,7 @@ func runStopIdentityLeaseTest(t *testing.T, testCase stopIdentityLeaseTestCase) 
 	// The fixture has emitted the exact matching row, but has not exited its
 	// status command. Neither an add nor another remover may pass this scope.
 	status.wait(t, ctx, call.done)
-	assertStopIdentityLeaseTestExcluded(t, fixture)
+	assertStopIdentityLeaseTestExcluded(t, ctx, fixture)
 	status.release()
 	mutation.wait(t, ctx, call.done)
 
@@ -72,7 +72,7 @@ func runStopIdentityLeaseTest(t *testing.T, testCase stopIdentityLeaseTestCase) 
 		t.Fatal("stop mutation completed before its fixture gate was released")
 	default:
 	}
-	assertStopIdentityLeaseTestExcluded(t, fixture)
+	assertStopIdentityLeaseTestExcluded(t, ctx, fixture)
 	mutation.release()
 	settled := waitPending(t, call.result.Pending)
 	if settled.Err != nil || !settled.Started || settled.ExitCode != 0 {
@@ -266,9 +266,9 @@ func assertStopIdentityLeaseTestPending(t *testing.T, testCase stopIdentityLease
 	}
 }
 
-func assertStopIdentityLeaseTestExcluded(t *testing.T, fixture stopIdentityLeaseTestFixture) {
+func assertStopIdentityLeaseTestExcluded(t *testing.T, ctx context.Context, fixture stopIdentityLeaseTestFixture) {
 	t.Helper()
-	submitContext, cancelSubmit := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	submitContext, cancelSubmit := context.WithTimeout(ctx, 50*time.Millisecond)
 	observation, submitErr := fixture.supervisor.client.Submit(submitContext, fixture.submission, fixture.launch)
 	cancelSubmit()
 	for _, pending := range pendingHandles(submitErr) {
@@ -277,14 +277,14 @@ func assertStopIdentityLeaseTestExcluded(t *testing.T, fixture stopIdentityLease
 	if !errors.Is(submitErr, context.DeadlineExceeded) || observation.Matched || observation.Pending != nil {
 		t.Fatalf("submission entered the public stop's exclusive scope: observation=%+v err=%v", observation, submitErr)
 	}
-	assertStopIdentityLeaseMaintenanceExcluded(t, fixture.supervisor.client)
+	assertStopIdentityLeaseMaintenanceExcluded(t, ctx, fixture.supervisor.client)
 	invocations := readInvocations(t, fixture.supervisor.logPath)
 	if countCommand(invocations, "add") != 0 || stopIdentityLeaseTestCommandCount(invocations, "remove", "8") != 0 {
 		t.Fatalf("a competing mutation started before the stop settled: %v", invocations)
 	}
 }
 
-func assertStopIdentityLeaseMaintenanceExcluded(t *testing.T, client *Client) {
+func assertStopIdentityLeaseMaintenanceExcluded(t *testing.T, ctx context.Context, client *Client) {
 	t.Helper()
 	root, private := privateStateRoot(client.Binding().ConfigPath)
 	if !private {
@@ -307,9 +307,9 @@ func assertStopIdentityLeaseMaintenanceExcluded(t *testing.T, client *Client) {
 		authorizations.Add(1)
 		return options.SuccessfulCleanupAuthorizer(ctx, root, binding, jobs)
 	}
-	cleanupContext, cancelCleanup := context.WithTimeout(t.Context(), 50*time.Millisecond)
-	defer cancelCleanup()
-	_, cleanupErr := startPrivateMaintenancePassContext(t, cleanupContext, client, func() {}).result(t)
+	// Maintenance skips a busy generation without waiting. Use the stop
+	// watchdog so scheduling before that decision is not a latency assertion.
+	_, cleanupErr := startPrivateMaintenancePassContext(t, ctx, client, func() {}).result(t)
 	for _, pending := range pendingHandles(cleanupErr) {
 		waitPending(t, pending)
 	}

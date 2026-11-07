@@ -515,9 +515,18 @@ func prepareHistoricalSupervisorExecutables(t *testing.T, fixture *historicalSup
 }
 
 func newHistoricalSupervisorOptions() pueue.Options {
+	// When the race test installation serves as the one-shot control owner,
+	// retain diagnostics without its default exit delay.
+	raceOptions := os.Getenv("GORACE")
+	if !strings.Contains(raceOptions, "atexit_sleep_ms=") {
+		if raceOptions != "" {
+			raceOptions += " "
+		}
+		raceOptions += "atexit_sleep_ms=0"
+	}
 	return pueue.Options{
 		ObservationTimeout: pueue.DefaultObservationTimeout,
-		Environment:        pueue.DefaultEnvironment(),
+		Environment:        append(pueue.DefaultEnvironment(), "GORACE="+raceOptions),
 		SuccessfulCleanupAuthorizer: func(context.Context, string, task.SupervisorRef, []pueue.Job) (pueue.PrivateQueueCleanupPlan, error) {
 			return pueue.PrivateQueueCleanupPlan{}, nil
 		},
@@ -527,6 +536,33 @@ func newHistoricalSupervisorOptions() pueue.Options {
 			}
 			return nil
 		},
+	}
+}
+
+func TestHistoricalSupervisorFixturePreservesRaceDiagnostics(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"default", "", "atexit_sleep_ms=0"},
+		{"diagnostics", "halt_on_error=1 exitcode=73", "halt_on_error=1 exitcode=73 atexit_sleep_ms=0"},
+		{"explicit delay", "atexit_sleep_ms=1500", "atexit_sleep_ms=1500"},
+		{"explicit zero", "exitcode=73:atexit_sleep_ms=0", "exitcode=73:atexit_sleep_ms=0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GORACE", tc.input)
+			var got []string
+			for _, entry := range newHistoricalSupervisorOptions().Environment {
+				if value, found := strings.CutPrefix(entry, "GORACE="); found {
+					got = append(got, value)
+				}
+			}
+			if !slices.Equal(got, []string{tc.want}) {
+				t.Fatalf("fixture race options = %q, want exactly %q", got, tc.want)
+			}
+		})
 	}
 }
 

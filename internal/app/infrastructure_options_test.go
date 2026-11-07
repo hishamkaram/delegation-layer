@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -18,8 +19,14 @@ func TestInfrastructureSupervisorOptionsUsesAcceptedSnapshots(t *testing.T) {
 	artifacts := infrastructure.Artifacts{Runner: "/accepted/runner"}
 	control := []string{"PATH=/control/bin", "CONTROL_BYTES=\xff"}
 	maintenance := []string{"PATH=/maintenance/bin", "PROVIDER_KEY=accepted-provider", "PROVIDER_BYTES=\xfe"}
-	launch := infrastructure.LaunchContext{ControlEnvironment: control, MaintenanceEnvironment: maintenance}
+	launch := infrastructure.LaunchContext{
+		ControlEnvironment: control, MaintenanceEnvironment: maintenance,
+		SupervisorExecutable: filepath.Join(t.TempDir(), "selected", "pueue"),
+	}
 	options := infrastructureSupervisorOptions(artifacts, launch)
+	if options.RuntimeClientExecutable != launch.SupervisorExecutable {
+		t.Fatalf("runtime client = %q, want accepted %q", options.RuntimeClientExecutable, launch.SupervisorExecutable)
+	}
 	if options.ControlOwnerExecutable != artifacts.Runner {
 		t.Fatalf("control owner = %q", options.ControlOwnerExecutable)
 	}
@@ -49,8 +56,8 @@ func TestInfrastructureSupervisorOptionsPreservesExplicitEmpty(t *testing.T) {
 	if options.Environment == nil || len(options.Environment) != 0 || options.PrivateMaintenanceEnvironment == nil || len(options.PrivateMaintenanceEnvironment) != 0 {
 		t.Fatal("explicit empty environments replaced")
 	}
-	if options.ControlOwnerExecutable != "" || options.PrivateMaintenanceLauncher != nil {
-		t.Fatal("empty accepted runner triggered ambient selection")
+	if options.ControlOwnerExecutable != "" || options.RuntimeClientExecutable != "" || options.PrivateMaintenanceLauncher != nil {
+		t.Fatal("empty accepted executable triggered ambient selection")
 	}
 }
 

@@ -8,10 +8,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -62,6 +64,7 @@ func newInfrastructurePreparationFixture(t *testing.T) infrastructurePreparation
 		ControlEnvironment: []string{"CONTROL=epoch-default"}, MaintenanceEnvironment: []string{"MAINTENANCE=epoch-default"}, SupervisorExecutable: filepath.Join(store.Root, "pueue"),
 	}
 	selected := defaulted.Clone()
+	selected.SupervisorExecutable = filepath.Join(store.Root, "request-selected", "pueue")
 	selected.ControlEnvironment = []string{"CONTROL=request-selected"}
 	selected.MaintenanceEnvironment = []string{"MAINTENANCE=request-selected"}
 	// These paths test composition only. No executable/native authority is
@@ -100,6 +103,18 @@ func TestInfrastructurePreparationOptionsUseOnlySelectedContext(t *testing.T) {
 	fixture.selected.ControlEnvironment[0], fixture.selected.MaintenanceEnvironment[0] = "MUTATED=1", "MUTATED=2"
 	if options.Environment[0] != "CONTROL=request-selected" || options.PrivateMaintenanceEnvironment[0] != "MAINTENANCE=request-selected" {
 		t.Fatal("options retained caller-owned environment slices")
+	}
+}
+
+func TestInfrastructurePreparationOptionsUseOnlySelectedClient(t *testing.T) {
+	fixture := newInfrastructurePreparationFixture(t)
+	guard, wait := inertInfrastructurePreparationPorts()
+	options, _, err := infrastructurePreparationOptions(fixture.origin, fixture.artifacts, fixture.selected, guard, wait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.RuntimeClientExecutable != fixture.selected.SupervisorExecutable || options.RuntimeClientExecutable == fixture.defaulted.SupervisorExecutable {
+		t.Fatal("options lost the request's accepted installed client")
 	}
 }
 
@@ -167,6 +182,66 @@ printf '%s\n' 'pueue 4.0.4'
 	assertPairFaultWitness(t, base, before)
 	if string(readSupervisorProbeTestFile(t, configPath)) != configBefore || observation.Disposition() != (infrastructure.Disposition{}) {
 		t.Fatal("failed helper validation changed config or claimed readiness/Start")
+	}
+}
+
+func TestInfrastructurePreparationHistoricalBindingUsesAcceptedInstalledClient(t *testing.T) {
+	store, _, original, owner := newOwnedSupervisorProbeTestFixture(t)
+	wantRuntime := original.RuntimeBinding()
+	legacy := original.Binding()
+	legacyDirectory := filepath.Join(store.Root, ".supervisor", "pueue-pair-"+strings.Repeat("a", 64))
+	legacy.ClientExecutable = filepath.Join(legacyDirectory, "pueue")
+	legacy.DaemonExecutable = filepath.Join(legacyDirectory, "pueued")
+	legacy.ExecutableIdentity = ""
+	// Historical reference data only: neither old program is created or hashed.
+	legacy.ClientSHA256, legacy.DaemonSHA256 = strings.Repeat("b", 64), strings.Repeat("c", 64)
+	if err := task.ValidateFreshSupervisorRef(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if !pueue.IsLegacyStateSupervisorClient(store.Root, legacy) {
+		t.Fatal("historical copied-client precondition not established")
+	}
+	origin, err := infrastructure.NewOrigin(store.Root, store.RootID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := infrastructure.LaunchContext{
+		Protocol: infrastructure.RecordProtocolVersion, Root: store.Root, RootID: store.RootID, OS: runtime.GOOS,
+		SupervisorExecutable: wantRuntime.ClientExecutable,
+		ControlEnvironment:   pueue.DefaultEnvironment(), MaintenanceEnvironment: []string{},
+	}
+	options, observation, err := infrastructurePreparationOptions(origin, infrastructure.Artifacts{Runner: canonicalAppTestExecutable(t)}, selected, owner, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var acceptedClientObserved atomic.Bool
+	options.Observer = func(event pueue.CommandEvent) {
+		if len(event.Argv) > 0 && event.Argv[0] == selected.SupervisorExecutable {
+			acceptedClientObserved.Store(true)
+		}
+	}
+	before := capturePairFaultWitness(t, filepath.Dir(legacy.ConfigPath))
+	configBefore := string(readSupervisorProbeTestFile(t, legacy.ConfigPath))
+	client, err := pueue.BindSaved(t.Context(), legacy, options)
+	owner.ownClient(client, err)
+	if err != nil {
+		t.Fatalf("accepted installed client could not recover historical binding: %v", err)
+	}
+	if err = client.Ready(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if client.Binding() != legacy || client.RuntimeBinding() != wantRuntime {
+		t.Fatal("recovery changed historical authority or lost the accepted installed pair")
+	}
+	if !acceptedClientObserved.Load() || observation.Disposition() != (infrastructure.Disposition{}) {
+		t.Fatal("recovery skipped installed transport or claimed a daemon Start")
+	}
+	if _, err = os.Stat(legacyDirectory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("historical executable directory was created: %v", err)
+	}
+	assertPairFaultWitness(t, filepath.Dir(legacy.ConfigPath), before)
+	if string(readSupervisorProbeTestFile(t, legacy.ConfigPath)) != configBefore {
+		t.Fatal("read-only recovery changed saved configuration")
 	}
 }
 

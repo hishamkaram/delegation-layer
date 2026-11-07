@@ -128,6 +128,9 @@ type Options struct {
 	// queue identity reader reached its wait on an active writer intent. It
 	// only reports that decision and must not block.
 	queueWriterWaitObserver func()
+	// pendingCloseObserver is a deterministic test seam reporting resident
+	// close entry with a retained command. It must not block ownership.
+	pendingCloseObserver func()
 }
 
 // PrivateQueueCleanupPlan separates removal authority from a bounded retry
