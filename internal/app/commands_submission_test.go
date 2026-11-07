@@ -378,7 +378,7 @@ esac
 	writeAppTestFile(t, configPath, config)
 	writeAppTestFile(t, statusPath, []byte(`{"tasks":{},"groups":{}}`))
 	options := pueue.Options{
-		Environment:        append(pueue.DefaultEnvironment(), "FAKE_COMMAND_LOG="+commandLog, "FAKE_STATUS_PATH="+statusPath),
+		Environment:        append(appTestControlEnvironment(os.Environ()), "FAKE_COMMAND_LOG="+commandLog, "FAKE_STATUS_PATH="+statusPath),
 		ObservationTimeout: pueue.DefaultObservationTimeout,
 	}
 	supervisor, err := pueue.Bind(t.Context(), executable, configPath, options)

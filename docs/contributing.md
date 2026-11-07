@@ -12,6 +12,8 @@ not install Go. `make tools-go` installs only the core Go tools for the platform
 checks. Then run `make build`, which requires both that compiler and the
 pinned tools checked by `make tool-versions`. Keep the native `bin/delegate`
 and `bin/delegate-run` from the same build colocated.
+If `GOROOT` is set explicitly, it must match the selected compiler; a matching
+`go version` alone does not prove the assembler and other tools use that release.
 
 Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
 relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
@@ -87,6 +89,29 @@ or a concrete concern. A setup failure is blocked, not a passing test. Reviewers
 can reuse trustworthy unchanged results. Final independent review covers the
 integrated change; do not repeat it separately for every worker. Unrelated
 findings are reported separately, not automatically added to the ticket.
+
+### Focused app and fixture checks
+
+Select the behavior being edited before running the full gate. For example:
+
+```sh
+go test -race -count=1 -timeout=30m ./internal/app -run '^TestAppControlFixturePreservesRaceDiagnostics$'
+go test -race -count=1 -timeout=30m ./internal/supervisor/testsupport -run '^TestWriteExecutable'
+go test -race -count=1 -timeout=30m ./internal/app -run '^TestContinuationSuccessorsReceiveCurrentOutputPredicate$/^claude_read-only_native-permissions-v3$/^continue_--task$'
+```
+
+The first command checks pure captured-environment decisions. The second checks
+executable-fixture ownership, including a native Linux write/fork regression.
+The third exercises one real-store continuation case;
+it does not cover the other providers, permission modes or continuation entrypoint.
+Confirm the selected cases actually ran. Pure decision tests should use isolated
+inputs; persistence and process-lifecycle checks retain their real consumers.
+
+Add `-json` to collect timings while preserving the command's exit status. Separate
+build/setup time from test execution, and account for overlapping parallel tests.
+Compare performance with matching toolchain, cache, race options and concurrency.
+Changes to shared fixtures require their consumers as well as the fixture tests;
+these focused commands do not replace the required final gates above.
 
 ### Static analysis
 
