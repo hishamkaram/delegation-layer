@@ -225,6 +225,7 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         self.case = SimpleNamespace(configuration={"delegate": str(self.fixture.base / "delegate")},
                                     lifetime=self.lifetime, command=Mock(return_value=self.reply),
                                     native=Mock(return_value={"present": False, "identity_matches": False}),
+                                    cleanup_task_ids=lambda _state, task_ids: tuple(task_ids),
                                     read_closure=Mock(return_value={"root_id": ROOT, "tasks": {}}))
         self.disposal = DisposalLeases()
         self.addCleanup(self.disposal.release_all)
@@ -274,6 +275,7 @@ class NestedOwnerCleanupTests(unittest.TestCase):
         meta = _read_control_record(directory / "meta.json", "task metadata")
         write_json(self.config.parent / "supervisor.identity.json", {"binding": meta["supervisor_config"]})
         case = NestedCase.__new__(NestedCase)
+        case.creator_fenced = False
         case.configuration = {**self.case.configuration, "observer_environment": {}}
         case.lifetime, case.command, case.native = self.lifetime, self.case.command, self.case.native
         case.cleanup_deadline = time.monotonic() + 2

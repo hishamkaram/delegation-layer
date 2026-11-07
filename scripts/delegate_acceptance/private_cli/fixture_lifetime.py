@@ -50,6 +50,9 @@ class FixtureLifetime:
     old_layout_owned: tuple[OwnedDirectory, ...] = ()
     base: Path | None = None
     base_token: OwnedDirectory | None = None
+    # DirectoryOwner retains authority; nested cleanup borrows this original
+    # state incarnation when observing a completed bootstrap refusal.
+    state_token: OwnedDirectory | None = None
     # Private control capture files live in this owned child, never directly
     # in base: base is an ancestor of the provider execution views.
     capture_token: OwnedDirectory | None = None

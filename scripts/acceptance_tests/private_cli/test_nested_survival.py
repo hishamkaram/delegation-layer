@@ -6,6 +6,7 @@ import threading
 import time
 import fcntl
 import os
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch, Mock
@@ -379,3 +380,250 @@ class NestedAdmissionReceiptTests(unittest.TestCase):
         observe.assert_called_once()
         self.assertNotIn("failed_admission", self.case.evidence)
         self.assertEqual(self.receipt.counts["dispatch_completed_count"], 1)
+
+
+class NestedBootstrapCleanupTests(unittest.TestCase):
+    """Bootstrap refusal wiring; the native port separately proves store semantics."""
+
+    def setUp(self):
+        self.parent = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.owner = DirectoryOwner()
+        self.transferred = None
+        self.addCleanup(self.close_owned)
+        self.base = self.owner.create("bootstrap fixture", self.parent / ".dl-bootstrap", self.parent)
+        self.state = self.owner.create("primary state", self.base.directory / "state", self.base.directory)
+        captures = self.owner.create("captures", self.base.directory / "captures", self.base.directory)
+        workspace = self.owner.create("workspace", self.base.directory / "workspace", self.base.directory)
+        self.receipts = self.parent / "receipts"
+        self.receipts.mkdir(mode=0o700)
+        lifetime = FixtureLifetime(ownership=self.owner, base=self.base.directory, base_token=self.base,
+                                   state_token=self.state, capture_token=captures,
+                                   private_config=self.state.directory / ".supervisor" / "pueue.yml",
+                                   old_install=self.base.directory / "installed",
+                                   old_libexec=self.base.directory / "libexec")
+        self.receipt = AcceptanceReceipt(self.receipts / "receipt.json", 3, 1, {})
+        self.args = SimpleNamespace(nested_topology="other-warm", expected_backend="process-group",
+                                    native_fixture=Path(sys.executable))
+        fixture = SimpleNamespace(state=self.state.directory, workspace=workspace.directory,
+                                  waiter_directory=self.base.directory / "waiters", lease_nonce="fixture-nonce")
+        self.case = NestedCase(self.args, lifetime, fixture, self.receipts, self.receipt)
+        self.task_id = "c" * 32
+        self.calls = []
+        self.failure = {"code": "resource_pressure", "stage": "check-resources",
+                        "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"}
+        self.native_observations = []
+        self.native = self.enterContext(patch(
+            "scripts.delegate_acceptance.private_cli.nested_observation.run_captured_text_command",
+            side_effect=self.observe_entry))
+        self.enterContext(patch("scripts.delegate_acceptance.private_cli.nested_case.NestedCase.command",
+                                side_effect=self.command))
+
+    def close_owned(self):
+        entries = self.owner.transfer() if self.transferred is None else self.transferred
+        rollback_owned_directories(entry for entry in entries if not entry.consumed)
+
+    def root_id(self, state):
+        return "a" * 32 if state == self.case.a else "b" * 32
+
+    def initialize(self, state):
+        if not (state / "root.json").exists():
+            write_json(state / "root.json", {"schema_version": 1, "root_id": self.root_id(state),
+                                             "created_at": "2026-11-07T00:00:00Z"})
+
+    def command(self, state, arguments, name, **_options):
+        self.calls.append((state, arguments, name))
+        if arguments[0] == "dispatch":
+            self.initialize(state)
+            return {"schema_version": 1, "command": "dispatch", "root_id": self.root_id(state),
+                    "task_id": self.task_id, "task_record": "unknown", "admission": "unknown",
+                    "failure": self.failure}
+        self.assertEqual(arguments, ["supervisor", "stop-owner"])
+        return {"root_id": self.root_id(state), "supervisor_owner": {"action": "stop-owner",
+                                                                    "state": "not_initialized"}}
+
+    def observe_entry(self, _command, environment, _timeout, *, deadline, capture_root):
+        self.assertIs(capture_root, self.case.lifetime.capture_token)
+        self.assertLessEqual(deadline, self.case.cleanup_deadline)
+        state = Path(environment["DELEGATE_NESTED_FIXTURE_ROOT"])
+        token = self.state if state == self.case.a else self.case.b_token
+        assert token is not None, "native observation must borrow the original root token"
+        # The fake reflects concrete fixture entry changes; native Go tests
+        # and the bounded real-port proof own safe rooted-read semantics.
+        proof = {"root_id": self.root_id(state), "task_id": self.task_id,
+                 "entry_exists": os.path.lexists(state / "tasks" / self.task_id),
+                 "root_device": token.identity[0], "root_inode": token.identity[1]}
+        self.native_observations.append(proof)
+        return SimpleNamespace(returncode=0, stdout="NESTED_TASK_OBSERVATION\t" + json.dumps(proof) + "\n", stderr="")
+
+    def refuse(self, name="warm-a"):
+        state = self.case.a if name == "warm-a" else self.case.b
+        if name == "warm-b":
+            self.initialize(self.case.a)
+        with self.assertRaisesRegex(AcceptanceFailure, "never redispatch") as rejected:
+            self.case.dispatch(state, self.task_id, self.parent / "brief.md", "2m", name)
+        return state, rejected.exception
+
+    def assert_refusal_cleanup(self, name):
+        from scripts.delegate_acceptance.private_cli.finalization import finalize_fixture
+        state, primary = self.refuse(name)
+        raw = self.case.lifetime.attempted_task_ids if state == self.case.a else self.case.b_ids
+        attempted = list(raw)
+        original = json.loads(json.dumps(self.case.evidence["failed_admission"]))
+        self.receipt.add_details(failure_phase="nested_setup")
+        with patch("scripts.delegate_acceptance.private_cli.nested_cleanup.shutdown_custody_roots",
+                   side_effect=lambda observed, _env: (observed,)), \
+                patch("scripts.delegate_acceptance.private_cli.supervisor.shutdown_custody_roots",
+                      side_effect=lambda observed, _env: (observed,)):
+            finalize_fixture(SimpleNamespace(scenario="nested-survival", pueue=Path(sys.executable)), primary, self.case.lifetime,
+                             self.receipt, False)
+        published = json.loads(self.receipt.output.read_text())
+        self.assertEqual(published["result"], "FAIL")
+        self.assertEqual(published["failure"], {"code": "nested-setup-failed", "exception_type": "AcceptanceFailure",
+                                                 "phase": "nested_setup"})
+        self.assertEqual(published["nested_survival"]["failed_admission"], original)
+        self.assertEqual(original["task_record"], "unknown")
+        self.assertEqual(original["failure"], self.failure)
+        self.assertEqual(published["nested_survival"]["cleanup"]["status"], "canonical-closure-proven")
+        self.assertEqual(published["cleanup"]["status"], "retained")
+        self.assertEqual(raw, attempted)
+        self.assertTrue(self.base.directory.is_dir())
+        self.assertEqual(sum(arguments[0] == "dispatch" for _, arguments, _ in self.calls), 1)
+        self.assertTrue(all(arguments[0] != "cancel" for _, arguments, _ in self.calls))
+        self.assertIn(state, self.case.lifetime.closed_roots)
+        self.assertGreaterEqual(len(self.native_observations), 3)
+
+    def test_warm_a_refusal_closes_without_reclassifying_primary_failure_or_creating_b(self):
+        self.assert_refusal_cleanup("warm-a")
+        self.assertFalse(self.case.b.exists())
+
+    def test_warm_b_refusal_uses_its_immediately_precreated_original_token(self):
+        self.assertFalse(self.case.b.exists())
+        self.assert_refusal_cleanup("warm-b")
+        token = self.case.b_token
+        assert token is not None, "warm B must retain its original root token"
+        token.assert_live()
+        self.assertEqual(token.directory, self.case.b)
+
+    def test_cold_root_remains_absent_after_primary_bootstrap_refusal(self):
+        self.base = self.owner.create("cold fixture", self.parent / ".dl-cold", self.parent)
+        self.state = self.owner.create("cold primary state", self.base.directory / "state", self.base.directory)
+        captures = self.owner.create("cold captures", self.base.directory / "captures", self.base.directory)
+        lifetime = FixtureLifetime(ownership=self.owner, base=self.base.directory, base_token=self.base,
+                                   state_token=self.state, capture_token=captures,
+                                   private_config=self.state.directory / ".supervisor" / "pueue.yml",
+                                   old_install=self.base.directory / "installed",
+                                   old_libexec=self.base.directory / "libexec")
+        args = SimpleNamespace(nested_topology="other-cold", expected_backend="process-group",
+                               native_fixture=Path(sys.executable))
+        fixture = SimpleNamespace(state=self.state.directory, workspace=self.parent,
+                                  waiter_directory=self.base.directory / "waiters", lease_nonce="cold-nonce")
+        self.case = NestedCase(args, lifetime, fixture, self.receipts, self.receipt)
+        self.assertFalse(self.case.b.exists())
+        self.assert_refusal_cleanup("warm-a")
+        self.assertFalse(self.case.b.exists())
+        self.assertIsNone(self.case.b_token)
+
+    def test_already_filtered_ids_reprove_raw_candidate_and_reappearance_retains(self):
+        state, _primary = self.refuse()
+        self.case.cleanup_deadline = time.monotonic() + 3
+        fence_creator(self.case, self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.assertEqual(self.case.cleanup_task_ids(state, [self.task_id]), ())
+        self.assertEqual(self.case.read_closure(state, ())["tasks"], {})
+        (state / "tasks").mkdir(mode=0o700)
+        (state / "tasks" / self.task_id).mkdir(mode=0o700)
+        with self.assertRaisesRegex(AcceptanceFailure, "entry is present"):
+            self.case.read_closure(state, ())
+        self.assertEqual(len(self.native_observations), 3)
+        self.assertTrue(self.base.directory.is_dir())
+
+    def test_finalizer_raw_attempts_are_filtered_at_closure_reader(self):
+        state, _primary = self.refuse()
+        self.case.cleanup_deadline = time.monotonic() + 3
+        fence_creator(self.case, self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.assertEqual(self.case.read_closure(state, self.case.lifetime.attempted_task_ids)["tasks"], {})
+        self.assertEqual(self.case.lifetime.attempted_task_ids, [self.task_id])
+        self.assertEqual(len(self.native_observations), 1)
+
+    def test_root_removal_rechecks_raw_refused_id_after_filtered_read(self):
+        from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
+        state, _primary = self.refuse()
+        self.case.cleanup_deadline = time.monotonic() + 3
+        fence_creator(self.case, self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.assertEqual(self.case.cleanup_task_ids(state, [self.task_id]), ())
+        self.assertEqual(self.case.read_closure(state, ())["tasks"], {})
+        (state / "tasks").mkdir(mode=0o700)
+        (state / "tasks" / self.task_id).mkdir(mode=0o700)
+        self.transferred = self.owner.transfer()
+        with DisposalLeases() as disposal, self.assertRaisesRegex(AcceptanceFailure, "entry is present"):
+            remove_private_acceptance_root(self.base, self.transferred,
+                                           managed_state_roots=((state, ()),), disposal=disposal,
+                                           deadline=self.case.cleanup_deadline, reader=self.case.read_closure)
+        self.assertTrue(self.base.directory.is_dir())
+        self.assertEqual(self.case.lifetime.attempted_task_ids, [self.task_id])
+        self.assertTrue(self.native_observations[-1]["entry_exists"])
+
+    def test_expired_read_and_native_fault_or_changed_pin_cannot_exclude_attempt(self):
+        state, _primary = self.refuse()
+        self.case.creator_fenced = True
+        self.case.cleanup_deadline = time.monotonic() - 1
+        with self.assertRaisesRegex(AcceptanceFailure, "deadline expired"):
+            self.case.cleanup_task_ids(state, [self.task_id])
+        self.native.assert_not_called()
+        self.case.cleanup_deadline = time.monotonic() + 3
+        for fault in (SimpleNamespace(returncode=1, stdout="", stderr="read/close fault"),
+                      SimpleNamespace(returncode=0, stdout="NESTED_TASK_OBSERVATION\t" + json.dumps({
+                          "root_id": self.root_id(state), "task_id": self.task_id, "entry_exists": False,
+                          "root_device": self.state.identity[0], "root_inode": self.state.identity[1] + 1}), stderr="")):
+            with self.subTest(fault=fault), patch(
+                    "scripts.delegate_acceptance.private_cli.nested_observation.run_captured_text_command",
+                    return_value=fault), self.assertRaises(AcceptanceFailure):
+                self.case.cleanup_task_ids(state, [self.task_id])
+        self.assertEqual(self.case.lifetime.attempted_task_ids, [self.task_id])
+
+    def test_replaced_original_root_is_rejected_before_native_observation(self):
+        state, _primary = self.refuse()
+        self.case.creator_fenced = True
+        self.case.cleanup_deadline = time.monotonic() + 3
+        retained = state.with_name("original-state")
+        state.rename(retained)
+        state.mkdir(mode=0o700)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "replaced"):
+                self.case.cleanup_task_ids(state, [self.task_id])
+            self.native.assert_not_called()
+        finally:
+            state.rmdir()
+            retained.rename(state)
+
+    def test_unfenced_leader_attempted_or_exception_path_remains_strict(self):
+        from scripts.delegate_acceptance.private_cli.nested_cleanup import cancel_owned_setup
+        state, _primary = self.refuse()
+        self.case.cleanup_deadline = time.monotonic() + 3
+        with self.assertRaisesRegex(AcceptanceFailure, "owned setup task is not a regular record"):
+            cancel_owned_setup(self.case, state, [self.task_id], self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.case.lifetime.attempted_task_ids.append(self.case.configuration["leader"])
+        with self.assertRaisesRegex(AcceptanceFailure, "owned setup task is not a regular record"):
+            cancel_owned_setup(self.case, state, [self.task_id], self.case.cleanup_deadline)
+        self.case.lifetime.attempted_task_ids.pop()
+        del self.case.evidence["failed_admission"]
+        self.case.lifetime.attempted_task_ids.clear()
+        with patch.object(NestedCase, "command", side_effect=TimeoutError("bootstrap control unresolved")), \
+                self.assertRaisesRegex(TimeoutError, "control unresolved"):
+            self.case.dispatch(state, self.task_id, self.parent / "brief.md", "2m", "warm-a")
+        with self.assertRaisesRegex(AcceptanceFailure, "owned setup task is not a regular record"):
+            cancel_owned_setup(self.case, state, [self.task_id], self.case.cleanup_deadline)
+        self.native.assert_not_called()
+
+    def test_created_setup_missing_its_record_never_uses_absence_exception(self):
+        from scripts.delegate_acceptance.private_cli.nested_cleanup import cancel_owned_setup
+        state, _primary = self.refuse()
+        self.case.creator_fenced = True
+        self.case.cleanup_deadline = time.monotonic() + 3
+        self.case.evidence["failed_admission"]["task_record"] = "created"
+        with self.assertRaisesRegex(AcceptanceFailure, "owned setup task is not a regular record"):
+            cancel_owned_setup(self.case, state, [self.task_id], self.case.cleanup_deadline)
+        self.native.assert_not_called()

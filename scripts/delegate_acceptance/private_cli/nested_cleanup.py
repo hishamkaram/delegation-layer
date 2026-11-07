@@ -99,6 +99,7 @@ def cleanup_case(case, deadline, disposal):
         case.evidence["cleanup"]["status"] = "no-task-or-supervisor-created"
         return
     fence_creator(case, deadline)
+    case.creator_fenced = True
     reconcile_children(case)
     # StopTask commits permanent refusal before opening/recovering B. Queued
     # work is removed while paused; no cleanup resume is assumed necessary.
@@ -144,7 +145,7 @@ def forget_uninitialized_roots(case):
 
 def cancel_owned_setup(case, state, task_ids, deadline):
     actors = {case.configuration[role] for role in ("leader", "w1", "w2")}
-    for task_id in task_ids:
+    for task_id in case.cleanup_task_ids(state, task_ids):
         if task_id in actors:
             continue
         task = _read_control_record(state / "tasks" / task_id / "task.json", "owned setup task")
@@ -156,6 +157,7 @@ def cancel_owned_setup(case, state, task_ids, deadline):
 def close_root(case, state, task_ids, deadline, disposal):
     if state in case.lifetime.closed_roots:
         return
+    task_ids = case.cleanup_task_ids(state, task_ids)
     require(disposal is not None, "nested root closure requires the finalizer disposal owner")
     config = state / ".supervisor" / "pueue.yml"
     selected = bound_private_client(state, case.lifetime.env) if path_present(config) else None

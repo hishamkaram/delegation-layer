@@ -14,6 +14,7 @@ from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.nested_observation import (
     await_record, observe_native, await_actor_closure, bound_private_client, prove_task_absence,
     compare_native_tokens, fixture_launch,
+    observe_bootstrap_task_entry,
 )
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
@@ -31,6 +32,8 @@ class NestedCase:
         self.a = fixture.state
         self.b = self.a if args.nested_topology == "shared-warm" else lifetime.base / "nested-state"
         self.b_ids = lifetime.attempted_task_ids if self.b == self.a else []
+        self.b_token = None
+        self.creator_fenced = False
         self.configuration = {
             "controls": str(self.controls.directory), "capture": str(captures.directory),
             "capture_identity": list(captures.identity), "delegate": str(lifetime.old_install / "delegate"),
@@ -74,6 +77,10 @@ class NestedCase:
                         phase="nested-external-observer", capture_root=self.lifetime.capture_token)
 
     def dispatch(self, state, task_id, brief, budget, name):
+        if name == "warm-b":
+            require(self.args.nested_topology == "other-warm" and state == self.b and self.b != self.a
+                    and self.b_token is None, "warm B bootstrap root was already prepared or changed")
+            self.b_token = self.lifetime.ownership.create("warm B state", self.b, self.lifetime.base)
         ids = self.lifetime.attempted_task_ids if state == self.a else self.b_ids
         ids.append(task_id)
         response = self.command(state, ["dispatch", "--provider", "pi:json", "--permission", "read-only",
@@ -171,7 +178,37 @@ class NestedCase:
                                    deadline=self.cleanup_deadline, closed=self.lifetime.closed_roots.get(state))
 
     def read_closure(self, state, task_ids):
-        return validate_managed_lifetime_closure(state, task_ids, prove_unlaunched=self.prove_unlaunched)
+        return validate_managed_lifetime_closure(state, self.cleanup_task_ids(state, task_ids),
+                                                 prove_unlaunched=self.prove_unlaunched)
+
+    def cleanup_task_ids(self, state, task_ids):
+        """Derive targets afresh; attempted IDs and prior observations are never absence authority."""
+        requested = tuple(task_ids)
+        if not self.creator_fenced or self.configuration["leader"] in self.lifetime.attempted_task_ids:
+            return requested
+        failed = self.evidence.get("failed_admission")
+        if not isinstance(failed, dict) or failed.get("task_record") == "created":
+            return requested
+        name = failed.get("name")
+        if name == "warm-a" and state == self.a:
+            attempted, token = self.lifetime.attempted_task_ids, self.lifetime.state_token
+        elif name == "warm-b" and state == self.b and self.b != self.a:
+            attempted, token = self.b_ids, self.b_token
+        else:
+            return requested
+        candidate = failed.get("requested_task_id")
+        if not attempted or candidate != attempted[-1] or failed.get("task_id") != candidate:
+            return requested
+        # failed_admission exists only after the synchronous bootstrap control
+        # returned through its capture owner's Wait. Bootstrap precedes the
+        # leader, the only fixture process allowed to create nested workers.
+        require(token is not None, "bootstrap task observation lacks its original root owner")
+        proof = observe_bootstrap_task_entry(self.configuration, self.lifetime.capture_token, state,
+                                            failed.get("root_id"), candidate, token,
+                                            deadline=self.cleanup_deadline)
+        require(proof["entry_exists"] is False, "refused bootstrap task entry is present; retain root")
+        self.evidence["cleanup"]["refused_not_created"] = proof
+        return tuple(task_id for task_id in requested if task_id != candidate)
 
     def cleanup(self, deadline, disposal):
         from scripts.delegate_acceptance.private_cli.nested_cleanup import cleanup_case
