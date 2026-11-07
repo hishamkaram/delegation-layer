@@ -197,6 +197,15 @@ class PreflightTests(CandidateArtifactCase):
                 self.set_jobs([*original, copy])
                 self.refuse("distribution_job_provenance_unproven")
 
+    def test_copy_cannot_launder_a_failed_or_incomplete_original(self):
+        for changes in ({"conclusion": "failure"}, {"status": "in_progress"}, {"steps": None}):
+            with self.subTest(changes=changes):
+                original = jobs()
+                copy = carried(original[0])
+                original[0].update(changes)
+                self.set_jobs([*original, copy])
+                self.refuse("distribution_job_provenance_unproven")
+
     def test_explicit_main_dispatch_is_a_trusted_producer_event(self):
         self.routes[ENDPOINTS["attempt"]]["json"]["event"] = "workflow_dispatch"
         self.run_preflight()

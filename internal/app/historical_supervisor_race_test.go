@@ -7,26 +7,40 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"testing"
 )
 
+const historicalSupervisorRaceHelperEnv = "DELEGATE_HISTORICAL_SUPERVISOR_RACE_HELPER"
+
+func init() {
+	if os.Getenv(historicalSupervisorRaceHelperEnv) == "exit-zero" {
+		// Exercise the owner's os.Exit(0) finalization outside testing.M,
+		// which treats os.Exit(0) during a test as an unexpected exit.
+		exerciseHistoricalSupervisorFixtureRace()
+		os.Exit(0)
+	}
+}
+
 func TestHistoricalSupervisorFixtureRaceDetector(t *testing.T) {
-	t.Setenv("GORACE", "halt_on_error=1 exitcode=73")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		mode string
-		exit int
+		mode    string
+		options string
+		exit    int
 	}{
-		{"clean", 0},
-		{"race", 73},
+		{"clean", "halt_on_error=1 exitcode=73", 0},
+		{"race", "halt_on_error=1 exitcode=73", 73},
+		{"exit-zero", "", 66},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
+			t.Setenv("GORACE", tc.options)
 			command := exec.Command(executable, "-test.run=^TestHistoricalSupervisorRaceHelper$", "-test.count=1", "-test.timeout=15s")
-			command.Env = append(newHistoricalSupervisorOptions().Environment, "DELEGATE_HISTORICAL_SUPERVISOR_RACE_HELPER="+tc.mode)
+			command.Env = append(newHistoricalSupervisorOptions().Environment, historicalSupervisorRaceHelperEnv+"="+tc.mode)
 			output, runErr := command.CombinedOutput()
 			if tc.exit == 0 {
 				if runErr != nil {
@@ -49,9 +63,13 @@ func TestHistoricalSupervisorFixtureRaceDetector(t *testing.T) {
 }
 
 func TestHistoricalSupervisorRaceHelper(t *testing.T) {
-	if os.Getenv("DELEGATE_HISTORICAL_SUPERVISOR_RACE_HELPER") != "race" {
+	if os.Getenv(historicalSupervisorRaceHelperEnv) != "race" {
 		return
 	}
+	exerciseHistoricalSupervisorFixtureRace()
+}
+
+func exerciseHistoricalSupervisorFixtureRace() {
 	// Deliberate child-only race proves fixture options keep instrumentation active.
 	var value int
 	var joined sync.WaitGroup
@@ -66,5 +84,5 @@ func TestHistoricalSupervisorRaceHelper(t *testing.T) {
 	}
 	close(start)
 	joined.Wait()
-	t.Log(value)
+	runtime.KeepAlive(value)
 }

@@ -515,8 +515,8 @@ func prepareHistoricalSupervisorExecutables(t *testing.T, fixture *historicalSup
 }
 
 func newHistoricalSupervisorOptions() pueue.Options {
-	// Every fake supervisor command reexecutes the race test installation as
-	// its one-shot owner. Keep diagnostics without a default exit delay per command.
+	// When the race test installation serves as the one-shot control owner,
+	// retain diagnostics without its default exit delay.
 	raceOptions := os.Getenv("GORACE")
 	if !strings.Contains(raceOptions, "atexit_sleep_ms=") {
 		if raceOptions != "" {

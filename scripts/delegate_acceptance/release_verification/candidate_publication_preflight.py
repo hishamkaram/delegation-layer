@@ -82,9 +82,9 @@ def _jobs(client: GitHubClient, repository: str, run_id: int) -> list[dict[str, 
     raise _refuse("distribution_jobs_incomplete")
 
 
-def latest_jobs(rows: list[dict[str, object]], *, run_id: int,
-                head_sha: str, latest_attempt: int) -> dict[str, dict[str, object]]:
-    """Pure selection over complete history; duplicate executions in one attempt are unproven."""
+def _require_successful_jobs(rows: list[dict[str, object]], *, run_id: int,
+                             head_sha: str, latest_attempt: int) -> None:
+    """Validate latest logical jobs; duplicate executions in one attempt are unproven."""
     selected: dict[str, dict[str, object]] = {}
     ambiguous: set[str] = set()
     for row in rows:
@@ -108,7 +108,6 @@ def latest_jobs(rows: list[dict[str, object]], *, run_id: int,
     if any((row.get("status"), row.get("conclusion")) != ("completed", "success")
            for row in selected.values()):
         raise _refuse("distribution_job_not_successful")
-    return selected
 
 
 def _time(value: object) -> datetime:
@@ -133,7 +132,8 @@ def _execution_identity(row: dict[str, object]) -> dict[str, object]:
             raise _refuse("distribution_job_provenance_unproven")
         number, name, status, conclusion = (step.get(key) for key in ("number", "name", "status", "conclusion"))
         if (type(number) is not int or number <= 0 or not isinstance(name, str) or not name
-                or status != "completed" or conclusion is not None and not isinstance(conclusion, str)):
+                or not isinstance(status, str) or not status
+                or conclusion is not None and not isinstance(conclusion, str)):
             raise _refuse("distribution_job_provenance_unproven")
         steps.append({"number": number, "name": name, "status": status, "conclusion": conclusion,
                       **{key: _time(step[key]) if step.get(key) is not None else None
@@ -174,8 +174,8 @@ def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> No
         raise _refuse("publication_repository_not_public")
     run = _run(client, artifact)
     rows = _jobs(client, locator.repository, locator.run_id)
-    latest_jobs(rows, run_id=locator.run_id,
-                head_sha=artifact.manifest.source.commit, latest_attempt=run)
+    _require_successful_jobs(rows, run_id=locator.run_id,
+                             head_sha=artifact.manifest.source.commit, latest_attempt=run)
     producer = _execution_attempt(rows, PRODUCER_JOB)
     if producer != locator.run_attempt:
         raise _refuse("distribution_artifact_superseded")
