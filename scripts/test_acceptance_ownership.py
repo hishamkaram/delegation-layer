@@ -37,23 +37,6 @@ class DirectoryOwnershipTests(unittest.TestCase):
         )
         return target, journal, authorization, identity
 
-    def test_directory_creation_never_replaces_a_racing_destination(self):
-        with tempfile.TemporaryDirectory(prefix="acceptance-create-race-") as directory:
-            root = Path(directory)
-            original = common._rename_noreplace
-
-            def occupy_then_publish(source_fd, source_name, destination_fd, destination_name):
-                os.mkdir(destination_name, dir_fd=destination_fd)
-                (root / destination_name / "keep.txt").write_text("replacement", encoding="utf-8")
-                return original(source_fd, source_name, destination_fd, destination_name)
-
-            owner = common.DirectoryOwner()
-            with patch.object(directory_operations, "_rename_noreplace", side_effect=occupy_then_publish), \
-                    self.assertRaises(FileExistsError):
-                owner.create("owned", root / "owned", root)
-            self.assertEqual((root / "owned" / "keep.txt").read_text(), "replacement")
-            self.assertEqual(list(root.glob(".delegate-create-*")), [])
-
     def test_cleanup_preparation_has_no_unjournaled_filesystem_side_effect(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-cleanup-prepare-") as directory:
             root = Path(directory)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,23 +38,86 @@ func createSparseTestFile(t *testing.T, path string, size int64) {
 }
 
 func TestParseRefusesFIFOWithoutBlocking(t *testing.T) {
-	fifo := filepath.Join(canonicalTestDir(t), "config.fifo")
+	base, err := os.MkdirTemp("", "harnessprobe-fifo-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := true // No worker has started during partial setup.
+	t.Cleanup(func() {
+		if !joined {
+			t.Errorf("FIFO parser closure unverified; retained %s", base)
+			return
+		}
+		if cleanupErr := os.RemoveAll(base); cleanupErr != nil {
+			t.Error(cleanupErr)
+		}
+	})
+	canonical, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(canonical, "config.fifo")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	result := make(chan error, 1)
+	done := make(chan struct{})
+	var parseErr error
+	t.Cleanup(func() {
+		if err := releaseFIFOParser(fifo, done); err != nil {
+			t.Error(err)
+			return
+		}
+		joined = true
+	})
+	joined = false
 	go func() {
-		_, err := parse(fifo)
-		result <- err
+		_, parseErr = parse(fifo)
+		close(done)
 	}()
 	select {
-	case err := <-result:
-		if err == nil {
+	case <-done:
+		if parseErr == nil {
 			t.Fatal("FIFO was accepted as a config")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("FIFO config read blocked")
+	}
+}
+
+// A regression may block either opening or reading the FIFO. A nonblocking
+// writer rendezvous followed by EOF releases both without abandoning the worker.
+func releaseFIFOParser(fifo string, done <-chan struct{}) error {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+		writer, err := os.OpenFile(fifo, os.O_WRONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+		if err == nil {
+			closeErr := writer.Close()
+			select {
+			case <-done:
+				return closeErr
+			case <-deadline.C:
+				return errors.Join(closeErr, errors.New("FIFO parser did not join after release"))
+			}
+		}
+		if !errors.Is(err, unix.ENXIO) {
+			return err
+		}
+		select {
+		case <-done:
+			return nil
+		case <-deadline.C:
+			return errors.New("FIFO parser did not accept release")
+		case <-tick.C:
+		}
 	}
 }
 

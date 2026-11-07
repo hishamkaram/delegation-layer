@@ -17,6 +17,11 @@ func NewAppTestTask(t *testing.T, sealed bool) (*taskdir.Store, *taskdir.TaskDir
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	td, req := NewAppTaskInStore(t, store, strings.Repeat("c", 32), sealed, nil)
 	return store, td, req
 }
@@ -38,11 +43,21 @@ func NewAppTaskInStoreWithSupervisorConfig(t *testing.T, store *taskdir.Store, i
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := td.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	if sealed {
 		permit, permitErr := td.PrepareStart(0)
 		if permitErr != nil {
 			t.Fatal(permitErr)
 		}
+		t.Cleanup(func() {
+			if releaseErr := permit.Release(); releaseErr != nil {
+				t.Error(releaseErr)
+			}
+		})
 		if err = permit.Consume(); err != nil {
 			t.Fatal(err)
 		}
@@ -101,6 +116,11 @@ func PrepareAppBudgetRecords(t *testing.T, td *taskdir.TaskDir) *task.MetaRecord
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if releaseErr := submitPermit.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
 	if err = submitPermit.Consume(); err != nil {
 		t.Fatal(err)
 	}

@@ -123,12 +123,13 @@ func requireRegisteredReferences(t *testing.T, registration commonprovider.Regis
 		HistoricalReference(config.ModeReadOnly), HistoricalReference(config.ModeWorkspaceWrite),
 		projectionReference(config.ModeReadOnly),
 	}
-	if len(registration.Interpreters) != len(wanted) {
-		t.Fatalf("interpreters=%d want=%d", len(registration.Interpreters), len(wanted))
+	registry, err := predicate.New(registration.Interpreters...)
+	if err != nil {
+		t.Fatalf("invalid or duplicate registered reference: %v", err)
 	}
-	for index, ref := range wanted {
-		if !registration.Interpreters[index].Reference().Equal(ref) {
-			t.Fatalf("interpreter %d does not preserve reference %+v", index, ref)
+	for _, ref := range wanted {
+		if _, err := registry.Resolve(ref); err != nil {
+			t.Fatalf("required interpreter %+v is not resolvable: %v", ref, err)
 		}
 	}
 }

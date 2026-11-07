@@ -99,7 +99,12 @@ func NewUncertainGroupSupervisorWithConfigAndTimeout(t *testing.T, rootID, confi
 	if err != nil {
 		t.Fatal(err)
 	}
+	retain := false
 	t.Cleanup(func() {
+		if retain {
+			t.Logf("retained uncertain-group fixture %s after client closure failure", rawBase)
+			return
+		}
 		if removeErr := os.RemoveAll(rawBase); removeErr != nil {
 			t.Error(removeErr)
 		}
@@ -120,13 +125,32 @@ func NewUncertainGroupSupervisorWithConfigAndTimeout(t *testing.T, rootID, confi
 	)
 	environment := append(os.Environ(), "FAKE_LOG="+logPath, "FAKE_STATUS="+statusPath, "FAKE_AFTER="+afterPath, "FAKE_DONE="+donePath)
 	bound, err := pueue.Bind(context.Background(), executable, configPath, pueue.Options{Environment: environment, ObservationTimeout: pueue.DefaultObservationTimeout})
+	if bound != nil {
+		t.Cleanup(func() {
+			if closeErr := bound.Close(); closeErr != nil {
+				retain = true
+				t.Error(closeErr)
+			}
+		})
+	}
 	if err != nil {
 		t.Fatalf("bind uncertain-group supervisor fixture: %v", err)
 	}
-	client, err := pueue.NewClient(bound.Binding(), pueue.Options{Environment: environment, ObservationTimeout: observationTimeout})
+	binding := bound.Binding()
+	if err = bound.Close(); err != nil {
+		retain = true
+		t.Fatal(err)
+	}
+	client, err := pueue.NewClient(binding, pueue.Options{Environment: environment, ObservationTimeout: observationTimeout, WaitForPendingClose: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := client.Close(); closeErr != nil {
+			retain = true
+			t.Error(closeErr)
+		}
+	})
 	return client, logPath, donePath
 }
 

@@ -80,15 +80,21 @@ func (w *countWriter) Write(p []byte) (int, error) {
 func TestArrayAndRecordBoundaries(t *testing.T) {
 	var got []string
 	err := valueOf(`["first",{"opaque":[1,2]},"last"]`).Array(func(v Value) error { b, e := v.Raw(128); got = append(got, string(b)); return e })
-	if err != nil || len(got) != 3 {
+	if err != nil || !slices.Equal(got, []string{`"first"`, `{"opaque":[1,2]}`, `"last"`}) {
 		t.Fatalf("values=%v err=%v", got, err)
 	}
 	s := "{\"type\":\"first\"}\n{\"type\":\"last\"}"
 	at := strings.NewReader(s)
 	var lines []uint64
-	semantic, readErr := Records(at, at, func(v Value, line uint64) error { lines = append(lines, line); return v.Validate() })
-	if semantic != nil || readErr != nil || len(lines) != 2 {
-		t.Fatalf("lines=%v semantic=%v read=%v", lines, semantic, readErr)
+	var records []string
+	semantic, readErr := Records(at, at, func(v Value, line uint64) error {
+		lines = append(lines, line)
+		data, err := v.Raw(128)
+		records = append(records, string(data))
+		return err
+	})
+	if semantic != nil || readErr != nil || !slices.Equal(lines, []uint64{1, 2}) || !slices.Equal(records, []string{`{"type":"first"}`, `{"type":"last"}`}) {
+		t.Fatalf("lines=%v records=%v semantic=%v read=%v", lines, records, semantic, readErr)
 	}
 }
 

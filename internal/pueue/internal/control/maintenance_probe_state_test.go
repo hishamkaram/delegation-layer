@@ -393,41 +393,32 @@ func TestScheduledPrivateMaintenanceWaitsForGenerationTransition(t *testing.T) {
 func TestScheduledPrivateMaintenanceWaitsForQueueIdentityLease(t *testing.T) {
 	fixture, client := newMaintenanceProbeFixture(t)
 	client.options.SuccessfulCleanupAuthorizer = privateTerminalTriggerCleanupAuthorizer
+	scope := newTestCallScope(t, client.options)
 	leaseEntered := make(chan struct{})
-	leaseRelease := make(chan struct{})
-	leaseDone := make(chan error, 1)
-	go func() {
-		leaseDone <- client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
+	leaseRelease, releaseLease := scope.barrier()
+	ctx := scope.context()
+	lease := startTestCall(scope, func() lockCallResult {
+		return lockCallResult{err: client.withPrivateQueueIdentityLease(ctx, func(context.Context) error {
 			close(leaseEntered)
 			<-leaseRelease
 			return nil
-		})
-	}()
-	<-leaseEntered
+		})}
+	})
+	awaitEntry(scope, leaseEntered, lease, "queue identity lease did not enter")
 
 	if !client.SchedulePrivateQueueMaintenance(t.Context()) {
 		t.Fatal("private maintenance was not scheduled")
 	}
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- client.Close() }()
+	closeCall := startTestCall(scope, func() lockCallResult { return lockCallResult{err: client.Close()} })
 	select {
-	case closeErr := <-closeDone:
-		t.Fatalf("scheduled maintenance crossed an active queue identity lease: %v", closeErr)
+	case <-closeCall.done:
+		t.Fatalf("scheduled maintenance crossed an active queue identity lease: %v", closeCall.result.err)
 	case <-time.After(250 * time.Millisecond):
 	}
 
-	close(leaseRelease)
-	if err := <-leaseDone; err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case closeErr := <-closeDone:
-		if closeErr != nil {
-			t.Fatal(closeErr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("scheduled maintenance did not finish after queue identity publication")
-	}
+	releaseLease()
+	awaitLockCall(scope, lease, "queue identity lease")
+	awaitLockCall(scope, closeCall, "scheduled maintenance after queue identity publication")
 	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
 	if removed := string(readPrivateSupervisorFile(t, filepath.Join(base, "test-kill-task-id"))); removed != "0\n" {
 		t.Fatalf("scheduled maintenance removed unexpected numeric targets: %q", removed)

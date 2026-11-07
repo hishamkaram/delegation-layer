@@ -81,6 +81,24 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertIn("run: make check-platform\n", macos)
         self.assertFalse(WORKFLOW.with_name("static-diagnostics.yml").exists())
 
+    def test_native_unit_gates_have_supervisor_and_control_owner_prerequisites(self):
+        for name, target in (("gate-linux", "check"), ("gate-macos", "check-platform")):
+            with self.subTest(job=name):
+                native_steps = list(steps(job_text(self.source, name)).values())
+                install = next(index for index, step in enumerate(native_steps)
+                               if "run: ./scripts/install-test-supervisor.sh\n" in step)
+                build = next(index for index, step in enumerate(native_steps)
+                             if "go build -buildvcs=false -o bin/test-supervisor/delegate-run ./cmd/delegate-run" in step)
+                gate = next(index for index, step in enumerate(native_steps)
+                            if f"run: make {target}\n" in step)
+                self.assertLess(install, build)
+                self.assertLess(build, gate)
+                for variable, executable in (("DELEGATE_TEST_PUEUE", "pueue"),
+                                             ("DELEGATE_TEST_PUEUED", "pueued"),
+                                             ("DELEGATE_REPAIR_EDITOR_OWNER", "delegate-run")):
+                    self.assertIn(f"{variable}: ${{{{ github.workspace }}}}/bin/test-supervisor/{executable}",
+                                  native_steps[gate])
+
     def test_ci_and_ccr_checkouts_do_not_persist_credentials(self):
         for workflow in (WORKFLOW, WORKFLOW.with_name("ccr-integration.yml")):
             with self.subTest(workflow=workflow.name):

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
@@ -141,34 +143,108 @@ func TestAdoptRejectsInvalidDescriptors(t *testing.T) {
 }
 
 func TestCloseSerializesWithBorrower(t *testing.T) {
-	path := leasePath(t)
-	lease := acquire(t, path)
-	entered, release, borrowed := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	base, err := os.MkdirTemp("/tmp", "lease-borrow-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lease *Lease
+	entered, release, borrowed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	releaseBorrower := sync.OnceFunc(func() { close(release) })
+	var borrowedErr, closeErr error
+	closed := make(chan struct{})
+	borrowerStarted := false
+	startClose := sync.OnceFunc(func() {
+		go func() {
+			defer close(closed)
+			closeErr = lease.Close()
+		}()
+	})
+	t.Cleanup(func() {
+		releaseBorrower()
+		if borrowerStarted && !leaseTestCallJoined(borrowed) {
+			t.Errorf("borrower did not join; retaining fixture %s", base)
+			return
+		}
+		if lease != nil {
+			startClose()
+			if resultErr := leaseTestCallResult(closed, &closeErr); resultErr != nil {
+				t.Errorf("lease close failed; retaining fixture %s: %v", base, resultErr)
+				return
+			}
+		}
+		if removeErr := os.RemoveAll(base); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	resolved, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(resolved, "instance.lock")
+	var acquired bool
+	lease, acquired, err = TryAcquireLease(t.Context(), path)
+	if err != nil || !acquired {
+		t.Fatalf("acquire: %v, %v", acquired, err)
+	}
+	borrowerStarted = true
 	go func() {
-		borrowed <- lease.WithHeldFile(context.Background(), func(file *os.File) error {
+		defer close(borrowed)
+		borrowedErr = lease.WithHeldFile(context.Background(), func(file *os.File) error {
 			close(entered)
 			<-release
 			_, err := file.Stat()
 			return err
 		})
 	}()
-	<-entered
+	awaitLeaseBorrowerEntry(t, entered, borrowed, &borrowedErr)
 	// The borrower holds the actual closure guard, rather than a launch barrier.
 	if lease.mu.TryLock() {
 		lease.mu.Unlock()
 		t.Error("borrower did not hold closure guard")
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- lease.Close() }()
+	startClose()
 	assertAvailable(t, path, false)
-	close(release)
-	if err := <-borrowed; err != nil {
-		t.Error(err)
+	releaseBorrower()
+	if !leaseTestCallJoined(borrowed) {
+		t.Fatal("borrower did not return after release")
 	}
-	if err := <-closed; err != nil {
-		t.Error(err)
+	if borrowedErr != nil {
+		t.Error(borrowedErr)
+	}
+	if !leaseTestCallJoined(closed) {
+		t.Fatal("lease did not close after borrower release")
+	}
+	if closeErr != nil {
+		t.Error(closeErr)
 	}
 	assertAvailable(t, path, true)
+}
+
+func awaitLeaseBorrowerEntry(t *testing.T, entered, borrowed <-chan struct{}, result *error) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-borrowed:
+		t.Fatalf("borrower returned before entry: %v", *result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("borrower did not enter")
+	}
+}
+
+func leaseTestCallResult(done <-chan struct{}, result *error) error {
+	if !leaseTestCallJoined(done) {
+		return errors.New("lease call did not join")
+	}
+	return *result
+}
+
+func leaseTestCallJoined(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
 }
 
 func TestLeaseRequiresExistingPrivateParentAndContext(t *testing.T) {

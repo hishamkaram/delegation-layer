@@ -16,11 +16,24 @@ import (
 func TestLifetimeGuardianProofBatchResidesBetweenBatches(t *testing.T) {
 	f := newLifetimeGuardianProofBatchFixture(t)
 	result := make(chan error, 1)
-	go func() { result <- f.guardian.persistTermination(t.Context()) }()
+	done := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(f.backoffRelease) }) }
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("proof retry did not join after backoff release")
+		}
+	})
+	go func() { defer close(done); result <- f.guardian.persistTermination(t.Context()) }()
 	select {
 	case err := <-result:
 		t.Fatalf("proof retry escaped before the next batch: %v", err)
 	case <-f.backoffEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proof retry did not reach backoff")
 	}
 	empty, terminate, _ := f.scope.counts()
 	if empty != 6 || terminate != 3 {
@@ -34,7 +47,7 @@ func TestLifetimeGuardianProofBatchResidesBetweenBatches(t *testing.T) {
 	if delays := f.timeline.backoffSnapshot(); len(delays) != 1 || delays[0] != 100*time.Millisecond {
 		t.Fatalf("backoff delays = %v, want [100ms]", delays)
 	}
-	close(f.backoffRelease)
+	release()
 	if err := <-result; err != nil {
 		t.Fatalf("proof retry after backoff: %v", err)
 	}
@@ -138,6 +151,9 @@ func TestLifetimeGuardianResidentProofRetryHoldsAuthority(t *testing.T) {
 			}
 		},
 	)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(backoffRelease) }) }
+	t.Cleanup(release)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
 	f.callRefused(t, "close despite a nonempty proof", f.message(lifetimeMessageClose, 0, 0), lifetimeGuardianCodeTermination)
 	f.worker.release()
@@ -145,6 +161,8 @@ func TestLifetimeGuardianResidentProofRetryHoldsAuthority(t *testing.T) {
 	case err := <-f.runDone:
 		t.Fatalf("guardian returned while the next proof batch was blocked: %v", err)
 	case <-backoffEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("guardian did not reach resident proof backoff")
 	}
 	if destroy, release := f.scope.disposalCounts(); destroy != 0 || release != 0 {
 		t.Fatalf("resident proof retry released scope: destroy=%d release=%d", destroy, release)
@@ -152,7 +170,7 @@ func TestLifetimeGuardianResidentProofRetryHoldsAuthority(t *testing.T) {
 	if timelineIndex(f.timeline.snapshot(), "release") >= 0 {
 		t.Fatal("resident proof retry released the owner")
 	}
-	close(backoffRelease)
+	release()
 	if err := f.waitRun(t); err == nil {
 		t.Fatal("Run lost the original proof failure")
 	}
@@ -193,7 +211,5 @@ func TestLifetimeGuardianRetriesDestroyReleaseAndOwnerPhases(t *testing.T) {
 		t.Fatalf("owner release calls = %d, want 2", ownerReleases)
 	}
 	events := f.timeline.snapshot()
-	if timelineIndex(events, "scope-destroy") >= timelineIndex(events, "scope-release") || timelineIndex(events, "scope-release") >= timelineIndex(events, "release") {
-		t.Fatalf("cleanup phase order = %v", events)
-	}
+	assertTimelineOrder(t, events, "scope-destroy", "scope-release", "release")
 }

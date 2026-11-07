@@ -132,6 +132,9 @@ func TestLoadConfigStrictlyBindsHelperAndEnvironment(t *testing.T) {
 
 func TestConfigAndHelperRejectPathDigestAndDelayFaults(t *testing.T) {
 	fixture := newFixtureFiles(t)
+	if _, err := loadConfig(fixture.outerPath); err != nil {
+		t.Fatalf("valid fixture refused: %v", err)
+	}
 	cases := []struct {
 		name string
 		edit func(*Config, *HelperConfig)
@@ -147,10 +150,13 @@ func TestConfigAndHelperRejectPathDigestAndDelayFaults(t *testing.T) {
 			current := fixture.outer
 			helper := fixture.helper
 			test.edit(&current, &helper)
-			writeFixtureJSON(t, fixture.helperConfig, helper)
+			helperRaw := writeFixtureJSON(t, fixture.helperConfig, helper)
+			if test.name != "helper config digest" {
+				current.HelperConfigSHA256 = task.ComputeSHA256(helperRaw)
+			}
 			writeFixtureJSON(t, fixture.outerPath, current)
-			if _, err := loadConfig(fixture.outerPath); err == nil {
-				t.Fatal("invalid fixture accepted")
+			if _, err := loadConfig(fixture.outerPath); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("invalid fixture error=%v, want ErrInvalidConfig", err)
 			}
 		})
 	}

@@ -64,6 +64,7 @@ from scripts.delegate_acceptance.native.task_ops import (
 from scripts.delegate_acceptance.native.timeouts import (
     TimeoutFifoLease as TimeoutFifoLease,
     TimeoutLeaseOwner,
+    _TimeoutLeaseSetupError,
 )
 from scripts.delegate_acceptance.native.constants import (
     PROFILES,
@@ -241,6 +242,11 @@ class NativeAcceptance:
             self.base = self._constructor_ownership.create(
                 "acceptance base", self.base, self.base_parent).directory
             self._initialize_runtime_roots(managed_runner)
+        except _TimeoutLeaseSetupError:
+            # The partial timeout owner still owns unresolved readers. Preserve
+            # its exact paths; generic rollback would quarantine their directory.
+            self._constructor_ownership.release()
+            raise
         except BaseException as error:
             try:
                 self._constructor_ownership.rollback()

@@ -311,6 +311,8 @@ func TestTimerExpiryDuringSuccessfulPreflightCannotLaunch(t *testing.T) {
 	clock := newManualClock()
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	deadlineObserved := make(chan struct{})
 	var observed sync.Once
 	preparations := 0
@@ -341,15 +343,30 @@ func TestTimerExpiryDuringSuccessfulPreflightCannotLaunch(t *testing.T) {
 			},
 		},
 	}
-	go func() { resultCh <- Run(td, permit, plan, options) }()
-	<-entered
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("preflight runner did not join after release")
+		}
+	})
+	go func() { defer close(done); resultCh <- Run(td, permit, plan, options) }()
+	select {
+	case <-entered:
+	case result := <-resultCh:
+		t.Fatalf("runner returned before preflight: %+v", result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not reach preflight")
+	}
 	clock.timer.ch <- clock.now.Add(time.Minute)
 	select {
 	case <-deadlineObserved:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timer expiry was not observed during preflight")
 	}
-	close(release)
+	unblock()
 	result := <-resultCh
 	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
 	if result.Outcome == nil || result.Outcome.Verdict != task.VerdictRejected {
@@ -392,6 +409,8 @@ func TestClockExpiryBeforeTimerObservationCannotLaunch(t *testing.T) {
 	clock := newAdvancingClock()
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	preparations := make(chan struct{}, 1)
 	requests := make(chan struct{}, 1)
 	startCalls := 0
@@ -415,10 +434,25 @@ func TestClockExpiryBeforeTimerObservationCannotLaunch(t *testing.T) {
 		}},
 	}
 	resultCh := make(chan Result, 1)
-	go func() { resultCh <- Run(td, permit, plan, options) }()
-	<-entered
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("preflight runner did not join after release")
+		}
+	})
+	go func() { defer close(done); resultCh <- Run(td, permit, plan, options) }()
+	select {
+	case <-entered:
+	case result := <-resultCh:
+		t.Fatalf("runner returned before preflight: %+v", result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not reach preflight")
+	}
 	clock.advance(time.Minute)
-	close(release)
+	unblock()
 	result := <-resultCh
 	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
 	if result.Outcome == nil || result.Outcome.Verdict != task.VerdictRejected {

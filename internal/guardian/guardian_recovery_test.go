@@ -607,9 +607,7 @@ func TestLifetimeGuardianPendingExactStartRecordsOnlyAfterWorkerExitAndEmptyProo
 		t.Fatalf("termination causes = %v, want [%s]", causes, task.LifetimeTerminationCompleted)
 	}
 	events := f.timeline.snapshot()
-	if timelineIndex(events, "worker-exited") >= timelineIndex(events, "termination-record") {
-		t.Fatalf("termination order = %v", events)
-	}
+	assertTimelineOrder(t, events, "worker-exited", "termination-record")
 }
 
 func TestLifetimeGuardianPendingStartFinalizesAfterNonzeroWorkerExit(t *testing.T) {

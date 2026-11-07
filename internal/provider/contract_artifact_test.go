@@ -125,22 +125,31 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 		t.Fatal("runtime refresh accepted legacy metadata without a launch environment")
 	}
 	meta.EffectiveConfig.Policy.Sources[0].SHA256 = task.ComputeSHA256([]byte("changed-source"))
-	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed policy source matched legacy metadata")
 	}
 	meta.EffectiveConfig.Policy.Sources[0].SHA256 = profile.Effective.Policy.Sources[0].SHA256
+	if err := profile.Matches(request, meta); err != nil {
+		t.Fatalf("legacy writable-root baseline did not match: %v", err)
+	}
 	profile.WritableRoots = []string{"/changed-runtime"}
 	profile.Effective.Policy.WritableRoots = []string{"/changed-runtime"}
-	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed legacy writable-root policy matched immutable metadata")
 	}
 	profile.WritableRoots = []string{"/runtime"}
 	profile.Effective.Policy.WritableRoots = []string{"/runtime"}
+	if err := profile.Matches(request, meta); err != nil {
+		t.Fatalf("input-content baseline did not match: %v", err)
+	}
 	profile.Plan.InputFiles[0].Content = `{"mode":"workspace-write"}`
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed input content matched immutable metadata")
 	}
-	profile.Plan = plan
+	profile.Plan = artifactPlan(request)
+	if err := profile.Matches(request, meta); err != nil {
+		t.Fatalf("output-writer baseline did not match: %v", err)
+	}
 	meta.OutputWriterContract = ""
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed output writer contract matched immutable metadata")

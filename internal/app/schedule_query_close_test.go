@@ -23,15 +23,23 @@ func TestScheduleQueryCloseFaultPreservesFactsAndSanitizesPresentation(t *testin
 			Payload: &task.PayloadDescriptor{Basename: "result.txt", Length: 42, SHA256: strings.Repeat("c", 64)},
 		},
 	}
+	before, err := json.Marshal(response.ScheduleExecution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want ScheduleExecutionResponse
+	if err = json.Unmarshal(before, &want); err != nil {
+		t.Fatal(err)
+	}
 	result := commandResult{response: response}
 	mergeScheduleQueryClose(&result, func() error { return closeFault })
-	if result.code != 1 || !errors.Is(result.err, closeFault) || result.response.RootID != response.RootID || result.response.TaskID != response.TaskID || !reflect.DeepEqual(result.response.ScheduleExecution, response.ScheduleExecution) {
+	if result.code != 1 || !errors.Is(result.err, closeFault) || result.response.RootID != response.RootID || result.response.TaskID != response.TaskID || !reflect.DeepEqual(result.response.ScheduleExecution, &want) {
 		t.Fatalf("close fault erased validated facts or cause: %+v", result)
 	}
-	assertScheduleQueryClosePresentation(t, result, private, response.ScheduleExecution.LocalEvidence.Payload.SHA256)
+	assertScheduleQueryClosePresentation(t, result, private, &want)
 }
 
-func assertScheduleQueryClosePresentation(t *testing.T, result commandResult, private, payloadSHA256 string) {
+func assertScheduleQueryClosePresentation(t *testing.T, result commandResult, private string, want *ScheduleExecutionResponse) {
 	t.Helper()
 	for _, jsonOutput := range []bool{true, false} {
 		var stdout, stderr bytes.Buffer
@@ -44,7 +52,7 @@ func assertScheduleQueryClosePresentation(t *testing.T, result commandResult, pr
 			if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
 				t.Fatal(err)
 			}
-			if decoded.ScheduleQueryError == nil || decoded.ScheduleQueryError.Code != "query_failed" || decoded.ScheduleExecution == nil || !decoded.ScheduleExecution.Complete || decoded.ScheduleExecution.LocalEvidence.Payload.SHA256 != payloadSHA256 {
+			if decoded.ScheduleQueryError == nil || decoded.ScheduleQueryError.Code != "query_failed" || !reflect.DeepEqual(decoded.ScheduleExecution, want) {
 				t.Fatalf("close fault lost classified error or result descriptor: %+v", decoded)
 			}
 		}

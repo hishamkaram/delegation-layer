@@ -26,7 +26,7 @@ func TestNativeLinuxReadersReturnRealValues(t *testing.T) {
 	}
 }
 
-func TestNativeLinuxCheckRespectsTheBudgetAndReportsEveryMetric(t *testing.T) {
+func TestNativeLinuxCheckRespectsTheBudgetAndIdentifiesPressure(t *testing.T) {
 	started := time.Now()
 	got, err := NewChecker().Check(context.Background(), selfResolver{})
 	if err != nil {

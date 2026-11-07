@@ -146,13 +146,13 @@ func TestCompareRequests(t *testing.T) {
 		t.Errorf("expected different review targets to compare unequal")
 	}
 
-	reqDifferentBudget := *reqB
+	reqDifferentBudget := *reqA
 	reqDifferentBudget.BudgetNanos = 120000000000
 	if CompareRequests(reqA, &reqDifferentBudget) {
 		t.Errorf("expected different budget to compare unequal")
 	}
 
-	reqDifferentCwd := *reqB
+	reqDifferentCwd := *reqA
 	reqDifferentCwd.CanonicalCwd = "/other"
 	if CompareRequests(reqA, &reqDifferentCwd) {
 		t.Errorf("expected different cwd to compare unequal")

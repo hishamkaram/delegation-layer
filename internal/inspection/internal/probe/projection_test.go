@@ -242,6 +242,15 @@ func TestProjectionHTTPClientDisablesAmbientProxyAndKeepAlive(t *testing.T) {
 
 func TestRunProjectionRemoteCancellationUsesCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(projectionContext(t))
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("projection did not stop after cancellation")
+		}
+	})
 	started := make(chan struct{})
 	transport := &projectionRoundTripper{roundTrip: func(request *http.Request) (*http.Response, error) {
 		close(started)
@@ -254,12 +263,24 @@ func TestRunProjectionRemoteCancellationUsesCallerContext(t *testing.T) {
 	)
 	result := make(chan error, 1)
 	go func() {
+		defer close(done)
 		_, err := runProjectionWithTransport(ctx, definition, nil, transport)
 		result <- err
 	}()
-	<-started
+	select {
+	case <-started:
+	case err := <-result:
+		t.Fatalf("projection returned before reaching the transport: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("projection did not reach the transport")
+	}
 	cancel()
-	err := <-result
+	var err error
+	select {
+	case err = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("projection did not return after cancellation")
+	}
 	if !errors.Is(err, ErrProjectionCanceled) || !errors.Is(err, context.Canceled) {
 		t.Fatalf("caller cancellation was not preserved safely: %v", err)
 	}

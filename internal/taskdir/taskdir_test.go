@@ -55,9 +55,10 @@ func (t *testFaultInjector) OnCleanupUnlink(_ string) error {
 	return nil
 }
 
-func closeStoreQuietly(s *Store) {
+func closeTestStore(t testing.TB, s *Store) {
+	t.Helper()
 	if err := s.Close(); err != nil {
-		return
+		t.Error(err)
 	}
 }
 
@@ -70,7 +71,7 @@ func TestStoreInitAndOpen(t *testing.T) {
 	if initErr != nil {
 		t.Fatalf("InitStore failed: %v", initErr)
 	}
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	if s.RootID == "" {
 		t.Fatalf("expected non-empty RootID")
@@ -86,7 +87,7 @@ func TestStoreInitAndOpen(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("OpenStore failed: %v", openErr)
 	}
-	defer closeStoreQuietly(s2)
+	defer closeTestStore(t, s2)
 
 	if s2.RootID != s.RootID {
 		t.Errorf("expected RootID %s, got %s", s.RootID, s2.RootID)
@@ -168,7 +169,7 @@ func setupStagingTest(t *testing.T) (*Store, string) {
 
 func TestStagingWriteFailure(t *testing.T) {
 	s, testDir := setupStagingTest(t)
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	inj := &testFaultInjector{failStageWrite: true}
 	committed, cleanErr, wErr := s.stageAndCommit(testDir, "test1.json", []byte("data"), inj)
@@ -185,7 +186,7 @@ func TestStagingWriteFailure(t *testing.T) {
 
 func TestStagingBarrierFailure(t *testing.T) {
 	s, testDir := setupStagingTest(t)
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	inj := &testFaultInjector{failStageBarrier: true}
 	committed, cleanErr, bErr := s.stageAndCommit(testDir, "test2.json", []byte("data"), inj)
@@ -199,7 +200,7 @@ func TestStagingBarrierFailure(t *testing.T) {
 
 func TestStagingPostLinkBarrierFailure(t *testing.T) {
 	s, testDir := setupStagingTest(t)
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	inj := &testFaultInjector{failPostLinkDir: true}
 	_, cleanErr, dErr := s.stageAndCommit(testDir, "test3.json", []byte("data"), inj)
@@ -216,7 +217,7 @@ func TestStagingPostLinkBarrierFailure(t *testing.T) {
 
 func TestStagingCleanupFailure(t *testing.T) {
 	s, testDir := setupStagingTest(t)
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	inj := &testFaultInjector{failCleanup: true}
 	committed, cleanErr, sErr := s.stageAndCommit(testDir, "test4.json", []byte("data"), inj)
@@ -237,7 +238,7 @@ func TestScavengerRespectsActiveRecords(t *testing.T) {
 	if sErr != nil {
 		t.Fatal(sErr)
 	}
-	defer closeStoreQuietly(s)
+	defer closeTestStore(t, s)
 
 	taskDir := filepath.Join(s.Root, "tasks", "0123456789abcdef0123456789abcdef")
 	if dirErr := os.MkdirAll(taskDir, 0o700); dirErr != nil {

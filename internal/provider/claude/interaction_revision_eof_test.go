@@ -142,11 +142,14 @@ func (r eofRevision) require(t *testing.T, tail []string, want eofExpectation) {
 	got, answer := evaluateInteractiveTrace(t, r.sealed, lines)
 	// Only the current revision frames accepted follow-up answers; every
 	// retained revision publishes the principal alone.
-	wantAnswer := tracePrincipalText
-	if r.sealed.Reference().Equal(interactionReference(r.mode)) {
-		wantAnswer = expectedResponses(t, lines)
+	wantAnswer := ""
+	if want.sealed == task.VerdictCommitted {
+		wantAnswer = tracePrincipalText
+		if r.sealed.Reference().Equal(interactionReference(r.mode)) {
+			wantAnswer = expectedResponses(t, lines)
+		}
 	}
-	if got.Verdict != want.sealed || (got.Verdict == task.VerdictCommitted) != (answer == wantAnswer) {
+	if got.Verdict != want.sealed || answer != wantAnswer {
 		t.Fatalf("%s sealed=%+v answer=%q want %s", r.label, got, answer, want.sealed)
 	}
 	err := completeAfter(t, r.profile, r.mode, tail)

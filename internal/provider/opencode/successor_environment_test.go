@@ -77,6 +77,7 @@ func snapshotMeta(meta task.MetaRecord) task.MetaRecord {
 	if meta.EffectiveConfig.Policy != nil {
 		policy := *meta.EffectiveConfig.Policy
 		policy.WritableRoots = slices.Clone(policy.WritableRoots)
+		policy.Sources = slices.Clone(policy.Sources)
 		meta.EffectiveConfig.Policy = &policy
 	}
 	return meta

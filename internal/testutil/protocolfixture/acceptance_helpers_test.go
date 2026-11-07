@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 )
 
 var fixtureBinPath string
+
+// TestMain owns the suite binary. A process owner can retain that binary when
+// its sole Wait remains unresolved; concurrent cases can only set this flag.
+var retainFixtureSuite atomic.Bool
 
 func TestMain(m *testing.M) {
 	temp, err := os.MkdirTemp("", "protocolfixture-suite-*")
@@ -36,7 +41,10 @@ func TestMain(m *testing.M) {
 	} else {
 		code = m.Run()
 	}
-	if removeErr := os.RemoveAll(temp); removeErr != nil {
+	if retainFixtureSuite.Load() {
+		fmt.Fprintf(os.Stderr, "unjoined fixture process; retained suite binary %s\n", temp)
+		code = 1
+	} else if removeErr := os.RemoveAll(temp); removeErr != nil {
 		fmt.Fprintf(os.Stderr, "fixture binary cleanup: %v\n", removeErr)
 		code = 1
 	}
@@ -44,7 +52,10 @@ func TestMain(m *testing.M) {
 }
 
 type (
-	fixtureCase   struct{ root, id, brief, cwd, sink, base string }
+	fixtureCase struct {
+		root, id, brief, cwd, sink, base string
+		retain                           bool
+	}
 	fixtureResult struct {
 		stdout, stderr string
 		code           int
@@ -53,12 +64,25 @@ type (
 
 func newCase(t *testing.T) *fixtureCase {
 	t.Helper()
-	base := t.TempDir()
+	base, err := os.MkdirTemp("", "protocolfixture-case-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &fixtureCase{base: base}
+	t.Cleanup(func() {
+		if c.retain {
+			t.Errorf("fixture process closure unverified; retained %s", c.base)
+			return
+		}
+		if cleanupErr := os.RemoveAll(c.base); cleanupErr != nil {
+			t.Error(cleanupErr)
+		}
+	})
 	id, err := randomid.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &fixtureCase{base: base, root: filepath.Join(base, "store"), id: id, brief: filepath.Join(base, "brief.md"), cwd: filepath.Join(base, "workspace"), sink: filepath.Join(base, "sink.log")}
+	c.root, c.id, c.brief, c.cwd, c.sink = filepath.Join(base, "store"), id, filepath.Join(base, "brief.md"), filepath.Join(base, "workspace"), filepath.Join(base, "sink.log")
 	if err := os.Mkdir(c.cwd, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -326,6 +350,7 @@ func assertEventOrder(t *testing.T, path string, expected ...string) {
 }
 
 type fixtureProcess struct {
+	owner          *fixtureCase
 	cmd            *exec.Cmd
 	stdout, stderr bytes.Buffer
 	done           chan struct{}
@@ -335,9 +360,9 @@ type fixtureProcess struct {
 	release        string
 }
 
-func startFixture(t *testing.T, want int, release string, args ...string) *fixtureProcess {
+func (c *fixtureCase) startFixture(t *testing.T, want int, release string, args ...string) *fixtureProcess {
 	t.Helper()
-	p := &fixtureProcess{cmd: exec.Command(fixtureBinPath, args...), done: make(chan struct{}), want: want, release: release}
+	p := &fixtureProcess{owner: c, cmd: exec.Command(fixtureBinPath, args...), done: make(chan struct{}), want: want, release: release}
 	p.cmd.Stdout = &p.stdout
 	p.cmd.Stderr = &p.stderr
 	if err := p.cmd.Start(); err != nil {
@@ -347,7 +372,9 @@ func startFixture(t *testing.T, want int, release string, args ...string) *fixtu
 	t.Cleanup(func() {
 		if !p.finished {
 			if p.release != "" {
-				writeTestFile(t, p.release, []byte("release\n"))
+				if err := os.WriteFile(p.release, []byte("release\n"), 0o600); err != nil {
+					t.Errorf("release finite fixture: %v", err)
+				}
 			}
 			p.wait(t)
 		}
@@ -360,6 +387,8 @@ func (p *fixtureProcess) wait(t *testing.T) fixtureResult {
 	select {
 	case <-p.done:
 	case <-time.After(20 * time.Second):
+		p.owner.retain = true
+		retainFixtureSuite.Store(true)
 		t.Fatalf("finite fixture PID%d did not exit; args=%v", p.cmd.Process.Pid, p.cmd.Args)
 	}
 	p.finished = true
@@ -373,17 +402,22 @@ func (p *fixtureProcess) wait(t *testing.T) fixtureResult {
 
 func (p *fixtureProcess) releaseAndWait(t *testing.T) fixtureResult {
 	t.Helper()
-	writeTestFile(t, p.release, []byte("release\n"))
+	if err := os.WriteFile(p.release, []byte("release\n"), 0o600); err != nil {
+		t.Errorf("release finite fixture: %v", err)
+	}
 	return p.wait(t)
 }
 
 func (c *fixtureCase) hold(t *testing.T, point, command string, args ...string) (*fixtureProcess, string) {
 	t.Helper()
-	base := t.TempDir()
+	base, err := os.MkdirTemp(c.base, "hold-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	rv := filepath.Join(base, "ready")
 	release := filepath.Join(base, "release")
 	args = append(args, "-checkpoint", point, "-rendezvous", rv, "-release-file", release)
-	p := startFixture(t, 0, release, c.args(command, args...)...)
+	p := c.startFixture(t, 0, release, c.args(command, args...)...)
 	awaitCheckpoint(t, rv, point, p.cmd.Process.Pid)
 	return p, rv
 }

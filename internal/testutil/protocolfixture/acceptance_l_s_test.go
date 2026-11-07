@@ -36,10 +36,13 @@ func TestAcceptance_GroupL_and_S(t *testing.T) {
 
 func holdLock(t *testing.T, c *fixtureCase, level, mode string) *fixtureProcess {
 	t.Helper()
-	base := t.TempDir()
+	base, err := os.MkdirTemp(c.base, "lock-*")
+	if err != nil {
+		t.Fatal(err)
+	}
 	rv, release := filepath.Join(base, "ready"), filepath.Join(base, "release")
 	args := c.args("lock-hold", "-level", level, "-mode", mode, "-rendezvous", rv, "-wait-file", release, "-timeout-ms", "10000", "-no-unlock=true")
-	p := startFixture(t, 0, release, args...)
+	p := c.startFixture(t, 0, release, args...)
 	awaitCheckpoint(t, rv, "locked", p.cmd.Process.Pid)
 	return p
 }

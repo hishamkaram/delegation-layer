@@ -436,6 +436,10 @@ func TestCatalogDeferredAdmissionNormalizesAndDeeplyIsolatesProfiles(t *testing.
 	finalized.Plan.Arguments = slices.Clone(pending.Plan.Arguments)
 	finalized.Plan.InputFiles = slices.Clone(pending.Plan.InputFiles)
 	finalized.Plan.OutputArtifacts = slices.Clone(pending.Plan.OutputArtifacts)
+	before, err := json.Marshal([]any{pending.Plan, pending.Effective, pending.WritableRoots, finalized.Plan, finalized.Effective, finalized.WritableRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	candidate := requireCatalogDeferredCandidate(t, fixture, pending, finalized)
 	admitted, err := candidate.Admit()
@@ -462,13 +466,26 @@ func TestCatalogDeferredAdmissionNormalizesAndDeeplyIsolatesProfiles(t *testing.
 		t.Fatalf("second static admission was rejected: %v", err)
 	}
 	assertDeferredAdmissionIsolation(t, second)
+	after, err := json.Marshal([]any{pending.Plan, pending.Effective, pending.WritableRoots, finalized.Plan, finalized.Effective, finalized.WritableRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("catalog normalization or a returned profile mutated factory storage")
+	}
 }
 
 func requireCatalogDeferredCandidate(t *testing.T, fixture deferredAdmissionFixture, admitProfile, finalizeProfile PreparedProfile) ProfileCandidate {
 	t.Helper()
 	registration := testRegistration(fixture.request.Provider, fixture.request.Mode)
 	registration.Prepare = func(task.TaskRecord, []string) (ProfileCandidate, error) {
-		return fixture.candidate(admitProfile, finalizeProfile), nil
+		// Return the factory's shared backing data. The catalog owns isolation;
+		// a cloning fake would conceal a missing clone at that boundary.
+		return ProfileCandidate{
+			Directory: fixture.request.CanonicalCwd, WritableRoots: fixture.roots, Inspection: &fixture.definition,
+			Admit:    func() (PreparedProfile, error) { return admitProfile, nil },
+			Finalize: func(json.RawMessage, time.Time) (PreparedProfile, error) { return finalizeProfile, nil },
+		}, nil
 	}
 	catalog, err := NewCatalog(registration)
 	if err != nil {

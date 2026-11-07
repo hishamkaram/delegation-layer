@@ -155,7 +155,7 @@ esac
     def load_receipt(self, path=None):
         return json.loads((path or self.receipt_path).read_text(encoding="utf-8"))
 
-    def write_passing_aggregate_case(self, index, case, case_directory):
+    def write_passing_aggregate_case(self, index, case, case_directory, *, installed_paths=None):
         aliases = evidence._expected_task_aliases(case.provider, case.scenario)
         session = "session-" + case.case_id
         tasks = {
@@ -198,14 +198,16 @@ esac
             "provider_executable": first_runtime["executable"],
             "provider_version": first_runtime["version"],
             "schema_version": 2, "representation": "installed-paths",
-            "installed_executables": {name: str((self.extract / name).resolve()) for name in verifier.BINARIES},
+            "installed_executables": installed_paths or {
+                name: str((self.extract / name).resolve()) for name in verifier.BINARIES},
         }), encoding="utf-8")
         (case_directory / "cleanup.json").write_text(json.dumps({
             "status": "removed", "supervisor_shutdown_observed": True,
             "raw_process_captures": "removed",
         }), encoding="utf-8")
 
-    def write_aggregate(self, *, source_revision=REVISION, status="PASS", require_pass=False):
+    def write_aggregate(self, *, source_revision=REVISION, status="PASS", require_pass=False,
+                        first_case_paths=None):
         root = self.root / "native-aggregate-fixture"
         (root / evidence.CASE_ROOT_NAME).mkdir(parents=True)
         (root / evidence.COMPACT_RECEIPT_ROOT_NAME).mkdir()
@@ -213,7 +215,9 @@ esac
         for index, case in enumerate(evidence.EXPECTED_CASES):
             case_directory = evidence.prepare_case_directory(root, case.case_id)
             if status == "PASS" or (status == "FAIL" and index):
-                self.write_passing_aggregate_case(index, case, case_directory)
+                self.write_passing_aggregate_case(
+                    index, case, case_directory,
+                    installed_paths=first_case_paths if index == 0 else None)
                 matrix.append("\t".join((case.case_id, case.provider, case.permission,
                                          case.scenario, "0", "PASS", case.case_output)) + "\n")
             elif status == "BLOCKED":
@@ -499,7 +503,7 @@ esac
         self.assertEqual(receipt["failure"]["code"], "aggregate_case_digest_mismatch")
         self.assertTrue(self.assets.exists())
 
-    def test_native_finalizer_rejects_case_binaries_not_bound_to_archive(self):
+    def test_native_finalizer_rejects_tampered_case_cleanup_authorization(self):
         self.assertEqual(self.verify(), 0)
         aggregate_receipt = self.write_aggregate()
         aggregate = json.loads(aggregate_receipt.read_text(encoding="utf-8"))
@@ -529,6 +533,29 @@ esac
         self.assertEqual(code, 1)
         self.assertEqual(self.load_receipt(final_receipt)["failure"]["code"],
                          "aggregate_case_cleanup_journal_invalid")
+        self.assertTrue(self.assets.exists())
+
+    def test_native_finalizer_rejects_case_binaries_not_bound_to_archive(self):
+        self.assertEqual(self.verify(), 0)
+        selected = {name: str((self.extract / name).resolve()) for name in verifier.BINARIES}
+        selected["delegate"] = str(self.root / "foreign" / "delegate")
+        # Build and authorize this independently valid case before aggregate sealing.
+        aggregate_receipt = self.write_aggregate(first_case_paths=selected)
+        aggregate = json.loads(aggregate_receipt.read_text(encoding="utf-8"))
+        self.assertEqual(aggregate["status"], "PASS")
+        self.assertEqual(aggregate["cases"][0]["binary_identities"]["paths"], selected)
+        exit_file = self.root / "acceptance.exit"
+        exit_file.write_text("0\n", encoding="ascii")
+        final_receipt = self.root / "native-case-binary-selection.json"
+        code = verifier.finalize_native(Namespace(
+            receipt=str(final_receipt), archive_receipt=str(self.receipt_path),
+            aggregate_receipt=str(aggregate_receipt), assets_dir=str(self.assets),
+            extract_dir=str(self.extract), acceptance_outcome="success",
+            exit_code_file=str(exit_file), tag=TAG, source_revision=REVISION,
+        ))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.load_receipt(final_receipt)["failure"]["code"],
+                         "native_case_binary_selection_mismatch")
         self.assertTrue(self.assets.exists())
 
     def test_native_finalizer_replays_after_terminal_write_interruption(self):

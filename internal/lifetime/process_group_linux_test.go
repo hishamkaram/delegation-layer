@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -231,16 +230,22 @@ func runLinuxOrphanHelperMode(t *testing.T) bool {
 
 func killVerifiedLinuxTestProcess(t *testing.T, ref LaunchRef) {
 	t.Helper()
-	present, token, err := observeStartedProcessIdentity(ref.PID())
+	operations := nativeLinuxPidfdOperations()
+	handle, present, err := openVerifiedLinuxProcessHandle(ref.PGID(), ref, operations)
 	if err != nil {
-		t.Logf("observe cleanup PID %d: %v", ref.PID(), err)
+		t.Errorf("open verified cleanup PID %d: %v", ref.PID(), err)
 		return
 	}
-	if !present || token != ref.StartToken() {
+	if !present {
 		return
 	}
-	if err = rawProcessSignal(ref.PID(), syscall.SIGKILL); err != nil && !errors.Is(err, errProcessNoSuchEntity) {
-		t.Logf("kill cleanup PID %d: %v", ref.PID(), err)
+	defer func() {
+		if closeErr := operations.close(handle.fd); closeErr != nil {
+			t.Errorf("close cleanup pidfd: %v", closeErr)
+		}
+	}()
+	if err = unix.PidfdSendSignal(handle.fd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+		t.Errorf("kill verified cleanup PID %d: %v", ref.PID(), err)
 	}
 }
 

@@ -17,51 +17,58 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 35 {
+	if registration.Prepare == nil {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
-	checks := []struct {
-		index   int
-		matches bool
-	}{
-		{2, registration.Interpreters[2].Reference().Equal(historicalNativeReferenceForMode(Mode))},
-		{3, registration.Interpreters[3].Reference().Equal(historicalNativeReferenceForMode(WorkspaceWriteMode))},
-		{4, registration.Interpreters[4].Reference().Equal(legacyNativeReferenceForMode(Mode))},
-		{5, registration.Interpreters[5].Reference().Equal(legacyNativeReferenceForMode(WorkspaceWriteMode))},
-		{6, registration.Interpreters[6].Reference().Equal(legacyPortableReferenceForMode(Mode))},
-		{7, registration.Interpreters[7].Reference().Equal(legacyPortableReferenceForMode(WorkspaceWriteMode))},
-		{8, registration.Interpreters[8].Reference().Equal(LegacyReference())},
-		{13, registration.Interpreters[13].Reference().Equal(previousNativeProbeReferenceForMode(Mode))},
-		{14, registration.Interpreters[14].Reference().Equal(previousNativeProbeReferenceForMode(WorkspaceWriteMode))},
-		{17, registration.Interpreters[17].Reference().Equal(preAttributionReferenceForMode(Mode))},
-		{18, registration.Interpreters[18].Reference().Equal(preAttributionReferenceForMode(WorkspaceWriteMode))},
-		{19, registration.Interpreters[19].Reference().Equal(preAttributionInteractionReference(Mode))},
-		{20, registration.Interpreters[20].Reference().Equal(preAttributionInteractionReference(WorkspaceWriteMode))},
-		{21, registration.Interpreters[21].Reference().Equal(unscopedReference(WorkspaceWriteMode))},
-		{22, registration.Interpreters[22].Reference().Equal(unscopedInteractionReference(Mode))},
-		{23, registration.Interpreters[23].Reference().Equal(unscopedInteractionReference(WorkspaceWriteMode))},
-		{24, registration.Interpreters[24].Reference().Equal(unscopedReference(Mode))},
-		{25, registration.Interpreters[25].Reference().Equal(scopedReference(Mode))},
-		{26, registration.Interpreters[26].Reference().Equal(scopedReference(WorkspaceWriteMode))},
-		{27, registration.Interpreters[27].Reference().Equal(scopedInteractionReference(Mode))},
-		{28, registration.Interpreters[28].Reference().Equal(scopedInteractionReference(WorkspaceWriteMode))},
-		{33, registration.Interpreters[33].Reference().Equal(projectionReference(Mode))},
-		{34, registration.Interpreters[34].Reference().Equal(projectionReference(WorkspaceWriteMode))},
-	}
-	for _, check := range checks {
-		if !check.matches {
-			t.Fatalf("legacy predicate reference at index %d is not registered", check.index)
+	registry := retainedRegistry(t)
+	for _, ref := range []task.PredicateRef{
+		ReferenceForMode(Mode),
+		ReferenceForMode(WorkspaceWriteMode),
+		historicalNativeReferenceForMode(Mode),
+		historicalNativeReferenceForMode(WorkspaceWriteMode),
+		legacyNativeReferenceForMode(Mode),
+		legacyNativeReferenceForMode(WorkspaceWriteMode),
+		legacyPortableReferenceForMode(Mode),
+		legacyPortableReferenceForMode(WorkspaceWriteMode),
+		LegacyReference(),
+		previousNativeProbeReferenceForMode(Mode),
+		previousNativeProbeReferenceForMode(WorkspaceWriteMode),
+		preAttributionReferenceForMode(Mode),
+		preAttributionReferenceForMode(WorkspaceWriteMode),
+		preAttributionInteractionReference(Mode),
+		preAttributionInteractionReference(WorkspaceWriteMode),
+		unscopedReference(WorkspaceWriteMode),
+		unscopedInteractionReference(Mode),
+		unscopedInteractionReference(WorkspaceWriteMode),
+		unscopedReference(Mode),
+		scopedReference(Mode),
+		scopedReference(WorkspaceWriteMode),
+		scopedInteractionReference(Mode),
+		scopedInteractionReference(WorkspaceWriteMode),
+		projectionReference(Mode),
+		projectionReference(WorkspaceWriteMode),
+		advisoryReference(Mode),
+		advisoryReference(WorkspaceWriteMode),
+		advisoryInteractionReference(Mode),
+		advisoryInteractionReference(WorkspaceWriteMode),
+	} {
+		if _, err := registry.Resolve(ref); err != nil {
+			t.Fatalf("required predicate %+v is not resolvable: %v", ref, err)
 		}
 	}
 }
 
 func TestInteractionRegistration(t *testing.T) {
-	registration := Registration()
 	description := Description()
-	if !registration.Interpreters[9].Reference().Equal(interactionReference(Mode)) || !registration.Interpreters[10].Reference().Equal(interactionReference(WorkspaceWriteMode)) ||
-		!registration.Interpreters[11].Reference().Equal(historicalInteractionReference(Mode)) || !registration.Interpreters[12].Reference().Equal(historicalInteractionReference(WorkspaceWriteMode)) ||
-		!registration.Interpreters[15].Reference().Equal(previousInteractionReference(Mode)) || !registration.Interpreters[16].Reference().Equal(previousInteractionReference(WorkspaceWriteMode)) {
-		t.Fatal("interactive predicates missing")
+	registry := retainedRegistry(t)
+	for _, ref := range []task.PredicateRef{
+		interactionReference(Mode), interactionReference(WorkspaceWriteMode),
+		historicalInteractionReference(Mode), historicalInteractionReference(WorkspaceWriteMode),
+		previousInteractionReference(Mode), previousInteractionReference(WorkspaceWriteMode),
+	} {
+		if _, err := registry.Resolve(ref); err != nil {
+			t.Fatalf("interactive predicate %+v is not resolvable: %v", ref, err)
+		}
 	}
 	if !description.Interaction.Clarification || description.Interaction.Steering != false {
 		t.Fatalf("wrong interaction capabilities: %+v", description.Interaction)

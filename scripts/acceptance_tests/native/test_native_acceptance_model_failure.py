@@ -2,8 +2,6 @@
 
 from argparse import Namespace
 
-import ast
-import inspect
 import json
 from pathlib import Path
 import tempfile
@@ -118,23 +116,20 @@ class ModelDiscoveryFailureContractTests(unittest.TestCase):
             self.validate(response("failed", "discovery_failed", failure=failure(), error=ERROR_TEXT,
                                    diagnostics=[]))
 
-    def test_summary_statically_excludes_the_diagnostic_fields(self):
-        tree = ast.parse(inspect.getsource(provider_policy.validate_model_discovery_response))
-        returns = [node.value for node in ast.walk(tree) if isinstance(node, ast.Return)]
-        self.assertEqual(len(returns), 1)
-        summary = returns[0]
-        if not isinstance(summary, ast.Dict):
-            self.fail("the discovery summary must be a dictionary literal")
-        keys: set[object] = set()
-        for key in summary.keys:
-            if not isinstance(key, ast.Constant):
-                self.fail("the discovery summary must use literal keys")
-            keys.add(key.value)
-        self.assertEqual(keys,
-                         {"status", "reason_code", "complete", "source", "model_count", "effort_count"})
-        constants = {node.value for node in ast.walk(summary) if isinstance(node, ast.Constant)}
-        names = {node.id for node in ast.walk(summary) if isinstance(node, ast.Name)}
-        self.assertFalse({"failure", "error"} & (constants | names))
+    def test_summary_contains_only_the_independent_public_projection(self):
+        for status, reason in (("available", "ok"), ("partial", "partial_catalog"), *FAILURE_STATUSES):
+            with self.subTest(status=status):
+                fields = ({"failure": failure(recovery_command=RECOVERY), "error": ERROR_TEXT}
+                          if (status, reason) in FAILURE_STATUSES else {})
+                summary = self.validate(response(status, reason, **fields))
+                self.assertEqual(summary, {
+                    "status": status, "reason_code": reason, "complete": status == "available",
+                    "source": "pi --list-models" if status in {"available", "partial"} else "none",
+                    "model_count": 1 if status in {"available", "partial"} else 0,
+                    "effort_count": None,
+                })
+                self.assertNotIn(ERROR_TEXT, json.dumps(summary))
+                self.assertNotIn(RECOVERY, json.dumps(summary))
 
 
 class ObservedExitPolicyTests(unittest.TestCase):

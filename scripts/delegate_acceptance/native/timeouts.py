@@ -51,6 +51,7 @@ class TimeoutFifoLease:
         self.device: int | None = None
         self.inode: int | None = None
         self.fd: int | None = None
+        self._close_error: BaseException | None = None
         self.buffer = bytearray()
         self.writer_observed = False
         self.ready = False
@@ -124,13 +125,29 @@ class TimeoutFifoLease:
                         f"{self.label} FIFO has malformed readiness evidence")
 
     def close(self) -> None:
+        if self._close_error is not None:
+            raise self._close_error
         if self.fd is None:
             return
+        descriptor, self.fd = self.fd, None
+        # A failed close leaves native closure uncertain; never retry a number
+        # the kernel may already have released and another open may have reused.
         try:
-            os.close(self.fd)
-        except OSError:
-            pass
-        self.fd = None
+            os.close(descriptor)
+        except BaseException as error:
+            self._close_error = error
+            raise
+
+
+class _TimeoutLeaseSetupError(AcceptanceFailure):
+    """Keep the partial owner reachable when constructor cleanup is unresolved."""
+
+    def __init__(self, owner: TimeoutLeaseOwner, cleanup_failures: tuple[BaseException, ...]):
+        super().__init__(
+            "timeout FIFO setup failed and reader closure is unverified; "
+            f"retained directory: {owner.directory}")
+        self.owner = owner
+        self.cleanup_failures = cleanup_failures
 
 
 class TimeoutLeaseOwner:
@@ -151,12 +168,21 @@ class TimeoutLeaseOwner:
         self.liveness: dict[str, object] | None = None
         if enabled:
             directory_owner.create("timeout liveness leases", self.directory, workspace)
-            self.leases = {
-                "parent": TimeoutFifoLease(
-                    self.parent_fifo, "timeout parent", self.parent_ready_marker),
-                "child": TimeoutFifoLease(
-                    self.child_fifo, "timeout child", self.child_ready_marker),
-            }
+            try:
+                self.leases["parent"] = TimeoutFifoLease(
+                    self.parent_fifo, "timeout parent", self.parent_ready_marker)
+                self.leases["child"] = TimeoutFifoLease(
+                    self.child_fifo, "timeout child", self.child_ready_marker)
+            except BaseException as error:
+                cleanup_failures = []
+                for lease in self.leases.values():
+                    try:
+                        lease.close()
+                    except BaseException as cleanup_error:
+                        cleanup_failures.append(cleanup_error)
+                if cleanup_failures:
+                    raise _TimeoutLeaseSetupError(self, tuple(cleanup_failures)) from error
+                raise
 
     def cleanup(self) -> bool:
         failures: list[BaseException] = []
@@ -164,7 +190,11 @@ class TimeoutLeaseOwner:
             if not isinstance(lease, TimeoutFifoLease):
                 failures.append(AcceptanceFailure("timeout liveness lease is malformed"))
                 continue
-            lease.close()
+            try:
+                lease.close()
+            except BaseException as error:
+                failures.append(error)
+                continue
             try:
                 try:
                     lease.path.lstat()

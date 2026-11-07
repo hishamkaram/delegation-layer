@@ -81,9 +81,22 @@ func lifetimeWireNoopLaunchGateFactory(*exec.Cmd) (LaunchGate, error) {
 	return lifetimeWireNoopLaunchGate{}, nil
 }
 
-func startLifetimeWireServer(guardianConn net.Conn, taskID string, expected []lifetimeWireExpectation) <-chan error {
+func startLifetimeWireServer(t *testing.T, guardianConn net.Conn, taskID string, expected []lifetimeWireExpectation) <-chan error {
+	t.Helper()
 	serverErr := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		if err := guardianConn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Error(err)
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("wire server did not join after connection closure")
+		}
+	})
 	go func() {
+		defer close(done)
 		codec, err := newLifetimeCodec(guardianConn)
 		if err != nil {
 			serverErr <- errors.Join(err, guardianConn.Close())
@@ -111,8 +124,9 @@ func startLifetimeWireServer(guardianConn net.Conn, taskID string, expected []li
 
 func TestLifetimeWorkerClientProtocolOrder(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("a", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 123, accepted: true},
@@ -125,6 +139,7 @@ func TestLifetimeWorkerClientProtocolOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	if err = client.StartCommand(cmd, func() error {
 		cmd.Process = &os.Process{Pid: 123}
@@ -138,7 +153,7 @@ func TestLifetimeWorkerClientProtocolOrder(t *testing.T) {
 	if err = client.CloseTask(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -154,8 +169,9 @@ func TestLifetimeWorkerClientProtocolOrder(t *testing.T) {
 
 func TestLifetimeWorkerClientDefersStartedReplyFailureUntilAfterWait(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("d", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 321, code: lifetimeGuardianCodeStarted},
@@ -166,6 +182,7 @@ func TestLifetimeWorkerClientDefersStartedReplyFailureUntilAfterWait(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	if err = client.StartCommand(cmd, func() error {
 		cmd.Process = &os.Process{Pid: 321}
@@ -181,7 +198,7 @@ func TestLifetimeWorkerClientDefersStartedReplyFailureUntilAfterWait(t *testing.
 	if err = client.CloseTask(t.Context()); err == nil || !strings.Contains(err.Error(), lifetimeGuardianCodeStarted) {
 		t.Fatalf("close error = %v, want retained guardian refusal", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -197,8 +214,9 @@ func TestLifetimeWorkerClientDefersStartedReplyFailureUntilAfterWait(t *testing.
 
 func TestLifetimeWorkerClientTreatsAcceptedTerminationAsTerminal(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("e", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 654, accepted: true},
@@ -210,6 +228,7 @@ func TestLifetimeWorkerClientTreatsAcceptedTerminationAsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	if err = client.StartCommand(cmd, func() error {
 		cmd.Process = &os.Process{Pid: 654}
@@ -226,7 +245,7 @@ func TestLifetimeWorkerClientTreatsAcceptedTerminationAsTerminal(t *testing.T) {
 	if err = client.CloseTask(t.Context()); err != nil {
 		t.Fatalf("close after accepted termination: %v", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -236,8 +255,9 @@ func TestLifetimeWorkerClientTreatsAcceptedTerminationAsTerminal(t *testing.T) {
 
 func TestLifetimeWorkerClientTerminationDoesNotWaitForBlockedStart(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("7", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStop, accepted: true},
@@ -250,11 +270,17 @@ func TestLifetimeWorkerClientTerminationDoesNotWaitForBlockedStart(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	startEntered := make(chan struct{})
 	startRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseStart := func() { releaseOnce.Do(func() { close(startRelease) }) }
 	startDone := make(chan error, 1)
+	startJoined := make(chan struct{})
+	cleanupLifetimeWireWork(t, releaseStart, workerConn, startJoined, "blocked StartCommand")
 	go func() {
+		defer close(startJoined)
 		startDone <- client.StartCommand(cmd, func() error {
 			close(startEntered)
 			<-startRelease
@@ -269,20 +295,22 @@ func TestLifetimeWorkerClientTerminationDoesNotWaitForBlockedStart(t *testing.T)
 	}
 
 	terminateDone := make(chan error, 1)
-	go func() { terminateDone <- client.Terminate(t.Context()) }()
+	terminateJoined := make(chan struct{})
+	cleanupLifetimeWireWork(t, releaseStart, workerConn, terminateJoined, "termination")
+	go func() { defer close(terminateJoined); terminateDone <- client.Terminate(t.Context()) }()
 	select {
 	case err = <-terminateDone:
 		if err != nil {
 			t.Fatalf("terminate while native start was blocked: %v", err)
 		}
 	case <-time.After(time.Second):
-		close(startRelease)
+		releaseStart()
 		<-startDone
 		<-terminateDone
 		t.Fatal("termination waited for the blocked native start")
 	}
 
-	close(startRelease)
+	releaseStart()
 	if err = <-startDone; err != nil {
 		t.Fatalf("started process was not retained for the execution-owned wait: %v", err)
 	}
@@ -292,7 +320,7 @@ func TestLifetimeWorkerClientTerminationDoesNotWaitForBlockedStart(t *testing.T)
 	if err = client.CloseTask(t.Context()); err != nil {
 		t.Fatalf("close after termination during start: %v", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -302,8 +330,9 @@ func TestLifetimeWorkerClientTerminationDoesNotWaitForBlockedStart(t *testing.T)
 
 func TestLifetimeWorkerClientTerminationUsesIndependentControlDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("e", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageStop, accepted: true},
 	})
@@ -313,11 +342,12 @@ func TestLifetimeWorkerClientTerminationUsesIndependentControlDeadline(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	client.deadline = time.Now().Add(-time.Second)
 	if err = client.Terminate(t.Context()); err != nil {
 		t.Fatalf("terminate after task deadline: %v", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -327,8 +357,9 @@ func TestLifetimeWorkerClientTerminationUsesIndependentControlDeadline(t *testin
 
 func TestLifetimeWorkerClientFinishHonorsImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("8", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 123, accepted: true},
@@ -339,6 +370,7 @@ func TestLifetimeWorkerClientFinishHonorsImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	if err = client.StartCommand(cmd, func() error {
 		cmd.Process = &os.Process{Pid: 123}
@@ -350,7 +382,7 @@ func TestLifetimeWorkerClientFinishHonorsImmutableDeadline(t *testing.T) {
 	if err = client.FinishCommand(t.Context(), cmd); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("finish after task deadline = %v, want context deadline exceeded", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -360,8 +392,9 @@ func TestLifetimeWorkerClientFinishHonorsImmutableDeadline(t *testing.T) {
 
 func TestLifetimeWorkerClientCloseHonorsImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	taskID := strings.Repeat("9", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 	})
 
@@ -370,11 +403,12 @@ func TestLifetimeWorkerClientCloseHonorsImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	client.deadline = time.Now().Add(-time.Second)
 	if err = client.CloseTask(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("close after task deadline = %v, want context deadline exceeded", err)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -384,9 +418,10 @@ func TestLifetimeWorkerClientCloseHonorsImmutableDeadline(t *testing.T) {
 
 func TestLifetimeWorkerClientBindsHelloToImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	deadlineConn := &lifetimeGuardianDeadlineConn{Conn: workerConn, deadline: make(chan time.Time, 1)}
 	taskID := strings.Repeat("f", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 	})
 	deadline := time.Now().Add(2 * time.Second)
@@ -395,10 +430,11 @@ func TestLifetimeWorkerClientBindsHelloToImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	if got := <-deadlineConn.deadline; !got.Equal(deadline) {
 		t.Fatalf("hello deadline = %v, want immutable deadline %v", got, deadline)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -411,9 +447,10 @@ func TestLifetimeWorkerClientBindsHelloToImmutableDeadline(t *testing.T) {
 
 func TestLifetimeWorkerClientBindsHelloToLongImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	deadlineConn := &lifetimeGuardianDeadlineConn{Conn: workerConn, deadline: make(chan time.Time, 1)}
 	taskID := strings.Repeat("0", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 	})
 	taskDeadline := time.Now().Add(2 * time.Minute)
@@ -424,11 +461,12 @@ func TestLifetimeWorkerClientBindsHelloToLongImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	got := <-deadlineConn.deadline
 	if !got.Equal(taskDeadline) {
 		t.Fatalf("hello deadline = %v, want immutable task deadline %v", got, taskDeadline)
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -459,9 +497,10 @@ func (c *lifetimeWireDeadlineHistoryConn) snapshot() []time.Time {
 
 func TestLifetimeWorkerClientBindsFinishToImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	deadlineConn := &lifetimeWireDeadlineHistoryConn{Conn: workerConn}
 	taskID := strings.Repeat("1", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 456, accepted: true},
@@ -475,6 +514,7 @@ func TestLifetimeWorkerClientBindsFinishToImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	cmd := exec.Command("provider")
 	if err = client.StartCommand(cmd, func() error {
 		cmd.Process = &os.Process{Pid: 456}
@@ -494,7 +534,7 @@ func TestLifetimeWorkerClientBindsFinishToImmutableDeadline(t *testing.T) {
 			t.Fatalf("work transition %d deadline = %v, want immutable task deadline %v", index, got, taskDeadline)
 		}
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -504,9 +544,10 @@ func TestLifetimeWorkerClientBindsFinishToImmutableDeadline(t *testing.T) {
 
 func TestLifetimeWorkerClientBindsCloseToImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	deadlineConn := &lifetimeWireDeadlineHistoryConn{Conn: workerConn}
 	taskID := strings.Repeat("2", 32)
-	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+	serverErr := startLifetimeWireServer(t, guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageClose, accepted: true},
 	})
@@ -518,6 +559,7 @@ func TestLifetimeWorkerClientBindsCloseToImmutableDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeClient := ownLifetimeWireClient(t, client)
 	if err = client.CloseTask(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +572,7 @@ func TestLifetimeWorkerClientBindsCloseToImmutableDeadline(t *testing.T) {
 			t.Fatalf("close transition %d deadline = %v, want immutable task deadline %v", index, got, taskDeadline)
 		}
 	}
-	if err = client.Close(); err != nil {
+	if err = closeClient(); err != nil {
 		t.Fatal(err)
 	}
 	if err = <-serverErr; err != nil {
@@ -540,6 +582,7 @@ func TestLifetimeWorkerClientBindsCloseToImmutableDeadline(t *testing.T) {
 
 func TestLifetimeCodecCallHonorsContext(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
+	cleanupLifetimeTestResource(t, workerConn)
 	cleanupLifetimeTestResource(t, guardianConn)
 	codec, err := newLifetimeCodec(workerConn)
 	if err != nil {

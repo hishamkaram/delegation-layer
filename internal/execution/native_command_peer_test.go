@@ -227,6 +227,18 @@ func TestNativeCommandPeerConcurrentSiblingsDoNotInheritIPC(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
+	// Keep one known socket batch open before any exec; the concurrent batches
+	// below still exercise creation racing exec, while this one guarantees that
+	// every sibling has real owned descriptors it must not inherit.
+	held := nativePeerCreateBatch(1)
+	t.Cleanup(func() {
+		if closeErr := held.close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if held.err != nil {
+		t.Fatal(held.err)
+	}
 	batches, siblings := make([]nativePeerSocketBatch, 2), make([]nativePeerSiblingResult, 4)
 	start := make(chan struct{})
 	var workers sync.WaitGroup
@@ -251,7 +263,7 @@ func TestNativeCommandPeerConcurrentSiblingsDoNotInheritIPC(t *testing.T) {
 			}
 		})
 	}
-	requireNativePeerSiblingIsolation(t, batches, siblings)
+	requireNativePeerSiblingIsolation(t, append(batches, held), siblings)
 }
 
 func requireNativePeerSiblingIsolation(t *testing.T, batches []nativePeerSocketBatch, siblings []nativePeerSiblingResult) {

@@ -21,7 +21,7 @@ import (
 )
 
 func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
-	store := newBareInspectionStore(t)
+	store, owner := newTerminalObservationStore(t)
 	blockPath := filepath.Join(store.Root, ".supervisor", "block-cleanup-remove")
 	releasePath := filepath.Join(store.Root, ".supervisor", "release-cleanup-remove")
 	supervisor, statusCalls, unfilteredStatusCalls := newTerminalEventInspectionSupervisorWithEnvironment(
@@ -34,18 +34,13 @@ func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
 	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	released := false
-	defer func() {
-		if !released {
-			if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
-				t.Error(err)
-			}
-		}
-	}()
 
 	seedBlockedTerminalInspectionEvent(t, ctx, store, blockPath, supervisor, operation, job)
 	callbackDone := make(chan error, 1)
+	callbackFinished := make(chan struct{})
+	ownTerminalObservationWork(t, owner, releasePath, callbackFinished)
 	go func() {
+		defer close(callbackFinished)
 		callbackDone <- runTerminalEvent(runnerArguments{Root: store.Root, PueueID: job.ID, ExitCode: "0"}, terminalEventMaintenanceDependencies(
 			statusCalls,
 			unfilteredStatusCalls,
@@ -59,7 +54,10 @@ func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
 		err   error
 	}
 	results := make(chan result, 1)
+	admissionFinished := make(chan struct{})
+	ownTerminalObservationWork(t, owner, releasePath, admissionFinished)
 	go func() {
+		defer close(admissionFinished)
 		facts, _, err := admissioncore.RunInspection(operation, supervisor, operation.Request().Binding.WorkerExecutable, store.Root)
 		results <- result{facts: facts, err: err}
 	}()
@@ -79,7 +77,6 @@ func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
 	if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	released = true
 	if callbackErr := <-callbackDone; callbackErr != nil {
 		t.Fatal(callbackErr)
 	}
@@ -91,7 +88,7 @@ func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
 }
 
 func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallback(t *testing.T) {
-	store := newBareInspectionStore(t)
+	store, owner := newTerminalObservationStore(t)
 	base := filepath.Join(store.Root, ".supervisor")
 	blockPath := filepath.Join(base, "block-cleanup-status")
 	releasePath := filepath.Join(base, "release-cleanup-status")
@@ -111,14 +108,6 @@ func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallb
 			t.Fatal(err)
 		}
 	}
-	released := false
-	defer func() {
-		if !released {
-			if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
-				t.Error(err)
-			}
-		}
-	}()
 	if err := operation.RecordReceiptContext(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +117,10 @@ func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallb
 	}
 
 	callbackDone := make(chan error, 1)
+	callbackFinished := make(chan struct{})
+	ownTerminalObservationWork(t, owner, releasePath, callbackFinished)
 	go func() {
+		defer close(callbackFinished)
 		callbackDone <- runTerminalEvent(
 			runnerArguments{Root: store.Root, PueueID: job.ID, ExitCode: "0"},
 			terminalEventMaintenanceDependencies(statusCalls, unfilteredStatusCalls, environment...),
@@ -142,7 +134,6 @@ func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallb
 	if err = os.WriteFile(releasePath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	released = true
 	if callbackErr := <-callbackDone; callbackErr != nil {
 		t.Fatal(callbackErr)
 	}
@@ -154,6 +145,34 @@ func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallb
 	if total, unfiltered := statusCalls.Load(), unfilteredStatusCalls.Load(); total != 5 || unfiltered != 4 {
 		t.Fatalf("failed-pass retry made status_calls=%d unfiltered_status_calls=%d, want admission reconciliation and two streamed authorization/revalidation pairs", total, unfiltered)
 	}
+}
+
+// These concurrent cases use the component's retained-root ownership rather
+// than automatic temporary deletion if an actor cannot be joined.
+func newTerminalObservationStore(t *testing.T) (*taskdir.Store, *componentSupervisorFixture) {
+	t.Helper()
+	owner := newComponentSupervisorFixture(t, componentFiniteDaemon)
+	store, err := taskdir.InitStore(owner.root)
+	owner.ownStore(t, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, owner
+}
+
+func ownTerminalObservationWork(t *testing.T, owner *componentSupervisorFixture, releasePath string, finished <-chan struct{}) {
+	t.Helper()
+	owner.pending = append(owner.pending, finished)
+	t.Cleanup(func() {
+		if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
+			t.Error(err)
+		}
+		select {
+		case <-finished:
+		case <-time.After(15 * time.Second):
+			t.Errorf("terminal observation actor did not join; retain %s", owner.base)
+		}
+	})
 }
 
 func seedBlockedTerminalInspectionEvent(t *testing.T, ctx context.Context, store *taskdir.Store, blockPath string, supervisor *pueue.Client, operation *inspection.Operation, job pueue.Job) {

@@ -11,6 +11,17 @@ import { harnesses } from "./installer/catalog.mjs";
 import { routingPath } from "./installer/routing-rules.mjs";
 import { targetFor } from "./installer/selection.mjs";
 
+let unresolvedChild = false;
+
+function runChild(executable, args, options) {
+  const result = spawnSync(executable, args, { timeout: 30_000, killSignal: "SIGKILL", ...options });
+  if (result.pid > 0 && result.status === null && result.signal === null) unresolvedChild = true;
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, "fixture child terminated by a signal");
+  assert.notEqual(result.status, null, "fixture child has no observed exit");
+  return result;
+}
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installerPath = resolve(process.argv[2] ?? join(repositoryRoot, "scripts", "install-agent-integration.mjs"));
 const sourceDirectory = join(repositoryRoot, "skills", "agent-integration");
@@ -23,7 +34,7 @@ if (process.platform !== "win32") {
 }
 
 function runInstaller(args, { cwd, home, path, input = "" }) {
-  const result = spawnSync(process.execPath, [installerPath, ...args], {
+  const result = runChild(process.execPath, [installerPath, ...args], {
     cwd,
     encoding: "utf8",
     env: {
@@ -49,7 +60,7 @@ async function testEntryWithoutResolvableHome(root) {
   ].join("\n"));
   const environment = { ...process.env };
   delete environment.DELEGATION_LAYER_HOME;
-  const runWithoutHome = (argumentsList) => spawnSync(process.execPath, [
+  const runWithoutHome = (argumentsList) => runChild(process.execPath, [
     "--import",
     preloadPath,
     installerPath,
@@ -279,5 +290,6 @@ try {
 
   console.log("Agent integration installer behavior checks passed.");
 } finally {
-  await rm(root, { force: true, recursive: true });
+  if (unresolvedChild) console.error(`Retained installer fixture with unresolved child: ${root}`);
+  else await rm(root, { force: true, recursive: true });
 }

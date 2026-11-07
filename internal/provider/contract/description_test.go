@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -64,7 +65,14 @@ func assertField(t *testing.T, fields map[string]json.RawMessage, name, want str
 	if !ok {
 		t.Fatalf("field %q is absent", name)
 	}
-	if string(got) != want {
+	var gotValue, wantValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("field %q is invalid JSON: %v", name, err)
+	}
+	if err := json.Unmarshal([]byte(want), &wantValue); err != nil {
+		t.Fatalf("field %q expectation is invalid JSON: %v", name, err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
 		t.Fatalf("field %q = %s, want %s", name, got, want)
 	}
 }

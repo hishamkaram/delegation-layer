@@ -3,6 +3,7 @@ package admission
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,16 +81,44 @@ func TestRunAdmissionInspectionInitialReadUsesOperationDeadline(t *testing.T) {
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	lockDone := make(chan error, 1)
+	lockJoined := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-lockJoined:
+		case <-time.After(5 * time.Second):
+			t.Error("inspection lock holder did not join")
+		}
+	})
 	go func() {
+		defer close(lockJoined)
 		lockDone <- control.WithLock(context.Background(), func(_ *taskdir.ControlTransaction) error {
 			close(locked)
 			<-release
 			return nil
 		})
 	}()
-	<-locked
+	select {
+	case <-locked:
+	case lockErr := <-lockDone:
+		t.Fatalf("inspection lock failed before acquisition: %v", lockErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("inspection lock was not acquired")
+	}
 	result := make(chan error, 1)
+	joined := make(chan struct{})
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-joined:
+		case <-time.After(5 * time.Second):
+			t.Error("inspection admission did not join")
+		}
+	})
 	go func() {
+		defer close(joined)
 		_, _, runErr := RunInspection(operation, nil, "", "")
 		result <- runErr
 	}()
@@ -99,11 +128,9 @@ func TestRunAdmissionInspectionInitialReadUsesOperationDeadline(t *testing.T) {
 			t.Fatalf("initial evidence read ignored deadline error: %v", runErr)
 		}
 	case <-time.After(3 * time.Second):
-		close(release)
-		<-lockDone
 		t.Fatal("initial evidence read outlived the operation deadline")
 	}
-	close(release)
+	unblock()
 	if err = <-lockDone; err != nil {
 		t.Fatal(err)
 	}

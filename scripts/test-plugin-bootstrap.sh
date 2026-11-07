@@ -10,6 +10,7 @@ PLUGIN_ROOT="${ROOT}/plugin"
 PATH_BIN="${ROOT}/path-bin"
 INSTALL_DIR="${ROOT}/installed"
 SYSTEM_PATH="/usr/bin:/bin"
+export DELEGATE_TEST_INSTALL_LOG="${ROOT}/installer-invocations"
 HOME="${ROOT}/home"
 mkdir -p "${PLUGIN_ROOT}/scripts" "${PATH_BIN}" "${HOME}"
 cp "${BOOTSTRAP}" "${PLUGIN_ROOT}/scripts/ensure-delegate.sh"
@@ -18,6 +19,7 @@ chmod 0755 "${PLUGIN_ROOT}/scripts/ensure-delegate.sh"
 cat > "${PLUGIN_ROOT}/scripts/install-cli.sh" <<'INSTALLER'
 #!/usr/bin/env sh
 set -eu
+printf '%s\n' "${DELEGATION_LAYER_INSTALL_DIR}" >> "${DELEGATE_TEST_INSTALL_LOG}"
 mkdir -p "${DELEGATION_LAYER_INSTALL_DIR}"
 printf '%s\n' installed > "${DELEGATION_LAYER_INSTALL_DIR}/installer-marker"
 for binary in delegate delegate-run pueue pueued; do
@@ -69,7 +71,7 @@ done
 
 env HOME="${HOME}" DELEGATION_LAYER_INSTALL_DIR= PATH="${PATH_BIN}:${SYSTEM_PATH}" PLUGIN_ROOT="${PLUGIN_ROOT}" \
   "${PLUGIN_ROOT}/scripts/ensure-delegate.sh" > "${ROOT}/existing.out"
-[[ ! -f "${PATH_BIN}/installer-marker" ]] || {
+[[ ! -e "${DELEGATE_TEST_INSTALL_LOG}" ]] || {
   echo "ERROR: valid existing delegate triggered a reinstall." >&2
   exit 1
 }
@@ -77,6 +79,10 @@ env HOME="${HOME}" DELEGATION_LAYER_INSTALL_DIR= PATH="${PATH_BIN}:${SYSTEM_PATH
 rm "${PATH_BIN}/delegate"
 env HOME="${HOME}" DELEGATION_LAYER_INSTALL_DIR="${PATH_BIN}" PATH="${PATH_BIN}:${SYSTEM_PATH}" PLUGIN_ROOT="${PLUGIN_ROOT}" \
   "${PLUGIN_ROOT}/scripts/ensure-delegate.sh" > "${ROOT}/installed.out"
+[[ "$(cat "${DELEGATE_TEST_INSTALL_LOG}")" == "${PATH_BIN}" ]] || {
+  echo "ERROR: missing delegate must invoke exactly one installer at the selected destination." >&2
+  exit 1
+}
 [[ -f "${PATH_BIN}/installer-marker" ]] || {
   echo "ERROR: missing delegate did not trigger bootstrap." >&2
   exit 1

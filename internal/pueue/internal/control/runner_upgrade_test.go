@@ -146,48 +146,67 @@ func TestPlanQueuedRunnerCommandsPreservesSupervisedLaunchMarker(t *testing.T) {
 		{name: "inspection", inspection: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := canonicalTemp(t)
-			rootID, taskID := strings.Repeat("c", 32), strings.Repeat("d", 32)
-			identity := InspectionIdentity{RootID: rootID, TaskID: taskID, QueueGroup: "default"}
-			label := "delegate:" + rootID + ":" + taskID
-			if test.inspection {
-				label = identity.Label()
-			}
-			oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
-			newRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64))
-			replacement := RunnerCommandReplacement{
-				NumericID: 13, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
-				OldRunner: oldRunner, NewRunner: newRunner, Inspection: test.inspection,
-			}
-			if test.inspection {
-				replacement.InspectionGroup = "default"
-			}
-			job := jobWithOriginalCommand(Job{
-				ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued,
-			}, runnerCommand(oldRunner, replacement, true))
-
-			plans, err := planQueuedRunnerCommands(
-				QueueSnapshot{Jobs: []Job{job}},
-				map[int64]RunnerCommandReplacement{job.ID: replacement},
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			plan, found := plans[job.ID]
-			if !found || plan.expected != originalCommand(job) || plan.replacement != runnerCommand(newRunner, replacement, true) {
-				t.Fatalf("supervised runner plan = %+v, found=%v", plan, found)
-			}
-
-			job = jobWithOriginalCommand(job, runnerCommand(newRunner, replacement, true))
-			plans, err = planQueuedRunnerCommands(
-				QueueSnapshot{Jobs: []Job{job}},
-				map[int64]RunnerCommandReplacement{job.ID: replacement},
-			)
-			if err != nil || len(plans) != 0 {
-				t.Fatalf("current supervised command was not idempotent: plans=%v err=%v", plans, err)
-			}
+			assertSupervisedRunnerReplacement(t, test.inspection)
 		})
 	}
+}
+
+func assertSupervisedRunnerReplacement(t *testing.T, inspection bool) {
+	t.Helper()
+	root := canonicalTemp(t)
+	rootID, taskID := strings.Repeat("c", 32), strings.Repeat("d", 32)
+	identity := InspectionIdentity{RootID: rootID, TaskID: taskID, QueueGroup: "default"}
+	label := "delegate:" + rootID + ":" + taskID
+	if inspection {
+		label = identity.Label()
+	}
+	oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
+	newRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64))
+	replacement := RunnerCommandReplacement{
+		NumericID: 13, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
+		OldRunner: oldRunner, NewRunner: newRunner, Inspection: inspection,
+	}
+	if inspection {
+		replacement.InspectionGroup = "default"
+	}
+	job := jobWithOriginalCommand(Job{
+		ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued,
+	}, escapedCommand(append([]string{oldRunner}, supervisedRunnerFixtureArguments(replacement)...)...))
+
+	plans, err := planQueuedRunnerCommands(
+		QueueSnapshot{Jobs: []Job{job}},
+		map[int64]RunnerCommandReplacement{job.ID: replacement},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, found := plans[job.ID]
+	if !found || plan.expected != originalCommand(job) {
+		t.Fatalf("supervised runner plan = %+v, found=%v", plan, found)
+	}
+
+	output, decodeErr := exec.Command("/bin/sh", "-c", "set -- "+plan.replacement+"; printf '%s\\000' \"$@\"").Output()
+	want := append([]string{newRunner}, supervisedRunnerFixtureArguments(replacement)...)
+	if decodeErr != nil || !reflect.DeepEqual(strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00"), want) {
+		t.Fatalf("replacement argv=%q want=%q error=%v", output, want, decodeErr)
+	}
+	job = jobWithOriginalCommand(job, escapedCommand(want...))
+	plans, err = planQueuedRunnerCommands(
+		QueueSnapshot{Jobs: []Job{job}},
+		map[int64]RunnerCommandReplacement{job.ID: replacement},
+	)
+	if err != nil || len(plans) != 0 {
+		t.Fatalf("current supervised command was not idempotent: plans=%v err=%v", plans, err)
+	}
+}
+
+// Literal launch contract, independent of runnerCommand's supervision decision.
+func supervisedRunnerFixtureArguments(replacement RunnerCommandReplacement) []string {
+	arguments := []string{}
+	if replacement.Inspection {
+		arguments = append(arguments, "--inspection")
+	}
+	return append(arguments, "--guardian", "--supervised", "--root", replacement.RootPath, replacement.TaskID)
 }
 
 func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T) {
