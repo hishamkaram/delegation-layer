@@ -51,7 +51,7 @@ func TestReconcileStatusSharesOnePrivateSnapshotAcrossOverlappingClients(t *test
 	clients := privateTaskObservationClients(t, bound, identities, environment, entered)
 	scope := newTestCallScope(t, bound.options)
 	start, releaseStart := scope.barrier()
-	scope.onRelease(func() { releasePrivateStatus(t, releasePath) })
+	scope.onRelease(func() { releasePrivateStatusOnCleanup(t, releasePath) })
 	results := make(chan privateTaskObservationResult, callers)
 	workers := make([]*testCall[privateTaskObservationResult], callers)
 	for index, client := range clients {
