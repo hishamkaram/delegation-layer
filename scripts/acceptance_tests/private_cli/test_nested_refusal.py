@@ -193,6 +193,119 @@ class RefusedLeaderControlTests(unittest.TestCase):
         self.assertNotIn("private-secret", json.dumps(self.case.evidence))
 
 
+class NestedChildAdmissionReceiptTests(unittest.TestCase):
+    def setUp(self):
+        self.parent = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="nested-child-receipt-")))
+        owner = DirectoryOwner()
+        self.addCleanup(lambda: rollback_owned_directories(owner.transfer()))
+        controls = owner.create("nested controls", self.parent / "controls", self.parent)
+        self.case = NestedCase.__new__(NestedCase)
+        self.case.controls = controls
+        self.case.configuration = {"leader": "b" * 32, "w1": "c" * 32}
+        self.case.lifetime = FixtureLifetime()
+        self.case.lifetime.attempted_task_ids.append("b" * 32)
+        self.case.b_ids = self.case.lifetime.attempted_task_ids
+        self.case.responses = {"leader": {"task_id": "b" * 32, "task_record": "created", "admission": "admitted"}}
+        self.case.evidence = {"topology": "shared-warm", "milestones": {}}
+        self.command = Mock(side_effect=AssertionError("unknown child must not be observed"))
+        self.dispatch = Mock(side_effect=AssertionError("unknown child must not be redispatched"))
+        self.enterContext(patch.object(self.case, "command", self.command))
+        self.enterContext(patch.object(self.case, "dispatch", self.dispatch))
+        self.receipt = AcceptanceReceipt(self.parent / "receipt.json", 3, 1, {})
+        self.receipt.update_counts(dispatch_completed_count=1, admitted_task_count=1)
+        self.case.receipt = self.receipt
+        self.receipt.add_details(nested_survival=self.case.evidence)
+
+    def publish_capture(self, capture):
+        write_json(self.case.controls.directory / "w1-control-ended.json", {"control": "ended"}, replace=True)
+        write_json(self.case.controls.directory / "w1-dispatch.json", capture, replace=True)
+
+    def failed_child(self, capture):
+        self.publish_capture(capture)
+        before_counts = dict(self.receipt.counts)
+        with self.assertRaises(AcceptanceFailure) as raised:
+            self.case.nested_response("w1")
+        self.assertEqual(str(raised.exception), "nested admission was not proven")
+        self.assertEqual(self.case.b_ids, ["b" * 32])
+        self.assertEqual(self.case.responses, {"leader": {"task_id": "b" * 32, "task_record": "created", "admission": "admitted"}})
+        self.assertEqual(self.receipt.counts, before_counts)
+        self.command.assert_not_called()
+        self.dispatch.assert_not_called()
+        self.assertIn("failed_admission", self.case.evidence)
+        self.receipt.write("FAIL", {"status": "retained"}, raised.exception)
+        published = json.loads(self.receipt.output.read_text())
+        self.assertEqual(published["failure"]["exception_type"], "AcceptanceFailure")
+        return published["nested_survival"]["failed_admission"]
+
+    def test_unknown_child_cpu_refusal_retains_only_public_evidence(self):
+        response = cpu_refusal()
+        response["task_id"] = "c" * 32
+        capture = {"exit_code": 1, "response": response, "arguments": ["private-child-canary"],
+                   "stdout_tail": "private-child-canary", "stderr_tail": "private-child-canary"}
+        actual = self.failed_child(capture)
+        self.assertEqual(actual, {
+            "name": "w1", "requested_task_id": "c" * 32, "exit_code": 1, "response_present": True,
+            "schema_version": 1, "command": "dispatch", "root_id": "a" * 32, "task_id": "c" * 32,
+            "task_record": "unknown", "admission": "unknown",
+            "failure": {"code": "resource_pressure", "stage": "check-resources",
+                        "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"},
+            "resource_admission": {"status": "pressure", "diagnostics": {"host_cpu": {
+                "counter_unit": "ticks", "busy_threshold": 0.95, "required_streak": 3,
+                "intervals": [{"elapsed_ms": 1020, "busy_delta": 98, "total_delta": 100,
+                               "busy_fraction": 0.98, "classification": "hot"}]}}},
+        })
+        serialized = self.receipt.output.read_text()
+        self.assertNotIn("private-child-canary", serialized)
+        self.assertNotIn("private-secret", serialized)
+        self.assertEqual(json.loads((self.case.controls.directory / "w1-dispatch.json").read_text()), capture)
+
+    def test_missing_or_nonobject_response_retains_bounded_exit_and_unknown_markers(self):
+        for capture, expected_exit in (({"exit_code": 7}, 7), ({"exit_code": None, "response": []}, None),
+                                       ({"exit_code": True, "response": "private-child-canary"}, None),
+                                       ({"exit_code": "1"}, None), ({"exit_code": 2**63}, None)):
+            with self.subTest(exit_type=type(capture["exit_code"]).__name__):
+                self.case.evidence.pop("failed_admission", None)
+                actual = self.failed_child({**capture, "arguments": ["private-child-canary"],
+                                            "invocation_error": "private-child-canary", "stdout_tail": "private-child-canary"})
+                self.assertEqual(actual, {
+                    "name": "w1", "requested_task_id": "c" * 32, "exit_code": expected_exit, "response_present": False,
+                    "schema_version": None, "command": None, "root_id": None, "task_id": None,
+                    "task_record": None, "admission": None, "failure": {},
+                })
+                self.assertNotIn("private-child-canary", self.receipt.output.read_text())
+
+    def test_malformed_selected_fields_do_not_export_nested_objects(self):
+        response = {key: {"private-child-canary": ["private-child-canary"]} for key in (
+            "schema_version", "command", "root_id", "task_id", "task_record", "admission")}
+        response["failure"] = {key: ["private-child-canary"] for key in (
+            "code", "stage", "reason_code", "next_action", "error")}
+        actual = self.failed_child({"exit_code": -15, "response": response})
+        self.assertEqual(actual, {"name": "w1", "requested_task_id": "c" * 32, "exit_code": -15,
+                                  "response_present": True, "failure": {}})
+        self.assertNotIn("private-child-canary", self.receipt.output.read_text())
+
+    def test_unexpected_exit_does_not_turn_created_fields_into_admission_authority(self):
+        response = {"schema_version": 1, "command": "dispatch", "root_id": "a" * 32,
+                    "task_id": "c" * 32, "task_record": "created", "admission": "admitted"}
+        actual = self.failed_child({"exit_code": 7, "response": response})
+        self.assertEqual(actual, {"name": "w1", "requested_task_id": "c" * 32, "exit_code": 7,
+                                  "response_present": True, "failure": {}, **response})
+
+    def test_created_child_keeps_existing_admission_flow_without_failure_evidence(self):
+        response = {"schema_version": 1, "command": "dispatch", "root_id": "a" * 32,
+                    "task_id": "c" * 32, "task_record": "created", "admission": "admitted"}
+        self.publish_capture({"exit_code": 0, "response": response})
+        self.assertEqual(self.case.nested_response("w1"), response)
+        self.assertEqual(self.case.b_ids, ["b" * 32, "c" * 32])
+        self.assertEqual(self.case.responses, {"leader": {"task_id": "b" * 32, "task_record": "created", "admission": "admitted"},
+                                               "w1": response})
+        self.assertEqual(self.receipt.counts["dispatch_completed_count"], 2)
+        self.assertEqual(self.receipt.counts["admitted_task_count"], 2)
+        self.assertNotIn("failed_admission", self.case.evidence)
+        self.command.assert_not_called()
+        self.dispatch.assert_not_called()
+
+
 def expected_cpu():
     return {"counter_unit": "ticks", "busy_threshold": 0.95, "required_streak": 3,
             "intervals": [{"elapsed_ms": 1020, "busy_delta": 98, "total_delta": 100,

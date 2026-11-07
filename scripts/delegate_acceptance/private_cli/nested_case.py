@@ -77,6 +77,28 @@ class NestedCase:
                         receipt=self.receipts / (name + ".json"), capture_response=True,
                         phase="nested-external-observer", capture_root=self.lifetime.capture_token)
 
+    def _record_failed_admission(self, name, task_id, response, *, capture=None):
+        public = response if isinstance(response, dict) else {}
+        projected = {"name": name, "requested_task_id": task_id, "failure": {}}
+        for key in ("schema_version", "command", "root_id", "task_id", "task_record", "admission"):
+            value = public.get(key)
+            if (value is None or
+                    (key == "schema_version" and type(value) is int and value.bit_length() <= 64) or
+                    (key != "schema_version" and isinstance(value, str) and len(value) <= 256)):
+                projected[key] = value
+        failure = public.get("failure")
+        if isinstance(failure, dict):
+            projected["failure"] = {key: failure[key] for key in ("code", "stage", "reason_code", "next_action")
+                                    if isinstance(failure.get(key), str) and len(failure[key]) <= 256}
+        resource = resource_admission_evidence(public)
+        if resource is not None and "diagnostics" in resource:
+            projected["resource_admission"] = resource
+        if capture is not None:
+            code = capture.get("exit_code")
+            projected["exit_code"] = code if type(code) is int and -(2**31) <= code < 2**31 else None
+            projected["response_present"] = isinstance(response, dict)
+        self.evidence["failed_admission"] = projected
+
     def dispatch(self, state, task_id, brief, budget, name):
         if name == "warm-b":
             require(self.args.nested_topology == "other-warm" and state == self.b and self.b != self.a
@@ -90,17 +112,7 @@ class NestedCase:
         if response.get("task_id") == task_id and response.get("task_record") == "created":
             self.responses[name] = response
         else:
-            failure = response.get("failure")
-            self.evidence["failed_admission"] = {
-                "name": name, "requested_task_id": task_id,
-                **{key: response.get(key) for key in
-                   ("schema_version", "command", "root_id", "task_id", "task_record", "admission")},
-                "failure": {key: failure[key] for key in ("code", "stage", "reason_code", "next_action")
-                            if key in failure} if isinstance(failure, dict) else {},
-            }
-            resource = resource_admission_evidence(response)
-            if resource is not None and "diagnostics" in resource:
-                self.evidence["failed_admission"]["resource_admission"] = resource
+            self._record_failed_admission(name, task_id, response)
         require(response.get("task_id") == task_id and response.get("task_record") == "created",
                 "nested admission was not created; never redispatch")
         self.command(state, ["status", task_id], name + "-status")
@@ -116,9 +128,12 @@ class NestedCase:
         await_record(self.controls.directory / (role + "-control-ended.json"), deadline)
         capture = await_record(self.controls.directory / (role + "-dispatch.json"), deadline)
         response = capture.get("response")
-        require(capture.get("exit_code") in (0, 1) and isinstance(response, dict)
-                and response.get("task_record") == "created" and response.get("admission") == "admitted"
-                and response.get("task_id") == self.configuration[role], "nested admission was not proven")
+        admitted = (capture.get("exit_code") in (0, 1) and isinstance(response, dict)
+                    and response.get("task_record") == "created" and response.get("admission") == "admitted"
+                    and response.get("task_id") == self.configuration[role])
+        if not admitted:
+            self._record_failed_admission(role, self.configuration[role], response, capture=capture)
+        require(admitted, "nested admission was not proven")
         if response["task_id"] not in self.b_ids:
             self.b_ids.append(response["task_id"])
         self.responses[role] = response
@@ -212,7 +227,7 @@ class NestedCase:
             return requested
         if not attempted or candidate != attempted[-1] or failed.get("task_id") != candidate:
             return requested
-        # failed_admission exists only after the direct control's capture-owner
+        # Bootstrap failed_admission evidence follows the direct control's capture-owner
         # Wait. Warm refusals precede any leader attempt. An absent, unreconciled
         # leader cannot have launched the sole creator of nested workers.
         require(token is not None, "bootstrap task observation lacks its original root owner")
