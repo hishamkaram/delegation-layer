@@ -281,6 +281,9 @@ func (c *Client) CloseAfterPending(err error) error {
 		return nil
 	}
 	if c.options.WaitForPendingClose {
+		if c.options.pendingCloseObserver != nil && len(pendingHandles(err)) > 0 {
+			c.options.pendingCloseObserver()
+		}
 		return c.Close()
 	}
 	c.beginBackgroundClose()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +57,8 @@ func TestPrivateBindingResidentFailuresJoinVersionProbe(t *testing.T) {
 func assertPrivateResidentBindFailureSettlement(t *testing.T, fixture privateRecoverySettlementFixture, bind privateBindFailureOperation) {
 	t.Helper()
 	fixture.options.WaitForPendingClose = true
+	pendingClose := make(chan struct{})
+	fixture.options.pendingCloseObserver = sync.OnceFunc(func() { close(pendingClose) })
 	var completed atomic.Bool
 	fixture.options.Observer = func(event CommandEvent) {
 		if event.Stage == "completed" && slices.Contains(event.Argv, "--version") {
@@ -87,6 +90,7 @@ func assertPrivateResidentBindFailureSettlement(t *testing.T, fixture privateRec
 	}()
 	fixture.gate.wait(t, watchdog, call.done)
 	cancelProbe()
+	waitPrivateBindingPendingClose(t, watchdog, pendingClose, call)
 	select {
 	case <-call.done:
 		t.Fatalf("resident binding returned while its version probe was held: %v", call.err)
@@ -109,6 +113,17 @@ func assertPrivateResidentBindFailureSettlement(t *testing.T, fixture privateRec
 	result := completeBindingProbePendingTest(t, fixture.gate, pending)
 	if string(result.Stdout) != "pueue 99.7.3\n" {
 		t.Fatalf("version probe completion=%q", result.Stdout)
+	}
+}
+
+func waitPrivateBindingPendingClose(t *testing.T, ctx context.Context, pendingClose <-chan struct{}, call *bindingProbePendingTestCall) {
+	t.Helper()
+	select {
+	case <-pendingClose:
+	case <-call.done:
+		t.Fatalf("resident binding returned before retaining its pending probe: %v", call.err)
+	case <-ctx.Done():
+		t.Fatalf("version probe did not reach resident close: %v", ctx.Err())
 	}
 }
 

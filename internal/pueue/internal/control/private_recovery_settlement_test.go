@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +48,8 @@ func newPrivateRecoverySettlementFixture(t *testing.T) privateRecoverySettlement
 func TestPrivateRecoveryResidentBindFailureJoinsVersionProbe(t *testing.T) {
 	fixture := newPrivateRecoverySettlementFixture(t)
 	fixture.options.WaitForPendingClose = true
+	pendingClose := make(chan struct{})
+	fixture.options.pendingCloseObserver = sync.OnceFunc(func() { close(pendingClose) })
 	var completed atomic.Bool
 	fixture.options.Observer = func(event CommandEvent) {
 		if event.Stage == "completed" && slices.Contains(event.Argv, "--version") {
@@ -78,6 +81,7 @@ func TestPrivateRecoveryResidentBindFailureJoinsVersionProbe(t *testing.T) {
 	}()
 	fixture.gate.wait(t, watchdog, call.done)
 	cancelProbe()
+	waitPrivateBindingPendingClose(t, watchdog, pendingClose, call)
 	select {
 	case <-call.done:
 		t.Fatalf("resident recovery returned while version probe was held: %v", call.err)
