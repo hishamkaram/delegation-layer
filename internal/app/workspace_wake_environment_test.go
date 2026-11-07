@@ -34,8 +34,8 @@ esac
 exec "${0%/*}/fixture-pueue" "$@"
 `
 
-// wakeEnvironmentTask is a closed, never-launched provider turn whose managed
-// workspace use still owes its capture. The capture helper is created but not
+// wakeEnvironmentTask records a stop before any provider launch, with a managed
+// workspace use still awaiting capture. The capture helper is created but not
 // submitted, so the next task observation wakes and submits it. The fake
 // supervisor never runs the job, so no guardian completion races submission.
 type wakeEnvironmentTask struct {
@@ -56,7 +56,7 @@ func newWakeEnvironmentTask(t *testing.T) wakeEnvironmentTask {
 	}
 	resource := workspacefixture.NewResourceInStore(t, store)
 	use := newManagedTaskUseInStore(t, store, resource)
-	// A durable user stop before any launch closes the provider lifetime.
+	// Request a durable stop before launch; observation still has to prove closure.
 	stop, err := use.td.PrepareStop(strings.Repeat("a", 32), "user", time.Time{})
 	if err != nil {
 		t.Fatal(err)

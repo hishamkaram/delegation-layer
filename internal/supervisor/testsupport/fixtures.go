@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -156,10 +157,20 @@ esac
 
 func WriteExecutable(t *testing.T, path, contents string) {
 	t.Helper()
+	if err := writeFixtureExecutable(path, contents); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeFixtureExecutable(path, contents string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	// A concurrent fork can inherit an O_CLOEXEC writer until its exec closes
+	// it, making another test's immediate exec fail with ETXTBSY (Go issue 22315).
+	// Exclude fork for the descriptor's entire open/write/close lifetime.
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, []byte(contents), 0o700)
+	syscall.ForkLock.RUnlock()
+	return err
 }
