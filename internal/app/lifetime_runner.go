@@ -211,6 +211,18 @@ func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state 
 	if parsed.Inspection {
 		return guardianErr
 	}
+	if !parsed.WorkspaceOperation {
+		td, openErr := store.OpenTask(parsed.TaskID)
+		if openErr == nil {
+			_, captureErr := captureRemoteOutputs(context.Background(), store, td)
+			captureErr = errors.Join(captureErr, td.Close())
+			if captureErr != nil {
+				log.Printf("delegate: remote output capture deferred: %v", captureErr)
+			}
+		} else {
+			log.Printf("delegate: remote capture task unavailable: %v", openErr)
+		}
+	}
 	wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps)
 	if cleanupRetainsStore(wakeErr, store) {
 		return errors.Join(guardianErr, wakeErr)

@@ -580,3 +580,15 @@ Preflight creates no task, starts no supervisor, and launches no provider.
 A ready `verification: "preflight"` result is not live authentication or
 execution proof. Report blocked/unsupported results and follow the returned
 guidance; readiness checks do not authorize provider configuration changes.
+
+## Remote tasks
+
+See the [remote workflow](../../../docs/remote-delegation.md) for device
+configuration, explicit trust, file manifests and supported SSH settings.
+`--ssh-config ABS` explicitly selects one supported configuration file; the
+choice is saved for later controls. Default discovery reads user then system
+configuration. `dispatch --device ALIAS` requires `--remote-cwd ABS` or `--input-manifest FILE`
+instead of local workspace options. Preserve the returned `remote:ID` on status,
+collect, cancel, events, reply and steer. `collect --out ABS` downloads selected
+files; it does not apply them. `remote reconcile remote:ID` retains the original
+intent after uncertain admission. Do not strip the prefix or use a new ID.

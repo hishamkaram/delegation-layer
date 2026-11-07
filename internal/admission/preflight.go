@@ -22,9 +22,14 @@ func Preflight(options StaticOptions, root string, request task.TaskRecord) (res
 		result.Stage = PreflightPlacement
 		return result, candidateErr
 	}
-	if candidateErr = finalizeStaticCandidate(candidate, request); candidateErr != nil {
+	profile, candidateErr := finalizeStaticCandidate(candidate, request)
+	if candidateErr != nil {
 		result.Stage = PreflightStatic
 		return result, candidateErr
+	}
+	result.ProviderExecutable = profile.Plan.Executable
+	if candidate.Inspection != nil && candidate.Inspection.Runtime != nil {
+		result.ProviderExecutable = candidate.Inspection.Runtime.Executable
 	}
 	result.Stage = PreflightReady
 	return result, nil

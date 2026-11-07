@@ -455,6 +455,9 @@ func ValidateTaskRecord(r *TaskRecord) error {
 	if err := validateWorkspaceBinding(r.Workspace); err != nil {
 		return err
 	}
+	if err := validateRemoteBinding(r.Remote); err != nil {
+		return err
+	}
 	if err := ValidateTeamContext(r.Team); err != nil {
 		return err
 	}

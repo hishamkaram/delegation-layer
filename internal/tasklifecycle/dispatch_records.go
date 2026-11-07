@@ -23,6 +23,7 @@ type DispatchRequest struct {
 	TeamTarget                                    *task.TeamTarget
 	TeamContext                                   *task.TeamContext
 	ProjectRoot                                   string
+	Remote                                        *task.RemoteBinding
 }
 
 type TaskRecordPresence uint8

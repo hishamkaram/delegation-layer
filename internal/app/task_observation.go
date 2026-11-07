@@ -1,23 +1,29 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-func status(a Arguments, deps Dependencies) (result commandResult) {
+func status(a Arguments, deps Dependencies) commandResult {
+	return statusContext(context.Background(), a, deps)
+}
+
+func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("status")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStore(root, deps.storeDependencies(), false)
+	store, err := openStoreContext(ctx, root, deps.storeDependencies(), false)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -30,12 +36,12 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}.observe(td)
+			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorControlScope(), lookup: deps.supervisorLookup()}, td)
 		}
 	}()
-	defer func() { fillRecordedTaskContext(store, td, deps.Environment, &result) }()
+	defer func() { fillRecordedTaskContextForOperation(ctx, store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
+	observed, err := tasklifecycle.StatusContext(ctx, store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
 	if observed.ControlObservation {
@@ -47,13 +53,17 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	return commandResult{response: response, code: 0}
 }
 
-func collect(a Arguments, deps storeDependencies) (result commandResult) {
+func collect(a Arguments, deps storeDependencies) commandResult {
+	return collectContext(context.Background(), a, deps)
+}
+
+func collectContext(ctx context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("collect")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStore(root, deps, false)
+	store, err := openStoreContext(ctx, root, deps, false)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -66,12 +76,12 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	// Runs before td.Close; it never changes the command result.
 	defer func() {
 		if !cleanupRetainsStore(result.err, store) {
-			taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}.observe(td)
+			reportContextTaskMaintenance(ctx, taskMaintenanceObserver{root: root, options: deps.supervisorOptions, lookup: deps.supervisorLookup}, td)
 		}
 	}()
-	defer func() { fillRecordedTaskContext(store, td, deps.environment, &result) }()
+	defer func() { fillRecordedTaskContextForOperation(ctx, store, td, deps.environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
+	observed, err := tasklifecycle.CollectContext(ctx, root, td, deps.collectionOptions(a.Watch))
 	applyTaskObservation(&response, observed.Observation, root)
 	response.Raw = observed.Raw
 	if observed.Completion != nil {
@@ -150,4 +160,13 @@ func collectionResult(response Response, outcome *task.OutcomeRecord, collectErr
 		return failed(response, collectErr, 1)
 	}
 	return commandResult{response: response, code: 4}
+}
+
+// A completed command's maintenance wake has its own existing finite lifetime.
+func reportContextTaskMaintenance(parent context.Context, observer taskMaintenanceObserver, td *taskdir.TaskDir) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), lifetimeCustodyReleaseTimeout)
+	defer cancel()
+	if err := observer.observeTask(ctx, td); err != nil {
+		log.Printf("delegate: task maintenance observation deferred: %v", err)
+	}
 }

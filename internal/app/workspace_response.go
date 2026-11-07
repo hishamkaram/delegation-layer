@@ -14,6 +14,10 @@ import (
 )
 
 func fillRecordedTaskContext(store *taskdir.Store, td *taskdir.TaskDir, environment []string, result *commandResult) {
+	fillRecordedTaskContextForOperation(context.Background(), store, td, environment, result)
+}
+
+func fillRecordedTaskContextForOperation(parent context.Context, store *taskdir.Store, td *taskdir.TaskDir, environment []string, result *commandResult) {
 	request, _, err := td.PreparedRecords()
 	if err != nil {
 		return
@@ -24,7 +28,7 @@ func fillRecordedTaskContext(store *taskdir.Store, td *taskdir.TaskDir, environm
 	}
 	response := WorkspaceResponse{ID: request.Workspace.ID, Isolation: "git-worktree", State: "unreadable", ReasonCode: "workspace_observation_failed", NextAction: "stop_and_report", EvidenceState: "unknown"}
 	result.response.Workspace = &response
-	wakeContext, finishWake := context.WithTimeout(context.Background(), time.Second)
+	wakeContext, finishWake := context.WithTimeout(parent, time.Second)
 	wakeErr := wakeManagedTaskWorkspace(wakeContext, store, td, environment)
 	finishWake()
 	if cleanupRetainsStore(wakeErr, store) {
@@ -34,7 +38,7 @@ func fillRecordedTaskContext(store *taskdir.Store, td *taskdir.TaskDir, environm
 		result.response.Workspace.ReasonCode = workspaceObservationReason("wake", wakeErr)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()
 	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
 	if err != nil {

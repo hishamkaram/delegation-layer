@@ -28,6 +28,14 @@ func validateJSONType(data []byte, typ reflect.Type) error {
 	if typ.Kind() == reflect.Pointer {
 		return validateJSONType(data, typ.Elem())
 	}
+	// RawMessage is an explicitly opaque JSON value. The outer structure check
+	// already validates its syntax and duplicate keys; its consumer validates shape.
+	if typ == reflect.TypeFor[json.RawMessage]() {
+		if !json.Valid(trimmed) {
+			return errors.New("invalid raw JSON value")
+		}
+		return nil
+	}
 	if typ.Kind() == reflect.Struct {
 		return validateJSONObject(data, typ)
 	}

@@ -429,3 +429,13 @@ For model-discovery status/exit pairs use the
 Passive schedule reads have their own
 [result semantics](#scheduled-execution-results): failed/rejected/pending task
 facts remain data in a completed read.
+
+## Remote references
+
+A `remote:ID` routes to recorded destination evidence. Inspect the nested remote
+response separately from origin connectivity, dated cache and download reports.
+Five bounded connection attempts never authorize paid execution retry. After a
+possibly sent admission, reconcile that same immutable request; absent history
+remains unknown, never `not_created`. Preserve acknowledged controls and sealed
+outcomes even when connection cleanup or file transfer reports an ancillary error.
+No host, root, provider, permission or task-ID substitution is automatic.

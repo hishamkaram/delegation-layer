@@ -16,6 +16,20 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	Device               string
+	RemoteRoot           string
+	RemoteCwd            string
+	InputManifest        string
+	OutputManifest       string
+	OutputDirectory      string
+	RemoteExecutable     string
+	SSHConfig            string
+	RemoteAfter          string
+	RemoteAction         string
+	Fingerprint          string
+	Stdio                bool
+	remoteBinding        *task.RemoteBinding
+	remoteCancelID       string
 	MessageID            string
 	RequestID            string
 	Answers              string
@@ -107,6 +121,8 @@ func ParseArguments(args []string) (Arguments, error) {
 	}
 	a := Arguments{Command: command}
 	switch command {
+	case "devices", "remote":
+		return parseRemoteArguments(a, rest)
 	case "workspace", "checkpoint", "schedule", "teams":
 		return parseManagementArguments(a, rest)
 	}
@@ -131,6 +147,7 @@ func ParseArguments(args []string) (Arguments, error) {
 	fs.StringVar(&a.Runner, "runner", "", "absolute custom runner executable (advanced override; omit for the automatic runner)")
 	watch := "0s"
 	registerCommandFlags(fs, &a, &watch)
+	registerRemoteFlags(fs, &a)
 	ordered, err := orderFlags(fs, rest)
 	if err != nil {
 		return Arguments{}, err
@@ -213,7 +230,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -374,7 +391,7 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 }
 
 func (a *Arguments) validateSupervisor(positional []string) error {
-	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" && a.SupervisorAction != "stop-owner" {
+	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" && a.SupervisorAction != "stop-owner" && a.SupervisorAction != "ensure-owner" {
 		return errors.New("supervisor requires status, migrate or stop-owner")
 	}
 	if a.supervisorPueueConfigSet || a.supervisorRunnerSet {
@@ -415,6 +432,9 @@ func (a *Arguments) validateRecheck(positional []string) error {
 		return errors.New("exactly one task ID is required")
 	}
 	a.TaskID = positional[0]
+	if strings.HasPrefix(a.TaskID, "remote:") {
+		return errors.New("recheck is unsupported for remote references")
+	}
 	return task.ValidateTaskID(a.TaskID)
 }
 
@@ -458,6 +478,9 @@ func (a *Arguments) validateContinue(positional []string) error {
 	if a.TaskID == "" {
 		return errors.New("continue requires --task TASK_ID")
 	}
+	if strings.HasPrefix(a.TaskID, "remote:") {
+		return errors.New("continue is unsupported for remote references")
+	}
 	if err := task.ValidateTaskID(a.TaskID); err != nil {
 		return err
 	}
@@ -473,7 +496,7 @@ func (a *Arguments) validateTaskCommand(positional []string, watch string) error
 		return errors.New("exactly one task ID is required")
 	}
 	a.TaskID = positional[0]
-	if err := task.ValidateTaskID(a.TaskID); err != nil {
+	if err := validateRoutedTaskID(a.TaskID); err != nil {
 		return err
 	}
 	parsed, err := time.ParseDuration(watch)
@@ -485,6 +508,9 @@ func (a *Arguments) validateTaskCommand(positional []string, watch string) error
 }
 
 func (a *Arguments) validateDispatch(positional []string) error {
+	if a.Device != "" {
+		return a.validateRemoteDispatch(positional)
+	}
 	if err := validateWorkspaceDispatch(*a); err != nil {
 		return err
 	}

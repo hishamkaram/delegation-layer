@@ -241,6 +241,10 @@ func (d *ControlDir) RecordNamesContext(ctx context.Context) (names []string, re
 		return nil, err
 	}
 	defer d.end()
+	return d.recordNamesContext(ctx)
+}
+
+func (d *ControlDir) recordNamesContext(ctx context.Context) (names []string, resultErr error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -426,4 +430,13 @@ func (d *ControlDir) Close() error {
 	close(done)
 	d.mu.Unlock()
 	return err
+}
+
+// RecordNames lists names through this transaction's pinned directory.
+func (tx *ControlTransaction) RecordNames() ([]string, error) {
+	if err := tx.enter(); err != nil {
+		return nil, err
+	}
+	defer tx.leave()
+	return tx.d.recordNamesContext(tx.ctx)
 }

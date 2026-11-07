@@ -474,3 +474,16 @@ under ignored .local/archive. Describe implemented behavior and actual checks;
 mark future or unavailable behavior honestly. Use Archify full-diagram exports,
 not cropped screenshots, when a diagram changes. Do not update illustrations
 or rerun their native/provider scenarios merely for unrelated contributor prose.
+
+### Remote SSH acceptance
+
+`make acceptance-remote` builds a candidate CLI/runner from this checkout and
+executes them in place through an isolated Docker SSH daemon. It exercises the
+production Pi adapter with a finite protocol fixture, input/output transfer,
+disconnection, cancellation and expiry, and verifies owned task closure before
+container cleanup. Docker and access to distro packages for the owned test image
+are required. The driver reports remaining resources on cleanup failure.
+
+This is container SSH/lifecycle evidence. It does not establish native macOS,
+logind logout-policy behavior, or a real provider account. Those require prepared
+native hosts and their own recorded acceptance results.

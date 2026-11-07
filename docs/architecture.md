@@ -16,6 +16,17 @@ implementation overview. The packaged [command reference](../skills/agent-integr
 and [result handling](../skills/agent-integration/references/result-handling.md)
 own shared public procedures and response decisions.
 
+## Remote execution boundary
+
+[Remote delegation](remote-delegation.md) routes origin references over embedded
+SSH to the destination's existing lifecycle. `internal/remote` owns protocol,
+origin intent and connection retry decisions; `internal/sshconfig` and
+`internal/sshtransport` own connection configuration/trust and channel I/O.
+`internal/remotefiles` validates declared bytes; application workspace capture
+composes it after canonical closure. `internal/taskdir` retains all control-record
+durability. Destination task/outcome records remain authoritative; no local
+cache or transfer receipt grants another launch or renews the execution budget.
+
 ## Package boundaries
 
 | Owner | Responsibility |

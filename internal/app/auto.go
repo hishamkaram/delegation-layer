@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
@@ -17,7 +18,11 @@ const (
 )
 
 func preflight(a Arguments, deps Dependencies) commandResult {
-	deps = deps.withCapturedEnvironment()
+	return preflightContext(context.Background(), a, deps)
+}
+
+func preflightContext(ctx context.Context, a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironmentContext(ctx)
 	response := newResponse("preflight")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {

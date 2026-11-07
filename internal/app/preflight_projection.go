@@ -12,6 +12,7 @@ func preflightCommandResult(response Response, observed admissioncore.PreflightR
 		return failed(response, err, 2)
 	}
 	report := declaredCapability(*observed.Description)
+	report.ProviderExecutable = observed.ProviderExecutable
 	report.Verification = "preflight"
 	report.ReasonCode = "preflight_not_launched"
 	response.Capability = &report

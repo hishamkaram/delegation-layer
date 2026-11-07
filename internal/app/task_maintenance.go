@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -129,7 +130,23 @@ func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id stri
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	return releaseLifetimeCustody(ctx, td)
+	releaseErr := releaseLifetimeCustody(ctx, td)
+	request, readErr := td.RecordedRequest()
+	if readErr != nil {
+		return errors.Join(releaseErr, readErr)
+	}
+	if request.Remote == nil || len(request.Remote.OutputPaths) == 0 {
+		return releaseErr
+	}
+	_, closureErr := guardian.ReadClosureProof(ctx, td)
+	if errors.Is(closureErr, guardian.ErrProofPending) {
+		return releaseErr
+	}
+	if closureErr != nil {
+		return errors.Join(releaseErr, closureErr)
+	}
+	_, captureErr := captureRemoteOutputs(ctx, store, td)
+	return errors.Join(releaseErr, captureErr)
 }
 
 // taskMaintenanceObserver is the public status and collect maintenance step.
@@ -139,14 +156,6 @@ type taskMaintenanceObserver struct {
 	root    string
 	options pueue.Options
 	lookup  supervisorcore.ExecutableLookup
-}
-
-func (o taskMaintenanceObserver) observe(td *taskdir.TaskDir) {
-	ctx, cancel := context.WithTimeout(context.Background(), lifetimeCustodyReleaseTimeout)
-	defer cancel()
-	if err := o.observeTask(ctx, td); err != nil {
-		log.Printf("delegate: task maintenance observation deferred: %v", err)
-	}
 }
 
 func (o taskMaintenanceObserver) observeTask(ctx context.Context, td *taskdir.TaskDir) error {
@@ -161,8 +170,9 @@ func (o taskMaintenanceObserver) observeTask(ctx context.Context, td *taskdir.Ta
 	}
 	custodyWork, custodyErr := closedLifetimeCustodyReleasePending(ctx, td)
 	rowWork, client, rowErr := o.observeEndedRow(ctx, td, req, meta, spec, metaHash)
-	err = errors.Join(custodyErr, rowErr)
-	if custodyWork || rowWork {
+	captureWork, captureErr := remoteTaskCapturePending(ctx, o.root, td, req)
+	err = errors.Join(custodyErr, rowErr, captureErr)
+	if custodyWork || rowWork || captureWork {
 		err = errors.Join(err, o.requestMaintenance(ctx, client))
 	}
 	supervisorcore.CloseMaintenance(client, err)
@@ -322,4 +332,28 @@ func requestPrivateFullMaintenanceWake(ctx context.Context, root string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pueue.DefaultObservationTimeout)
 	defer cancel()
 	return pueue.RequestPrivateQueueMaintenance(ctx, root)
+}
+
+// Remote capture recovery is requested through the elected maintenance owner;
+// observers never reread mutable workspace bytes or perform capture themselves.
+func remoteTaskCapturePending(ctx context.Context, root string, td *taskdir.TaskDir, request *task.TaskRecord) (pending bool, resultErr error) {
+	if request.Remote == nil || len(request.Remote.OutputPaths) == 0 {
+		return false, nil
+	}
+	if _, err := guardian.ReadClosureProof(ctx, td); err != nil {
+		if errors.Is(err, guardian.ErrProofPending) {
+			return false, nil
+		}
+		return false, err
+	}
+	directory, err := os.OpenRoot(root)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, directory.Close()) }()
+	_, err = readRemoteCapturePassive(ctx, directory, request.RootID, request.TaskID)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
 }

@@ -3,6 +3,7 @@ package taskdir
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,6 +63,16 @@ func TestReadOnlyEvidenceRetainsCommittedOutcome(t *testing.T) {
 	if evidence.Inspection.Publication != task.PublicationCommitted || evidence.OutcomeSHA256 == "" || evidence.Inspection.Outcome.Payload != winner.Payload {
 		t.Fatalf("validated result descriptor changed: %+v", evidence)
 	}
+	file, err := reader.OpenTaskPayload(t.Context(), td.TaskID, winner.Payload)
+	must(t, err)
+	data, readErr := io.ReadAll(file)
+	if readErr != nil || string(data) != "durable answer" {
+		t.Fatalf("payload=%q error=%v", data, readErr)
+	}
+	if _, writeErr := file.Write([]byte("unowned mutation")); writeErr == nil {
+		t.Error("passive reader granted writable payload")
+	}
+	must(t, file.Close())
 }
 
 func TestReadOnlyEvidenceDistinguishesAbsenceAndPartialTask(t *testing.T) {

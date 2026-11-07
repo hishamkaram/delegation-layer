@@ -61,13 +61,17 @@ func (td *TaskDir) BeginInteraction() error {
 	return lock.Close()
 }
 
-func (td *TaskDir) withInteraction(fn func() error) (resultErr error) {
+func (td *TaskDir) withInteraction(fn func() error) error {
+	return td.withInteractionContext(context.Background(), fn)
+}
+
+func (td *TaskDir) withInteractionContext(parent context.Context, fn func() error) (resultErr error) {
 	lock, err := td.store.openExistingLock(filepath.Join(td.Dir, ".interaction.lock"), LockLevelRun)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	if err = lock.LockEX(ctx); err != nil {
 		return err
@@ -107,6 +111,10 @@ func (td *TaskDir) interactionRecords() ([]task.InteractionEvent, interactionSna
 }
 
 func (td *TaskDir) appendInteraction(state interactionSnapshot, event task.InteractionEvent) error {
+	return td.appendInteractionContext(context.Background(), state, event)
+}
+
+func (td *TaskDir) appendInteractionContext(ctx context.Context, state interactionSnapshot, event task.InteractionEvent) error {
 	event.Sequence = state.Cursor + 1
 	if err := task.ApplyInteractionEvent(&state.InteractionState, event); err != nil {
 		return err
@@ -128,7 +136,7 @@ func (td *TaskDir) appendInteraction(state interactionSnapshot, event task.Inter
 	if state.encodedBytes+len(data)+reserve > maxInteractionBytes || state.Cursor > maxInteractionRecords || (state.Cursor == maxInteractionRecords && event.Kind != "closed") {
 		return task.ErrControlRecordTooBig
 	}
-	_, cleanup, err := td.store.stageAndCommit(filepath.Join(td.Dir, "interaction"), fmt.Sprintf("%020d.json", event.Sequence), data, td.store.faultInjector)
+	_, cleanup, err := td.store.stageReaderContext(ctx, filepath.Join(td.Dir, "interaction"), fmt.Sprintf("%020d.json", event.Sequence), bytes.NewReader(data), td.store.faultInjector)
 	return errors.Join(err, cleanup)
 }
 
@@ -171,6 +179,10 @@ func (td *TaskDir) InteractionEvents(after uint64) ([]task.InteractionEvent, uin
 	if err != nil {
 		return nil, after, err
 	}
+	return interactionEventPage(events, state.InteractionState, after)
+}
+
+func interactionEventPage(events []task.InteractionEvent, state task.InteractionState, after uint64) ([]task.InteractionEvent, uint64, error) {
 	if after > state.Cursor {
 		return nil, after, task.ErrInteractionRequest
 	}
@@ -260,8 +272,13 @@ func (td *TaskDir) interactionDeadlineOpen(req *task.TaskRecord, state task.Inte
 }
 
 // SubmitInteraction is idempotent by message ID and does not contact a provider.
-func (td *TaskDir) SubmitInteraction(message task.InteractionMessage) (receipt task.InteractionDelivery, resultErr error) {
-	resultErr = td.withInteraction(func() error {
+func (td *TaskDir) SubmitInteraction(message task.InteractionMessage) (task.InteractionDelivery, error) {
+	return td.SubmitInteractionContext(context.Background(), message)
+}
+
+// SubmitInteractionContext retains the caller lifetime while recording an idempotent inbox message.
+func (td *TaskDir) SubmitInteractionContext(ctx context.Context, message task.InteractionMessage) (receipt task.InteractionDelivery, resultErr error) {
+	resultErr = td.withInteractionContext(ctx, func() error {
 		events, state, err := td.interactionRecords()
 		if err != nil {
 			return err
@@ -286,7 +303,7 @@ func (td *TaskDir) SubmitInteraction(message task.InteractionMessage) (receipt t
 		if interactionReplyExists(message, events) {
 			return task.ErrInteractionConflict
 		}
-		if err = td.appendInteraction(state, task.InteractionEvent{Kind: "message", Message: &message}); err != nil {
+		if err = td.appendInteractionContext(ctx, state, task.InteractionEvent{Kind: "message", Message: &message}); err != nil {
 			return err
 		}
 		receipt = task.InteractionDelivery{MessageID: message.ID, State: "queued"}

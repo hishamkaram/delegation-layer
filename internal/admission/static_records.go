@@ -20,6 +20,7 @@ const (
 // PreflightResult is a detached static observation. It conveys no permission
 // to launch and never claims supervised runtime or live-provider acceptance.
 type PreflightResult struct {
-	Description *commonprovider.Description
-	Stage       PreflightStage
+	ProviderExecutable string
+	Description        *commonprovider.Description
+	Stage              PreflightStage
 }
