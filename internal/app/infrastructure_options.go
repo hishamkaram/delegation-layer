@@ -14,6 +14,7 @@ import (
 // and separately supplies its private daemon-start grant afterward.
 func infrastructureSupervisorOptions(artifacts infrastructure.Artifacts, launch infrastructure.LaunchContext) pueue.Options {
 	return withDefaultSupervisorCallbacks(pueue.Options{
+		RuntimeClientExecutable:       launch.SupervisorExecutable,
 		ControlOwnerExecutable:        artifacts.Runner,
 		PrivateTerminalEventRunner:    artifacts.Runner,
 		Environment:                   slices.Clone(launch.ControlEnvironment),
