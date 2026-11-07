@@ -8,6 +8,8 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 )
 
+const hostCPUCounterUnit = CPUCounterSeconds
+
 // readHostCPU reads the cumulative host CPU times. It never computes a
 // percentage: gopsutil's Percent keeps package-global history. Linux does not
 // use gopsutil's cpu package because its import-time init reads the inherited

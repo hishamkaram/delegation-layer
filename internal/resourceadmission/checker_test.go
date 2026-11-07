@@ -109,6 +109,9 @@ func TestCheckSustainedCPUNeedsThreeConsecutiveBusyIntervals(t *testing.T) {
 			if tc.want == StatusPressure && pressuresOf(got)[MetricHostCPU] != BasisSustained {
 				t.Fatalf("pressures = %v, want sustained host cpu", got.Pressures())
 			}
+			if (got.HostCPUDiagnostics() != nil) != (tc.want == StatusPressure) {
+				t.Fatalf("diagnostics must accompany only confirmed CPU pressure: %+v", got.HostCPUDiagnostics())
+			}
 		})
 	}
 }
@@ -208,6 +211,9 @@ func TestCheckCounterResetIsUnknownNotZero(t *testing.T) {
 	}
 	if unavailableOf(got)[MetricHostCPU] != ReasonCounterReset {
 		t.Fatalf("unavailable = %v, want counter_reset", got.Unavailable())
+	}
+	if got.HostCPUDiagnostics() != nil {
+		t.Fatal("a counter reset must not expose confirmed CPU evidence")
 	}
 }
 

@@ -19,6 +19,7 @@ from scripts.delegate_acceptance.private_cli.nested_observation import (
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.nested_policy import queue_ended_evidence
+from scripts.delegate_acceptance.private_cli.receipt import resource_admission_evidence
 
 
 class NestedCase:
@@ -97,6 +98,9 @@ class NestedCase:
                 "failure": {key: failure[key] for key in ("code", "stage", "reason_code", "next_action")
                             if key in failure} if isinstance(failure, dict) else {},
             }
+            resource = resource_admission_evidence(response)
+            if resource is not None and "diagnostics" in resource:
+                self.evidence["failed_admission"]["resource_admission"] = resource
         require(response.get("task_id") == task_id and response.get("task_record") == "created",
                 "nested admission was not created; never redispatch")
         self.command(state, ["status", task_id], name + "-status")

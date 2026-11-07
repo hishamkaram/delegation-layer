@@ -25,8 +25,33 @@ const resourceRetryAfterSeconds = 30
 // for a fresh admission. It is not durable and never changes the command's
 // exit code, admission, liveness, publication, failure, or outcome by itself.
 type ResourceAdmissionResponse struct {
-	Status   string                     `json:"status"`
-	Warnings []ResourceAdmissionWarning `json:"warnings,omitempty"`
+	Status      string                        `json:"status"`
+	Warnings    []ResourceAdmissionWarning    `json:"warnings,omitempty"`
+	Diagnostics *ResourceAdmissionDiagnostics `json:"diagnostics,omitempty"`
+}
+
+// ResourceAdmissionDiagnostics carries optional bounded evidence. The
+// assessment owns the values; this response only projects them to JSON.
+type ResourceAdmissionDiagnostics struct {
+	HostCPU *HostCPUDiagnosticsResponse `json:"host_cpu,omitempty"`
+}
+
+// HostCPUDiagnosticsResponse exposes bounded evidence for a host CPU refusal.
+type HostCPUDiagnosticsResponse struct {
+	CounterUnit    string                    `json:"counter_unit"`
+	BusyThreshold  float64                   `json:"busy_threshold"`
+	RequiredStreak int                       `json:"required_streak"`
+	Intervals      []HostCPUIntervalResponse `json:"intervals"`
+}
+
+// HostCPUIntervalResponse describes one consumed sampling interval.
+type HostCPUIntervalResponse struct {
+	ElapsedMilliseconds int64    `json:"elapsed_ms"`
+	BusyDelta           *float64 `json:"busy_delta,omitempty"`
+	TotalDelta          *float64 `json:"total_delta,omitempty"`
+	BusyFraction        *float64 `json:"busy_fraction,omitempty"`
+	Classification      string   `json:"classification"`
+	UnavailableReason   string   `json:"unavailable_reason,omitempty"`
 }
 
 // ResourceAdmissionWarning is one bounded, sanitized resource observation
@@ -70,11 +95,25 @@ func truncateResourceAdmission(resource *ResourceAdmissionResponse, budget int) 
 
 // resourceAdmissionResponse projects one invocation-local assessment. A nil
 // assessment, for an existing task or an unchecked admission, adds nothing.
-func resourceAdmissionResponse(assessment *resourceadmission.Assessment) *ResourceAdmissionResponse {
+func resourceAdmissionResponse(assessment *resourceadmission.Assessment, commandError error) *ResourceAdmissionResponse {
 	if assessment == nil {
 		return nil
 	}
 	response := &ResourceAdmissionResponse{Status: string(assessment.Status())}
+	pressure, refused := tasklifecycle.ResourcePressureRefusal(commandError)
+	if cpu := assessment.HostCPUDiagnostics(); cpu != nil && refused && pressure.Metric == resourceadmission.MetricHostCPU {
+		host := &HostCPUDiagnosticsResponse{
+			CounterUnit: string(cpu.CounterUnit), BusyThreshold: cpu.BusyThreshold, RequiredStreak: cpu.RequiredStreak,
+		}
+		for _, interval := range cpu.Intervals {
+			host.Intervals = append(host.Intervals, HostCPUIntervalResponse{
+				ElapsedMilliseconds: interval.ElapsedMilliseconds,
+				BusyDelta:           interval.BusyDelta, TotalDelta: interval.TotalDelta, BusyFraction: interval.BusyFraction,
+				Classification: string(interval.Classification), UnavailableReason: string(interval.UnavailableReason),
+			})
+		}
+		response.Diagnostics = &ResourceAdmissionDiagnostics{HostCPU: host}
+	}
 	for _, unavailable := range assessment.Unavailable() {
 		response.Warnings = append(response.Warnings, ResourceAdmissionWarning{
 			Code: ResourceObservationUnavailable, Metric: string(unavailable.Metric), ReasonCode: string(unavailable.Reason),

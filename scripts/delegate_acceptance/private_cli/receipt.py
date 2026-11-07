@@ -7,9 +7,72 @@ from scripts.delegate_acceptance.private_cli.fingerprints import descriptor_evid
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
 from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
 import json
+import math
 import platform
 import threading
 import time
+from typing import TypeGuard
+
+
+def _finite_diagnostic_number(value: object) -> TypeGuard[int | float]:
+    return ((type(value) is int and value.bit_length() <= 64)
+            or (type(value) is float and math.isfinite(value)))
+
+
+def _host_cpu_evidence(value: object) -> dict[str, object] | None:
+    """Allowlist the tested public representation; never recalculate admission policy."""
+    if not isinstance(value, dict):
+        return None
+    unit, threshold, streak, intervals = (value.get(key) for key in
+                                         ("counter_unit", "busy_threshold", "required_streak", "intervals"))
+    if (unit not in ("ticks", "seconds") or not _finite_diagnostic_number(threshold)
+            or not 0 <= threshold <= 1 or type(streak) is not int or not 1 <= streak <= 3
+            or not isinstance(intervals, list) or not 1 <= len(intervals) <= 3):
+        return None
+    projected = []
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            return None
+        elapsed, classification = interval.get("elapsed_ms"), interval.get("classification")
+        if (type(elapsed) is not int or not 0 <= elapsed < 2**63
+                or classification not in ("clear", "hot", "unavailable")):
+            return None
+        item = {"elapsed_ms": elapsed, "classification": classification}
+        for key in ("busy_delta", "total_delta", "busy_fraction"):
+            if key in interval:
+                number = interval[key]
+                if not _finite_diagnostic_number(number) or (key == "busy_fraction" and not 0 <= number <= 1):
+                    return None
+                item[key] = number
+        if classification == "unavailable":
+            reason = interval.get("unavailable_reason")
+            if ("busy_fraction" in item or reason not in
+                    ("unreadable", "malformed", "counter_reset", "no_elapsed_time", "deadline", "unsupported_platform")):
+                return None
+            item["unavailable_reason"] = reason
+        elif (not all(key in item for key in ("busy_delta", "total_delta", "busy_fraction"))
+              or item["busy_delta"] < 0 or item["total_delta"] <= 0 or item["busy_delta"] > item["total_delta"]):
+            return None
+        projected.append(item)
+    return {"counter_unit": unit, "busy_threshold": threshold, "required_streak": streak, "intervals": projected}
+
+
+def resource_admission_evidence(response: object) -> dict[str, object] | None:
+    """Retain only public status and optional bounded CPU refusal evidence."""
+    if not isinstance(response, dict):
+        return None
+    resource = response.get("resource_admission")
+    if not isinstance(resource, dict) or resource.get("status") not in ("clear", "pressure", "unknown"):
+        return None
+    evidence = {"status": resource["status"]}
+    failure, diagnostics = response.get("failure"), resource.get("diagnostics")
+    if (resource["status"] == "pressure" and isinstance(failure, dict)
+            and failure.get("code") == "resource_pressure" and failure.get("reason_code") == "host_cpu_sustained"
+            and isinstance(diagnostics, dict)):
+        host_cpu = _host_cpu_evidence(diagnostics.get("host_cpu"))
+        if host_cpu is not None:
+            evidence["diagnostics"] = {"host_cpu": host_cpu}
+    return evidence
 
 
 class AcceptanceReceipt:

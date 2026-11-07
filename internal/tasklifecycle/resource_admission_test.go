@@ -23,6 +23,7 @@ type scriptedResources struct {
 	scope       resourceadmission.Scope
 	checks      int
 	scopes      int
+	onCheck     func()
 }
 
 func (s *scriptedResources) Check(context.Context, resourceadmission.TargetResolver) (resourceadmission.Assessment, error) {
@@ -30,6 +31,9 @@ func (s *scriptedResources) Check(context.Context, resourceadmission.TargetResol
 		s.t.Fatalf("unexpected resource check %d", s.checks+1)
 	}
 	s.checks++
+	if s.onCheck != nil {
+		s.onCheck()
+	}
 	return s.assessments[s.checks-1], nil
 }
 
@@ -127,6 +131,31 @@ func TestResourceGateRefusesOnlyWhileTaskEntryIsAbsent(t *testing.T) {
 	}
 	if err = gate.refusal(); err != nil {
 		t.Fatalf("an entry that appeared before refusal was refused: %v", err)
+	}
+}
+
+func TestResourceGateCPUObservationDoesNotRefuseAnEntryThatAppears(t *testing.T) {
+	const id = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	store := newResourceGateStore(t)
+	busy, total, fraction := 95.0, 100.0, 0.95
+	assessment := resourceadmission.NewAssessment(time.Now(), resourceadmission.Scope{}, resourceadmission.Findings{
+		Pressures: []resourceadmission.Pressure{{Metric: resourceadmission.MetricHostCPU, Basis: resourceadmission.BasisSustained}},
+		HostCPU: &resourceadmission.HostCPUDiagnostics{
+			CounterUnit: resourceadmission.CPUCounterTicks, BusyThreshold: 0.95, RequiredStreak: 3,
+			Intervals: []resourceadmission.HostCPUInterval{{
+				ElapsedMilliseconds: 1000, BusyDelta: &busy, TotalDelta: &total, BusyFraction: &fraction,
+				Classification: resourceadmission.CPUIntervalHot,
+			}},
+		},
+	})
+	checker := &scriptedResources{t: t, assessments: []resourceadmission.Assessment{assessment}, onCheck: func() {
+		if err := os.MkdirAll(filepath.Join(store.Root, "tasks", id), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	gate, err := openResourceGate(DispatchRequest{}, DispatchOptions{Resources: checker}, store, id)
+	if err != nil || checker.checks != 1 || gate.current() == nil || gate.current().HostCPUDiagnostics() == nil {
+		t.Fatalf("appearing entry must keep existing-task flow and its observation: err=%v checks=%d gate=%+v", err, checker.checks, gate)
 	}
 }
 

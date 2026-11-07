@@ -2,6 +2,7 @@
 
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp, _timestamp_before, _timestamp_unix_ns
 from scripts.delegate_acceptance.evidence.validation import _task_identity
+from scripts.delegate_acceptance.private_cli.receipt import resource_admission_evidence
 
 
 def _exact_stop_row(status, request_id):
@@ -100,11 +101,9 @@ def default_stop_dispatch_evidence(response: object, *, expected_task_id: str | 
         "admission": admission if isinstance(admission, str) and admission in {"admitted", "not-admitted", "unknown"} else None,
         "failure": failure,
     }
-    resource = data.get("resource_admission")
-    if isinstance(resource, dict):
-        status = resource.get("status")
-        if isinstance(status, str) and status in {"clear", "pressure", "unknown"}:
-            evidence["resource_admission"] = {"status": status}
+    resource = resource_admission_evidence(data)
+    if resource is not None:
+        evidence["resource_admission"] = resource
     if expected_task_id is not None:
         evidence["expected_task_id_match"] = (
             _task_identity(expected_task_id) and _task_identity(task_id) and task_id == expected_task_id)

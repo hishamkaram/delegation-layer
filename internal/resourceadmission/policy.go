@@ -79,29 +79,47 @@ func classifyVMPressure(level vmPressure) outcome {
 }
 
 func hostCPUOutcome(prev, cur reading[cpuCounters]) outcome {
+	return evaluateHostCPU(prev, cur).outcome
+}
+
+type hostCPUEvaluation struct {
+	outcome      outcome
+	busyDelta    *float64
+	totalDelta   *float64
+	busyFraction *float64
+}
+
+// evaluateHostCPU derives the decision and its evidence together from the
+// same sample pair. No consumer re-reads counters or re-evaluates pressure.
+func evaluateHostCPU(prev, cur reading[cpuCounters]) hostCPUEvaluation {
 	if cur.skipped() || prev.skipped() {
-		return skippedOutcome
+		return hostCPUEvaluation{outcome: skippedOutcome}
 	}
 	if !cur.ok {
-		return unknownOutcome(cur.failure())
+		return hostCPUEvaluation{outcome: unknownOutcome(cur.failure())}
 	}
 	if !prev.ok {
-		return unknownOutcome(prev.failure())
+		return hostCPUEvaluation{outcome: unknownOutcome(prev.failure())}
 	}
 	if !validCounters(prev.value) || !validCounters(cur.value) {
-		return unknownOutcome(ReasonMalformed)
+		return hostCPUEvaluation{outcome: unknownOutcome(ReasonMalformed)}
 	}
 	busy := cur.value.busy - prev.value.busy
 	total := cur.value.total - prev.value.total
+	result := hostCPUEvaluation{busyDelta: &busy, totalDelta: &total}
 	switch {
 	case busy < 0 || total < 0:
-		return unknownOutcome(ReasonCounterReset)
+		result.outcome = unknownOutcome(ReasonCounterReset)
 	case total == 0:
-		return unknownOutcome(ReasonNoElapsedTime)
+		result.outcome = unknownOutcome(ReasonNoElapsedTime)
 	case busy > total:
-		return unknownOutcome(ReasonMalformed)
+		result.outcome = unknownOutcome(ReasonMalformed)
+	default:
+		fraction := busy / total
+		result.busyFraction = &fraction
+		result.outcome = boolOutcome(fraction >= cpuBusyThreshold)
 	}
-	return boolOutcome(busy/total >= cpuBusyThreshold)
+	return result
 }
 
 // validCounters rejects readings no kernel counter can produce.
