@@ -1,6 +1,7 @@
 """Publication trusts complete GitHub job history and the artifact's actual producer chain."""
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta, timezone
 import json
 import unittest
 from unittest.mock import patch
@@ -19,8 +20,23 @@ def trusted_metadata(replies):
 
 
 def job(name, attempt=2, identity=1, **changes):
+    started = datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=attempt)
+    finished = started + timedelta(minutes=1)
     return {"id": identity, "name": name, "run_attempt": attempt, "run_id": RUN_ID,
-            "head_sha": COMMIT, "status": "completed", "conclusion": "success", **changes}
+            "head_sha": COMMIT, "status": "completed", "conclusion": "success",
+            "created_at": (started - timedelta(seconds=2)).isoformat(),
+            "started_at": started.isoformat(), "completed_at": finished.isoformat(),
+            "runner_id": 7, "runner_name": "fixture-runner",
+            "steps": [{"name": "Prove the candidate", "number": 1, "status": "completed",
+                       "conclusion": "success", "started_at": started.isoformat(),
+                       "completed_at": finished.isoformat()}], **changes}
+
+
+def carried(row, attempt=3, identity=100):
+    """Observed GitHub rerun shape: new record, unchanged completed execution."""
+    return {**deepcopy(row), "id": identity, "run_attempt": attempt,
+            "created_at": datetime(2026, 1, 1, attempt, tzinfo=UTC).isoformat(),
+            "runner_group_id": None}
 
 
 def jobs():
@@ -65,6 +81,121 @@ class PreflightTests(CandidateArtifactCase):
         self.run_preflight()
         self.assertIn(jobs_endpoint(), self.requested())
         self.assertFalse(any("/attempts/" in endpoint for endpoint in self.requested()))
+
+    def test_copied_successes_keep_the_original_artifact_publishable(self):
+        original = jobs()
+        copies = [carried(row, identity=100 + index) for index, row in enumerate(original)]
+        # The failed macOS job actually reruns; all other successes are copied.
+        mac = preflight.CHECK_JOBS[1]
+        copies = [row if row["name"] != mac else job(mac, 3, row["id"]) for row in copies]
+        self.set_jobs([*copies, *reversed(original)])
+        self.run_preflight()
+
+    def test_copied_old_installs_do_not_prove_a_new_producer(self):
+        original = [job(name, 1, 100 + index) for index, name in enumerate(preflight.REQUIRED_JOBS)]
+        current = [job(preflight.PRODUCER_JOB, 2, 1)]
+        current += [carried(row, identity=200 + index) for index, row in enumerate(original)
+                    if row["name"] != preflight.PRODUCER_JOB]
+        self.set_jobs([*original, *current])
+        self.refuse("distribution_install_predates_producer")
+
+    def test_old_producer_copy_cannot_hide_an_intervening_rebuild(self):
+        original = job(preflight.PRODUCER_JOB, 1, 90)
+        self.set_jobs([*jobs(), original, carried(original)])
+        self.refuse("distribution_job_provenance_unproven")
+
+    def test_copy_requires_an_unambiguous_original_execution(self):
+        original = jobs()
+        copies = [carried(row, identity=100 + index) for index, row in enumerate(original)]
+        self.set_jobs(copies)
+        self.refuse("distribution_job_provenance_unproven")
+        self.set_jobs([*original, *copies, job(preflight.PRODUCER_JOB, 2, 90)])
+        self.refuse("distribution_job_ambiguous")
+
+    def test_carry_identity_requires_matching_execution_steps(self):
+        original = jobs()
+        copy = carried(original[0])
+        copy["steps"][0]["name"] = "A different execution"
+        self.set_jobs([*original, copy])
+        self.refuse("distribution_job_provenance_unproven")
+
+    def test_real_rebuild_can_reuse_the_same_or_null_runner(self):
+        for runner in (7, None):
+            with self.subTest(runner=runner):
+                original = jobs()
+                original[0]["runner_id"] = runner
+                rebuilt = job(preflight.PRODUCER_JOB, 3, 90, runner_id=runner)
+                self.set_jobs([*original, rebuilt])
+                self.refuse("distribution_artifact_superseded")
+
+    def test_copies_allow_attempt_gaps_and_nullable_runner_metadata(self):
+        self.routes[ENDPOINTS["attempt"]]["json"]["run_attempt"] = 4
+        original = jobs()
+        for row in original:
+            row.update(runner_id=None, runner_name=None)
+        copies = [carried(row, 4, 100 + index) for index, row in enumerate(original)]
+        self.set_jobs([*original, *copies])
+        self.run_preflight()
+
+    def test_execution_times_compare_instants_and_ignore_additive_metadata(self):
+        original = jobs()
+        copies = [carried(row, identity=100 + index) for index, row in enumerate(original)]
+        for row in copies:
+            for key in ("started_at", "completed_at"):
+                row[key] = datetime.fromisoformat(row[key]).astimezone(
+                    timezone(timedelta(hours=2))).isoformat()
+            for step in row["steps"]:
+                step["new_api_field"] = "additive"
+                for key in ("started_at", "completed_at"):
+                    step[key] = step[key].replace("+00:00", "Z")
+        self.set_jobs([*original, *copies])
+        self.run_preflight()
+
+    def test_older_cancelled_history_does_not_block_a_later_original(self):
+        self.set_jobs([job(preflight.PRODUCER_JOB, 1, 90, status="completed",
+                           conclusion="cancelled", created_at=None, started_at=None,
+                           completed_at=None, steps=None), *jobs()])
+        self.run_preflight()
+
+    def test_copy_cannot_hide_an_intervening_failed_rebuild(self):
+        original = job(preflight.PRODUCER_JOB, 1, 90)
+        rebuilt = job(preflight.PRODUCER_JOB, 2, 1, conclusion="failure")
+        self.set_jobs([*[row for row in jobs() if row["name"] != preflight.PRODUCER_JOB],
+                       original, rebuilt, carried(original)])
+        self.refuse("distribution_job_provenance_unproven")
+
+    def test_incomplete_or_inconsistent_copy_evidence_refuses(self):
+        for changes in ({"steps": None}, {"steps": []}, {"completed_at": None},
+                        {"started_at": "invalid"}, {"created_at": "2026-01-01T03:00:00"},
+                        {"created_at": "2026-01-01T02:00:01Z"},
+                        {"created_at": "2026-01-01T02:01:00Z"}):
+            with self.subTest(changes=changes):
+                original = jobs()
+                self.set_jobs([*original, {**carried(original[0]), **changes}])
+                self.refuse("distribution_job_provenance_unproven")
+
+    def test_installs_may_reexecute_after_a_carried_producer(self):
+        self.set_jobs([*jobs(), *[job(name, 3, 100 + index)
+                                  for index, name in enumerate(preflight.INSTALL_JOBS)]])
+        self.run_preflight()
+
+    def test_nullable_step_metadata_is_compared_without_new_requirements(self):
+        original = jobs()
+        for row in original:
+            row["steps"][0].update(conclusion=None, started_at=None, completed_at=None)
+        self.set_jobs([*original, *[carried(row, identity=100 + index)
+                                   for index, row in enumerate(original)]])
+        self.run_preflight()
+
+    def test_malformed_step_identity_cannot_establish_a_copy(self):
+        for changes in ({"number": True}, {"name": None}, {"status": None},
+                        {"started_at": "not a timestamp"}):
+            with self.subTest(changes=changes):
+                original = jobs()
+                copy = carried(original[0])
+                copy["steps"][0].update(changes)
+                self.set_jobs([*original, copy])
+                self.refuse("distribution_job_provenance_unproven")
 
     def test_explicit_main_dispatch_is_a_trusted_producer_event(self):
         self.routes[ENDPOINTS["attempt"]]["json"]["event"] = "workflow_dispatch"

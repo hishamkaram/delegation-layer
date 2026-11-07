@@ -1,12 +1,15 @@
 """Require the selected distribution's latest CI producer and install jobs on main.
 
 GitHub owns run/job history. Read all pages with filter=all, then select the
-latest execution of each required logical job. A carried successful job is
-valid; an older artifact than the latest producer is not. No store or approval
-record participates in this decision.
+latest successful record of each required logical job. GitHub can copy a
+completed execution into a later attempt; derive its origin from the complete
+history instead of treating that copy as a rebuild. No store or approval record
+participates in this decision.
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from .actions_artifacts import MAX_PAGES, PAGE_SIZE
 from .candidate_artifact import CandidateArtifact
@@ -108,6 +111,60 @@ def latest_jobs(rows: list[dict[str, object]], *, run_id: int,
     return selected
 
 
+def _time(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise _refuse("distribution_job_provenance_unproven")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise _refuse("distribution_job_provenance_unproven") from None
+    if parsed.utcoffset() is None:
+        raise _refuse("distribution_job_provenance_unproven")
+    return parsed
+
+
+def _execution_identity(row: dict[str, object]) -> dict[str, object]:
+    listed = row.get("steps")
+    if not isinstance(listed, list) or not listed:
+        raise _refuse("distribution_job_provenance_unproven")
+    steps: list[dict[str, object]] = []
+    for step in listed:
+        if not isinstance(step, dict):
+            raise _refuse("distribution_job_provenance_unproven")
+        number, name, status, conclusion = (step.get(key) for key in ("number", "name", "status", "conclusion"))
+        if (type(number) is not int or number <= 0 or not isinstance(name, str) or not name
+                or status != "completed" or conclusion is not None and not isinstance(conclusion, str)):
+            raise _refuse("distribution_job_provenance_unproven")
+        steps.append({"number": number, "name": name, "status": status, "conclusion": conclusion,
+                      **{key: _time(step[key]) if step.get(key) is not None else None
+                         for key in ("started_at", "completed_at")}})
+    return {"status": row.get("status"), "conclusion": row.get("conclusion"), "steps": steps,
+            **{key: _time(row.get(key)) for key in ("started_at", "completed_at")}}
+
+
+def _execution_attempt(rows: list[dict[str, object]], name: str) -> int:
+    """Walk copies back to their first original; an intervening rebuild must match."""
+    ordered = sorted((row for row in rows if row.get("name") == name),
+                     key=lambda row: positive_id(row.get("run_attempt"), STAGE), reverse=True)
+    latest_identity: dict[str, object] | None = None
+    for index, row in enumerate(ordered):
+        attempt = positive_id(row.get("run_attempt"), STAGE)
+        if index + 1 < len(ordered) and attempt == ordered[index + 1].get("run_attempt"):
+            raise _refuse("distribution_job_ambiguous")
+        created, started, completed = (_time(row.get(key)) for key in ("created_at", "started_at", "completed_at"))
+        if started > completed:
+            raise _refuse("distribution_job_provenance_unproven")
+        if latest_identity is not None and _execution_identity(row) != latest_identity:
+            raise _refuse("distribution_job_provenance_unproven")
+        if created <= started:
+            return attempt
+        if created <= completed:
+            raise _refuse("distribution_job_provenance_unproven")
+        if latest_identity is None:
+            latest_identity = _execution_identity(row)
+    raise _refuse("distribution_job_provenance_unproven")
+
+
 def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> None:
     """Check the actual source/run, all required jobs and the artifact's producer chain."""
     locator = artifact.locator
@@ -116,12 +173,13 @@ def require_publishable(client: GitHubClient, artifact: CandidateArtifact) -> No
             or identity.get("private") is not False):
         raise _refuse("publication_repository_not_public")
     run = _run(client, artifact)
-    jobs = latest_jobs(_jobs(client, locator.repository, locator.run_id), run_id=locator.run_id,
-                       head_sha=artifact.manifest.source.commit, latest_attempt=run)
-    producer = positive_id(jobs[PRODUCER_JOB].get("run_attempt"), STAGE)
+    rows = _jobs(client, locator.repository, locator.run_id)
+    latest_jobs(rows, run_id=locator.run_id,
+                head_sha=artifact.manifest.source.commit, latest_attempt=run)
+    producer = _execution_attempt(rows, PRODUCER_JOB)
     if producer != locator.run_attempt:
         raise _refuse("distribution_artifact_superseded")
-    if any(positive_id(jobs[name].get("run_attempt"), STAGE) < producer for name in INSTALL_JOBS):
+    if any(_execution_attempt(rows, name) < producer for name in INSTALL_JOBS):
         raise _refuse("distribution_install_predates_producer")
     commit = object_value(client.json(
         f"repos/{locator.repository}/commits/{artifact.manifest.source.commit}"), STAGE)
