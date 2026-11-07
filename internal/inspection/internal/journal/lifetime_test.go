@@ -469,6 +469,10 @@ func recordQualifiedInspectionLifetimeWorkerWait(
 	})
 	mustInspection(t, err)
 	workerDigest := digestInspectionLifetimeWorkerRecord(t, worker)
+	var wantExitCode *int
+	if exitCode != nil {
+		wantExitCode = inspectionIntPointer(*exitCode)
+	}
 	first, err := op.RecordLifetimeWorkerWait(taskdir.LifetimeWorkerWaitFacts{
 		WorkerSHA256: workerDigest,
 		ChildPID:     worker.PID,
@@ -479,6 +483,9 @@ func recordQualifiedInspectionLifetimeWorkerWait(
 	mustInspection(t, err)
 	if !task.LifetimeWorkerWaitIsQualified(first) || first.WorkerSHA256 != workerDigest {
 		t.Fatalf("qualified wait binding = %+v, want worker %q", first, workerDigest)
+	}
+	if first.ChildPID != 1001 || first.Result != result || !reflect.DeepEqual(first.ExitCode, wantExitCode) {
+		t.Fatalf("qualified wait facts = %+v, want child 1001 result=%q exit=%v", first, result, wantExitCode)
 	}
 	read, err := op.ReadLifetimeWorkerWaitContext(t.Context())
 	mustInspection(t, err)

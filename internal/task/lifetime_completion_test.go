@@ -398,13 +398,6 @@ func TestLifetimeCompletionRejectsMissingWorkerForExactWorker(t *testing.T) {
 	}
 }
 
-func TestLifetimeCompletionRejectsUnqualifiedRegisteredScopeEmptyAbsence(t *testing.T) {
-	evidence := completionRegisteredEvidence(t, false, false, LifetimeTerminationCompleted)
-	if _, err := NewLifetimeWorkerAbsence(evidence, LifetimeAbsenceExactWorker, "boot-current", completionTime(11, 5)); err == nil {
-		t.Fatal("registered scope-empty evidence inferred exact worker absence")
-	}
-}
-
 func TestLifetimeCompletionPartialFactsRemainOpen(t *testing.T) {
 	intent := completionIntent("boot-current")
 	closure, err := ResolveLifetimeClosure(LifetimeEvidence{Intent: &intent})

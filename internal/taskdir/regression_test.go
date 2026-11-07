@@ -81,6 +81,11 @@ func sealedTask(t *testing.T, s *Store, answer string) *TaskDir {
 	t.Helper()
 	td := preparedTask(t, s)
 	p := consumeStart(t, td)
+	t.Cleanup(func() {
+		if releaseErr := p.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
 	must(t, td.RecordStarted(1))
 	must(t, td.WriteRawFiles(answer, "diagnostic\n"))
 	_, err := td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef())

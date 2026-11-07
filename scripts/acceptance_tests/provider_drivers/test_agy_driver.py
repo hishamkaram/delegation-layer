@@ -1,5 +1,6 @@
 """Non-provider regressions for native acceptance process/evidence ownership."""
 import os
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 
 import scripts.acceptance_agy as gate
 import scripts.acceptance_supervisor_common as common
+from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.paths import operations as path_operations
 from scripts.delegate_acceptance.processes import operations as process_operations
 from scripts.delegate_acceptance.provider_drivers.agy import constants as agy_constants
@@ -39,19 +41,51 @@ class ObservedDaemon(process_operations.Process):
 
 
 class NativeHarnessTests(unittest.TestCase):
-    def make_book(self, directory, environment=None):
-        owner = common.DirectoryOwner()
-        book = agy_process_capture.ProcessBook(
-            directory, environment or os.environ.copy(), owner=owner)
-        self.addCleanup(self._cleanup_book_owner, owner)
-        return book
+    @contextmanager
+    def book_directory(self, *, prefix):
+        tree = FixtureTree.open(prefix=prefix, label="AGY process test fixture")
+        books = []
 
-    @staticmethod
-    def _cleanup_book_owner(owner):
+        def make_book(directory, environment=None):
+            book = agy_process_capture.ProcessBook(
+                directory, environment or os.environ.copy(), owner=tree.owner)
+            books.append(book)
+            return book
+
         try:
-            owner.rollback()
-        except (OSError, RuntimeError):
-            pass
+            yield tree.root, make_book
+        finally:
+            failures = []
+            for book in books:
+                for process in book.entries:
+                    try:
+                        process.wait(10, expected=None)
+                    except gate.AcceptanceFailure as error:
+                        # Signal/capture/stdin failure cases deliberately assert the
+                        # failed result. A recorded result still proves this exact
+                        # child was waited and its capture streams closed.
+                        if process.result is None or process.process is None or process.process.returncode is None:
+                            tree.observe(error, closure_required=True)
+                            failures.append(error)
+                    except BaseException as error:
+                        tree.observe(error, closure_required=True)
+                        failures.append(error)
+            try:
+                tree.dispose()
+            finally:
+                if failures:
+                    raise BaseExceptionGroup("AGY test process closure unverified; fixture retained", failures)
+
+    def test_book_scope_joins_child_after_an_assertion_failure(self):
+        with self.assertRaisesRegex(AssertionError, "injected early assertion"):
+            with self.book_directory(prefix="agy-failed-assertion-") as (directory, make_book):
+                book = make_book(directory / "processes")
+                process = book.start("finite-child", [str(Path(sys.executable).resolve()),
+                                     "-c", "import time; time.sleep(0.05)"], directory)
+                self.fail("injected early assertion")
+        self.assertEqual(process.process.returncode, 0)
+        self.assertEqual(process.result["exit_code"], 0)
+        self.assertFalse(directory.exists())
 
     def test_process_lifecycle_uses_shared_owner(self):
         self.assertIs(agy_process_capture.OwnedProcess, common.Process)
@@ -192,11 +226,11 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertFalse(agy_runtime.authentication_unavailable(root))
 
     def test_status_capture_never_persists_environment_values(self):
-        with tempfile.TemporaryDirectory(prefix='agy-status-unit-') as directory:
+        with self.book_directory(prefix='agy-status-unit-') as (directory, make_book):
             root = Path(directory)
             marker = 'private-value-' + os.urandom(16).hex()
             environment = dict(os.environ, HARNESS_SECRET=marker)
-            book = self.make_book(root / 'processes', environment)
+            book = make_book(root / 'processes', environment)
             code = ('import json, os; print(json.dumps({"tasks": {"0": '
                     '{"status": {"Done": {}}, "envs": {"SECRET": os.environ["HARNESS_SECRET"] * 10000}}}}))')
             process = book.start('status', [str(Path(sys.executable).resolve()), '-c', code,
@@ -213,9 +247,9 @@ class NativeHarnessTests(unittest.TestCase):
         cases = ['print("x" * 4096)', 'print(\'{"tasks":{},"tasks":{}}\')', 'print(\'{"tasks":{},"envs":{"key":NaN}}\')', 'print("{")']
         cases.append('import json; print(json.dumps({"tasks": {"0": {"command": "😀" * 100}}}, ensure_ascii=False))')
         for code in cases:
-            with self.subTest(code=code), tempfile.TemporaryDirectory(prefix='agy-status-unit-') as directory:
+            with self.subTest(code=code), self.book_directory(prefix='agy-status-unit-') as (directory, make_book):
                 root = Path(directory)
-                book = self.make_book(root / 'processes')
+                book = make_book(root / 'processes')
                 process = book.start('status', [str(Path(sys.executable).resolve()), '-c', code,
                                               'status', '--json'], root)
                 with patch.object(agy_process_capture, 'MAX_STATUS_BYTES', 1024):
@@ -291,9 +325,9 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertEqual(result['workspace'], '/controlled/workspace')
 
     def test_stdin_backpressure_is_bounded_and_closes_with_eof(self):
-        with tempfile.TemporaryDirectory(prefix='agy-stdin-unit-') as directory:
+        with self.book_directory(prefix='agy-stdin-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             process = book.start(
                 'closed-stdin', [str(Path(sys.executable).resolve()), '-c',
                                  'import time; time.sleep(0.2)'],
@@ -309,9 +343,9 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(book.pending(), [])
 
     def test_stdin_write_delivers_all_bytes_before_eof(self):
-        with tempfile.TemporaryDirectory(prefix='agy-stdin-eof-unit-') as directory:
+        with self.book_directory(prefix='agy-stdin-eof-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             process = book.run(
                 'reads-stdin', [str(Path(sys.executable).resolve()), '-c',
                                 'import sys; print(len(sys.stdin.buffer.read()))'],
@@ -321,16 +355,16 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(process.output(), b'12\n')
 
     def test_agy_process_constructor_validation_uses_acceptance_failure(self):
-        with tempfile.TemporaryDirectory(prefix='agy-process-validation-') as directory:
+        with self.book_directory(prefix='agy-process-validation-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             with self.assertRaises(gate.AcceptanceFailure):
                 book.start('relative', ['relative-executable'], root)
 
     def test_agy_wait_default_requires_zero_exit(self):
-        with tempfile.TemporaryDirectory(prefix='agy-process-exit-') as directory:
+        with self.book_directory(prefix='agy-process-exit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             process = book.start(
                 'failure', [str(Path(sys.executable).resolve()), '-c', 'raise SystemExit(3)'], root)
             with self.assertRaises(gate.AcceptanceFailure):
@@ -519,9 +553,9 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertTrue(run.failure_queue_finished({'tasks': {}}))
 
     def test_expired_observation_keeps_one_actual_process(self):
-        with tempfile.TemporaryDirectory(prefix='agy-harness-unit-') as directory:
+        with self.book_directory(prefix='agy-harness-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             release_path = root / 'release'
             os.mkfifo(release_path, 0o600)
             code = (
@@ -550,6 +584,7 @@ class NativeHarnessTests(unittest.TestCase):
                     for owned in book.entries:
                         if getattr(owned, 'process', None) is not None:
                             owned.wait(10)
+                    release_path.unlink()
             result = process.wait(10)
             self.assertEqual(result['exit_code'], 0)
             self.assertEqual(process.output(), b'complete\n')
@@ -558,8 +593,8 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertTrue((process.directory / 'completed.json').is_file())
 
     def test_post_start_receipt_failure_keeps_child_owner(self):
-        with tempfile.TemporaryDirectory(prefix='agy-harness-unit-') as directory:
-            book = self.make_book(Path(directory) / 'processes')
+        with self.book_directory(prefix='agy-harness-unit-') as (directory, make_book):
+            book = make_book(Path(directory) / 'processes')
             original = common.write_json
             def fail_started(path, *args, **kwargs):
                 if path.name == 'started.json':
@@ -576,9 +611,9 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(book.pending(), [])
 
     def test_ownership_transfer_failure_keeps_child_owner(self):
-        with tempfile.TemporaryDirectory(prefix='agy-harness-unit-') as directory:
+        with self.book_directory(prefix='agy-harness-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             with patch.object(common.DirectoryOwner, 'transfer_child_to',
                               side_effect=OSError('injected ownership transfer failure')):
                 with self.assertRaisesRegex(OSError, 'ownership transfer failure'):
@@ -591,9 +626,9 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(book.pending(), [])
 
     def test_process_book_collision_keeps_preexisting_capture(self):
-        with tempfile.TemporaryDirectory(prefix='agy-collision-unit-') as directory:
+        with self.book_directory(prefix='agy-collision-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             collision = book.directory / '001-collision'
             collision.mkdir()
             sentinel = collision / 'preexisting.txt'
@@ -606,9 +641,9 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(sentinel.read_text(), 'keep')
 
     def test_pending_retains_signaled_child_as_unresolved(self):
-        with tempfile.TemporaryDirectory(prefix='agy-signaled-unit-') as directory:
+        with self.book_directory(prefix='agy-signaled-unit-') as (directory, make_book):
             root = Path(directory)
-            book = self.make_book(root / 'processes')
+            book = make_book(root / 'processes')
             process = book.start('signaled', [str(Path(sys.executable).resolve()), '-c',
                                'import os, signal; os.kill(os.getpid(), signal.SIGTERM)'], root)
 

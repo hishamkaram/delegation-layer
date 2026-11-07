@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -32,15 +33,40 @@ func TestBudgetExpiryPersistsBeforeCompletionCancelsObservation(t *testing.T) {
 		}, nil
 	})}
 	owner, _ := armBudget(clock, time.Second, opts)
+	var persistOnce sync.Once
+	release := func() { persistOnce.Do(func() { close(persist) }) }
+	t.Cleanup(func() {
+		release()
+		owner.complete(opts)
+		select {
+		case <-owner.done:
+		case <-time.After(5 * time.Second):
+			t.Error("budget observer did not join")
+		}
+	})
 	clock.timer.ch <- clock.now.Add(time.Second)
-	<-preparing
+	select {
+	case <-preparing:
+	case <-owner.done:
+		t.Fatalf("budget observer returned before preparation: %v", owner.await())
+	case <-time.After(5 * time.Second):
+		t.Fatal("budget observer did not reach preparation")
+	}
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-completed:
+		case <-time.After(5 * time.Second):
+			t.Error("budget completion did not join")
+		}
+	})
 	go func() {
 		close(completionAttempt)
 		owner.complete(opts)
 		close(completed)
 	}()
 	<-completionAttempt
-	close(persist)
+	release()
 	<-completed
 	require(t, owner.await())
 	assertOrder(t, events.snapshot(), "deadline-observed", "intent-persisted")
@@ -58,7 +84,14 @@ func TestBudgetPreparationFailurePreventsSupervisorOperation(t *testing.T) {
 	})}
 	owner, _ := armBudget(clock, time.Second, opts)
 	clock.timer.ch <- clock.now.Add(time.Second)
-	<-prepared
+	t.Cleanup(func() { owner.complete(opts); <-owner.done })
+	select {
+	case <-prepared:
+	case <-owner.done:
+		t.Fatalf("budget observer returned without preparation: %v", owner.await())
+	case <-time.After(5 * time.Second):
+		t.Fatal("budget preparation did not run")
+	}
 	owner.complete(opts)
 	if !errors.Is(owner.await(), failed) {
 		t.Fatal("lost durable preparation failure")

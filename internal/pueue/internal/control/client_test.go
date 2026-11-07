@@ -50,7 +50,7 @@ case "${3-}" in
       printf '%s\n' '  -s, --stashed    Create the task in Stashed state.'
       printf '%s\n' '  -p, --print-task-id    Only return the task id.'
     else
-      if [ "${FAKE_ADD_DELAY:-}" != "" ]; then sleep "$FAKE_ADD_DELAY"; fi
+      if [ "${FAKE_ADD_GATE:-}" != "" ]; then while [ ! -f "$FAKE_ADD_GATE" ]; do sleep 0.01; done; elif [ "${FAKE_ADD_DELAY:-}" != "" ]; then sleep "$FAKE_ADD_DELAY"; fi
       printf '%s\n' "${FAKE_ADD_ID:-7}"
     fi
     ;;

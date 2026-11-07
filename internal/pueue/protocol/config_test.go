@@ -21,11 +21,17 @@ func parseConfigOK(t *testing.T, source string) *Config {
 func TestConfigOrdinaryYAMLAndJSON(t *testing.T) {
 	yaml := "# handwritten YAML\nshared: {host: localhost, port: '6924'}\nclient:\n  read_local_logs: false\ndaemon:\n  callback: |\n    echo one\n    echo two\n"
 	jsonForm := `{"shared":{"host":"localhost","port":"6924"},"client":{"read_local_logs":false},"daemon":{"callback":"echo one\necho two\n"}}`
-	if !reflect.DeepEqual(parseConfigOK(t, yaml), parseConfigOK(t, jsonForm)) {
+	parsedYAML, parsedJSON := parseConfigOK(t, yaml), parseConfigOK(t, jsonForm)
+	for _, config := range []*Config{parsedYAML, parsedJSON} {
+		if config.Shared.Host != "localhost" || config.Shared.Port != "6924" || config.Client.ReadLocalLogs || config.Daemon.Callback == nil || *config.Daemon.Callback != "echo one\necho two\n" {
+			t.Fatalf("custom configuration values changed: %+v", config)
+		}
+	}
+	if !reflect.DeepEqual(parsedYAML, parsedJSON) {
 		t.Fatal("YAML and JSON semantics differ")
 	}
 	aliased := parseConfigOK(t, "shared:\n  pueue_directory: &data /private/data\n  runtime_directory: *data\nprofiles:\n  unused:\n    shared: {host: elsewhere}\n")
-	if *aliased.Shared.PueueDirectory != *aliased.Shared.RuntimeDirectory || aliased.Shared.Host != "127.0.0.1" {
+	if aliased.Shared.PueueDirectory == nil || aliased.Shared.RuntimeDirectory == nil || *aliased.Shared.PueueDirectory != "/private/data" || *aliased.Shared.RuntimeDirectory != "/private/data" || aliased.Shared.Host != "127.0.0.1" {
 		t.Fatal("alias or base profile selection incorrect")
 	}
 }

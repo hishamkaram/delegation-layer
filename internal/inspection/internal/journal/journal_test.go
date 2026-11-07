@@ -18,6 +18,9 @@ import (
 
 func TestOpenOperationCreatesImmutableRequestOutsideOrdinaryTasks(t *testing.T) {
 	store, request, binding := inspectionFixture(t)
+	wantPrior := task.PriorSession{Provider: request.Provider, ConversationID: "saved-session", PredecessorTaskID: strings.Repeat("b", 32)}
+	prior := wantPrior
+	request.PriorSession = &prior
 	now := time.Date(2026, 9, 15, 12, 0, 0, 123456789, time.FixedZone("test", 7*60*60))
 	op, err := OpenOperation(store, request, binding, now)
 	mustInspection(t, err)
@@ -47,14 +50,22 @@ func TestOpenOperationCreatesImmutableRequestOutsideOrdinaryTasks(t *testing.T) 
 	if !reflect.DeepEqual(onDisk, saved) {
 		t.Fatalf("persisted request differs: %+v / %+v", onDisk, saved)
 	}
-	// Request returns an owned copy, including the nested optional session.
+	// Neither the caller's input nor a returned view owns the journal's session.
+	request.PriorSession.ConversationID = "mutated-input"
 	mutated := op.Request()
 	mutated.Task.Provider = "fixture:mutated"
-	if mutated.Task.PriorSession != nil {
-		mutated.Task.PriorSession.ConversationID = "mutated"
+	if mutated.Task.PriorSession == nil {
+		t.Fatal("request lost the nested prior session")
 	}
-	if got := op.Request(); got.Task.Provider != saved.Task.Provider || !reflect.DeepEqual(got.Task.PriorSession, saved.Task.PriorSession) {
+	mutated.Task.PriorSession.ConversationID = "mutated-result"
+	if got := op.Request(); got.Task.Provider != "fixture:test" || got.Task.PriorSession == nil || *got.Task.PriorSession != wantPrior {
 		t.Fatalf("request copy mutation changed journal state: got=%+v saved=%+v", got, saved)
+	}
+	loaded, err := LoadOperation(store, request.TaskID)
+	mustInspection(t, err)
+	t.Cleanup(func() { mustInspection(t, loaded.Close()) })
+	if got := loaded.Request(); got.Task.PriorSession == nil || *got.Task.PriorSession != wantPrior {
+		t.Fatalf("request mutation changed persisted session: %+v", got.Task.PriorSession)
 	}
 }
 

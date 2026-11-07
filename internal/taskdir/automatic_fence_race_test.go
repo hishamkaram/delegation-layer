@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -102,13 +103,26 @@ func assertAutomaticFenceCriticalSection(t *testing.T, afterLink bool) {
 	result := make(chan automaticFenceResult, 1)
 	done := make(chan struct{})
 	var release sync.Once
+	t.Cleanup(func() {
+		release.Do(func() { close(gate.release) })
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("automatic fence did not join after gate release")
+		}
+	})
 	go func() {
 		defer close(done)
 		proven, digest, fenceErr := td.FenceUnlaunchedTaskContext(t.Context())
 		result <- automaticFenceResult{proven, digest, fenceErr}
 	}()
-	t.Cleanup(func() { release.Do(func() { close(gate.release) }); <-done })
-	<-gate.entered
+	select {
+	case <-gate.entered:
+	case finished := <-result:
+		t.Fatalf("fence returned before the write gate: %+v", finished)
+	case <-time.After(5 * time.Second):
+		t.Fatal("fence did not reach the write gate")
+	}
 	assertAutomaticFenceExcludesOtherOwners(t, peer)
 	id := task.ComputeSHA256([]byte(task.StopCauseAutomaticAbandonment + ":" + peer.TaskID))[:32]
 	path := filepath.Join(peer.Dir, "stop", id+stopRequestSuffix)

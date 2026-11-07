@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -284,13 +285,14 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	removed := strings.Fields(string(readPrivateSupervisorFile(t, filepath.Join(base, "test-kill-task-id"))))
-	if len(removed) != 199 {
-		t.Fatalf("removed %d rows, want199", len(removed))
+	want := make([]string, 199)
+	for id := range want {
+		want[id] = strconv.Itoa(id)
 	}
-	for _, id := range removed {
-		if id == "199" {
-			t.Fatal("cleanup removed active row")
-		}
+	slices.Sort(removed)
+	slices.Sort(want)
+	if !slices.Equal(removed, want) {
+		t.Fatalf("removed rows=%v, want each terminal ID 0..198 exactly once", removed)
 	}
 	if got := removeCommands.Load(); got != 1 {
 		t.Fatalf("cleanup issued %d remove commands, want one batch", got)

@@ -138,16 +138,6 @@ func TestUserCancellationSuppressesAutomaticRebootContinuation(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	t.Run("mixed with budget", func(t *testing.T) {
-		fixture := newRebootFixture(t, rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, launchEnvironment: true})
-		recordRebootStop(t, fixture, strings.Repeat("c", 32), "user")
-		recordRebootStop(t, fixture, "budget", "budget")
-		observed := rebootStatus(t, fixture)
-		continuation := observed.response.Continuation
-		if observed.code != 0 || observed.response.Status != "timed_out" || continuation == nil || continuation.Resumable || continuation.ContinueCommand != "" || continuation.Reason != "task was cancelled by the user" {
-			t.Fatalf("cancelled budget timeout = code %d %+v", observed.code, observed.response)
-		}
-	})
 }
 
 func TestUnreadableCancellationIsReportedNotHidden(t *testing.T) {

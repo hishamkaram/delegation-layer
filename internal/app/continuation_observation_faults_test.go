@@ -246,6 +246,9 @@ func TestSimultaneousUserAndBudgetStopReportsExplicitCancellation(t *testing.T) 
 		if response.Status != "timed_out" || response.Continuation == nil || response.Continuation.Resumable {
 			t.Fatalf("%s cancelled timeout = %+v", response.Command, response)
 		}
+		if response.Continuation.ContinueCommand != "" || response.Continuation.Reason != "task was cancelled by the user" {
+			t.Fatalf("cancelled timeout offered a command or wrong reason: %+v", response.Continuation)
+		}
 		failure := response.Failure
 		if failure == nil || failure.Code != "task_cancelled" || failure.Stage != response.Command || failure.NextAction != "stop_and_report" {
 			t.Fatalf("%s failure = %+v, want task_cancelled/stop_and_report", response.Command, failure)

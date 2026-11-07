@@ -63,6 +63,11 @@ func registeredCapacityTask(t testing.TB) (*TaskDir, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := td.Close(); closeErr != nil {
+			t.Errorf("close task: %v", closeErr)
+		}
+	})
 	owner, err := td.AcquireLifetimeOwner(context.Background())
 	if err != nil {
 		t.Fatal(err)

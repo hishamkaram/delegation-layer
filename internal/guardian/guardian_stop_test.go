@@ -252,6 +252,7 @@ func assertTimelineContains(t *testing.T, events []string, required ...string) {
 
 func assertTimelineOrder(t *testing.T, events []string, ordered ...string) {
 	t.Helper()
+	assertTimelineContains(t, events, ordered...)
 	for index := 0; index+1 < len(ordered); index++ {
 		if timelineIndex(events, ordered[index]) >= timelineIndex(events, ordered[index+1]) {
 			t.Fatalf("lifecycle order = %v", events)

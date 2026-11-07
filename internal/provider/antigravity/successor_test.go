@@ -127,8 +127,7 @@ func TestSuccessorCandidateRetainsRecordedApproval(t *testing.T) {
 func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
 	fixture.meta.Predicate = NewCurrentPrintInterpreterForMode(ModeWorkspaceWrite).Reference()
-	before := fixture.meta
-	before.Environment = slices.Clone(fixture.meta.Environment)
+	before := cloneMeta(fixture.meta)
 	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta, os.Environ()); err != nil {
 		t.Fatal(err)
 	}

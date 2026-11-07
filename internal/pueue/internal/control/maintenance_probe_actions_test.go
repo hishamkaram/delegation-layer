@@ -664,8 +664,14 @@ func waitForPrivateTerminalTriggerLeader(t *testing.T, operation string, leaderD
 
 func assertPrivateTerminalTriggerRemoved(t *testing.T, scenario *privateTerminalTriggerScenario) {
 	removed := strings.Fields(string(readPrivateSupervisorFile(t, filepath.Join(scenario.base, "test-kill-task-id"))))
-	if len(removed) != 199 {
-		t.Fatalf("maintenance removed %d terminal rows, want 199", len(removed))
+	want := make([]string, 199)
+	for id := range want {
+		want[id] = strconv.Itoa(id)
+	}
+	slices.Sort(removed)
+	slices.Sort(want)
+	if !slices.Equal(removed, want) {
+		t.Fatalf("maintenance removed rows=%v, want terminal IDs 0..198 exactly once", removed)
 	}
 }
 

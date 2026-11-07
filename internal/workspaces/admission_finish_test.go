@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
@@ -27,34 +26,35 @@ type finishedAdmission struct {
 func newFinishedAdmission(t *testing.T) finishedAdmission {
 	t.Helper()
 	fixture := workspacefixture.NewRecoveryFixture(t)
-	resource, owner := acquireAdmissionUse(t, fixture)
+	admission := acquireAdmissionUse(t, fixture)
 	request := fixture.Resource.Request()
-	reservation, err := resource.Reserve(t.Context(), workspace.Subject{Kind: workspace.SubjectAdmission, ID: request.TaskID, SHA256: request.RequestSHA256})
+	reservation, err := admission.resource.Reserve(t.Context(), workspace.Subject{Kind: workspace.SubjectAdmission, ID: request.TaskID, SHA256: request.RequestSHA256})
 	if err != nil {
-		t.Fatal(errors.Join(err, owner.Release(), resource.Close()))
+		t.Fatal(err)
 	}
-	admission := &Admission{resource: resource, owner: owner, reservation: reservation}
+	admission.reservation = reservation
 	return finishedAdmission{fixture: fixture, admission: admission, reservation: reservation}
 }
 
 // acquireAdmissionUse opens the admission's own resource handle and use owner.
-func acquireAdmissionUse(t *testing.T, fixture *workspacefixture.RecoveryFixture) (*workspace.Resource, *taskdir.LifetimeOwnerLease) {
+func acquireAdmissionUse(t *testing.T, fixture *workspacefixture.RecoveryFixture) *Admission {
 	t.Helper()
 	resource, err := workspace.LoadResource(t.Context(), fixture.Store, fixture.Resource.Request().WorkspaceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	owner, err := resource.AcquireUseOwner(t.Context())
+	admission := &Admission{resource: resource}
+	t.Cleanup(func() {
+		if cleanupErr := admission.Close(); cleanupErr != nil {
+			fixture.RetainCleanupFailure(cleanupErr)
+			t.Error(cleanupErr)
+		}
+	})
+	admission.owner, err = resource.AcquireUseOwner(t.Context())
 	if err != nil {
-		held := &Admission{resource: resource, owner: owner}
-		t.Cleanup(func() {
-			if cleanupErr := held.Close(); cleanupErr != nil {
-				t.Error(cleanupErr)
-			}
-		})
-		t.Fatal(errors.Join(err, held.closeAfter(fixture.Store, err)))
+		t.Fatal(errors.Join(err, admission.closeAfter(fixture.Store, err)))
 	}
-	return resource, owner
+	return admission
 }
 
 // persistAdmissionReservation reserves the admission subject under a
@@ -64,6 +64,7 @@ func persistAdmissionReservation(t *testing.T, fixture *workspacefixture.Recover
 	owner, err := fixture.Resource.AcquireUseOwner(t.Context())
 	t.Cleanup(func() {
 		if cleanupErr := owner.Release(); cleanupErr != nil {
+			fixture.RetainCleanupFailure(cleanupErr)
 			t.Error(cleanupErr)
 		}
 	})
@@ -82,12 +83,12 @@ func persistAdmissionReservation(t *testing.T, fixture *workspacefixture.Recover
 // parent process persisted in fixture.
 func resumeFinishedAdmission(t *testing.T, fixture *workspacefixture.RecoveryFixture) finishedAdmission {
 	t.Helper()
-	resource, owner := acquireAdmissionUse(t, fixture)
-	reservation, err := resource.LatestReservation(t.Context())
+	admission := acquireAdmissionUse(t, fixture)
+	reservation, err := admission.resource.LatestReservation(t.Context())
 	if err != nil {
-		t.Fatal(errors.Join(err, owner.Release(), resource.Close()))
+		t.Fatal(err)
 	}
-	admission := &Admission{resource: resource, owner: owner, reservation: reservation}
+	admission.reservation = reservation
 	return finishedAdmission{fixture: fixture, admission: admission, reservation: reservation}
 }
 
@@ -124,6 +125,12 @@ func (f finishedAdmission) requireFinalClose(t *testing.T, finished AdmissionFin
 	if err != nil {
 		t.Fatalf("finish kept the use owner: %v", err)
 	}
+	t.Cleanup(func() {
+		if cleanupErr := owner.Release(); cleanupErr != nil {
+			f.fixture.RetainCleanupFailure(cleanupErr)
+			t.Error(cleanupErr)
+		}
+	})
 	if err = owner.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -234,6 +241,7 @@ func (f finishedAdmission) requireRetainedFinishThenExplicitClose(t *testing.T, 
 	if owner != nil {
 		t.Cleanup(func() {
 			if releaseErr := owner.Release(); releaseErr != nil {
+				f.fixture.RetainCleanupFailure(releaseErr)
 				t.Error(releaseErr)
 			}
 		})

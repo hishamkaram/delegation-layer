@@ -191,8 +191,13 @@ class RuntimeReceiptCompatibilityTests(unittest.TestCase):
         for field, value in (("provider_version", None), ("provider_version", "bad\n"),
                              ("provider_executable", None), ("provider_executable", "relative")):
             with self.subTest(field=field, value=value):
-                write_json(self.root / "binding.json", dict(binding, installed_executables={**binding["installed_executables"], field: value}), replace=True)
-                self.assertEqual(self.source_proof(source)["state"], "unresolved")
+                write_json(self.root / "binding.json", binding, replace=True)
+                self.assertEqual(self.source_proof(source)["state"], "complete")
+                write_json(self.root / "binding.json", {**binding, field: value}, replace=True)
+                rejected = self.source_proof(source)
+                self.assertEqual(rejected["state"], "unresolved")
+                self.assertEqual(rejected["binary_identities"]["paths"], binding["installed_executables"])
+                self.assertIsNone(rejected["binary_identities"]["provider_binding"])
         write_json(self.root / "binding.json", binding, replace=True)
         for value in (None, {self.task_id: None}, {self.task_id: "bad\n"}, {"c" * 32: ""}):
             with self.subTest(versions=value):

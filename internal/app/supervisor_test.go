@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,11 @@ func TestLegacyEndedInspectionJobUsesInspectionJournalEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := operation.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	submission, err := operation.ClaimSubmission(openedAt.Add(time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
@@ -292,18 +298,43 @@ func TestEnsureInspectionGroupHonorsBootstrapLockDeadline(t *testing.T) {
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	lockErr := make(chan error, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		unblock()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("bootstrap lock holder did not join")
+		}
+	})
 	go func() {
-		lockErr <- pueue.WithBootstrapLock(context.Background(), store.Root, func() error {
+		defer close(finished)
+		lockErr <- pueue.WithBootstrapLock(ctx, store.Root, func() error {
 			close(locked)
 			<-release
 			return nil
 		})
 	}()
-	<-locked
+	select {
+	case <-locked:
+	case err := <-lockErr:
+		t.Fatalf("bootstrap holder exited before lock: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap holder did not acquire lock")
+	}
 	err := supervisorcore.EnsureInspectionGroup(store, client, 25*time.Millisecond)
-	close(release)
-	if lockResult := <-lockErr; lockResult != nil {
-		t.Fatalf("bootstrap lock holder failed: %v", lockResult)
+	unblock()
+	select {
+	case lockResult := <-lockErr:
+		if lockResult != nil {
+			t.Fatalf("bootstrap lock holder failed: %v", lockResult)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap lock holder did not return")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("bootstrap lock wait was not bounded: %v", err)

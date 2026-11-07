@@ -11,6 +11,17 @@ import { countRoutingEvents, createRoutingPlan } from "./installer/routing-rules
 import { applyRouting } from "./installer/routing-store.mjs";
 import { pickOptions } from "./installer/terminal.mjs";
 
+let unresolvedChild = false;
+
+function runChild(executable, args, options) {
+  const result = spawnSync(executable, args, { timeout: 30_000, killSignal: "SIGKILL", ...options });
+  if (result.pid > 0 && result.status === null && result.signal === null) unresolvedChild = true;
+  assert.ifError(result.error);
+  assert.equal(result.signal, null, "fixture child terminated by a signal");
+  assert.notEqual(result.status, null, "fixture child has no observed exit");
+  return result;
+}
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installer = resolve(process.argv[2] ?? join(repositoryRoot, "scripts/install-agent-integration.mjs"));
 const root = await realpath(await mkdtemp(join(tmpdir(), "delegate routing 'test-")));
@@ -18,7 +29,7 @@ const home = join(root, "home");
 const project = join(root, "project");
 const environment = { ...process.env, DELEGATION_LAYER_HOME: home, CLAUDE_CONFIG_DIR: "", CODEX_HOME: "" };
 function run(args, extra = {}) {
-  return spawnSync(process.execPath, [installer, ...args], { cwd: project, env: { ...environment, ...extra }, encoding: "utf8" });
+  return runChild(process.execPath, [installer, ...args], { cwd: project, env: { ...environment, ...extra }, encoding: "utf8" });
 }
 function success(result) { assert.equal(result.status, 0, result.stderr); return result; }
 const install = ["install", "--scope", "global", "--harness", "claude,codex", "--yes", "--routing", "default"];
@@ -424,7 +435,7 @@ try {
   assert.equal(await readFile(join(dirname(configPath), backups[0]), "utf8"), original);
   for (const event of ["SessionStart", "SubagentStart"]) {
     const command = config.hooks[event].at(-1).hooks[0].command;
-    const hook = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" }, input: "{}" });
+    const hook = runChild("/bin/sh", ["-c", command], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" }, input: "{}" });
     success(hook);
     const output = JSON.parse(hook.stdout).hookSpecificOutput;
     assert.equal(output.hookEventName, event);
@@ -434,7 +445,7 @@ try {
   const unusualSkill = join(root, "skill \"quoted\" \\ tab\tline\n雪");
   await cp(dirname(dirname(helper)), unusualSkill, { recursive: true });
   for (const event of ["SessionStart", "SubagentStart"]) {
-    const hook = success(spawnSync("/bin/sh", [join(unusualSkill, "scripts/delegate-routing-context.sh"), event], {
+    const hook = success(runChild("/bin/sh", [join(unusualSkill, "scripts/delegate-routing-context.sh"), event], {
       encoding: "utf8", env: { PATH: "/usr/bin:/bin" }, input: "{}",
     }));
     const context = JSON.parse(hook.stdout).hookSpecificOutput.additionalContext;
@@ -506,5 +517,6 @@ try {
   assert.notEqual(run(["routing", "invalid"]).status, 0);
   console.log("Routing installer checks passed (merge, capture, disable, rollback, paths, package hooks).");
 } finally {
-  await rm(root, { recursive: true, force: true });
+  if (unresolvedChild) console.error(`Retained routing fixture with unresolved child: ${root}`);
+  else await rm(root, { recursive: true, force: true });
 }

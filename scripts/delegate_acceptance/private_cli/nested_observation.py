@@ -10,7 +10,7 @@ import uuid
 
 from scripts.delegate_acceptance.evidence.files import digest, path_present
 from scripts.delegate_acceptance.evidence.records import _read_control_record
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require, _hex_digest
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require, _hex_digest, _task_identity
 from scripts.delegate_acceptance.evidence.json_decoder import unique_object
 from scripts.delegate_acceptance.lifetime.evidence import _validate_managed_ordinary_lifetime
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
@@ -125,6 +125,43 @@ def observe_task_store(configuration, capture, state, root, task_id, mode, *, de
                                                      "prepared", "spec_sha256", "meta_sha256"}
             and proof.get("root_id") == root and proof.get("task_id") == task_id,
             "canonical task observer changed identity or response shape")
+    return proof
+
+
+def observe_bootstrap_task_entry(configuration, capture, state, root, task_id, token, *, deadline):
+    """Read only through the store owner, bound to the original owned root."""
+    require(deadline is not None and time.monotonic() < deadline,
+            "bootstrap task observation deadline expired")
+    if not _task_identity(root) or not _task_identity(task_id):
+        raise AcceptanceFailure("bootstrap task observation lacks its exact root/task identity")
+    require(token.directory == state, "bootstrap task observation names another owned root")
+    token.assert_live()
+    environment = fixture_environment(configuration, DELEGATE_NESTED_FIXTURE_MODE="task-entry",
+                                      DELEGATE_NESTED_FIXTURE_ROOT=str(state),
+                                      DELEGATE_NESTED_FIXTURE_TASK=task_id,
+                                      DELEGATE_NESTED_FIXTURE_ROOT_ID=root,
+                                      DELEGATE_NESTED_FIXTURE_ROOT_DEVICE=str(token.identity[0]),
+                                      DELEGATE_NESTED_FIXTURE_ROOT_INODE=str(token.identity[1]))
+    result = run_captured_text_command([configuration["native_fixture"], "-test.run=^TestNestedTaskAbsenceFixture$"],
+                                      environment, None, deadline=min(deadline, time.monotonic() + 10),
+                                      capture_root=capture)
+    token.assert_live()
+    require(time.monotonic() < deadline, "bootstrap task observation deadline expired")
+    require(result.returncode == 0, "canonical bootstrap task entry observation failed: "
+            + result.stderr[-1000:] + result.stdout[-1000:])
+    prefix = "NESTED_TASK_OBSERVATION\t"
+    require(len(result.stdout.encode()) <= 1024 * 1024, "bootstrap task observer exceeded its output bound")
+    lines = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]
+    require(len(lines) == 1, "bootstrap task observer omitted its exact response")
+    proof = json.loads(lines[0], object_pairs_hook=unique_object)
+    require(isinstance(proof, dict)
+            and set(proof) == {"root_id", "task_id", "entry_exists", "root_device", "root_inode"}
+            and proof.get("root_id") == root and _task_identity(root)
+            and proof.get("task_id") == task_id and _task_identity(task_id)
+            and type(proof.get("entry_exists")) is bool
+            and type(proof.get("root_device")) is int and type(proof.get("root_inode")) is int
+            and (proof["root_device"], proof["root_inode"]) == token.identity,
+            "bootstrap task observer changed identity or response shape")
     return proof
 
 

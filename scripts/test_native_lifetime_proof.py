@@ -129,8 +129,15 @@ class NativeLifetimeProofTests(unittest.TestCase):
         ):
             with self.subTest(changes=changes):
                 receipt = fixture_receipt("linux", "process-group", "cooperative")
-                object_at(receipt, "primitive_receipt", "binary").update(changes)
-                self.assertTrue(validate_receipt(receipt, "linux", "amd64", expected_source()))
+                self.assertEqual(validate_receipt(receipt, "linux", "amd64", expected_source()), [])
+                primitive = object_at(receipt, "primitive_receipt")
+                object_at(primitive, "binary").update(changes)
+                object_at(receipt, "assurance_receipt")["primitive_receipt_sha256"] = hashlib.sha256(
+                    canonical_go_json(primitive, newline=False)).hexdigest()
+                expected = ("test binary identity is incomplete" if "sha256" in changes else
+                            "test binary installed path is invalid" if "path" in changes else
+                            "test binary size metadata is invalid")
+                self.assertEqual(validate_receipt(receipt, "linux", "amd64", expected_source()), [expected])
 
     def test_unencodable_primitive_returns_validation_error(self) -> None:
         receipt = fixture_receipt("linux", "process-group", "cooperative")

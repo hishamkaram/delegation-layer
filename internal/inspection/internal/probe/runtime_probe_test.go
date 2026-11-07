@@ -20,7 +20,10 @@ func (runtimeTestStopper) PrepareBudget(time.Time) (execution.BudgetRequest, err
 }
 
 func TestRuntimeCapabilityNeverRunsVersionCommand(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "installed CLI's directory")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := writeRuntimeCLI(t, root, "--sandbox --output")
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox", "--output"})
 	facts, err := runRuntimeProbe(t, definition)
@@ -53,7 +56,7 @@ func TestRuntimeCapabilityRejectsRequiredHelpOverflow(t *testing.T) {
 
 func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
 	installed := t.TempDir()
-	root := filepath.Join(t.TempDir(), "installed")
+	root := filepath.Join(t.TempDir(), "installed CLI's alias")
 	if err := os.Symlink(installed, root); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +68,7 @@ func TestRuntimeCapabilityRunsReplacedInstalledExecutable(t *testing.T) {
 	// A compatible provider update replaces the installed file after
 	// discovery. The probe runs the installed executable; no byte gate refuses.
 	updated := filepath.Join(root, "provider-cli.updated")
-	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"updated:$*\" >>" + filepath.Join(root, "invocations") + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '--sandbox --new-flag' ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"updated:$*\" >>" + quoteRuntimePath(filepath.Join(root, "invocations")) + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '--sandbox --new-flag' ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(updated, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func writeRuntimeCLI(t *testing.T, directory, help string) string {
 		t.Fatal("test CLI help contains unsupported characters")
 	}
 	path := filepath.Join(directory, "provider-cli")
-	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >>" + filepath.Join(directory, "invocations") + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '" + help + "' ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$*\" >>" + quoteRuntimePath(filepath.Join(directory, "invocations")) + "\ncase \"${1-}\" in\n  --help) printf '%s\\n' '" + help + "' ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -168,4 +171,8 @@ func runtimeCLIInvocations(t *testing.T, directory string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func quoteRuntimePath(path string) string {
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 }

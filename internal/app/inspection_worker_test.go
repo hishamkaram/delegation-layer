@@ -245,6 +245,21 @@ func (l *inspectionExpiryLifetime) CloseTask(context.Context) error {
 	return nil
 }
 
+func (l *inspectionExpiryLifetime) awaitTermination(t *testing.T, finished <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-l.terminated:
+	case <-finished:
+		select {
+		case <-l.terminated:
+		default:
+			t.Fatal("inspection finished without lifetime termination")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("inspection did not terminate")
+	}
+}
+
 func TestInspectionExpiryPersistsTerminationReplyBeforeLifetimeClose(t *testing.T) {
 	created := time.Unix(100, 0).UTC()
 	store, operation := newInspectionWorkerOperation(t, created)
@@ -257,8 +272,19 @@ func TestInspectionExpiryPersistsTerminationReplyBeforeLifetimeClose(t *testing.
 	entered := make(chan struct{})
 	type result struct{ workErr, stopErr error }
 	done := make(chan result, 1)
+	finished := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("supervised inspection did not join")
+		}
+	})
 	go func() {
-		workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{
+		defer close(finished)
+		workErr, stopErr := execution.RunSupervisedContext(ctx, operation.Deadline(), execution.SupervisedOptions{
 			Clock: clock, Stopper: stopper, Lifetime: lifetime,
 		}, func(scope execution.PreflightScope) error {
 			close(entered)
@@ -267,10 +293,21 @@ func TestInspectionExpiryPersistsTerminationReplyBeforeLifetimeClose(t *testing.
 		})
 		done <- result{workErr: workErr, stopErr: stopErr}
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case got := <-done:
+		t.Fatalf("inspection returned before work entry: %+v", got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("inspection did not enter work")
+	}
 	clock.expire(operation.Deadline())
-	<-lifetime.terminated
-	got := <-done
+	lifetime.awaitTermination(t, finished)
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("inspection did not finish after termination")
+	}
 	if got.workErr == nil || got.stopErr != nil {
 		t.Fatalf("expiry result work=%v stop=%v", got.workErr, got.stopErr)
 	}

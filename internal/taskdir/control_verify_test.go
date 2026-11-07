@@ -311,19 +311,40 @@ func TestControlTransactionVerifyDrainsBeforeUnlock(t *testing.T) {
 	s.SetFaultInjector(&controlVerifyBlockingBarrier{started: started, release: release})
 	verifyDone := make(chan error, 1)
 	transactionDone := make(chan error, 1)
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	verifyJoined, transactionJoined := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		unblock()
+		for _, done := range []<-chan struct{}{verifyJoined, transactionJoined} {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("verification work did not join after release")
+			}
+		}
+	})
 	go func() {
+		defer close(transactionJoined)
 		transactionDone <- d.WithLock(t.Context(), func(tx *ControlTransaction) error {
-			go func() { verifyDone <- tx.Verify("request.json", record) }()
-			<-started
+			go func() { defer close(verifyJoined); verifyDone <- tx.Verify("request.json", record) }()
+			select {
+			case <-started:
+			case <-verifyJoined:
+				return errors.New("verification returned before the barrier")
+			case <-time.After(5 * time.Second):
+				return errors.New("verification did not reach the barrier")
+			}
 			return nil
 		})
 	}()
-	defer func() {
-		close(release)
-		must(t, <-verifyDone)
-		must(t, <-transactionDone)
-	}()
-	<-started
+	select {
+	case <-started:
+	case transactionErr := <-transactionDone:
+		t.Fatalf("transaction finished before verification barrier: %v", transactionErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("verification did not reach the barrier")
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	err = d2.WithLock(ctx, func(_ *ControlTransaction) error {
@@ -333,6 +354,9 @@ func TestControlTransactionVerifyDrainsBeforeUnlock(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("operation lease was not retained through verification: %v", err)
 	}
+	unblock()
+	must(t, <-verifyDone)
+	must(t, <-transactionDone)
 }
 
 func TestControlTransactionVerifyRemainsValidWhileClosing(t *testing.T) {

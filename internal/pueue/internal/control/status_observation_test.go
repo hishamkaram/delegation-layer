@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,22 +41,34 @@ func TestReconcileStatusSharesOnePrivateSnapshotAcrossOverlappingClients(t *test
 	startedPath := filepath.Join(base, "task-observation-started")
 	releasePath := filepath.Join(base, "task-observation-release")
 	entered := make(chan struct{}, callers)
-	environment := append(os.Environ(),
+	environment := append(
+		os.Environ(),
 		"PRIVATE_CONTROL_MARKER="+controlPath,
 		"PRIVATE_STATUS_STARTED="+startedPath,
 		"PRIVATE_STATUS_RELEASE="+releasePath,
 	)
 
 	clients := privateTaskObservationClients(t, bound, identities, environment, entered)
-
-	start := make(chan struct{})
+	scope := newTestCallScope(t, bound.options)
+	start, releaseStart := scope.barrier()
+	scope.onRelease(func() { releasePrivateStatusOnCleanup(t, releasePath) })
 	results := make(chan privateTaskObservationResult, callers)
-	workers := startPrivateTaskObservationCallers(clients, identities, start, results)
-	close(start)
+	workers := make([]*testCall[privateTaskObservationResult], callers)
+	for index, client := range clients {
+		ctx := scope.context()
+		workers[index] = startTestCall(scope, func() privateTaskObservationResult {
+			<-start
+			observation, err := client.ReconcileStatus(ctx, identities[index])
+			return privateTaskObservationResult{observation: observation, err: err}
+		})
+	}
+	releaseStart()
 	waitForPrivateTaskObservationEntries(t, entered, callers)
 	waitForPrivateFixtureMarker(t, startedPath)
 	releasePrivateStatus(t, releasePath)
-	workers.Wait()
+	for _, worker := range workers {
+		results <- awaitCall(scope, worker, "overlapping status call")
+	}
 	close(results)
 	assertPrivateTaskObservationResults(t, results)
 	if got := privateTaskObservationStatusCount(t, controlPath); got != 1 {
@@ -86,22 +97,13 @@ func privateTaskObservationClients(t *testing.T, bound *Client, identities []Ide
 			t.Fatal(err)
 		}
 		clients[index] = client
+		t.Cleanup(func() {
+			if err := client.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 	return clients
-}
-
-func startPrivateTaskObservationCallers(clients []*Client, identities []Identity, start <-chan struct{}, results chan<- privateTaskObservationResult) *sync.WaitGroup {
-	var workers sync.WaitGroup
-	workers.Add(len(clients))
-	for index, client := range clients {
-		go func() {
-			defer workers.Done()
-			<-start
-			observation, err := client.ReconcileStatus(context.Background(), identities[index])
-			results <- privateTaskObservationResult{observation: observation, err: err}
-		}()
-	}
-	return &workers
 }
 
 func waitForPrivateTaskObservationEntries(t *testing.T, entered <-chan struct{}, count int) {
@@ -243,7 +245,8 @@ func runPendingPrivateTaskObservationCase(t *testing.T, preStartLock bool) {
 		scope:       newTestCallScope(t, bound.options),
 	}
 	scenario.scope.onRelease(func() { releasePrivateStatusOnCleanup(t, scenario.releasePath) })
-	scenario.environment = append(os.Environ(),
+	scenario.environment = append(
+		os.Environ(),
 		"PRIVATE_CONTROL_MARKER="+scenario.controlPath,
 		"PRIVATE_STATUS_STARTED="+scenario.startedPath,
 		"PRIVATE_STATUS_RELEASE="+scenario.releasePath,

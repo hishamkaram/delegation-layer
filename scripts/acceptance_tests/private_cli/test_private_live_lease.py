@@ -470,11 +470,11 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             [sys.executable, "-c", script, str(first_fifo), self.nonce, "0", "hold"],
             stdin=subprocess.PIPE,
         )
+        self.addCleanup(self.reap, first)
         second = subprocess.Popen(
             [sys.executable, "-c", script, str(second_fifo), self.nonce, "0.2", "hold"],
             stdin=subprocess.PIPE,
         )
-        self.addCleanup(self.reap, first)
         self.addCleanup(self.reap, second)
         opened = []
         real_open = private_cli.os.open
@@ -505,6 +505,29 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         for descriptor in opened:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+
+    def test_second_child_start_failure_reaps_the_first_before_removing_its_root(self):
+        started = []
+        popen = subprocess.Popen
+
+        def start(*args, **kwargs):
+            if started:
+                raise OSError("injected second child start failure")
+            process = popen(*args, **kwargs)
+            started.append(process)
+            return process
+
+        case = PrivateLiveLeaseTests("test_child_death_during_cohort_formation_fails_and_closes_all_fds")
+        result = unittest.TestResult()
+        with patch.object(subprocess, "Popen", side_effect=start):
+            case.run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(result.failures, [])
+        self.assertEqual(len(result.errors), 1)
+        self.assertIn("injected second child start failure", result.errors[0][1])
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode)
+        self.assertFalse(case.root.exists())
 
     @staticmethod
     def reap(process):

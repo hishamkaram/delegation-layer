@@ -126,12 +126,22 @@ func appRejectedRecoveryTask(t *testing.T, registry predicate.Registry) (string,
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	taskID := strings.Repeat("e", 32)
 	td, _ := newAppTaskInStore(t, store, taskID, false, nil)
 	permit, err := td.PrepareStart(0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if releaseErr := permit.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
 	if err = permit.Consume(); err != nil {
 		t.Fatal(err)
 	}

@@ -27,7 +27,12 @@ type nativePrivateSupervisorFixture struct {
 	clientPath string
 	daemonPath string
 	stateRoot  string
+	lifetime   *nativePrivateFixtureLifetime
 }
+
+// The fixture, rather than an automatic ancestor TempDir cleanup, owns removal.
+// Any failed daemon/client closure retains the entire root for diagnosis.
+type nativePrivateFixtureLifetime struct{ retained bool }
 
 func newNativePrivateSupervisorFixture(t *testing.T) nativePrivateSupervisorFixture {
 	t.Helper()
@@ -36,39 +41,119 @@ func newNativePrivateSupervisorFixture(t *testing.T) nativePrivateSupervisorFixt
 	if clientPath == "" || daemonPath == "" {
 		t.Skip("native supervisor paths are not configured")
 	}
-	stateRoot := filepath.Join(canonicalTemp(t), "state")
+	base, err := os.MkdirTemp("/tmp", "pyn-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime := &nativePrivateFixtureLifetime{}
+	t.Cleanup(func() {
+		if lifetime.retained {
+			t.Errorf("retained native private supervisor fixture after unresolved cleanup: %s", base)
+			return
+		}
+		if removeErr := os.RemoveAll(base); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	resolved, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(resolved, "state")
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	writePrivateStateRootRecord(t, stateRoot)
-	return nativePrivateSupervisorFixture{clientPath: clientPath, daemonPath: daemonPath, stateRoot: stateRoot}
+	return nativePrivateSupervisorFixture{clientPath: clientPath, daemonPath: daemonPath, stateRoot: stateRoot, lifetime: lifetime}
 }
 
-// bind registers the owned daemon's shutdown as soon as BindPrivate returns
-// it, so a fatal assertion cannot leave the daemon running. The cleanup keeps
-// the daemon process identity recorded at bind, because a graceful daemon or
-// a test may remove the PID record before cleanup runs.
+// bind owns cleanup before startup. Preparing the client under the bootstrap
+// lock gives cleanup its exact endpoint even when StartPrivate fails after Start.
+// The recorded identity and actual Wait survive later PID-record removal.
+type nativePrivateBindingFixture struct {
+	client   *Client
+	process  privateProcessIdentity
+	waits    []<-chan struct{}
+	lifetime *nativePrivateFixtureLifetime
+}
+
+func (owned *nativePrivateBindingFixture) stop(ctx context.Context) error {
+	if owned.client == nil || (owned.process.PID == 0 && len(owned.waits) == 0) {
+		return nil
+	}
+	if owned.process.PID == 0 {
+		var identityErr error
+		owned.process, _, identityErr = owned.client.privateDaemonProcessIdentity()
+		if identityErr != nil {
+			return identityErr
+		}
+	}
+	return stopNativePrivateSupervisor(ctx, owned.client, owned.process)
+}
+
+func (owned *nativePrivateBindingFixture) cleanup(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), nativePrivateObservationTimeout)
+	defer cancel()
+	if stopErr := owned.stop(ctx); stopErr != nil {
+		owned.lifetime.retained = true
+		t.Errorf("native private supervisor cleanup failed: %v", stopErr)
+	}
+	if owned.client != nil {
+		closed := make(chan error, 1)
+		go func() { closed <- owned.client.Close() }()
+		select {
+		case closeErr := <-closed:
+			if closeErr != nil {
+				owned.lifetime.retained = true
+				t.Errorf("native private supervisor client close failed: %v", closeErr)
+			}
+		case <-ctx.Done():
+			owned.lifetime.retained = true
+			t.Errorf("native private supervisor client close did not join: %v", ctx.Err())
+		}
+	}
+	for _, done := range owned.waits {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			owned.lifetime.retained = true
+			t.Errorf("native daemon Wait did not finish: %v", ctx.Err())
+		}
+	}
+}
+
 func (fixture nativePrivateSupervisorFixture) bind(t *testing.T) (*Client, error) {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), fixture.clientPath, fixture.daemonPath, fixture.stateRoot, Options{PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{}, ObservationTimeout: nativePrivateObservationTimeout})
+	owned := &nativePrivateBindingFixture{lifetime: fixture.lifetime}
+	t.Cleanup(func() { owned.cleanup(t) })
+	options := Options{
+		PrivateGenerationGuard: allowPrivateGenerationForTest{}, DaemonStartGuard: allowDaemonStartForTest{},
+		ObservationTimeout: nativePrivateObservationTimeout,
+		DaemonWaitOwner: daemonWaitOwnerFunc(func(_ string, _ int, done <-chan struct{}) error {
+			owned.waits = append(owned.waits, done)
+			return nil
+		}),
+	}
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		var prepareErr error
+		owned.client, prepareErr = PreparePrivateWithLock(ctx, fixture.clientPath, fixture.daemonPath, fixture.stateRoot, options)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		return owned.client.StartPrivate(ctx, fixture.stateRoot)
+	})
 	if err != nil {
 		return nil, err
 	}
-	process, present, identityErr := client.privateDaemonProcessIdentity()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), nativePrivateObservationTimeout)
-		defer cancel()
-		if stopErr := stopNativePrivateSupervisor(ctx, client, process); stopErr != nil {
-			t.Errorf("native private supervisor cleanup failed: %v", stopErr)
-		}
-		if closeErr := client.Close(); closeErr != nil {
-			t.Errorf("native private supervisor client close failed: %v", closeErr)
-		}
-	})
+	var present bool
+	var identityErr error
+	owned.process, present, identityErr = owned.client.privateDaemonProcessIdentity()
 	if identityErr != nil || !present {
+		fixture.lifetime.retained = true
 		t.Fatalf("native daemon process was not recorded at bind: present=%t err=%v", present, identityErr)
 	}
-	return client, nil
+	return owned.client, nil
 }
 
 // stopNativePrivateSupervisor gracefully stops a daemon that still answers at

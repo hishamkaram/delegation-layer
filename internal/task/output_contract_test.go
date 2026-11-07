@@ -19,12 +19,12 @@ func TestNormalizeInputFilesSortsAndCopiesDeclarations(t *testing.T) {
 	if normalized[0].Name != "a-profile.json" || normalized[1].Name != "z-profile.json" {
 		t.Fatalf("input files were not sorted: %+v", normalized)
 	}
+	if CompareInputFiles(files, normalized) {
+		t.Fatal("comparison ignored declaration order")
+	}
 	normalized[0].Content = "x"
 	if files[1].Content != "a" {
 		t.Fatal("input declaration was not copied")
-	}
-	if CompareInputFiles(files, normalized) {
-		t.Fatal("comparison ignored declaration order")
 	}
 }
 

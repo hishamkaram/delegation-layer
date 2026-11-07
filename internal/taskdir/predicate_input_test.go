@@ -87,6 +87,11 @@ func sealedProbeTask(t *testing.T, config task.TaskConfig, conversation string) 
 		must(t, td.ClaimSession(req.Provider, conversation))
 	}
 	permit := consumeStart(t, td)
+	t.Cleanup(func() {
+		if releaseErr := permit.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
 	if conversation != "" {
 		must(t, td.RecordProviderIdentity(task.SessionIdentity{Provider: req.Provider, ConversationID: conversation}))
 	}

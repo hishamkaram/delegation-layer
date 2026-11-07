@@ -133,10 +133,7 @@ func TestSuccessorOfRunPredecessorNeverOpensANewSession(t *testing.T) {
 func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	for _, dialect := range []launchDialect{dialectNativeV1, dialectNativeV2} {
 		fixture := newSuccessorFixture(t, ModeWorkspaceWrite, dialect)
-		before := fixture.run
-		before.Environment = slices.Clone(fixture.run.Environment)
-		policy := *fixture.run.EffectiveConfig.Policy
-		before.EffectiveConfig.Policy = &policy
+		before := snapshotMeta(fixture.run)
 		if _, err := PrepareSuccessorCandidate(fixture.request, fixture.run, os.Environ()); err != nil {
 			t.Fatal(err)
 		}
@@ -234,10 +231,7 @@ func TestACPV1RecordReconstructsV1AndItsSuccessorUsesV2(t *testing.T) {
 			for _, recorded := range []task.PredicateRef{acpV1ReferenceForMode(mode), ReferenceForMode(mode)} {
 				predecessor := withPredicate(fixture.acp, recorded)
 				predecessor.Environment = slices.Clone(fixture.acp.Environment)
-				before := predecessor
-				before.Environment = slices.Clone(predecessor.Environment)
-				policy := *predecessor.EffectiveConfig.Policy
-				before.EffectiveConfig.Policy = &policy
+				before := snapshotMeta(predecessor)
 				requireACPSuccessor(t, fixture.request, predecessor, os.Environ())
 				reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor, os.Environ())
 				if err != nil {

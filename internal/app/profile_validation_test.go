@@ -130,6 +130,7 @@ func TestRunRunnerRefreshesProfileAtProcessStartBoundary(t *testing.T) {
 }
 
 type runnerRefreshFixture struct {
+	retain             bool
 	base               string
 	store              *taskdir.Store
 	td                 *taskdir.TaskDir
@@ -156,13 +157,20 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 
 func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *runnerRefreshFixture {
 	t.Helper()
+	fixture := &runnerRefreshFixture{}
 	rawBase, err := os.MkdirTemp("", "dl-runner-")
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixture.base = rawBase
 	t.Cleanup(func() {
-		if cleanupErr := os.RemoveAll(rawBase); cleanupErr != nil {
-			t.Error(cleanupErr)
+		fixture.close(t)
+		if !fixture.retain {
+			if cleanupErr := os.RemoveAll(fixture.base); cleanupErr != nil {
+				t.Error(cleanupErr)
+			}
+		} else {
+			t.Errorf("retained runner fixture %s after incomplete cleanup", fixture.base)
 		}
 	})
 	base, err := filepath.EvalSymlinks(rawBase)
@@ -174,11 +182,13 @@ func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *ru
 	statusPath := filepath.Join(base, "status.json")
 	writeRunnerSupervisor(t, supervisorExecutable, configPath, statusPath, base)
 	environment := append(os.Environ(), "RUNNER_STATUS_PATH="+statusPath)
-	supervisor, err := pueue.Bind(context.Background(), supervisorExecutable, configPath, pueue.Options{Environment: environment})
+	supervisor, err := pueue.Bind(context.Background(), supervisorExecutable, configPath, pueue.Options{Environment: environment, WaitForPendingClose: true})
+	fixture.supervisor = supervisor
 	if err != nil {
 		t.Fatal(err)
 	}
 	store, err := taskdir.InitStore(filepath.Join(base, "state"))
+	fixture.store = store
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +213,7 @@ func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *ru
 	}
 	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: providerExecutable, ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Environment: options.Environment, EnvironmentRecorded: options.EnvironmentRecorded}
 	td, err := store.CreateTask(id, req, brief, meta)
+	fixture.td = td
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +225,8 @@ func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *ru
 		t.Fatal(err)
 	}
 	writeRunnerStatus(t, statusPath, store.RootID, id, 7)
-	return &runnerRefreshFixture{base: base, store: store, td: td, req: req, supervisor: supervisor, environment: environment, providerExecutable: providerExecutable}
+	fixture.req, fixture.environment, fixture.providerExecutable = req, environment, providerExecutable
+	return fixture
 }
 
 func (f *runnerRefreshFixture) profile() PreparedProfile {
@@ -227,10 +239,18 @@ func (f *runnerRefreshFixture) profile() PreparedProfile {
 
 func (f *runnerRefreshFixture) close(t *testing.T) {
 	t.Helper()
-	if err := f.td.Close(); err != nil {
-		t.Error(err)
+	var err error
+	if f.td != nil {
+		err = errors.Join(err, f.td.Close())
 	}
-	if err := f.store.Close(); err != nil {
+	if f.supervisor != nil {
+		err = errors.Join(err, f.supervisor.Close())
+	}
+	if f.store != nil {
+		err = errors.Join(err, f.store.Close())
+	}
+	if err != nil {
+		f.retain = true
 		t.Error(err)
 	}
 }

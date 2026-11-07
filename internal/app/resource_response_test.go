@@ -77,10 +77,9 @@ func TestResourceAdmissionNilKeepsLegacyRendering(t *testing.T) {
 	if err = writeHumanResponse(&output, response); err != nil {
 		t.Fatal(err)
 	}
-	var want strings.Builder
-	writeHumanSummary(&want, response)
-	if output.String() != want.String() {
-		t.Fatalf("legacy human output = %q, want %q", output.String(), want.String())
+	const want = "command=dispatch root_id= task_id=task-1 admission=unknown liveness=undetermined publication=unknown\n"
+	if output.String() != want {
+		t.Fatalf("legacy human output = %q, want %q", output.String(), want)
 	}
 }
 

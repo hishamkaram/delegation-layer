@@ -50,12 +50,40 @@ func TestObserveCommandOwnsNaturalStartAndWait(t *testing.T) {
 }
 
 func TestObserveCommandDetachesCallerWithoutStoppingProcess(t *testing.T) {
-	executable := transportFiniteExecutable(t, "sleep 0.08; printf 'finished\\n'")
-	pending := StartOwned(exec.Command(executable))
-	_, err := ObserveCommand(context.Background(), pending, 5*time.Millisecond)
+	base, err := os.MkdirTemp("", "transport-detach-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePath := filepath.Join(base, "release")
+	executable := filepath.Join(base, "fake-supervisor")
+	var pending *Pending
+	t.Cleanup(func() {
+		if releaseErr := os.WriteFile(releasePath, nil, 0o600); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+		if pending != nil {
+			select {
+			case <-pending.Done():
+			case <-time.After(2 * time.Second):
+				t.Errorf("gated process did not join; retaining fixture %s", base)
+				return
+			}
+		}
+		if removeErr := os.RemoveAll(base); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	if writeErr := os.WriteFile(executable, []byte("#!/bin/sh\nset -eu\nwhile [ ! -f \"$1\" ]; do sleep 0.01; done; printf 'finished\\n'\n"), 0o700); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	pending = StartOwned(exec.Command(executable, releasePath))
+	_, err = ObserveCommand(context.Background(), pending, 5*time.Millisecond)
 	var inFlight *InFlightError
 	if !errors.As(err, &inFlight) || inFlight.Pending != pending || !errors.Is(err, ErrInFlight) {
 		t.Fatalf("expected in-flight observation, got %v", err)
+	}
+	if releaseErr := os.WriteFile(releasePath, nil, 0o600); releaseErr != nil {
+		t.Fatal(releaseErr)
 	}
 	result := awaitTransportPending(t, pending)
 	if !result.Started || result.ExitCode != 0 || string(result.Stdout) != "finished\n" {

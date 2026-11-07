@@ -434,62 +434,7 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("argv-equivalent `continue`", continuation)
             self.assertIn("continue remains continue", routing_rule)
 
-    def test_composed_skill_migration_retry_preserves_continue_intent(self):
-        original_continue = [
-            "delegate", "--root", "/state", "continue", "--task", "a" * 32,
-            "--brief", "/brief", "--budget", "30m", "--json",
-        ]
-        failed_continue = {
-            "task_record": "not_created",
-            "failure": {
-                "code": "supervisor_upgrade_required",
-                "next_action": "run_supervisor_migrate",
-            },
-        }
-        migrated = {
-            "supervisor_control": {
-                "state": "migrated",
-                "next_action": "retry_dispatch",
-            },
-        }
-        successor = {
-            "command": "continue",
-            "task_record": "created",
-            "task_id": "b" * 32,
-            "parent_task_id": "a" * 32,
-        }
-        mismatched_continue = dict(failed_continue, failure={
-            "code": "supervisor_upgrade_required", "next_action": "stop_and_report"})
-        mismatched_migration = {"state": "migrated", "next_action": "retry_dispatch"}
-
-        def may_retry(admission, migration):
-            return (admission.get("task_record") == "not_created"
-                    and admission.get("failure", {}).get("code") == "supervisor_upgrade_required"
-                    and admission.get("failure", {}).get("next_action") == "run_supervisor_migrate"
-                    and migration.get("supervisor_control", {}).get("state") == "migrated"
-                    and migration.get("supervisor_control", {}).get("next_action") == "retry_dispatch")
-
-        self.assertTrue(may_retry(failed_continue, migrated))
-        self.assertFalse(may_retry(mismatched_continue, migrated))
-        self.assertFalse(may_retry(failed_continue, mismatched_migration))
-
-        calls = [original_continue.copy()]
-        if may_retry(failed_continue, migrated):
-            calls.append(["delegate", "--root", "/state", "supervisor", "migrate", "--json"])
-            calls.append(original_continue.copy())
-        responses = [failed_continue, migrated, successor]
-        continue_calls = [argv for argv in calls if "continue" in argv]
-        dispatch_calls = [argv for argv in calls if "dispatch" in argv]
-        direct_provider_calls = [argv for argv in calls if argv[0] != "delegate"]
-        linked = [response for response in responses
-                  if response.get("task_record") == "created"
-                  and response.get("parent_task_id") == "a" * 32]
-        self.assertEqual(continue_calls, [original_continue, original_continue])
-        self.assertEqual(calls.count(["delegate", "--root", "/state", "supervisor", "migrate", "--json"]), 1)
-        self.assertEqual(len(linked), 1)
-        self.assertEqual(dispatch_calls, [])
-        self.assertEqual(direct_provider_calls, [])
-
+    def test_skill_migration_guidance_and_eval_preserve_continue_intent(self):
         self.assert_migration_guidance_matches_contract()
 
         evaluations = json.loads((gate.SKILL / "evals/evals.json").read_text(encoding="utf-8"))

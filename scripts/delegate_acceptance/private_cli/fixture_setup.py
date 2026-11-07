@@ -59,7 +59,8 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
     ).directory
     home = lifetime.ownership.create("private CLI home", lifetime.base / "home", lifetime.base).directory
     workspace = lifetime.ownership.create("private CLI workspace", lifetime.base / "workspace", lifetime.base).directory
-    state = lifetime.ownership.create("private CLI state", state_parent / "state", state_parent).directory
+    lifetime.state_token = lifetime.ownership.create("private CLI state", state_parent / "state", state_parent)
+    state = lifetime.state_token.directory
     waiter_directory = lifetime.ownership.create(
         "provider waiter directory", lifetime.base / "provider-waiters", lifetime.base
     ).directory

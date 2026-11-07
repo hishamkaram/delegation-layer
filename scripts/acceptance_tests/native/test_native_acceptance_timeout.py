@@ -2,6 +2,8 @@
 
 from scripts.acceptance_tests.native.support import NoCommands, task_owner
 from argparse import Namespace
+from contextlib import ExitStack
+from io import FileIO
 import os
 from pathlib import Path
 import stat
@@ -22,19 +24,32 @@ from scripts.delegate_acceptance.native import (
 from scripts.delegate_acceptance.native.timeouts import (
     TIMEOUT_SOURCE_TOOL_TIMEOUT_MS,
     TimeoutLeaseOwner,
+    _TimeoutLeaseSetupError,
 )
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
-    def _timeout_lease_operation(self, root: Path) -> gate.NativeAcceptance:
+    def _timeout_lease_operation(self, root: Path, resources: ExitStack) -> gate.NativeAcceptance:
         output = root / "evidence"
         workspace = root / "workspace"
         briefs = root / "briefs"
         output.mkdir(parents=True)
         owner = supervisor_common.DirectoryOwner()
+        owned_directories = None
+
+        def release_pins():
+            if owned_directories is None:
+                owner.release()
+            else:
+                for token in owned_directories:
+                    supervisor_common.release_owned_directory(token)
+
+        resources.callback(release_pins)
         workspace_token = owner.create("timeout workspace", workspace, root)
         briefs_token = owner.create("timeout briefs", briefs, root)
         timeout_state = TimeoutLeaseOwner(workspace_token.directory, True, owner)
+        for lease in timeout_state.leases.values():
+            resources.callback(lease.close)
         raw_token = owner.create("raw process captures", output / "processes", output)
         operation = object.__new__(gate.NativeAcceptance)
         operation.success_candidate = None
@@ -42,7 +57,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.workspace = workspace_token.directory
         operation.briefs = briefs_token.directory
         operation.owned_directories = owner.transfer()
-        track_directory_pins(self, operation.owned_directories)
+        owned_directories = operation.owned_directories
         self.enterContext(patch.object(operation, "processes", SimpleNamespace(capture_root=raw_token), create=True))
         operation.timeout_state = timeout_state
         return operation
@@ -54,19 +69,163 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         return owner
 
     @staticmethod
-    def _timeout_writer(lease: gate.TimeoutFifoLease) -> int:
-        return os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+    def _timeout_writer(lease: gate.TimeoutFifoLease, resources: ExitStack) -> FileIO:
+        descriptor = os.open(lease.path, os.O_WRONLY | os.O_NONBLOCK)
+        return resources.enter_context(os.fdopen(descriptor, "wb", buffering=0))
+
+    def test_timeout_fixture_closes_readers_and_writer_after_early_assertion(self):
+        with self.assertRaisesRegex(AssertionError, "injected early assertion"):
+            with tempfile.TemporaryDirectory(prefix="timeout-failed-assertion-") as directory, ExitStack() as resources:
+                operation = self._timeout_lease_operation(Path(directory), resources)
+                leases = list(operation.timeout_state.leases.values())
+                writer = self._timeout_writer(leases[0], resources)
+                self.fail("injected early assertion")
+        self.assertTrue(writer.closed)
+        self.assertTrue(all(lease.fd is None for lease in leases))
+        self.assertFalse(Path(directory).exists())
+
+    def test_timeout_fixture_closes_first_reader_when_second_acquisition_fails(self):
+        opened = []
+        constructor = gate.TimeoutFifoLease
+
+        def acquire(*args):
+            if opened:
+                raise OSError("injected second FIFO acquisition failure")
+            lease = constructor(*args)
+            opened.append(lease)
+            return lease
+
+        with self.assertRaisesRegex(OSError, "second FIFO acquisition failure"):
+            with tempfile.TemporaryDirectory(prefix="timeout-partial-acquisition-") as directory, \
+                    ExitStack() as resources, patch("scripts.delegate_acceptance.native.timeouts.TimeoutFifoLease", side_effect=acquire):
+                self._timeout_lease_operation(Path(directory), resources)
+        self.assertEqual(len(opened), 1)
+        self.assertIsNone(opened[0].fd)
+        self.assertFalse(Path(directory).exists())
+
+    def test_timeout_constructor_preserves_primary_fault_and_reports_reader_close_fault(self):
+        opened = []
+        constructor = gate.TimeoutFifoLease
+        primary = OSError("injected second FIFO acquisition failure")
+        cleanup_error = OSError("reader close fault")
+        with tempfile.TemporaryDirectory(prefix="timeout-partial-close-fault-") as directory, ExitStack() as resources:
+            owner = supervisor_common.DirectoryOwner()
+            resources.callback(owner.release)
+
+            def acquire(*args):
+                if opened:
+                    raise primary
+                lease = constructor(*args)
+                resources.callback(lease.close)  # Original closer remains the test's final recovery owner.
+                resources.enter_context(patch.object(lease, "close", side_effect=cleanup_error))
+                opened.append(lease)
+                return lease
+
+            with patch("scripts.delegate_acceptance.native.timeouts.TimeoutFifoLease", side_effect=acquire), \
+                    self.assertRaises(_TimeoutLeaseSetupError) as caught:
+                TimeoutLeaseOwner(Path(directory), True, owner)
+            self.assertIs(caught.exception.__cause__, primary)
+            self.assertIs(caught.exception.owner.leases["parent"], opened[0])
+            self.assertEqual(caught.exception.cleanup_failures, (cleanup_error,))
+            self.assertIsNotNone(opened[0].fd)
+            self.assertTrue(opened[0].path.is_fifo())
+            self.assertIn(str(opened[0].path.parent), str(caught.exception))
+        self.assertIsNone(opened[0].fd)
+
+    def test_native_constructor_retains_timeout_ancestors_when_reader_close_is_unproven(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-constructor-retain-") as directory:
+            root = Path(directory)
+            output, home = root / "evidence", root / "home"
+            output.mkdir()
+            delegate, runner = adjacent_runner_bundle(root)
+            args = Namespace(
+                provider="opencode:run", mode="workspace-write", scenario="timeout-resume",
+                discover_models=False, output=str(output), delegate=str(delegate), runner=str(runner),
+                pueue="/bin/sh", pueued="/bin/sh", provider_executable="/bin/sh", model=None, effort=None)
+            opened = []
+            constructor, close = gate.TimeoutFifoLease, os.close
+            primary = OSError("injected second FIFO acquisition failure")
+            close_error = OSError("injected result after native close")
+            faulted = False
+            selected_fd = None
+
+            def acquire(*arguments):
+                nonlocal selected_fd
+                if opened:
+                    raise primary
+                lease = constructor(*arguments)
+                opened.append(lease)
+                selected_fd = lease.fd
+                return lease
+
+            # Retain the observed number before close() retires it.
+            def report_after_close(fd):
+                nonlocal faulted
+                close(fd)
+                if selected_fd is not None and fd == selected_fd and not faulted:
+                    faulted = True
+                    raise close_error
+
+            before_descriptors = len(os.listdir("/dev/fd"))
+            with patch.object(gate.Path, "home", return_value=home), \
+                    patch.object(gate, "reject_tmp"), patch.object(gate, "require_discovery"), \
+                    patch("scripts.delegate_acceptance.native.timeouts.TimeoutFifoLease", side_effect=acquire), \
+                    patch("scripts.delegate_acceptance.native.timeouts.os.close", side_effect=report_after_close), \
+                    self.assertRaises(_TimeoutLeaseSetupError) as caught:
+                gate.NativeAcceptance(args)
+            partial = caught.exception
+            self.assertIs(partial.__cause__, primary)
+            self.assertEqual(partial.cleanup_failures, (close_error,))
+            self.assertTrue(partial.owner.directory.is_dir())
+            self.assertTrue(partial.owner.directory.parent.is_dir())
+            self.assertTrue(partial.owner.directory.parent.parent.is_dir())
+            self.assertTrue(opened[0].path.is_fifo())
+            self.assertFalse(partial.owner.cleanup())
+            self.assertTrue(opened[0].path.is_fifo())
+            self.assertTrue(faulted)
+            self.assertEqual(len(os.listdir("/dev/fd")), before_descriptors)
+            # The injected failure followed a real successful close, and no
+            # process was launched. Only that proof permits final test disposal.
+
+    def test_timeout_cleanup_reports_close_error_without_retrying_a_retired_descriptor(self):
+        # The fault occurs after a real successful native close. This independent
+        # proof permits this test's final TemporaryDirectory disposal; the
+        # production owner must still retain uncertainty on every cleanup retry.
+        with self.assertRaisesRegex(OSError, "injected result after native close"):
+            with tempfile.TemporaryDirectory(prefix="timeout-reader-close-error-") as directory, ExitStack() as resources:
+                operation = self._timeout_lease_operation(Path(directory), resources)
+                parent = operation.timeout_state.leases["parent"]
+                descriptor = parent.fd
+                close = os.close
+                attempts = []
+
+                def close_then_report_error(fd):
+                    attempts.append(fd)
+                    close(fd)
+                    if fd == descriptor:
+                        raise OSError("injected result after native close")
+
+                with patch("scripts.delegate_acceptance.native.timeouts.os.close", side_effect=close_then_report_error):
+                    self.assertFalse(operation._cleanup_timeout_leases())
+                    self.assertFalse(operation._cleanup_timeout_leases())
+                    with self.assertRaisesRegex(OSError, "injected result after native close"):
+                        parent.close()
+                self.assertEqual(attempts.count(descriptor), 1)
+                self.assertIsNone(parent.fd)
+                self.assertTrue(parent.path.is_fifo())
+                self.assertIsNone(operation.timeout_state.leases["child"].fd)
+                self.assertFalse(operation.timeout_state.leases["child"].path.exists())
 
     def test_timeout_liveness_requires_exact_fifo_inode_and_distinct_ready_evidence(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-ready-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-ready-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
             try:
-                os.write(parent_writer, parent.expected)
-                os.write(child_writer, child.expected)
+                parent_writer.write(parent.expected)
+                child_writer.write(child.expected)
                 self.assertTrue(operation._capture_timeout_liveness())
                 receipt = gate.read_json(operation.output / "timeout-liveness.json")
                 self.assertTrue(receipt["ready"])
@@ -79,22 +238,22 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     self.assertTrue(stat.S_ISFIFO(metadata.st_mode))
                     self.assertEqual(receipt["resources"][name]["inode"], lease.inode)
             finally:
-                os.close(parent_writer)
-                os.close(child_writer)
+                parent_writer.close()
+                child_writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_rejects_marker_only_forgery(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-marker-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-marker-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
             try:
-                os.write(parent_writer, parent.expected)
-                os.write(child_writer, child.expected)
-                os.close(parent_writer)
-                os.close(child_writer)
+                parent_writer.write(parent.expected)
+                child_writer.write(child.expected)
+                parent_writer.close()
+                child_writer.close()
                 with self.assertRaisesRegex(gate.AcceptanceFailure, "closed before"):
                     operation._capture_timeout_liveness()
                 self.assertFalse((operation.output / "timeout-liveness.json").exists())
@@ -102,57 +261,57 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_rejects_malformed_fifo_evidence(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-malformed-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-malformed-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
-            writer = self._timeout_writer(parent)
+            writer = self._timeout_writer(parent, resources)
             try:
-                os.write(writer, b"marker-only\n")
+                writer.write(b"marker-only\n")
                 with self.assertRaisesRegex(gate.AcceptanceFailure, "malformed"):
                     operation._timeout_liveness_ready()
             finally:
-                os.close(writer)
+                writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_marker_file_alone_is_not_readiness(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-marker-file-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-marker-file-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             operation.timeout_state.marker_file.write_text("timeout-marker:forged\n")
             self.assertFalse(operation._timeout_liveness_ready())
             self.assertFalse((operation.output / "timeout-liveness.json").exists())
             operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_one_side_eof_is_insufficient(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-one-eof-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-one-eof-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
-            os.write(parent_writer, parent.expected)
-            os.write(child_writer, child.expected)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
+            parent_writer.write(parent.expected)
+            child_writer.write(child.expected)
             try:
                 self.assertTrue(operation._capture_timeout_liveness())
-                os.close(parent_writer)
+                parent_writer.close()
                 self.assertFalse(operation._timeout_liveness_closed())
                 self.assertFalse(operation.timeout_state.leases["child"].eof)
             finally:
-                os.close(child_writer)
+                child_writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_requires_both_fifo_eof_for_success(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-both-eof-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-both-eof-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
-            os.write(parent_writer, parent.expected)
-            os.write(child_writer, child.expected)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
+            parent_writer.write(parent.expected)
+            child_writer.write(child.expected)
             try:
                 self.assertTrue(operation._capture_timeout_liveness())
-                os.close(parent_writer)
-                os.close(child_writer)
+                parent_writer.close()
+                child_writer.close()
                 self.assertTrue(operation._timeout_liveness_closed())
                 operation.wait_timeout_leases_closed()
                 receipt = gate.read_json(operation.output / "timeout-liveness.json")
@@ -169,28 +328,28 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             def poll(self, _timeout):
                 return []
 
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-silent-eof-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-silent-eof-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
-            writer = self._timeout_writer(parent)
+            writer = self._timeout_writer(parent, resources)
             try:
-                os.write(writer, parent.expected)
+                writer.write(parent.expected)
                 parent.observe()
                 self.assertTrue(parent.ready)
                 self.assertFalse(parent.eof)
-                os.close(writer)
+                writer.close()
                 writer = None
                 with patch.object(gate.select, "poll", return_value=SilentPoll()):
                     parent.observe()
                 self.assertTrue(parent.eof)
             finally:
                 if writer is not None:
-                    os.close(writer)
+                    writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_cleanup_removes_only_owned_fifos_and_artifacts(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-cleanup-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-cleanup-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             operation.timeout_state.marker_file.write_text("owned\n")
             operation.timeout_state.resume_file.write_text("owned\n")
             paths = [lease.path for lease in operation.timeout_state.leases.values()]
@@ -203,9 +362,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertTrue(all(lease.fd is None for lease in operation.timeout_state.leases.values()))
 
     def test_finalize_retains_timeout_leases_when_shutdown_is_unproven(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-finalize-retain-") as directory:
+        with tempfile.TemporaryDirectory(prefix="native-timeout-finalize-retain-") as directory, ExitStack() as resources:
             root = Path(directory)
-            operation = self._timeout_lease_operation(root)
+            operation = self._timeout_lease_operation(root, resources)
             base_owner = supervisor_common.DirectoryOwner()
             operation.base_parent = root / "private"
             base_parent_token = base_owner.create(
@@ -232,14 +391,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_rejects_fifo_replacement_and_preserves_replacement(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-replace-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-replace-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
-            os.write(parent_writer, parent.expected)
-            os.write(child_writer, child.expected)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
+            parent_writer.write(parent.expected)
+            child_writer.write(child.expected)
             replacement = parent.path
             try:
                 self.assertTrue(operation._capture_timeout_liveness())
@@ -249,89 +408,89 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     operation._timeout_liveness_closed()
                 self.assertTrue(replacement.is_file())
             finally:
-                os.close(parent_writer)
-                os.close(child_writer)
+                parent_writer.close()
+                child_writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_rejects_an_extra_writer_until_it_closes(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-extra-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-extra-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
             child = operation.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(parent)
-            child_writer = self._timeout_writer(child)
+            parent_writer = self._timeout_writer(parent, resources)
+            child_writer = self._timeout_writer(child, resources)
             extra_writer = None
-            os.write(parent_writer, parent.expected)
-            os.write(child_writer, child.expected)
+            parent_writer.write(parent.expected)
+            child_writer.write(child.expected)
             try:
                 self.assertTrue(operation._capture_timeout_liveness())
-                extra_writer = self._timeout_writer(child)
-                os.close(parent_writer)
-                os.close(child_writer)
+                extra_writer = self._timeout_writer(child, resources)
+                parent_writer.close()
+                child_writer.close()
                 self.assertFalse(operation._timeout_liveness_closed())
-                os.close(extra_writer)
+                extra_writer.close()
                 extra_writer = None
                 self.assertTrue(operation._timeout_liveness_closed())
             finally:
                 if extra_writer is not None:
-                    os.close(extra_writer)
+                    extra_writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_accepts_a_fragmented_marker_and_rejects_a_repeat(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-repeat-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-repeat-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             parent = operation.timeout_state.leases["parent"]
-            writer = self._timeout_writer(parent)
+            writer = self._timeout_writer(parent, resources)
             try:
                 split = len(parent.expected) // 2
-                os.write(writer, parent.expected[:split])
+                writer.write(parent.expected[:split])
                 self.assertFalse(operation._timeout_liveness_ready())
                 self.assertFalse(parent.ready)
-                os.write(writer, parent.expected[split:])
+                writer.write(parent.expected[split:])
                 self.assertFalse(operation._timeout_liveness_ready())
                 self.assertTrue(parent.ready)
                 # A retried shell call reopens the same lease and repeats its marker.
-                os.close(writer)
-                writer = self._timeout_writer(parent)
-                os.write(writer, parent.expected)
+                writer.close()
+                writer = self._timeout_writer(parent, resources)
+                writer.write(parent.expected)
                 with self.assertRaisesRegex(gate.AcceptanceFailure, "extra or malformed"):
                     operation._timeout_liveness_ready()
                 self.assertFalse((operation.output / "timeout-liveness.json").exists())
             finally:
-                os.close(writer)
+                writer.close()
                 operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_isolated_between_concurrent_acceptance_runs(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-isolation-") as directory:
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-isolation-") as directory, ExitStack() as resources:
             root = Path(directory)
-            first = self._timeout_lease_operation(root / "first")
-            second = self._timeout_lease_operation(root / "second")
+            first = self._timeout_lease_operation(root / "first", resources)
+            second = self._timeout_lease_operation(root / "second", resources)
             first_parent = first.timeout_state.leases["parent"]
             first_child = first.timeout_state.leases["child"]
-            parent_writer = self._timeout_writer(first_parent)
-            child_writer = self._timeout_writer(first_child)
+            parent_writer = self._timeout_writer(first_parent, resources)
+            child_writer = self._timeout_writer(first_child, resources)
             try:
-                os.write(parent_writer, first_parent.expected)
-                os.write(child_writer, first_child.expected)
+                parent_writer.write(first_parent.expected)
+                child_writer.write(first_child.expected)
                 self.assertTrue(first._capture_timeout_liveness())
                 self.assertFalse(second._timeout_liveness_ready())
                 self.assertNotEqual(first_parent.inode, second.timeout_state.leases["parent"].inode)
-                forged = self._timeout_writer(second.timeout_state.leases["parent"])
+                forged = self._timeout_writer(second.timeout_state.leases["parent"], resources)
                 try:
                     with self.assertRaisesRegex(gate.AcceptanceFailure, "malformed"):
-                        os.write(forged, first_parent.expected)
+                        forged.write(first_parent.expected)
                         second._timeout_liveness_ready()
                 finally:
-                    os.close(forged)
+                    forged.close()
             finally:
-                os.close(parent_writer)
-                os.close(child_writer)
+                parent_writer.close()
+                child_writer.close()
                 first._cleanup_timeout_leases()
                 second._cleanup_timeout_leases()
 
     def test_timeout_brief_uses_harness_fifo_leases_and_portable_shell_syntax(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-brief-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-brief-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             brief = operation.timeout_brief("timeout-source").read_text()
             command = brief.split("`", 2)[1]
 
@@ -352,8 +511,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation._cleanup_timeout_leases()
 
     def test_timeout_brief_requires_one_foreground_call_that_outlives_the_budget(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-brief-call-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-brief-call-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             brief = operation.timeout_brief("timeout-source").read_text()
             operation._cleanup_timeout_leases()
         self.assertEqual(brief.count("`"), 2)
@@ -407,8 +566,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     operation.owned_directories))
 
     def test_timeout_resume_brief_names_the_previous_provider_session_neutrally(self):
-        with tempfile.TemporaryDirectory(prefix="native-timeout-resume-brief-") as directory:
-            operation = self._timeout_lease_operation(Path(directory))
+        with tempfile.TemporaryDirectory(prefix="native-timeout-resume-brief-") as directory, ExitStack() as resources:
+            operation = self._timeout_lease_operation(Path(directory), resources)
             resume = operation.timeout_brief("timeout-resume", resume=True).read_text()
             source = operation.timeout_brief("timeout-source").read_text()
 

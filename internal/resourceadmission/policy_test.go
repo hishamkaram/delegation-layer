@@ -195,7 +195,8 @@ func TestHeadroomLowUsesTheLimitReserve(t *testing.T) {
 	}{
 		{"big limit, headroom at 1 GiB", 16 * gib, 15 * gib, false},
 		{"big limit, headroom just under 1 GiB", 16 * gib, 15*gib + 1, true},
-		{"small limit uses ten percent", 2 * gib, 2*gib - reserveBytes(2*gib), false},
+		{"small limit uses ten percent", 2 * gib, 2*gib - (2*gib)/10, false},
+		{"small limit just below ten percent", 2 * gib, 2*gib - (2*gib)/10 + 1, true},
 		{"usage above limit saturates", gib, 2 * gib, true},
 		{"idle level", 16 * gib, 0, false},
 	}

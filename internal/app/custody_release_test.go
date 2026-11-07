@@ -362,36 +362,3 @@ func requireRunnerLeaseHeldOffer(t *testing.T, result commandResult, reported bo
 		t.Fatalf("%s continuation %+v, want the held runner lease reported", result.response.Command, offer)
 	}
 }
-
-// TestStatusCustodyReadPathLatency records, without asserting a bound, the
-// wall time of repeated status polls for a legacy unplaced registration and
-// for placed open and proven-closed registrations on the same fixture shape.
-func TestStatusCustodyReadPathLatency(t *testing.T) {
-	const polls = 10
-	for _, tc := range []struct {
-		name      string
-		placement bool
-		cause     string
-	}{
-		{name: "legacy-unplaced-closed", cause: task.LifetimeTerminationBudget},
-		{name: "placed-open", placement: true, cause: custodyLifetimeOpen},
-		{name: "placed-closed", placement: true, cause: task.LifetimeTerminationBudget},
-	} {
-		store, td, request := newAppTestTask(t, false)
-		var placement *task.LifetimeCustodyPlacement
-		if tc.placement {
-			placement = newCustodyTestPlacement(t)
-		}
-		registration := recordCustodyLifetime(t, td, placement, tc.cause)
-		if tc.placement {
-			bindCustodyTestView(t, registration)
-		}
-		started := time.Now()
-		for range polls {
-			status(Arguments{Root: store.Root, TaskID: request.TaskID}, Dependencies{ResourceChecker: fixtureResources})
-		}
-		elapsed := time.Since(started)
-		t.Logf("custody-latency %s polls=%d total=%s per-poll=%s", tc.name, polls, elapsed, elapsed/polls)
-		closeAppTestTask(t, store, td)
-	}
-}

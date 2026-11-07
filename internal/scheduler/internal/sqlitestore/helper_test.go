@@ -55,7 +55,7 @@ func runHelper(args []string) int {
 
 // helperClaimOnce opens the production Store, waits for the barrier, and
 // prints the claim outcome.
-func helperClaimOnce(ctx context.Context, args []string) error {
+func helperClaimOnce(ctx context.Context, args []string) (resultErr error) {
 	root, rootID, scheduleID, taskID := args[0], args[1], args[2], args[5]
 	cursor, cursorErr := strconv.ParseInt(args[3], 10, 64)
 	due, dueErr := strconv.ParseInt(args[4], 10, 64)
@@ -66,11 +66,7 @@ func helperClaimOnce(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if closeErr := store.Close(); closeErr != nil {
-			fmt.Fprintln(os.Stderr, closeErr)
-		}
-	}()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	if err = testchild.AwaitRelease(ctx, "ready"); err != nil {
 		return err
 	}

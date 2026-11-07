@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -74,12 +75,16 @@ func requirePiInterpreters(t *testing.T, registration commonprovider.Registratio
 		{"read-only v2", readOnlyV2Reference()},
 		{"legacy", LegacyReference()},
 	}
-	if registration.Prepare == nil || registration.PrepareExisting == nil || registration.PrepareSuccessor == nil || len(registration.Interpreters) != len(expected) {
+	if registration.Prepare == nil || registration.PrepareExisting == nil || registration.PrepareSuccessor == nil {
 		t.Fatalf("registration=%+v", registration)
 	}
-	for index, want := range expected {
-		if !registration.Interpreters[index].Reference().Equal(want.reference) {
-			t.Fatalf("%s interpreter reference is not registered at %d", want.name, index)
+	registry, err := predicate.New(registration.Interpreters...)
+	if err != nil {
+		t.Fatalf("invalid or duplicate registered reference: %v", err)
+	}
+	for _, want := range expected {
+		if _, err := registry.Resolve(want.reference); err != nil {
+			t.Fatalf("%s interpreter reference is not resolvable: %v", want.name, err)
 		}
 	}
 }

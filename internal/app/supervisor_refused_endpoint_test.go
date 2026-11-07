@@ -258,8 +258,7 @@ func newRefusedEndpointContinueFixture(t *testing.T) (*outputUpgradeFixture, ref
 		t.Fatal(err)
 	}
 	testCase := outputUpgradeControlCases(t)[0]
-	parent := mustCCRContinuationTempDir(t, userHome, "delegation-refused-continue-")
-	owner := newComponentSupervisorFixtureIn(t, componentFiniteDaemon, parent)
+	owner := newComponentSupervisorFixtureIn(t, componentFiniteDaemon, userHome)
 	fixture := &outputUpgradeFixture{
 		testCase:  testCase,
 		root:      owner.root,

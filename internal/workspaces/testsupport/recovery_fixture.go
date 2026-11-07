@@ -22,6 +22,7 @@ func OpenSelectionOperation(t *testing.T, fixture *RecoveryFixture, request work
 	}
 	t.Cleanup(func() {
 		if closeErr := operation.Close(); closeErr != nil {
+			fixture.RetainCleanupFailure(closeErr)
 			t.Error(closeErr)
 		}
 	})
@@ -36,6 +37,7 @@ func RecoveryUseOwner(t *testing.T, fixture *RecoveryFixture) {
 	owner, err := fixture.Resource.TryAcquireUseOwner(t.Context())
 	t.Cleanup(func() {
 		if releaseErr := owner.Release(); releaseErr != nil {
+			fixture.RetainCleanupFailure(releaseErr)
 			t.Error(releaseErr)
 		}
 	})
@@ -47,11 +49,35 @@ func RecoveryUseOwner(t *testing.T, fixture *RecoveryFixture) {
 type RecoveryFixture struct {
 	Store    *taskdir.Store
 	Resource *workspace.Resource
+	// The fixture owns ancestor removal; separately loaded child owners report
+	// unresolved final cleanup here before their handles become inaccessible.
+	cleanupFailure error
+}
+
+// RetainCleanupFailure prevents ancestor removal after a child owner's final
+// cleanup fails. Reporting the failure does not transfer or discard its owner.
+func (f *RecoveryFixture) RetainCleanupFailure(err error) {
+	f.cleanupFailure = errors.Join(f.cleanupFailure, err)
 }
 
 func NewRecoveryFixture(t *testing.T) *RecoveryFixture {
 	t.Helper()
-	return NewRecoveryFixtureIn(t, supervisorfixture.CanonicalTempDir(t))
+	base, err := os.MkdirTemp("", "dla-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &RecoveryFixture{}
+	t.Cleanup(func() {
+		if fixture.Resource != nil || fixture.Store != nil || fixture.cleanupFailure != nil {
+			t.Errorf("retaining recovery fixture %s: handle closure is unresolved: %v", base, fixture.cleanupFailure)
+			return
+		}
+		if err := os.RemoveAll(base); err != nil {
+			t.Error(err)
+		}
+	})
+	initializeRecoveryFixture(t, supervisorfixture.CanonicalPath(t, base), fixture)
+	return fixture
 }
 
 // RecoveryFixtureRoot is the store root of a recovery fixture under base.
@@ -63,11 +89,23 @@ func RecoveryFixtureRoot(base string) string {
 // caller owns and removes; test cleanup only closes the fixture's handles.
 func NewRecoveryFixtureIn(t *testing.T, base string) *RecoveryFixture {
 	t.Helper()
+	fixture := &RecoveryFixture{}
+	initializeRecoveryFixture(t, base, fixture)
+	return fixture
+}
+
+func initializeRecoveryFixture(t *testing.T, base string, fixture *RecoveryFixture) {
+	t.Helper()
+	t.Cleanup(func() {
+		if closeErr := fixture.CloseHandles(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
 	store, err := taskdir.InitStore(RecoveryFixtureRoot(base))
+	fixture.Store = store
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &RecoveryFixture{Store: store}
 	request := workspace.ResourceRequest{
 		SchemaVersion: task.SchemaVersion,
 		RootID:        store.RootID,
@@ -80,17 +118,8 @@ func NewRecoveryFixtureIn(t *testing.T, base string) *RecoveryFixture {
 	}
 	fixture.Resource, err = workspace.EstablishResource(t.Context(), store, request)
 	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if closeErr := fixture.CloseHandles(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	return fixture
 }
 
 // CloseHandles closes the resource and store handles. A handle is cleared
@@ -125,14 +154,15 @@ func (f *RecoveryFixture) Reopen(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resource, err := workspace.LoadResource(t.Context(), store, strings.Repeat("b", 32))
+	f.Store = store
+	f.Resource, err = workspace.LoadResource(t.Context(), store, strings.Repeat("b", 32))
 	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
+		if closeErr := f.CloseHandles(); closeErr != nil {
+			f.RetainCleanupFailure(closeErr)
 			t.Error(closeErr)
 		}
 		t.Fatal(err)
 	}
-	f.Store, f.Resource = store, resource
 }
 
 // ReopenRecoveryFixture reopens the recovery fixture another process
@@ -140,12 +170,12 @@ func (f *RecoveryFixture) Reopen(t *testing.T, root string) {
 func ReopenRecoveryFixture(t *testing.T, root string) *RecoveryFixture {
 	t.Helper()
 	fixture := &RecoveryFixture{}
-	fixture.Reopen(t, root)
 	t.Cleanup(func() {
 		if closeErr := fixture.CloseHandles(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
+	fixture.Reopen(t, root)
 	return fixture
 }
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -596,28 +597,90 @@ func TestSubmitStagedCommitFailureLeavesStashedWithoutEnqueue(t *testing.T) {
 	}
 }
 
-func TestSubmitStagedAddPendingIsConsumedWithoutDuplicateAdd(t *testing.T) {
+type pendingStagedAddFixture struct {
+	fake     *fakeSupervisor
+	scope    *testCallScope
+	permit   *taskdir.SubmissionPermit
+	identity Identity
+	result   ordinaryRecoveryResult
+	release  func() error
+}
+
+func newPendingStagedAddFixture(t *testing.T) *pendingStagedAddFixture {
+	t.Helper()
 	fake := newFakeSupervisor(t, "ok")
-	appendStagedEnvironment(fake, "FAKE_ADD_DELAY=0.05")
-	fake.client.options.ObservationTimeout = 20 * time.Millisecond
-	_, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
-	observation, err := fake.client.SubmitStaged(context.Background(), permit, launch, func(Observation) error { return nil })
-	if err != nil && (!errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil) {
-		t.Fatalf("the original add Pending was not consumed: observation=%+v err=%v", observation, err)
-	}
-	if !observation.Matched {
-		t.Fatalf("the original add Pending lost its staged receipt: observation=%+v err=%v", observation, err)
-	}
-	if observation.Pending != nil {
-		result := waitPending(t, observation.Pending)
-		if result.Err != nil || result.ExitCode != 0 {
-			t.Fatalf("the single enqueue did not finish successfully: %+v", result)
+	t.Cleanup(func() {
+		if err := fake.client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	addGate := filepath.Join(t.TempDir(), "add-release")
+	appendStagedEnvironment(fake, "FAKE_ADD_GATE="+addGate)
+	_, permit, identity, launch := prepareStagedOrdinarySubmission(t, fake)
+	started := make(chan struct{})
+	onStarted := sync.OnceFunc(func() { close(started) })
+	fake.client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "started" && slices.Contains(event.Argv, "add") && !slices.Contains(event.Argv, "--help") {
+			onStarted()
 		}
 	}
-	if got := len(stagedInvocations(t, fake, "add")); got != 1 {
+	scope := newTestCallScope(t, fake.client.options)
+	releaseAdd := sync.OnceValue(func() error { return os.WriteFile(addGate, nil, 0o600) })
+	scope.onRelease(func() {
+		if err := releaseAdd(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := scope.cancelableContext()
+	submission := startTestCall(scope, func() ordinaryRecoveryResult {
+		observation, err := fake.client.SubmitStaged(ctx, permit, launch, func(Observation) error {
+			return errors.New("gated add reached commit before completion")
+		})
+		return ordinaryRecoveryResult{observation: observation, err: err}
+	})
+	awaitEntry(scope, started, submission, "submission did not start its add")
+	cancel()
+	result := awaitCall(scope, submission, "canceled staged add")
+	return &pendingStagedAddFixture{fake: fake, scope: scope, permit: permit, identity: identity, result: result, release: releaseAdd}
+}
+
+func (fixture *pendingStagedAddFixture) complete(t *testing.T) {
+	t.Helper()
+	observation, err := fixture.result.observation, fixture.result.err
+	if !errors.Is(err, ErrSubmissionUncertain) || !errors.Is(err, ErrInFlight) || observation.Pending == nil || observation.Matched {
+		t.Fatalf("held add did not retain uncertainty and its Pending: observation=%+v err=%v", observation, err)
+	}
+	if !fixture.permit.IsConsumed() || len(stagedInvocations(t, fixture.fake, "enqueue")) != 0 {
+		t.Fatal("pending add did not consume its permit exclusively before enqueue")
+	}
+	if err := fixture.release(); err != nil {
+		t.Fatal(err)
+	}
+	if !waitUntil(observation.Pending.Done(), fixture.scope.cutoff) {
+		t.Fatal("original add did not finish after release")
+	}
+	completed, done := observation.Pending.Result()
+	if !done || completed.Err != nil || completed.ExitCode != 0 || string(completed.Stdout) != "7\n" {
+		t.Fatalf("original pending add did not return its exact ID: %+v", completed)
+	}
+}
+
+func TestSubmitStagedRecoversPendingAddWithoutDuplicateAdd(t *testing.T) {
+	fixture := newPendingStagedAddFixture(t)
+	fixture.complete(t)
+	writeStagedOrdinaryStatus(t, fixture.fake, fixture.identity, 7, StateStashed, "", "default")
+	var committed Observation
+	recovered, recoverErr := fixture.fake.client.RecoverStaged(fixture.scope.context(), fixture.identity, 7, func(candidate Observation) error {
+		committed = candidate
+		return nil
+	})
+	if recoverErr != nil || !recovered.Matched || recovered.State != StateStashed || recovered.NumericTaskID != 7 || recovered != committed || recovered.Identity.Label() != fixture.identity.Label() || recovered.Identity.SpecSHA256 != fixture.identity.SpecSHA256 || recovered.Identity.MetaSHA256 != fixture.identity.MetaSHA256 {
+		t.Fatalf("pending add did not recover its exact staged row: observation=%+v committed=%+v err=%v", recovered, committed, recoverErr)
+	}
+	if got := len(stagedInvocations(t, fixture.fake, "add")); got != 1 {
 		t.Fatalf("add was retried after its Pending: %d actual add invocations", got)
 	}
-	if got := len(stagedInvocations(t, fake, "enqueue")); got != 1 {
+	if got := len(stagedInvocations(t, fixture.fake, "enqueue")); got != 1 {
 		t.Fatalf("successful staged add did not enqueue exactly once: %d", got)
 	}
 }

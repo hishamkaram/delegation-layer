@@ -62,6 +62,7 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 		"Done":    {"Done": map[string]any{"enqueued_at": statusTestTime, "start": statusTestTime, "end": statusTestTime, "result": "Success"}},
 		"Locked":  {"Locked": map[string]any{"previous_status": map[string]any{"Queued": map[string]any{"enqueued_at": statusTestTime}}}},
 	}
+	expected := map[string]State{"Queued": StateQueued, "Running": StateRunning, "Paused": StateRunning, "Stashed": StateStashed, "Done": StateEnded, "Locked": StateUnknown}
 	for name, state := range states {
 		t.Run(name, func(t *testing.T) {
 			jobs := map[string]any{"7": statusTestJob(7, "delegate:"+strings.Repeat("a", 32)+":"+strings.Repeat("b", 32), state)}
@@ -70,14 +71,8 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(parsed) != 1 || parsed[0].ID != 7 {
+			if len(parsed) != 1 || parsed[0].ID != 7 || parsed[0].State != expected[name] {
 				t.Fatalf("unexpected rows: %+v", parsed)
-			}
-			if name == "Locked" && parsed[0].State != StateUnknown {
-				t.Fatalf("locked state should remain conservative: %+v", parsed[0])
-			}
-			if name == "Stashed" && parsed[0].State != StateStashed {
-				t.Fatalf("stashed state was collapsed into queued: %+v", parsed[0])
 			}
 		})
 	}

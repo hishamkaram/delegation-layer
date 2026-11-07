@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,26 +17,67 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+// bootstrapPendingTestFixture owns the lock, children and transferred cleanup.
+type bootstrapPendingTestFixture struct {
+	lock        *bootstrapLock
+	pending     []*Pending
+	resultErr   error
+	releasePath string
+}
+
+func (fixture *bootstrapPendingTestFixture) cleanup(t *testing.T, scope *testCallScope) {
+	t.Helper()
+	for _, pending := range fixture.pending {
+		if !waitUntil(pending.Done(), scope.final) {
+			t.Error("bootstrap child did not join before cleanup deadline")
+			<-pending.Done()
+		}
+	}
+	var owner *BootstrapCleanupError
+	if errors.As(fixture.resultErr, &owner) {
+		if !waitUntil(owner.Done(), scope.final) {
+			t.Error("bootstrap lock owner did not finish before cleanup deadline")
+			<-owner.Done()
+		}
+		if owner.Err() != nil {
+			t.Error(owner.Err())
+		}
+	}
+	if fixture.lock != nil {
+		if closeErr := closeBootstrapLock(fixture.lock); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}
+}
+
 func TestFinishPrivateBootstrapRetainsLockForEveryPendingCommand(t *testing.T) {
 	base := canonicalTemp(t)
-	stateRoot := filepath.Join(base, "state")
-	privateBase := filepath.Join(stateRoot, privateSupervisorDirectory)
+	privateBase := filepath.Join(base, "state", privateSupervisorDirectory)
 	if err := os.MkdirAll(privateBase, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	lock, err := acquireBootstrapLock(context.Background(), filepath.Join(privateBase, "bootstrap.lock"))
+	lockPath := filepath.Join(privateBase, "bootstrap.lock")
+	lock, err := acquireBootstrapLock(context.Background(), lockPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	releasePath := filepath.Join(base, "release")
+	fixture := &bootstrapPendingTestFixture{lock: lock, releasePath: filepath.Join(base, "release")}
+	scope := newTestCallScope(t, Options{})
+	scope.onRelease(func() {
+		if writeErr := os.WriteFile(fixture.releasePath, nil, 0o600); writeErr != nil {
+			t.Error(writeErr)
+		}
+	})
+	scope.joins = append(scope.joins, func() { fixture.cleanup(t, scope) })
 	waitScript := `while [ ! -f "$1" ]; do sleep 0.01; done`
-	first := transport.StartOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
-	second := transport.StartOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
-	resultErr := errors.Join(&InFlightError{Pending: first}, &InFlightError{Pending: second})
-	finishPrivateBootstrap(&lock, &resultErr)
+	for range 2 {
+		fixture.pending = append(fixture.pending, transport.StartOwned(exec.Command("sh", "-c", waitScript, "wait", fixture.releasePath)))
+	}
+	fixture.resultErr = errors.Join(&InFlightError{Pending: fixture.pending[0]}, &InFlightError{Pending: fixture.pending[1]})
+	finishPrivateBootstrap(&fixture.lock, &fixture.resultErr)
 
 	lockContext, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	deferredLock, lockErr := acquireBootstrapLock(lockContext, filepath.Join(privateBase, "bootstrap.lock"))
+	deferredLock, lockErr := acquireBootstrapLock(lockContext, lockPath)
 	cancel()
 	if deferredLock != nil {
 		if closeErr := closeBootstrapLock(deferredLock); closeErr != nil {
@@ -45,17 +87,16 @@ func TestFinishPrivateBootstrapRetainsLockForEveryPendingCommand(t *testing.T) {
 	if !errors.Is(lockErr, context.DeadlineExceeded) {
 		t.Fatalf("bootstrap lock was released before every pending command completed: %v", lockErr)
 	}
-	if writeErr := os.WriteFile(releasePath, nil, 0o600); writeErr != nil {
+	if writeErr := os.WriteFile(fixture.releasePath, nil, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if !awaitPendingNaturally(first, time.Second) || !awaitPendingNaturally(second, time.Second) {
-		t.Fatal("pending bootstrap commands did not complete")
+	for _, pending := range fixture.pending {
+		if !awaitPendingNaturally(pending, time.Second) {
+			t.Fatal("pending bootstrap command did not complete")
+		}
 	}
-	lock, err = acquireBootstrapLock(context.Background(), filepath.Join(privateBase, "bootstrap.lock"))
+	fixture.lock, err = acquireBootstrapLock(scope.context(), lockPath)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err = closeBootstrapLock(lock); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -396,9 +437,10 @@ func TestWaitReadyRejectsParentCancellationAndRetainsPendingOwner(t *testing.T) 
 func TestStopRecoveredWaitsForPriorPendingProbeBeforeShutdown(t *testing.T) {
 	fake := newFakeSupervisorPaths(t, "delay-status", "pueue "+FixtureVersion)
 	shutdownMarker := filepath.Join(filepath.Dir(fake.configPath), "shutdown-marker")
+	statusGate := filepath.Join(filepath.Dir(fake.configPath), "status-release")
 	fake.environment = append(
 		fake.environment,
-		"FAKE_STATUS_DELAY=0.3",
+		"FAKE_STATUS_GATE="+statusGate,
 		"FAKE_SHUTDOWN_MARKER="+shutdownMarker,
 	)
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
@@ -410,27 +452,60 @@ func TestStopRecoveredWaitsForPriorPendingProbeBeforeShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	ready := make(chan error, 1)
-	go func() { ready <- waitReady(ctx, client, time.Second) }()
+	t.Cleanup(func() {
+		if closeErr := client.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	scope := newTestCallScope(t, client.options)
+	scope.onRelease(func() {
+		if releaseErr := os.WriteFile(statusGate, nil, 0o600); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	})
+	ctx, cancel := scope.cancelableContext()
+	ready := startTestCall(scope, func() privateTaskObservationResult {
+		readyErr := waitReady(ctx, client, time.Second)
+		return privateTaskObservationResult{observation: Observation{Pending: pendingFrom(readyErr)}, err: readyErr}
+	})
 	waitForFakeInvocation(t, fake.logPath, "arg=status\n")
 	cancel()
-	readinessErr := <-ready
+	readinessErr := awaitCall(scope, ready, "canceled readiness probe").err
 	var inFlight *InFlightError
 	if !errors.As(readinessErr, &inFlight) || inFlight.Pending == nil {
 		t.Fatalf("waitReady did not return the active probe: %v", readinessErr)
 	}
 
-	cleanup := make(chan error, 1)
-	go func() {
-		cleanup <- stopRecoveredSupervisor(context.Background(), client, 2*time.Second, readinessErr)
-	}()
-	time.Sleep(50 * time.Millisecond)
-	if _, err := os.Stat(shutdownMarker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("shutdown overlapped the pending readiness probe: %v", err)
+	shutdownBeforeProbe := make(chan bool, 1)
+	client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "entry" && slices.Contains(event.Argv, "shutdown") {
+			select {
+			case <-inFlight.Pending.Done():
+				shutdownBeforeProbe <- false
+			default:
+				shutdownBeforeProbe <- true
+			}
+		}
 	}
-	if err := <-cleanup; err != nil {
-		t.Fatalf("recovered supervisor cleanup failed: %v", err)
+	cleanup := startTestCall(scope, func() lockCallResult {
+		return lockCallResult{err: stopRecoveredSupervisor(context.Background(), client, 2*time.Second, readinessErr)}
+	})
+	select {
+	case <-cleanup.done:
+		t.Fatalf("cleanup returned while its readiness probe was gated: %v", cleanup.result.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := os.WriteFile(statusGate, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	awaitLockCall(scope, cleanup, "recovered supervisor cleanup")
+	select {
+	case before := <-shutdownBeforeProbe:
+		if before {
+			t.Fatal("shutdown entered before the exact pending probe completed")
+		}
+	default:
+		t.Fatal("cleanup did not enter shutdown")
 	}
 	if _, err := os.Stat(shutdownMarker); err != nil {
 		t.Fatalf("recovered supervisor was not shut down after probe completion: %v", err)

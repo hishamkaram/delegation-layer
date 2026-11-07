@@ -17,6 +17,7 @@ import (
 
 func TestResourceRegistryReplayAndCollision(t *testing.T) {
 	store, resource, request := newResourceFixture(t)
+	t.Cleanup(func() { closeResource(t, resource) })
 	if ids, err := ResourceIDs(t.Context(), store); err != nil || !slices.Equal(ids, []string{request.WorkspaceID}) {
 		t.Fatalf("initial resource inventory ids=%v err=%v", ids, err)
 	}
@@ -43,8 +44,6 @@ func TestResourceRegistryReplayAndCollision(t *testing.T) {
 	if _, err = EstablishResource(t.Context(), store, collision); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("different request did not collide: %v", err)
 	}
-
-	closeResource(t, resource)
 }
 
 func TestResourceBindAdmissionReplayPreservesInitialWorkspaceBinding(t *testing.T) {

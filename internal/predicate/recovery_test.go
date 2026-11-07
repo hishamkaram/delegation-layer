@@ -35,11 +35,13 @@ func TestRegistryResolvesOneRecoveryTargetIndependentOfRegistrationOrder(t *test
 	source := task.FixturePredicateRef()
 	target := recoveryTestRef("codex:exec", "current")
 	candidate := recoveryTestInterpreter{ref: target, target: target, accept: func(ref task.PredicateRef) bool { return ref.Equal(source) }}
-	first, err := New(candidate)
+	unrelatedRef := recoveryTestRef("claude:print", "unrelated")
+	unrelated := recoveryTestInterpreter{ref: unrelatedRef, target: unrelatedRef, accept: func(task.PredicateRef) bool { return false }}
+	first, err := New(candidate, unrelated)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := New(candidate)
+	second, err := New(unrelated, candidate)
 	if err != nil {
 		t.Fatal(err)
 	}

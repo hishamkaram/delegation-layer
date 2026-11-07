@@ -59,22 +59,28 @@ func TestReadOnlyPolicyProjectionAcceptsCompiledEffectiveConfig(t *testing.T) {
 }
 
 func TestReadOnlyPolicyProjectionRejectsOverrides(t *testing.T) {
+	if _, err := projectReadOnlyConfig([]byte(readOnlyConfigContent)); err != nil {
+		t.Fatalf("valid baseline was refused: %v", err)
+	}
 	for _, testCase := range []struct {
-		name string
-		json string
+		name      string
+		json      string
+		wantError string
 	}{
 		{
-			name: "agent edit allow",
-			json: `{"agent":{"delegation-layer-read-only":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"allow","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"}}},"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"}}`,
+			name:      "agent edit allow",
+			json:      strings.Replace(readOnlyConfigContent, `"edit":"deny"`, `"edit":"allow"`, 1),
+			wantError: "agent permissions differ",
 		},
 		{
-			name: "legacy mode override",
-			json: `{"agent":{"delegation-layer-read-only":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"}}},"mode":{"delegation-layer-read-only":{"permission":{"edit":"allow"}}},"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"}}`,
+			name:      "legacy mode override",
+			json:      strings.TrimSuffix(readOnlyConfigContent, "}") + `,"mode":{"delegation-layer-read-only":{"permission":{"edit":"allow"}}}}`,
+			wantError: "legacy mode overrides",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if _, err := projectReadOnlyConfig([]byte(testCase.json)); err == nil {
-				t.Fatal("effective permission override was accepted")
+			if _, err := projectReadOnlyConfig([]byte(testCase.json)); err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("permission override error=%v, want %q", err, testCase.wantError)
 			}
 		})
 	}
@@ -452,10 +458,12 @@ func TestWorkspaceWritePermissionRejectsGlobMetacharacters(t *testing.T) {
 }
 
 func TestPolicyProjectionRejectsEnabledMCP(t *testing.T) {
-	base := `{"agent":{"delegation-layer-read-only":{"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"}}},"permission":{"*":"deny","read":"allow","grep":"allow","glob":"allow","list":"allow","edit":"deny","bash":"deny","task":"deny","skill":"deny","lsp":"deny","question":"deny","webfetch":"deny","websearch":"deny","external_directory":"deny","doom_loop":"deny"},"lsp":false,"formatter":false}`
-	withMCP := strings.TrimSuffix(base, "}") + `,"mcp":{"local":{"type":"local","command":["unsafe-helper"]}}}`
-	if _, err := projectReadOnlyConfig([]byte(withMCP)); err == nil {
-		t.Fatal("enabled MCP server was accepted")
+	if _, err := projectReadOnlyConfig([]byte(readOnlyConfigContent)); err != nil {
+		t.Fatalf("valid baseline was refused: %v", err)
+	}
+	withMCP := strings.TrimSuffix(readOnlyConfigContent, "}") + `,"mcp":{"local":{"type":"local","command":["unsafe-helper"]}}}`
+	if _, err := projectReadOnlyConfig([]byte(withMCP)); err == nil || !strings.Contains(err.Error(), `MCP server "local" is enabled`) {
+		t.Fatalf("enabled MCP server error=%v, want enabled-server rejection", err)
 	}
 }
 

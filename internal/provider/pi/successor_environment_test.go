@@ -167,9 +167,13 @@ func admittedPredecessor(t *testing.T, request task.TaskRecord, scope piScope, n
 	}
 }
 
-func cloneMeta(meta task.MetaRecord) task.MetaRecord {
-	meta.Environment = slices.Clone(meta.Environment)
-	return meta
+func snapshotMeta(t *testing.T, meta task.MetaRecord) string {
+	t.Helper()
+	data, err := task.MarshalCanonical(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func successorRequest(request task.TaskRecord) task.TaskRecord {
@@ -209,7 +213,7 @@ func TestSuccessorLaunchesFromCallerEnvironmentNotPredecessorRecord(t *testing.T
 				predecessorScope := newPiScope(t, "A", selectors.predecessor...)
 				callerScope := newPiScope(t, "B", selectors.caller...)
 				meta := admittedPredecessor(t, request, predecessorScope, now)
-				recorded := cloneMeta(meta)
+				recorded := snapshotMeta(t, meta)
 				successor := successorRequest(request)
 
 				candidate := prepareSuccessorOf(t, successor, meta, callerScope.environment)
@@ -224,8 +228,8 @@ func TestSuccessorLaunchesFromCallerEnvironmentNotPredecessorRecord(t *testing.T
 				prepared := finalizeProfile(t, candidate, now)
 				requireNoScope(t, "successor", predecessorScope, candidate, prepared)
 				requireCallerSessionSelector(t, mode, callerScope, prepared)
-				if !reflect.DeepEqual(meta, recorded) {
-					t.Fatalf("predecessor metadata changed: %+v want %+v", meta, recorded)
+				if got := snapshotMeta(t, meta); got != recorded {
+					t.Fatalf("predecessor metadata changed: %s want %s", got, recorded)
 				}
 				requireReconstructionUsesRecord(t, request, meta, callerScope, now)
 			})

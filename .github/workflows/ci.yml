@@ -138,8 +138,20 @@ jobs:
         if: ${{ needs.changes.outputs.full == 'true' }}
         run: make tools
 
+      - name: Install pinned supervisor test binaries
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        run: ./scripts/install-test-supervisor.sh
+
+      - name: Build native repair control owner
+        if: ${{ needs.changes.outputs.full == 'true' }}
+        run: go build -buildvcs=false -o bin/test-supervisor/delegate-run ./cmd/delegate-run
+
       - name: Run gate checks
         if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_REPAIR_EDITOR_OWNER: ${{ github.workspace }}/bin/test-supervisor/delegate-run
         run: make check
 
       - name: Check documentation, skills and diagrams
@@ -168,10 +180,6 @@ jobs:
       - name: Run protocol acceptance
         if: ${{ needs.changes.outputs.full == 'true' }}
         run: make acceptance-protocol
-
-      - name: Install pinned supervisor test binaries
-        if: ${{ needs.changes.outputs.full == 'true' }}
-        run: ./scripts/install-test-supervisor.sh
 
       - name: Prove private supervisor bootstrap through delegate CLI
         if: ${{ needs.changes.outputs.full == 'true' }}
@@ -289,7 +297,17 @@ jobs:
       - name: Install platform tools
         run: make tools-go
 
+      - name: Install pinned supervisor test binaries
+        run: ./scripts/install-test-supervisor.sh
+
+      - name: Build native repair control owner
+        run: go build -buildvcs=false -o bin/test-supervisor/delegate-run ./cmd/delegate-run
+
       - name: Run platform gate checks
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+          DELEGATE_REPAIR_EDITOR_OWNER: ${{ github.workspace }}/bin/test-supervisor/delegate-run
         run: make check-platform
 
       - name: Prove selected native lifetime backend
@@ -312,9 +330,6 @@ jobs:
 
       - name: Run protocol acceptance
         run: make acceptance-protocol
-
-      - name: Install pinned supervisor test binaries
-        run: ./scripts/install-test-supervisor.sh
 
       - name: Prove private supervisor bootstrap through delegate CLI
         env:

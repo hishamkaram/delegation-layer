@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -317,96 +317,61 @@ func TestRunProviderLateSessionHasFiniteObservableGap(t *testing.T) {
 	cfg := testProviderConfig(dir, "late_session")
 	cfg.LifetimeMS = 80
 	configPath := writeProviderConfig(t, dir, cfg)
-	writer := &notifyWriter{first: make(chan struct{}), writes: make(chan []byte, 8)}
-	done := make(chan error, 1)
-	go func() {
-		done <- RunProviderArgs(configPath, cfg.Argv, strings.NewReader("brief"), writer, &bytes.Buffer{})
-	}()
-	select {
-	case <-writer.first:
-	case <-time.After(5 * time.Second):
-		t.Fatal("late-session answer did not start")
-	}
-	select {
-	case <-writer.writes:
-		t.Fatal("late-session bytes arrived before finite gap")
-	case <-time.After(20 * time.Millisecond):
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	output := writer.Bytes()
-	if !bytes.HasPrefix(output, []byte(`{"type":"answer_chunk"`)) || !bytes.Contains(output, []byte(`{"type":"session"`)) || !bytes.HasSuffix(output, []byte("\n")) {
-		t.Fatalf("late-session output order=%q", output)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		writer := &timedProviderWriter{}
+		if err := RunProviderArgs(configPath, cfg.Argv, strings.NewReader("brief"), writer, &bytes.Buffer{}); err != nil {
+			t.Fatal(err)
+		}
+		events := decodeProviderEvents(t, writer.data.Bytes())
+		assertProviderEventTypes(t, events, "answer_chunk", "session", "result")
+		if events[0].Text != "late session answer" || !events[2].Success {
+			t.Fatalf("late-session events=%+v", events)
+		}
+		if len(writer.writes) != len(events) {
+			t.Fatalf("fixture frame writes=%d, want %d", len(writer.writes), len(events))
+		}
+		// Observe the gap at the writer itself. The observer cannot miss it
+		// because it was scheduled after the session frame arrived.
+		if gap := writer.writes[1].Sub(writer.writes[0]); gap != 80*time.Millisecond {
+			t.Fatalf("answer-to-session gap=%s, want 80ms", gap)
+		}
+	})
 }
 
 func TestRunProviderSplitsLongLiteralAnswerIntoBoundedFrames(t *testing.T) {
-	dir := t.TempDir()
-	cfg := testProviderConfig(dir, "success")
-	cfg.Answer = strings.Repeat("☃", 40*1024)
-	configPath := writeProviderConfig(t, dir, cfg)
-	var stdout, stderr bytes.Buffer
-	if err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	for _, frame := range bytes.Split(stdout.Bytes(), []byte{'\n'}) {
-		if len(frame) > maxFrameBytes {
-			t.Fatalf("frame length=%d exceeds %d", len(frame), maxFrameBytes)
+	for _, answer := range []string{strings.Repeat("☃", 40*1024), strings.Repeat("\x00", 20*1024)} {
+		dir := t.TempDir()
+		cfg := testProviderConfig(dir, "success")
+		cfg.Answer = answer
+		configPath := writeProviderConfig(t, dir, cfg)
+		var stdout, stderr bytes.Buffer
+		if err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr); err != nil {
+			t.Fatal(err)
 		}
-	}
-
-	cfg.Answer = strings.Repeat("\x00", 20*1024)
-	configPath = writeProviderConfig(t, dir, cfg)
-	stdout.Reset()
-	stderr.Reset()
-	if err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr); err != nil {
-		t.Fatal(err)
-	}
-	for _, frame := range bytes.Split(stdout.Bytes(), []byte{'\n'}) {
-		if len(frame) > maxFrameBytes {
-			t.Fatalf("escaped frame length=%d exceeds %d", len(frame), maxFrameBytes)
-		}
+		assertProviderAnswer(t, stdout.Bytes(), cfg, answer)
 	}
 }
 
+type providerScenarioCase struct {
+	name       string
+	types      []string
+	answer     string
+	stderrWant string
+	newline    bool
+	exitCode   int
+}
+
 func TestRunProviderScenariosAndFiniteLargeStreams(t *testing.T) {
-	cases := []struct {
-		name       string
-		stdoutWant string
-		stderrWant string
-		exitCode   int
-	}{
-		{name: "empty", stdoutWant: "", stderrWant: ""},
-		{name: "diagnostic", stdoutWant: "", stderrWant: stderrMarker},
-		{name: "malformed", stdoutWant: "", stderrWant: ""},
-		{name: "truncated", stdoutWant: "", stderrWant: ""},
-		{name: "late_session", stdoutWant: "", stderrWant: ""},
-		{name: "nonzero", stdoutWant: "", stderrWant: "", exitCode: 7},
+	cases := []providerScenarioCase{
+		{name: "empty", types: []string{"session", "answer_chunk", "result"}, answer: " \t\n", newline: true},
+		{name: "diagnostic", types: []string{"session", "answer_chunk", "result"}, answer: "brief", stderrWant: stderrMarker, newline: true},
+		{name: "malformed", types: []string{"session", "unknown"}, newline: true},
+		{name: "truncated", types: []string{"session", "answer_chunk", "result"}, answer: "truncated"},
+		{name: "late_session", types: []string{"answer_chunk", "session", "result"}, answer: "late session answer", newline: true},
+		{name: "nonzero", types: []string{"session", "answer_chunk", "result"}, answer: "brief", newline: true, exitCode: 7},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			cfg := testProviderConfig(dir, tc.name)
-			configPath := writeProviderConfig(t, dir, cfg)
-			var stdout, stderr bytes.Buffer
-			err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr)
-			if tc.exitCode == 0 {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				var exitErr *ExitError
-				if !errors.As(err, &exitErr) || exitErr.Code != tc.exitCode {
-					t.Fatalf("error=%v", err)
-				}
-			}
-			assertArtifact(t, filepath.Join(dir, "expected.stdout"), stdout.Bytes())
-			assertArtifact(t, filepath.Join(dir, "expected.stderr"), stderr.Bytes())
-			if tc.stderrWant != "" && !bytes.Contains(stderr.Bytes(), []byte(tc.stderrWant)) {
-				t.Fatalf("stderr=%q", stderr.Bytes())
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { runProviderScenarioCase(t, tc) })
 	}
 
 	dir := t.TempDir()
@@ -417,11 +382,113 @@ func TestRunProviderScenariosAndFiniteLargeStreams(t *testing.T) {
 	if err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if len(stdout.Bytes()) <= 1<<20 || len(stderr.Bytes()) <= 1<<20 {
-		t.Fatalf("large stream sizes stdout=%d stderr=%d", stdout.Len(), stderr.Len())
+	assertProviderAnswer(t, stdout.Bytes(), cfg, strings.Repeat("S", int(cfg.StdoutBytes)))
+	if !bytes.Equal(stderr.Bytes(), bytes.Repeat([]byte{'E'}, int(cfg.StderrBytes))) {
+		t.Fatalf("large stderr did not preserve its configured %d bytes", cfg.StderrBytes)
 	}
 	assertArtifact(t, filepath.Join(dir, "expected.stdout"), stdout.Bytes())
 	assertArtifact(t, filepath.Join(dir, "expected.stderr"), stderr.Bytes())
+}
+
+func runProviderScenarioCase(t *testing.T, tc providerScenarioCase) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := testProviderConfig(dir, tc.name)
+	configPath := writeProviderConfig(t, dir, cfg)
+	var stdout, stderr bytes.Buffer
+	err := RunProvider(configPath, strings.NewReader("brief"), &stdout, &stderr)
+	if tc.exitCode == 0 {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		var exitErr *ExitError
+		if !errors.As(err, &exitErr) || exitErr.Code != tc.exitCode {
+			t.Fatalf("error=%v", err)
+		}
+	}
+	assertProviderScenarioOutput(t, tc, cfg, stdout.Bytes(), stderr.Bytes())
+	assertArtifact(t, filepath.Join(dir, "expected.stdout"), stdout.Bytes())
+	assertArtifact(t, filepath.Join(dir, "expected.stderr"), stderr.Bytes())
+}
+
+func assertProviderScenarioOutput(t *testing.T, tc providerScenarioCase, cfg ProviderConfig, stdout, stderr []byte) {
+	t.Helper()
+	events := decodeProviderEvents(t, stdout)
+	assertProviderEventTypes(t, events, tc.types...)
+	var answer strings.Builder
+	for _, event := range events {
+		if event.TaskID != cfg.TaskID || event.Type == "session" && event.SessionID != cfg.SessionID || event.Type == "result" && (event.SessionID != cfg.SessionID || !event.Success) {
+			t.Fatalf("unexpected fixture identity or result: %+v", event)
+		}
+		if event.Type == "answer_chunk" {
+			answer.WriteString(event.Text)
+		}
+	}
+	if answer.String() != tc.answer || string(stderr) != tc.stderrWant || bytes.HasSuffix(stdout, []byte{'\n'}) != tc.newline {
+		t.Fatalf("scenario=%s answer=%q stderr=%q newline=%t", tc.name, answer.String(), string(stderr), bytes.HasSuffix(stdout, []byte{'\n'}))
+	}
+}
+
+// This schema is the fixture's documented wire contract, independently of its encoder.
+type providerEvent struct {
+	Type      string `json:"type"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id"`
+	Text      string `json:"text"`
+	Success   bool   `json:"success"`
+}
+
+func decodeProviderEvents(t *testing.T, output []byte) []providerEvent {
+	t.Helper()
+	frames := bytes.Split(bytes.TrimSuffix(output, []byte{'\n'}), []byte{'\n'})
+	events := make([]providerEvent, 0, len(frames))
+	for _, frame := range frames {
+		if len(frame) == 0 || len(frame) > maxFrameBytes {
+			t.Fatalf("frame length=%d, want 1..%d", len(frame), maxFrameBytes)
+		}
+		var event providerEvent
+		if err := json.Unmarshal(frame, &event); err != nil {
+			t.Fatalf("invalid fixture event: %v", err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func assertProviderEventTypes(t *testing.T, events []providerEvent, types ...string) {
+	t.Helper()
+	if len(events) != len(types) {
+		t.Fatalf("fixture event count=%d, want %d", len(events), len(types))
+	}
+	for index, kind := range types {
+		if events[index].Type != kind {
+			t.Fatalf("fixture event %d=%s, want %s", index, events[index].Type, kind)
+		}
+	}
+}
+
+func assertProviderAnswer(t *testing.T, output []byte, cfg ProviderConfig, expected string) {
+	t.Helper()
+	events := decodeProviderEvents(t, output)
+	if len(events) < 3 || events[0].Type != "session" || events[0].SessionID != cfg.SessionID || events[len(events)-1].Type != "result" || !events[len(events)-1].Success || events[len(events)-1].SessionID != cfg.SessionID || !bytes.HasSuffix(output, []byte{'\n'}) {
+		t.Fatal("fixture omitted its session, answer, or successful terminal frame")
+	}
+	var answer strings.Builder
+	for index, event := range events {
+		if event.TaskID != cfg.TaskID {
+			t.Fatalf("fixture event %d has foreign task identity", index)
+		}
+		if index > 0 && index < len(events)-1 {
+			if event.Type != "answer_chunk" {
+				t.Fatalf("fixture answer frame %d has type %s", index, event.Type)
+			}
+			answer.WriteString(event.Text)
+		}
+	}
+	if answer.String() != expected {
+		t.Fatalf("fixture answer differs: got %d bytes, want %d", answer.Len(), len(expected))
+	}
 }
 
 func TestRunProviderRejectsInvalidConfigAndUsesFiniteHold(t *testing.T) {
@@ -482,11 +549,14 @@ func assertArtifact(t *testing.T, path string, want []byte) {
 	}
 }
 
-type notifyWriter struct {
-	mu     sync.Mutex
+type timedProviderWriter struct {
 	data   bytes.Buffer
-	first  chan struct{}
-	writes chan []byte
+	writes []time.Time
+}
+
+func (w *timedProviderWriter) Write(data []byte) (int, error) {
+	w.writes = append(w.writes, time.Now())
+	return w.data.Write(data)
 }
 
 type compiledOutput struct {
@@ -595,27 +665,4 @@ func readParentChildReceipts(t *testing.T, invocations string) (providerReceipt,
 		t.Fatalf("missing parent/child completion receipts in %s", invocations)
 	}
 	return parent, child
-}
-
-func (w *notifyWriter) Write(data []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	first := w.data.Len() == 0
-	if first {
-		close(w.first)
-	}
-	w.data.Write(data)
-	if !first {
-		select {
-		case w.writes <- append([]byte(nil), data...):
-		default:
-		}
-	}
-	return len(data), nil
-}
-
-func (w *notifyWriter) Bytes() []byte {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]byte(nil), w.data.Bytes()...)
 }
