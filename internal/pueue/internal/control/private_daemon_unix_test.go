@@ -3,9 +3,10 @@
 package control
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,15 +22,17 @@ const (
 	privateDaemonMarker     = "PUEUE_PRIVATE_DAEMON_MARKER"
 	privateDaemonReady      = "PUEUE_PRIVATE_DAEMON_READY"
 	privateDaemonRelease    = "PUEUE_PRIVATE_DAEMON_RELEASE"
-	privateDaemonInterrupt  = "PUEUE_PRIVATE_DAEMON_INTERRUPTED"
 	privateDaemonClosed     = "PUEUE_PRIVATE_DAEMON_CLOSED"
 )
 
-// The parent owns the ancestor until helper Wait and daemon Wait are proven.
+// The parent owns the ancestor until launcher Wait and daemon closure are proven.
+// Limit probes retain daemon Wait. A deliberately killed launcher transfers its
+// orphan to the OS reaper; only canonical incarnation absence is claimed there.
 type privateDaemonTestFixture struct {
 	base    string
 	command *exec.Cmd
 	joined  bool
+	daemon  privateProcessIdentity
 }
 
 func newPrivateDaemonTestFixture(t *testing.T) *privateDaemonTestFixture {
@@ -39,22 +42,50 @@ func newPrivateDaemonTestFixture(t *testing.T) *privateDaemonTestFixture {
 		t.Fatal(err)
 	}
 	fixture := &privateDaemonTestFixture{base: base}
-	t.Cleanup(func() {
-		if fixture.command != nil && fixture.command.Process != nil {
-			if !fixture.joined {
-				t.Errorf("helper Wait unresolved; retaining fixture %s", base)
-				return
-			}
-			if _, err := os.Stat(filepath.Join(base, "daemon-closed")); err != nil {
-				t.Errorf("daemon Wait unresolved; retaining fixture %s: %v", base, err)
-				return
-			}
-		}
-		if err := os.RemoveAll(base); err != nil {
-			t.Error(err)
-		}
-	})
+	t.Cleanup(func() { fixture.cleanup(t) })
 	return fixture
+}
+
+func (fixture *privateDaemonTestFixture) cleanup(t *testing.T) {
+	t.Helper()
+	if fixture.command != nil && fixture.command.Process != nil {
+		if !fixture.joined {
+			t.Errorf("helper Wait unresolved; retaining fixture %s", fixture.base)
+			return
+		}
+		if closureErr := fixture.daemonClosure(); closureErr != nil {
+			t.Errorf("daemon closure unresolved; retaining fixture %s: %v", fixture.base, closureErr)
+			return
+		}
+	}
+	if removeErr := os.RemoveAll(fixture.base); removeErr != nil {
+		t.Error(removeErr)
+	}
+}
+
+func (fixture *privateDaemonTestFixture) daemonClosure() error {
+	if fixture.daemon.PID != 0 {
+		return waitPrivateDaemonTestUnavailable(fixture.daemon, 3*time.Second)
+	}
+	_, err := os.Stat(filepath.Join(fixture.base, "daemon-closed"))
+	return err
+}
+
+// A killed immediate parent cannot retain its Wait goroutine. Its OS adopter
+// owns reaping; this canonical observation proves only this incarnation inactive.
+func waitPrivateDaemonTestUnavailable(identity privateProcessIdentity, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	client := &Client{}
+	for {
+		unavailable, err := client.privateProcessUnavailable(identity)
+		if err != nil || unavailable {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 type privateDaemonHelperWait struct{ done <-chan struct{} }
@@ -80,28 +111,6 @@ func (owned *privateDaemonHelperWait) cleanup(t *testing.T) {
 	}
 }
 
-func awaitPrivateDaemonCallerInterruption(t *testing.T, done <-chan struct{}, interrupted <-chan os.Signal) {
-	t.Helper()
-	select {
-	case <-done:
-		t.Fatal("daemon exited before the caller group interruption")
-	default:
-	}
-	if err := os.WriteFile(os.Getenv(privateDaemonReady), []byte("ready\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-interrupted:
-	case <-done:
-		t.Fatal("daemon exited before caller interruption was observed")
-	case <-time.After(5 * time.Second):
-		t.Fatal("caller group interruption was not observed")
-	}
-	if err := os.WriteFile(os.Getenv(privateDaemonInterrupt), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestPrivateDaemonLaunchHelper(t *testing.T) {
 	mode := os.Getenv(privateDaemonHelperMode)
 	if mode == "" {
@@ -124,11 +133,6 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 		}
 	}
 	environment := replacePrivateDaemonHelperEnvironment(os.Environ(), privateDaemonHelperMode, childMode)
-	interrupted := make(chan os.Signal, 1)
-	if mode == "session-launcher" {
-		signal.Notify(interrupted, syscall.SIGTERM)
-		defer signal.Stop(interrupted)
-	}
 	owned := &privateDaemonHelperWait{}
 	t.Cleanup(func() { owned.cleanup(t) })
 	options := Options{
@@ -143,7 +147,14 @@ func TestPrivateDaemonLaunchHelper(t *testing.T) {
 	}
 	waitForPrivateDaemonTestFile(t, os.Getenv(privateDaemonMarker), 3*time.Second)
 	if mode == "session-launcher" {
-		awaitPrivateDaemonCallerInterruption(t, owned.done, interrupted)
+		select {
+		case <-owned.done:
+			t.Fatal("daemon exited before the caller group interruption")
+		default:
+		}
+		if err := os.WriteFile(os.Getenv(privateDaemonReady), []byte("ready\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	select {
@@ -230,7 +241,6 @@ func TestPrivateDaemonSurvivesCallerGroupInterruption(t *testing.T) {
 	ready := filepath.Join(base, "launcher-ready")
 	survived := filepath.Join(base, "daemon-survived")
 	release := filepath.Join(base, "daemon-release")
-	interrupted := filepath.Join(base, "launcher-interrupted")
 	script := writePrivateDaemonTestExecutable(t, base, "pueued-session", `#!/bin/sh
 set -eu
 trap 'exit 99' HUP INT TERM
@@ -251,7 +261,6 @@ printf 'survived\n' >"$PUEUE_PRIVATE_DAEMON_SURVIVED"
 		privateDaemonMarker+"="+pidMarker,
 		privateDaemonReady+"="+ready,
 		privateDaemonRelease+"="+release,
-		privateDaemonInterrupt+"="+interrupted,
 		privateDaemonClosed+"="+filepath.Join(base, "daemon-closed"),
 		"PUEUE_PRIVATE_DAEMON_SURVIVED="+survived,
 	)
@@ -265,11 +274,18 @@ printf 'survived\n' >"$PUEUE_PRIVATE_DAEMON_SURVIVED"
 	if err != nil || !before.Present || before.StartToken == "" {
 		t.Fatalf("daemon was not alive before interruption: %+v: %v", before, err)
 	}
+	fixture.daemon = privateProcessIdentity{PID: pid, StartToken: before.StartToken}
 	signal := exec.Command("/bin/sh", "-c", `kill -TERM -"$1"`, "sh", strconv.Itoa(command.Process.Pid))
 	if output, signalErr := signal.CombinedOutput(); signalErr != nil {
 		t.Fatalf("interrupt caller process group: %v: %s", signalErr, output)
 	}
-	waitForPrivateDaemonTestFile(t, interrupted, 3*time.Second)
+	select {
+	case <-caller.done:
+		fixture.joined = true
+		requirePrivateDaemonCallerSIGTERM(t, caller.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not die from its process-group interruption")
+	}
 	after, err := observeNativePrivateProcess(pid)
 	if err != nil || !after.Present || after.StartToken != before.StartToken {
 		t.Fatalf("same daemon was not alive after caller group interruption: before=%+v after=%+v err=%v", before, after, err)
@@ -277,16 +293,22 @@ printf 'survived\n' >"$PUEUE_PRIVATE_DAEMON_SURVIVED"
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-caller.done:
-		fixture.joined = true
-		if caller.err != nil {
-			t.Fatalf("caller helper failed to retain daemon Wait: %v", caller.err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("caller helper did not join daemon Wait")
+	if closureErr := waitPrivateDaemonTestUnavailable(fixture.daemon, 3*time.Second); closureErr != nil {
+		t.Fatalf("daemon did not close after release: %v", closureErr)
 	}
 	waitForPrivateDaemonTestFile(t, survived, 3*time.Second)
+}
+
+func requirePrivateDaemonCallerSIGTERM(t *testing.T, err error) {
+	t.Helper()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) {
+		t.Fatalf("caller did not exit from SIGTERM: %v", err)
+	}
+	status, valid := exited.Sys().(syscall.WaitStatus)
+	if !valid || !status.Signaled() || status.Signal() != syscall.SIGTERM {
+		t.Fatalf("caller exit was not SIGTERM: %v", err)
+	}
 }
 
 func replacePrivateDaemonHelperEnvironment(environment []string, key, value string) []string {

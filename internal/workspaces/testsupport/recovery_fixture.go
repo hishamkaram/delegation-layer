@@ -154,14 +154,15 @@ func (f *RecoveryFixture) Reopen(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resource, err := workspace.LoadResource(t.Context(), store, strings.Repeat("b", 32))
+	f.Store = store
+	f.Resource, err = workspace.LoadResource(t.Context(), store, strings.Repeat("b", 32))
 	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
+		if closeErr := f.CloseHandles(); closeErr != nil {
+			f.RetainCleanupFailure(closeErr)
 			t.Error(closeErr)
 		}
 		t.Fatal(err)
 	}
-	f.Store, f.Resource = store, resource
 }
 
 // ReopenRecoveryFixture reopens the recovery fixture another process
@@ -169,12 +170,12 @@ func (f *RecoveryFixture) Reopen(t *testing.T, root string) {
 func ReopenRecoveryFixture(t *testing.T, root string) *RecoveryFixture {
 	t.Helper()
 	fixture := &RecoveryFixture{}
-	fixture.Reopen(t, root)
 	t.Cleanup(func() {
 		if closeErr := fixture.CloseHandles(); closeErr != nil {
 			t.Error(closeErr)
 		}
 	})
+	fixture.Reopen(t, root)
 	return fixture
 }
 

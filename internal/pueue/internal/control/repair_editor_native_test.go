@@ -28,13 +28,14 @@ func testManagedRepairNativeState(t *testing.T, owner string, state State) {
 	fixture := newNativePrivateSupervisorFixture(t)
 	// The generic native fixture only needs a root record. Repair admission
 	// instead exercises a fully initialized production store and its locks.
-	fixture.stateRoot = filepath.Join(canonicalTemp(t), "state")
+	fixture.stateRoot = filepath.Join(filepath.Dir(fixture.stateRoot), "repair-state")
 	store, err := taskdir.InitStoreWithPredicatesContext(t.Context(), fixture.stateRoot, predicate.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		if closeErr := store.Close(); closeErr != nil {
+			fixture.lifetime.retained = true
 			t.Error(closeErr)
 		}
 	})
