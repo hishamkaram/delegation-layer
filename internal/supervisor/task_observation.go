@@ -76,14 +76,17 @@ func probeReadyTaskSupervisor(ctx context.Context, store *taskdir.Store, binding
 	return client, nil
 }
 
-// A missing published pair only defers the exact warm probe. Saved-task
-// observation still validates compatible selection under its shared lease.
+// A missing or historical copied pair defers the exact warm probe. Saved-task
+// observation validates installed transport selection under its shared lease.
 func probeWarmTaskSupervisor(ctx context.Context, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
 	if err != nil {
 		return nil, err
 	}
 	if found {
+		if pueue.IsLegacyStateSupervisorClient(store.Root, published) {
+			return nil, nil
+		}
 		missing, missingErr := pueue.PrivateSupervisorPairMissing(published)
 		if missingErr != nil || missing {
 			return nil, missingErr

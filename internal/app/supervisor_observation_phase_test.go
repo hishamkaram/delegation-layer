@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -173,6 +174,59 @@ func TestPublicStatusObservesCompletedHistoryThroughCompatiblePair(t *testing.T)
 			runObservationPhaseCompatiblePair(t, test.removeClient, test.removeDaemon)
 		})
 	}
+}
+
+func TestPublicStatusObservesHistoricalCopyPublicationThroughInstalledPair(t *testing.T) {
+	t.Parallel()
+	fixture := prepareHistoricalObservationPhase(t, pueue.StateRunning)
+	legacy := fixture.predecessor
+	directory := filepath.Join(fixture.root, ".supervisor", "pueue-pair-"+strings.Repeat("a", 64))
+	legacy.ClientExecutable, legacy.DaemonExecutable = filepath.Join(directory, "pueue"), filepath.Join(directory, "pueued")
+	legacy.ExecutableIdentity = ""
+	legacy.ClientSHA256, legacy.DaemonSHA256 = strings.Repeat("b", 64), strings.Repeat("c", 64)
+	// Metadata-only presence exercises the warm probe's stat shortcut. Empty
+	// directories cannot execute; no historical program is created or hashed.
+	for _, path := range []string{legacy.ClientExecutable, legacy.DaemonExecutable} {
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publication, err := task.MarshalCanonical(historicalPrivateBindingRecord{SchemaVersion: task.SchemaVersion, Binding: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon, err := task.MarshalCanonical(historicalPrivateDaemonIdentityFor(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string][]byte{"supervisor.identity.json": publication, "daemon.identity.json": daemon} {
+		if err = os.WriteFile(filepath.Join(fixture.root, ".supervisor", name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !pueue.IsLegacyStateSupervisorClient(fixture.root, legacy) {
+		t.Fatal("publication is not a recognized historical copy")
+	}
+	if missing, missingErr := pueue.PrivateSupervisorPairMissing(legacy); missingErr != nil || missing {
+		t.Fatalf("historical path presence precondition failed: missing=%t err=%v", missing, missingErr)
+	}
+	resetHistoricalSupervisorCommandLog(t, fixture)
+	before := snapshotObservationPhaseRecords(t, fixture)
+	configBefore := readSupervisorProbeTestFile(t, legacy.ConfigPath)
+	commands := observePhaseStatusCommands(fixture)
+	deps := fixture.dependencies()
+	deps.InitialSupervisorExecutable = fixture.clientA
+	code, stdout, stderr, response := runHistoricalSupervisorCommandWithDependencies(t, []string{
+		"--root", fixture.root, "status", fixture.req.TaskID, "--json",
+	}, deps)
+	assertObservationPhaseCompatibleResponse(t, code, stdout, stderr, response)
+	if log := readSupervisorProbeTestFile(t, fixture.commandLog); !bytes.Contains(log, []byte("A status\n")) {
+		t.Errorf("status did not use the installed client: %q", log)
+	}
+	assertSupervisorProbeTestFile(t, legacy.ConfigPath, configBefore)
+	assertHistoricalTaskEvidence(t, fixture)
+	assertObservationPhaseRecords(t, before)
+	assertObservationPhaseNoMutation(t, commands())
 }
 
 func runObservationPhaseCompatiblePair(t *testing.T, removeClient, removeDaemon bool) {
