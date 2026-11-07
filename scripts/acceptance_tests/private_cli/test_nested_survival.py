@@ -456,12 +456,32 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
         return SimpleNamespace(returncode=0, stdout="NESTED_TASK_OBSERVATION\t" + json.dumps(proof) + "\n", stderr="")
 
     def refuse(self, name="warm-a"):
-        state = self.case.a if name == "warm-a" else self.case.b
+        state = self.case.b if name == "warm-b" else self.case.a
         if name == "warm-b":
             self.initialize(self.case.a)
+        elif name == "leader":
+            self.prepare_warm_record()
+            leader = self.case.configuration["leader"]
+            if not isinstance(leader, str):
+                self.fail("configured fixture leader must be a task ID")
+            self.task_id = leader
         with self.assertRaisesRegex(AcceptanceFailure, "never redispatch") as rejected:
             self.case.dispatch(state, self.task_id, self.parent / "brief.md", "2m", name)
         return state, rejected.exception
+
+    def prepare_warm_record(self):
+        self.initialize(self.case.a)
+        self.warm_task_id = "d" * 32
+        (self.case.a / "tasks").mkdir(mode=0o700, exist_ok=True)
+        directory = self.case.a / "tasks" / self.warm_task_id
+        directory.mkdir(mode=0o700)
+        identity = {"schema_version": 1, "root_id": self.root_id(self.case.a), "task_id": self.warm_task_id}
+        # Minimal Python closure projections, not complete prepared-task
+        # records. No handoff or lifetime journal claims that a worker launched.
+        write_json(directory / "task.json", identity)
+        write_json(directory / "meta.json", {**identity, "runner_ownership": "managed"})
+        write_json(directory / "outcome.json", {**identity, "verdict": "rejected"})
+        self.case.lifetime.attempted_task_ids.append(self.warm_task_id)
 
     def assert_refusal_cleanup(self, name):
         from scripts.delegate_acceptance.private_cli.finalization import finalize_fixture
@@ -503,6 +523,84 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
         assert token is not None, "warm B must retain its original root token"
         token.assert_live()
         self.assertEqual(token.directory, self.case.b)
+
+    def test_refused_direct_leader_filters_only_itself_and_preserves_warm_history(self):
+        state, _primary = self.refuse("leader")
+        raw = [self.warm_task_id, self.case.configuration["leader"]]
+        self.assertEqual(self.case.lifetime.attempted_task_ids, raw)
+        self.case.cleanup_deadline = time.monotonic() + 3
+        fence_creator(self.case, self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.assertEqual(self.case.cleanup_task_ids(state, raw), (self.warm_task_id,))
+        self.assertEqual(self.case.lifetime.attempted_task_ids, raw)
+        self.assertEqual(len(self.native_observations), 1)
+        self.assertEqual(self.native_observations[0], {
+            "root_id": self.root_id(state), "task_id": self.case.configuration["leader"],
+            "entry_exists": False, "root_device": self.state.identity[0], "root_inode": self.state.identity[1]})
+
+    def test_direct_leader_refusal_closes_without_observing_or_cancelling_absent_leader(self):
+        observer = Mock(side_effect=AssertionError("absent leader must not reach public status"))
+        with patch("scripts.delegate_acceptance.private_cli.nested_cleanup.public_status_observer", return_value=observer):
+            self.assert_refusal_cleanup("leader")
+        observer.assert_not_called()
+        self.assertEqual(self.case.lifetime.attempted_task_ids, [self.warm_task_id, self.case.configuration["leader"]])
+        self.assertTrue((self.case.a / "tasks" / self.warm_task_id / "task.json").is_file())
+
+    def test_direct_leader_requires_exact_fenced_unreconciled_childless_attempt(self):
+        state, _primary = self.refuse("leader")
+        self.case.cleanup_deadline = time.monotonic() + 3
+        raw = list(self.case.lifetime.attempted_task_ids)
+        failed = dict(self.case.evidence["failed_admission"])
+        for fault in ("unfenced", "wrong-state", "wrong-configured-leader", "wrong-returned-id", "not-last",
+                      "created", "reconciled", "response-key-without-value", "w1-in-b", "w2-in-a"):
+            with self.subTest(fault=fault):
+                self.case.creator_fenced = fault != "unfenced"
+                self.case.lifetime.attempted_task_ids[:] = raw
+                self.case.b_ids.clear()
+                self.case.responses.clear()
+                self.case.evidence["failed_admission"] = dict(failed)
+                leader = self.case.configuration["leader"]
+                selected = state
+                if fault == "wrong-state":
+                    selected = self.case.b
+                elif fault == "wrong-configured-leader":
+                    self.case.configuration["leader"] = "e" * 32
+                elif fault == "wrong-returned-id":
+                    self.case.evidence["failed_admission"]["task_id"] = "e" * 32
+                elif fault == "not-last":
+                    self.case.lifetime.attempted_task_ids.append("e" * 32)
+                elif fault == "created":
+                    self.case.evidence["failed_admission"]["task_record"] = "created"
+                elif fault in {"reconciled", "response-key-without-value"}:
+                    self.case.responses["leader"] = {"task_id": leader} if fault == "reconciled" else None
+                elif fault == "w1-in-b":
+                    self.case.b_ids.append(self.case.configuration["w1"])
+                elif fault == "w2-in-a":
+                    self.case.lifetime.attempted_task_ids.insert(0, self.case.configuration["w2"])
+                try:
+                    requested = tuple(self.case.lifetime.attempted_task_ids)
+                    self.assertEqual(self.case.cleanup_task_ids(selected, requested), requested)
+                    self.native.assert_not_called()
+                finally:
+                    self.case.configuration["leader"] = leader
+
+    def test_direct_leader_reappearance_blocks_actual_removal_even_with_filtered_input(self):
+        from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
+        state, _primary = self.refuse("leader")
+        self.case.cleanup_deadline = time.monotonic() + 3
+        fence_creator(self.case, self.case.cleanup_deadline)
+        self.case.creator_fenced = True
+        self.assertEqual(self.case.cleanup_task_ids(state, self.case.lifetime.attempted_task_ids), (self.warm_task_id,))
+        self.assertEqual(self.case.read_closure(state, ())["tasks"], {})
+        (state / "tasks" / self.task_id).mkdir(mode=0o700)
+        self.transferred = self.owner.transfer()
+        with DisposalLeases() as disposal, self.assertRaisesRegex(AcceptanceFailure, "entry is present"):
+            remove_private_acceptance_root(self.base, self.transferred,
+                                           managed_state_roots=((state, ()),), disposal=disposal,
+                                           deadline=self.case.cleanup_deadline, reader=self.case.read_closure)
+        self.assertTrue(self.base.directory.is_dir())
+        self.assertEqual(self.case.lifetime.attempted_task_ids, [self.warm_task_id, self.task_id])
+        self.assertTrue(self.native_observations[-1]["entry_exists"])
 
     def test_cold_root_remains_absent_after_primary_bootstrap_refusal(self):
         self.base = self.owner.create("cold fixture", self.parent / ".dl-cold", self.parent)

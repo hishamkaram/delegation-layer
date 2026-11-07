@@ -184,24 +184,33 @@ class NestedCase:
     def cleanup_task_ids(self, state, task_ids):
         """Derive targets afresh; attempted IDs and prior observations are never absence authority."""
         requested = tuple(task_ids)
-        if not self.creator_fenced or self.configuration["leader"] in self.lifetime.attempted_task_ids:
+        if not self.creator_fenced:
             return requested
         failed = self.evidence.get("failed_admission")
         if not isinstance(failed, dict) or failed.get("task_record") == "created":
             return requested
         name = failed.get("name")
+        candidate = failed.get("requested_task_id")
+        leader = self.configuration["leader"]
+        if name in {"warm-a", "warm-b"} and leader in self.lifetime.attempted_task_ids:
+            return requested
         if name == "warm-a" and state == self.a:
             attempted, token = self.lifetime.attempted_task_ids, self.lifetime.state_token
         elif name == "warm-b" and state == self.b and self.b != self.a:
             attempted, token = self.b_ids, self.b_token
+        elif name == "leader" and state == self.a:
+            if candidate != leader or "leader" in self.responses or any(
+                    self.configuration[role] in ids for role in ("w1", "w2")
+                    for ids in (self.lifetime.attempted_task_ids, self.b_ids)):
+                return requested
+            attempted, token = self.lifetime.attempted_task_ids, self.lifetime.state_token
         else:
             return requested
-        candidate = failed.get("requested_task_id")
         if not attempted or candidate != attempted[-1] or failed.get("task_id") != candidate:
             return requested
-        # failed_admission exists only after the synchronous bootstrap control
-        # returned through its capture owner's Wait. Bootstrap precedes the
-        # leader, the only fixture process allowed to create nested workers.
+        # failed_admission exists only after the direct control's capture-owner
+        # Wait. Warm refusals precede any leader attempt. An absent, unreconciled
+        # leader cannot have launched the sole creator of nested workers.
         require(token is not None, "bootstrap task observation lacks its original root owner")
         proof = observe_bootstrap_task_entry(self.configuration, self.lifetime.capture_token, state,
                                             failed.get("root_id"), candidate, token,
