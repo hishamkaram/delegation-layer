@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -82,7 +81,7 @@ func TestContinueRejectsIncompatibleSuccessorBeforePrivateSupervisorRecovery(t *
 	seedContinuationSuccessorTestHistory(t, fixture, [][2]string{{"A", "B"}}, "B")
 	seedContinuationSuccessorTestBlocker(t, fixture, "recovery alias")
 	predecessor := newContinuationCompatibilityPredecessor(t, fixture, fixture.bindings["A"])
-	before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
+	before := testsupportcore.SnapshotStore(t, fixture.store.Root)
 
 	result := continueTask(Arguments{
 		Root: fixture.store.Root, TaskID: predecessor.TaskID,
@@ -94,7 +93,7 @@ func TestContinueRejectsIncompatibleSuccessorBeforePrivateSupervisorRecovery(t *
 	if result.response.TaskRecord != "not_created" || result.response.TaskID != "" {
 		t.Fatalf("incompatible continuation created or exposed a successor: %+v", result.response)
 	}
-	if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, fixture.store.Root)) {
+	if !maps.Equal(before, testsupportcore.SnapshotStore(t, fixture.store.Root)) {
 		t.Fatal("incompatible continuation changed private supervisor state")
 	}
 	present, err := pueue.PrivateRecoveryBindingPresent(fixture.store.Root)
@@ -291,7 +290,7 @@ func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessor
 
 	var candidate commonprovider.ProfileCandidate
 	catalog := ccrContinuationCatalog(t, &candidate)
-	before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
+	before := testsupportcore.SnapshotStore(t, fixture.store.Root)
 	deps := withSupervisorProbeRouting(t, Dependencies{
 		ResourceChecker: fixtureResources,
 		Catalog:         catalog, InitialSupervisorExecutable: transport.ClientExecutable,
@@ -312,7 +311,7 @@ func runCCRContinuationSuccessorCase(t *testing.T, fixture continuationSuccessor
 	if failure != wantFailure {
 		t.Fatalf("continuation lost supervisor recovery guidance: %+v", failure)
 	}
-	if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, fixture.store.Root)) {
+	if !maps.Equal(before, testsupportcore.SnapshotStore(t, fixture.store.Root)) {
 		t.Fatal("continuation changed state-root files before supervisor recovery")
 	}
 	if candidate.Finalize == nil {
@@ -441,7 +440,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			seedContinuationSuccessorTestHistory(t, fixture, [][2]string{{"A", "B"}}, "B")
 			seedContinuationSuccessorTestBlocker(t, fixture, "recovery alias")
 			predecessor := newPiContinuationPredecessor(t, fixture, fixture.bindings["A"])
-			before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
+			before := testsupportcore.SnapshotStore(t, fixture.store.Root)
 			result := testCase.run(fixture, predecessor, Dependencies{ResourceChecker: fixtureResources, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 
 			if result.code != 2 || !errors.Is(result.err, pi.ErrUnsupportedProfile) {
@@ -453,7 +452,7 @@ func TestInvalidPiContinuationOptionDoesNotRecoverPrivateSupervisor(t *testing.T
 			if testCase.name == "continue" && result.response.TaskID != "" {
 				t.Fatalf("continue exposed an uncreated successor: %+v", result.response)
 			}
-			if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, fixture.store.Root)) {
+			if !maps.Equal(before, testsupportcore.SnapshotStore(t, fixture.store.Root)) {
 				t.Fatal("invalid Pi continuation changed private supervisor state")
 			}
 			present, err := pueue.PrivateRecoveryBindingPresent(fixture.store.Root)
@@ -599,7 +598,7 @@ func recordContinuationTestIdentity(t *testing.T, td *taskdir.TaskDir, provider,
 func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSuccessorTestState, gate string, saved, want task.SupervisorRef, wantErr error) {
 	t.Helper()
 	assertSupervisorProbeTestNoAdmissionAuthority(t, fixture.store)
-	before := snapshotContinuationSuccessorTestState(t, fixture.store.Root)
+	before := testsupportcore.SnapshotStore(t, fixture.store.Root)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	var got task.SupervisorRef
@@ -623,7 +622,7 @@ func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSucce
 	if wantErr != nil && got != (task.SupervisorRef{}) && got != saved {
 		t.Errorf("%s exposed a successor before publication completed: %+v", gate, got)
 	}
-	if !maps.Equal(before, snapshotContinuationSuccessorTestState(t, fixture.store.Root)) {
+	if !maps.Equal(before, testsupportcore.SnapshotStore(t, fixture.store.Root)) {
 		t.Fatal("continuation gate changed state-root files")
 	}
 	assertSupervisorProbeTestNoAdmissionAuthority(t, fixture.store)
@@ -800,43 +799,4 @@ func writeContinuationSuccessorTestBytes(t *testing.T, path string, data []byte)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-type continuationSuccessorTestFile struct {
-	mode     fs.FileMode
-	modified time.Time
-	contents string
-}
-
-func snapshotContinuationSuccessorTestState(t *testing.T, root string) map[string]continuationSuccessorTestFile {
-	t.Helper()
-	files := make(map[string]continuationSuccessorTestFile)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		file := continuationSuccessorTestFile{mode: info.Mode(), modified: info.ModTime()}
-		// Opening a store runs its normal temporary filesystem probe. Compare
-		// its entries and mode, while allowing that container's mtime to change.
-		if path == filepath.Join(root, ".probe") {
-			file.modified = time.Time{}
-		}
-		if !entry.IsDir() {
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			file.contents = string(data)
-		}
-		files[path] = file
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return files
 }

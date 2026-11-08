@@ -109,7 +109,7 @@ func TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome(t *tes
 	if err = workspaces.RecordTaskCapture(store, request); err != nil {
 		t.Fatal(err)
 	}
-	if err = reconcileWorkspaceUse(t.Context(), store, resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources})); err != nil {
+	if err = workspaces.ReconcileUse(t.Context(), store, resource, workspaceRuntimeOptions(Dependencies{ResourceChecker: fixtureResources})); err != nil {
 		t.Fatalf("pre-task admission waited for nonexistent outcome: %v", err)
 	}
 	closed, err := resource.ReservationClosed(t.Context(), reservation.Sequence)

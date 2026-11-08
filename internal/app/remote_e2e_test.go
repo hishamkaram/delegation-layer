@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/remote"
+	"github.com/hishamkaram/delegation-layer/internal/remote/payload"
+	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
-
-	"github.com/hishamkaram/delegation-layer/internal/remote"
-	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 )
 
 func (e *remoteServerExchange) exchange(ctx context.Context, request remote.Request) (remote.Response, error) {
@@ -28,7 +28,7 @@ func (e *remoteServerExchange) exchange(ctx context.Context, request remote.Requ
 	if err != nil {
 		return remote.Response{}, err
 	}
-	response := executeRemote(ctx, received, e.deps)
+	response := remoteFeature(e.deps).Execute(ctx, received)
 	e.calls++
 	if !e.lost && request.Operation == e.loseOperation {
 		e.lost = true
@@ -77,7 +77,7 @@ func TestRemoteConcurrentTerminalReconciliationPreservesOneStart(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			results <- executeRemote(t.Context(), fixture.request(remote.Reconcile), fixture.deps)
+			results <- remoteFeature(fixture.deps).Execute(t.Context(), fixture.request(remote.Reconcile))
 		}()
 	}
 	group.Wait()
@@ -115,7 +115,7 @@ func TestRemoteWireSnapshotTransferResumesAfterLostChunkAcknowledgment(t *testin
 	}
 	exchange := &remoteServerExchange{deps: fixture.deps, loseOperation: remote.StageChunk}
 	coordinator := remote.Coordinator{Exchange: exchange, Retry: remote.RetryPolicy{Sleep: func(context.Context, time.Duration) error { return nil }}}
-	cwd, err := uploadRemoteInputs(t.Context(), coordinator, fixture.intent, manifest, source)
+	cwd, err := payload.UploadInputs(t.Context(), coordinator, fixture.intent, manifest, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestRemoteWireSnapshotTransferResumesAfterLostChunkAcknowledgment(t *testin
 		t.Fatal("staged bytes differ")
 	}
 	// Re-upload uses recorded complete bytes; it never changes the task identity.
-	repeat, err := uploadRemoteInputs(t.Context(), coordinator, fixture.intent, manifest, source)
+	repeat, err := payload.UploadInputs(t.Context(), coordinator, fixture.intent, manifest, source)
 	if err != nil || repeat != cwd {
 		t.Fatalf("repeat cwd=%q err=%v", repeat, err)
 	}
@@ -208,7 +208,7 @@ func TestRemoteReconcileRacesOriginalSubmissionWithoutAnotherAdd(t *testing.T) {
 	incoming := remote.Request{Version: 1, Operation: remote.Reconcile, Root: identity.Root, Expected: &identity, TaskID: intent.TaskID, Intent: &intent, Data: brief}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	result := executeRemote(ctx, incoming, deps)
+	result := remoteFeature(deps).Execute(ctx, incoming)
 	envelope := remoteServerEnvelope(t, result)
 	if !result.Existing || envelope.TaskRecord != "created" {
 		t.Fatalf("matching in-flight request lost: %+v", result)
@@ -222,7 +222,7 @@ func TestRemoteReconcileRacesOriginalSubmissionWithoutAnotherAdd(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeRunnerStashedStatus(t, original.statusPath, request.RootID, request.TaskID, 7)
-	result = executeRemote(t.Context(), incoming, deps)
+	result = remoteFeature(deps).Execute(t.Context(), incoming)
 	envelope = remoteServerEnvelope(t, result)
 	if !result.Existing || envelope.Admission != "admitted" {
 		t.Fatalf("reconcile lost accepted row: %+v", result)

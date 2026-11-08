@@ -4,8 +4,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
@@ -17,7 +18,7 @@ func TestPredecessorTerminatedPreservesSubmissionDeferral(t *testing.T) {
 	commands := observePhaseStatusCommands(fixture)
 
 	err := tasklifecycle.PredecessorTerminated(fixture.root, fixture.td, &fixture.req, tasklifecycle.SupervisorOptions{
-		Options: fixture.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA}, OpenStore: openNativeSupervisorStore,
+		Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.clientA}, OpenStore: openNativeSupervisorStore,
 	})
 	if !errors.Is(err, pueue.ErrUnknown) || !errors.Is(err, pueue.ErrPrivateSupervisorSubmissionIncomplete) || !errors.Is(err, pueue.ErrBinding) {
 		t.Errorf("predecessor lost submission deferral identities: %v", err)
@@ -39,7 +40,7 @@ func TestPredecessorTerminatedNonEndedRemainsUnknown(t *testing.T) {
 			commands := observePhaseStatusCommands(fixture)
 
 			err := tasklifecycle.PredecessorTerminated(fixture.root, fixture.td, &fixture.req, tasklifecycle.SupervisorOptions{
-				Options: fixture.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA}, OpenStore: openNativeSupervisorStore,
+				Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.clientA}, OpenStore: openNativeSupervisorStore,
 			})
 			if !errors.Is(err, pueue.ErrUnknown) || errors.Is(err, pueue.ErrPrivateSupervisorSubmissionIncomplete) || errors.Is(err, pueue.ErrBinding) || errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 				t.Errorf("ordinary non-ended predecessor changed error identity: %v", err)

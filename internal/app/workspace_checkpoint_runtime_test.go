@@ -19,6 +19,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 )
 
 // These cases compose the checkpoint coordinator, the production operation
@@ -161,7 +162,7 @@ func (f checkpointRuntimeFixture) performAction(t *testing.T, operation *workspa
 	var candidate workspace.OperationResult
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: workspaceSignalTestStopper{}}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation, os.Environ())
+		candidate, actionErr = workspaceworker.RunAction(scope, store, operation, os.Environ())
 		return actionErr
 	})
 	if stopErr != nil {

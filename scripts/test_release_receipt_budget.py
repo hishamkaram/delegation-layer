@@ -8,17 +8,13 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.native_evidence.contract import (
-    MAX_AGGREGATE_BYTES,
-    MAX_RECEIPT_BYTES,
-)
-from scripts.delegate_acceptance.evidence.digests import sha as sha256
-from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
-from scripts.delegate_acceptance.release_verification.contract import (
-    MAX_RECEIPT,
-    VerificationError,
-)
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.native_evidence.contract import MAX_AGGREGATE_BYTES
+from scripts.acceptance.native_evidence.contract import MAX_RECEIPT_BYTES
+from scripts.acceptance.evidence.digests import sha as sha256
+from scripts.release_verification import filesystem as receipt_files
+from scripts.release_verification.contract import MAX_RECEIPT
+from scripts.acceptance.evidence.source import VerificationError
 
 
 def _mapping(value: object, label: str) -> dict[str, object]:

@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 )
 
 // ContinuationOptions supplies immutable endpoint configuration and the
@@ -14,6 +15,6 @@ type ContinuationOptions struct {
 }
 
 // Lookup returns the supervisor executable lookup this configuration selects.
-func (options ContinuationOptions) Lookup() ExecutableLookup {
-	return ExecutableLookup{InitialExecutable: options.InitialExecutable, Environment: options.Environment}
+func (options ContinuationOptions) Lookup() installation.ExecutableLookup {
+	return installation.ExecutableLookup{InitialExecutable: options.InitialExecutable, Environment: options.Environment}
 }

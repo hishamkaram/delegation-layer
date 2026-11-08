@@ -65,7 +65,7 @@ func (c checkpointGit) request(t *testing.T, selection *workspace.CheckpointSele
 }
 
 // prepareOrdinary resolves cwd, pins its common directory through the
-// application's canonical pin, and prepares the candidate.
+// source directory's actual identity, and prepares the candidate.
 func (c checkpointGit) prepareOrdinary(t *testing.T, cwd string) preparedCheckpoint {
 	t.Helper()
 	ctx := c.lineage.scope.ctx
@@ -73,9 +73,11 @@ func (c checkpointGit) prepareOrdinary(t *testing.T, cwd string) preparedCheckpo
 	if err != nil {
 		t.Fatalf("resolve ordinary checkpoint target: %v", err)
 	}
-	if target.Source, err = pinCommonDirectory(target.Source); err != nil {
+	commonIdentity, err := workspacescore.DirectoryIdentity(target.Source.CommonDir)
+	if err != nil {
 		t.Fatal(err)
 	}
+	target.Source = target.Source.WithCommonDirIdentity(commonIdentity)
 	identity, err := workspacescore.DirectoryIdentity(cwd)
 	if err != nil {
 		t.Fatal(err)

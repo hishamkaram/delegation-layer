@@ -1,6 +1,9 @@
 package tasklifecycle
 
-import "github.com/hishamkaram/delegation-layer/internal/taskdir"
+import (
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle/stop"
+)
 
 type CancellationFailure uint8
 
@@ -13,7 +16,7 @@ const (
 // values cannot authorize work; taskdir's journals retain that authority.
 type Cancellation struct {
 	Inspection *taskdir.TaskInspection
-	Stop       *StopOutcome
+	Stop       *stop.Outcome
 	Stops      []taskdir.StopRecord
 	StopsRead  bool
 	Failure    CancellationFailure

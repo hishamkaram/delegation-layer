@@ -8,11 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -52,7 +54,7 @@ func TestLegacyPrivateBindingWithoutDaemonIdentityRequiresResolvedPair(t *testin
 		ConfigDigest:         digest,
 		ObservedVersion:      "legacy-pueue",
 	}
-	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{InitialExecutable: initialExecutable}); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, installation.ExecutableLookup{InitialExecutable: initialExecutable}); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("legacy private binding without a resolvable executable pair was accepted: %v", err)
 	}
 }
@@ -67,7 +69,7 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
 		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
 	}
-	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{}); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, installation.ExecutableLookup{}); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("partial private daemon identity was accepted: %v", err)
 	}
 }
@@ -100,7 +102,7 @@ func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
 	}
 	emptyPath := testsupport.CanonicalTempDir(t)
 	t.Setenv("PATH", emptyPath)
-	_, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, supervisor.ExecutableLookup{InitialExecutable: activeExecutable})
+	_, err := supervisor.RecoverPrivateClient(t.Context(), store, saved, pueue.Options{}, installation.ExecutableLookup{InitialExecutable: activeExecutable})
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not resolve the active executable pair before validating saved state: %v", err)
 	}

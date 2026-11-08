@@ -8,7 +8,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func validateLegacyEndedInspectionJob(taskID string, job pueue.Job) error {
@@ -34,10 +33,6 @@ func LegacyJobTaskID(label, rootID string) (taskID string, managed, inspectionWo
 		return "", true, inspectionWorker, err
 	}
 	return taskID, true, inspectionWorker, nil
-}
-
-func TaskTerminal(insp *taskdir.TaskInspection) bool {
-	return insp != nil && (insp.Publication == task.PublicationCommitted || insp.Publication == task.PublicationRejected)
 }
 
 func privateSuccessfulCleanupCandidates(rootID string, jobs []pueue.Job) []privateCleanupCandidate {

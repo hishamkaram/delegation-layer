@@ -15,10 +15,11 @@ from unittest.mock import patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes import operations
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.processes import operations as operations
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.processes.operations import run_bounded_command
 
 
 SCRIPTS = Path(__file__).resolve().parent

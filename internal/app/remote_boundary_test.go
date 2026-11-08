@@ -2,101 +2,17 @@ package app
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/remotecommands"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
-
-func TestRemoteInputBoundsIncompleteControlFrame(t *testing.T) {
-	reader, writer := io.Pipe()
-	defer func() {
-		if err := writer.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	bounded, err := newRemoteInput(t.Context(), reader, 20*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() { _, readErr := (remote.Framer{Reader: bounded}).ReadRequest(); result <- readErr }()
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], 10)
-	if _, err = writer.Write(header[:]); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err = <-result:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("unbounded or wrong read error: %v", err)
-		}
-	case <-time.After(time.Second):
-		if closeErr := reader.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-		t.Fatal("incomplete control frame exceeded idle bound")
-	}
-}
-
-func TestRemoteInputBoundsIncompleteDataFrame(t *testing.T) {
-	reader, writer := io.Pipe()
-	defer func() {
-		if err := writer.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	bounded, err := newRemoteInput(t.Context(), reader, 20*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() { _, readErr := (remote.Framer{Reader: bounded}).ReadData(); result <- readErr }()
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], remote.MaxDataBytes)
-	if _, err = writer.Write(append(header[:], byte(1))); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err = <-result:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("wrong data read error: %v", err)
-		}
-	case <-time.After(time.Second):
-		if closeErr := reader.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-		t.Fatal("incomplete data frame exceeded idle bound")
-	}
-}
-
-func TestRemoteInputHonorsOverallDeadline(t *testing.T) {
-	reader, writer := io.Pipe()
-	defer func() {
-		if err := writer.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	bounded, err := newRemoteInput(ctx, reader, time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var data [1]byte
-	_, err = bounded.Read(data[:])
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("overall deadline lost: %v", err)
-	}
-}
 
 func TestRemoteActualStoreOpenRejectsReplacedRoot(t *testing.T) {
 	fixture := newRemoteServerFixture(t, false)
@@ -145,26 +61,9 @@ func TestRemoteActualStoreOpenRejectsReplacedRoot(t *testing.T) {
 		t.Fatal("replacement root granted mutation handle")
 	}
 	request := fixture.request(remote.Reconcile)
-	response := executeRemote(t.Context(), request, deps)
+	response := remoteFeature(deps).Execute(t.Context(), request)
 	if response.Failure == nil {
 		t.Fatal("replacement root granted remote recovery")
-	}
-}
-
-func TestRemoteOutputBoundsUnreadResponse(t *testing.T) {
-	reader, writer := io.Pipe()
-	defer func() {
-		if err := reader.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	bounded, err := newRemoteOutput(t.Context(), writer, 20*time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = bounded.Write([]byte("response"))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("unread response lost idle bound: %v", err)
 	}
 }
 
@@ -177,7 +76,7 @@ func TestRemoteChangedPinRequiresMatchingImmutableIntent(t *testing.T) {
 		request.Expected = &changed
 		request.IntentSHA256 = digest
 		before := remoteStoreInventory(t, fixture.store.Root)
-		response := executeRemote(t.Context(), request, fixture.deps)
+		response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 		if response.Failure == nil {
 			t.Fatalf("mismatched intent exposed evidence: %+v", response)
 		}
@@ -197,7 +96,7 @@ func TestRemoteChangedPinRetainsInteractionEvents(t *testing.T) {
 	expected.RootInode++
 	request.Expected = &expected
 	before := remoteStoreInventory(t, fixture.store.Root)
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	envelope := remoteServerEnvelope(t, response)
 	if envelope.Interaction == nil || envelope.Interaction.TurnID != "turn-1" || len(envelope.Events) != 1 || envelope.Events[0].Kind != "ready" || envelope.Cursor == nil || *envelope.Cursor != 1 {
 		t.Fatalf("passive interaction evidence lost: %+v", envelope)
@@ -289,7 +188,7 @@ func TestRemoteExistingOperationsRejectDifferentOriginIntent(t *testing.T) {
 			request.Control = &remote.Control{ID: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
 			request.Transfer = &remote.TransferRequest{Selector: "payload"}
 			before := remoteStoreInventory(t, fixture.store.Root)
-			response := executeRemote(t.Context(), request, fixture.deps)
+			response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 			if response.Failure == nil || response.Failure.Code != "identity_mismatch" || len(response.Envelope) != 0 {
 				t.Fatalf("wrong-origin operation accepted: %+v", response)
 			}
@@ -304,25 +203,9 @@ func TestRemoteRecordedRootRejectsPathAlias(t *testing.T) {
 	fixture := newRemoteServerFixture(t, true)
 	request := fixture.request(remote.Status)
 	request.Root = fixture.store.Root + string(os.PathSeparator) + "."
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.Failure == nil || response.Failure.Code != "identity_mismatch" {
 		t.Fatalf("root alias accepted: %+v", response)
-	}
-}
-
-func TestRemoteFinalPinFailureKeepsAdmissionUnknown(t *testing.T) {
-	for _, operation := range []remote.Operation{remote.Admit, remote.Reconcile} {
-		for _, record := range []string{"created", "not_created"} {
-			response := remote.Response{Version: remote.ProtocolVersion, Identity: remote.Identity{Root: "/recorded-root"}, TaskRecord: record, Existing: true, Envelope: []byte(`{"task_record":"created"}`)}
-			result := remoteFinalPinFailure(operation, response, remote.ErrIdentity)
-			if result.TaskRecord != "unknown" || result.Failure == nil || result.Failure.Code != "acceptance_unknown" || result.Existing || len(result.Envelope) != 0 {
-				t.Fatalf("root change became definite failure: %+v", result)
-			}
-			err := &remote.OperationError{Code: result.Failure.Code, Message: result.Failure.Message}
-			if !errors.Is(err, remote.ErrAcceptanceUnknown) {
-				t.Fatalf("uncertainty classification lost: %v", err)
-			}
-		}
 	}
 }
 
@@ -336,7 +219,7 @@ func TestRemoteEarlyAdmissionFailureProvesNoCreation(t *testing.T) {
 	intent.Destination = changed
 	request.Intent = &intent
 	before := remoteStoreInventory(t, fixture.store.Root)
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.TaskRecord != "not_created" || response.Failure == nil || response.Failure.Code != "identity_mismatch" || response.Existing {
 		t.Fatalf("early admission error lost creation proof: %+v", response)
 	}
@@ -344,7 +227,7 @@ func TestRemoteEarlyAdmissionFailureProvesNoCreation(t *testing.T) {
 		t.Fatal("early rejected admission wrote state")
 	}
 	request.Operation = remote.Reconcile
-	response = executeRemote(t.Context(), request, fixture.deps)
+	response = remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.TaskRecord == "not_created" {
 		t.Fatal("reconcile claimed no creation")
 	}
@@ -355,7 +238,7 @@ func TestRemoteEarlyInvalidBriefIsNotCreated(t *testing.T) {
 	request := fixture.request(remote.Admit)
 	request.Data = []byte("changed brief")
 	before := remoteStoreInventory(t, fixture.store.Root)
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.TaskRecord != "not_created" || response.Failure == nil || response.Failure.Code != "brief_mismatch" {
 		t.Fatalf("invalid brief creation state: %+v", response)
 	}
@@ -365,14 +248,14 @@ func TestRemoteEarlyInvalidBriefIsNotCreated(t *testing.T) {
 }
 
 func TestRemoteFinalPinUncertaintyUsesPendingCLIExit(t *testing.T) {
-	response := remoteFinalPinFailure(remote.Admit, remote.Response{Version: remote.ProtocolVersion, TaskRecord: "created", Existing: true}, remote.ErrIdentity)
+	response := remote.Response{Version: remote.ProtocolVersion, TaskRecord: "unknown", Failure: remote.FailureResponse("acceptance_unknown", remote.ErrAcceptanceUnknown)}
 	operationErr := &remote.OperationError{Code: response.Failure.Code, Message: response.Failure.Message}
 	err := fmt.Errorf("reconciling remote: %w", operationErr)
-	if code := remoteCLIResultCode("dispatch", remoteCLIResponse{Remote: &response}, err); code != 3 {
+	if code := remoteCLIResultCode("dispatch", remotecommands.Report{Remote: &response}, err); code != 3 {
 		t.Fatalf("uncertain admission exit%d, want pending3", code)
 	}
 	definite := &remote.OperationError{Code: "request_conflict", Message: "different immutable request"}
-	if code := remoteCLIResultCode("dispatch", remoteCLIResponse{}, definite); code != 1 {
+	if code := remoteCLIResultCode("dispatch", remotecommands.Report{}, definite); code != 1 {
 		t.Fatalf("definite conflict misclassified pending: %d", code)
 	}
 }

@@ -10,11 +10,11 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification.assets import GITHUB_AUTH_MODES
-from scripts.delegate_acceptance.release_verification.candidate_install_proof import (
-    CHANNELS, ProofRequest, prove_candidate_install,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_verification.assets import GITHUB_AUTH_MODES
+from scripts.release_verification.candidate_install_proof import CHANNELS
+from scripts.release_verification.candidate_install_proof import ProofRequest
+from scripts.release_verification.candidate_install_proof import prove_candidate_install
+from scripts.acceptance.evidence.source import VerificationError
 
 
 # The executing checkout is the one this entry point runs from; it is never an input.

@@ -8,7 +8,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func newNativeObserver() observer {
+func newNativeObserver() composedObserver {
 	return composedObserver{
 		cpu:        readHostCPU,
 		memory:     readHostMemory,

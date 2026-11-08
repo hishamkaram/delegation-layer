@@ -22,11 +22,12 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import test_published_install as base
-from scripts.acceptance_tests.release_fixture import open_descriptors
-from scripts.delegate_acceptance.directories import operations as directories
-from scripts.delegate_acceptance.processes import operations
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification import commands
+from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.directories import operations as directories
+from scripts.acceptance.processes import operations as operations
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.evidence import source as commands
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 
 

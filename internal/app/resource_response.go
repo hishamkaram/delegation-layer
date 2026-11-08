@@ -25,9 +25,10 @@ const resourceRetryAfterSeconds = 30
 // for a fresh admission. It is not durable and never changes the command's
 // exit code, admission, liveness, publication, failure, or outcome by itself.
 type ResourceAdmissionResponse struct {
-	Status      string                        `json:"status"`
-	Warnings    []ResourceAdmissionWarning    `json:"warnings,omitempty"`
-	Diagnostics *ResourceAdmissionDiagnostics `json:"diagnostics,omitempty"`
+	DisabledGuards []string                      `json:"disabled_guards,omitempty"`
+	Status         string                        `json:"status"`
+	Warnings       []ResourceAdmissionWarning    `json:"warnings,omitempty"`
+	Diagnostics    *ResourceAdmissionDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // ResourceAdmissionDiagnostics carries optional bounded evidence. The
@@ -68,6 +69,9 @@ func writeHumanResourceAdmission(output *strings.Builder, resource *ResourceAdmi
 		return
 	}
 	fmt.Fprintf(output, "resource_admission=%s\n", resource.Status)
+	if len(resource.DisabledGuards) != 0 {
+		fmt.Fprintf(output, "resource_disabled_guards=%s\n", strings.Join(resource.DisabledGuards, ","))
+	}
 	for _, warning := range resource.Warnings {
 		fmt.Fprintf(output, "resource_warning code=%s reason_code=%s message=%s", warning.Code, warning.ReasonCode, warning.Message)
 		if warning.Metric != "" {
@@ -99,7 +103,7 @@ func resourceAdmissionResponse(assessment *resourceadmission.Assessment, command
 	if assessment == nil {
 		return nil
 	}
-	response := &ResourceAdmissionResponse{Status: string(assessment.Status())}
+	response := &ResourceAdmissionResponse{Status: string(assessment.Status()), DisabledGuards: assessment.DisabledGuards()}
 	pressure, refused := tasklifecycle.ResourcePressureRefusal(commandError)
 	if cpu := assessment.HostCPUDiagnostics(); cpu != nil && refused && pressure.Metric == resourceadmission.MetricHostCPU {
 		host := &HostCPUDiagnosticsResponse{

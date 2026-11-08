@@ -32,7 +32,7 @@ func DispatchExistingContext(ctx context.Context, options ExistingTaskOptions, s
 	if inspectErr != nil {
 		return existingFailure(result, ExistingPreparation, inspectErr)
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		if releaseErr := ReleaseContinuationSessionContext(ctx, td, oldReq, inspection.Outcome); releaseErr != nil {
 			return existingFailure(result, ExistingTerminalRelease, releaseErr)
 		}

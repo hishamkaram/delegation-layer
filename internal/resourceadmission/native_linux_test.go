@@ -28,7 +28,7 @@ func TestNativeLinuxReadersReturnRealValues(t *testing.T) {
 
 func TestNativeLinuxCheckRespectsTheBudgetAndIdentifiesPressure(t *testing.T) {
 	started := time.Now()
-	got, err := NewChecker().Check(context.Background(), selfResolver{})
+	got, err := NewChecker(GuardPolicy{}).Check(context.Background(), selfResolver{})
 	if err != nil {
 		t.Fatalf("Check error = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestNativeLinuxCheckRespectsTheBudgetAndIdentifiesPressure(t *testing.T) {
 }
 
 func TestNativeLinuxScopeMatchesProcSelfCgroup(t *testing.T) {
-	got, err := NewChecker().Scope(context.Background(), selfResolver{})
+	got, err := NewChecker(GuardPolicy{}).Scope(context.Background(), selfResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -39,12 +40,12 @@ func runHistoricalStatusReadinessScenario(t *testing.T, group, missing bool) {
 	stopHistoricalInstallationPredecessor(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	configBefore := readSupervisorProbeTestFile(t, configPath)
-	privateBefore := capturePairFaultWitness(t, filepath.Dir(configPath))
+	privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(configPath))
 	startsBefore := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
 	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
 	result := supervisorStatus(fixture.root, deps, newSupervisorCommandResponse("status"))
 	assertStoppedHistoricalSupervisorStatus(t, result)
-	assertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
 	if !bytes.Equal(configBefore, readSupervisorProbeTestFile(t, configPath)) || !bytes.Equal(startsBefore, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) {
 		t.Fatal("status changed historical config or started a daemon")
 	}
@@ -127,7 +128,7 @@ func runHistoricalStatusMigrationPhase(t *testing.T, group bool, phase historica
 	}
 	stopHistoricalInstallationPredecessor(t, fixture)
 	writeHistoricalStatusMigrationPhase(t, fixture, phase.progress)
-	before := capturePairFaultWitness(t, filepath.Dir(pueue.PrivateConfigPath(fixture.root)))
+	before := testsupport.CapturePairFaultWitness(t, filepath.Dir(pueue.PrivateConfigPath(fixture.root)))
 	starts := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
 	config := readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))
 	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
@@ -139,7 +140,7 @@ func runHistoricalStatusMigrationPhase(t *testing.T, group bool, phase historica
 	// Admission retains generic transition guidance until migration observes
 	// the predecessor; status can report the stopped historical generation.
 	assertHistoricalStatusPhaseDispatch(t, fixture)
-	assertPairFaultWitness(t, filepath.Dir(pueue.PrivateConfigPath(fixture.root)), before)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(pueue.PrivateConfigPath(fixture.root)), before)
 	if !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) {
 		t.Fatal("phase observation or admission refusal started a daemon")
 	}
@@ -202,7 +203,7 @@ func TestHistoricalSupervisorStatusObservesDriftedSavedEndpoint(t *testing.T) {
 	original := prepareHistoricalStatusEndpointDrift(t, fixture)
 	drifted := readSupervisorProbeTestFile(t, configPath)
 	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
-	before := capturePairFaultWitness(t, filepath.Dir(configPath))
+	before := testsupport.CapturePairFaultWitness(t, filepath.Dir(configPath))
 	commands := observePhaseStatusCommands(fixture)
 	live := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
 	assertReadyHistoricalSupervisorStatus(t, live, "run_supervisor_migrate")
@@ -221,7 +222,7 @@ func TestHistoricalSupervisorStatusObservesDriftedSavedEndpoint(t *testing.T) {
 	stopped := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
 	assertStoppedHistoricalSupervisorStatus(t, stopped)
 	assertHistoricalStatusTemporaryConfigsClosed(t, commands())
-	assertPairFaultWitness(t, filepath.Dir(configPath), before)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(configPath), before)
 	if !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) {
 		t.Fatal("status started a daemon for endpoint inspection")
 	}
@@ -290,14 +291,14 @@ func TestHistoricalSupervisorStatusPreservesUnreadableMigrationJournal(t *testin
 			if err := os.WriteFile(path, []byte("{]"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			before := capturePairFaultWitness(t, filepath.Dir(path))
+			before := testsupport.CapturePairFaultWitness(t, filepath.Dir(path))
 			result := supervisorStatus(fixture.root, fixture.dependencies(), newSupervisorCommandResponse("status"))
 			var syntax *json.SyntaxError
 			control := result.response.SupervisorControl
 			if result.code != 1 || control.NextAction != "stop_and_report" || control.ReasonCode == "historical_target_not_ready" || !errors.As(result.err, &syntax) {
 				t.Fatalf("migration read fault became an unavailable historical endpoint: control=%+v err=%v", control, result.err)
 			}
-			assertPairFaultWitness(t, filepath.Dir(path), before)
+			testsupport.AssertPairFaultWitness(t, filepath.Dir(path), before)
 		})
 	}
 }

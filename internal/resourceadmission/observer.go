@@ -44,3 +44,15 @@ func (o composedObserver) hostMemory(ctx context.Context) reading[hostMemory] { 
 func (o composedObserver) membership(_ context.Context, target Target) reading[string] {
 	return o.cgroupPath(target)
 }
+
+// withPolicy avoids dedicated host reads for disabled guards. Shared cgroup
+// reads remain shared; the evaluator selects their enabled outcomes.
+func (o composedObserver) withPolicy(policy GuardPolicy) composedObserver {
+	if policy.DisableCPU {
+		o.cpu = func(context.Context) reading[cpuCounters] { return notApplicable[cpuCounters]() }
+	}
+	if policy.DisableMemory {
+		o.memory = func(context.Context) reading[hostMemory] { return notApplicable[hostMemory]() }
+	}
+	return o
+}

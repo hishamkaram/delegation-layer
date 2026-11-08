@@ -8,6 +8,10 @@ import (
 	"os"
 	"slices"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
+
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -163,7 +167,7 @@ type Dependencies struct {
 	// and every later consumer reads that snapshot. A nonnil empty slice is an
 	// explicit empty environment and is kept.
 	Environment      []string
-	invocationSource *capturedInfrastructureInvocation
+	invocationSource *infrastructurehost.Invocation
 	// ownerRouting is an immutable command composition choice. Nil selects
 	// native routing; component tests can lend their existing lifecycle owner.
 	ownerRouting       supervisorcore.OwnerRouting
@@ -179,7 +183,7 @@ func (d Dependencies) withCapturedEnvironment() Dependencies {
 
 func (d Dependencies) withCapturedEnvironmentContext(ctx context.Context) Dependencies {
 	if d.invocationSource == nil {
-		d.invocationSource = captureInfrastructureInvocation(ctx)
+		d.invocationSource = infrastructurehost.CaptureInvocation(ctx)
 	}
 	if d.Environment == nil {
 		d.Environment = os.Environ()
@@ -196,10 +200,10 @@ type storeDependencies struct {
 	predicateRegistry func() predicate.Registry
 	catalog           commonprovider.Catalog
 	supervisorOptions pueue.Options
-	supervisorLookup  supervisorcore.ExecutableLookup
+	supervisorLookup  installation.ExecutableLookup
 	runnerExecutable  string
 	environment       []string
-	invocationSource  *capturedInfrastructureInvocation
+	invocationSource  *infrastructurehost.Invocation
 	ownerRouting      supervisorcore.OwnerRouting
 	observeSupervisor bool
 }
@@ -235,8 +239,8 @@ func (d Dependencies) supervisorControlScope() pueue.Options {
 
 // supervisorLookup locates an unbound supervisor pair in this composition's
 // launch scope.
-func (d Dependencies) supervisorLookup() supervisorcore.ExecutableLookup {
-	return supervisorcore.ExecutableLookup{InitialExecutable: d.InitialSupervisorExecutable, Environment: slices.Clone(d.Environment)}
+func (d Dependencies) supervisorLookup() installation.ExecutableLookup {
+	return installation.ExecutableLookup{InitialExecutable: d.InitialSupervisorExecutable, Environment: slices.Clone(d.Environment)}
 }
 
 func (d Dependencies) normalized() Dependencies {
@@ -258,9 +262,9 @@ func (d Dependencies) normalized() Dependencies {
 		d.PublisherVersion = defaultPublisher
 	}
 	if d.SupervisorOptions.ControlOwnerExecutable == "" {
-		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable(d.RunnerExecutable)
+		d.SupervisorOptions.ControlOwnerExecutable = installation.DiscoverControlOwnerExecutable(d.RunnerExecutable)
 	}
-	d.SupervisorOptions = withDefaultSupervisorCallbacks(d.SupervisorOptions)
+	d.SupervisorOptions = nativeInfrastructureCallbacks().ApplyTo(d.SupervisorOptions)
 	return d
 }
 
@@ -446,10 +450,6 @@ func openStoreContext(ctx context.Context, root string, deps storeDependencies, 
 		}
 	}
 	return store, nil
-}
-
-func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {
-	return supervisorcore.ResolveCurrentPrivateSupervisorExecutables(root, deps.supervisorLookup())
 }
 
 func bindInitialForAdmission(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, deferPrivateStart bool) (*pueue.Client, error) {

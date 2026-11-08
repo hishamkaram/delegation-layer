@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -12,7 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *taskdir.Store, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *taskdir.Store, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
 	pending, err := pueue.PrivateSupervisorMigrationPending(store.Root)
 	if err != nil {
 		return nil, err

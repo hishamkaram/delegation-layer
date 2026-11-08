@@ -170,7 +170,7 @@ jobs:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
 
-      - name: Retain native lifetime proof receipt
+      - name: Retain native lifetime proof evidence
         if: >-
           always() && (steps.native_lifetime.outcome == 'success' ||
           steps.native_lifetime.outcome == 'failure' ||
@@ -178,7 +178,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}
-          path: bin/native-lifetime-proof/receipt.json
+          path: |
+            bin/native-lifetime-proof/receipt.json
+            bin/native-lifetime-proof/proof-processes-*/
           retention-days: 7
           if-no-files-found: error
 
@@ -326,7 +328,7 @@ jobs:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
 
-      - name: Retain native lifetime proof receipt
+      - name: Retain native lifetime proof evidence
         if: >-
           always() && (steps.native_lifetime.outcome == 'success' ||
           steps.native_lifetime.outcome == 'failure' ||
@@ -334,7 +336,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}
-          path: bin/native-lifetime-proof/receipt.json
+          path: |
+            bin/native-lifetime-proof/receipt.json
+            bin/native-lifetime-proof/proof-processes-*/
           retention-days: 7
           if-no-files-found: error
 
@@ -638,7 +642,7 @@ jobs:
           import sys
 
           sys.path.insert(0, os.environ["GITHUB_WORKSPACE"])
-          from scripts.delegate_acceptance.release_verification.assets import platform_identity
+          from scripts.release_verification.assets import platform_identity
 
           observed = platform_identity()
           print(f"observed {observed['os']} {observed['arch']} kernel {observed['kernel']}")

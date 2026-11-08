@@ -3,10 +3,7 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -16,6 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 )
 
 func loadWorkspaceGuardianState(store *taskdir.Store, id string) (lifetimeGuardianRunState, error) {
@@ -82,7 +80,7 @@ func runLoadedWorkspaceWorker(parsed runnerArguments, store *taskdir.Store, oper
 	stopper := &workspaceBudgetStopper{operation: operation, lifetime: child.Lifetime()}
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: child.Lifetime(), PrepareEnvironment: operationalEnvironmentPreparation(store)}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation, environment)
+		candidate, actionErr = workspaceworker.RunAction(scope, store, operation, environment)
 		return actionErr
 	})
 	if workErr != nil || stopErr != nil {
@@ -115,58 +113,12 @@ func recordWorkspaceWorkerResult(ctx context.Context, store *taskdir.Store, oper
 }
 
 func recordWorkspaceWorkerFailure(ctx context.Context, store *taskdir.Store, operation *workspace.Operation, cause error) error {
-	result := workspace.OperationResult{SchemaVersion: task.SchemaVersion, OperationID: operation.Request().OperationID, RequestSHA256: operation.Digest(), Status: "failed", ReasonCode: workspaceActionFailureReason(operation.Request().Kind, cause)}
-	artifact, diagnosticErr := writeWorkspaceFailureDiagnostic(store, operation, cause)
+	result := workspace.OperationResult{SchemaVersion: task.SchemaVersion, OperationID: operation.Request().OperationID, RequestSHA256: operation.Digest(), Status: "failed", ReasonCode: workspaceworker.FailureReason(operation.Request().Kind, cause)}
+	artifact, diagnosticErr := workspaceworker.WriteFailureDiagnostic(store, operation, cause)
 	if diagnosticErr == nil {
 		result.Artifacts = []workspace.Artifact{artifact}
 	}
 	return errors.Join(cause, diagnosticErr, recordWorkspaceWorkerResult(ctx, store, operation, result))
-}
-
-func writeWorkspaceFailureDiagnostic(store *taskdir.Store, operation *workspace.Operation, cause error) (workspace.Artifact, error) {
-	directory := workspace.ScratchPath(store.Root, operation.Request().OperationID)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return workspace.Artifact{}, err
-	}
-	writer, err := newWorkspaceDiagnostic(directory, workspace.FailureDiagnosticName)
-	if err != nil {
-		return workspace.Artifact{}, err
-	}
-	_, writeErr := fmt.Fprintln(writer, cause)
-	if err = errors.Join(writeErr, writer.Close()); err != nil {
-		return workspace.Artifact{}, errors.Join(err, os.Remove(filepath.Join(directory, workspace.FailureDiagnosticName)))
-	}
-	return writer.Artifact(), nil
-}
-
-func workspaceActionFailureReason(kind string, err error) string {
-	if errors.Is(err, workspace.ErrIdentity) || errors.Is(err, workspace.ErrIdentityMismatch) || errors.Is(err, task.ErrIdentityMismatch) {
-		return "workspace_identity_changed"
-	}
-	if errors.Is(err, exec.ErrNotFound) {
-		if kind == workspace.OperationVerify {
-			return "verification_command_unavailable"
-		}
-		return "git_executable_unavailable"
-	}
-	switch kind {
-	case workspace.OperationProvision:
-		return "workspace_provision_failed"
-	case workspace.OperationCapture:
-		return "workspace_capture_failed"
-	case workspace.OperationVerify:
-		return "workspace_verification_failed"
-	case workspace.OperationRemove:
-		return "workspace_removal_failed"
-	case workspace.OperationForget:
-		return "workspace_forget_failed"
-	case workspace.OperationCheckpoint:
-		return "checkpoint_failed"
-	case workspace.OperationCheckpointRemove:
-		return "checkpoint_removal_failed"
-	default:
-		return "workspace_operation_failed"
-	}
 }
 
 func validateWorkspaceWorker(ctx context.Context, operation *workspace.Operation) error {
@@ -203,35 +155,4 @@ func (s *workspaceBudgetStopper) PrepareBudget(deadline time.Time) (execution.Bu
 	return func(stopContext context.Context) error {
 		return s.lifetime.Terminate(execution.DetachBudgetRequestContext(stopContext))
 	}, nil
-}
-
-// workspaceCommandRunner borrows the existing scope; Git never starts, waits,
-// signals, or creates a second deadline owner.
-type workspaceCommandRunner struct {
-	scope       execution.PreflightScope
-	environment []string
-}
-
-func (r workspaceCommandRunner) Run(ctx context.Context, command *exec.Cmd) error {
-	if ctx == nil {
-		return context.Canceled
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if command == nil || !filepath.IsAbs(command.Dir) {
-		return task.ErrIdentityMismatch
-	}
-	// Git and verification have already resolved their selected PATH. This
-	// overlay rechecks the root before Start; it does not repeat that lookup.
-	selected := command.Env
-	if selected == nil && r.environment != nil {
-		selected = execution.InheritedCommandEnvironment(r.environment, command.Dir)
-	}
-	environment, err := r.scope.PrepareEnvironment(selected)
-	if err != nil {
-		return err
-	}
-	command.Env = environment
-	return execution.RunScopedCommand(r.scope, command, execution.CommandHooks{})
 }

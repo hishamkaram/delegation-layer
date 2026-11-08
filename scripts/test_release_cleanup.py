@@ -17,11 +17,14 @@ from unittest.mock import patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.release_verification import cleanup, filesystem
-from scripts.delegate_acceptance.release_verification.assets import remember_directory
-from scripts.delegate_acceptance.release_verification.contract import VerificationError, new_receipt
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.release_verification import cleanup as cleanup
+from scripts.release_verification import filesystem as filesystem
+from scripts.release_verification.assets import remember_directory
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.contract import new_receipt
 
 
 SECRET = "private-canary-path"

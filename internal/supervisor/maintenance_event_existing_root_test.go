@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 )
 
@@ -64,7 +66,7 @@ var launchMarkingNames = []string{"delegate", "pueue", "pueued"}
 
 // launchMarkingLookup returns a canonical directory of marking executables and
 // a lookup that selects only them.
-func launchMarkingLookup(t *testing.T) (string, ExecutableLookup) {
+func launchMarkingLookup(t *testing.T) (string, installation.ExecutableLookup) {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -75,7 +77,7 @@ func launchMarkingLookup(t *testing.T) (string, ExecutableLookup) {
 			t.Fatal(err)
 		}
 	}
-	return directory, ExecutableLookup{
+	return directory, installation.ExecutableLookup{
 		InitialExecutable: filepath.Join(directory, "delegate"),
 		Environment:       []string{"PATH=" + directory},
 	}

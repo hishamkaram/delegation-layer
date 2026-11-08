@@ -11,11 +11,14 @@ type Checker struct {
 	observer observer
 	clock    clock
 	budget   time.Duration
+	policy   GuardPolicy
 }
 
 // NewChecker returns a Checker that reads the local operating system.
-func NewChecker() *Checker {
-	return newChecker(newNativeObserver(), systemClock{}, checkBudget)
+func NewChecker(policy GuardPolicy) *Checker {
+	checker := newChecker(newNativeObserver().withPolicy(policy), systemClock{}, checkBudget)
+	checker.policy = policy
+	return checker
 }
 
 func newChecker(o observer, c clock, budget time.Duration) *Checker {
@@ -39,9 +42,12 @@ func (c *Checker) Check(ctx context.Context, resolver TargetResolver) (Assessmen
 	if err := ctx.Err(); err != nil {
 		return Assessment{}, err
 	}
+	if c.policy.DisableCPU && c.policy.DisableMemory {
+		return c.assessment(Scope{}, Findings{}), nil
+	}
 	mon, cancel := context.WithTimeout(ctx, c.budget)
 	defer cancel()
-	r := &run{checker: c, caller: ctx, mon: mon}
+	r := &run{checker: c, caller: ctx, mon: mon, eval: evaluator{policy: c.policy}}
 	return r.execute(resolver)
 }
 
@@ -51,6 +57,9 @@ func (c *Checker) Check(ctx context.Context, resolver TargetResolver) (Assessmen
 func (c *Checker) Scope(ctx context.Context, resolver TargetResolver) (Scope, error) {
 	if err := ctx.Err(); err != nil {
 		return Scope{}, err
+	}
+	if c.policy.DisableCPU && c.policy.DisableMemory {
+		return Scope{}, nil
 	}
 	mon, cancel := context.WithTimeout(ctx, c.budget)
 	defer cancel()
@@ -124,13 +133,22 @@ func (r *run) execute(resolver TargetResolver) (Assessment, error) {
 			return Assessment{}, err
 		}
 	}
-	return NewAssessment(r.checker.clock.Now(), r.scope(target), r.eval.findings()), nil
+	return r.checker.assessment(r.scope(target), r.eval.findings()), nil
+}
+
+func (c *Checker) assessment(scope Scope, findings Findings) Assessment {
+	assessment := NewAssessment(c.clock.Now(), scope, findings)
+	assessment.policy = c.policy
+	return assessment
 }
 
 // criticalPrecheck reads host memory alone. A critical reading is a confirmed
 // host-memory pressure with every other metric skipped. Anything else is not
 // a confirmation sample and is discarded. The error is the caller's.
 func (r *run) criticalPrecheck() (Assessment, bool, error) {
+	if r.checker.policy.DisableMemory {
+		return Assessment{}, false, nil
+	}
 	memory := r.checker.observer.hostMemory(r.mon)
 	if err := r.caller.Err(); err != nil {
 		return Assessment{}, false, err
@@ -140,7 +158,7 @@ func (r *run) criticalPrecheck() (Assessment, bool, error) {
 		return Assessment{}, false, nil
 	}
 	r.eval.hostMemory.record(outcome)
-	return NewAssessment(r.checker.clock.Now(), Scope{}, r.eval.findings()), true, nil
+	return r.checker.assessment(Scope{}, r.eval.findings()), true, nil
 }
 
 func (r *run) scope(target *Target) Scope {
@@ -187,11 +205,18 @@ func (r *run) unsampled() snapshot {
 	if r.checker.observer.usesTarget() {
 		cgroup = unobserved[cgroupSample](ReasonDeadline)
 	}
-	return snapshot{
+	first := snapshot{
 		cpu:    unobserved[cpuCounters](ReasonDeadline),
 		memory: unobserved[hostMemory](ReasonDeadline),
 		cgroup: cgroup,
 	}
+	if r.checker.policy.DisableCPU {
+		first.cpu = notApplicable[cpuCounters]()
+	}
+	if r.checker.policy.DisableMemory {
+		first.memory = notApplicable[hostMemory]()
+	}
+	return first
 }
 
 // pause waits until one interval after prevAt.

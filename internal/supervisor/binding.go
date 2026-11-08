@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
+func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup installation.ExecutableLookup) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -28,7 +30,7 @@ func NewClient(ctx context.Context, root string, saved task.SupervisorRef, optio
 
 // RecoverPrivateClient borrows the resident's pinned Store. Only a clean
 // unavailable-pair fact allows reconciliation and one recovery retry.
-func RecoverPrivateClient(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
+func RecoverPrivateClient(ctx context.Context, store *taskdir.Store, saved task.SupervisorRef, options pueue.Options, lookup installation.ExecutableLookup) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -67,13 +69,13 @@ func RecoverPrivateClient(ctx context.Context, store *taskdir.Store, saved task.
 	return retry.Client(), nil
 }
 
-func reconcileSavedPrivateClient(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup ExecutableLookup) error {
+func reconcileSavedPrivateClient(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup installation.ExecutableLookup) error {
 	return pueue.WithBootstrapLockContext(ctx, store.Root, func(lockedContext context.Context) error {
 		return ReconcilePublishedSupervisorWithLock(lockedContext, store, options, lookup, false)
 	})
 }
 
-func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (pueue.PrivateRecovery, error) {
+func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup installation.ExecutableLookup) (pueue.PrivateRecovery, error) {
 	clientExecutable, daemonExecutable, err := ResolveRecoveryPrivateSupervisorExecutables(root, saved, lookup)
 	if err != nil {
 		return pueue.PrivateRecovery{}, err
@@ -83,7 +85,7 @@ func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.Su
 
 // NewControlClient proves an external supervisor's saved endpoint ready before
 // mutation. Private clients are prepared by the independent resident owner.
-func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (*pueue.Client, error) {
+func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup installation.ExecutableLookup) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}

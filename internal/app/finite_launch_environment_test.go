@@ -12,6 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 )
 
 type operationalCommandLifetime struct {
@@ -33,37 +34,14 @@ func (operationalCommandStopper) PrepareBudget(time.Time) (execution.BudgetReque
 	return func(context.Context) error { return nil }, nil
 }
 
-func TestFiniteWorkspaceCommandFinalEnvironment(t *testing.T) {
-	for _, selection := range []string{"explicit", "empty", "inherited"} {
-		t.Run(selection, func(t *testing.T) {
-			a, b := operationalTestStore(t), operationalTestStore(t)
-			captured, selected, expected := finiteWorkspaceSelection(t, a, b, selection)
-			refusal := errors.New("stop before native command birth")
-			lifetime := &operationalCommandLifetime{refusal: refusal}
-			workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: operationalCommandStopper{}, Lifetime: lifetime, PrepareEnvironment: operationalEnvironmentPreparation(b)}, func(scope execution.PreflightScope) error {
-				command := &exec.Cmd{Path: "/not-started", Args: []string{"not-started"}, Dir: b.Root, Env: selected}
-				return (workspaceCommandRunner{scope: scope, environment: captured}).Run(scope.Context(), command)
-			})
-			if !errors.Is(workErr, refusal) || stopErr != nil || len(lifetime.seen) != 1 {
-				t.Fatalf("scoped command did not reach exact refusal: %v %v", workErr, stopErr)
-			}
-			got := lifetime.seen[0]
-			assertOperationalOrigin(t, got, b)
-			if !slices.Equal(withoutOperationalTestOrigin(got), expected) {
-				t.Fatal("scoped command changed selected non-origin environment")
-			}
-		})
-	}
-}
-
 func TestFiniteCommandRootReplacementRefusesBeforeStart(t *testing.T) {
-	store := operationalTestStore(t)
+	store, operation, _ := newWorkspaceVerificationTestOperation(t, []string{"/not-started"})
 	prepare := operationalEnvironmentPreparation(store)
 	replaceOperationalTestRoot(t, store)
 	lifetime := &operationalCommandLifetime{refusal: errors.New("unexpected native boundary")}
 	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: operationalCommandStopper{}, Lifetime: lifetime, PrepareEnvironment: prepare}, func(scope execution.PreflightScope) error {
-		command := &exec.Cmd{Path: "/not-started", Args: []string{"not-started"}, Dir: store.Root, Env: []string{}}
-		return (workspaceCommandRunner{scope: scope, environment: []string{}}).Run(scope.Context(), command)
+		_, err := workspaceworker.RunAction(scope, store, operation, []string{})
+		return err
 	})
 	if workErr == nil || stopErr != nil || len(lifetime.seen) != 0 {
 		t.Fatalf("replaced root reached native boundary: %v %v starts=%d", workErr, stopErr, len(lifetime.seen))

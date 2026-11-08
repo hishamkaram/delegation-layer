@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -458,15 +460,15 @@ func supervisorControlOptions(deps Dependencies) pueue.Options {
 }
 
 func currentPrivateSupervisor(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
-	clientExecutable, _, err := resolveCurrentPrivateSupervisorExecutables(root, deps)
+	clientExecutable, _, err := installation.ResolvePrivateSupervisorExecutables(deps.supervisorLookup())
 	if err != nil {
 		return nil, err
 	}
 	return pueue.Bind(ctx, clientExecutable, pueue.PrivateConfigPath(root), options)
 }
 
-func prepareCurrentPrivateSupervisor(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
-	clientExecutable, daemonExecutable, err := migrationSupervisorPair(root, lookup)
+func prepareCurrentPrivateSupervisor(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := migrationSupervisorPair(lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +516,7 @@ func notInitializedSupervisor(response Response) commandResult {
 	return commandResult{response: response, code: 0}
 }
 
-func inspectSupervisorMigration(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
+func inspectSupervisorMigration(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options, store *taskdir.Store) (state supervisorMigrationState, resultErr error) {
 	state.activeWork = "none"
 	initialized, err := supervisorMigrationInitialized(ctx, store)
 	if err != nil {
@@ -567,7 +569,7 @@ func privateSupervisorStatePresent(root string) (bool, error) {
 	return err == nil, nil
 }
 
-func inspectSupervisorMigrationLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
+func inspectSupervisorMigrationLocked(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
 	if err := supervisorcore.ReconcilePublishedSupervisorWithLock(ctx, store, options, lookup, true); err != nil {
 		return err
 	}
@@ -620,7 +622,7 @@ func verifyCommittedPrivateSupervisor(root string, current *pueue.Client) error 
 	return nil
 }
 
-func inspectSupervisorWithoutGroup(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options, state *supervisorMigrationState) error {
+func inspectSupervisorWithoutGroup(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options, state *supervisorMigrationState) error {
 	state.noInspectionGroup = true
 	if _, err := os.Stat(pueue.PrivateConfigPath(root)); errors.Is(err, os.ErrNotExist) {
 		state.notInitialized = true
@@ -663,7 +665,7 @@ func finishSupervisorMigration(response Response, state supervisorMigrationState
 }
 
 func supervisorMigrationFailure(response Response, err error) commandResult {
-	response.SupervisorControl.ReasonCode = supervisorFailureReason(err)
+	response.SupervisorControl.ReasonCode = supervisorcore.FailureReason(err)
 	if errors.Is(err, inspection.ErrGroupMigrationBusy) || errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) {
 		response.SupervisorControl.State = "blocked"
 		response.SupervisorControl.ActiveWork = "present"
@@ -675,7 +677,7 @@ func supervisorMigrationFailure(response Response, err error) commandResult {
 	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }
 
-func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
 	current, err := prepareCurrentPrivateSupervisor(ctx, root, lookup, options)
 	if err != nil {
 		return nil, err
@@ -710,7 +712,7 @@ func failedSupervisorCause(response Response, message string, cause error, code 
 	result := failedSupervisor(response, message, code)
 	result.err = publicSupervisorError(message, cause)
 	if result.response.SupervisorControl != nil {
-		result.response.SupervisorControl.ReasonCode = supervisorFailureReason(cause)
+		result.response.SupervisorControl.ReasonCode = supervisorcore.FailureReason(cause)
 	}
 	return result
 }
@@ -722,4 +724,31 @@ func legacyActiveWork(snapshot pueue.QueueSnapshot) string {
 		}
 	}
 	return "none"
+}
+
+func supervisorEnsureOwner(a Arguments, deps Dependencies) (result commandResult) {
+	response := newResponse("supervisor")
+	root, err := tasklifecycle.ResolveRoot(a.Root)
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	options := supervisorControlOptions(deps)
+	ctx, cancel := supervisorcore.ControlContext(options)
+	defer cancel()
+	store, err := openStoreContext(ctx, root, deps.storeDependencies(), true)
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	defer func() { mergeCommandClose(&result, store.Close) }()
+	control := supervisorcore.ControlRuntime{Options: options, Lookup: deps.supervisorLookup(), Routing: deps.infrastructureRouting()}
+	client, err := control.PreparePrivateAdmission(ctx, store)
+	if client != nil {
+		err = errors.Join(err, client.Close())
+	}
+	response.RootID = store.RootID
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	response.Status = "owner_ready"
+	return commandResult{response: response}
 }

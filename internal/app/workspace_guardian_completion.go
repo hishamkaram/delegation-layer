@@ -49,7 +49,7 @@ func reconcileWorkspaceAfterGuardian(store *taskdir.Store, parsed runnerArgument
 	if err != nil {
 		return err
 	}
-	return reconcileWorkspaceUse(ctx, store, resource, options)
+	return workspacescore.ReconcileUse(ctx, store, resource, options)
 }
 
 func workspaceForGuardian(ctx context.Context, store *taskdir.Store, parsed runnerArguments) (id string, resultErr error) {

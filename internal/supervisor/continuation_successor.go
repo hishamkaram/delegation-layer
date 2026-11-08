@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -35,7 +37,7 @@ func PrepareContinuationSuccessor(ctx context.Context, root string, successor ta
 		if task.SameSupervisorIdentity(legacyBinding, successor) {
 			return nil
 		}
-		clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.Lookup())
+		clientExecutable, daemonExecutable, err := installation.ResolvePrivateSupervisorExecutables(options.Lookup())
 		if err != nil {
 			return err
 		}

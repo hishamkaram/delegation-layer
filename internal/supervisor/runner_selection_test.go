@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -48,13 +50,13 @@ func TestManagedRunnerSuccessorRequiresSelectedRoleAndRecordedOwnership(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ValidateManagedOrdinaryRunnerExecutable("", original, original, task.RunnerOwnershipManaged, RunnerRepairTarget{}); err != nil {
+	if err = ValidateManagedOrdinaryRunnerExecutable(original, original, task.RunnerOwnershipManaged, RunnerRepairTarget{}); err != nil {
 		t.Fatalf("native-owned recorded image rejected: %v", err)
 	}
-	if err = ValidateManagedOrdinaryRunnerExecutable("", original, selected, task.RunnerOwnershipManaged, target); err != nil {
+	if err = ValidateManagedOrdinaryRunnerExecutable(original, selected, task.RunnerOwnershipManaged, target); err != nil {
 		t.Fatal(err)
 	}
-	if err = ValidateManagedOrdinaryRunnerExecutable("", original, selected, task.RunnerOwnershipManaged, RunnerRepairTarget{}); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = ValidateManagedOrdinaryRunnerExecutable(original, selected, task.RunnerOwnershipManaged, RunnerRepairTarget{}); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unselected managed successor accepted: %v", err)
 	}
 	binding := inspection.Binding{WorkerExecutable: original, RunnerOwnership: task.RunnerOwnershipManaged}
@@ -99,7 +101,7 @@ func TestResolveRunnerAcceptsInstalledAliasAndPinsResolvedSelection(t *testing.T
 	if err := os.Symlink(real, alias); err != nil {
 		t.Fatal(err)
 	}
-	selected, err := ResolveRunner(alias, "")
+	selected, err := installation.ResolveRunner(alias, "")
 	if err != nil || selected != real {
 		t.Fatalf("installed alias selection=%q err=%v", selected, err)
 	}

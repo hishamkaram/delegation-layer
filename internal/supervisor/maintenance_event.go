@@ -9,6 +9,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func RunTerminalEventWithRuntime(root string, numericTaskID int64, exitCode string, runtime AdmissionOptions) error {
@@ -109,7 +110,7 @@ func prepareLegacyPrivateMaintenance(root string, runtime AdmissionOptions) (bin
 		return binding, err
 	}
 	defer func() {
-		if !CleanupRetainsStore(resultErr, store) {
+		if !taskdir.CleanupRetainsStore(resultErr, store) {
 			resultErr = errors.Join(resultErr, store.Close())
 		}
 	}()

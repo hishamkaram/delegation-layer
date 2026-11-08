@@ -221,3 +221,26 @@ func TestResourceGateRefreshUsesFreshnessAndScope(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceGateRefreshDoesNotReuseAnotherGuardSelection(t *testing.T) {
+	store := newResourceGateStore(t)
+	off := resourceadmission.GuardPolicy{DisableCPU: true, DisableMemory: true}
+	assessment, err := resourceadmission.NewChecker(off).Check(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &scriptedResources{t: t, assessments: []resourceadmission.Assessment{clearAssessment(time.Now())}}
+	gate, err := openResourceGate(DispatchRequest{}, DispatchOptions{Resources: checker, resourceAssessment: &assessment}, store, "cccccccccccccccccccccccccccccccc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = gate.refresh(task.SupervisorRef{}, supervisorcore.AdmissionOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if checker.checks != 1 || checker.scopes != 1 {
+		t.Fatalf("another policy was reused: checks=%d scopes=%d", checker.checks, checker.scopes)
+	}
+	if gate.current().Policy() != (resourceadmission.GuardPolicy{}) {
+		t.Fatal("refresh retained old policy")
+	}
+}

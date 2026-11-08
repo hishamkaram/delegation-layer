@@ -3,6 +3,8 @@ package admission
 import (
 	"context"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -11,7 +13,7 @@ import (
 )
 
 func (runtime workspaceRuntime) ManagedRunner() (string, error) {
-	return supervisorcore.ResolveRunner("", runtime.configuration.RunnerExecutable)
+	return installation.ResolveRunner("", runtime.configuration.RunnerExecutable)
 }
 
 func (runtime workspaceRuntime) PrepareManaged(ctx context.Context, store *taskdir.Store, runner string) (string, *pueue.Client, error) {

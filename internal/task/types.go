@@ -122,6 +122,11 @@ const (
 	PublicationRejected  Publication = 3
 )
 
+// Terminal reports whether publication has an authoritative committed or rejected outcome.
+func (p Publication) Terminal() bool {
+	return p == PublicationCommitted || p == PublicationRejected
+}
+
 func (p Publication) String() string {
 	switch p {
 	case PublicationUnknown:

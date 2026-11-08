@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -80,7 +82,7 @@ func reconcilePrivateContinuationBinding(root string, saved, current task.Superv
 }
 
 func resolveCurrentContinuationSupervisor(ctx context.Context, root string, options ContinuationOptions) (task.SupervisorRef, error) {
-	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.Lookup())
+	clientExecutable, daemonExecutable, err := installation.ResolvePrivateSupervisorExecutables(options.Lookup())
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}

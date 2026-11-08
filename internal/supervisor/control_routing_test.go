@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -132,7 +134,7 @@ func exerciseSavedControlReply(t *testing.T, contactError bool) {
 		return infrastructure.Disposition{Kind: infrastructure.DispositionWarmReuse}, nil
 	}}
 	before := parentMigrationTree(t, fixture.store.Root)
-	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: routing}).RecoverSaved(t.Context(), fixture.store, fixture.target, source)
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: routing}).RecoverSaved(t.Context(), fixture.store, fixture.target, source)
 	if client != nil {
 		t.Fatal(errors.Join(errors.New("unready reply produced a client"), client.CloseAfterPending(err)))
 	}
@@ -198,7 +200,7 @@ func TestControlRuntimeSavedTaskObservationReprobesAliasAfterOwner(t *testing.T)
 		afterOwner = parentMigrationTree(t, fixture.store.Root)
 		return infrastructure.Disposition{Kind: infrastructure.DispositionWarmReuse}, nil
 	}}
-	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: routing}).RecoverSavedTaskObservation(t.Context(), fixture.store, fixture.target, source)
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: routing}).RecoverSavedTaskObservation(t.Context(), fixture.store, fixture.target, source)
 	requireCompatibleControlClient(t, client, err, fixture.target, runtimeBinding)
 	if calls != 1 {
 		t.Fatalf("task alias recovery contacted owner %d times, want one", calls)
@@ -278,7 +280,7 @@ func assertGeneralSavedRecoveryRefusesTaskAlias(t *testing.T, fixture parentMigr
 	for _, open := range []bool{false, true} {
 		refused := errors.New("general recovery requires owner preparation")
 		calls := 0
-		runtime := ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: selectedControlRouting{saved: func(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
+		runtime := ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, Routing: selectedControlRouting{saved: func(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
 			calls++
 			return infrastructure.Disposition{}, refused
 		}}, OpenStore: func(ctx context.Context, root string) (*taskdir.Store, error) {
@@ -378,18 +380,18 @@ func TestControlRuntimeOpenSavedRetainsCleanupStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	retained := &routedStoreRetentionError{store: fixture.store, cause: errors.New("owned startup cleanup unresolved")}
-	runtime := ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, OpenStore: func(context.Context, string) (*taskdir.Store, error) { return fixture.store, nil }, Routing: selectedControlRouting{saved: func(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
+	runtime := ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.target.ClientExecutable}, OpenStore: func(context.Context, string) (*taskdir.Store, error) { return fixture.store, nil }, Routing: selectedControlRouting{saved: func(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
 		return infrastructure.Disposition{}, retained
 	}}}
 	client, err := runtime.OpenSaved(t.Context(), fixture.store.Root, fixture.target, source)
-	if client != nil || !errors.Is(err, retained) || !CleanupRetainsStore(err, fixture.store) {
+	if client != nil || !errors.Is(err, retained) || !taskdir.CleanupRetainsStore(err, fixture.store) {
 		t.Fatalf("routed cleanup owner lost: %v", err)
 	}
 	if _, pinErr := fixture.store.PinRootContext(t.Context()); pinErr != nil {
 		t.Fatalf("routed cleanup prematurely closed borrowed store: %v", pinErr)
 	}
 	retained.store = nil
-	if CleanupRetainsStore(err, fixture.store) {
+	if taskdir.CleanupRetainsStore(err, fixture.store) {
 		t.Fatal("settled cleanup still retains store")
 	}
 }

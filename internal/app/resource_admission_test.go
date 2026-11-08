@@ -223,6 +223,36 @@ func TestContinueSharesOneResourceCheckWithItsDispatch(t *testing.T) {
 	}
 }
 
+func TestLocalAdmissionGuardOverridesReachNativeChecker(t *testing.T) {
+	for _, command := range []string{"dispatch", "continue"} {
+		t.Run(command, func(t *testing.T) {
+			fixture := newResourcePiFixture(t, command == "continue", &recordingResources{})
+			fixture.deps.ResourceChecker = nil
+			policy := resourceadmission.GuardPolicy{DisableCPU: true, DisableMemory: true}
+			arguments := freshPiDispatchArguments(fixture)
+			arguments.ResourceGuards = policy
+			var result commandResult
+			if command == "continue" {
+				arguments = Arguments{
+					Root: fixture.root, TaskID: fixture.predecessorID,
+					PueueConfig: fixture.supervisor.Binding().ConfigPath, Runner: fixture.runner,
+					ResourceGuards: policy, Config: task.TaskConfig{Interactive: true},
+				}
+				result = continueTask(arguments, fixture.deps)
+			} else {
+				result = dispatch(arguments, fixture.deps.normalized())
+			}
+			if result.err != nil || result.code != 0 || result.response.TaskRecord != "created" {
+				t.Fatalf("%s admission failed: %+v", command, result)
+			}
+			resource := jsonResponseFor(t, command, result).ResourceAdmission
+			if resource == nil || resource.Status != ResourceAdmissionClear || strings.Join(resource.DisabledGuards, ",") != "cpu,memory" {
+				t.Fatalf("%s lost explicit native guard selection: %+v", command, resource)
+			}
+		})
+	}
+}
+
 func TestContinuePressureRefusesBeforeSuccessorWork(t *testing.T) {
 	resources := &recordingResources{assessments: []func() resourceadmission.Assessment{testPressureAssessment}}
 	fixture := newResourcePiFixture(t, true, resources)

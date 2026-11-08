@@ -479,7 +479,7 @@ func TestManagedTurnBaselineScratchInsideCheckoutRefusesProvider(t *testing.T) {
 	// The runner persists the preflight diagnostic in its seal; the writer's
 	// typed cause must also survive cleanup, rather than become os.Remove's error.
 	// Its lineage Git is an independent launch, so it runs after the guardian.
-	if err = recordManagedTurnBaseline(fixture.lineage.scope.ctx, fixture.lineage.store, fixture.turn.request, fixture.lineage.git); !errors.Is(err, workspace.ErrInvalidGitContext) {
+	if err = fixture.lineage.observeBaseline(fixture.turn.request, os.Environ()); !errors.Is(err, workspace.ErrInvalidGitContext) {
 		t.Fatalf("overlapping scratch lost its typed cause: %v", err)
 	}
 	assertBaselineScratchEmpty(t, scratch)

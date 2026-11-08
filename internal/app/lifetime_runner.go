@@ -16,6 +16,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/remote/payload"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -214,7 +215,7 @@ func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, state 
 	if !parsed.WorkspaceOperation {
 		td, openErr := store.OpenTask(parsed.TaskID)
 		if openErr == nil {
-			_, captureErr := captureRemoteOutputs(context.Background(), store, td)
+			_, captureErr := payload.CaptureOutputs(context.Background(), store, td)
 			captureErr = errors.Join(captureErr, td.Close())
 			if captureErr != nil {
 				log.Printf("delegate: remote output capture deferred: %v", captureErr)

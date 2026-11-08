@@ -6,6 +6,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -66,7 +68,7 @@ func InspectProviderContext(parent context.Context, options InspectionOptions, s
 }
 
 func prepareInspectionBinding(options InspectionOptions, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (string, *pueue.Client, inspection.Binding, error) {
-	runner, err := supervisorcore.ResolveRunner(options.Runner, options.DefaultRunner)
+	runner, err := installation.ResolveRunner(options.Runner, options.DefaultRunner)
 	if err != nil {
 		return "", nil, inspection.Binding{}, AnnotateMissingInspectionStage("resolving worker", err)
 	}

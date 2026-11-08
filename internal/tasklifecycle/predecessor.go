@@ -18,7 +18,7 @@ func preparePredecessorResolution(ctx context.Context, store *taskdir.Store, td 
 	if err != nil {
 		return false, false, err
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		return false, true, nil
 	}
 	handedOff, err = releaseHandedOffPredecessor(ctx, td, predecessorReq)

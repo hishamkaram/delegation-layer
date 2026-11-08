@@ -12,9 +12,7 @@ if __package__ in {None, ""}:
 
 PUBLICATION_WORKFLOW = "release.yml"
 INPUT_NAMES = ("artifact_id", "resume_published")
-from scripts.delegate_acceptance.release_verification.candidate_publication_delivery import (
-    RECEIPT_NAME,
-)
+from scripts.release_verification.candidate_publication_delivery import RECEIPT_NAME
 from scripts.test_release_workflow_contracts import (
     PUBLICATION_JOB, PUBLISH_STEP, RECEIPT_STEP, WORKFLOWS, conditions, job_steps, workflow_job, workflow_step,
 )

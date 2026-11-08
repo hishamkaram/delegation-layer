@@ -17,12 +17,13 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import verify_release_archive as verifier
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.release_verification import commands, published
-from scripts.delegate_acceptance.release_verification import published_contract as rules
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.evidence import source as commands
+from scripts.release_verification import published as published
+from scripts.release_verification import published_contract as rules
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_ports import ConsumerPorts
 from scripts.test_candidate_source_support import ChildFault
 
 
@@ -283,7 +284,7 @@ class PublishedBase(unittest.TestCase):
             extract_dir=str(self.extract), mode="native-acceptance", tag=TAG,
             repo=REPO, source_revision=REVISION)
         stub = {"sha256": "0" * 64, "files": []}
-        with patch("scripts.delegate_acceptance.release_verification.verification.source_fingerprint",
+        with patch("scripts.release_verification.verification.source_fingerprint",
                    return_value=stub):
             return verifier.verify(args)
 

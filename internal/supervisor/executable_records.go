@@ -5,8 +5,6 @@ import (
 )
 
 const (
-	managedRunnerName           = "delegate-run"
-	managedRunnerMain           = "github.com/hishamkaram/delegation-layer/cmd/delegate-run"
 	runnerRepairReceiptRevision = "managed-runner-v1"
 )
 

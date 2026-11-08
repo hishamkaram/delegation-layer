@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 
@@ -105,7 +107,7 @@ func BindInitialWithStartContext(ctx context.Context, selection AdmissionSelecti
 		// must arrive through the same independently owned preparation.
 		return BindPrivateWithContext(ctx, root, runtime)
 	}
-	executable, err := ResolveInitialExecutable(runtime.Lookup())
+	executable, err := installation.ResolveInitialExecutable(runtime.Lookup())
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +134,7 @@ func BindPrivateWithContext(ctx context.Context, root string, runtime AdmissionO
 		return nil, err
 	}
 	defer func() {
-		if !CleanupRetainsStore(resultErr, store) {
+		if !taskdir.CleanupRetainsStore(resultErr, store) {
 			resultErr = errors.Join(resultErr, store.Close())
 		}
 	}()

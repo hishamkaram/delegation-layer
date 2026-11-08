@@ -15,46 +15,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// pairFaultRecords are the private generation records and the fake daemon's
-// start log. A refused mutation leaves every one byte-identical.
-var pairFaultRecords = []string{
-	"supervisor.identity.json", "daemon.identity.json", "bootstrap.pending",
-	"migration.json", "migration-history.json", "identity.pending.json", "daemon-started",
-}
-
-// pairFaultFile is one record's presence and exact bytes.
-type pairFaultFile struct {
-	present bool
-	data    string
-}
-
-func capturePairFaultWitness(t *testing.T, base string) map[string]pairFaultFile {
-	t.Helper()
-	witness := make(map[string]pairFaultFile, len(pairFaultRecords))
-	for _, name := range pairFaultRecords {
-		data, err := os.ReadFile(filepath.Join(base, name))
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			witness[name] = pairFaultFile{}
-		case err != nil:
-			t.Fatal(err)
-		default:
-			witness[name] = pairFaultFile{present: true, data: string(data)}
-		}
-	}
-	return witness
-}
-
-func assertPairFaultWitness(t *testing.T, base string, before map[string]pairFaultFile) {
-	t.Helper()
-	after := capturePairFaultWitness(t, base)
-	for _, name := range pairFaultRecords {
-		if after[name] != before[name] {
-			t.Fatalf("refused pair recovery changed %s (present %t -> %t)", name, before[name].present, after[name].present)
-		}
-	}
-}
-
 func pairFaultReason(err error) string {
 	var recovery *pueue.PrivateRecoveryError
 	if errors.As(err, &recovery) {
@@ -101,14 +61,14 @@ func TestAdmissionReportsUnreadablePairRecords(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(base, record), []byte("{"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			before := capturePairFaultWitness(t, base)
+			before := testsupport.CapturePairFaultWitness(t, base)
 			err := dispatchPairFault(t, "unreadable "+record, func(ctx context.Context) (*pueue.Client, error) {
 				return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 			}, store.Root)
 			if pairFaultReason(err) != "state_unreadable" {
 				t.Fatalf("unreadable %s was not reported as state_unreadable: %v", record, err)
 			}
-			assertPairFaultWitness(t, base, before)
+			testsupport.AssertPairFaultWitness(t, base, before)
 		})
 	}
 }
@@ -158,12 +118,12 @@ func TestExplicitMigrationReportsUnreadableRecordBesideRestartIntent(t *testing.
 	if err := os.WriteFile(filepath.Join(base, "migration.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before := capturePairFaultWitness(t, base)
+	before := testsupport.CapturePairFaultWitness(t, base)
 	result := migratePairFault(t, "restart intent with unreadable migration record", store.Root, deps, owner)
 	if result.err == nil || result.response.SupervisorControl.ReasonCode != "state_unreadable" {
 		t.Fatalf("unreadable migration record was suppressed: %+v %v", result.response.SupervisorControl, result.err)
 	}
-	assertPairFaultWitness(t, base, before)
+	testsupport.AssertPairFaultWitness(t, base, before)
 }
 
 // TestPendingHistoricalRestartStopsPublicConsumersBeforePairSelection keeps
@@ -194,7 +154,7 @@ func TestPendingHistoricalRestartStopsPublicConsumersBeforePairSelection(t *test
 	pid := filepath.Join(fixture.root, ".supervisor", "run", "pueue.pid")
 	writeRunnerFixture(t, deps.InitialSupervisorExecutable, historicalSupervisorClientScript("C", fixture.readyPath, pid, fixture.statusPath, fixture.commandLog))
 	base := filepath.Dir(fixture.predecessor.ConfigPath)
-	before := capturePairFaultWitness(t, base)
+	before := testsupport.CapturePairFaultWitness(t, base)
 	configBefore := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)
 	startsBefore := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
 	if string(startsBefore) != "A\n" {
@@ -222,7 +182,7 @@ func TestPendingHistoricalRestartStopsPublicConsumersBeforePairSelection(t *test
 	for _, consumer := range consumers {
 		t.Run(consumer.name, func(t *testing.T) {
 			consumer.run(t)
-			assertPairFaultWitness(t, base, before)
+			testsupport.AssertPairFaultWitness(t, base, before)
 			if after := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath); !bytes.Equal(after, configBefore) {
 				t.Fatal("pending historical restart changed config bytes")
 			}
@@ -254,14 +214,14 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 		installed := filepath.Join(testsupport.CanonicalTempDir(t), "installation-c")
 		deps.InitialSupervisorExecutable = filepath.Join(installed, "pueue")
 		writeSupervisorProbeExecutables(t, store.RootID, deps.InitialSupervisorExecutable, filepath.Join(installed, "pueued"))
-		before := capturePairFaultWitness(t, base)
+		before := testsupport.CapturePairFaultWitness(t, base)
 		err := dispatchPairFault(t, "live missing member", func(ctx context.Context) (*pueue.Client, error) {
 			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 		}, store.Root)
 		if pairFaultReason(err) != "published_pair_unavailable_live" {
 			t.Fatalf("live endpoint with a missing member was not reported: %v", err)
 		}
-		assertPairFaultWitness(t, base, before)
+		testsupport.AssertPairFaultWitness(t, base, before)
 	})
 	t.Run("explicit migration", func(t *testing.T) {
 		store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
@@ -303,24 +263,24 @@ func TestPairIdentityConflictStopsEveryConsumer(t *testing.T) {
 		store, deps, current := newSupervisorProbeTestFixture(t)
 		base := filepath.Dir(current.Binding().ConfigPath)
 		writeConflictingLaunchWitness(t, store.Root, current.Binding())
-		before := capturePairFaultWitness(t, base)
+		before := testsupport.CapturePairFaultWitness(t, base)
 		err := dispatchPairFault(t, "identity conflict", func(ctx context.Context) (*pueue.Client, error) {
 			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 		}, store.Root)
 		if pairFaultReason(err) != "identity_conflict" {
 			t.Fatalf("identity conflict was not reported: %v", err)
 		}
-		assertPairFaultWitness(t, base, before)
+		testsupport.AssertPairFaultWitness(t, base, before)
 	})
 	t.Run("explicit migration", func(t *testing.T) {
 		store, deps, current, owner := newOwnedSupervisorProbeTestFixture(t)
 		base := filepath.Dir(current.Binding().ConfigPath)
 		writeConflictingLaunchWitness(t, store.Root, current.Binding())
-		before := capturePairFaultWitness(t, base)
+		before := testsupport.CapturePairFaultWitness(t, base)
 		result := migratePairFault(t, "identity conflict", store.Root, deps, owner)
 		if result.err == nil || result.response.SupervisorControl.ReasonCode != "identity_conflict" {
 			t.Fatalf("explicit migration absorbed an identity conflict: %+v %v", result.response.SupervisorControl, result.err)
 		}
-		assertPairFaultWitness(t, base, before)
+		testsupport.AssertPairFaultWitness(t, base, before)
 	})
 }

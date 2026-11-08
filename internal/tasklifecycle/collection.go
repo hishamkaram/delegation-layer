@@ -6,7 +6,6 @@ import (
 	"time"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -62,7 +61,7 @@ func collectPrepared(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		if offerErr := refreshContinuation(ctx, &observed.Observation, root, td, req, meta, options.Catalog); offerErr != nil {
 			return observed, errors.Join(passErr, offerErr)
 		}
-		if inspectErr == nil && supervisorcore.TaskTerminal(inspection) {
+		if inspectErr == nil && inspection.Terminal() {
 			return observed, nil
 		}
 		if collectionAttemptEnded(&observed) {

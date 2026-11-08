@@ -9,11 +9,13 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.processes.contracts import CommandFailure
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.processes.operations import run_bounded_command
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import MAX_OUTPUT
+from scripts.acceptance.evidence.source import VerificationError
 
 
 def writer(size: int, *, exit_code: int = 0) -> list[str]:

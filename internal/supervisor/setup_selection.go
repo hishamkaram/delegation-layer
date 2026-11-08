@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -47,14 +49,14 @@ func ResolveAdmissionRunner(argument, ownership string, runtime AdmissionOptions
 	} else if argument == "" {
 		return "", task.ErrEvidenceFault
 	}
-	return ResolveRunner(argument, runtime.RunnerExecutable)
+	return installation.ResolveRunner(argument, runtime.RunnerExecutable)
 }
 
 func AdmissionQueueRepairRunner(selection AdmissionSelection, runtime AdmissionOptions, taskRunner string) (string, error) {
 	if RequestedRunnerOwnership(selection) == task.RunnerOwnershipManaged {
 		return taskRunner, nil
 	}
-	runner, err := ResolveRunner("", runtime.RunnerExecutable)
+	runner, err := installation.ResolveRunner("", runtime.RunnerExecutable)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -74,13 +76,13 @@ func AdmissionSupervisorExecutablePair(selection AdmissionSelection, root string
 	if selection.SavedSupervisor != nil {
 		return ResolveRecoveryPrivateSupervisorExecutables(root, *selection.SavedSupervisor, runtime.Lookup())
 	}
-	return ResolveCurrentPrivateSupervisorExecutables(root, runtime.Lookup())
+	return installation.ResolvePrivateSupervisorExecutables(runtime.Lookup())
 }
 
 // The published generation owns the recovery candidate.
 // Its recorded installation paths remain preferred, and missing
 // paths use canonical discovery. Selection grants no native launch authority.
-func publishedContinuationSupervisorPair(root string, lookup ExecutableLookup) (string, string, bool, error) {
+func publishedContinuationSupervisorPair(root string, lookup installation.ExecutableLookup) (string, string, bool, error) {
 	published, found, err := pueue.ReadPrivateSupervisorBinding(root)
 	if err != nil || !found {
 		return "", "", found, err

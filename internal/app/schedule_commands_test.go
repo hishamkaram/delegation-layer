@@ -32,7 +32,7 @@ func scheduleFixture(t *testing.T) (string, contract.Store, contract.Definition)
 			t.Error(closeErr)
 		}
 	})
-	store, err := openOrInitializeSchedules(t.Context(), state)
+	store, err := scheduler.OpenOrInitialize(t.Context(), state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestScheduleCreateOpenRefusesCorruptStore(t *testing.T) {
 	if writeErr := os.WriteFile(path, contents, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	opened, err := openOrInitializeSchedules(t.Context(), state)
+	opened, err := scheduler.OpenOrInitialize(t.Context(), state)
 	if opened != nil || !errors.Is(err, task.ErrUnsupportedSchema) {
 		t.Fatalf("opened=%v err=%v", opened, err)
 	}
@@ -259,19 +259,6 @@ func TestScheduleUncertainWriteReportsIDAndJoinedFault(t *testing.T) {
 	item, err := store.GetSchedule(t.Context(), scheduleTestID)
 	if err != nil || item.State != contract.StatePaused {
 		t.Fatalf("committed state=%s err=%v", item.State, err)
-	}
-}
-
-func TestScheduleCreateReadbackUsesCapturedDefinition(t *testing.T) {
-	_, store, definition := scheduleFixture(t)
-	match, err := readBackScheduleDefinition(t.Context(), store, definition)
-	if err != nil || !match {
-		t.Fatalf("matching definition: match=%t err=%v", match, err)
-	}
-	definition.CreatedAt = definition.CreatedAt.Add(time.Nanosecond)
-	match, err = readBackScheduleDefinition(t.Context(), store, definition)
-	if match || !errors.Is(err, contract.ErrConflict) {
-		t.Fatalf("different identity: match=%t err=%v", match, err)
 	}
 }
 

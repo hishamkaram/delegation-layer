@@ -103,9 +103,19 @@ func (f ownerContactFixture) reply() ownerReply {
 	return ownerReply{Protocol: ownerProtocolVersion, RootID: f.auth.request.RootID, OwnerRef: f.auth.request.Owner, PublicationSHA256: f.auth.request.PublicationSHA256, Action: ownerStatus, Code: ownerOK}
 }
 
+func (f ownerContactFixture) beginAccept(t *testing.T) {
+	t.Helper()
+	// Authentication setup has its own completed accept. Start this turn's
+	// existing I/O bound after durable fixture preparation, not before it.
+	if err := f.auth.listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The test creator joins the one bounded server turn before fixture cleanup.
 func (f ownerContactFixture) serve(t *testing.T, handle func(*net.UnixConn, ownerRequest) error) func() error {
 	t.Helper()
+	f.beginAccept(t)
 	done := make(chan error, 1)
 	go func() {
 		connection, err := f.auth.listener.AcceptUnix()
@@ -142,6 +152,11 @@ func (f ownerContactFixture) serve(t *testing.T, handle func(*net.UnixConn, owne
 
 func TestOwnerContactAcceptsLiveOwnerAfterOriginalDeadline(t *testing.T) {
 	f := newOwnerContactFixture(t)
+	// Fixture preparation can outlive the handshake's accept phase. Contact
+	// owns a fresh bounded server turn, independent of that earlier deadline.
+	if err := f.auth.listener.SetDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	expired, err := f.auth.intent.Expired(time.Now())
 	if err != nil || !expired {
 		t.Fatalf("fixture startup deadline must be past: %v", err)
@@ -152,7 +167,9 @@ func TestOwnerContactAcceptsLiveOwnerAfterOriginalDeadline(t *testing.T) {
 		}
 		return writeOwnerFrame(connection, f.reply())
 	})
-	reply, err := contactOwner(t.Context(), f.reader, f.journal.pin, f.auth.request)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	reply, err := contactOwner(ctx, f.reader, f.journal.pin, f.auth.request)
 	if err != nil || reply != f.reply() {
 		t.Fatalf("live owner contact failed: %v", err)
 	}
@@ -340,6 +357,7 @@ func replaceOwnerContactSocket(t *testing.T, path string) {
 
 func TestOwnerContactAuthenticatesPeerBeforeSending(t *testing.T) {
 	f := ownerContactFixtureWithPeer(t, true)
+	f.beginAccept(t)
 	observed := make(chan error, 1)
 	go func() {
 		connection, err := f.auth.listener.AcceptUnix()

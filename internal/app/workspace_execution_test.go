@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
@@ -39,9 +40,19 @@ func newMappedWorkspaceExecutionFixture(t *testing.T) (*workspace.Resource, stri
 	if err = resource.RecordSource(t.Context(), source); err != nil {
 		t.Fatalf("record source: %v", err)
 	}
-	anchor, err := prepareManagedAnchor(t.Context(), store.Root, resource)
+	anchor := filepath.Join(request.Container, request.WorkspaceID)
+	if err = os.MkdirAll(anchor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(filepath.Join(store.Root, "workspaces", request.WorkspaceID), filepath.Join(anchor, ".delegate-workspace")); err != nil {
+		t.Fatal(err)
+	}
+	anchorIdentity, err := workspaces.DirectoryIdentity(anchor)
 	if err != nil {
-		t.Fatalf("prepare anchor: %v", err)
+		t.Fatal(err)
+	}
+	if err = resource.RecordAnchor(t.Context(), workspace.AnchorRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID, Path: anchor, Identity: anchorIdentity}); err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(anchor, "checkout")
 	checkout := workspace.Checkout{Source: source, CheckoutPath: path, Workdir: filepath.Join(path, "nested"), AdminDir: filepath.Join(source.CommonDir, "worktrees", "fixture"), AdminBacklink: filepath.Join(source.CommonDir, "worktrees", "fixture")}
@@ -51,7 +62,19 @@ func newMappedWorkspaceExecutionFixture(t *testing.T) (*workspace.Resource, stri
 	if err = resource.RecordCheckout(t.Context(), checkout); err != nil {
 		t.Fatalf("record checkout: %v", err)
 	}
-	if err = recordManagedRegistration(t.Context(), resource, checkout); err != nil {
+	checkoutIdentity, err := workspaces.DirectoryIdentity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = resource.RecordRegistration(t.Context(), workspace.Registration{
+		SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID,
+		SourceRoot: source.Root, CommonDir: source.CommonDir, GitDir: source.GitDir,
+		AdminDir: checkout.AdminDir, AdminBacklink: checkout.AdminBacklink,
+		CheckoutPath: path, CanonicalCwd: checkout.Workdir,
+		RelativeCwd: source.RelativeCwd, BaseOID: source.BaseOID, ObjectFormat: source.ObjectFormat,
+		BaseRef:           workspaces.ManagedBaseRef(request.RootID, request.WorkspaceID),
+		ContainerIdentity: anchorIdentity, CheckoutIdentity: checkoutIdentity,
+	}); err != nil {
 		t.Fatalf("record registration: %v", err)
 	}
 	return resource, checkout.Workdir

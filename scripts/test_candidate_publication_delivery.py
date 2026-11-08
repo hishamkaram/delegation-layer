@@ -10,17 +10,17 @@ import unittest
 from unittest.mock import patch
 
 from scripts import publish_development_candidate as cli
-from scripts.delegate_acceptance.release_verification import candidate_publication_delivery as delivery
-from scripts.delegate_acceptance.release_verification.candidate_manifest import MANIFEST_PATH
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_ports import default_ports
+from scripts.release_verification import candidate_publication_delivery as delivery
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_ports import default_ports
 from scripts.test_candidate_artifact_support import (
     ARTIFACT_ID, COMMIT, DOWNLOAD, ENDPOINTS, REPOSITORY, RUN_ID, TREE, CandidateArtifactCase,
 )
 from scripts import test_candidate_publication_preflight as ci_fixture
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 from scripts.test_release_github_transport import ObservedGitHubClient
-from scripts.delegate_acceptance.release_verification import github
+from scripts.release_verification import github as github
 
 
 SECRETS = {"GH_TOKEN": "github-private-canary", "HOMEBREW_TAP_TOKEN": "tap-private-canary",

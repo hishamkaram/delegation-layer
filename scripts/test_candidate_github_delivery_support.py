@@ -31,24 +31,25 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification.candidate_artifact import (
-    ArtifactObservation, AttemptObservation, CandidateArtifact, WorkflowObservation,
-)
-from scripts.delegate_acceptance.release_verification.candidate_github_delivery import (
-    PreparedRelease, prepare_release_assets, publish_prepared_release,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, parse_manifest,
-)
-from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    ReleaseSubject, release_body,
-)
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.github import ArtifactDownload
-from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.evidence.digests import sha
+from scripts.release_verification.candidate_artifact import ArtifactObservation
+from scripts.release_verification.candidate_artifact import AttemptObservation
+from scripts.release_verification.candidate_artifact import CandidateArtifact
+from scripts.release_verification.candidate_artifact import WorkflowObservation
+from scripts.release_verification.candidate_github_delivery import PreparedRelease
+from scripts.release_verification.candidate_github_delivery import prepare_release_assets
+from scripts.release_verification.candidate_github_delivery import publish_prepared_release
+from scripts.release_verification.candidate_manifest import CANDIDATE_WORKFLOW_PATH
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.release_verification.candidate_publication_contract import ReleaseSubject
+from scripts.release_verification.candidate_publication_contract import release_body
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.github import ArtifactDownload
+from scripts.release_verification.published_ports import ConsumerPorts
 from scripts.test_candidate_artifact_support import COMMIT, REPOSITORY, VERSION, locator, manifest_bytes, payload_files
 from scripts.test_release_github_transport import ObservedGitHubClient
 

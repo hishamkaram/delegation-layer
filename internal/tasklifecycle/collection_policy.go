@@ -4,13 +4,12 @@ import (
 	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func CollectionInspectionOutcome(inspection *taskdir.TaskInspection, collectErr, inspectErr, descriptorErr error) (*task.OutcomeRecord, error, bool) {
-	if inspection == nil || !supervisorcore.TaskTerminal(inspection) || inspection.Outcome == nil {
+	if inspection == nil || !inspection.Terminal() || inspection.Outcome == nil {
 		return nil, nil, false
 	}
 	if IsPureCollectionPendingError(collectErr) {

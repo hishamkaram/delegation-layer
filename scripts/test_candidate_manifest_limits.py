@@ -11,30 +11,38 @@ from unittest.mock import Mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.record_fixtures import array_at, object_at
-from scripts.acceptance_tests.candidate_fixtures import manifest
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.release_verification.candidate_build_artifacts import (
-    BuildContext, observed_files,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import BuildRequest
-from scripts.delegate_acceptance.release_verification.candidate_codec import (
-    encode_record, load_record,
-)
-from scripts.delegate_acceptance.release_verification.candidate_install import (
-    CHANNEL_SHELL, verify_candidate_install,
-)
-from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    CandidateFiles, CandidateInstallRequest,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, MAX_CONTAINER_BYTES, MAX_MANIFEST_BYTES, PAYLOAD_MEMBER_COUNT,
-    STAGE, ArtifactEntry, ArtifactKind, candidate_artifact_name, encode_manifest, entry_limit,
-    expected_inventory, parse_manifest, payload_paths,
-)
-from scripts.delegate_acceptance.release_verification.contract import MAX_ARCHIVE, VerificationError
-from scripts.delegate_acceptance.release_verification.published_files import read_package_bytes
+from scripts.acceptance.testing.record_fixtures import array_at
+from scripts.acceptance.testing.record_fixtures import object_at
+from scripts.release_tests.candidate_fixtures import manifest
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.release_verification.candidate_build_artifacts import BuildContext
+from scripts.release_verification.candidate_build_artifacts import observed_files
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.release_verification.candidate_codec import encode_record
+from scripts.release_verification.candidate_codec import load_record
+from scripts.release_verification.candidate_install import CHANNEL_SHELL
+from scripts.release_verification.candidate_install import verify_candidate_install
+from scripts.release_verification.candidate_install_contract import CandidateFiles
+from scripts.release_verification.candidate_install_contract import CandidateInstallRequest
+from scripts.release_verification.candidate_manifest import CANDIDATE_WORKFLOW_PATH
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import MAX_CONTAINER_BYTES
+from scripts.release_verification.candidate_manifest import MAX_MANIFEST_BYTES
+from scripts.release_verification.candidate_manifest import PAYLOAD_MEMBER_COUNT
+from scripts.release_verification.candidate_manifest import STAGE
+from scripts.release_verification.candidate_manifest import ArtifactEntry
+from scripts.release_verification.candidate_manifest import ArtifactKind
+from scripts.release_verification.candidate_manifest import candidate_artifact_name
+from scripts.release_verification.candidate_manifest import encode_manifest
+from scripts.release_verification.candidate_manifest import entry_limit
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.release_verification.candidate_manifest import payload_paths
+from scripts.release_verification.contract import MAX_ARCHIVE
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_files import read_package_bytes
 
 
 MIB = 1024 * 1024

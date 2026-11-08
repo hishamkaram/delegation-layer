@@ -7,10 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func installedSelectionFixture(t *testing.T) (string, task.SupervisorRef, ExecutableLookup) {
+func installedSelectionFixture(t *testing.T) (string, task.SupervisorRef, installation.ExecutableLookup) {
 	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -23,17 +25,7 @@ func installedSelectionFixture(t *testing.T) (string, task.SupervisorRef, Execut
 		ClientExecutable: filepath.Join(base, "recorded", "pueue"), ClientSHA256: strings.Repeat("c", 64),
 		DaemonExecutable: filepath.Join(base, "recorded", "pueued"), DaemonSHA256: strings.Repeat("d", 64),
 	}
-	return root, binding, ExecutableLookup{InitialExecutable: filepath.Join(base, "installed", "pueue")}
-}
-
-func selectionExecutable(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("fixture, never executed or read"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	return root, binding, installation.ExecutableLookup{InitialExecutable: filepath.Join(base, "installed", "pueue")}
 }
 
 func TestResolveSavedSupervisorClientPreservesRecordedInstallation(t *testing.T) {
@@ -73,5 +65,15 @@ func TestResolveSavedSupervisorClientFallsBackOnlyForAbsence(t *testing.T) {
 	}
 	if got, err = ResolveSavedSupervisorClient(root, saved, lookup); err == nil || got != "" {
 		t.Fatalf("invalid recorded member fell back: %q %v", got, err)
+	}
+}
+
+func selectionExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("fixture, never executed or read"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 }

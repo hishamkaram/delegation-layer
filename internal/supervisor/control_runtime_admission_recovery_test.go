@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -35,7 +37,7 @@ func testControlRuntimeAdmissionInstalledTransport(t *testing.T, damaged string)
 	prepareAdmissionRecoveryDamage(t, &fixture, damaged)
 	before := parentMigrationTree(t, fixture.store.Root)
 	calls := 0
-	runtime := ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}
+	runtime := ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}
 	client, err := runtime.PreparePrivateAdmission(t.Context(), fixture.store)
 	want := fixture.target
 	if damaged == "client" || damaged == "both" || damaged == "historical-copy" {
@@ -58,7 +60,7 @@ func testControlRuntimeAdmissionInstalledTransport(t *testing.T, damaged string)
 
 func TestControlRuntimeAdmissionHealthyPairIgnoresInvalidSelection(t *testing.T) {
 	fixture := newAdmissionRecoveryFixture(t, true)
-	lookup := ExecutableLookup{AcceptedBootstrapPair: BootstrapPair{Client: "invalid relative installation"}}
+	lookup := installation.ExecutableLookup{AcceptedBootstrapPair: installation.BootstrapPair{Client: "invalid relative installation"}}
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup}).PreparePrivateAdmission(t.Context(), fixture.store)
 	requireCompatibleControlClient(t, client, err, fixture.target, fixture.target)
@@ -70,7 +72,7 @@ func TestControlRuntimeAdmissionHealthyPairIgnoresInvalidSelection(t *testing.T)
 func TestControlRuntimeAdmissionUnavailableSelectionKeepsMigrationGuidance(t *testing.T) {
 	fixture := newAdmissionRecoveryFixture(t, true)
 	prepareAdmissionRecoveryDamage(t, &fixture, "client")
-	lookup := ExecutableLookup{InitialExecutable: filepath.Join(fixture.store.Root, "missing-installation", "pueue")}
+	lookup := installation.ExecutableLookup{InitialExecutable: filepath.Join(fixture.store.Root, "missing-installation", "pueue")}
 	calls := 0
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: admissionRecoveryNoRoute(&calls)}).PreparePrivateAdmission(t.Context(), fixture.store)
@@ -93,7 +95,7 @@ func TestControlRuntimeAdmissionSelectionFaultIsNotOptionalAbsence(t *testing.T)
 	if err := os.WriteFile(nonExecutable, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	lookup := ExecutableLookup{AcceptedBootstrapPair: BootstrapPair{Client: filepath.Join(directory, "missing-pueue"), Daemon: nonExecutable}}
+	lookup := installation.ExecutableLookup{AcceptedBootstrapPair: installation.BootstrapPair{Client: filepath.Join(directory, "missing-pueue"), Daemon: nonExecutable}}
 	calls := 0
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: admissionRecoveryNoRoute(&calls)}).PreparePrivateAdmission(t.Context(), fixture.store)
@@ -126,7 +128,7 @@ func testControlRuntimeAdmissionPreliminaryFault(t *testing.T, fault string) {
 	}
 	calls := 0
 	before := parentMigrationTree(t, fixture.store.Root)
-	lookup := ExecutableLookup{AcceptedBootstrapPair: BootstrapPair{Client: "invalid relative installation"}}
+	lookup := installation.ExecutableLookup{AcceptedBootstrapPair: installation.BootstrapPair{Client: "invalid relative installation"}}
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: admissionRecoveryNoRoute(&calls)}).PreparePrivateAdmission(t.Context(), fixture.store)
 	if client != nil {
 		t.Fatal(ClosePrivateAdmissionTransition(client, errors.New("malformed publication returned admission")))
@@ -156,7 +158,7 @@ func TestControlRuntimeAdmissionUnreadyTransportKeepsOriginalRefusal(t *testing.
 			}
 			calls := 0
 			before := parentMigrationTree(t, fixture.store.Root)
-			client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}).PreparePrivateAdmission(t.Context(), fixture.store)
+			client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, Routing: admissionRecoveryNoRoute(&calls)}).PreparePrivateAdmission(t.Context(), fixture.store)
 			if client != nil {
 				t.Fatal(ClosePrivateAdmissionTransition(client, errors.New("unready transport returned admission")))
 			}

@@ -197,7 +197,7 @@ func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *
 }
 
 func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, options workspacescore.OperationOptions, operationID string) (resultErr error) {
-	useErr := reconcileWorkspaceUse(ctx, store, resource, options)
+	useErr := workspacescore.ReconcileUse(ctx, store, resource, options)
 	if useErr != nil && (!errors.Is(useErr, workspace.ErrPending) || !workspacescore.PendingError(useErr)) {
 		return useErr
 	}

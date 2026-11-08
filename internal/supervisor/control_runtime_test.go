@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -108,8 +110,8 @@ func TestControlRuntimeRefusesReplacedBorrowedRootAfterContact(t *testing.T) {
 
 // Routing requires an actual selected installed role, even when the resident
 // reply cannot prove readiness. Authored finite scripts own no daemon work.
-func controlRoutingLookup(t *testing.T) ExecutableLookup {
+func controlRoutingLookup(t *testing.T) installation.ExecutableLookup {
 	t.Helper()
 	client, _ := installedPairFixture(t, parentMigrationClient, "#!/bin/sh\nexit 64\n")
-	return ExecutableLookup{InitialExecutable: client}
+	return installation.ExecutableLookup{InitialExecutable: client}
 }

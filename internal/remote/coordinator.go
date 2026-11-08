@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -17,8 +19,10 @@ type Exchange interface {
 }
 
 type Coordinator struct {
-	Exchange Exchange
-	Retry    RetryPolicy
+	Exchange       Exchange
+	Retry          RetryPolicy
+	ResourceGuards resourceadmission.GuardPolicy
+	guardSupport   *verifiedGuardSupport
 }
 
 // Dispatch writes send-intent before the first admitting request. A lost response
@@ -50,6 +54,14 @@ func (c Coordinator) Dispatch(ctx context.Context, reference *Reference) (Respon
 	}
 	request := Request{IntentSHA256: digest, Version: ProtocolVersion, Operation: operation, Expected: &intent.Destination, Root: intent.Destination.Root, TaskID: intent.TaskID, Intent: &intent, Data: brief}
 	if operation == Admit {
+		c, err = c.verifyGuardSupport(ctx, intent.Destination)
+		if err != nil {
+			return Response{}, err
+		}
+		if c.ResourceGuards != (resourceadmission.GuardPolicy{}) {
+			policy := c.ResourceGuards
+			request.ResourceGuards = &policy
+		}
 		request.BeforeWrite = func() error {
 			first, gateErr := reference.beginSend(ctx, digest)
 			if gateErr != nil {
@@ -197,16 +209,14 @@ func (c Coordinator) call(ctx context.Context, request Request) (Response, error
 			return validateExchangeResponse(request, observed)
 		}
 		if errors.Is(err, ErrAdmissionAlreadySent) {
-			request.Operation = Reconcile
-			request.BeforeWrite = nil
+			request = existingOnly(request)
 			continue
 		}
 		if !Transient(err) || attempt == MaxAttempts {
 			return response, err
 		}
 		if request.Operation == Admit && !beforeSend(err) {
-			request.Operation = Reconcile
-			request.BeforeWrite = nil
+			request = existingOnly(request)
 		}
 		if err = c.Retry.Wait(ctx, attempt); err != nil {
 			return response, err
@@ -245,4 +255,74 @@ func validateExchangeResponse(request Request, response Response) (Response, err
 // Is preserves admission uncertainty through the machine-readable failure code.
 func (e *OperationError) Is(target error) bool {
 	return target == ErrAcceptanceUnknown && e.Code == "acceptance_unknown"
+}
+
+// ResourceGuardCapability names support for invocation-local admission overrides.
+const ResourceGuardCapability = "resource-guard-override"
+
+var ErrResourceGuardUnsupported = errors.New("destination does not support resource-guard overrides; update the destination or omit the override")
+
+// verifiedGuardSupport is an invocation-local capability observation, not
+// admission authority. The coordinator rechecks its destination and policy
+// before reuse; send-intent still controls whether an admitting transmission
+// may occur. The destination remains the sole task admission authority.
+type verifiedGuardSupport struct {
+	destination Identity
+	policy      resourceadmission.GuardPolicy
+}
+
+// PrepareDispatch verifies override support before callers upload a snapshot.
+// Existing rejections and recorded sends retain their existing recovery path.
+// Dispatch enforces the same requirement for callers without a preparation step.
+func (c Coordinator) PrepareDispatch(ctx context.Context, reference *Reference) (Coordinator, error) {
+	if c.ResourceGuards == (resourceadmission.GuardPolicy{}) {
+		return c, nil
+	}
+	intent, err := reference.Intent()
+	if err != nil {
+		return c, err
+	}
+	digest, err := IntentDigest(intent)
+	if err != nil {
+		return c, err
+	}
+	if _, rejectionErr := reference.rejectedResponse(intent, digest); !errors.Is(rejectionErr, os.ErrNotExist) {
+		if errors.Is(rejectionErr, ErrAdmissionRejected) {
+			return c, nil
+		}
+		return c, rejectionErr
+	}
+	sent, err := reference.sendRecorded(digest)
+	if err != nil {
+		return c, errors.Join(ErrAcceptanceUnknown, err)
+	}
+	if sent {
+		return c, nil
+	}
+	return c.verifyGuardSupport(ctx, intent.Destination)
+}
+
+func (c Coordinator) verifyGuardSupport(ctx context.Context, destination Identity) (Coordinator, error) {
+	if c.ResourceGuards == (resourceadmission.GuardPolicy{}) {
+		return c, nil
+	}
+	if verified := c.guardSupport; verified != nil && verified.destination == destination && verified.policy == c.ResourceGuards {
+		return c, nil
+	}
+	response, err := c.call(ctx, Request{Version: ProtocolVersion, Operation: Hello, Root: destination.Root, Expected: &destination})
+	if err != nil {
+		return c, err
+	}
+	if !slices.Contains(response.Capabilities, ResourceGuardCapability) {
+		return c, ErrResourceGuardUnsupported
+	}
+	c.guardSupport = &verifiedGuardSupport{destination: destination, policy: c.ResourceGuards}
+	return c, nil
+}
+
+func existingOnly(request Request) Request {
+	request.Operation = Reconcile
+	request.BeforeWrite = nil
+	request.ResourceGuards = nil
+	return request
 }

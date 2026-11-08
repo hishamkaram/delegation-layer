@@ -13,16 +13,18 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import test_candidate_github_delivery_support as support
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification import assets
-from scripts.delegate_acceptance.release_verification.candidate_github_delivery import (
-    PreparedRelease, prepare_release_assets,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import MANIFEST_PATH, payload_paths
-from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    VERIFICATION_SUMMARY, release_body, release_text,
-)
-from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.release_verification import assets as assets
+from scripts.release_verification.candidate_github_delivery import PreparedRelease
+from scripts.release_verification.candidate_github_delivery import prepare_release_assets
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import payload_paths
+from scripts.release_verification.candidate_publication_contract import VERIFICATION_SUMMARY
+from scripts.release_verification.candidate_publication_contract import release_body
+from scripts.release_verification.candidate_publication_contract import release_text
+from scripts.acceptance.evidence.source import MAX_OUTPUT
+from scripts.acceptance.evidence.source import VerificationError
 from scripts.test_candidate_artifact_support import REPOSITORY, VERSION, manifest_bytes, payload_files
 from scripts.test_candidate_github_delivery_support import (
     MERGED, NOTES, OTHER, PAYLOAD_DIRECTORY, TAG, DeliveryCase, Fault, artifact, promotion,

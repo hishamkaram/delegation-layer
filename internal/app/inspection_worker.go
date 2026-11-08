@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
@@ -383,7 +385,7 @@ func validateCurrentInspectionWorker(ctx context.Context, root string, operation
 	}
 	var target supervisorcore.RunnerRepairTarget
 	if current != binding.WorkerExecutable && binding.RunnerOwnership == task.RunnerOwnershipManaged {
-		installed, err := supervisorcore.ResolveRunner("", configuredRole)
+		installed, err := installation.ResolveRunner("", configuredRole)
 		if err != nil {
 			return err
 		}

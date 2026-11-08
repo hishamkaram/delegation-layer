@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -27,7 +29,7 @@ func RefreshManagedRetryRunnerContext(ctx context.Context, selection AdmissionSe
 	if err != nil {
 		return selection, false, err
 	}
-	runner, err := ResolveRunner(recorded, defaultRunner)
+	runner, err := installation.ResolveRunner(recorded, defaultRunner)
 	if err != nil {
 		return selection, false, fmt.Errorf("resolve current managed task runner: %w", err)
 	}

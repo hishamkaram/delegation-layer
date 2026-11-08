@@ -62,7 +62,7 @@ func (options DispatchOptions) resourceChecker() ResourceChecker {
 	if options.Resources != nil {
 		return options.Resources
 	}
-	return resourceadmission.NewChecker()
+	return resourceadmission.NewChecker(options.ResourceGuards)
 }
 
 // executionTargetResolver names the process that would run the admitted task:
@@ -95,6 +95,7 @@ func (r executionTargetResolver) ResolveTarget(ctx context.Context) (resourceadm
 // persisted and never consulted for an existing or partial task.
 type resourceGate struct {
 	checker    ResourceChecker
+	policy     resourceadmission.GuardPolicy
 	store      *taskdir.Store
 	taskID     string
 	assessment resourceadmission.Assessment
@@ -120,7 +121,7 @@ func openResourceGateContext(ctx context.Context, request DispatchRequest, optio
 	if !taskEntryAbsent(store, id) {
 		return nil, nil
 	}
-	gate := &resourceGate{checker: options.resourceChecker(), store: store, taskID: id}
+	gate := &resourceGate{checker: options.resourceChecker(), policy: options.ResourceGuards, store: store, taskID: id}
 	if options.resourceAssessment != nil {
 		gate.assessment, gate.observed = *options.resourceAssessment, true
 		return gate, gate.refusal()
@@ -169,7 +170,7 @@ func (g *resourceGate) refreshContext(ctx context.Context, binding task.Supervis
 	if err != nil {
 		return err
 	}
-	if g.observed && g.assessment.Reusable(time.Now(), scope) {
+	if g.observed && g.assessment.Policy() == g.policy && g.assessment.Reusable(time.Now(), scope) {
 		return nil
 	}
 	if err = g.checkContext(ctx, resolver); err != nil {

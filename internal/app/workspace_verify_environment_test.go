@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 )
 
 const verificationProbeName = "verification-probe"
@@ -166,7 +167,7 @@ func runWorkspaceVerification(t *testing.T, store *taskdir.Store, operation *wor
 	var candidate workspace.OperationResult
 	var actionErr error
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: workspaceSignalTestStopper{}}, func(scope execution.PreflightScope) error {
-		candidate, actionErr = runWorkspaceAction(scope, store, operation, environment)
+		candidate, actionErr = workspaceworker.RunAction(scope, store, operation, environment)
 		return nil
 	})
 	if workErr != nil || stopErr != nil {

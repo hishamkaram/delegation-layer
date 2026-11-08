@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	schedulecommand "github.com/hishamkaram/delegation-layer/internal/scheduler/command"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -52,7 +54,7 @@ func TestScheduleBriefReadClassifiesChangedFile(t *testing.T) {
 			if !errors.Is(observed, tc.want) {
 				t.Fatalf("real ReadBrief err=%v; want %v", observed, tc.want)
 			}
-			if !errors.Is(err, tc.want) || !errors.Is(err, errScheduleInput) {
+			if !errors.Is(err, tc.want) || !errors.Is(err, schedulecommand.ErrInvalidInput) {
 				t.Fatalf("changed brief classification err=%v; want typed invalid-input %v", err, tc.want)
 			}
 		})
@@ -87,7 +89,7 @@ func TestScheduleBriefReadRetainsJoinedStorageFault(t *testing.T) {
 		data, readErr := tasklifecycle.ReadBrief(path)
 		return data, errors.Join(fmt.Errorf("read brief: %w", readErr), storageFault)
 	})
-	if !errors.Is(err, config.ErrBriefNotFound) || !errors.Is(err, storageFault) || errors.Is(err, errScheduleInput) {
+	if !errors.Is(err, config.ErrBriefNotFound) || !errors.Is(err, storageFault) || errors.Is(err, schedulecommand.ErrInvalidInput) {
 		t.Fatalf("joined brief fault changed classification or lost a cause: %v", err)
 	}
 }
@@ -103,7 +105,7 @@ func TestScheduleBriefReadClassifiesBoundedReadLimit(t *testing.T) {
 	_, err := readScheduleBrief(a.Brief, func(string) ([]byte, error) {
 		return nil, fmt.Errorf("read brief: %w", sizeErr)
 	})
-	if !errors.Is(err, sizeErr) || !errors.Is(err, errScheduleInput) {
+	if !errors.Is(err, sizeErr) || !errors.Is(err, schedulecommand.ErrInvalidInput) {
 		t.Fatalf("bounded-read brief error lost its typed input classification: %v", err)
 	}
 }

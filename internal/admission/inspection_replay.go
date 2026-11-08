@@ -63,13 +63,13 @@ func validateAdmissionInspectionReplay(ctx context.Context, store *taskdir.Store
 	if record.Binding.WorkerExecutable == binding.WorkerExecutable && record.Binding.WorkerSHA256 == binding.WorkerSHA256 {
 		return nil
 	}
-	return validateManagedInspectionReplay(ctx, store.Root, operation, binding)
+	return validateManagedInspectionReplay(ctx, operation, binding)
 }
 
 func validateCompletedLegacyInspectionReplay(ctx context.Context, root string, operation *inspection.Operation, saved, current inspection.Binding) error {
 	if saved.RunnerOwnership != "" || saved.WorkerExitProof != "" ||
 		!supervisorcore.ManagedInspectionBinding(root, saved) ||
-		!supervisorcore.ManagedInspectionWorkerExecutable(root, current) ||
+		!supervisorcore.ManagedInspectionWorkerExecutable(current) ||
 		current.WorkerExitProof != inspection.WorkerExitProofGuardianWaitV1 ||
 		!sameInspectionBindingBase(saved, current) {
 		return task.ErrEvidenceFault
@@ -123,8 +123,8 @@ func allowIncompleteMarkerlessRuntimeReplay(ctx context.Context, operation *insp
 	return false, nil
 }
 
-func validateManagedInspectionReplay(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) error {
-	if !supervisorcore.ManagedInspectionWorkerExecutable(root, binding) {
+func validateManagedInspectionReplay(ctx context.Context, operation *inspection.Operation, binding inspection.Binding) error {
+	if !supervisorcore.ManagedInspectionWorkerExecutable(binding) {
 		return task.ErrEvidenceFault
 	}
 	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(ctx)

@@ -1,12 +1,6 @@
 package app
 
-import (
-	"context"
-	"errors"
-
-	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
-)
+import "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 type supervisorPublicError struct {
 	message string
@@ -18,7 +12,7 @@ func (e *supervisorPublicError) Error() string { return e.message }
 func (e *supervisorPublicError) Unwrap() error { return e.cause }
 
 func publicSupervisorError(message string, err error) error {
-	if detail := supervisorFailureDetail(supervisorFailureReason(err)); detail != "" {
+	if detail := supervisorFailureDetail(supervisor.FailureReason(err)); detail != "" {
 		message += " " + detail
 	}
 	return &supervisorPublicError{message: message, cause: err}
@@ -47,22 +41,6 @@ func dispatchPublicError(failure DispatchFailureResponse, err error) error {
 		return &fixedDetailPublicError{message: dispatchFailureMessage(failure.Code) + " " + providerCapabilityChangedDetail, cause: err}
 	default:
 		return nil
-	}
-}
-
-func supervisorFailureReason(err error) string {
-	var recovery *pueue.PrivateRecoveryError
-	if errors.As(err, &recovery) && supervisorFailureDetail(recovery.ReasonCode) != "" {
-		return recovery.ReasonCode
-	}
-	switch {
-	case errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy), errors.Is(err, inspection.ErrGroupMigrationBusy):
-		return "active_work"
-	case errors.Is(err, pueue.ErrInFlight), errors.Is(err, pueue.ErrStatusOperational), errors.Is(err, pueue.ErrControlLimit),
-		errors.Is(err, pueue.ErrUnknown), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		return "observation_failed"
-	default:
-		return ""
 	}
 }
 

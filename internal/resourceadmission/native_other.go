@@ -6,7 +6,7 @@ import "context"
 
 // Other platforms build but are not supported: memory is reported
 // unavailable instead of guessed.
-func newNativeObserver() observer {
+func newNativeObserver() composedObserver {
 	return composedObserver{
 		cpu:        readHostCPU,
 		memory:     readHostMemory,

@@ -16,8 +16,8 @@ import zipfile
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification import actions_artifacts as artifacts
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_verification import actions_artifacts as artifacts
+from scripts.acceptance.evidence.source import VerificationError
 
 
 REPOSITORY = "owner/repo"

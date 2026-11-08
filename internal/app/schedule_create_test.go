@@ -8,12 +8,10 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
-	"github.com/hishamkaram/delegation-layer/internal/scheduler/recurrence"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -199,14 +197,6 @@ func TestScheduleCreateUncertainWriteReadsAbsenceOnce(t *testing.T) {
 	}
 	if _, err := store.GetSchedule(t.Context(), definition.ScheduleID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("absent definition was created: %v", err)
-	}
-}
-
-func TestScheduleCreateRangeExhaustionIsOperational(t *testing.T) {
-	input := scheduleCreateInput{ID: scheduleTestID, Cron: "* * * * *", Timezone: "UTC", TimezoneSet: true, CreatedAt: time.Date(2262, 4, 11, 23, 47, 16, 854775807, time.UTC)}
-	_, _, err := scheduleDefinition(input)
-	if !errors.Is(err, recurrence.ErrRangeExhausted) {
-		t.Fatalf("range err=%v", err)
 	}
 }
 

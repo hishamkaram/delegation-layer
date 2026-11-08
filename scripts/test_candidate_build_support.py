@@ -22,14 +22,13 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    UNRESOLVED_OWNERSHIP_CODES,
-)
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.operations import run_bounded_command
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import MAX_OUTPUT
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import UNRESOLVED_OWNERSHIP_CODES
 
 
 REPOSITORY = Path(__file__).resolve().parent.parent
@@ -38,7 +37,7 @@ COMMAND_TIMEOUT_SECONDS = 120
 VERSION = "0.1.37"
 HARNESS_PATHS = (
     "scripts/build_development_candidate.py", "scripts/render-homebrew-formula.sh",
-    "scripts/delegate_acceptance", "scripts/maintainability", ".goreleaser.yaml",
+    "scripts/scripts.acceptance", "scripts/maintainability", ".goreleaser.yaml",
     ".github/workflows/ci.yml",
 )
 GIT_ENVIRONMENT = {
