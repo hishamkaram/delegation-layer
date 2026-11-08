@@ -87,6 +87,73 @@ func assertPendingWatchObservation(t *testing.T, response remote.Response, ident
 	}
 }
 
+const (
+	watchSequencePending  = `{"pending":{"kind":"publication"},"publication":"pending"}`
+	watchSequenceTerminal = `{"outcome":{"verdict":"committed"},"publication":"committed"}`
+)
+
+type completingRemoteObservation struct {
+	identity remote.Identity
+	calls    int
+}
+
+func (e *completingRemoteObservation) Call(_ context.Context, request remote.Request) (remote.Response, error) {
+	e.calls++
+	if request.Operation != remote.Collect {
+		return remote.Response{}, remote.ErrProtocol
+	}
+	var envelope string
+	switch e.calls {
+	case 1:
+		envelope = watchSequencePending
+	case 2:
+		envelope = watchSequenceTerminal
+	default:
+		return remote.Response{}, errors.New("unexpected poll after terminal observation")
+	}
+	return remote.Response{Version: remote.ProtocolVersion, Identity: e.identity, Envelope: []byte(envelope)}, nil
+}
+
+// The app adapter owns full envelope decoding; this port classifies only the
+// two known wire fixtures needed to prove the watch's pending-to-terminal flow.
+type sequenceWatchEnvelope struct{}
+
+func (sequenceWatchEnvelope) Inspect(data json.RawMessage) (ObservationFacts, error) {
+	switch string(data) {
+	case watchSequencePending:
+		return ObservationFacts{Pending: true}, nil
+	case watchSequenceTerminal:
+		return ObservationFacts{Outcome: true}, nil
+	default:
+		return ObservationFacts{}, remote.ErrProtocol
+	}
+}
+
+func TestRemoteWatchRepollsPendingUntilTerminalObservation(t *testing.T) {
+	reference, _ := newTestReference(t)
+	intent, err := reference.Intent()
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange := &completingRemoteObservation{identity: intent.Destination}
+	client := Client{Envelopes: sequenceWatchEnvelope{}}
+	response, err := client.observeRemoteTask(t.Context(), originRequest{Command: "collect", Watch: 30 * time.Second}, remote.Coordinator{Exchange: exchange}, reference)
+	if err != nil {
+		t.Fatalf("watch did not reach terminal observation: %v", err)
+	}
+	if exchange.calls != 2 {
+		t.Fatalf("watch stopped before terminal observation: calls=%d want=2", exchange.calls)
+	}
+	if response.Version != remote.ProtocolVersion || response.Identity != intent.Destination || response.Failure != nil || string(response.Envelope) != watchSequenceTerminal {
+		t.Fatalf("watch did not preserve terminal observation: %+v", response)
+	}
+	for _, diagnostic := range response.Diagnostics {
+		if diagnostic == "observation_watch_expired" {
+			t.Fatalf("terminal observation was reported as expired: %+v", response)
+		}
+	}
+}
+
 func TestRemoteWatchWithoutObservationPreservesFailure(t *testing.T) {
 	_, err := finishRemoteWatch(remote.Response{}, context.DeadlineExceeded)
 	if !errors.Is(err, context.DeadlineExceeded) {
