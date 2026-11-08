@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -140,7 +142,7 @@ func prepareTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store
 			return pueue.ErrConfiguration
 		}
 		ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
-		prepared, resultErr = supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, setupOptions)
+		prepared, resultErr = supervisorcore.PreparePrivateAdmissionSupervisorContext(control, installation.ExecutableLookup{InitialExecutable: clientPath}, store, setupOptions)
 		if resultErr == nil && prepared == nil {
 			return pueue.ErrConfiguration
 		}

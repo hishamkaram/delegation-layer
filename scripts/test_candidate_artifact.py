@@ -8,11 +8,14 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.record_fixtures import object_at, array_at
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, MAX_CONTAINER_BYTES, parse_manifest, payload_paths,
-)
+from scripts.acceptance.testing.record_fixtures import object_at
+from scripts.acceptance.testing.record_fixtures import array_at
+from scripts.acceptance.evidence.digests import sha
+from scripts.release_verification.candidate_manifest import CANDIDATE_WORKFLOW_PATH
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import MAX_CONTAINER_BYTES
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.release_verification.candidate_manifest import payload_paths
 from scripts.test_candidate_artifact_support import (
     ARTIFACT_ID, COMMIT, DOWNLOAD, ENDPOINTS, FULL_SEQUENCE, OTHER_COMMIT, REPOSITORY, REPOSITORY_ID,
     RUN_ATTEMPT, RUN_ID, VERSION, WORKFLOW_ID, CandidateArtifactCase, manifest_bytes, payload_files,

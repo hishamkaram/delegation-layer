@@ -24,7 +24,7 @@ func kernelContext(ctx context.Context) context.Context {
 	})
 }
 
-func newNativeObserver() observer {
+func newNativeObserver() composedObserver {
 	cgroups := cgroupReader{fsys: os.DirFS("/")}
 	return composedObserver{
 		targeted:   true,

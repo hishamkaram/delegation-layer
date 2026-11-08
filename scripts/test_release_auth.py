@@ -12,8 +12,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import verify_release_archive as verifier
-from scripts.delegate_acceptance.release_verification import assets, cli, verification
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_verification import assets as assets
+from scripts.release_verification import cli as cli
+from scripts.release_verification import verification as verification
+from scripts.acceptance.evidence.source import VerificationError
 
 
 SECRET = "release-auth-secret-must-not-leak"

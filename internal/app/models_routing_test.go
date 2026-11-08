@@ -18,7 +18,7 @@ func TestModelDiscoveryPrivatePreparationUsesCapturedRoutingFault(t *testing.T) 
 	writeRunnerFixture(t, clientPath, "#!/bin/sh\nprintf 'pueue 4.0.4\\n'\n")
 	writeRunnerFixture(t, filepath.Join(filepath.Dir(clientPath), "pueued"), "#!/bin/sh\nexit 0\n")
 	deps := (Dependencies{Environment: []string{}, InitialSupervisorExecutable: clientPath}).withCapturedEnvironmentContext(t.Context())
-	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.err, infrastructure.ErrIdentity) {
+	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.Err(), infrastructure.ErrIdentity) {
 		t.Fatal("fixture did not capture malformed actual source")
 	}
 	store := supervisorfixture.NewInspectionStore(t)
@@ -47,7 +47,7 @@ func TestModelDiscoveryCleanupRetainsRoutingStore(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	cleanup := &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: store}, cause: os.ErrPermission}
+	cleanup := &routingCleanupTestError{store: store, cause: os.ErrPermission}
 	cause := errors.Join(errors.New("earlier independent cause"), cleanup)
 	if err = closeModelDiscoveryStore(cause, store); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("model discovery lost cleanup cause: %v", err)
@@ -62,7 +62,7 @@ func TestModelDiscoveryCleanupRetainsRoutingStore(t *testing.T) {
 		t.Fatalf("model discovery retained a different Store handle: %v", pinErr)
 	}
 	// This is a settled test view; the real routing error retains failed owners.
-	cleanup.resources = nil
+	cleanup.store = nil
 	if err = closeModelDiscoveryStore(cause, store); !errors.Is(err, os.ErrPermission) {
 		t.Fatal(err)
 	}

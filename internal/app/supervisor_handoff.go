@@ -3,14 +3,15 @@ package app
 import (
 	"context"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 )
 
 // prepareInspectionHandoffSupervisor keeps the published private generation
 // authoritative across a handoff retry, even when a newer pair has been staged.
 // The caller holds the root bootstrap lock.
-func prepareInspectionHandoffSupervisor(ctx context.Context, root string, lookup supervisorcore.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
+func prepareInspectionHandoffSupervisor(ctx context.Context, root string, lookup installation.ExecutableLookup, options pueue.Options) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}

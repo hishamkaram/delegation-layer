@@ -37,7 +37,7 @@ func TestSchedulerObservationCleanupRetainsRoutingStore(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	cleanup := &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: store}, cause: os.ErrPermission}
+	cleanup := &routingCleanupTestError{store: store, cause: os.ErrPermission}
 	resultErr := errors.Join(errors.New("earlier independent cause"), cleanup)
 	state := schedulerruntime.TaskState{Observation: contract.Observation{ObservedAt: time.Unix(1, 0).UTC()}}
 	closeSchedulerObservation(&state, &resultErr, store)
@@ -52,7 +52,7 @@ func TestSchedulerObservationCleanupRetainsRoutingStore(t *testing.T) {
 		t.Fatalf("scheduler retained an unrelated handle for the same root: %v", pinErr)
 	}
 	// No native actor is involved: this control represents a settled error view.
-	cleanup.resources = nil
+	cleanup.store = nil
 	closeSchedulerObservation(&state, &resultErr, store)
 	if _, pinErr := store.PinRootContext(t.Context()); !errors.Is(pinErr, os.ErrClosed) {
 		t.Fatalf("scheduler retained a settled cleanup view: %v", pinErr)

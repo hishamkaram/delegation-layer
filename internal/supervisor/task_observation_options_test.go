@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -52,7 +54,7 @@ func observationTree(t *testing.T, root string) []observationTreeEntry {
 func observationReceipt(store *taskdir.Store) (runnerRepairReceipt, string) {
 	binding := generationBinding(store.Root, "observation-data")
 	digest := strings.Repeat("a", 64) // historical executable identity data
-	return runnerRepairReceipt{SchemaVersion: task.SchemaVersion, Revision: runnerRepairReceiptRevision, Supervisor: binding, RunnerExecutable: filepath.Join(store.Root, ".supervisor", managedRunnerName+"-"+digest), RunnerSHA256: digest}, "receipt.json"
+	return runnerRepairReceipt{SchemaVersion: task.SchemaVersion, Revision: runnerRepairReceiptRevision, Supervisor: binding, RunnerExecutable: filepath.Join(store.Root, ".supervisor", "delegate-run"+"-"+digest), RunnerSHA256: digest}, "receipt.json"
 }
 
 func TestRunnerRepairReceiptReadDoesNotInitializeNamespace(t *testing.T) {
@@ -89,7 +91,7 @@ func TestColdTaskObservationRefusesMissingGeneration(t *testing.T) {
 	receipt, _ := observationReceipt(fixture.store)
 	// The absent saved files force canonical cold preparation to refuse. No CLI
 	// is available in the explicitly empty lookup scope, so no actor can start.
-	observed, observeErr := ObserveTaskSupervisorWithOptions(t.Context(), fixture.store, receipt.Supervisor, &task.MetaRecord{Environment: []string{}}, TaskSupervisorObservationOptions{Control: pueue.Options{Environment: []string{}}, Lookup: ExecutableLookup{Environment: []string{}}})
+	observed, observeErr := ObserveTaskSupervisorWithOptions(t.Context(), fixture.store, receipt.Supervisor, &task.MetaRecord{Environment: []string{}}, TaskSupervisorObservationOptions{Control: pueue.Options{Environment: []string{}}, Lookup: installation.ExecutableLookup{Environment: []string{}}})
 	if observed.Client != nil {
 		t.Cleanup(func() {
 			if closeErr := observed.Client.Close(); closeErr != nil {

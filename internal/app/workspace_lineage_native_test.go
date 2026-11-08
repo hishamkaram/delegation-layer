@@ -50,7 +50,7 @@ func TestNativeProvisionRejectsOwnedPlacementOverlaps(t *testing.T) {
 		nested := openLineageStore(t, filepath.Join(lineage.main, "nested-state"))
 		container := workspace.ContainerPath(nested.Root, nested.RootID)
 		resource := lineage.resource(t, nested, lineage.main, container)
-		if err := provisionManagedCheckout(lineage.scope.ctx, nested, resource, lineage.git); !errors.Is(err, workspace.ErrIdentity) {
+		if err := lineage.action(t, nested, resource, workspace.OperationProvision); !errors.Is(err, workspace.ErrIdentity) {
 			t.Fatalf("anchor inside the source checkout error = %v", err)
 		}
 		assertPathAbsent(t, container)
@@ -68,7 +68,7 @@ func TestNativeProvisionRejectsOwnedPlacementOverlaps(t *testing.T) {
 
 func assertOwnedPlacementRefused(t *testing.T, lineage nativeLineage, resource *workspace.Resource, forbidden string) {
 	t.Helper()
-	if err := provisionManagedCheckout(lineage.scope.ctx, lineage.store, resource, lineage.git); !errors.Is(err, workspace.ErrIdentity) {
+	if err := lineage.action(t, lineage.store, resource, workspace.OperationProvision); !errors.Is(err, workspace.ErrIdentity) {
 		t.Fatalf("overlapping owned placement error = %v, want workspace identity refusal", err)
 	}
 	assertPathAbsent(t, filepath.Join(forbidden, "checkout"))
@@ -119,7 +119,7 @@ func releaseAndForgetNativeChild(t *testing.T, lineage nativeLineage, resource *
 	if err := resource.RecordRelease(ctx, release); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeManagedCheckout(ctx, resource, lineage.git); err != nil {
+	if err := lineage.action(t, lineage.store, resource, workspace.OperationRemove); err != nil {
 		t.Fatalf("release cleanup: %v", err)
 	}
 	if err := resource.RecordRemoved(ctx, release.OperationID); err != nil {
@@ -129,7 +129,7 @@ func releaseAndForgetNativeChild(t *testing.T, lineage nativeLineage, resource *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = forgetManagedWorkspace(ctx, lineage.store, resource, lineage.git); err != nil {
+	if err = lineage.action(t, lineage.store, resource, workspace.OperationForget); err != nil {
 		t.Fatalf("forget %d refs: %v", len(intent.Refs), err)
 	}
 }
@@ -154,7 +154,7 @@ func assertChangedCommonDirectoryRefused(t *testing.T, legacy bool) {
 			t.Fatal(err)
 		}
 	}
-	if err := provisionManagedCheckout(lineage.scope.ctx, lineage.store, resource, lineage.git); err != nil {
+	if err := lineage.action(t, lineage.store, resource, workspace.OperationProvision); err != nil {
 		t.Fatal(err)
 	}
 	common := filepath.Join(lineage.main, ".git")
@@ -163,7 +163,7 @@ func assertChangedCommonDirectoryRefused(t *testing.T, legacy bool) {
 	}
 	lineage.gitIn(t, lineage.main, "init", "--quiet")
 	operation := lineage.captureOperation(t, resource, lineageOperationSubject("changed common"))
-	_, err := captureManagedCheckout(lineage.scope.ctx, lineage.store, resource, operation, lineage.git)
+	_, err := lineage.runOperation(operation, os.Environ())
 	if !errors.Is(err, workspace.ErrIdentity) && !errors.Is(err, workspace.ErrIdentityMismatch) {
 		t.Fatalf("capture against a replaced common directory error = %v", err)
 	}

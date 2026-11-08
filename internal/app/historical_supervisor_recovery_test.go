@@ -16,11 +16,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -198,7 +200,7 @@ func TestHistoricalSupervisorRecoveryRejectsUnrelatedBinding(t *testing.T) {
 	unrelated := fixture.predecessor
 	unrelated.Endpoint = "unix:" + filepath.Join(fixture.root, ".supervisor", "run", "unrelated.sock")
 
-	client, err := supervisor.RecoverPrivateClient(t.Context(), fixture.store, unrelated, fixture.options, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB})
+	client, err := supervisor.RecoverPrivateClient(t.Context(), fixture.store, unrelated, fixture.options, installation.ExecutableLookup{InitialExecutable: fixture.clientB})
 	if client != nil {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Error(closeErr)

@@ -23,6 +23,8 @@ or a successful unrelated check alone does not establish behavior approval.
 
 1. Read current source and trace the real consumer before asserting a defect.
    Check ownership, dependency direction, duplicated policy and compatibility.
+   Apply [module organization](../../agents/_data/maintainability-contract.md#module-organization)
+   to grouped filename families and facade imports.
 2. Review tests for useful independent oracles, error paths, cleanup and public
    behavior. A failed required check blocks its affected claim even if other
    checks pass. Missing evidence is unverified, not approval.

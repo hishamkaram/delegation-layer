@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func ResolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, lookup ExecutableLookup) (client, daemon string, resultErr error) {
+func ResolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, lookup installation.ExecutableLookup) (client, daemon string, resultErr error) {
 	client, daemon, available, err := availableSavedPair(root, saved)
 	if err != nil || available {
 		return client, daemon, err
 	}
-	client, daemon, resolveErr := ResolvePrivateSupervisorExecutables(root, lookup)
+	client, daemon, resolveErr := installation.ResolvePrivateSupervisorExecutables(lookup)
 	if resolveErr == nil {
 		return client, daemon, nil
 	}
@@ -30,8 +32,8 @@ func availableSavedPair(root string, saved task.SupervisorRef) (client, daemon s
 	if pueue.IsLegacyStateSupervisorClient(root, saved) || saved.ClientExecutable == "" || saved.DaemonExecutable == "" {
 		return "", "", false, nil
 	}
-	client, clientErr := resolveSupervisorExecutable(saved.ClientExecutable, "pueue")
-	daemon, daemonErr := resolveSupervisorExecutable(saved.DaemonExecutable, "pueued")
+	client, clientErr := installation.ResolveSupervisorExecutable(saved.ClientExecutable, "pueue")
+	daemon, daemonErr := installation.ResolveSupervisorExecutable(saved.DaemonExecutable, "pueued")
 	if clientErr == nil && daemonErr == nil {
 		return client, daemon, true, nil
 	}

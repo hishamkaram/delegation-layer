@@ -1,0 +1,748 @@
+"""Contract for native acceptance evidence."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from collections.abc import Mapping
+from typing import TypeGuard
+from scripts.acceptance.native_evidence.summaries import TreeSummary
+from scripts.acceptance.native_evidence.summaries import is_tree_summary
+from scripts.acceptance.native_evidence.summaries import _empty_summary as _empty_summary
+from scripts.acceptance.native_evidence.summaries import _summary_with_removed as _summary_with_removed
+from scripts.acceptance.evidence.digests import sha as _digest_bytes
+from scripts.acceptance.native_evidence.identities import _compact_installed_paths
+from scripts.acceptance.native_evidence.identities import _compact_runtime_identity
+from scripts.acceptance.native_evidence.identities import _compact_provider_runtime_identities
+from scripts.acceptance.native_evidence.identities import _runtime_identity_matches
+from scripts.acceptance.native_evidence.lifetime_closure import lifetime_closure_error
+from scripts.acceptance.native_evidence.production_acp import production_acp_proof_error
+from scripts.acceptance.native_evidence.production_acp import requires_production_acp
+import json
+import re
+
+
+SCHEMA_VERSION = 1
+
+
+AGGREGATE_KIND = "native-acceptance-aggregate"
+
+
+AGGREGATE_RECEIPT_NAME = "aggregate-receipt.json"
+
+
+CASE_MATRIX_NAME = "case-matrix.tsv"
+
+
+CASE_ROOT_NAME = "cases"
+
+
+COMPACT_RECEIPT_ROOT_NAME = "receipts"
+
+
+CASE_OWNER_ROOT_NAME = "case-owners"
+
+
+CASE_CLEANUP_ROOT_NAME = "case-cleanup"
+
+
+RETENTION_PLAN_NAME = "retention-plan.json"
+
+
+RETENTION_CLEANUP_ROOT_NAME = "retention-cleanup"
+
+
+MAX_INPUT_BYTES = 1 << 20
+
+
+MAX_RECEIPT_BYTES = 32 * 1024
+
+
+MAX_MATRIX_BYTES = 64 * 1024
+
+
+# The private raw-evidence inventory must count a full native case: a Mac
+# timeout case retained 6,919 entries and 3,183,628 bytes. An exceeded budget
+# is reported as incomplete and retains the raw evidence.
+PRIVATE_INVENTORY_MAX_ENTRIES = 65536
+
+
+PRIVATE_INVENTORY_MAX_BYTES = 128 * 1024 * 1024
+
+
+# Public staging plans and their staged-tree scans keep their original cap.
+PUBLIC_STAGING_MAX_ENTRIES = 4096
+
+
+# One directory listing, as opposed to a recursive inventory.
+MAX_DIRECTORY_CHILDREN = 4096
+
+
+DEFAULT_RETENTION_COUNT = 3
+
+
+MAX_RETENTION_COUNT = 32
+
+
+HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}$")
+
+
+MATRIX_HEADER = (
+    "case_id\tprovider\tpermission\tscenario\texit_code\tstatus\tcase_output\n"
+)
+
+
+class EvidenceError(Exception):
+    """A bounded, caller-actionable evidence error."""
+
+
+class BlockReason(Enum):
+    """Why a native case was blocked; only real unavailability can be neutral."""
+
+    AUTH_UNAVAILABLE = "auth-unavailable"
+    EXECUTABLE_UNAVAILABLE = "executable-unavailable"
+    UNCLASSIFIED = "unclassified"
+
+
+# The compact case receipt is versioned apart from the aggregate and release
+# schemas. Version 1 predates the reason; version 2 carries it as one exact
+# field, non-null exactly for a BLOCKED case.
+COMPACT_CASE_LEGACY_SCHEMA_VERSION = 1
+COMPACT_CASE_SCHEMA_VERSION = 2
+BLOCK_REASON_KEY = "block_reason"
+
+
+@dataclass(frozen=True)
+class CaseDefinition:
+    case_id: str
+    provider: str
+    permission: str
+    scenario: str
+    case_output: str
+
+
+@dataclass(frozen=True)
+class MatrixRow:
+    definition: CaseDefinition
+    exit_code: int
+    status: str
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower()
+
+
+def _case_definition(index: int, provider: str, permission: str, scenario: str) -> CaseDefinition:
+    suffix = "-".join((_slug(provider), _slug(permission), _slug(scenario)))
+    case_id = f"case-{index:02d}-{suffix}"
+    return CaseDefinition(case_id, provider, permission, scenario, f"{CASE_ROOT_NAME}/{case_id}")
+
+
+def expected_cases() -> tuple[CaseDefinition, ...]:
+    """Return the release gate's complete, ordered case matrix."""
+    definitions: list[CaseDefinition] = []
+    providers = (
+        "antigravity:print", "claude:print", "ccr:print", "codex:exec", "pi:json", "opencode:run",
+    )
+    index = 1
+    for provider in providers:
+        definitions.append(_case_definition(index, provider, "workspace-write", "write"))
+        index += 1
+    definitions.append(_case_definition(index, "codex:exec", "workspace-write", "timeout-resume"))
+    index += 1
+    for provider in providers:
+        definitions.append(_case_definition(index, provider, "read-only", "read-only"))
+        index += 1
+    definitions.append(_case_definition(index, "codex:review", "read-only", "read-only"))
+    definitions.append(_case_definition(index + 1, "codex:exec", "read-only", "non-git"))
+    definitions.append(_case_definition(index + 2, "codex:exec", "workspace-write", "non-git"))
+    # Appended so every earlier case identity and order stays unchanged.
+    definitions.append(_case_definition(index + 3, "opencode:run", "workspace-write", "timeout-resume"))
+    return tuple(definitions)
+
+
+EXPECTED_CASES = expected_cases()
+
+
+# One bounded case reference per matrix row, plus the aggregate envelope.
+MAX_AGGREGATE_BYTES = (len(EXPECTED_CASES) + 1) * MAX_RECEIPT_BYTES
+
+
+def canonical_json(value: object) -> bytes:
+    try:
+        return (json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
+    except (TypeError, ValueError) as error:
+        raise EvidenceError("receipt_json_invalid") from error
+
+
+def _safe_source_status(value: object) -> TypeGuard[str]:
+    return isinstance(value, str) and len(value) <= 64 and not any(ord(char) < 32 for char in value)
+
+
+def _source_status_matches(raw: dict[str, object], status: str) -> bool:
+    source_status = raw.get("status")
+    if not _safe_source_status(source_status):
+        return False
+    normalized = source_status.lower()
+    return {
+        "PASS": normalized in {"pass", "passed"},
+        "BLOCKED": normalized in {"blocked", "block"},
+        "FAIL": normalized in {"fail", "failed"},
+    }[status]
+
+
+def _safe_proof_text(value: object, *, allow_empty: bool = False) -> str | None:
+    if not isinstance(value, str) or len(value) > 128 or any(ord(char) < 32 for char in value):
+        return None
+    if not allow_empty and not value:
+        return None
+    return value
+
+
+_REQUESTED_OPTION_KEYS = ("requested_model", "requested_effort")
+
+
+_REQUESTED_OPTION_STATES = frozenset({"recorded", "missing", "invalid"})
+
+
+def _invalid_requested_options() -> dict[str, object]:
+    return {
+        "requested_options_state": "invalid",
+        "requested_model": None,
+        "requested_effort": None,
+    }
+
+
+def _normalize_requested_options(value: dict[str, object] | None) -> dict[str, object]:
+    """Normalize requested options while preserving explicit provider defaults."""
+    if value is None or any(key not in value for key in _REQUESTED_OPTION_KEYS):
+        return {
+            "requested_options_state": "missing",
+            "requested_model": None,
+            "requested_effort": None,
+        }
+    values: dict[str, str | None] = {}
+    for key in _REQUESTED_OPTION_KEYS:
+        option = value[key]
+        if option is None:
+            values[key] = None
+            continue
+        safe = _safe_proof_text(option)
+        if safe is None:
+            return _invalid_requested_options()
+        values[key] = safe
+    return {
+        "requested_options_state": "recorded",
+        "requested_model": values["requested_model"],
+        "requested_effort": values["requested_effort"],
+    }
+
+
+def _source_requested_options(
+        source: dict[str, object],
+        binding: dict[str, object] | None,
+        *,
+        require_binding: bool,
+        binding_error: str | None = None) -> dict[str, object]:
+    """Return source options only after a successful case matches its binding."""
+    source_options = _normalize_requested_options(source)
+    if source_options["requested_options_state"] != "recorded" or not require_binding:
+        return source_options
+    if binding_error is not None:
+        return _invalid_requested_options()
+    binding_options = _normalize_requested_options(binding)
+    if binding_options["requested_options_state"] != "recorded":
+        return binding_options
+    if any(source_options[key] != binding_options[key] for key in _REQUESTED_OPTION_KEYS):
+        return _invalid_requested_options()
+    return source_options
+
+
+def _validate_requested_options(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {
+            "requested_options_state", "requested_model", "requested_effort"}:
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+    state = value["requested_options_state"]
+    if not isinstance(state, str) or state not in _REQUESTED_OPTION_STATES:
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+    if state == "recorded":
+        normalized = _normalize_requested_options({
+            key: value[key] for key in _REQUESTED_OPTION_KEYS
+        })
+        if normalized != value:
+            raise EvidenceError("aggregate_case_requested_options_invalid")
+    elif any(value[key] is not None for key in _REQUESTED_OPTION_KEYS):
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+
+
+def _task_identifier_values(value: object, *, limit: int = 64) -> list[str]:
+    result: list[str] = []
+    if isinstance(value, dict):
+        for item in value.values():
+            if isinstance(item, str):
+                safe = _safe_proof_text(item)
+                if safe is not None:
+                    result.append(safe)
+            elif isinstance(item, (dict, list)) and len(result) < limit:
+                result.extend(_task_identifier_values(item, limit=limit - len(result)))
+            if len(result) >= limit:
+                break
+    elif isinstance(value, list):
+        for item in value[:limit]:
+            if isinstance(item, str):
+                safe = _safe_proof_text(item)
+                if safe is not None:
+                    result.append(safe)
+            elif isinstance(item, (dict, list)) and len(result) < limit:
+                result.extend(_task_identifier_values(item, limit=limit - len(result)))
+            if len(result) >= limit:
+                break
+    return sorted(set(result))[:limit]
+
+
+def _expected_task_aliases(provider: object, scenario: object) -> tuple[str, ...]:
+    """Return the authoritative task turns required by one passing case."""
+    if scenario == "interactive":
+        return ("interactive",)
+    if scenario == "timeout-resume":
+        return ("timeout_source", "timeout_resume")
+    if provider == "codex:review":
+        return ("fresh",)
+    return ("fresh", "resume")
+
+
+def _case_cleanup_authorization(value: dict[str, object]) -> str:
+    cleanup = value.get("cleanup")
+    immutable_cleanup = None
+    if isinstance(cleanup, dict):
+        immutable_cleanup = {
+            "observation": cleanup.get("observation"),
+            "raw_before": cleanup.get("raw_before"),
+        }
+    payload = {
+        key: value.get(key) for key in (
+            "schema_version", "kind", "gate", "scope", "case_id", "provider",
+            "permission", "scenario", "status", "exit_code", "evidence_status",
+            "source_receipt_sha256", "source_proof", "creation_identity",
+        )
+    }
+    payload["cleanup"] = immutable_cleanup
+    if value.get("schema_version") == COMPACT_CASE_SCHEMA_VERSION:
+        payload[BLOCK_REASON_KEY] = value.get(BLOCK_REASON_KEY)
+    return _digest_bytes(canonical_json(payload))
+
+
+def _case_result_verdict(rows: tuple[MatrixRow, ...], unresolved: bool) -> str:
+    if unresolved or any(row.status == "FAIL" for row in rows):
+        return "FAIL"
+    if any(row.status == "PASS" for row in rows):
+        return "PASS"
+    return "BLOCKED"
+
+
+def _aggregate_exit(status: str, result_verdict: str, require_pass: bool) -> int:
+    if status == "FAIL":
+        return 1
+    if result_verdict == "BLOCKED" and require_pass:
+        return 2
+    return 0
+
+
+def _aggregate_exit_code(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= 255:
+        raise EvidenceError("aggregate_exit_mismatch")
+    return value
+
+
+def _validate_summary(value: object) -> TreeSummary:
+    if not is_tree_summary(value):
+        raise EvidenceError("aggregate_summary_invalid")
+    return value
+
+
+def _parse_optional_revision(value: str | None) -> str | None:
+    if value is None or value == "":
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40,64}", value):
+        raise EvidenceError("source_revision_invalid")
+    return value
+
+def _source_closure_error(source: dict[str, object]) -> str | None:
+    """Bind the source receipt's closure proof to its exact admitted tasks."""
+    tasks = source.get("tasks")
+    if not isinstance(tasks, dict):
+        return "lifetime_closure_identity_invalid"
+    return lifetime_closure_error(
+        source.get("lifetime_closure"), task_ids=tasks.values(),
+        budget_task_ids=[tasks["timeout_source"]] if "timeout_source" in tasks else [],
+        model_discovery_required=source.get("model_discovery") is not None)
+
+
+def _lifecycle_summary(
+        source: dict[str, object], cleanup: dict[str, object],
+        cleanup_ok: bool, diagnostics_digest: str | None) -> dict[str, object]:
+    natural_shutdown = source.get("natural_daemon_shutdown")
+    closure_error = _source_closure_error(source)
+    lifecycle: dict[str, object] = {
+        "state": ("complete" if cleanup_ok and natural_shutdown is True and closure_error is None
+                  else "unresolved"),
+        "cleanup_status": cleanup.get("status"),
+        "supervisor_shutdown_observed": cleanup.get("supervisor_shutdown_observed"),
+        "natural_daemon_shutdown": natural_shutdown if isinstance(natural_shutdown, bool) else None,
+        # Private compact proof only; the public projection keeps its lifecycle keys.
+        "closure": source.get("lifetime_closure") if closure_error is None else None,
+    }
+    if diagnostics_digest is not None and HEX_DIGEST.fullmatch(diagnostics_digest):
+        lifecycle["failure_diagnostics_sha256"] = diagnostics_digest
+    return lifecycle
+
+def _validate_case_fields(case: dict[str, object]) -> None:
+    required = {"case_id", "provider", "permission", "scenario", "status", "exit_code",
+                "evidence_status", "receipt_path", "receipt_sha256", "binary_identities"}
+    if not required.issubset(case):
+        raise EvidenceError("aggregate_case_fields_missing")
+    if not isinstance(case["case_id"], str) or not isinstance(case["receipt_path"], str):
+        raise EvidenceError("aggregate_case_fields_invalid")
+    if not isinstance(case["status"], str) or case["status"] not in {"PASS", "BLOCKED", "FAIL"}:
+        raise EvidenceError("aggregate_case_status_invalid")
+    exit_code = case["exit_code"]
+    if type(exit_code) is not int or exit_code < 0 or exit_code > 255:
+        raise EvidenceError("aggregate_case_exit_invalid")
+    if ((case["status"] == "PASS" and exit_code != 0)
+            or (case["status"] == "BLOCKED" and exit_code != 2)
+            or (case["status"] == "FAIL" and exit_code in {0, 2})):
+        raise EvidenceError("aggregate_case_exit_mismatch")
+    if (not isinstance(case["evidence_status"], str)
+            or case["evidence_status"] not in {"RESOLVED", "UNRESOLVED"}):
+        raise EvidenceError("aggregate_case_evidence_status_invalid")
+
+
+def _validate_case_proof_identity(case: dict[str, object], value: dict[str, object]) -> dict[str, object]:
+    proof = value.get("source_proof")
+    required_proof = {
+        "state", "source_receipt_sha256", "final_status", "gate", "provider", "permission", "mode", "scenario",
+        "requested_options_state", "requested_model", "requested_effort",
+        "task_ids", "task_session_bindings", "diagnostic_task_ids", "session_ids",
+        "binary_identities", "lifecycle_proof",
+    }
+    if not isinstance(proof, dict) or not required_proof.issubset(proof):
+        raise EvidenceError("aggregate_case_proof_missing")
+    _validate_requested_options({
+        key: proof[key]
+        for key in ("requested_options_state", "requested_model", "requested_effort")
+    })
+    if (proof.get("final_status") != case["status"]
+            or proof.get("provider") != case["provider"]
+            or proof.get("permission") != case["permission"]
+            or proof.get("mode") != case["permission"]
+            or proof.get("scenario") != case["scenario"]
+            or proof.get("gate") != "acceptance-native"):
+        raise EvidenceError("aggregate_case_proof_mismatch")
+    if (proof.get("source_receipt_sha256") is not None
+            and HEX_DIGEST.fullmatch(str(proof.get("source_receipt_sha256"))) is None):
+        raise EvidenceError("aggregate_case_source_digest_invalid")
+    resolved_pass = case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
+    production_error = production_acp_proof_error(
+        str(case["provider"]), proof, resolved_pass=resolved_pass,
+        expected_aliases=_expected_task_aliases(str(case["provider"]), str(case["scenario"])))
+    if production_error is not None:
+        raise EvidenceError(production_error)
+    if resolved_pass:
+        closure_error = _proof_closure_error(proof)
+        if closure_error is not None:
+            raise EvidenceError("aggregate_case_" + closure_error)
+    return proof
+
+
+def _proof_closure_error(proof: dict[str, object]) -> str | None:
+    """Require a resolved PASS's private closure to cover its exact task bindings."""
+    lifecycle, bindings = proof.get("lifecycle_proof"), proof.get("task_session_bindings")
+    if (not isinstance(lifecycle, dict) or not isinstance(bindings, list)
+            or not all(isinstance(binding, dict) for binding in bindings)):
+        return "lifetime_closure_missing"
+    return lifetime_closure_error(
+        lifecycle.get("closure"), task_ids=[binding.get("task_id") for binding in bindings],
+        budget_task_ids=[binding.get("task_id") for binding in bindings
+                         if binding.get("alias") == "timeout_source"])
+
+
+def _validate_case_sessions(proof: Mapping[str, object]) -> tuple[list[dict[str, str]], list[str], list[str], dict[str, object]]:
+    bindings = proof.get("task_session_bindings")
+    if (not isinstance(bindings, list) or len(bindings) > 64
+            or any(not isinstance(binding, dict)
+                   or set(binding) != {"alias", "task_id", "session_id"}
+                   or not isinstance(binding.get("alias"), str)
+                   or SAFE_TEXT.fullmatch(binding["alias"]) is None
+                   or _safe_proof_text(binding.get("task_id")) is None
+                   or _safe_proof_text(binding.get("session_id")) is None
+                   for binding in bindings)):
+        raise EvidenceError("aggregate_case_task_session_bindings_invalid")
+    aliases = [binding["alias"] for binding in bindings]
+    if len(set(aliases)) != len(aliases):
+        raise EvidenceError("aggregate_case_task_session_bindings_invalid")
+    expected_task_ids = sorted({binding["task_id"] for binding in bindings})
+    if (not isinstance(proof.get("task_ids"), list)
+            or proof["task_ids"] != expected_task_ids
+            or len(expected_task_ids) != len(bindings)):
+        raise EvidenceError("aggregate_case_task_ids_invalid")
+    diagnostic_task_ids = proof.get("diagnostic_task_ids")
+    if (not isinstance(diagnostic_task_ids, list) or len(diagnostic_task_ids) > 64
+            or any(_safe_proof_text(item) is None for item in diagnostic_task_ids)
+            or diagnostic_task_ids != sorted(set(diagnostic_task_ids))):
+        raise EvidenceError("aggregate_case_diagnostic_task_ids_invalid")
+    sessions = proof.get("session_ids")
+    if (not isinstance(sessions, dict) or not isinstance(sessions.get("state"), str)
+            or sessions.get("state") not in {"recorded", "not-recorded"}
+            or not isinstance(sessions.get("values"), list)
+            or not all(isinstance(item, str) and item for item in sessions["values"])
+            or not isinstance(sessions.get("by_alias"), dict)
+            or any(not isinstance(key, str) or not isinstance(item, str) or not item
+                   for key, item in sessions["by_alias"].items())
+            or sessions["by_alias"] != {
+                binding["alias"]: binding["session_id"] for binding in bindings
+            }
+            or sorted(set(sessions["by_alias"].values())) != sessions["values"]
+            or (sessions.get("state") == "recorded") != bool(bindings)):
+        raise EvidenceError("aggregate_case_session_ids_invalid")
+    return bindings, aliases, expected_task_ids, sessions
+
+
+def _validate_case_binaries(case: dict[str, object], proof: dict[str, object]) -> tuple[dict[str, object], list[str]]:
+    binaries = proof.get("binary_identities")
+    if (not isinstance(binaries, dict) or not isinstance(binaries.get("state"), str)
+            or binaries.get("state") not in {"complete", "unavailable"}):
+        raise EvidenceError("aggregate_case_binary_identity_invalid")
+    current = binaries.get("schema_version") == 2 and binaries.get("representation") == "installed-paths"
+    if current:
+        if ("sha256" in binaries or _compact_installed_paths(
+                binaries.get("paths"), complete=binaries["state"] == "complete") is None):
+            raise EvidenceError("aggregate_case_binary_selection_invalid")
+    elif ("schema_version" in binaries or not isinstance(binaries.get("sha256"), dict)
+          or any(not isinstance(key, str) or not isinstance(value, str)
+                 or HEX_DIGEST.fullmatch(value) is None for key, value in binaries["sha256"].items())):
+        # Existing sealed receipts retain their historical representation and cleanup authority.
+        raise EvidenceError("aggregate_case_binary_identity_invalid")
+    binary_task_ids = binaries.get("task_ids")
+    if (not isinstance(binary_task_ids, list) or len(binary_task_ids) > 64
+            or any(not isinstance(task_id, str)
+                   or re.fullmatch(r"[0-9a-f]{32}", task_id) is None
+                   for task_id in binary_task_ids)
+            or binary_task_ids != sorted(set(binary_task_ids))):
+        raise EvidenceError("aggregate_case_binary_task_ids_invalid")
+    provider_runtimes = binaries.get("provider_runtime_identities")
+    if (not isinstance(provider_runtimes, dict) or len(provider_runtimes) > 64
+            or (provider_runtimes and _compact_provider_runtime_identities(binaries) is None)):
+        raise EvidenceError("aggregate_case_provider_runtime_identity_invalid")
+    normalized_runtimes = _compact_provider_runtime_identities(binaries) or {}
+    provider_binding = binaries.get("provider_binding")
+    binding_identity = (_compact_runtime_identity({
+        key: value for key, value in provider_binding.items() if key != "task_id"})
+        if isinstance(provider_binding, dict) else None)
+    if provider_binding is not None and (
+            not isinstance(provider_binding, dict)
+            or not isinstance(provider_binding.get("task_id"), str)
+            or re.fullmatch(r"[0-9a-f]{32}", provider_binding["task_id"]) is None
+            or binding_identity is None):
+        raise EvidenceError("aggregate_case_provider_binding_invalid")
+    if not current and binaries.get("state") == "complete" and not {
+            "delegate_sha256", "runner_sha256", "pueue_sha256", "pueued_sha256",
+    }.issubset(binaries["sha256"]):
+        raise EvidenceError("aggregate_case_binary_identity_incomplete")
+    if binaries.get("state") == "complete" and (
+            provider_binding is None
+            or binding_identity is None
+            or sorted(normalized_runtimes) != binary_task_ids
+            or not _runtime_identity_matches(
+                normalized_runtimes.get(provider_binding["task_id"], {}), binding_identity)
+            or (not current and binding_identity.get("sha256") and "provider_sha256" in binaries["sha256"]
+                and binaries["sha256"]["provider_sha256"] != binding_identity["sha256"])):
+        raise EvidenceError("aggregate_case_provider_runtime_coverage_invalid")
+    if case.get("binary_identities") != binaries:
+        raise EvidenceError("aggregate_case_binary_identity_mismatch")
+    return binaries, binary_task_ids
+
+
+def _validate_case_completion(
+        case: dict[str, object], proof: dict[str, object],
+        session_facts: tuple[list[dict[str, str]], list[str], list[str], dict[str, object]],
+        binary_facts: tuple[dict[str, object], list[str]]) -> None:
+    bindings, aliases, expected_task_ids, sessions = session_facts
+    binaries, binary_task_ids = binary_facts
+    lifecycle = proof.get("lifecycle_proof")
+    if (not isinstance(lifecycle, dict) or not isinstance(lifecycle.get("state"), str)
+            or lifecycle.get("state") not in {"complete", "unresolved"}):
+        raise EvidenceError("aggregate_case_lifecycle_invalid")
+    expected_aliases = set(_expected_task_aliases(case["provider"], case["scenario"]))
+    if case["status"] == "PASS" and case["evidence_status"] == "RESOLVED" and (
+            proof.get("state") != "complete" or set(aliases) != expected_aliases
+            or sessions.get("state") != "recorded" or not sessions["values"]
+            or binary_task_ids != expected_task_ids
+            or HEX_DIGEST.fullmatch(str(proof.get("source_receipt_sha256", ""))) is None
+            or binaries.get("state") != "complete" or lifecycle.get("state") != "complete"):
+        raise EvidenceError("aggregate_case_proof_incomplete")
+    if (case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
+            and proof.get("requested_options_state") != "recorded"):
+        raise EvidenceError("aggregate_case_requested_options_incomplete")
+    if (case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
+            and len(bindings) > 1
+            and len({binding["session_id"] for binding in bindings}) != 1):
+        raise EvidenceError("aggregate_case_session_continuity_invalid")
+    if case["status"] == "BLOCKED" and proof.get("state") != "blocked-before-runtime":
+        raise EvidenceError("aggregate_blocked_proof_scope_invalid")
+    if case["status"] == "FAIL" and (proof.get("state") != "unresolved"
+                                     or case["evidence_status"] != "UNRESOLVED"):
+        raise EvidenceError("aggregate_failure_proof_scope_invalid")
+
+
+def _validate_case_retention(evidence_status: object, terminal_state: object,
+                             raw_deleted: object, journal_present: bool) -> None:
+    """Validate terminal cleanup facts; prepared receipts remain replay-owned."""
+    if evidence_status == "RESOLVED":
+        expected_state, expected_deleted, expected_journal = "published-after-cleanup", True, True
+    elif evidence_status == "UNRESOLVED":
+        expected_state, expected_deleted, expected_journal = "published-unresolved", False, False
+    else:
+        raise EvidenceError("aggregate_case_retention_invalid")
+    if (terminal_state != expected_state or raw_deleted is not expected_deleted
+            or journal_present is not expected_journal):
+        raise EvidenceError("aggregate_case_retention_invalid")
+
+
+def _case_cleanup_journal_present(deletion: dict[str, object]) -> bool:
+    return any(deletion.get(key) is not None for key in (
+        "journal_path", "journal_sha256", "authorization_sha256",
+    ))
+
+
+@dataclass(frozen=True)
+class _CaseObservation:
+    directory: Path
+    source: dict[str, object] | None
+    source_digest: str | None
+    cleanup: dict[str, object]
+    proof: dict[str, object]
+    creation_identity: dict[str, object] | None
+    error: str | None
+
+
+def _source_proof_error(
+        row: MatrixRow, source: dict[str, object] | None, proof: Mapping[str, object],
+        evidence_error: str | None) -> str | None:
+    if source is None and evidence_error is None:
+        evidence_error = "source_receipt_missing"
+    if (proof.get("gate") != "acceptance-native"
+            or proof.get("provider") != row.definition.provider
+            or proof.get("permission") != row.definition.permission
+            or proof.get("mode") != row.definition.permission
+            or proof.get("scenario") != row.definition.scenario):
+        evidence_error = evidence_error or "source_proof_identity_mismatch"
+    requested_options_state = proof.get("requested_options_state")
+    if requested_options_state != "recorded":
+        evidence_error = evidence_error or (
+            "source_requested_options_missing"
+            if requested_options_state == "missing"
+            else "source_requested_options_invalid"
+        )
+    production = proof.get("production_acp")
+    if (row.status == "PASS" and requires_production_acp(row.definition.provider)
+            and (not isinstance(production, dict) or production.get("state") != "complete")):
+        state = production.get("state") if isinstance(production, dict) else None
+        evidence_error = evidence_error or (
+            "source_production_acp_missing" if state in {None, "missing"}
+            else "source_production_acp_invalid")
+    if row.status == "PASS" and proof.get("state") != "complete":
+        evidence_error = evidence_error or "source_proof_incomplete"
+    return evidence_error
+
+
+def _unresolved_source_proof(row: MatrixRow, source_digest: str | None) -> dict[str, object]:
+    return {
+        "state": "unresolved", "final_status": row.status,
+        "source_receipt_sha256": source_digest,
+        "source_status": None, "gate": "acceptance-native",
+        "provider": row.definition.provider, "permission": row.definition.permission,
+        "mode": row.definition.permission, "scenario": row.definition.scenario,
+        "requested_options_state": "missing", "requested_model": None,
+        "requested_effort": None,
+        "task_ids": [], "task_session_bindings": [], "diagnostic_task_ids": [],
+        "session_ids": {
+            "state": "not-recorded", "values": [], "by_alias": {},
+        },
+        "binary_identities": {
+            "schema_version": 2, "representation": "installed-paths",
+            "state": "unavailable", "paths": {}, "task_ids": [],
+            "provider_binding": None, "provider_runtime_identities": {},
+        },
+        "lifecycle_proof": {"state": "unresolved"},
+    }
+
+
+def _case_exit_code(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= 255:
+        raise EvidenceError("aggregate_case_exit_invalid")
+    return value
+
+
+def _validate_aggregate_result(
+        value: Mapping[str, object], cases: list[dict[str, object]]) -> int:
+    statuses = [case["status"] for case in cases]
+    if (value.get("case_count") != len(cases)
+            or value.get("pass_count") != statuses.count("PASS")
+            or value.get("blocked_count") != statuses.count("BLOCKED")
+            or value.get("failed_count") != statuses.count("FAIL")):
+        raise EvidenceError("aggregate_count_mismatch")
+    evidence_unresolved = any(case["evidence_status"] == "UNRESOLVED" for case in cases)
+    expected_unresolved = [case["case_id"] for case in cases if case["evidence_status"] == "UNRESOLVED"]
+    unresolved_cases = value.get("unresolved_cases")
+    unresolved_count = value.get("unresolved_case_count")
+    if (not isinstance(unresolved_cases, list) or type(unresolved_count) is not int
+            or unresolved_count != len(unresolved_cases)
+            or any(not isinstance(item, str) for item in unresolved_cases)
+            or len(set(unresolved_cases)) != len(unresolved_cases)
+            or not set(expected_unresolved).issubset(
+                set(item for item in unresolved_cases if isinstance(item, str)))):
+        raise EvidenceError("aggregate_unresolved_count_mismatch")
+    computed = _case_result_verdict(tuple(
+        MatrixRow(CaseDefinition(
+            str(case["case_id"]), str(case["provider"]), str(case["permission"]),
+            str(case["scenario"]), ""), _case_exit_code(case["exit_code"]), str(case["status"]),
+        ) for case in cases
+    ), evidence_unresolved)
+    if value.get("case_results_verdict") != computed:
+        raise EvidenceError("aggregate_result_mismatch")
+    status = value.get("status")
+    if not isinstance(status, str) or status not in {"PASS", "BLOCKED", "FAIL"}:
+        raise EvidenceError("aggregate_status_invalid")
+    if status == "FAIL" and computed != "FAIL" and value.get("unresolved_case_count", 0) == 0:
+        raise EvidenceError("aggregate_result_mismatch")
+    if status in {"PASS", "BLOCKED"} and (computed != status or value.get("unresolved_case_count") != 0):
+        raise EvidenceError("aggregate_result_mismatch")
+    policy = value.get("policy")
+    if not isinstance(policy, dict) or type(policy.get("require_at_least_one_pass")) is not bool:
+        raise EvidenceError("aggregate_policy_invalid")
+    expected_exit = _aggregate_exit(str(status), computed, bool(policy["require_at_least_one_pass"]))
+    if value.get("exit_code") != expected_exit:
+        raise EvidenceError("aggregate_exit_mismatch")
+    if value.get("blocked_scope") != "authentication-or-prerequisite-only":
+        raise EvidenceError("aggregate_blocked_scope_invalid")
+    return unresolved_count
+
+
+def _validate_aggregate_evidence(value: dict[str, object], unresolved_count: int) -> None:
+    evidence = value.get("evidence")
+    if (not isinstance(evidence, dict) or not isinstance(evidence.get("case_raw"), dict)
+            or not isinstance(evidence.get("compact_receipts"), dict)):
+        raise EvidenceError("aggregate_evidence_invalid")
+    _validate_summary(evidence["case_raw"].get("before"))
+    _validate_summary(evidence["case_raw"].get("after"))
+    _validate_summary(evidence["compact_receipts"])
+    raw_after = evidence["case_raw"]["after"]
+    if (unresolved_count == 0 and (
+            raw_after.get("complete") is not True
+            or raw_after.get("file_count") != 0
+            or raw_after.get("byte_count") != 0)):
+        raise EvidenceError("aggregate_case_raw_cleanup_incomplete")

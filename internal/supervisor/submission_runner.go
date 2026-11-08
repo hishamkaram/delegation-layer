@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -24,7 +26,7 @@ func ValidateManagedRetryRunnerContext(ctx context.Context, td *taskdir.TaskDir,
 		return task.ErrIdentityMismatch
 	}
 	if runner == meta.RunnerExecutable && !pueue.IsLegacyStateRunnerPath(root, runner) {
-		_, err = ResolveRunner(runner, "")
+		_, err = installation.ResolveRunner(runner, "")
 		return err
 	}
 	if err = target.ValidateExecutable(runner); err != nil {

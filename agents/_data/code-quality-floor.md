@@ -100,8 +100,9 @@ This document specifies the non-negotiable engineering floor for the repository.
   leak fixture. Helper processes exercising deliberate ownership transfer must
   retain their explicit exit behavior. A clean goroutine scan is not evidence
   that independent child processes exited; native closure tests remain required.
-  Initial adoption covers execution, scheduler host, Pueue control and application
-  composition. This does not establish leak-check coverage for the remaining
+  Adoption covers execution, scheduler host, Pueue control, application
+  composition, infrastructure host, remote commands, remote payload and workspace
+  worker tests. This does not establish leak-check coverage for the remaining
   goroutine owners (guardian, lifetime, supervisor, scheduler runtime, transport,
   inspection probes, verified execution and provider inspection).
 - **No Test Weakening**: Tests must never be loosened, assertions must not be bypassed, and linters must never be suppressed to force green status.

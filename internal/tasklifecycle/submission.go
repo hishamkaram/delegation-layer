@@ -3,6 +3,8 @@ package tasklifecycle
 import (
 	"context"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -40,7 +42,7 @@ func SubmitSavedContext(ctx context.Context, td *taskdir.TaskDir, req *task.Task
 		return submissionFailure(SubmissionClient, supervisorcore.ClosePrivateAdmissionTransition(client, err))
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, result.Err()) }()
-	runner, err := supervisorcore.ResolveTaskRunner(options.RequestedRunner, options.DefaultRunner, meta)
+	runner, err := installation.ResolveTaskRunner(options.RequestedRunner, options.DefaultRunner, meta)
 	if err != nil {
 		return submissionFailure(SubmissionRunner, err)
 	}
@@ -78,7 +80,7 @@ func SubmitWithProfileContext(ctx context.Context, td *taskdir.TaskDir, req *tas
 	if err := profile.ValidateAdmission(*req); err != nil {
 		return submissionFailure(SubmissionProfile, err)
 	}
-	runner, err := supervisorcore.ResolveTaskRunner(options.RequestedRunner, options.DefaultRunner, meta)
+	runner, err := installation.ResolveTaskRunner(options.RequestedRunner, options.DefaultRunner, meta)
 	if err != nil {
 		return submissionFailure(SubmissionRunner, err)
 	}

@@ -3,6 +3,7 @@ package resourceadmission
 // evaluator folds the snapshots of one check into per-metric sequences. It
 // lives only for that check.
 type evaluator struct {
+	policy        GuardPolicy
 	hostCPU       track
 	hostMemory    track
 	cgroupCPU     track
@@ -17,36 +18,36 @@ type evaluator struct {
 func (e *evaluator) step(prev *snapshot, cur snapshot) {
 	if prev == nil {
 		e.expect(cur)
-		e.hostMemory.baseline(hostMemoryOutcome(cur.memory))
+		e.hostMemory.baseline(e.memoryOutcome(hostMemoryOutcome(cur.memory)))
 	} else {
-		e.hostMemory.record(hostMemoryOutcome(cur.memory))
+		e.hostMemory.record(e.memoryOutcome(hostMemoryOutcome(cur.memory)))
 	}
 	if cur.cgroup.ok {
 		if e.cgroupPath == "" {
 			e.cgroupPath = cur.cgroup.value.path
 		}
-		e.memoryHighHit = e.memoryHighHit || memoryHighNear(cur.cgroup)
+		e.memoryHighHit = !e.policy.DisableMemory && (e.memoryHighHit || memoryHighNear(cur.cgroup))
 	}
 	if prev == nil {
 		return
 	}
 	elapsed := cur.at.Sub(prev.at)
 	cpu := evaluateHostCPU(prev.cpu, cur.cpu)
-	e.hostCPU.record(cpu.outcome)
-	if cpu.outcome.state != outcomeSkipped && len(e.cpuIntervals) < requiredStreak {
+	e.hostCPU.record(e.cpuOutcome(cpu.outcome))
+	if !e.policy.DisableCPU && cpu.outcome.state != outcomeSkipped && len(e.cpuIntervals) < requiredStreak {
 		e.cpuIntervals = append(e.cpuIntervals, hostCPUInterval(elapsed, cpu))
 	}
-	e.cgroupCPU.record(cgroupCPUOutcome(prev.cgroup, cur.cgroup, elapsed))
-	e.cgroupMemory.record(cgroupMemoryOutcome(prev.cgroup, cur.cgroup, elapsed))
+	e.cgroupCPU.record(e.cpuOutcome(cgroupCPUOutcome(prev.cgroup, cur.cgroup, elapsed)))
+	e.cgroupMemory.record(e.memoryOutcome(cgroupMemoryOutcome(prev.cgroup, cur.cgroup, elapsed)))
 }
 
 // expect registers every metric the platform provides so that a check cut
 // short reports it unavailable instead of omitting it.
 func (e *evaluator) expect(first snapshot) {
-	e.hostCPU.seen = !first.cpu.skipped()
-	e.hostMemory.seen = !first.memory.skipped()
-	e.cgroupCPU.seen = !first.cgroup.skipped()
-	e.cgroupMemory.seen = !first.cgroup.skipped()
+	e.hostCPU.seen = !e.policy.DisableCPU && !first.cpu.skipped()
+	e.hostMemory.seen = !e.policy.DisableMemory && !first.memory.skipped()
+	e.cgroupCPU.seen = !e.policy.DisableCPU && !first.cgroup.skipped()
+	e.cgroupMemory.seen = !e.policy.DisableMemory && !first.cgroup.skipped()
 }
 
 // pending reports whether any metric is hot but not yet confirmed.
@@ -114,4 +115,18 @@ func (e *evaluator) findings() Findings {
 		}
 	}
 	return f
+}
+
+func (e *evaluator) cpuOutcome(value outcome) outcome {
+	if e.policy.DisableCPU {
+		return skippedOutcome
+	}
+	return value
+}
+
+func (e *evaluator) memoryOutcome(value outcome) outcome {
+	if e.policy.DisableMemory {
+		return skippedOutcome
+	}
+	return value
 }

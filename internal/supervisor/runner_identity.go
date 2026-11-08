@@ -29,7 +29,7 @@ func ManagedInspectionBinding(root string, binding inspection.Binding) bool {
 
 // ManagedInspectionWorkerExecutable reads persisted ownership, not image bytes.
 // The canonical operation and its upgrade journal retain worker authority.
-func ManagedInspectionWorkerExecutable(_ string, binding inspection.Binding) bool {
+func ManagedInspectionWorkerExecutable(binding inspection.Binding) bool {
 	return binding.RunnerOwnership == task.RunnerOwnershipManaged &&
 		filepath.IsAbs(binding.WorkerExecutable) && filepath.Clean(binding.WorkerExecutable) == binding.WorkerExecutable
 }

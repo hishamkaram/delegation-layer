@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -288,7 +290,7 @@ func TestCheckpointListReadsMetadataOnly(t *testing.T) {
 	workspacefixture.MakeBareOperationDirectory(t, store, strings.Repeat("8", 32))
 	// Every checkpoint and removal record lives under the operation journal.
 	journal := filepath.Dir(workspacefixture.OperationDirectory(store, qualified))
-	before := snapshotContinuationSuccessorTestState(t, journal)
+	before := supervisorfixture.SnapshotStore(t, journal)
 
 	states := map[string]string{}
 	for argv := []string{"list", "--limit", "1"}; ; {
@@ -311,7 +313,7 @@ func TestCheckpointListReadsMetadataOnly(t *testing.T) {
 	if !reflect.DeepEqual(states, want) {
 		t.Fatalf("listed states = %v, want %v", states, want)
 	}
-	if after := snapshotContinuationSuccessorTestState(t, journal); !reflect.DeepEqual(after, before) {
+	if after := supervisorfixture.SnapshotStore(t, journal); !reflect.DeepEqual(after, before) {
 		t.Fatal("checkpoint list changed the operation journal")
 	}
 	fixture.requireAdds(t, 3)

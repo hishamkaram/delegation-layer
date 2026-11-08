@@ -263,7 +263,7 @@ func TestPublicSupervisorMigratePreservesMissingHistoricalConfig(t *testing.T) {
 	if err := os.Remove(configPath); err != nil {
 		t.Fatal(err)
 	}
-	privateBefore := capturePairFaultWitness(t, filepath.Dir(configPath))
+	privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(configPath))
 	startsBefore := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
 	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
 	deps := withSupervisorProbeRouting(t, fixture.dependencies(), fixture.component)
@@ -271,7 +271,7 @@ func TestPublicSupervisorMigratePreservesMissingHistoricalConfig(t *testing.T) {
 	if result.code == 0 || result.err == nil {
 		t.Fatal("public migration accepted a missing historical config")
 	}
-	assertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
 	if _, err := os.Stat(configPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("refused migration recreated historical config: %v", err)
 	}
@@ -315,8 +315,8 @@ func TestPublicSupervisorMigrateRepairsStoppedMissingInstalledPair(t *testing.T)
 		}
 	}
 	resetHistoricalSupervisorCommandLog(t, fixture)
-	privateBefore := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
-	if privateBefore["bootstrap.pending"].present || privateBefore["migration.json"].present || privateBefore["migration-history.json"].present {
+	privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+	if privateBefore["bootstrap.pending"].Present || privateBefore["migration.json"].Present || privateBefore["migration-history.json"].Present {
 		t.Fatal("stopped installed fixture already authorized a transition")
 	}
 	taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
@@ -328,7 +328,7 @@ func TestPublicSupervisorMigrateRepairsStoppedMissingInstalledPair(t *testing.T)
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("stopped missing installed pair did not refuse dispatch admission: %v", err)
 	}
-	assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
 	result := migratePairFault(t, "stopped missing installed pair", fixture.root, deps, fixture.component)
 	control := result.response.SupervisorControl
 	if result.code != 0 || result.err != nil || control.State != "migrated" || control.NextAction != "retry_dispatch" {
@@ -389,7 +389,7 @@ func runStoppedCallbackMigration(t *testing.T, withGroup bool) {
 	t.Helper()
 	fixture, head, observerErrors := prepareStoppedCallbackMigration(t, withGroup)
 	before := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
-	privateBefore := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+	privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
 	deps := fixture.dependencies()
 	err := dispatchPairFault(t, "stopped callback installation", func(ctx context.Context) (*pueue.Client, error) {
 		return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), fixture.store, fixture.options)
@@ -397,7 +397,7 @@ func runStoppedCallbackMigration(t *testing.T, withGroup bool) {
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("ordinary admission did not refuse stopped missing installation: %v", err)
 	}
-	assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
 	result := migratePairFault(t, "stopped callback installation", fixture.root, deps, fixture.component)
 	control := result.response.SupervisorControl
 	if result.code != 0 || result.err != nil || control.State != "migrated" || control.NextAction != "retry_dispatch" {
@@ -467,13 +467,13 @@ func TestPublicStoppedCallbackMigrationRefusesUnsafeRestore(t *testing.T) {
 			fixture, head, observerErrors := prepareStoppedCallbackMigration(t, true)
 			writeUnsafeStoppedCallbackRestore(t, fixture, fault)
 			taskBefore := snapshotOutputUpgradeTask(t, fixture.root, fixture.req.TaskID)
-			privateBefore := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+			privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
 			result := migratePairFault(t, fault, fixture.root, fixture.dependencies(), fixture.component)
 			control := result.response.SupervisorControl
 			if result.code == 0 || result.err == nil || control.State != "unavailable" || control.NextAction == "wait_for_legacy_work" {
 				t.Fatalf("unsafe cold restore did not refuse before recovery: control=%+v err=%v", control, result.err)
 			}
-			assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
+			testsupport.AssertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), privateBefore)
 			assertCallbackMigrationHasNoIntent(t, fixture)
 			assertCallbackMigrationAliasRetired(t, fixture.root)
 			assertHistoricalMigrationGroupUnchanged(t, fixture, head)
@@ -570,7 +570,7 @@ func failStoppedCallbackPreparation(t *testing.T, fixture *historicalSupervisorF
 	original := readSupervisorProbeTestFile(t, fixture.predecessor.ConfigPath)
 	denied := errors.New("injected callback preparation commit fault")
 	options := fixture.component.setupOptions(fixture.options)
-	options.PrivateGenerationGuard = infrastructurePreparationGuard(func(ctx context.Context, root string, commit func() error) error {
+	options.PrivateGenerationGuard = componentGenerationGuard(func(ctx context.Context, root string, commit func() error) error {
 		alias, present, err := pueue.ReadPrivateRecoveryBinding(root)
 		if err != nil {
 			return err
@@ -663,7 +663,7 @@ func TestStoppedCallbackMigrationRefusesDifferentIdentityAlias(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before := capturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
+	before := testsupport.CapturePairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath))
 	starts := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
 	deps := fixture.dependencies()
 	deps.InitialSupervisorExecutable = clientC
@@ -671,7 +671,7 @@ func TestStoppedCallbackMigrationRefusesDifferentIdentityAlias(t *testing.T) {
 	if result.code == 0 || result.err == nil || result.response.SupervisorControl.State != "unavailable" {
 		t.Fatalf("different alias authorized a stopped generation: control=%+v err=%v", result.response.SupervisorControl, result.err)
 	}
-	assertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), before)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(fixture.predecessor.ConfigPath), before)
 	assertPublishedCallbackPredecessorRetained(t, fixture, published, legacy)
 	if !bytes.Equal(starts, readSupervisorProbeTestFile(t, fixture.daemonStartLog)) || len(fixture.component.daemonWaits()) != len(waits) {
 		t.Fatal("different-identity stopped alias started a daemon")
@@ -1054,7 +1054,7 @@ func publishCallbackMigrationBeforeAliasCleanup(t *testing.T, fixture *historica
 	cleanupFault := errors.New("injected callback alias retirement fault")
 	var selected task.SupervisorRef
 	options := fixture.component.setupOptions(fixture.options)
-	options.PrivateGenerationGuard = infrastructurePreparationGuard(func(ctx context.Context, root string, commit func() error) error {
+	options.PrivateGenerationGuard = componentGenerationGuard(func(ctx context.Context, root string, commit func() error) error {
 		published, found, err := pueue.ReadPrivateSupervisorBinding(root)
 		if err != nil {
 			return err
@@ -1206,7 +1206,7 @@ func prepareLiveCallbackMigration(t *testing.T, fixture *historicalSupervisorFix
 func prepareCommittedHistoricalCallbackTask(t *testing.T, fixture *historicalSupervisorFixture) {
 	t.Helper()
 	workspace, _ := prepareHistoricalSupervisorExecutables(t, fixture)
-	fixture.options = withDefaultSupervisorCallbacks(pueue.Options{
+	fixture.options = nativeInfrastructureCallbacks().ApplyTo(pueue.Options{
 		ObservationTimeout:         pueue.DefaultObservationTimeout,
 		Environment:                pueue.DefaultEnvironment(),
 		PrivateTerminalEventRunner: fixture.runner,
@@ -1412,8 +1412,8 @@ func runStoppedHistoricalMigrationRefusal(t *testing.T, missing bool) {
 	stopHistoricalInstallationPredecessor(t, fixture)
 	configPath := pueue.PrivateConfigPath(fixture.root)
 	configBefore := readSupervisorProbeTestFile(t, configPath)
-	privateBefore := capturePairFaultWitness(t, filepath.Dir(configPath))
-	if privateBefore["migration.json"].present || privateBefore["migration-history.json"].present {
+	privateBefore := testsupport.CapturePairFaultWitness(t, filepath.Dir(configPath))
+	if privateBefore["migration.json"].Present || privateBefore["migration-history.json"].Present {
 		t.Fatal("stopped fixture already authorized a migration")
 	}
 	startsBefore := readSupervisorProbeTestFile(t, fixture.daemonStartLog)
@@ -1427,7 +1427,7 @@ func runStoppedHistoricalMigrationRefusal(t *testing.T, missing bool) {
 	if control.ReasonCode != "historical_target_not_ready" || control.NextAction != "stop_and_report" || !errors.Is(result.err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("stopped historical migration lost its refusal reason or action: %+v: %v", control, result.err)
 	}
-	assertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
+	testsupport.AssertPairFaultWitness(t, filepath.Dir(configPath), privateBefore)
 	if !bytes.Equal(configBefore, readSupervisorProbeTestFile(t, configPath)) {
 		t.Fatal("refused stopped migration changed historical config")
 	}
@@ -1764,7 +1764,7 @@ func prepareStoppedInspectionMigration(t *testing.T, scenario *historicalInspect
 	prepareInterruptedInspectionMigration(t, scenario, true)
 	denied := errors.New("injected fault after durable predecessor stop")
 	options := fixture.component.setupOptions(fixture.options)
-	options.PrivateGenerationGuard = infrastructurePreparationGuard(func(ctx context.Context, root string, commit func() error) error {
+	options.PrivateGenerationGuard = componentGenerationGuard(func(ctx context.Context, root string, commit func() error) error {
 		if err := fixture.component.GuardPrivateGenerationCommit(ctx, root, commit); err != nil {
 			return err
 		}
@@ -1817,7 +1817,7 @@ func TestExplicitMigrationRefusesMissingRecordedSuccessorAfterShutdown(t *testin
 	prepareStoppedInspectionMigration(t, scenario)
 	clientC, _ := installInspectionMigrationTargetC(t, fixture)
 	privateBase := filepath.Join(fixture.root, ".supervisor")
-	privateBefore := capturePairFaultWitness(t, privateBase)
+	privateBefore := testsupport.CapturePairFaultWitness(t, privateBase)
 	configBefore := readSupervisorProbeTestFile(t, pueue.PrivateConfigPath(fixture.root))
 	proposals := snapshotRetainedInspectionProposals(t, fixture.root)
 	requestPath := filepath.Join(fixture.root, "inspection-group", "request.json")
@@ -1837,7 +1837,7 @@ func TestExplicitMigrationRefusesMissingRecordedSuccessorAfterShutdown(t *testin
 	if result.code == 0 || control == nil || control.ReasonCode != "transition_pending" || control.NextAction != "stop_and_report" {
 		t.Fatalf("missing pinned successor lost actionable refusal: code=%d control=%+v err=%v", result.code, control, result.err)
 	}
-	assertPairFaultWitness(t, privateBase, privateBefore)
+	testsupport.AssertPairFaultWitness(t, privateBase, privateBefore)
 	assertRetainedInspectionProposals(t, proposals)
 	if !maps.EqualFunc(proposals, snapshotRetainedInspectionProposals(t, fixture.root), bytes.Equal) || !bytes.Equal(requestBefore, readSupervisorProbeTestFile(t, requestPath)) {
 		t.Fatal("refusal appended a replacement proposal or changed the original group request")
@@ -2086,4 +2086,11 @@ func TestInspectionMigrationUsesActivePredecessorAfterPathRelocation(t *testing.
 	if err != nil || !complete {
 		t.Fatalf("inspection edge was not committed after relocation: %t %v", complete, err)
 	}
+}
+
+// This component port supplies only publication within the fixture's owned root.
+type componentGenerationGuard func(context.Context, string, func() error) error
+
+func (g componentGenerationGuard) GuardPrivateGenerationCommit(ctx context.Context, root string, commit func() error) error {
+	return g(ctx, root, commit)
 }

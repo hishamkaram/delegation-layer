@@ -1,5 +1,7 @@
 package admission
 
+import "github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 import supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 // configuredRole comes from application installation configuration, never the
@@ -9,7 +11,7 @@ func managedSuccessorTarget(configuredRole, recorded, selected string) (supervis
 	if recorded == selected {
 		return supervisorcore.RunnerRepairTarget{}, nil
 	}
-	installed, err := supervisorcore.ResolveRunner("", configuredRole)
+	installed, err := installation.ResolveRunner("", configuredRole)
 	if err != nil {
 		return supervisorcore.RunnerRepairTarget{}, err
 	}

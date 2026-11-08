@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "a19dc328c89489a7ddec6f20c58cbb291205c31c",
+      "revision": "9c161ec0d4369e6881933915dbbd170b0afedaf2",
       "link_mode": "local-only"
     }
   },
@@ -58,9 +58,9 @@
           "label": "Active cancel; terminal task unchanged"
         },
         {
-          "path": "internal/app/remote_cli.go",
-          "line": 137,
-          "end_line": 180,
+          "path": "internal/app/remote.go",
+          "line": 18,
+          "end_line": 55,
           "label": "Origin references and remote operations"
         }
       ]
@@ -98,21 +98,21 @@
       "sublabel": "remote lifecycle",
       "sources": [
         {
-          "path": "internal/app/remote_serve.go",
-          "line": 207,
-          "end_line": 258,
-          "label": "Admit or existing-only reconcile"
+          "path": "internal/app/remote.go",
+          "line": 91,
+          "end_line": 124,
+          "label": "Canonical admission, reconciliation and controls"
         },
         {
-          "path": "internal/app/remote_serve.go",
-          "line": 272,
-          "end_line": 284,
-          "label": "Controls reuse ordinary commands"
+          "path": "internal/app/remotecommands/server.go",
+          "line": 145,
+          "end_line": 202,
+          "label": "Single destination operation router"
         },
         {
-          "path": "internal/app/remote_owner.go",
-          "line": 41,
-          "end_line": 55,
+          "path": "internal/app/remotecommands/resident.go",
+          "line": 11,
+          "end_line": 26,
           "label": "Require prepared persistent resident"
         }
       ]
@@ -130,9 +130,9 @@
           "label": "Receipt commits before enqueue"
         },
         {
-          "path": "internal/tasklifecycle/stop.go",
-          "line": 14,
-          "end_line": 82,
+          "path": "internal/tasklifecycle/stop/operation.go",
+          "line": 18,
+          "end_line": 103,
           "label": "Idle task stopping requires owner lease"
         }
       ]
@@ -631,7 +631,7 @@
       "dot": "amber",
       "title": "Cancellation and continuation",
       "items": [
-        "The active guardian handles native termination. If the task is idle, stopping the saved queue row requires its lifetime-owner lease; an acknowledgement alone does not prove closure (internal/tasklifecycle/stop.go:14–82).",
+        "The active guardian handles native termination. If the task is idle, stopping the saved queue row requires its lifetime-owner lease; an acknowledgement alone does not prove closure (internal/tasklifecycle/stop/operation.go:18–103).",
         "The new continuation task uses the saved provider session in the caller's current scope. A missing or incompatible session refuses continuation; it does not invent one."
       ]
     },
@@ -649,7 +649,7 @@
       "items": [
         "E is a separate remote request, not a step after local continuation. Destination reuses A/B execution and C cancellation. The caller owns origin intent and observation records; destination TaskDir alone owns task state (internal/remote/reference.go:19–35,66–100,184–214).",
         "A durable before-send marker prevents another admit after an uncertain transmission. Reconnection performs existing-only reconciliation under the same destination identity, not a provider restart (internal/remote/coordinator.go:24–103).",
-        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
+        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remotecommands/origin.go:255–283)."
       ]
     }
   ]

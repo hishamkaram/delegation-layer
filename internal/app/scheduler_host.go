@@ -7,9 +7,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/scheduler"
+
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/host"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -51,7 +54,7 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	if a.Runner != "" {
 		return failed(response, errors.New("scheduler serve requires the colocated managed delegate-run; omit --runner"), 2)
 	}
-	if _, err = supervisorcore.ResolveRunner("", deps.RunnerExecutable); err != nil {
+	if _, err = installation.ResolveRunner("", deps.RunnerExecutable); err != nil {
 		return failed(response, err, 1)
 	}
 	self, err := schedulerExecutable()
@@ -64,7 +67,7 @@ func serveScheduler(ctx context.Context, a Arguments, deps Dependencies) (result
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
-	schedules, err := openOrInitializeSchedules(ctx, store)
+	schedules, err := scheduler.OpenOrInitialize(ctx, store)
 	if err != nil {
 		return failed(response, err, 1)
 	}

@@ -7,19 +7,15 @@ import sys
 
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
-SHARED_COMMON = (SCRIPT_DIRECTORY / "acceptance_supervisor_common.py").resolve()
-COMMON_MODULE = "acceptance_supervisor_common"
-COMMON_MODULES = frozenset({COMMON_MODULE, "scripts.acceptance_supervisor_common"})
-PACKAGE_DIRECTORY = SCRIPT_DIRECTORY / "delegate_acceptance"
+OWNER_REFERENCE = "shared-lifecycle-owner"
+PACKAGE_DIRECTORY = SCRIPT_DIRECTORY / "acceptance"
 DIRECTORY_OWNER = (PACKAGE_DIRECTORY / "directories" / "operations.py").resolve()
 DIRECTORY_JOURNAL = (PACKAGE_DIRECTORY / "directories" / "journal.py").resolve()
 PROCESS_OWNER = (PACKAGE_DIRECTORY / "processes" / "operations.py").resolve()
 DIRECTORY_REMOVAL_FILES = frozenset({DIRECTORY_OWNER, DIRECTORY_JOURNAL})
 OWNER_MODULES = frozenset({
-    "scripts.delegate_acceptance.directories.operations",
-    "scripts.delegate_acceptance.processes.operations",
-    "delegate_acceptance.directories.operations",
-    "delegate_acceptance.processes.operations",
+    "scripts.acceptance.directories.operations",
+    "scripts.acceptance.processes.operations",
 })
 PROCESS_LIFECYCLE_TYPES = frozenset({"Process", "Processes", "OwnedProcess", "ProcessBook"})
 DIRECTORY_LIFECYCLE_TYPES = frozenset({"DirectoryOwner", "OwnedDirectory"})
@@ -53,10 +49,9 @@ CONTROLLED_MODULES = frozenset({
     "shutil",
     "subprocess",
     PROCESS_FACTORY_MODULE,
-    *COMMON_MODULES,
     *OWNER_MODULES,
 })
-CONTROLLED_COMMON_REFERENCES = frozenset({
+CONTROLLED_OWNER_REFERENCES = frozenset({
     "DirectoryOwner",
     "Processes",
     "remove_owned_directory",
@@ -65,7 +60,7 @@ CONTROLLED_DIRECT_NAMES = frozenset({
     "rmdir",
     "rmtree",
     "removedirs",
-    *CONTROLLED_COMMON_REFERENCES,
+    *CONTROLLED_OWNER_REFERENCES,
 })
 
 
@@ -82,8 +77,11 @@ class Violation:
 
 
 def production_paths() -> tuple[Path, ...]:
-    paths = set(SCRIPT_DIRECTORY.glob("acceptance_*.py"))
-    paths.update((SCRIPT_DIRECTORY / "delegate_acceptance").rglob("*.py"))
+    package = SCRIPT_DIRECTORY / "acceptance"
+    paths = {package / "__init__.py"}
+    paths.update(path for path in package.rglob("*.py")
+                 if "tests" not in path.relative_to(package).parts
+                 and not path.is_relative_to(package / "testing"))
     paths.update(SCRIPT_DIRECTORY / name for name in GOVERNED_TEST_FILES)
     return tuple(sorted(paths))
 
@@ -116,12 +114,12 @@ def _add_alias(
 
 
 def _controlled_reference(module: str, symbol: str) -> ControlledReference:
-    return (COMMON_MODULE if module in OWNER_MODULES | COMMON_MODULES else module, symbol)
+    return (OWNER_REFERENCE if module in OWNER_MODULES else module, symbol)
 
 
 def _owner_module_prefix(module: str) -> bool:
     return any(owner == module or owner.startswith(module + ".")
-               for owner in OWNER_MODULES | COMMON_MODULES)
+               for owner in OWNER_MODULES)
 
 
 def _absolute_import_module(node: ast.ImportFrom, path: Path | None) -> str | None:
@@ -163,7 +161,7 @@ def _import_aliases(tree: ast.AST, path: Path | None = None) -> ControlledAliase
             if module is None:
                 continue
             for imported in node.names:
-                if module in CONTROLLED_MODULES and (imported.name in CONTROLLED_COMMON_REFERENCES or (
+                if module in CONTROLLED_MODULES and (imported.name in CONTROLLED_OWNER_REFERENCES or (
                         module in {"os", "shutil"} and
                         imported.name in {"rmdir", "rmtree", "removedirs"}
                 ) or (module == "subprocess" and imported.name in SUBPROCESS_APIS)):
@@ -191,8 +189,8 @@ def _references(
         if references:
             return frozenset(references)
         if node.id in CONTROLLED_DIRECT_NAMES:
-            if node.id in CONTROLLED_COMMON_REFERENCES:
-                return frozenset({(COMMON_MODULE, node.id)})
+            if node.id in CONTROLLED_OWNER_REFERENCES:
+                return frozenset({(OWNER_REFERENCE, node.id)})
             if node.id == "rmdir":
                 return frozenset({("os", node.id)})
             return frozenset({("shutil", node.id)})
@@ -235,13 +233,13 @@ def _collect_controlled_aliases(tree: ast.AST, aliases: ControlledAliases) -> No
                     changed = True
 
 
-def _is_common_reference(
+def _is_owner_reference(
         node: ast.AST, symbol: str, aliases: ControlledAliases) -> bool:
-    return (COMMON_MODULE, symbol) in _references(node, aliases)
+    return (OWNER_REFERENCE, symbol) in _references(node, aliases)
 
 
 def _is_process_reference(node: ast.AST, aliases: ControlledAliases) -> bool:
-    return (COMMON_MODULE, "Processes") in _references(node, aliases)
+    return (OWNER_REFERENCE, "Processes") in _references(node, aliases)
 
 
 def _is_partial_reference(node: ast.AST, aliases: ControlledAliases) -> bool:
@@ -254,7 +252,7 @@ def _owner_receiver(
         owner_type_names: set[str],
         aliases: ControlledAliases,
 ) -> bool:
-    if _is_common_reference(node, "DirectoryOwner", aliases):
+    if _is_owner_reference(node, "DirectoryOwner", aliases):
         return True
     value = _name(node)
     if value is None:
@@ -267,7 +265,7 @@ def _owned_directory_constructor(
         node: ast.AST | None, aliases: ControlledAliases) -> bool:
     if not isinstance(node, ast.Call):
         return False
-    return _is_common_reference(node.func, "DirectoryOwner", aliases)
+    return _is_owner_reference(node.func, "DirectoryOwner", aliases)
 
 
 def _assignment_name(target: ast.AST) -> str | None:
@@ -364,7 +362,7 @@ def _call_violations(
             violations.append(_violation(
                 path, node, "legacy-register",
                 "DirectoryOwner.register is forbidden; use create or adopt_created"))
-        if _is_common_reference(node.func, "remove_owned_directory", aliases) and (
+        if _is_owner_reference(node.func, "remove_owned_directory", aliases) and (
                 len(node.args) != 1 or any(keyword.arg in {"directory", "parent"}
                                            for keyword in node.keywords)):
             violations.append(_violation(
@@ -502,7 +500,7 @@ def find_violations(paths: tuple[Path, ...] | list[Path]) -> tuple[Violation, ..
                     "directory lifecycle classes must be defined in the canonical directory owner"))
         owner_type_names = {
             name for name, references in aliases.items()
-            if (COMMON_MODULE, "DirectoryOwner") in references
+            if (OWNER_REFERENCE, "DirectoryOwner") in references
         }
         owner_type_names.add("DirectoryOwner")
         owner_names: set[str] = set()

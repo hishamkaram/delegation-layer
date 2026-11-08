@@ -112,7 +112,7 @@ func remoteServerEnvelope(t *testing.T, response remote.Response) Response {
 
 func TestRemoteHelloDoesNotInitializeMissingState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
-	response := executeRemote(t.Context(), remote.Request{Version: 1, Operation: remote.Hello, Root: root}, Dependencies{})
+	response := remoteFeature(Dependencies{}).Execute(t.Context(), remote.Request{Version: 1, Operation: remote.Hello, Root: root})
 	if response.Failure == nil || response.Failure.Code != "root_unavailable" {
 		t.Fatalf("response=%+v", response)
 	}
@@ -128,7 +128,7 @@ func TestRemoteReconcileAbsentRequestCannotCreateWork(t *testing.T) {
 	intent := fixture.intent
 	intent.TaskID = request.TaskID
 	request.Intent = &intent
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	envelope := remoteServerEnvelope(t, response)
 	if response.Existing || envelope.TaskRecord != "unknown" {
 		t.Fatalf("absent request gained authority: %+v", response)
@@ -148,7 +148,7 @@ func TestRemoteReconcileRejectsConflictingImmutableIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.Failure == nil || response.Failure.Code != "request_conflict" {
 		t.Fatalf("conflict not classified: %+v", response.Failure)
 	}
@@ -178,7 +178,7 @@ func TestRemoteRootPinChangePermitsPassiveReadAndRefusesCancellation(t *testing.
 	changed.RootInode++
 	request.Expected = &changed
 	before := remoteStoreInventory(t, fixture.store.Root)
-	response := executeRemote(t.Context(), request, fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), request)
 	envelope := remoteServerEnvelope(t, response)
 	if !response.RootPinChanged || envelope.Publication != "committed" {
 		t.Fatalf("passive read lost terminal outcome: %+v", response)
@@ -189,7 +189,7 @@ func TestRemoteRootPinChangePermitsPassiveReadAndRefusesCancellation(t *testing.
 	}
 	request.Operation = remote.Cancel
 	request.Control = &remote.Control{ID: strings.Repeat("e", 32)}
-	response = executeRemote(t.Context(), request, fixture.deps)
+	response = remoteFeature(fixture.deps).Execute(t.Context(), request)
 	if response.Failure == nil || response.Failure.Code != "root_pin_changed" {
 		t.Fatalf("mutation allowed after pin change: %+v", response)
 	}
@@ -243,7 +243,7 @@ func TestRemoteReconcileDirectoryWithoutRequestRemainsUnknown(t *testing.T) {
 	if err := os.Remove(requestPath); err != nil {
 		t.Fatal(err)
 	}
-	response := executeRemote(t.Context(), fixture.request(remote.Reconcile), fixture.deps)
+	response := remoteFeature(fixture.deps).Execute(t.Context(), fixture.request(remote.Reconcile))
 	envelope := remoteServerEnvelope(t, response)
 	if response.Existing || envelope.TaskRecord != "unknown" {
 		t.Fatalf("directory became receipt: %+v", response)

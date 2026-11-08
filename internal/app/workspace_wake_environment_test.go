@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -106,7 +108,7 @@ func bindPathRecordingSupervisor(t *testing.T, owner *componentSupervisorFixture
 	control, cancelControl := supervisorcore.ControlContextWithParent(t.Context(), options)
 	defer cancelControl()
 	firstWait := len(owner.daemonWaits())
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, owner.setupOptions(options))
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisorContext(control, installation.ExecutableLookup{InitialExecutable: clientPath}, store, owner.setupOptions(options))
 	owner.ownClient(client, err)
 	owner.ownDaemonClients(client, firstWait)
 	if err != nil {

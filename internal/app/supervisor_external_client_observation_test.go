@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -19,7 +21,7 @@ func TestStatusExternalClientReplacementObservesPublishedDaemon(t *testing.T) {
 	writeRunnerFixture(t, fixture.clientA, historicalSupervisorClientScript("A", fixture.readyPath, pid, fixture.statusPath, fixture.commandLog)+"\n# compatible installed client update\n")
 	before := snapshotObservationPhaseRecords(t, fixture)
 	commands := observePhaseStatusCommands(fixture)
-	client, err := supervisorcore.RecoverPrivateClient(t.Context(), fixture.store, fixture.predecessor, fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientB})
+	client, err := supervisorcore.RecoverPrivateClient(t.Context(), fixture.store, fixture.predecessor, fixture.options, installation.ExecutableLookup{InitialExecutable: fixture.clientB})
 	settleSupervisorProbeTestClient(t, client, err)
 	if err != nil || client == nil {
 		t.Fatalf("canonical compatible recovery failed: client=%v err=%v", client, err)

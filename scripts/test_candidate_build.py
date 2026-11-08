@@ -20,23 +20,26 @@ if __package__ in {None, ""}:
 
 import test_candidate_build_support as support
 from test_candidate_build_support import FixtureCase
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.processes import operations
-from scripts.delegate_acceptance.processes.contracts import (
-    BoundedCommandError, BoundedCommandResult, CommandFailure,
-)
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.release_verification import candidate_build
-from scripts.delegate_acceptance.release_verification.candidate_build_artifacts import BuildContext
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import (
-    BuildRequest, build_inputs, build_manifest,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build_source import child_environment
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    MANIFEST_PATH, ArtifactKind, encode_manifest, expected_inventory, parse_manifest,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.evidence.digests import sha
+from scripts.acceptance.processes import operations as operations
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import BoundedCommandResult
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.release_verification import candidate_build as candidate_build
+from scripts.release_verification.candidate_build_artifacts import BuildContext
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.release_verification.candidate_build_plan import build_inputs
+from scripts.release_verification.candidate_build_plan import build_manifest
+from scripts.acceptance.evidence.source import child_environment
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import ArtifactKind
+from scripts.release_verification.candidate_manifest import encode_manifest
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.acceptance.evidence.source import VerificationError
 
 
 PAYLOAD_NAMES = sorted([path for path, _kind, _os, _arch in expected_inventory(support.VERSION)]

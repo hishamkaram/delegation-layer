@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+
 import verify_acceptance_ownership as verifier
 
 
@@ -44,7 +45,7 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
 
     def test_register_is_rejected_but_unrelated_register_is_allowed(self):
         violations = self.violations(
-            "from acceptance_supervisor_common import DirectoryOwner\n"
+            "from scripts.acceptance.directories.operations import DirectoryOwner\n"
             "owner = DirectoryOwner()\nowner.register('root', path, parent)\n"
             "poller.register(fd)\n")
         self.assertEqual([item.kind for item in violations], ["legacy-register"])
@@ -55,7 +56,7 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
 
     def test_aliased_directory_owner_register_is_rejected(self):
         violations = self.violations(
-            "from acceptance_supervisor_common import DirectoryOwner as Owner\n"
+            "from scripts.acceptance.directories.operations import DirectoryOwner as Owner\n"
             "Owner.register(path)\n")
         self.assertEqual([item.kind for item in violations], ["legacy-register"])
 
@@ -327,20 +328,20 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
 
     def test_aliased_process_capture_requires_one_caller_owner(self):
         violations = self.violations(
-            "from acceptance_supervisor_common import Processes as OwnedProcesses\n"
+            "from scripts.acceptance.processes.operations import Processes as OwnedProcesses\n"
             "processes = OwnedProcesses(output / 'processes')\n")
         self.assertEqual([item.kind for item in violations], ["process-capture-owner"])
 
     def test_process_constructor_alias_cannot_bypass_owner_requirement(self):
         violations = self.violations(
-            "from acceptance_supervisor_common import Processes\n"
+            "from scripts.acceptance.processes.operations import Processes\n"
             "ProcessFactory = Processes\n"
             "processes = ProcessFactory(output / 'processes')\n")
         self.assertEqual([item.kind for item in violations], ["process-capture-owner"])
 
     def test_chained_process_constructor_alias_cannot_bypass_owner_requirement(self):
         violations = self.violations(
-            "from acceptance_supervisor_common import Processes\n"
+            "from scripts.acceptance.processes.operations import Processes\n"
             "First = Processes\n"
             "Second = First\n"
             "processes = Second(output / 'processes')\n")
@@ -349,14 +350,14 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
     def test_partial_process_factory_requires_owner_or_capture_root(self):
         violations = self.violations(
             "from functools import partial\n"
-            "from acceptance_supervisor_common import Processes\n"
+            "from scripts.acceptance.processes.operations import Processes\n"
             "ProcessBook = partial(Processes, stdout_capture_factory=factory)\n")
         self.assertEqual([item.kind for item in violations], ["process-capture-owner"])
 
     def test_partial_process_factory_with_owner_is_allowed_through_alias(self):
         violations = self.violations(
             "from functools import partial as make_factory\n"
-            "from acceptance_supervisor_common import Processes as P\n"
+            "from scripts.acceptance.processes.operations import Processes as P\n"
             "ProcessBook = make_factory(P, owner=owner)\n"
             "processes = ProcessBook(output / 'processes')\n")
         self.assertEqual(violations, ())
@@ -364,9 +365,10 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
     def test_local_partial_alias_retains_process_owner_validation(self):
         violations = self.violations(
             "import functools\n"
-            "import acceptance_supervisor_common as common\n"
+            "from scripts.acceptance.directories import operations as directory\n"
+            "from scripts.acceptance.processes import operations as process\n"
             "make_factory = functools.partial\n"
-            "process_factory = common.Processes\n"
+            "process_factory = process.Processes\n"
             "ProcessBook = make_factory(process_factory, stdout_capture_factory=factory)\n")
         self.assertEqual([item.kind for item in violations], ["process-capture-owner"])
 
@@ -433,17 +435,18 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
                 self.assertEqual(
                     [item.kind for item in self.violations(source)], ["direct-process-owner"])
 
-    def test_qualified_common_owner_calls_are_allowed(self):
+    def test_qualified_owner_calls_are_allowed(self):
         violations = self.violations(
-            "import acceptance_supervisor_common as common\n"
-            "owner = common.DirectoryOwner()\n"
+            "from scripts.acceptance.directories import operations as directory\n"
+            "from scripts.acceptance.processes import operations as process\n"
+            "owner = directory.DirectoryOwner()\n"
             "token = owner.create('root', path, parent)\n"
-            "common.Processes(path, owner=owner)\n"
-            "common.remove_owned_directory(token)\n")
+            "process.Processes(path, owner=owner)\n"
+            "directory.remove_owned_directory(token)\n")
         self.assertEqual(violations, ())
 
-    def test_shared_common_module_is_the_only_allowlisted_path(self):
-        self.assertEqual(verifier.find_violations((verifier.SHARED_COMMON,)), ())
+    def test_canonical_lifecycle_owners_pass_the_gate(self):
+        self.assertEqual(verifier.find_violations((verifier.DIRECTORY_OWNER, verifier.PROCESS_OWNER)), ())
 
     def test_provider_cannot_define_a_second_process_lifecycle_owner(self):
         violations = self.violations("class ProcessBook:\n    pass\n")
@@ -462,6 +465,7 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
         self.scripts.mkdir()
         self.enterContext(patch.object(verifier, "SCRIPT_DIRECTORY", self.scripts))
         self.governed = self.write_source("test_homebrew_formula_render.py")
+        self.initializer = self.write_source("acceptance/__init__.py")
 
     def write_source(self, relative: str, source: str = "") -> Path:
         path = self.scripts / relative
@@ -471,23 +475,25 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
 
     def test_discovery_includes_all_nested_package_python_files_in_order(self):
         expected = {
-            self.write_source("acceptance_existing.py"),
-            self.write_source("delegate_acceptance/__init__.py"),
-            self.write_source("delegate_acceptance/owners.py"),
-            self.write_source("delegate_acceptance/nested/__init__.py"),
-            self.write_source("delegate_acceptance/nested/neutral.py"),
-            self.write_source("delegate_acceptance/nested/test_helpers.py"),
+            self.write_source("acceptance/__init__.py"),
+            self.write_source("acceptance/owners.py"),
+            self.write_source("acceptance/nested/__init__.py"),
+            self.write_source("acceptance/nested/neutral.py"),
+            self.write_source("acceptance/nested/test_helpers.py"),
             self.governed,
         }
         self.write_source("unrelated.py")
-        self.write_source("acceptance_tests/test_helpers.py")
-        self.write_source("delegate_acceptance_backup/owners.py")
-        self.write_source("delegate_acceptance/nested/README.md")
+        self.write_source("acceptance/nested/tests/test_helpers.py")
+        self.write_source("acceptance/testing/shared.py")
+        self.write_source("acceptance_backup/owners.py")
+        self.write_source("acceptance/nested/README.md")
         self.assertEqual(verifier.production_paths(), tuple(sorted(expected)))
 
-    def test_missing_package_keeps_legacy_discovery(self):
-        expected = self.write_source("acceptance_existing.py")
-        self.assertEqual(verifier.production_paths(), tuple(sorted({expected, self.governed})))
+    def test_missing_package_is_not_silently_ignored(self):
+        self.initializer.unlink()
+        missing = self.scripts / "acceptance" / "__init__.py"
+        self.assertEqual(verifier.production_paths(), tuple(sorted({missing, self.governed})))
+        self.assertIn(missing, {item.path for item in verifier.find_violations(verifier.production_paths())})
 
     def test_default_gate_rejects_nested_renamed_modules_and_aliases(self):
         cases = (
@@ -497,21 +503,21 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
              "direct-process-owner"),
             ("import subprocess as sp\nexecute = sp.run\nexecute(argv)\n",
              "direct-process-owner"),
-            ("from acceptance_supervisor_common import Processes as P\n"
+            ("from scripts.acceptance.processes.operations import Processes as P\n"
              "Factory = P\nFactory(path)\n", "process-capture-owner"),
-            ("from acceptance_supervisor_common import DirectoryOwner as D\n"
+            ("from scripts.acceptance.directories.operations import DirectoryOwner as D\n"
              "Alias = D\nAlias.register(path)\n", "legacy-register"),
-            ("from acceptance_supervisor_common import remove_owned_directory as remove\n"
+            ("from scripts.acceptance.directories.operations import remove_owned_directory as remove\n"
              "remove(directory=path, parent=parent)\n", "path-only-removal"),
             ("import functools as f\n"
-             "from acceptance_supervisor_common import Processes as P\n"
+             "from scripts.acceptance.processes.operations import Processes as P\n"
              "bind = f.partial\nbind(P)\n", "process-capture-owner"),
             ("class ProcessBook:\n    pass\n", "duplicate-process-owner"),
         )
         for index, (source, kind) in enumerate(cases):
             with self.subTest(kind=kind):
                 path = self.write_source(
-                    f"delegate_acceptance/nested/case_{index}/neutral.py", source)
+                    f"acceptance/nested/case_{index}/neutral.py", source)
                 self.addCleanup(path.unlink)
                 violations = verifier.find_violations(verifier.production_paths())
                 self.assertIn((path, kind), [(item.path, item.kind) for item in violations])
@@ -521,19 +527,20 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
 
     def test_default_gate_accepts_nested_canonical_owner_calls_and_aliases(self):
         path = self.write_source(
-            "delegate_acceptance/nested/neutral.py",
-            "import acceptance_supervisor_common as common\n"
+            "acceptance/nested/neutral.py",
+            "from scripts.acceptance.directories import operations as directory\n"
+            "from scripts.acceptance.processes import operations as process\n"
             "from functools import partial as bind\n"
-            "Owner = common.DirectoryOwner\n"
+            "Owner = directory.DirectoryOwner\n"
             "owner = Owner()\n"
             "token = owner.create('capture', path, parent)\n"
-            "Factory = common.Processes\n"
+            "Factory = process.Processes\n"
             "Factory(path, capture_root=token)\n"
             "OwnedFactory = bind(Factory, owner=owner)\n"
             "OwnedFactory(path)\n"
-            "remove = common.remove_owned_directory\n"
+            "remove = directory.remove_owned_directory\n"
             "remove(token)\n")
-        self.assertEqual(verifier.production_paths(), tuple(sorted({path, self.governed})))
+        self.assertEqual(verifier.production_paths(), tuple(sorted({path, self.governed, self.initializer})))
         with patch.object(verifier.sys, "stderr", io.StringIO()) as errors:
             self.assertEqual(verifier.main(), 0)
         self.assertEqual(errors.getvalue(), "")
@@ -557,10 +564,10 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
 
     def test_nested_copies_of_owner_and_fixture_filenames_are_not_exempt(self):
         common = self.write_source(
-            "delegate_acceptance/nested/acceptance_supervisor_common.py",
+            "acceptance/nested/operations.py",
             "import shutil\nshutil.rmtree(root)\nclass Process:\n    pass\n")
         fixture = self.write_source(
-            "delegate_acceptance/nested/acceptance_private_cli.py",
+            "acceptance/nested/acceptance/private_cli/cli.py",
             "from subprocess import Popen as spawn\nspawn(argv)\n")
         violations = verifier.find_violations(verifier.production_paths())
         self.assertEqual(
@@ -572,18 +579,18 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
 class AcceptanceOwnershipExceptionTests(unittest.TestCase):
     def test_owner_and_fixture_exceptions_remain_exact_canonical_paths(self):
         scripts = Path(verifier.__file__).resolve().parent
-        self.assertEqual(verifier.SHARED_COMMON, scripts / "acceptance_supervisor_common.py")
+        self.assertEqual(verifier.DIRECTORY_OWNER, scripts / "acceptance" / "directories" / "operations.py")
         self.assertEqual(
             verifier.DIRECT_FIXTURE_SUBPROCESS_FILES,
-            frozenset({scripts / "delegate_acceptance" / "private_cli" / "capture.py"}))
+            frozenset({scripts / "acceptance" / "private_cli" / "capture.py"}))
 
     def test_only_exact_fixture_path_can_call_direct_popen(self):
         scripts = Path(verifier.__file__).resolve().parent
         paths = (
-            scripts / "delegate_acceptance" / "private_cli" / "capture.py",
-            scripts / "acceptance_private_cli.py",
-            scripts / "acceptance_private_cli_copy.py",
-            scripts / "delegate_acceptance" / "acceptance_private_cli.py",
+            scripts / "acceptance" / "private_cli" / "capture.py",
+            scripts / "acceptance/private_cli/cli.py",
+            scripts / "acceptance/private_cli/cli_copy.py",
+            scripts / "acceptance" / "nested" / "private_cli.py",
         )
         source = "import subprocess as sp\nspawn = sp.Popen\nspawn(argv)\n"
         with patch.object(Path, "read_text", return_value=source):
@@ -597,7 +604,7 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
         source = "import subprocess\n" + "".join(
             f"subprocess.{api}(argv)\n" for api in sorted(verifier.SUBPROCESS_APIS))
         for path in (verifier.PROCESS_OWNER,
-                     scripts / "delegate_acceptance" / "private_cli" / "capture.py"):
+                     scripts / "acceptance" / "private_cli" / "capture.py"):
             with self.subTest(path=path), patch.object(Path, "read_text", return_value=source):
                 self.assertEqual(verifier.find_violations((path,)), ())
 
@@ -614,7 +621,7 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
             "subprocess.run(['rm', '-rf', root])\n"
             "class Processes:\n    pass\n")
         with patch.object(Path, "read_text", return_value=source):
-            violations = verifier.find_violations((scripts / "delegate_acceptance" / "private_cli" / "capture.py",))
+            violations = verifier.find_violations((scripts / "acceptance" / "private_cli" / "capture.py",))
         self.assertEqual(
             {item.kind for item in violations},
             {"recursive-removal", "subprocess-removal", "duplicate-process-owner"})
@@ -636,7 +643,7 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
             (verifier.DIRECTORY_OWNER, {"duplicate-process-owner", "direct-process-owner"}),
             (verifier.DIRECTORY_JOURNAL,
              {"duplicate-process-owner", "duplicate-directory-owner", "direct-process-owner"}),
-            (verifier.SHARED_COMMON,
+            (Path(verifier.__file__).resolve().parent / "acceptance/private_cli/cli.py",
              {"duplicate-process-owner", "duplicate-directory-owner",
               "direct-process-owner", "recursive-removal"}),
         )
@@ -647,7 +654,7 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
     def test_operation_exceptions_do_not_allow_recursive_rm_or_missing_capture_owner(self):
         source = (
             "import subprocess\nsubprocess.run(['rm', '-rf', root])\n"
-            "from acceptance_supervisor_common import Processes\nProcesses(path)\n")
+            "from scripts.acceptance.processes.operations import Processes\nProcesses(path)\n")
         cases = (
             (verifier.PROCESS_OWNER, {"subprocess-removal", "process-capture-owner"}),
             (verifier.DIRECTORY_OWNER,
@@ -668,14 +675,14 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
 
     def test_canonical_package_import_and_assignment_aliases_require_capture_owner(self):
         imports = (
-            "from delegate_acceptance.processes.operations import Processes as P\n",
-            "import delegate_acceptance.processes.operations as p\nP = p.Processes\n",
-            "from delegate_acceptance.processes import operations as p\nP = p.Processes\n",
-            "import delegate_acceptance.processes.operations\n"
-            "P = delegate_acceptance.processes.operations.Processes\n",
+            "from scripts.acceptance.processes.operations import Processes as P\n",
+            "import scripts.acceptance.processes.operations as p\nP = p.Processes\n",
+            "from scripts.acceptance.processes import operations as p\nP = p.Processes\n",
+            "import scripts.acceptance.processes.operations\n"
+            "P = scripts.acceptance.processes.operations.Processes\n",
         )
         path = verifier.PROCESS_OWNER.parent / "nested" / "neutral.py"
-        canonical_imports = tuple(statement.replace("delegate_acceptance", "scripts.delegate_acceptance")
+        canonical_imports = tuple(statement.replace("acceptance", "acceptance")
                                   for statement in imports)
         for statement in (*imports, *canonical_imports):
             with self.subTest(statement=statement):
@@ -687,23 +694,23 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
 
     def test_canonical_directory_aliases_cannot_bypass_token_or_register_rules(self):
         source = (
-            "from delegate_acceptance.directories import operations as directory\n"
+            "from scripts.acceptance.directories import operations as directory\n"
             "Owner = directory.DirectoryOwner\nOwner.register(path)\n"
             "remove = directory.remove_owned_directory\nremove(path, parent)\n")
         path = verifier.DIRECTORY_OWNER.parent / "nested" / "neutral.py"
-        for statement in (source, source.replace("delegate_acceptance", "scripts.delegate_acceptance")):
+        for statement in (source, source.replace("acceptance", "acceptance")):
             with self.subTest(source=statement):
                 self.assertEqual(
                     {item.kind for item in self.violations(path, statement)},
                     {"legacy-register", "path-only-removal"})
 
-    def test_namespaced_facade_aliases_preserve_all_owner_requirements(self):
+    def test_namespaced_owner_aliases_preserve_all_owner_requirements(self):
         imports = (
-            "from scripts.acceptance_supervisor_common import Processes as Factory\n",
-            "import scripts.acceptance_supervisor_common as common\nFactory = common.Processes\n",
-            "from scripts import acceptance_supervisor_common as common\nFactory = common.Processes\n",
-            "import scripts.acceptance_supervisor_common\n"
-            "Factory = scripts.acceptance_supervisor_common.Processes\n",
+            "from scripts.acceptance.processes.operations import Processes as Factory\n",
+            "import scripts.acceptance.processes.operations as process\nFactory = process.Processes\n",
+            "from scripts.acceptance.processes import operations as process\nFactory = process.Processes\n",
+            "import scripts.acceptance.processes.operations\n"
+            "Factory = scripts.acceptance.processes.operations.Processes\n",
         )
         path = verifier.PROCESS_OWNER.parent / "nested" / "neutral.py"
         for statement in imports:
@@ -714,8 +721,8 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
                 self.assertEqual(
                     self.violations(path, statement + "Factory(path, capture_root=token)\n"), ())
         source = (
-            "from scripts.acceptance_supervisor_common import DirectoryOwner as Owner\n"
-            "from scripts.acceptance_supervisor_common import remove_owned_directory as remove\n"
+            "from scripts.acceptance.directories.operations import DirectoryOwner as Owner\n"
+            "from scripts.acceptance.directories.operations import remove_owned_directory as remove\n"
             "Owner.register(path)\nremove(path, parent)\n")
         self.assertEqual({item.kind for item in self.violations(path, source)},
                          {"legacy-register", "path-only-removal"})
@@ -725,7 +732,7 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
             "from ..processes.operations import Processes as Factory\n",
             "from ..processes import operations as owner\nFactory = owner.Processes\n",
             "from .. import processes as owner\nFactory = owner.operations.Processes\n",
-            "from ...delegate_acceptance.processes.operations import Processes as Factory\n",
+            "from ...acceptance.processes.operations import Processes as Factory\n",
         )
         path = verifier.PROCESS_OWNER.parent.parent / "nested" / "neutral.py"
         for statement in statements:
@@ -736,13 +743,13 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
                 self.assertEqual(
                     self.violations(path, statement + "Factory(path, capture_root=token)\n"), ())
 
-    def test_relative_directory_and_facade_aliases_keep_token_rules(self):
+    def test_relative_directory_aliases_keep_token_rules(self):
         sources = (
             "from ..directories import operations as owner\n"
             "Owner = owner.DirectoryOwner\nremove = owner.remove_owned_directory\n",
             "from .. import directories as owner\n"
             "Owner = owner.operations.DirectoryOwner\nremove = owner.operations.remove_owned_directory\n",
-            "from ... import acceptance_supervisor_common as owner\n"
+            "from ...acceptance.directories import operations as owner\n"
             "Owner = owner.DirectoryOwner\nremove = owner.remove_owned_directory\n",
         )
         path = verifier.DIRECTORY_OWNER.parent.parent / "nested" / "neutral.py"

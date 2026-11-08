@@ -3,7 +3,6 @@ package tasklifecycle
 import (
 	"errors"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -13,11 +12,11 @@ import (
 // graph. It confers no actuation or retry permission and differs from the
 // historical presence of a cleanup fault whose owner has already settled.
 func CleanupUnresolved(cause error) bool {
-	return pendingAdmissionCleanup(cause) || supervisorcore.CleanupHasRetainedStore(cause)
+	return pendingAdmissionCleanup(cause) || taskdir.CleanupHasRetainedStore(cause)
 }
 
 func closeAdmissionStore(store *taskdir.Store, cause error) (*taskdir.Store, error) {
-	if pendingAdmissionCleanup(cause) || supervisorcore.CleanupRetainsStore(cause, store) {
+	if pendingAdmissionCleanup(cause) || taskdir.CleanupRetainsStore(cause, store) {
 		return store, nil
 	}
 	if err := store.Close(); err != nil {

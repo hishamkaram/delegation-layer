@@ -6,17 +6,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// ErrSupervisorSelectionChanged refuses a replacement of an accepted resolved
-// native path. Canonical published generations are selected beforehand.
-var ErrSupervisorSelectionChanged = errors.New("private supervisor executable selection differs from accepted bootstrap")
-
-func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup installation.ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -43,7 +41,7 @@ func PreparePrivateAdmissionSupervisorContext(ctx context.Context, lookup Execut
 	}
 }
 
-func electPrivateAdmissionTransition(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, bool, error) {
+func electPrivateAdmissionTransition(ctx context.Context, lookup installation.ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, bool, error) {
 	var supervisor *pueue.Client
 	acquired, err := pueue.TryWithPrivateTransition(ctx, store.Root, func() error {
 		var probeErr error
@@ -60,7 +58,7 @@ func electPrivateAdmissionTransition(ctx context.Context, lookup ExecutableLooku
 	return supervisor, acquired, err
 }
 
-func PreparePrivateAdmissionTransition(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
+func PreparePrivateAdmissionTransition(ctx context.Context, lookup installation.ExecutableLookup, store *taskdir.Store, options pueue.Options) (*pueue.Client, error) {
 	configExisted, err := privateSupervisorConfigExisted(store.Root)
 	if err != nil {
 		return nil, err
@@ -114,8 +112,8 @@ func restartPublishedPrivateAdmission(ctx context.Context, store *taskdir.Store,
 	return supervisor, EnsureOrdinarySchedulingWithBootstrapLock(ctx, store.Root, supervisor)
 }
 
-func bootstrapPrivateAdmission(ctx context.Context, lookup ExecutableLookup, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, error) {
-	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(store.Root, lookup)
+func bootstrapPrivateAdmission(ctx context.Context, lookup installation.ExecutableLookup, store *taskdir.Store, options pueue.Options, configExisted bool) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := installation.ResolvePrivateSupervisorExecutables(lookup)
 	if err != nil {
 		return nil, err
 	}

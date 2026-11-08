@@ -30,7 +30,9 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/remote/payload"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -145,7 +147,7 @@ func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id stri
 	if closureErr != nil {
 		return errors.Join(releaseErr, closureErr)
 	}
-	_, captureErr := captureRemoteOutputs(ctx, store, td)
+	_, captureErr := payload.CaptureOutputs(ctx, store, td)
 	return errors.Join(releaseErr, captureErr)
 }
 
@@ -155,7 +157,7 @@ func releaseStoredTaskCustody(ctx context.Context, store *taskdir.Store, id stri
 type taskMaintenanceObserver struct {
 	root    string
 	options pueue.Options
-	lookup  supervisorcore.ExecutableLookup
+	lookup  installation.ExecutableLookup
 }
 
 func (o taskMaintenanceObserver) observeTask(ctx context.Context, td *taskdir.TaskDir) error {
@@ -351,7 +353,7 @@ func remoteTaskCapturePending(ctx context.Context, root string, td *taskdir.Task
 		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, directory.Close()) }()
-	_, err = readRemoteCapturePassive(ctx, directory, request.RootID, request.TaskID)
+	_, err = payload.ReadCapturePassive(ctx, directory, request.RootID, request.TaskID)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
 	}

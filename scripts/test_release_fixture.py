@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, Unpack
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.acceptance_tests.invalid_calls import invoke_invalid
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    UNRESOLVED_OWNERSHIP_CODES,
-)
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.testing.invalid_calls import invoke_invalid
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import UNRESOLVED_OWNERSHIP_CODES
 
 LABEL = "release fixture test"
 PREFIX = "release-fixture-test"

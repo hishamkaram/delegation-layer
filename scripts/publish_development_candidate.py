@@ -12,11 +12,11 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification.candidate_publication_delivery import (
-    HostedPublication, hosted_run, publish_candidate,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_ports import default_ports
+from scripts.release_verification.candidate_publication_delivery import HostedPublication
+from scripts.release_verification.candidate_publication_delivery import hosted_run
+from scripts.release_verification.candidate_publication_delivery import publish_candidate
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_ports import default_ports
 
 
 CHECKOUT = Path(__file__).resolve().parent.parent

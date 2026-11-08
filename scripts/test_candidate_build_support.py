@@ -22,14 +22,16 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    UNRESOLVED_OWNERSHIP_CODES,
-)
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.operations import run_bounded_command
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import fingerprint_sources
+from scripts.acceptance.testing.record_fixtures import array_at
+from scripts.acceptance.testing.record_fixtures import object_at
+from scripts.acceptance.evidence.source import MAX_OUTPUT
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import UNRESOLVED_OWNERSHIP_CODES
 
 
 REPOSITORY = Path(__file__).resolve().parent.parent
@@ -38,8 +40,7 @@ COMMAND_TIMEOUT_SECONDS = 120
 VERSION = "0.1.37"
 HARNESS_PATHS = (
     "scripts/build_development_candidate.py", "scripts/render-homebrew-formula.sh",
-    "scripts/delegate_acceptance", "scripts/maintainability", ".goreleaser.yaml",
-    ".github/workflows/ci.yml",
+    ".goreleaser.yaml", ".github/workflows/ci.yml",
 )
 GIT_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "Fixture",
@@ -187,13 +188,16 @@ class CandidateFixture:
         (self.repository / ".gitignore").write_text("/dist/\n/.release/\n__pycache__/\n")
         git(self.repository, "add", ".", tree=self.fixture_tree)
         git(self.repository, "commit", "--quiet", "-m", "base", tree=self.fixture_tree)
-        for relative in HARNESS_PATHS:
+        # The source owner follows canonical imports across acceptance/release
+        # packages; fixture repositories need that closure, not unrelated tests.
+        harness = fingerprint_sources(REPOSITORY, HARNESS_PATHS)
+        for record in array_at(harness, "files"):
+            relative = object_at(record)["path"]
+            if not isinstance(relative, str):
+                raise AssertionError("candidate fixture source path is not text")
             source, target = REPOSITORY / relative, self.repository / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
-            else:
-                shutil.copy2(source, target)
+            shutil.copy2(source, target)
         (self.repository / ".go-version").write_text("1.27.3\n")
         (self.repository / "go.sum").write_text("example.invalid/dependency v1.0.0 h1:fixture\n")
         (self.repository / "package.json").write_text(

@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -10,10 +9,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
-
-func ManagedRunnerBuildInfo(info *debug.BuildInfo) bool {
-	return info != nil && info.Path == managedRunnerMain
-}
 
 func queuedRunnerCommandIdentity(rootID, label, taskPrefix string) (taskID string, inspectionWorker, matched bool) {
 	if strings.HasPrefix(label, taskPrefix) {

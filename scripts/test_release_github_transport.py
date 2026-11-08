@@ -14,14 +14,17 @@ import tracemalloc
 import unittest
 from unittest.mock import Mock, patch
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.processes import operations
-from scripts.delegate_acceptance.processes.contracts import (
-    BoundedCommandError, BoundedCommandResult, CommandFailure,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification import filesystem, github
-from scripts.delegate_acceptance.release_verification.github import GitHubClient, positive_id
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.processes import operations as operations
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import BoundedCommandResult
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification import filesystem as filesystem
+from scripts.release_verification import github as github
+from scripts.release_verification.github import GitHubClient
+from scripts.release_verification.github import positive_id
 
 _MIB = 1 << 20
 
@@ -194,7 +197,7 @@ class GitHubTransportTests(unittest.TestCase):
         payload = b"PK\x03\x04\xff\x00\n"
         for artifact in (False, True):
             with self.subTest(artifact=artifact):
-                with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+                with patch("scripts.release_verification.github.run_bounded_command",
                            return_value=BoundedCommandResult(0, payload)) as run:
                     if artifact:
                         actual = client.artifact_archive("owner/repo", 17, limit=1024)
@@ -213,7 +216,7 @@ class GitHubTransportTests(unittest.TestCase):
         receipt = {"commands": []}
         env = {"GH_TOKEN": "private-canary"}
         client = GitHubClient(receipt, env)
-        with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+        with patch("scripts.release_verification.github.run_bounded_command",
                    return_value=BoundedCommandResult(0, b'{"workflow_run_id":17}')) as run:
             value = client.json("repos/owner/repo/actions/workflows/proof.yml/dispatches",
                                 method="POST", fields={"ref": "main", "inputs[tag]": "v1.2.3"})
@@ -228,7 +231,7 @@ class GitHubTransportTests(unittest.TestCase):
         for data in (b'null', b'42', b'{bad'):
             with self.subTest(data=data):
                 client = GitHubClient({"commands": []}, {})
-                with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+                with patch("scripts.release_verification.github.run_bounded_command",
                            return_value=BoundedCommandResult(0, data)):
                     with self.assertRaisesRegex(VerificationError, "github_response_invalid"):
                         client.json("repos/owner/repo")
@@ -325,7 +328,7 @@ class GitHubReleaseLookupTests(unittest.TestCase):
             observed.append((len(rows), len(data)))
             return BoundedCommandResult(0, data)
 
-        with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+        with patch("scripts.release_verification.github.run_bounded_command",
                    side_effect=bounded):
             self.assertEqual(self.client.release("owner/repo", "v1.2.3"), releases[0])
         self.assertEqual([count for count, _ in observed], [30, 30, 30, 5])
@@ -333,7 +336,7 @@ class GitHubReleaseLookupTests(unittest.TestCase):
 
     def test_oversized_page_remains_an_explicit_transport_failure(self):
         error = BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-        with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+        with patch("scripts.release_verification.github.run_bounded_command",
                    side_effect=error) as request:
             with self.assertRaisesRegex(VerificationError, "command_output_exceeded"):
                 self.client.release("owner/repo", "v1.2.3")

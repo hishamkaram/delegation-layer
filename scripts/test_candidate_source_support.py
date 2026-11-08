@@ -17,9 +17,12 @@ from pathlib import Path
 from typing import NotRequired, TypedDict, Unpack
 import unittest
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure, OutputSink
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import BoundedCommandResult
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.processes.contracts import OutputSink
+from scripts.acceptance.processes.operations import run_bounded_command
 from scripts.test_candidate_build_support import git
 
 

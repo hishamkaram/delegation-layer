@@ -14,6 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 
 	// This self-terminating command tests result interpretation. Native deadline
 	// stopping is exercised by the guardian and native acceptance tests.
@@ -32,7 +33,7 @@ func TestSignaledWorkspaceVerificationRetainsDurableDiagnostics(t *testing.T) {
 	var candidate workspace.OperationResult
 	workErr, stopErr := execution.RunSupervised(deadline, execution.SupervisedOptions{Stopper: workspaceSignalTestStopper{}}, func(scope execution.PreflightScope) error {
 		var actionErr error
-		candidate, actionErr = runWorkspaceAction(scope, store, operation, os.Environ())
+		candidate, actionErr = workspaceworker.RunAction(scope, store, operation, os.Environ())
 		return actionErr
 	})
 	if workErr != nil || stopErr != nil {

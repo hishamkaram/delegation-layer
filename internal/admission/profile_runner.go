@@ -44,7 +44,7 @@ func validateRunnerExecutableBeforeProvider(root string, candidate commonprovide
 				return err
 			}
 		}
-		return supervisorcore.ValidateManagedOrdinaryRunnerExecutable(root, meta.RunnerExecutable, currentExecutable, runnerOwnership, target)
+		return supervisorcore.ValidateManagedOrdinaryRunnerExecutable(meta.RunnerExecutable, currentExecutable, runnerOwnership, target)
 	}
 	return validateInspectionRunnerExecutable(root, req, store, currentExecutable, runnerOwnership, configuredRole)
 }

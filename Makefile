@@ -118,8 +118,8 @@ check-docs:
 	$(MAKE) verify-diagram-checksums plugin-package-check
 	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
 	python3 -m unittest discover -s scripts -p 'test_skill_examples.py' -v
-	python3 -m unittest discover -s scripts -p 'test_acceptance_skill_routing.py' -v
-	python3 -m unittest discover -s scripts/acceptance_tests/native -t scripts -p 'test_native_acceptance_aggregate.py' -k test_public_option_docs_cover_ccr_required_model_and_effort -v
+	python3 -m unittest discover -s scripts/acceptance/skill_routing/tests -t scripts -p 'test_skill_routing.py' -v
+	python3 -m unittest discover -s scripts/acceptance/native/tests -t scripts -p 'test_aggregate.py' -k test_public_option_docs_cover_ccr_required_model_and_effort -v
 	go test -count=1 ./internal/app -run '^TestProviderGuideMatchesNativeCatalog$$'
 
 # -timeout is the per-test-binary aggregate hang watchdog, not a latency requirement;
@@ -133,15 +133,15 @@ test-python:
 	python3 -m unittest discover -s scripts -t scripts -p 'test_*.py' -v
 
 test-native-harness:
-	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v
-	python3 -m unittest discover -s scripts/acceptance_tests -t scripts -p 'test_*.py' -v
+	python3 -m unittest discover -s scripts/acceptance -t scripts -p 'test_*.py' -v
 
 test-evidence-tools:
-	python3 -m unittest discover -s scripts -p 'test_native_acceptance_evidence.py' -v
+	python3 -m unittest discover -s scripts/acceptance/native_evidence/tests -t scripts -p 'test_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_verify_release_archive.py' -v
 	python3 -m unittest discover -s scripts -p 'test_release_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_published_install*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_candidate_*.py' -v
+	python3 -m unittest discover -s scripts/release_tests -t scripts -p 'test_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_homebrew_formula_render.py' -v
 	python3 -m unittest discover -s scripts -p 'test_actions_artifacts.py' -v
 
@@ -167,7 +167,7 @@ smoke-cli: build
 	fi
 
 acceptance-protocol: build
-	./scripts/acceptance-protocol.sh
+	./scripts/acceptance/protocol/run.sh
 
 supervisor-fixtures: tool-versions
 	@mkdir -p bin/harness-tools
@@ -179,12 +179,12 @@ supervisor-fixtures: tool-versions
 	CGO_ENABLED=0 go test -c -buildvcs=false -o bin/harness-tools/scheduler-fixture ./internal/scheduler
 
 acceptance-supervisor: tool-versions
-	./scripts/acceptance-supervisor.sh
+	./scripts/acceptance/supervisor/run.sh
 
 acceptance-private-cli: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Private CLI acceptance evidence: $$receipt_dir/receipt.json"; \
-	python3 scripts/acceptance_private_cli.py \
+	python3 scripts/acceptance/private_cli/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -196,7 +196,7 @@ acceptance-private-cli: tool-versions
 acceptance-scheduler: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/scheduler-acceptance.XXXXXX"); \
 	echo "Scheduler acceptance output: $$receipt_dir/results"; \
-	python3 scripts/acceptance_scheduler.py \
+	python3 scripts/acceptance/private_cli/scheduler/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -205,7 +205,7 @@ acceptance-scheduler: tool-versions
 acceptance-private-cli-default-stop: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Default stop acceptance evidence: $$receipt_dir/receipt.json"; \
-	python3 scripts/acceptance_private_cli.py \
+	python3 scripts/acceptance/private_cli/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -228,7 +228,7 @@ acceptance-nested-survival: nested-survival-fixture
 	@for topology in shared-warm other-warm other-cold; do \
 		receipt_dir=$$(mktemp -d "$(BIN_DIR)/nested-survival.XXXXXX") || exit $$?; \
 		echo "Nested survival $$topology evidence: $$receipt_dir/receipt.json"; \
-		python3 scripts/acceptance_private_cli.py \
+		python3 scripts/acceptance/private_cli/cli.py \
 			--source-root "$(CURDIR)" \
 			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -240,7 +240,7 @@ acceptance-nested-survival: nested-survival-fixture
 	done
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/nested-survival.XXXXXX") || exit $$?; \
 	echo "Nested refused leader evidence: $$receipt_dir/receipt.json"; \
-	python3 scripts/acceptance_private_cli.py \
+	python3 scripts/acceptance/private_cli/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -253,7 +253,7 @@ acceptance-nested-survival: nested-survival-fixture
 acceptance-supervisor-handoff: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Supervisor handoff acceptance evidence: $$receipt_dir/receipt.json"; \
-	python3 scripts/acceptance_private_cli.py \
+	python3 scripts/acceptance/private_cli/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -265,7 +265,7 @@ acceptance-supervisor-handoff: tool-versions
 acceptance-supervisor-upgrade-recovery: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
 	echo "Supervisor upgrade recovery evidence: $$receipt_dir/receipt.json"; \
-	python3 scripts/acceptance_private_cli.py \
+	python3 scripts/acceptance/private_cli/cli.py \
 		--source-root "$(CURDIR)" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
@@ -278,14 +278,14 @@ acceptance-workspaces: tool-versions
 	@for scenario in lifecycle lineage checkpoint; do \
 		receipt_dir=$$(mktemp -d "$(BIN_DIR)/managed-workspace-acceptance.XXXXXX") || exit $$?; \
 		echo "Managed workspace $$scenario acceptance evidence: $$receipt_dir/receipt.json"; \
-		python3 scripts/acceptance_workspaces.py \
+		python3 scripts/acceptance/workspaces/cli.py \
 			--source-root "$(CURDIR)" \
 			--scenario "$$scenario" \
 			--output "$$receipt_dir/receipt.json" || exit $$?; \
 	done
 
 acceptance-agy: build test-native-harness
-	./scripts/acceptance_native.sh antigravity:print
+	./scripts/acceptance/native/run.sh antigravity:print
 
 codex-acceptance-tools: tool-versions
 	@mkdir -p bin/codex-acceptance
@@ -293,13 +293,13 @@ codex-acceptance-tools: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-acceptance/delegate-run ./internal/testutil/codexacceptance/cmd/delegate-run
 
 acceptance-codex: build test-native-harness
-	./scripts/acceptance_native.sh codex:exec
+	./scripts/acceptance/native/run.sh codex:exec
 
 acceptance-codex-timeout-resume: build test-native-harness
-	./scripts/acceptance_native.sh codex:exec --permission workspace-write --scenario timeout-resume
+	./scripts/acceptance/native/run.sh codex:exec --permission workspace-write --scenario timeout-resume
 
 acceptance-codex-review: build test-native-harness
-	./scripts/acceptance_native.sh codex:review
+	./scripts/acceptance/native/run.sh codex:review
 
 claude-acceptance-tools: tool-versions
 	@mkdir -p bin/claude-acceptance
@@ -307,22 +307,22 @@ claude-acceptance-tools: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-acceptance/delegate-run ./internal/testutil/claudeacceptance/cmd/delegate-run
 
 acceptance-claude: build test-native-harness
-	./scripts/acceptance_native.sh claude:print
+	./scripts/acceptance/native/run.sh claude:print
 
 acceptance-claude-interactive: build test-native-harness
-	./scripts/acceptance_native.sh claude:print --permission read-only --scenario interactive
+	./scripts/acceptance/native/run.sh claude:print --permission read-only --scenario interactive
 
 acceptance-pi: build test-native-harness
-	./scripts/acceptance_native.sh pi:json
+	./scripts/acceptance/native/run.sh pi:json
 
 acceptance-opencode: build test-native-harness
-	./scripts/acceptance_native.sh opencode:run
+	./scripts/acceptance/native/run.sh opencode:run
 
 # Individual native gates return 2 when the executable, supervisor, or native
 # login prerequisite is unavailable. The aggregate keeps that explicit state
 # neutral while still failing on a real acceptance failure (exit 1).
 acceptance-native: build test-native-harness nested-survival-fixture task-inventory-fixture
-	./scripts/acceptance_native_all.sh
+	./scripts/acceptance/native/run_all.sh
 
 .PHONY: acceptance-independent-startup acceptance-independent-startup-prepared
 acceptance-independent-startup: tool-versions
@@ -351,12 +351,12 @@ acceptance-independent-startup-prepared: tool-versions
 	go test -race -count=1 -timeout=4m -v -run '^TestManagedShutdownLease' ./internal/lifetime
 	go test -race -count=1 -timeout=4m -v \
 		-run '^Test(Infrastructure|Lease|Adopt|CloseSerializesWithBorrower|Origin|ReadOrigin|Startup|OwnerPublication|OwnerJournal|RootPin|IntentJournal|Context|IntentRequires|Endpoint|DecodeStrictByteSlice|WithoutProcessScopeMarker|ConfigureProcessScopeEnvironment)' \
-		./internal/supervisor ./internal/taskdir ./internal/task ./internal/lifetime
+		./internal/supervisor ./internal/supervisor/installation ./internal/taskdir ./internal/task ./internal/lifetime
 	go test -race -count=1 -timeout=4m -v \
 		-run '^Test(ContinuationPair|ResolveSavedSupervisorClient|AcceptedSupervisorPair|ControlContinuation|ControlRuntimeSaved|RecoveryCandidate|PrepareAdmissionSupervisorAcceptsCompatibleDaemonBeforeScheduling|PrivateAdmissionRuntimeRefusesDifferentLogicalGenerationWithoutAuthorization|PrepareTaskSupervisorDefersCompatibleRuntimeMaintenance|ReadTaskMetadataSupervisor|RoutedCleanup)' \
-		./internal/supervisor ./internal/tasklifecycle
+		./internal/supervisor ./internal/supervisor/installation ./internal/tasklifecycle
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(Issue135PublicContinuation|InfrastructureEstablishmentHost|InfrastructureRouting|ModelDiscoveryPrivatePreparationUsesCapturedRoutingFault|ModelDiscoveryCleanupRetainsRoutingStore|SchedulerObservationCleanupRetainsRoutingStore|SchedulerCleanup|SchedulerObserveRetains|SchedulerDispatchRetains|RoutedManualMigration|ManualMigrationReport)' ./internal/app
+		-run '^Test(Issue135PublicContinuation|InfrastructureEstablishmentHost|InfrastructureRouting|ModelDiscoveryPrivatePreparationUsesCapturedRoutingFault|ModelDiscoveryCleanupRetainsRoutingStore|SchedulerObservationCleanupRetainsRoutingStore|SchedulerCleanup|SchedulerObserveRetains|SchedulerDispatchRetains|RoutedManualMigration|ManualMigrationReport)' ./internal/app ./internal/app/infrastructurehost
 	go test -race -count=1 -timeout=4m -v \
 		-run '^Test(Scheduler(CleanupUnresolved|TaskCleanupMarker|SelectedResult|RunJoinsRemainingWorker)|Host(PermanentChildFault|CleanupFrame|UnverifiedCleanup|ReportsOneCleanup))' \
 		./internal/scheduler/runtime ./internal/scheduler/host
@@ -365,8 +365,8 @@ acceptance-independent-startup-prepared: tool-versions
 	go test -race -count=1 -timeout=4m -v ./internal/supervisor/infrastructure
 
 acceptance-native-lifetime: tool-versions
-	python3 -m unittest discover -s scripts -p 'test_native_lifetime_proof.py' -v
-	python3 scripts/native_lifetime_proof.py --output "$${DELEGATE_NATIVE_LIFETIME_RECEIPT:-bin/native-lifetime-proof/receipt.json}"
+	python3 -m unittest discover -s scripts/acceptance/native_lifetime/tests -t scripts -p 'test_proof.py' -v
+	python3 scripts/acceptance/native_lifetime/cli.py --output "$${DELEGATE_NATIVE_LIFETIME_RECEIPT:-bin/native-lifetime-proof/receipt.json}"
 
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.
@@ -403,14 +403,14 @@ inspection-fixtures: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/provider ./internal/testutil/fakeprovider/cmd/provider
 
 acceptance-inspection: tool-versions test-native-harness
-	./scripts/acceptance-inspection.sh
+	./scripts/acceptance/inspections/run.sh
 
 .PHONY: acceptance-remote
 acceptance-remote: tool-versions
 	./scripts/install-test-supervisor.sh
 	@mkdir -p "$(BIN_DIR)/remote-acceptance"
 	@run_directory=$$(mktemp -d "$(BIN_DIR)/remote-acceptance/run.XXXXXXXX"); \
-	python3 scripts/acceptance_remote.py --build \
+	python3 scripts/acceptance/remote/cli.py --build \
 		--candidate "$$run_directory/installation" \
 		--supervisor "$(BIN_DIR)/test-supervisor/pueue" \
 		--output "$$run_directory/evidence"

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -320,7 +322,7 @@ func TestPremetadataLegacyInspectionReplayRequiresCompleteMatchingProof(t *testi
 			binding := fixture.binding
 			// Open is downstream of installation selection; the higher consumer
 			// test above covers truthful managed/custom selection at that boundary.
-			runner, err := supervisorcore.ResolveRunner("", fixture.newRunner)
+			runner, err := installation.ResolveRunner("", fixture.newRunner)
 			if err != nil {
 				t.Fatal(err)
 			}

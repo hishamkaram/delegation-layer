@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/remotecommands"
+
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
@@ -65,7 +67,7 @@ func TestRemoteMissingResidentPersistsDefiniteRejection(t *testing.T) {
 	if !errors.Is(err, remote.ErrAdmissionRejected) || response.TaskRecord != "not_created" || response.Failure == nil || response.Failure.Code != "resident_not_ready" {
 		t.Fatalf("missing resident was not definite refusal: %+v %v", response, err)
 	}
-	if code := remoteCLIResultCode("dispatch", remoteCLIResponse{Remote: &response}, err); code != 1 {
+	if code := remoteCLIResultCode("dispatch", remotecommands.Report{Remote: &response}, err); code != 1 {
 		t.Fatalf("definite refusal exit%d", code)
 	}
 	reference = reopenResourceReference(t, origin, reference, fixture.intent.TaskID)
@@ -195,7 +197,7 @@ func assertRemotePressureBoundary(t *testing.T, fixture *remoteResourceBoundaryF
 		t.Fatalf("pressure changed bound admission facts: %+v %v", response, err)
 	}
 	assertRemotePressureEnvelope(t, fixture, response)
-	if code := remoteCLIResultCode("dispatch", remoteCLIResponse{Remote: &response}, err); code != 3 {
+	if code := remoteCLIResultCode("dispatch", remotecommands.Report{Remote: &response}, err); code != 3 {
 		t.Fatalf("uncertain resource refusal exit%d", code)
 	}
 }
@@ -355,7 +357,18 @@ func ownRemoteResourceResident(t *testing.T, fixture *remoteResourceBoundaryFixt
 func awaitResourceResident(t *testing.T, ctx context.Context, fixture *remoteResourceBoundaryFixture) {
 	t.Helper()
 	for {
-		err := requireRemoteResident(ctx, fixture.store.Root, fixture.deps)
+		reader, err := (remoteLocalAdapter{deps: fixture.deps}).Read(ctx, fixture.store.Root, nil)
+		if err == nil {
+			process, processErr := infrastructure.ObserveOwnerProcess(ctx, reader)
+			if processErr == nil {
+				reference, referenceErr := process.Reference()
+				processErr = referenceErr
+				if processErr == nil {
+					processErr = lifetime.RequirePersistentProcess(reference)
+				}
+			}
+			err = errors.Join(processErr, reader.Close())
+		}
 		if err == nil {
 			return
 		}
@@ -424,4 +437,28 @@ func closeRemoteResourceResident(t *testing.T, ctx context.Context, fixture *rem
 		return
 	}
 	fixture.retain = false
+}
+
+func TestRemoteResourceGuardOverrideReachesDestinationGate(t *testing.T) {
+	fixture := newRemoteResourceBoundary(t)
+	ownRemoteResourceResident(t, fixture)
+	fixture.deps.ResourceChecker = nil
+	fixture.provider.prepareFault = errors.New("controlled provider preparation stop after resource gate")
+	reference, _ := resourceBoundaryReference(t, fixture)
+	exchange := &resourceBoundaryExchange{server: remoteServerExchange{deps: fixture.deps}}
+	coordinator := remote.Coordinator{Exchange: exchange, ResourceGuards: resourceadmission.GuardPolicy{DisableCPU: true, DisableMemory: true}}
+	response, err := coordinator.Dispatch(t.Context(), reference)
+	if err == nil {
+		t.Fatal("controlled provider preparation should fail")
+	}
+	envelope := remoteServerEnvelope(t, response)
+	if envelope.ResourceAdmission == nil || envelope.ResourceAdmission.Status != "clear" || !reflect.DeepEqual(envelope.ResourceAdmission.DisabledGuards, []string{"cpu", "memory"}) || len(envelope.ResourceAdmission.Warnings) != 0 {
+		t.Fatalf("destination lost invocation guard policy: %+v", envelope.ResourceAdmission)
+	}
+	if fixture.provider.prepareCalls != 1 || fixture.provider.finalizeCalls != 0 {
+		t.Fatalf("gate did not reach controlled preparation: %d/%d", fixture.provider.prepareCalls, fixture.provider.finalizeCalls)
+	}
+	if !reflect.DeepEqual(exchange.operations, []remote.Operation{remote.Hello, remote.Admit}) {
+		t.Fatalf("override protocol=%v", exchange.operations)
+	}
 }

@@ -1,0 +1,107 @@
+"""Pure runtime capability and launch identity checks over supplied evidence."""
+
+from __future__ import annotations
+
+import unicodedata
+from scripts.acceptance.evidence.digests import sha
+from scripts.acceptance.evidence.encoding import canonical_go_json
+from scripts.acceptance.evidence.validation import AcceptanceFailure
+from scripts.acceptance.evidence.validation import _hex_digest
+from scripts.acceptance.evidence.validation import _optional_hex_digest
+from scripts.acceptance.evidence.validation import require
+from scripts.acceptance.paths.policy import _raw_clean_absolute_path
+
+
+MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES = 64 * 1024
+
+
+def runtime_capability_sha(definition: dict[str, object]) -> str:
+    """Hash runtime capability fields while excluding executable identity."""
+    runtime = definition.get("runtime")
+    if not (isinstance(runtime, dict)):
+        raise AcceptanceFailure("runtime capability definition is missing runtime fields")
+
+    def go_slice(value: object) -> object:
+        # The Go digest clones slices into nil-backed values, so an empty
+        # slice is encoded as JSON null. Keep this mirror byte-identical.
+        return None if isinstance(value, list) and not value else value
+
+    contract = {
+        "revision": definition["revision"],
+        "directory": definition["directory"],
+        "environment": go_slice(definition["environment"]),
+        "output_limit": definition["output_limit"],
+    }
+    # Preserve runtimeCapabilityContract field order and version_args,omitempty.
+    if runtime.get("version_args"):
+        contract["version_args"] = runtime["version_args"]
+    contract["help_args"] = go_slice(runtime["help_args"])
+    contract["required_flags"] = go_slice(runtime["required_flags"])
+    return sha(canonical_go_json(contract))
+
+
+def _provider_runtime_identity(evidence: object, phase: str,
+                               label: str) -> dict[str, str]:
+    if not (isinstance(evidence, dict)):
+        raise AcceptanceFailure(f"{label} {phase} evidence is not an object")
+    executable = evidence.get("provider_executable")
+    version = evidence.get("provider_version", "")
+    sha256 = evidence.get("provider_sha256", "")
+    if not (_raw_clean_absolute_path(executable)):
+        raise AcceptanceFailure(f"{label} {phase} executable is invalid")
+    if not (isinstance(version, str) and (version == "" or bool(version.strip()))):
+        raise AcceptanceFailure(f"{label} {phase} version is invalid")
+    try:
+        version_bytes = version.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise AcceptanceFailure(f"{label} {phase} version is not valid UTF-8") from error
+    require(len(version_bytes) <= MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES,
+            f"{label} {phase} version exceeds the terminal evidence bound")
+    require(not any(unicodedata.category(character) == "Cc" for character in version),
+            f"{label} {phase} version contains control characters")
+    if not _optional_hex_digest(sha256):
+        raise AcceptanceFailure(f"{label} {phase} digest is invalid")
+    identity = {"executable": executable, "version": version}
+    if "provider_sha256" in evidence:
+        # Historical diagnostics are decoded only; no new digest is synthesized or compared.
+        identity["sha256"] = sha256
+    return identity
+
+
+def validate_provider_runtime_metadata(
+        meta: dict[str, object], *, observed_version: str | None = None,
+        launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
+        started_evidence: dict[str, object] | None = None,
+        label: str = "provider runtime metadata") -> dict[str, str] | None:
+    """Validate recorded runtime facts; ignore observed_version for legacy API compatibility."""
+    if not (isinstance(meta, dict)):
+        raise AcceptanceFailure(f"{label} is not an object")
+    require(not (launch_evidence is not None and started_evidence is not None),
+            f"{label} launch evidence modes are mutually exclusive")
+    executable = meta.get("provider_executable")
+    if not (_raw_clean_absolute_path(executable)):
+        raise AcceptanceFailure(f"{label} executable is invalid")
+    pending = "runtime_preflight_sha256" in meta
+    version = meta.get("provider_version")
+    if pending:
+        require(_hex_digest(meta.get("runtime_preflight_sha256")),
+                f"{label} preflight digest is invalid")
+        require(version == "", f"{label} pending version is not empty")
+        require(meta.get("environment_recorded") is True,
+                f"{label} pending environment is not recorded")
+    else:
+        if not (isinstance(version, str) and (version == "" or bool(version.strip()))):
+            raise AcceptanceFailure(f"{label} version is invalid")
+    if "environment_recorded" in meta:
+        require(type(meta["environment_recorded"]) is bool,
+                f"{label} environment marker is invalid")
+    if started_evidence is not None:
+        return _provider_runtime_identity(started_evidence, "started", label)
+    if launch_evidence is None:
+        return None
+    started, exited = launch_evidence
+    started_identity = _provider_runtime_identity(started, "started", label)
+    exit_identity = _provider_runtime_identity(exited, "exit", label)
+    require(all(started_identity.get(key) == exit_identity.get(key) for key in ("executable", "version")),
+            f"{label} started and exit runtime identities differ")
+    return started_identity

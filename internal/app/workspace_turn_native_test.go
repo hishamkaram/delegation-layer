@@ -50,7 +50,7 @@ func (l nativeLineage) beginTurn(t *testing.T, resource *workspace.Resource, reg
 
 func (l nativeLineage) baseline(t *testing.T, resource *workspace.Resource, turn nativeTurn) workspace.TurnBaseline {
 	t.Helper()
-	if err := recordManagedTurnBaseline(l.scope.ctx, l.store, turn.request, l.git); err != nil {
+	if err := l.observeBaseline(turn.request, os.Environ()); err != nil {
 		t.Fatalf("prelaunch baseline: %v", err)
 	}
 	baseline, err := resource.TurnBaseline(l.scope.ctx, turn.reservation.Sequence)
@@ -74,7 +74,7 @@ func (l nativeLineage) captureTurn(t *testing.T, resource *workspace.Resource, t
 	if _, err := resource.AssociateOperation(l.scope.ctx, workspace.CapturePurpose(turn.reservation.Sequence), operation.Request()); err != nil {
 		t.Fatal(err)
 	}
-	artifacts, err := captureManagedCheckout(l.scope.ctx, l.store, resource, operation, l.git)
+	result, err := l.runOperation(operation, os.Environ())
 	if err != nil {
 		t.Fatalf("turn capture: %v", err)
 	}
@@ -82,7 +82,7 @@ func (l nativeLineage) captureTurn(t *testing.T, resource *workspace.Resource, t
 	if err != nil || candidate.Turn == nil {
 		t.Fatalf("turn capture candidate = %+v, %v", candidate, err)
 	}
-	return nativeCapture{CaptureCandidate: candidate, artifacts: artifacts, operation: operation}
+	return nativeCapture{CaptureCandidate: candidate, artifacts: result.Artifacts, operation: operation}
 }
 
 func (l nativeLineage) sealTurn(t *testing.T, resource *workspace.Resource, turn nativeTurn, capture nativeCapture) {
@@ -150,7 +150,7 @@ func runNativeWorkerTurn(t *testing.T, lineage nativeLineage, resource *workspac
 	if err != nil || !bytes.Equal(indexBefore, indexAfter) || baseline.ObservedHEAD != registration.BaseOID {
 		t.Fatalf("baseline changed the real index or observed the wrong HEAD: %+v, %v", baseline, err)
 	}
-	if err = recordManagedTurnBaseline(lineage.scope.ctx, lineage.store, turn.request, lineage.git); !errors.Is(err, task.ErrAlreadyStarted) {
+	if err = lineage.observeBaseline(turn.request, os.Environ()); !errors.Is(err, task.ErrAlreadyStarted) {
 		t.Fatalf("second baseline for one launch error = %v, want already started", err)
 	}
 	if refs := lineage.ownedRefs(t, resource); !strings.Contains(refs, baseline.Ref+" "+baseline.TreeOID) {
@@ -203,7 +203,9 @@ func TestNativeTurnBaselineHonorsExpiredTaskDeadline(t *testing.T) {
 	turn := lineage.beginTurn(t, resource, registration)
 	expired, cancel := context.WithDeadline(lineage.scope.ctx, time.Now().Add(-time.Second))
 	defer cancel()
-	if err := recordManagedTurnBaseline(expired, lineage.store, turn.request, lineage.git); !errors.Is(err, context.DeadlineExceeded) {
+	expiredLineage := lineage
+	expiredLineage.scope.ctx = expired
+	if err := expiredLineage.observeBaseline(turn.request, os.Environ()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("baseline after the task deadline error = %v", err)
 	}
 	if _, err := resource.TurnBaseline(lineage.scope.ctx, turn.reservation.Sequence); !workspace.OperationAbsent(err) {

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	schedulecommand "github.com/hishamkaram/delegation-layer/internal/scheduler/command"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -57,7 +59,7 @@ func TestScheduleCreateInputPreservesRequestedChoices(t *testing.T) {
 	}
 }
 
-func assertScheduleCapturedValues(t *testing.T, input scheduleCreateInput, a Arguments, wantConfig task.TaskConfig, instant time.Time, clockCalls, idCalls int) {
+func assertScheduleCapturedValues(t *testing.T, input schedulecommand.CreateInput, a Arguments, wantConfig task.TaskConfig, instant time.Time, clockCalls, idCalls int) {
 	t.Helper()
 	if input.ID != scheduleTestID || !input.CreatedAt.Equal(instant) || clockCalls != 1 || idCalls != 1 || !reflect.DeepEqual(input.Request.Config, wantConfig) || input.Request.Provider != a.Provider || input.Request.Auto || input.Cron != a.ScheduleCron || !input.TimezoneSet || input.Timezone != "UTC" || !bytes.Equal(input.Brief, []byte("requested brief")) {
 		t.Fatalf("unexpected captured input: %+v clock=%d id=%d", input, clockCalls, idCalls)

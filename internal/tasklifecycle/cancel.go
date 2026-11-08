@@ -4,24 +4,27 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle/stop"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func Cancel(root string, td *taskdir.TaskDir, options pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (result Cancellation, resultErr error) {
+func Cancel(root string, td *taskdir.TaskDir, options pueue.Options, lookup installation.ExecutableLookup, openControl stop.ControlClientOpener) (result Cancellation, resultErr error) {
 	return CancelWithRequestID(root, td, "", options, lookup, openControl)
 }
 
 // CancelWithRequestID preserves the originating cancellation identity across transport loss.
-func CancelWithRequestID(root string, td *taskdir.TaskDir, requestID string, options pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (result Cancellation, resultErr error) {
+func CancelWithRequestID(root string, td *taskdir.TaskDir, requestID string, options pueue.Options, lookup installation.ExecutableLookup, openControl stop.ControlClientOpener) (result Cancellation, resultErr error) {
 	return CancelWithRequestIDContext(context.Background(), root, td, requestID, options, lookup, openControl)
 }
 
 // CancelWithRequestIDContext retains the caller operation bound without changing task budget.
-func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.TaskDir, requestID string, options pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (result Cancellation, resultErr error) {
+func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.TaskDir, requestID string, options pueue.Options, lookup installation.ExecutableLookup, openControl stop.ControlClientOpener) (result Cancellation, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -30,7 +33,7 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 	if err != nil {
 		return result, err
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		return result, nil
 	}
 	_, meta, err := td.PreparedRecords()
@@ -53,7 +56,7 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 		return result, err
 	}
 
-	stop, stopErr := StopTaskContext(ctx, root, td, requestID, "user", options, lookup, openControl)
+	outcome, stopErr := stop.Task(ctx, root, td, requestID, "user", options, lookup, openControl)
 	if errors.Is(stopErr, task.ErrTerminalTask) {
 		return terminalAfterCancelRace(result, td)
 	}
@@ -62,7 +65,7 @@ func CancelWithRequestIDContext(ctx context.Context, root string, td *taskdir.Ta
 			stopErr = nil
 		}
 	} else {
-		result.Stop = &stop
+		result.Stop = &outcome
 	}
 	if records, recordsErr := td.ReadStopRecords(); recordsErr == nil {
 		result.Stops, result.StopsRead = records, true
@@ -84,7 +87,7 @@ func terminalAfterCancelRace(result Cancellation, td *taskdir.TaskDir) (Cancella
 	if err != nil {
 		return result, err
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		return result, nil
 	}
 	return result, task.ErrTerminalTask

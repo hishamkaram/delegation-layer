@@ -57,6 +57,7 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--interactive` | Enable the profile's advertised native interaction; steering is a separate capability. See [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
 | `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
+| `--cpu-guard`, `--memory-guard` | Independent fresh-admission checks, both default `true`. Set `=false` to opt out for this dispatch or continuation only. |
 | `--team-scope`, `--team`, `--member` | Supply all three to choose one explicit [Member](#using-a-member); no implicit Team or Role-only target. |
 | `--project-root ABS` | Explicit containing root for a non-Git project-scoped Member; invalid without that target or in a Git context. |
 
@@ -77,6 +78,13 @@ Every task ID identifies one immutable request and at most one provider launch
 attempt. Changing its request is rejected; repeating it cannot grant another
 launch. A selected provider's failure does not select a fallback.
 Read [task creation](result-handling.md#task-creation) before any retry.
+
+Guard overrides are not saved, inherited by nested tasks, or applied to scheduled
+occurrences. Existing-task recovery does not run a fresh check. Remote overrides
+require destination capability support before upload or admission; they do not
+change a previously sent or durably rejected reference. A rejected reference
+needs a new task ID to request different admission guards. Overrides are explicit
+caller choices, not automatic recovery guidance after resource pressure.
 
 Omit `--runner`: Delegate selects its managed worker. A custom override
 conflicting with managed workspaces or a predecessor returns `invalid_request`

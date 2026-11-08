@@ -3,6 +3,8 @@ package supervisor
 import (
 	"runtime"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -57,7 +59,7 @@ func (r ControlRuntime) captureLaunchContext(pin taskdir.RootPin) (infrastructur
 	if found {
 		client, err = ResolveSavedSupervisorClient(pin.Root(), saved, r.Lookup)
 	} else {
-		client, err = resolveInstalledSupervisorClient(r.Lookup)
+		client, err = installation.ResolveInstalledSupervisorClient(r.Lookup)
 	}
 	if err != nil {
 		return infrastructure.LaunchContext{}, err

@@ -9,13 +9,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -214,7 +215,7 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{}, nil)); err != nil {
+	if err := tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, installation.ExecutableLookup{}, nil)); err != nil {
 		t.Fatalf("terminal predecessor was not released: %v", err)
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
@@ -475,7 +476,7 @@ func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
 		}
 	}()
 	prepareAppPublishedTimeoutEvidence(t, td)
-	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, supervisorcore.ExecutableLookup{}, nil)); !errors.Is(err, task.ErrSessionBusy) {
+	if err = tasklifecycle.PredecessorTerminated(store.Root, td, req, observationSupervisorOptions(pueue.Options{}, installation.ExecutableLookup{}, nil)); !errors.Is(err, task.ErrSessionBusy) {
 		t.Fatalf("active first-turn runner was eligible for continuation: %v", err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -21,7 +23,7 @@ func repairQueuedRunnerCommandsToTarget(ctx context.Context, store *taskdir.Stor
 }
 
 func PlanQueuedRunnerRepairTarget(runnerExecutable string) (RunnerRepairTarget, error) {
-	runner, err := ResolveRunner(runnerExecutable, "")
+	runner, err := installation.ResolveRunner(runnerExecutable, "")
 	if err != nil {
 		return RunnerRepairTarget{}, err
 	}
@@ -37,7 +39,7 @@ func (target RunnerRepairTarget) ValidateExecutable(path string) error {
 	if target.executable == "" || path != target.executable {
 		return task.ErrIdentityMismatch
 	}
-	_, err := ResolveRunner(path, "")
+	_, err := installation.ResolveRunner(path, "")
 	return err
 }
 

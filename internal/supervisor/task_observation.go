@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -15,7 +17,7 @@ import (
 // pure ready observations acquire no new outer resource.
 type TaskSupervisorObservationOptions struct {
 	Control          pueue.Options
-	Lookup           ExecutableLookup
+	Lookup           installation.ExecutableLookup
 	RunnerExecutable string
 	OpenStore        StoreOpener
 	Routing          OwnerRouting

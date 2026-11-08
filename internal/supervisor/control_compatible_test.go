@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -26,7 +28,7 @@ func TestControlContinuationReadsCompatibleRuntimeWithoutInventory(t *testing.T)
 			fixture, source := newWarmContinuationFixture(t)
 			transport := compatibleControlTransport(t, fixture, damaged)
 			before := parentMigrationTree(t, fixture.store.Root)
-			client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).PrepareContinuation(t.Context(), fixture.store, source)
+			client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).PrepareContinuation(t.Context(), fixture.store, source)
 			requireCompatibleControlClient(t, client, err, fixture.target, transport)
 			if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
 				t.Fatal("passive continuation changed durable state or staged inventory")
@@ -55,7 +57,7 @@ func TestControlRuntimeSavedCapturedPATHRefusalDoesNotRouteOwner(t *testing.T) {
 		calls++
 		return infrastructure.Disposition{}, errors.New("owner must not receive a refused lookup")
 	}}
-	lookup := ExecutableLookup{Environment: []string{"PATH=" + relative}}
+	lookup := installation.ExecutableLookup{Environment: []string{"PATH=" + relative}}
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: routing}).RecoverSaved(t.Context(), fixture.store, fixture.legacy, source)
 	if client != nil {
@@ -121,7 +123,7 @@ func TestPrepareTaskSupervisorDefersCompatibleRuntimeMaintenance(t *testing.T) {
 	supervisorfixture.WriteExecutable(t, runner, "new managed runner fixture")
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := PrepareTaskSupervisorWithRouting(t.Context(), fixture.store, fixture.legacy, meta, TaskSupervisorObservationOptions{
-		Control: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}, RunnerExecutable: runner, Source: source,
+		Control: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}, RunnerExecutable: runner, Source: source,
 	})
 	if client != nil {
 		defer func() {
@@ -152,7 +154,7 @@ func TestControlRuntimeSavedUnavailablePairStillRoutesOwner(t *testing.T) {
 		return infrastructure.Disposition{}, want
 	}}
 	transport := capturedPATHControlPair(t, fixture.target)
-	lookup := ExecutableLookup{InitialExecutable: transport.ClientExecutable}
+	lookup := installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}
 	fixture.options.Environment = append(fixture.options.Environment, "CONTROL_FIXTURE_UNAVAILABLE=1")
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup, Routing: routing}).RecoverSaved(t.Context(), fixture.store, fixture.legacy, source)
@@ -173,7 +175,7 @@ func TestControlRuntimeSavedEmptyCapturedPATHRefusesOwnerRoute(t *testing.T) {
 	removeCompatibleControlExecutable(t, fixture.legacy.ClientExecutable)
 	ambient := capturedPATHControlPair(t, fixture.target)
 	t.Setenv("PATH", filepath.Dir(ambient.ClientExecutable))
-	lookup := ExecutableLookup{Environment: []string{"PATH=" + supervisorfixture.CanonicalTempDir(t)}}
+	lookup := installation.ExecutableLookup{Environment: []string{"PATH=" + supervisorfixture.CanonicalTempDir(t)}}
 	want := exec.ErrNotFound
 	calls := 0
 	routing := selectedControlRouting{saved: func(_ context.Context, store *taskdir.Store, _ infrastructure.LaunchContext, observed infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
@@ -204,7 +206,7 @@ func TestControlRuntimeSavedReadsCapturedPATHTransport(t *testing.T) {
 		removeCompatibleControlExecutable(t, path)
 	}
 	t.Setenv("PATH", supervisorfixture.CanonicalTempDir(t))
-	lookup := ExecutableLookup{Environment: []string{"PATH=" + filepath.Dir(transport.ClientExecutable)}}
+	lookup := installation.ExecutableLookup{Environment: []string{"PATH=" + filepath.Dir(transport.ClientExecutable)}}
 	calls := 0
 	routing := selectedControlRouting{saved: func(context.Context, *taskdir.Store, infrastructure.LaunchContext, infrastructure.SavedBindingSource) (infrastructure.Disposition, error) {
 		calls++
@@ -237,7 +239,7 @@ func TestControlRuntimeSavedReadsCompatibleRuntimeWithoutInventory(t *testing.T)
 	fixture, source := newWarmContinuationFixture(t)
 	transport := compatibleControlTransport(t, fixture, "client")
 	before := parentMigrationTree(t, fixture.store.Root)
-	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).RecoverSaved(t.Context(), fixture.store, fixture.legacy, source)
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).RecoverSaved(t.Context(), fixture.store, fixture.legacy, source)
 	// Ordinary saved recovery preserves MAIN's original saved-A candidate.
 	// Its runtime config is active C; continuation instead supplies derived C.
 	want := fixture.target
@@ -271,7 +273,7 @@ func TestControlContinuationPreservesLegacyClientUpdateAndUnusedInventoryFault(t
 	}
 	want := fixture.target
 	before := parentMigrationTree(t, fixture.store.Root)
-	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: "/unavailable-installation/pueue"}}).PrepareContinuation(t.Context(), fixture.store, source)
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: "/unavailable-installation/pueue"}}).PrepareContinuation(t.Context(), fixture.store, source)
 	requireCompatibleControlClient(t, client, err, fixture.target, want)
 	if !maps.Equal(before, parentMigrationTree(t, fixture.store.Root)) {
 		t.Fatal("legacy client update changed durable state during observation")
@@ -282,7 +284,7 @@ func TestControlContinuationRefusesDamagedManagedPair(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
 	transport := compatibleControlTransport(t, fixture, "nonverifying")
 	before := parentMigrationTree(t, fixture.store.Root)
-	client, err := (ControlRuntime{Options: fixture.options, Lookup: ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).PrepareContinuation(t.Context(), fixture.store, source)
+	client, err := (ControlRuntime{Options: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: transport.ClientExecutable}}).PrepareContinuation(t.Context(), fixture.store, source)
 	if client != nil {
 		t.Fatal(ClosePrivateAdmissionTransition(client, errors.New("damaged managed pair returned a client")))
 	}
@@ -296,7 +298,7 @@ func TestControlContinuationRefusesDamagedManagedPair(t *testing.T) {
 
 func TestControlContinuationHealthyPairIgnoresUnavailableTransport(t *testing.T) {
 	fixture, source := newWarmContinuationFixture(t)
-	lookup := ExecutableLookup{InitialExecutable: filepath.Join(fixture.store.Root, "unavailable-installation", "pueue")}
+	lookup := installation.ExecutableLookup{InitialExecutable: filepath.Join(fixture.store.Root, "unavailable-installation", "pueue")}
 	before := parentMigrationTree(t, fixture.store.Root)
 	client, err := (ControlRuntime{Options: fixture.options, Lookup: lookup}).PrepareContinuation(t.Context(), fixture.store, source)
 	requireCompatibleControlClient(t, client, err, fixture.target, fixture.target)

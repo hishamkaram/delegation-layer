@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -13,7 +15,7 @@ import (
 // The bootstrap and inspection owners decide whether reconciliation may run.
 // Installation lookup supplies only a candidate; it cannot replace a recorded
 // restart target or authorize a new daemon generation.
-func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup ExecutableLookup, explicitMigration bool) error {
+func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, lookup installation.ExecutableLookup, explicitMigration bool) error {
 	if _, err := store.PinRootContext(ctx); err != nil {
 		return err
 	}
@@ -41,7 +43,7 @@ func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.St
 		}
 	}
 	outcome, err := pueue.ReconcilePublishedPrivatePairAttemptWithLock(ctx, store.Root, func(selection context.Context) (string, string, error) {
-		return resolveCompatiblePrivatePair(selection, store.Root, lookup)
+		return resolveCompatiblePrivatePair(selection, lookup)
 	}, options)
 	if err != nil {
 		if task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {

@@ -11,9 +11,9 @@ import textwrap
 import unittest
 from unittest import mock
 
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
-from scripts.delegate_acceptance.processes.operations import run_bounded_command
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.operations import run_bounded_command
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 
 
@@ -288,8 +288,8 @@ class PythonGateContractTests(unittest.TestCase):
 
     def test_standard_discovery_selects_every_test_file_once_including_new_modules(self):
         layout = REPOSITORY / "scripts"
-        future = ("test_future_gate_module.py", "acceptance_tests/test_future_gate_module.py",
-                  "acceptance_tests/native/test_future_gate_module.py")
+        future = ("test_future_gate_module.py", "acceptance/testing/tests/test_future_gate_module.py",
+                  "acceptance/native/tests/test_future_gate_module.py")
         hidden = "unpackaged_fixtures/test_hidden_gate_module.py"
         selected = selected_test_files(self.tree(), layout, (*future, hidden))
         on_disk = sorted(path.relative_to(layout).as_posix() for path in layout.rglob("test_*.py"))

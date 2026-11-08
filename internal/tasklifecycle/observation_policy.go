@@ -76,7 +76,10 @@ func DescribeSupervisor(observation pueue.Observation) *SupervisorObservation {
 	if observation.Matched {
 		id = &observation.NumericTaskID
 	} else {
-		id = copyTaskID(observation.Identity.NumericTaskID)
+		if observedID := observation.Identity.NumericTaskID; observedID != nil {
+			copied := *observedID
+			id = &copied
+		}
 	}
 	return &SupervisorObservation{Matched: observation.Matched, State: string(observation.State), NumericTaskID: id}
 }

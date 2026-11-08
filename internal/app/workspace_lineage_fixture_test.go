@@ -19,6 +19,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
 )
 
 // nativeWorkspaceGitRunner gives each owned Git command its own production
@@ -241,7 +243,7 @@ func (l nativeLineage) resourceWithID(t *testing.T, store *taskdir.Store, source
 func (l nativeLineage) provisionedChild(t *testing.T, sourceCwd string) (*workspace.Resource, workspace.Registration) {
 	t.Helper()
 	resource := l.resource(t, l.store, sourceCwd, l.container)
-	if err := provisionManagedCheckout(l.scope.ctx, l.store, resource, l.git); err != nil {
+	if err := l.action(t, l.store, resource, workspace.OperationProvision); err != nil {
 		t.Fatalf("provision sibling child: %v", err)
 	}
 	registration, err := resource.Registration(l.scope.ctx)
@@ -278,7 +280,7 @@ func (l nativeLineage) captureOperation(t *testing.T, resource *workspace.Resour
 func (l nativeLineage) capture(t *testing.T, resource *workspace.Resource, subject workspace.Subject) workspace.CaptureCandidate {
 	t.Helper()
 	operation := l.captureOperation(t, resource, subject)
-	if _, err := captureManagedCheckout(l.scope.ctx, l.store, resource, operation, l.git); err != nil {
+	if _, err := l.runOperation(operation, os.Environ()); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	candidate, err := resource.CaptureCandidate(l.scope.ctx, operation.Request().OperationID)
@@ -295,4 +297,74 @@ func lineageOperationSubject(label string) workspace.Subject {
 func (l nativeLineage) ownedRefs(t *testing.T, resource *workspace.Resource) string {
 	t.Helper()
 	return l.gitIn(t, l.main, "for-each-ref", "--format=%(refname) %(objectname)", "refs/delegate/"+l.store.RootID+"/workspaces/"+resource.Request().WorkspaceID+"/")
+}
+
+// runOperation exercises the public worker boundary in the fixture's real native scope.
+func (l nativeLineage) runOperation(operation *workspace.Operation, environment []string) (candidate workspace.OperationResult, err error) {
+	if l.owner.live.Load() {
+		return candidate, errLiveFixtureOwner
+	}
+	err = l.scope.RunWork(func(scope execution.PreflightScope) error {
+		var actionErr error
+		candidate, actionErr = workspaceworker.RunAction(scope, l.store, operation, environment)
+		return actionErr
+	})
+	return candidate, err
+}
+
+func (l nativeLineage) observeBaseline(request task.TaskRecord, environment []string) error {
+	if l.owner.live.Load() {
+		return errLiveFixtureOwner
+	}
+	return l.scope.RunWork(func(scope execution.PreflightScope) error {
+		return workspaceworker.ObserveTurnBaseline(scope, l.store, request, environment)
+	})
+}
+
+func (l nativeLineage) action(t *testing.T, store *taskdir.Store, resource *workspace.Resource, kind string) error {
+	t.Helper()
+	id, err := randomid.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := task.ComputeSHA256([]byte("action " + id))
+	request := workspace.OperationRequest{
+		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id, WorkspaceID: resource.Request().WorkspaceID,
+		Kind: kind, Subject: lineageOperationSubject(kind), Deadline: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),
+		WorkerExecutable: "/fixture/delegate-run", WorkerSHA256: digest,
+		Supervisor: supervisorfixture.ContinuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
+	}
+	if kind == workspace.OperationForget {
+		intent, intentErr := resource.ForgetIntent(l.scope.ctx)
+		if intentErr != nil {
+			return intentErr
+		}
+		request.Subject, err = workspacescore.ForgetSubject(intent)
+		if err != nil {
+			return err
+		}
+		request.Deadline = intent.Deadline
+	}
+	operation, err := workspace.OpenOperation(l.scope.ctx, store, request)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := operation.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if kind == workspace.OperationForget {
+		intent, intentErr := resource.ForgetIntent(l.scope.ctx)
+		if intentErr != nil {
+			return intentErr
+		}
+		if _, err = resource.AssociateOperation(l.scope.ctx, workspacescore.ForgetPurpose(intent), request); err != nil {
+			return err
+		}
+	}
+	actor := l
+	actor.store = store
+	_, err = actor.runOperation(operation, os.Environ())
+	return err
 }

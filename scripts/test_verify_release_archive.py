@@ -15,19 +15,29 @@ import unittest
 from argparse import Namespace
 from unittest.mock import patch
 
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import verify_release_archive as verifier
-from scripts import native_acceptance_evidence as evidence
-from scripts.acceptance_tests.fixture_cleanup import closing_preserving_primary
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
-from scripts.delegate_acceptance.processes.contracts import CommandFailure
-from scripts.delegate_acceptance.release_verification import commands as release_commands
-from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
-from scripts.delegate_acceptance.release_verification.contract import MAX_RELEASE_RECEIPT_BYTES
-from scripts.delegate_acceptance.directories import journal as cleanup_module
+import scripts.acceptance.native_evidence.aggregate as native_evidence_aggregate
+import scripts.acceptance.native_evidence.contract as native_evidence_contract
+import scripts.acceptance.native_evidence.directories as native_evidence_directories
+import scripts.acceptance.native_evidence.filesystem as native_evidence_filesystem
+
+repository_root = str(Path(__file__).resolve().parents[1])
+if repository_root not in sys.path:
+    sys.path.insert(0, repository_root)
+
+from scripts.acceptance.testing.fixture_cleanup import closing_preserving_primary
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.native.tests.support import lifetime_closure_source
+from scripts.acceptance.native.tests.support import production_acp_source
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.evidence import source as release_commands
+from scripts.release_verification import filesystem as receipt_files
+from scripts.release_verification.contract import MAX_RELEASE_RECEIPT_BYTES
+from scripts.acceptance.directories import journal as cleanup_module
 
 
 TAG = "v1.2.3"
@@ -156,7 +166,7 @@ esac
         return json.loads((path or self.receipt_path).read_text(encoding="utf-8"))
 
     def write_passing_aggregate_case(self, index, case, case_directory, *, installed_paths=None):
-        aliases = evidence._expected_task_aliases(case.provider, case.scenario)
+        aliases = native_evidence_contract._expected_task_aliases(case.provider, case.scenario)
         session = "session-" + case.case_id
         tasks = {
             alias: f"{index + 1:016x}{position + 1:016x}"
@@ -209,11 +219,11 @@ esac
     def write_aggregate(self, *, source_revision=REVISION, status="PASS", require_pass=False,
                         first_case_paths=None):
         root = self.root / "native-aggregate-fixture"
-        (root / evidence.CASE_ROOT_NAME).mkdir(parents=True)
-        (root / evidence.COMPACT_RECEIPT_ROOT_NAME).mkdir()
-        matrix = [evidence.MATRIX_HEADER]
-        for index, case in enumerate(evidence.EXPECTED_CASES):
-            case_directory = evidence.prepare_case_directory(root, case.case_id)
+        (root / native_evidence_contract.CASE_ROOT_NAME).mkdir(parents=True)
+        (root / native_evidence_contract.COMPACT_RECEIPT_ROOT_NAME).mkdir()
+        matrix = [native_evidence_contract.MATRIX_HEADER]
+        for index, case in enumerate(native_evidence_contract.EXPECTED_CASES):
+            case_directory = native_evidence_directories.prepare_case_directory(root, case.case_id)
             if status == "PASS" or (status == "FAIL" and index):
                 self.write_passing_aggregate_case(
                     index, case, case_directory,
@@ -236,14 +246,14 @@ esac
                 (case_directory / "raw-provider-output").write_text(SECRET, encoding="utf-8")
                 matrix.append("\t".join((case.case_id, case.provider, case.permission,
                                          case.scenario, "1", "FAIL", case.case_output)) + "\n")
-        matrix_path = root / evidence.CASE_MATRIX_NAME
+        matrix_path = root / native_evidence_contract.CASE_MATRIX_NAME
         matrix_path.write_text("".join(matrix), encoding="ascii")
-        result, _ = evidence.build_aggregate(
-            root, matrix_path, root / evidence.AGGREGATE_RECEIPT_NAME,
+        result, _ = native_evidence_aggregate.build_aggregate(
+            root, matrix_path, root / native_evidence_contract.AGGREGATE_RECEIPT_NAME,
             tag=TAG, source_revision=source_revision, require_pass=require_pass,
         )
         self.assertEqual(result["status"], status)
-        return root / evidence.AGGREGATE_RECEIPT_NAME
+        return root / native_evidence_contract.AGGREGATE_RECEIPT_NAME
 
     def test_success_binds_exact_archive_binaries_and_default_path(self):
         self.assertEqual(self.verify(), 0)
@@ -291,8 +301,10 @@ esac
         self.assertEqual(ref_command["exit_code"], 0)
         self.assertEqual(len(receipt["source_harness"]["sha256"]), 64)
         fingerprint_paths = {item["path"] for item in receipt["source_harness"]["files"]}
-        self.assertIn("scripts/acceptance_native.py", fingerprint_paths)
-        self.assertIn("scripts/acceptance_provider_common.py", fingerprint_paths)
+        self.assertIn("scripts/acceptance/native/cli.py", fingerprint_paths)
+        self.assertIn("scripts/acceptance/tasks/operations.py", fingerprint_paths)
+        self.assertIn("scripts/acceptance/processes/operations.py", fingerprint_paths)
+        self.assertIn("scripts/acceptance/directories/operations.py", fingerprint_paths)
 
     def test_checksum_mismatch_finalizes_receipt_and_retains_assets(self):
         (self.assets / "checksums.txt").write_text(f"{'0' * 64}  {self.archive_name}\n", encoding="ascii")
@@ -418,8 +430,8 @@ esac
         second = self.root / "cleanup-target-second"
         first.mkdir()
         second.mkdir()
-        first_identity = evidence._directory_identity(first)
-        second_identity = evidence._directory_identity(second)
+        first_identity = native_evidence_filesystem._directory_identity(first)
+        second_identity = native_evidence_filesystem._directory_identity(second)
         receipt = verifier.new_receipt("archive-smoke", TAG, REVISION)
         authorization = verifier._release_cleanup_authorization(
             receipt, "pass", first_identity,
@@ -470,7 +482,7 @@ esac
         self.assertEqual(receipt["archive_receipt_sha256"], hashlib.sha256(self.receipt_path.read_bytes()).hexdigest())
         self.assertEqual(receipt["aggregate_receipt_sha256"],
                          hashlib.sha256(aggregate_receipt.read_bytes()).hexdigest())
-        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(native_evidence_contract.EXPECTED_CASES))
         self.assertTrue(all(len(item["receipt_sha256"]) == 64
                             for item in receipt["native_acceptance"]["case_receipt_hashes"]))
         self.assertEqual(receipt["cleanup"]["status"], "complete")
@@ -783,7 +795,7 @@ esac
         self.assertEqual(receipt["native_acceptance"]["aggregate_status"], "BLOCKED")
         self.assertEqual(receipt["native_acceptance"]["claims_scope"],
                          "provider-permission-scenario-case-results-only")
-        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(native_evidence_contract.EXPECTED_CASES))
         self.assertTrue(all(item["status"] == "BLOCKED"
                             for item in receipt["native_acceptance"]["case_receipt_hashes"]))
         self.assertTrue(self.assets.exists())
@@ -936,7 +948,7 @@ esac
         self.assertEqual(receipt["source_harness"], verifier.source_fingerprint("native-acceptance"))
         cases = receipt["native_acceptance"]["case_receipt_hashes"]
         self.assertEqual({case["case_id"] for case in cases},
-                         {case.case_id for case in evidence.EXPECTED_CASES})
+                         {case.case_id for case in native_evidence_contract.EXPECTED_CASES})
         self.assertNotIn("case_results", receipt["acceptance"])
         self.assertEqual(verifier.MAX_RECEIPT, 32 * 1024)
         self.assertLessEqual(receipt_path.stat().st_size, MAX_RELEASE_RECEIPT_BYTES)

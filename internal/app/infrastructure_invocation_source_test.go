@@ -63,10 +63,10 @@ func TestAppInvocationCaptureSurvivesSelectedAndRecordedEnvironments(t *testing.
 	_, selected := appInvocationOrigin(t)
 	setAppInvocationOrigin(t, actual)
 	deps := (Dependencies{Environment: selected}).withCapturedEnvironment()
-	if deps.invocationSource == nil || deps.invocationSource.err != nil {
+	if deps.invocationSource == nil || deps.invocationSource.Err() != nil {
 		t.Fatal("actual invocation source was not captured")
 	}
-	if observed, found := deps.invocationSource.source.Origin(); !found || observed != original {
+	if observed, found := deps.invocationSource.Origin(); !found || observed != original {
 		t.Fatal("selected environment replaced actual invocation origin")
 	}
 	if !slices.Equal(deps.Environment, selected) {
@@ -85,7 +85,7 @@ func TestAppInvocationCaptureSurvivesSelectedAndRecordedEnvironments(t *testing.
 	if scoped.storeDependencies().invocationSource != deps.invocationSource || !slices.Equal(scoped.Environment, recorded) {
 		t.Fatal("store projection lost invocation owner or recorded launch scope")
 	}
-	if observed, found := scoped.invocationSource.source.Origin(); !found || observed != original {
+	if observed, found := scoped.invocationSource.Origin(); !found || observed != original {
 		t.Fatal("environment rebasing replaced original invocation locator")
 	}
 }
@@ -93,7 +93,7 @@ func TestAppInvocationCaptureSurvivesSelectedAndRecordedEnvironments(t *testing.
 func TestAppInvocationCaptureRetainsOriginalError(t *testing.T) {
 	t.Setenv(infrastructure.OriginEnvironment, "malformed original invocation")
 	deps := (Dependencies{Environment: []string{}}).withCapturedEnvironment()
-	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.err, infrastructure.ErrIdentity) {
+	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.Err(), infrastructure.ErrIdentity) {
 		t.Fatal("invocation capture did not retain malformed-origin failure")
 	}
 	_, valid := appInvocationOrigin(t)
@@ -106,10 +106,10 @@ func TestAppInvocationCaptureRetainsOriginalError(t *testing.T) {
 	if repeated.invocationSource != deps.invocationSource || scoped.invocationSource != deps.invocationSource || scoped.storeDependencies().invocationSource != deps.invocationSource {
 		t.Fatal("later environment recaptured failed invocation")
 	}
-	if !errors.Is(scoped.invocationSource.err, infrastructure.ErrIdentity) {
+	if !errors.Is(scoped.invocationSource.Err(), infrastructure.ErrIdentity) {
 		t.Fatal("later valid locator erased original capture failure")
 	}
-	if _, found := scoped.invocationSource.source.Origin(); found {
+	if _, found := scoped.invocationSource.Origin(); found {
 		t.Fatal("failed invocation acquired later routing data")
 	}
 }
@@ -119,21 +119,21 @@ func TestAppInvocationCaptureUsesCallerContextOnce(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	deps := (Dependencies{Environment: []string{}}).withCapturedEnvironmentContext(canceled)
-	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.err, context.Canceled) {
+	if deps.invocationSource == nil || !errors.Is(deps.invocationSource.Err(), context.Canceled) {
 		t.Fatal("capture discarded command context before observing invocation")
 	}
 	repeated := deps.withCapturedEnvironmentContext(t.Context())
-	if repeated.invocationSource != deps.invocationSource || !errors.Is(repeated.invocationSource.err, context.Canceled) {
+	if repeated.invocationSource != deps.invocationSource || !errors.Is(repeated.invocationSource.Err(), context.Canceled) {
 		t.Fatal("later live context recaptured canceled invocation")
 	}
 	_, valid := appInvocationOrigin(t)
 	setAppInvocationOrigin(t, valid)
 	accepted := (Dependencies{Environment: []string{}}).withCapturedEnvironmentContext(t.Context())
-	if accepted.invocationSource == nil || accepted.invocationSource.err != nil {
+	if accepted.invocationSource == nil || accepted.invocationSource.Err() != nil {
 		t.Fatal("live command context failed capture")
 	}
 	later := accepted.withCapturedEnvironmentContext(canceled)
-	if later.invocationSource != accepted.invocationSource || later.invocationSource.err != nil {
+	if later.invocationSource != accepted.invocationSource || later.invocationSource.Err() != nil {
 		t.Fatal("later cancellation replaced original successful capture")
 	}
 }
@@ -144,10 +144,10 @@ func TestAppInvocationInjectedEnvironmentCannotGrantOutsideProvenance(t *testing
 	_, selected := appInvocationOrigin(t)
 	for _, environment := range [][]string{nil, {}, selected} {
 		deps := (Dependencies{Environment: environment}).withCapturedEnvironment()
-		if deps.invocationSource == nil || !errors.Is(deps.invocationSource.err, lifetime.ErrTaskContained) {
+		if deps.invocationSource == nil || !errors.Is(deps.invocationSource.Err(), lifetime.ErrTaskContained) {
 			t.Fatal("injected launch environment erased actual task containment")
 		}
-		if _, found := deps.invocationSource.source.Origin(); found {
+		if _, found := deps.invocationSource.Origin(); found {
 			t.Fatal("injected launch environment invented invocation routing")
 		}
 		if deps.Environment == nil {
@@ -165,7 +165,7 @@ func TestAppInvocationCaptureErrorStaysLazyForPassiveCommands(t *testing.T) {
 	validDeps := (Dependencies{Environment: []string{}}).withCapturedEnvironment()
 	t.Setenv(infrastructure.OriginEnvironment, "malformed invocation")
 	faultDeps := (Dependencies{Environment: []string{}}).withCapturedEnvironment()
-	if faultDeps.invocationSource == nil || !errors.Is(faultDeps.invocationSource.err, infrastructure.ErrIdentity) {
+	if faultDeps.invocationSource == nil || !errors.Is(faultDeps.invocationSource.Err(), infrastructure.ErrIdentity) {
 		t.Fatal("fixture did not capture invocation error")
 	}
 	root := filepath.Join(t.TempDir(), "absent-state")

@@ -51,7 +51,7 @@ func TestSchedulerCleanupProjectionRetainsStoreCloseOwner(t *testing.T) {
 }
 
 func TestSchedulerCleanupOrdinaryAndSettledViewsRemainNonfatal(t *testing.T) {
-	for _, cause := range []error{nil, os.ErrPermission, &infrastructureRoutingCleanupError{cause: os.ErrPermission}, &taskAdmissionCleanupError{cause: os.ErrPermission}, &nilSchedulerRetainedStoreError{cause: os.ErrPermission}} {
+	for _, cause := range []error{nil, os.ErrPermission, &routingCleanupTestError{cause: os.ErrPermission}, &taskAdmissionCleanupError{cause: os.ErrPermission}, &nilSchedulerRetainedStoreError{cause: os.ErrPermission}} {
 		result := schedulerTaskCleanupError(cause)
 		if errors.Is(result, schedulerruntime.ErrTaskCleanupUnresolved) {
 			t.Fatalf("settled or ordinary task error became fatal: %v", result)

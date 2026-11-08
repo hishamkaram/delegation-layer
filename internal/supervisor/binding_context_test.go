@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -16,11 +18,11 @@ func TestSavedClientCancellationPrecedesExecutableSelection(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	invalid := task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(fixture.store.Root)}
-	client, err := RecoverPrivateClient(ctx, fixture.store, invalid, pueue.Options{}, ExecutableLookup{})
+	client, err := RecoverPrivateClient(ctx, fixture.store, invalid, pueue.Options{}, installation.ExecutableLookup{})
 	if client != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled saved client selected invalid executable data: %v", err)
 	}
-	client, err = NewControlClient(ctx, fixture.store.Root, invalid, pueue.Options{}, ExecutableLookup{})
+	client, err = NewControlClient(ctx, fixture.store.Root, invalid, pueue.Options{}, installation.ExecutableLookup{})
 	if client != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled control client selected invalid executable data: %v", err)
 	}
@@ -42,7 +44,7 @@ func TestPairReconciliationRejectsRootReplacedBeforeBootstrapLock(t *testing.T) 
 	}
 	fixture.otherStores = append(fixture.otherStores, replacement)
 	err = pueue.WithBootstrapLockContext(t.Context(), fixture.store.Root, func(ctx context.Context) error {
-		return ReconcilePublishedSupervisorWithLock(ctx, fixture.store, pueue.Options{}, ExecutableLookup{}, false)
+		return ReconcilePublishedSupervisorWithLock(ctx, fixture.store, pueue.Options{}, installation.ExecutableLookup{}, false)
 	})
 	if !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("reconciliation accepted a different root after waiting for its lock: %v", err)

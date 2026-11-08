@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -30,7 +32,7 @@ type OwnerRouting interface {
 // contact. Healthy local observation needs no resident or artifact selection.
 type ControlRuntime struct {
 	Options   pueue.Options
-	Lookup    ExecutableLookup
+	Lookup    installation.ExecutableLookup
 	Routing   OwnerRouting
 	OpenStore StoreOpener
 }
@@ -57,7 +59,7 @@ func (r ControlRuntime) OpenSaved(ctx context.Context, root string, saved task.S
 		return nil, err
 	}
 	defer func() {
-		if !CleanupRetainsStore(resultErr, store) {
+		if !taskdir.CleanupRetainsStore(resultErr, store) {
 			resultErr = errors.Join(resultErr, store.Close())
 		}
 	}()
@@ -177,7 +179,7 @@ func (r ControlRuntime) probeSavedWith(ctx context.Context, store *taskdir.Store
 		if err != nil || available {
 			return client, daemon, errors.Join(err, selection.Err())
 		}
-		return resolveCompatiblePrivatePair(selection, pin.Root(), r.Lookup)
+		return resolveCompatiblePrivatePair(selection, r.Lookup)
 	})
 	if err != nil {
 		return client, err
@@ -197,7 +199,7 @@ func (r ControlRuntime) probeAdmission(ctx context.Context, store *taskdir.Store
 	var client *pueue.Client
 	var err error
 	if needsPair {
-		clientExecutable, daemonExecutable, selectionErr := resolveCompatiblePrivatePair(ctx, store.Root, r.Lookup)
+		clientExecutable, daemonExecutable, selectionErr := resolveCompatiblePrivatePair(ctx, r.Lookup)
 		if selectionErr != nil && !task.AllErrorCauses(selectionErr, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {
 			return nil, selectionErr
 		}

@@ -22,18 +22,19 @@ from unittest.mock import call, patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.evidence.bounded_files import FileFingerprint
-from scripts.delegate_acceptance.release_verification import candidate_build_artifacts, filesystem
-from scripts.delegate_acceptance.release_verification.candidate_build_artifacts import (
-    BuildContext, observed_files,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import BuildRequest
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    ArtifactKind, entry_limit, expected_inventory,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.acceptance.evidence.bounded_files import FileFingerprint
+from scripts.release_verification import candidate_build_artifacts as candidate_build_artifacts
+from scripts.release_verification import filesystem as filesystem
+from scripts.release_verification.candidate_build_artifacts import BuildContext
+from scripts.release_verification.candidate_build_artifacts import observed_files
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.release_verification.candidate_manifest import ArtifactKind
+from scripts.release_verification.candidate_manifest import entry_limit
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.acceptance.evidence.source import VerificationError
 
 
 T = TypeVar("T")

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -47,5 +49,5 @@ func wakeManagedTaskWorkspace(ctx context.Context, store *taskdir.Store, td *tas
 	if err != nil {
 		return err
 	}
-	return reconcileWorkspaceUse(ctx, store, resource, options)
+	return workspaces.ReconcileUse(ctx, store, resource, options)
 }

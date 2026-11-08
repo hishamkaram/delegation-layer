@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	ResourceGuards       resourceadmission.GuardPolicy
 	Device               string
 	RemoteRoot           string
 	RemoteCwd            string
@@ -282,34 +285,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
 		return
 	}
-	if a.Command == "continue" {
-		fs.StringVar(&a.TaskID, "task", "", "predecessor task ID")
-		fs.StringVar(&a.Brief, "brief", "", "optional follow-up brief file")
-		fs.StringVar(&a.Config.Budget, "budget", "", "finite continuation budget")
-		fs.StringVar(&a.Config.Model, "model", "", "continuation model override")
-		fs.StringVar(&a.Config.Effort, "effort", "", "continuation effort override")
-		return
-	}
-	if a.Command != "dispatch" {
-		return
-	}
-	fs.StringVar(&a.TaskID, "id", "", "task ID")
-	fs.BoolVar(&a.Auto, "auto", false, "select the first ready provider")
-	fs.StringVar(&a.Provider, "provider", "", "provider profile")
-	fs.StringVar(&a.Brief, "brief", "", "brief file")
-	fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
-	fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
-	fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
-	fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional agy timeout within the task budget")
-	fs.StringVar(&a.Config.Model, "model", "", "requested model")
-	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
-	fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
-	fs.StringVar(&a.ResumeTask, "resume-task", "", "exact predecessor task ID")
-	fs.StringVar(&a.Isolation, "isolation", "", "optional workspace isolation: git-worktree")
-	fs.StringVar(&a.WorkspaceID, "workspace", "", "retained managed workspace ID")
-	fs.StringVar(&a.Base, "base", "", "committed Git base (default: HEAD)")
-	fs.StringVar(&a.WorkspaceBudget, "workspace-budget", "", "finite workspace helper budget (default: 5m)")
-	registerTeamTargetFlags(fs, a)
+	registerAdmissionFlags(fs, a)
 }
 
 // orderFlags permits documented ID --json placement without silently accepting
@@ -633,4 +609,58 @@ func registerInteractionFlags(fs *flag.FlagSet, a *Arguments) bool {
 	}
 
 	return false
+}
+
+// guardFlag exposes positive default-on CLI flags while keeping zero-value
+// Arguments safe for programmatic callers.
+type guardFlag struct{ disabled *bool }
+
+func (f guardFlag) String() string {
+	if f.disabled == nil {
+		return "true"
+	}
+	return strconv.FormatBool(!*f.disabled)
+}
+func (f guardFlag) IsBoolFlag() bool { return true }
+func (f guardFlag) Set(value string) error {
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return err
+	}
+	*f.disabled = !enabled
+	return nil
+}
+
+// registerAdmissionFlags owns flags for fresh ordinary admission only.
+func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
+	if a.Command != "dispatch" && a.Command != "continue" {
+		return
+	}
+	fs.Var(guardFlag{disabled: &a.ResourceGuards.DisableCPU}, "cpu-guard", "check CPU pressure before fresh admission (default true)")
+	fs.Var(guardFlag{disabled: &a.ResourceGuards.DisableMemory}, "memory-guard", "check memory pressure before fresh admission (default true)")
+	if a.Command == "continue" {
+		fs.StringVar(&a.TaskID, "task", "", "predecessor task ID")
+		fs.StringVar(&a.Brief, "brief", "", "optional follow-up brief file")
+		fs.StringVar(&a.Config.Budget, "budget", "", "finite continuation budget")
+		fs.StringVar(&a.Config.Model, "model", "", "continuation model override")
+		fs.StringVar(&a.Config.Effort, "effort", "", "continuation effort override")
+		return
+	}
+	fs.StringVar(&a.TaskID, "id", "", "task ID")
+	fs.BoolVar(&a.Auto, "auto", false, "select the first ready provider")
+	fs.StringVar(&a.Provider, "provider", "", "provider profile")
+	fs.StringVar(&a.Brief, "brief", "", "brief file")
+	fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
+	fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
+	fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
+	fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional agy timeout within the task budget")
+	fs.StringVar(&a.Config.Model, "model", "", "requested model")
+	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
+	fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
+	fs.StringVar(&a.ResumeTask, "resume-task", "", "exact predecessor task ID")
+	fs.StringVar(&a.Isolation, "isolation", "", "optional workspace isolation: git-worktree")
+	fs.StringVar(&a.WorkspaceID, "workspace", "", "retained managed workspace ID")
+	fs.StringVar(&a.Base, "base", "", "committed Git base (default: HEAD)")
+	fs.StringVar(&a.WorkspaceBudget, "workspace-budget", "", "finite workspace helper budget (default: 5m)")
+	registerTeamTargetFlags(fs, a)
 }

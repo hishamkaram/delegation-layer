@@ -22,13 +22,13 @@ func StatusContext(ctx context.Context, store *taskdir.Store, td *taskdir.TaskDi
 	inspection, err := td.Inspect()
 	interaction, interactionErr := ReadInteraction(td)
 	result.Interaction, result.Inspection = interaction, inspection
-	if !supervisorcore.TaskTerminal(inspection) {
+	if !inspection.Terminal() {
 		err = errors.Join(err, interactionErr)
 	}
 	if err != nil {
 		return result, err
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		err = observeTerminalStatus(ctx, store.Root, td, options, catalog, &result.Observation)
 		return result, err
 	}

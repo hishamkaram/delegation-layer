@@ -1,8 +1,8 @@
 package app
 
-import "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+import "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/stop"
 
-func stopOutcomeResponse(outcome tasklifecycle.StopOutcome) StopResponse {
+func stopOutcomeResponse(outcome stop.Outcome) StopResponse {
 	return StopResponse{
 		RequestID:     outcome.RequestID(),
 		Cause:         outcome.Cause(),

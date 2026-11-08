@@ -10,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -144,7 +146,7 @@ func TestPublishedConfigDriftKeepsStrictRefusalOutsideMigration(t *testing.T) {
 	var admitted *pueue.Client
 	admission := pueue.WithBootstrapLockContext(t.Context(), fixture.root, func(ctx context.Context) error {
 		var prepareErr error
-		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, supervisor.ExecutableLookup{InitialExecutable: fixture.clientB}, fixture.store, fixture.options)
+		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, installation.ExecutableLookup{InitialExecutable: fixture.clientB}, fixture.store, fixture.options)
 		return prepareErr
 	})
 	if admitted != nil {

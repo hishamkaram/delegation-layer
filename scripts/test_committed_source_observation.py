@@ -6,6 +6,7 @@ nothing is evidence about the real repository, a provider or a release.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import sys
@@ -15,10 +16,11 @@ from unittest import mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.record_fixtures import array_at, object_at
-from scripts.acceptance_tests.release_fixture import FixtureTree
-from scripts.delegate_acceptance.release_verification import candidate_source_observation, source
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.acceptance.evidence import source as source_evidence
+from scripts.acceptance.testing.record_fixtures import array_at
+from scripts.acceptance.testing.record_fixtures import object_at
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.evidence.source import VerificationError
 from scripts.test_candidate_source_support import SourceRepository
 
 
@@ -28,12 +30,13 @@ DATA = "fixture.txt"
 EXTRA = "scripts/fixture_extra.py"
 SEEDS = (ENTRY, DATA)
 FILES = {
-    source.PARSER_SOURCE: (Path(__file__).resolve().parent.parent / source.PARSER_SOURCE).read_bytes(),
+    source_evidence.PARSER_SOURCE: (Path(__file__).resolve().parent.parent / source_evidence.PARSER_SOURCE).read_bytes(),
     ENTRY: b"from scripts.fixture_helper import VALUE\n",
     HELPER: b"VALUE = 'executing'\n",
     DATA: b"fixture data\n",
 }
 OTHER_HELPER = b"VALUE = 'other committed bytes'\n"
+
 
 
 class HarnessCase(unittest.TestCase):
@@ -48,7 +51,7 @@ class HarnessCase(unittest.TestCase):
     def observe(self, *, receipt: dict | None = None, seeds: tuple[str, ...] = SEEDS,
                 environment: dict[str, str] | None = None, checkout: Path | None = None) -> tuple[str, str, bool]:
         try:
-            return source.observe_harness({"commands": []} if receipt is None else receipt,
+            return source_evidence.observe_harness({"commands": []} if receipt is None else receipt,
                                           os.environ if environment is None else environment,
                                           checkout=checkout or self.repository.path, seeds=seeds)
         except VerificationError as error:
@@ -56,7 +59,7 @@ class HarnessCase(unittest.TestCase):
             raise
 
     def fingerprint(self, seeds: tuple[str, ...] = SEEDS) -> str:
-        fingerprint = source.fingerprint_sources(self.repository.path, seeds)["sha256"]
+        fingerprint = source_evidence.fingerprint_sources(self.repository.path, seeds)["sha256"]
         if not isinstance(fingerprint, str):
             raise AssertionError("fixture source fingerprint is not text")
         return fingerprint
@@ -86,7 +89,7 @@ class CommittedMatchTests(HarnessCase):
         self.assertIn(self.head, receipt["commands"][1]["argv"])
         self.assertEqual({record["exit_code"] for record in receipt["commands"]}, {0})
         paths: list[str] = []
-        for item in array_at(source.fingerprint_sources(self.repository.path, SEEDS), "files"):
+        for item in array_at(source_evidence.fingerprint_sources(self.repository.path, SEEDS), "files"):
             path = object_at(item)["path"]
             if not isinstance(path, str):
                 raise AssertionError("fixture fingerprint file path is not text")
@@ -140,8 +143,8 @@ class RefusalTests(HarnessCase):
         )
         for code, fingerprint in cases:
             with self.subTest(code=code, fingerprint=fingerprint), \
-                    mock.patch.object(source, "fingerprint_sources", return_value=fingerprint):
-                self.assertRefused(code, source.HARNESS_STAGE)
+                    mock.patch.object(source_evidence, "fingerprint_sources", return_value=fingerprint):
+                self.assertRefused(code, source_evidence.HARNESS_STAGE)
 
     def test_git_and_receipt_failures_refuse_instead_of_mismatching(self) -> None:
         not_git = self.tree.root / "not-a-repository"
@@ -151,14 +154,22 @@ class RefusalTests(HarnessCase):
         self.assertRefused("command_failed", "git-harness-head", checkout=unborn.path)
         self.assertRefused("receipt_commands_invalid", "git-harness-head", receipt={})
         self.assertRefused("build_path_unavailable", "build-candidate", environment={"HOME": "/"})
-        with mock.patch.object(candidate_source_observation, "MAX_SOURCE_FILE", 8):
+        registry_reader = source_evidence.read_regular_blobs
+
+        def read_tiny_registry_blobs(receipt: dict, environment: Mapping[str, str], *,
+                                     repository: Path, tree: str, paths: tuple[str, ...]) -> dict[str, bytes]:
+            # Bound the actual Git read after the checkout fingerprint has been observed.
+            with mock.patch.object(source_evidence, "MAX_SOURCE_FILE", 8):
+                return registry_reader(receipt, environment, repository=repository, tree=tree, paths=paths)
+
+        with mock.patch.object(source_evidence, "read_regular_blobs", side_effect=read_tiny_registry_blobs):
             self.assertRefused("command_output_exceeded", "git-registry-blob")
 
     def test_a_file_changed_or_removed_during_the_observation_refuses(self) -> None:
-        fingerprint = source.fingerprint_sources
+        fingerprint = source_evidence.fingerprint_sources
         helper = self.repository.path / HELPER
         for code, stage, change in (
-                ("source_changed_during_observation", source.HARNESS_STAGE, lambda: helper.write_bytes(OTHER_HELPER)),
+                ("source_changed_during_observation", source_evidence.HARNESS_STAGE, lambda: helper.write_bytes(OTHER_HELPER)),
                 ("source_file_invalid", "bounded-read", helper.unlink)):
             def fingerprint_then_change(root: Path, seeds: tuple[str, ...]) -> dict[str, object]:
                 observed = fingerprint(root, seeds)
@@ -166,7 +177,7 @@ class RefusalTests(HarnessCase):
                 return observed
 
             with self.subTest(code=code), \
-                    mock.patch.object(source, "fingerprint_sources", side_effect=fingerprint_then_change):
+                    mock.patch.object(source_evidence, "fingerprint_sources", side_effect=fingerprint_then_change):
                 self.assertRefused(code, stage)
             helper.write_bytes(FILES[HELPER])
 

@@ -25,9 +25,11 @@ for changed durable or process behavior.
 
 1. Inspect the affected callers and tests. Preserve others' edits. Confirm an
    upstream post-image is applied and checked before dependent implementation.
-2. Name the state owner/invariant; keep data, decisions and I/O separate. Use
-   existing values and consumer-owned ports. Do not extract a helper that just
-   passes an entire local state through a long positional argument list.
+2. Name the state owner/invariant; keep data, decisions and I/O separate. Apply
+   [module organization](../../agents/_data/maintainability-contract.md#module-organization)
+   before moving a capability. Use existing values and consumer-owned ports.
+   Do not extract a helper that just passes an entire local state through a long
+   positional argument list.
 3. Preserve contexts, wrapped errors, persisted behavior, permissions and
    session identity. Use canonical transactions, resolvers and finalizers.
 4. Add meaningful success/failure regressions. Prove a bug test fails for its

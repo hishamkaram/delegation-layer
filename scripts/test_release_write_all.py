@@ -18,9 +18,10 @@ from unittest.mock import patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.release_verification import filesystem
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.release_verification import filesystem as filesystem
+from scripts.acceptance.evidence.source import VerificationError
 
 
 DATA = bytes(range(256)) * 4 + b"tail"

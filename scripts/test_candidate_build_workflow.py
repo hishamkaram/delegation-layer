@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import unittest
 
-from scripts.delegate_acceptance.release_verification import candidate_publication_preflight as preflight
+from scripts.release_verification import candidate_publication_preflight as preflight
 
 
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"

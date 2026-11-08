@@ -10,7 +10,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func ValidateManagedOrdinaryRunnerExecutable(_ string, recorded, current, ownership string, target RunnerRepairTarget) error {
+func ValidateManagedOrdinaryRunnerExecutable(recorded, current, ownership string, target RunnerRepairTarget) error {
 	if ownership != task.RunnerOwnershipManaged {
 		return nil
 	}

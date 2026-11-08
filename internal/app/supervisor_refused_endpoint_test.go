@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -510,7 +512,7 @@ func testSupervisorClientsNeverRecoverObservationFault(t *testing.T, output stri
 		},
 		"recovering client": func(fixture refusedPairFixture) (*pueue.Client, error) {
 			before := len(fixture.owner.daemonWaits())
-			client, err := supervisorcore.RecoverPrivateClient(t.Context(), fixture.store, fixture.published, fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath})
+			client, err := supervisorcore.RecoverPrivateClient(t.Context(), fixture.store, fixture.published, fixture.options, installation.ExecutableLookup{InitialExecutable: fixture.clientPath})
 			fixture.owner.ownClient(client, err)
 			fixture.owner.ownDaemonClients(client, before)
 			return client, err

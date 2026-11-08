@@ -17,11 +17,11 @@ from unittest.mock import patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification import github
-from scripts.delegate_acceptance.release_verification import candidate_tap_delivery as tap
-from scripts.delegate_acceptance.release_verification.candidate_manifest import HOMEBREW_FORMULA_PATH
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import git_blob_sha
+from scripts.release_verification import github as github
+from scripts.release_verification import candidate_tap_delivery as tap
+from scripts.release_verification.candidate_manifest import HOMEBREW_FORMULA_PATH
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import git_blob_sha
 from scripts.test_candidate_artifact_support import CandidateArtifactCase, payload_files
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 from scripts.test_release_github_transport import ObservedGitHubClient

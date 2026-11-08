@@ -6,7 +6,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -20,7 +19,7 @@ func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.
 	if err != nil {
 		return err
 	}
-	if supervisorcore.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		if err = requireRunnerLeaseRelease(td); err != nil {
 			return err
 		}
@@ -35,7 +34,7 @@ func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.
 	if err != nil {
 		return err
 	}
-	if supervisorcore.TaskTerminal(inspection) && inspection.Outcome != nil {
+	if inspection.Terminal() && inspection.Outcome != nil {
 		return releaseTerminalPredecessor(ctx, td, req, inspection)
 	}
 	if handedOff, handoffErr := releaseHandedOffPredecessor(ctx, td, req); handoffErr != nil {
@@ -47,7 +46,7 @@ func PredecessorTerminatedContext(ctx context.Context, root string, td *taskdir.
 }
 
 func releaseTerminalPredecessor(ctx context.Context, td *taskdir.TaskDir, req *task.TaskRecord, inspection *taskdir.TaskInspection) error {
-	if inspection == nil || !supervisorcore.TaskTerminal(inspection) || inspection.Outcome == nil {
+	if inspection == nil || !inspection.Terminal() || inspection.Outcome == nil {
 		return errPredecessorOutcomeUnavailable
 	}
 	return ReleaseContinuationSessionContext(ctx, td, req, inspection.Outcome)

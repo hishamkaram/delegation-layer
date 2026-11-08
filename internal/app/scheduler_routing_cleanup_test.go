@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	schedulerruntime "github.com/hishamkaram/delegation-layer/internal/scheduler/runtime"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -17,7 +19,7 @@ import (
 )
 
 type schedulerRetainedRouting struct {
-	infrastructureOwnerRouting
+	infrastructurehost.Routing
 	store  *taskdir.Store
 	source infrastructure.SavedBindingSource
 	calls  int
@@ -35,7 +37,7 @@ func (r *schedulerRetainedRouting) RecoverSaved(ctx context.Context, store *task
 	}
 	r.store, r.source = store, source
 	r.calls++
-	return infrastructure.Disposition{}, &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: store}, cause: os.ErrPermission}
+	return infrastructure.Disposition{}, &routingCleanupTestError{store: store, cause: os.ErrPermission}
 }
 
 func (r *schedulerRetainedRouting) EnsurePrivate(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (infrastructure.Disposition, error) {
@@ -47,7 +49,7 @@ func (r *schedulerRetainedRouting) EnsurePrivate(ctx context.Context, store *tas
 	}
 	r.store = store
 	r.calls++
-	return infrastructure.Disposition{}, &infrastructureRoutingCleanupError{resources: &infrastructureRoutingResources{target: store}, cause: os.ErrPermission}
+	return infrastructure.Disposition{}, &routingCleanupTestError{store: store, cause: os.ErrPermission}
 }
 
 func TestSchedulerDispatchRetainsCleanupBeforeAnyObservation(t *testing.T) {
@@ -209,3 +211,12 @@ func writeSchedulerPrivateSavedConfig(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 }
+
+type routingCleanupTestError struct {
+	store *taskdir.Store
+	cause error
+}
+
+func (e *routingCleanupTestError) Error() string                 { return "scheduler routing cleanup unresolved" }
+func (e *routingCleanupTestError) Unwrap() error                 { return e.cause }
+func (e *routingCleanupTestError) RetainedStore() *taskdir.Store { return e.store }

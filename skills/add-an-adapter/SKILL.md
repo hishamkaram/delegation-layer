@@ -80,9 +80,11 @@ lifecycle or native guidance only when the change affects those boundaries.
    refusal/error/timeout markers, exit conflicts, identity mismatch, policy
    drift, usage scope, and historical predicate revisions. Collection must stay
    observational and must never retry paid work.
-   Name Python acceptance-driver regressions `scripts/test_acceptance_<provider>.py`
-   for ordinary discovery. Use `make test-native-harness` as a focused target;
-   the final aggregate already includes these Python tests.
+   Put Python driver regressions beside the existing driver tests under
+   `scripts/acceptance/provider_drivers/tests/test_<provider>_driver.py`.
+   Follow [module organization](../../agents/_data/maintainability-contract.md#module-organization)
+   for the complete feature and its consumers. Use `make test-native-harness`
+   as a focused target; `make test-python` already includes these tests.
 5. Run the provider through the shipped dispatcher/runner with isolated pueue,
    existing authentication, and the exact plan budgets. Finite profiles receive
    the brief on stdin followed by EOF. Machine Protocol and native Interaction

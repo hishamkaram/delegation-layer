@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	workspaceworker "github.com/hishamkaram/delegation-layer/internal/workspaces/worker"
+
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -39,7 +41,7 @@ type runnerArguments struct {
 // RunRunner executes one saved task from the supervisor's exact root/task
 // command. It shares the public runtime and never accepts a provider argv.
 func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
-	if handled, err := infrastructure.RunOwnerMode(context.Background(), args, infrastructureEntryHost{}); handled {
+	if handled, err := infrastructure.RunOwnerMode(context.Background(), args, nativeInfrastructureHost()); handled {
 		if err != nil {
 			return writeCLIError(stderr, publicSupervisorError("Infrastructure owner unavailable.", err), 1)
 		}
@@ -298,7 +300,7 @@ func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, r
 		if preflightErr != nil {
 			return plan, preflightErr
 		}
-		return plan, observeManagedTurnBaseline(scope, store, *admittedReq, deps.Environment)
+		return plan, workspaceworker.ObserveTurnBaseline(scope, store, *admittedReq, deps.Environment)
 	}
 	permit, err := td.PrepareStart(0)
 	if err != nil {
@@ -380,7 +382,7 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 		return failed(response, err, 1)
 	}
 	supervisorOptions = supervisor.OptionsWithMaintenanceScope(supervisorOptions, deps.Environment)
-	if supervisor.TaskTerminal(inspection) {
+	if inspection.Terminal() {
 		releaseErr := tasklifecycle.ReleaseContinuationSession(td, req, inspection.Outcome)
 		if releaseErr != nil {
 			return failed(response, releaseErr, 1)

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -389,7 +391,7 @@ func TestReconcileStatusDoesNotReusePriorMaintenanceDeferral(t *testing.T) {
 	queue, err = tasklifecycle.ReconcileStatus(
 		t.Context(), healthy.root, healthy.td, &healthy.req, &healthy.meta,
 		healthy.submit.SpecSHA256, healthy.submit.MetaSHA256,
-		tasklifecycle.SupervisorOptions{Options: healthy.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: healthy.clientA}, OpenStore: openNativeSupervisorStore}, &observed,
+		tasklifecycle.SupervisorOptions{Options: healthy.options, Lookup: installation.ExecutableLookup{InitialExecutable: healthy.clientA}, OpenStore: openNativeSupervisorStore}, &observed,
 	)
 	if err != nil || !queue.Matched || observed.Admission != task.AdmissionAdmitted {
 		t.Errorf("healthy poll could not recover the receipted Stashed task: queue=%+v observed=%+v err=%v", queue, observed, err)
@@ -455,7 +457,7 @@ func prepareCompleteStashedObservationClient(t *testing.T, fixture *historicalSu
 	prepared, err := supervisorcore.ObserveTaskSupervisorWithOptions(
 		t.Context(), fixture.store, fixture.predecessor, &fixture.meta,
 		supervisorcore.TaskSupervisorObservationOptions{
-			Control: fixture.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA},
+			Control: fixture.options, Lookup: installation.ExecutableLookup{InitialExecutable: fixture.clientA},
 			RunnerExecutable: fixture.runner, OpenStore: openNativeSupervisorStore,
 		},
 	)

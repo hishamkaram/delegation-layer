@@ -72,7 +72,7 @@ func inspectLegacyEndedTask(ctx context.Context, store *taskdir.Store, legacy in
 	if err != nil {
 		return fmt.Errorf("%w: ended Delegate task %s could not be inspected: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 	}
-	if !TaskTerminal(result) {
+	if !result.Terminal() {
 		if requirement == endedTaskClosedForMigration && result.Publication == task.PublicationUnknown && !result.SealExists && !result.OutcomeExists {
 			return inspectClosedUnpublishedTask(ctx, td)
 		}

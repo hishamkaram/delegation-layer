@@ -16,10 +16,12 @@ import zipfile
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification import candidate_artifact, filesystem
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    MANIFEST_PATH, PAYLOAD_MEMBER_COUNT, parse_manifest, payload_paths,
-)
+from scripts.release_verification import candidate_artifact as candidate_artifact
+from scripts.release_verification import filesystem as filesystem
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import PAYLOAD_MEMBER_COUNT
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.release_verification.candidate_manifest import payload_paths
 from scripts.test_candidate_artifact_support import (
     ARCHIVE_PATHS, MIB, VERSION, CandidateArtifactCase, Member, Served, manifest_bytes, members,
     payload_files,

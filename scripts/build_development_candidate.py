@@ -11,11 +11,10 @@ import sys
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.release_verification.candidate_build import (
-    BuildPaths, build_candidate,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import BuildRequest
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_verification.candidate_build import BuildPaths
+from scripts.release_verification.candidate_build import build_candidate
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.acceptance.evidence.source import VerificationError
 
 
 HARNESS_ROOT = Path(__file__).resolve().parent.parent

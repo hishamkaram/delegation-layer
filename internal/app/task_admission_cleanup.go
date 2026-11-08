@@ -3,7 +3,6 @@ package app
 import (
 	"errors"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -39,7 +38,7 @@ func retainTaskAdmissionCleanup(result *commandResult, store *taskdir.Store) {
 }
 
 func cleanupRetainsStore(cause error, store *taskdir.Store) bool {
-	if supervisorcore.CleanupRetainsStore(cause, store) {
+	if taskdir.CleanupRetainsStore(cause, store) {
 		return true
 	}
 	// Keep the application's existing virtual workspace-owner error view.

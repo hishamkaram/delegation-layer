@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
@@ -26,7 +26,7 @@ func PrepareContinuationWorkspaceContext(ctx context.Context, root string, optio
 		return nil, err
 	}
 	defer func() {
-		if !supervisorcore.CleanupRetainsStore(resultErr, store) {
+		if !taskdir.CleanupRetainsStore(resultErr, store) {
 			resultErr = errors.Join(resultErr, store.Close())
 		}
 	}()

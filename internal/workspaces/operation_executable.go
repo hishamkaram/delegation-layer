@@ -2,7 +2,7 @@ package workspaces
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -12,7 +12,7 @@ func validateWorkspaceOperationExecutable(root, recorded string) error {
 	if pueue.IsLegacyStateRunnerPath(root, recorded) {
 		return task.ErrIdentityMismatch
 	}
-	selected, err := supervisorcore.ResolveRunner(recorded, "")
+	selected, err := installation.ResolveRunner(recorded, "")
 	if err != nil {
 		return err
 	}

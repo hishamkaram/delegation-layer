@@ -12,7 +12,27 @@ import (
 	"time"
 )
 
-// Status is the overall outcome of one check.
+// GuardPolicy selects the checks for one fresh admission. Its zero value keeps
+// both guards enabled. It is invocation-local and never persisted.
+type GuardPolicy struct {
+	DisableCPU    bool `json:"disable_cpu,omitempty"`
+	DisableMemory bool `json:"disable_memory,omitempty"`
+}
+
+// DisabledGuards derives explicit opt-outs in stable display order.
+func (p GuardPolicy) DisabledGuards() []string {
+	var disabled []string
+	if p.DisableCPU {
+		disabled = append(disabled, "cpu")
+	}
+	if p.DisableMemory {
+		disabled = append(disabled, "memory")
+	}
+	return disabled
+}
+
+// Status is the overall outcome over enabled guards only. Clear means no
+// confirmed pressure among those guards, not a claim about disabled metrics.
 type Status string
 
 // The three statuses mirror the public resource_admission metadata values.
@@ -101,6 +121,7 @@ const freshnessWindow = 5 * time.Second
 // Assessment is the immutable result of one check. It is invocation-local and
 // never persisted.
 type Assessment struct {
+	policy     GuardPolicy
 	built      bool
 	observedAt time.Time
 	scope      Scope
@@ -157,6 +178,12 @@ func (a Assessment) HostCPUDiagnostics() *HostCPUDiagnostics {
 	}
 	return nil
 }
+
+// Policy is the immutable guard selection used for this assessment.
+func (a Assessment) Policy() GuardPolicy { return a.policy }
+
+// DisabledGuards returns explicit opt-outs, derived from the policy.
+func (a Assessment) DisabledGuards() []string { return a.policy.DisabledGuards() }
 
 // ObservedAt is the clock reading when the check finished.
 func (a Assessment) ObservedAt() time.Time { return a.observedAt }

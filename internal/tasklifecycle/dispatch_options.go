@@ -35,6 +35,8 @@ type DispatchOptions struct {
 	Workspace            workspaces.OperationOptions
 	OpenStore            TaskStoreOpener
 	ContinuationProfiles ContinuationProfiles
+	// ResourceGuards selects the invocation-local fresh-admission checks.
+	ResourceGuards resourceadmission.GuardPolicy
 	// Resources checks fresh ordinary admissions only. Nil selects the native
 	// resourceadmission checker when a fresh admission first needs it.
 	Resources        ResourceChecker

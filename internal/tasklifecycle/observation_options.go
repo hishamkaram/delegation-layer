@@ -3,6 +3,8 @@ package tasklifecycle
 import (
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -16,7 +18,7 @@ import (
 type SupervisorOptions struct {
 	AdmissionStore *taskdir.Store // Borrowed actual Store for mutation after passive observation.
 	Options        pueue.Options
-	Lookup         supervisorcore.ExecutableLookup
+	Lookup         installation.ExecutableLookup
 	OpenStore      supervisorcore.StoreOpener
 	Routing        supervisorcore.OwnerRouting
 }

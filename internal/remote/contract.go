@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
+	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -187,22 +188,23 @@ type TransferRequest struct {
 }
 
 type Request struct {
-	BeforeWrite  func() error          `json:"-"`
-	IntentSHA256 string                `json:"intent_sha256,omitempty"`
-	Provider     string                `json:"provider,omitempty"`
-	Cwd          string                `json:"cwd,omitempty"`
-	Manifest     *remotefiles.Manifest `json:"-"`
-	Data         []byte                `json:"-"`
-	Version      int                   `json:"version"`
-	Operation    Operation             `json:"operation"`
-	Expected     *Identity             `json:"expected,omitempty"`
-	Root         string                `json:"root,omitempty"`
-	TaskID       string                `json:"task_id,omitempty"`
-	Intent       *Intent               `json:"intent,omitempty"`
-	Control      *Control              `json:"control,omitempty"`
-	After        uint64                `json:"after,omitempty"`
-	WatchNanos   int64                 `json:"watch_nanos,omitempty"`
-	Transfer     *TransferRequest      `json:"transfer,omitempty"`
+	ResourceGuards *resourceadmission.GuardPolicy `json:"resource_guards,omitempty"`
+	BeforeWrite    func() error                   `json:"-"`
+	IntentSHA256   string                         `json:"intent_sha256,omitempty"`
+	Provider       string                         `json:"provider,omitempty"`
+	Cwd            string                         `json:"cwd,omitempty"`
+	Manifest       *remotefiles.Manifest          `json:"-"`
+	Data           []byte                         `json:"-"`
+	Version        int                            `json:"version"`
+	Operation      Operation                      `json:"operation"`
+	Expected       *Identity                      `json:"expected,omitempty"`
+	Root           string                         `json:"root,omitempty"`
+	TaskID         string                         `json:"task_id,omitempty"`
+	Intent         *Intent                        `json:"intent,omitempty"`
+	Control        *Control                       `json:"control,omitempty"`
+	After          uint64                         `json:"after,omitempty"`
+	WatchNanos     int64                          `json:"watch_nanos,omitempty"`
+	Transfer       *TransferRequest               `json:"transfer,omitempty"`
 }
 
 func (r Request) Validate() error {
@@ -238,6 +240,10 @@ func (r Request) Validate() error {
 }
 
 func (r Request) validateBindings() error {
+	if r.ResourceGuards != nil && r.Operation != Admit {
+		return fmt.Errorf("%w: resource guards require admission", ErrProtocol)
+	}
+
 	if r.Intent != nil && r.TaskID != "" && r.Intent.TaskID != r.TaskID {
 		return ErrConflict
 	}

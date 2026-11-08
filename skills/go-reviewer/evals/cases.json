@@ -185,6 +185,170 @@
           "rationale": "Manual semantic grade by Root. PASS for approve with no finding that claims a rule violation. An unsupported violation claim is a FAIL. If Root reproduces a claimed in-domain violation with Go, the trial is void as a fixture defect, not a model FAIL. Lint remarks are not violations. The check descends through both Unwrap shapes, so pending holds only when every leaf is a known pending cause, and its tests cover joined, wrapped, nested, and multi-%w concrete faults."
         }
       }
+    },
+    {
+      "id": "broad-facade-hides-policy-owner",
+      "visible": {
+        "prompt": "Review only module organization in the supplied synthetic source, using the repository's module-organization guidance. The manifest names every maintained consumer; import paths are private. Do not edit inputs or request runtime/release checks for this bounded design exercise. Write review/record.json with verdict ('approve' or 'hold') and findings (file and reason).",
+        "inputs": [
+          {
+            "path": "fixture/manifest.txt",
+            "content": "Only maintained Python consumer: scripts/acceptance/native/cli.py. No public import compatibility is promised. The Go files belong to one supervisor cleanup owner; eligibility policy is used only by its cleanup operation.\n"
+          },
+          {
+            "path": "scripts/acceptance/evidence/validation.py",
+            "content": "def require(value):\n    if not value:\n        raise ValueError(\"missing value\")\n"
+          },
+          {
+            "path": "scripts/acceptance/processes/capture.py",
+            "content": "class Capture:\n    def __init__(self, output):\n        self.output = output\n"
+          },
+          {
+            "path": "internal/supervisor/cleanup.go",
+            "content": "package supervisor\n\nfunc EligibleIDs(ids []string) []string {\n var eligible []string\n for _, id := range ids {\n  if cleanupEligible(id) { eligible = append(eligible, id) }\n }\n return eligible\n}\n"
+          },
+          {
+            "path": "internal/supervisor/cleanup_policy.go",
+            "content": "package supervisor\n\nfunc cleanupEligible(id string) bool { return id != \"\" }\n"
+          },
+          {
+            "path": "scripts/acceptance/native/cli.py",
+            "content": "from scripts.acceptance.common import require\n\ndef run(value):\n    require(value)\n"
+          },
+          {
+            "path": "scripts/acceptance/common.py",
+            "content": "from scripts.acceptance.evidence.validation import require as require\nfrom scripts.acceptance.processes.capture import Capture as Capture\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "hold",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "scripts/acceptance/native/cli.py"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "fixture/manifest.txt"
+            },
+            {
+              "type": "edit-file",
+              "target": "scripts/acceptance/evidence/validation.py"
+            },
+            {
+              "type": "edit-file",
+              "target": "scripts/acceptance/processes/capture.py"
+            },
+            {
+              "type": "edit-file",
+              "target": "internal/supervisor/cleanup.go"
+            },
+            {
+              "type": "edit-file",
+              "target": "internal/supervisor/cleanup_policy.go"
+            },
+            {
+              "type": "edit-file",
+              "target": "scripts/acceptance/native/cli.py"
+            },
+            {
+              "type": "edit-file",
+              "target": "scripts/acceptance/common.py"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "review/record.json",
+              "check": "json-field",
+              "locator": "/verdict",
+              "value": "hold"
+            }
+          ]
+        },
+        "rationale": "Manual semantic grade by Root: hold for scripts/acceptance/native/cli.py depending on the unrelated broad facade instead of its defining policy owner, with direct import as the smallest repair. Do not demand splitting the cohesive Go cleanup package merely because files share a prefix."
+      },
+      "control": {
+        "id": "direct-owner-and-cohesive-flat-files",
+        "visible": {
+          "prompt": "Review only module organization in the supplied synthetic source, using the repository's module-organization guidance. The manifest names every maintained consumer; import paths are private. Do not edit inputs or request runtime/release checks for this bounded design exercise. Write review/record.json with verdict ('approve' or 'hold') and findings (file and reason).",
+          "inputs": [
+            {
+              "path": "fixture/manifest.txt",
+              "content": "Only maintained Python consumer: scripts/acceptance/native/cli.py. No public import compatibility is promised. The Go files belong to one supervisor cleanup owner; eligibility policy is used only by its cleanup operation.\n"
+            },
+            {
+              "path": "scripts/acceptance/evidence/validation.py",
+              "content": "def require(value):\n    if not value:\n        raise ValueError(\"missing value\")\n"
+            },
+            {
+              "path": "scripts/acceptance/processes/capture.py",
+              "content": "class Capture:\n    def __init__(self, output):\n        self.output = output\n"
+            },
+            {
+              "path": "internal/supervisor/cleanup.go",
+              "content": "package supervisor\n\nfunc EligibleIDs(ids []string) []string {\n var eligible []string\n for _, id := range ids {\n  if cleanupEligible(id) { eligible = append(eligible, id) }\n }\n return eligible\n}\n"
+            },
+            {
+              "path": "internal/supervisor/cleanup_policy.go",
+              "content": "package supervisor\n\nfunc cleanupEligible(id string) bool { return id != \"\" }\n"
+            },
+            {
+              "path": "scripts/acceptance/native/cli.py",
+              "content": "from scripts.acceptance.evidence.validation import require\n\ndef run(value):\n    require(value)\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "approve",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "scripts/acceptance/native/cli.py"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "fixture/manifest.txt"
+              },
+              {
+                "type": "edit-file",
+                "target": "scripts/acceptance/evidence/validation.py"
+              },
+              {
+                "type": "edit-file",
+                "target": "scripts/acceptance/processes/capture.py"
+              },
+              {
+                "type": "edit-file",
+                "target": "internal/supervisor/cleanup.go"
+              },
+              {
+                "type": "edit-file",
+                "target": "internal/supervisor/cleanup_policy.go"
+              },
+              {
+                "type": "edit-file",
+                "target": "scripts/acceptance/native/cli.py"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "review/record.json",
+                "check": "json-field",
+                "locator": "/verdict",
+                "value": "approve"
+              }
+            ]
+          },
+          "rationale": "Manual semantic grade by Root: approve the direct policy dependency and cohesive Go cleanup files. A package-per-prefix rule, forced interfaces or a new facade is a failure. Runtime/release approval is outside this exercise."
+        }
+      }
     }
   ]
 }

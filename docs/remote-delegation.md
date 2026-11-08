@@ -79,6 +79,13 @@ user SSH files untouched, and serializes conflicting enrollments.
 
 ## Dispatch and files
 
+Fresh remote dispatches check destination CPU and memory pressure by default.
+The independent `--cpu-guard=false` and `--memory-guard=false` overrides require
+the destination's advertised support before upload or admission. They are not
+saved with intent and do not change existing-only reconciliation or a durably
+rejected reference. Applying different guards after rejection requires a new
+task ID; never replay uncertain work to change its guard selection.
+
 Use exactly one workspace mode:
 
 ```sh

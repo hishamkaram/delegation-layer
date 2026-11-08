@@ -206,7 +206,7 @@ func requireNoCgroupMemoryRefusal(t *testing.T, when string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), containerCheckWindow)
 	defer cancel()
-	got, err := NewChecker().Check(ctx, selfResolver{})
+	got, err := NewChecker(GuardPolicy{}).Check(ctx, selfResolver{})
 	if err != nil {
 		t.Fatalf("%s: Check error = %v", when, err)
 	}

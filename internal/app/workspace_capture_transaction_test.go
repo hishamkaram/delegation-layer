@@ -116,7 +116,7 @@ func TestWorkspaceClosedVerificationCaptureSurvivesObserverCancellationDuringRep
 	t.Cleanup(func() { fixture.Store.SetFaultInjector(nil) })
 	var commands atomic.Int32
 	deps.SupervisorOptions.Observer = func(pueue.CommandEvent) { commands.Add(1) }
-	err := reconcileWorkspaceUse(observer, fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps))
+	err := workspaces.ReconcileUse(observer, fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps))
 	if !fault.fired || observer.Err() != context.Canceled || err != nil {
 		t.Fatalf("closed capture replay followed the observer cancellation: fired=%t observer=%v reconcile=%v", fault.fired, observer.Err(), err)
 	}

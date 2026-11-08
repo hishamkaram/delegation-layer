@@ -22,11 +22,11 @@ class CheckWorkflowTests(unittest.TestCase):
         self.assertEqual(len(python), 4)
         self.assertEqual(len({tuple(command) for command in python}), 4)
         self.assertTrue(all("-p" in command for command in python))
-        self.assertIn(["python3", "-m", "unittest", "discover", "-s", "scripts/acceptance_tests/native",
-                       "-t", "scripts", "-p", "test_native_acceptance_aggregate.py", "-k",
+        self.assertIn(["python3", "-m", "unittest", "discover", "-s", "scripts/acceptance/native/tests",
+                       "-t", "scripts", "-p", "test_aggregate.py", "-k",
                        "test_public_option_docs_cover_ccr_required_model_and_effort", "-v"], python)
         self.assertNotIn("install-tools.sh", result.stdout)
-        self.assertNotIn("acceptance_native_all.sh", result.stdout)
+        self.assertNotIn("acceptance/native/run_all.sh", result.stdout)
 
     def test_check_runs_race_suite_once(self):
         root = Path(__file__).resolve().parent.parent

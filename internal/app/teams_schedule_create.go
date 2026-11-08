@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	schedulecommand "github.com/hishamkaram/delegation-layer/internal/scheduler/command"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
@@ -37,7 +38,7 @@ func createTeamScheduleCommand(a Arguments, deps Dependencies) commandResult {
 	if err != nil {
 		return failed(response, err, 2)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), scheduleOperationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), schedulecommand.OperationTimeout)
 	defer cancel()
 	member, err := lookupTeamMember(ctx, *requestedTeamTarget(a), root, cwd, a.ProjectRoot, deps)
 	if err != nil {

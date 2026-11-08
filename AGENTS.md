@@ -19,7 +19,7 @@ details.
    tracking file or extra approval process.
 2. Before changing shared state or an interface, name its authoritative owner,
    writers, readers and invariant. Keep one owner per state; derive other views.
-3. Give modules cohesive responsibilities. Separate data, pure decisions and
+3. Give modules [cohesive responsibilities](agents/_data/maintainability-contract.md#module-organization). Separate data, pure decisions and
    I/O; depend inward through narrow consumer-owned interfaces. Reuse the
    existing policy, resolver, transaction and finalizer instead of copying them.
 4. Keep explicit control flow, typed boundaries, immutable defaults and useful

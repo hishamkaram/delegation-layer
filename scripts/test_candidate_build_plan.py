@@ -7,12 +7,13 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification import candidate_build_plan as plan
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    ArtifactKind, encode_manifest, expected_inventory, parse_manifest,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.acceptance.evidence.digests import sha
+from scripts.release_verification import candidate_build_plan as plan
+from scripts.release_verification.candidate_manifest import ArtifactKind
+from scripts.release_verification.candidate_manifest import encode_manifest
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.acceptance.evidence.source import VerificationError
 
 
 COMMIT = "a1" * 20

@@ -1,0 +1,97 @@
+"""Finite observation deadlines and inherited acceptance environment."""
+
+from __future__ import annotations
+
+import math
+import os
+import struct
+import time
+from typing import IO, Mapping
+from scripts.acceptance.directories.policy import require
+
+
+def validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
+    if not isinstance(timeout, (int, float)):
+        raise ValueError("bounded command timeout must be finite and positive")
+    try:
+        timeout = float(timeout)
+    except OverflowError:
+        raise ValueError("bounded command timeout must be finite and positive") from None
+    if not 0 < timeout < float("inf"):
+        raise ValueError("bounded command timeout must be finite and positive")
+    if not isinstance(max_output, int) or max_output < 0:
+        raise ValueError("bounded command capture limit must be a nonnegative integer")
+    return timeout
+
+
+def failure_cleanup_deadline(timeout):
+    """Return one finite monotonic deadline for failure-path observation."""
+    require(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0,
+            "failure cleanup timeout must be finite and positive")
+    return time.monotonic() + float(timeout)
+
+
+def wait_for_failure_cleanup(deadline, delay):
+    """Sleep within a cleanup deadline; return false when its budget is spent."""
+    require(type(deadline) in (int, float) and math.isfinite(deadline),
+            "failure cleanup deadline is invalid")
+    require(type(delay) in (int, float) and math.isfinite(delay) and delay >= 0,
+            "failure cleanup delay is invalid")
+    remaining = float(deadline) - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(float(delay), remaining))
+    return True
+
+
+def wait_until(predicate, timeout=15, description="condition", *, timeout_error=None):
+    deadline = time.monotonic() + timeout
+    while True:
+        value = predicate()
+        if value:
+            return value
+        within_deadline = time.monotonic() < deadline
+        if not within_deadline and timeout_error is not None:
+            raise timeout_error
+        require(within_deadline, "observation expired: " + description)
+        time.sleep(0.05)
+
+
+def selected_environment(environment: Mapping[str, str], failure_type) -> dict[str, str]:
+    """Copy one explicit child environment after proving every entry is launchable.
+
+    The selection is the child's entire environment, never an overlay, so an empty
+    mapping stays empty.  ``Processes.start`` calls this before any capture exists,
+    so a refusal leaves nothing to clean up.  The mapping is read once: a later
+    caller mutation cannot change the copy.  A refusal names the offending shape,
+    never a value.
+    """
+    if not isinstance(environment, Mapping):
+        raise failure_type("process environment must be a mapping")
+    selected = dict(environment.items())
+    for key, value in selected.items():
+        if type(key) is not str or type(value) is not str:
+            raise failure_type("process environment keys and values must be strings")
+        if not key or "=" in key or "\0" in key or "\0" in value:
+            raise failure_type("process environment entry is not launchable")
+    return selected
+
+
+def inherited_environment():
+    # Each included coordinate is inherited without relocation or PATH shadowing.
+    keys = {"HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL",
+            "LC_CTYPE", "TZ", "TMPDIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+            "XDG_RUNTIME_DIR", "__CF_USER_TEXT_ENCODING"}
+    return {key: value for key, value in os.environ.items() if key in keys}
+
+
+def _bounded_command_pending_bytes(pipe: IO[bytes]) -> int | None:
+    """Inspect a pipe without adding bytes beyond the capture bound."""
+    try:
+        import fcntl
+        import termios
+
+        result = fcntl.ioctl(pipe.fileno(), termios.FIONREAD, struct.pack("I", 0))
+        return struct.unpack("I", result)[0]
+    except (ImportError, OSError, struct.error, AttributeError):
+        return None

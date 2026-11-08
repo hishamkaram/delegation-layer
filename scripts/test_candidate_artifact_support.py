@@ -20,20 +20,24 @@ import zipfile
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification import candidate_artifact, github
-from scripts.delegate_acceptance.release_verification.candidate_artifact import (
-    CandidateArtifact, load_candidate_artifact,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import (
-    BuildRequest, build_inputs, build_manifest,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, ArtifactKind, CandidateLocator, candidate_artifact_name,
-    encode_manifest, expected_inventory,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.evidence.digests import sha
+from scripts.release_verification import candidate_artifact as candidate_artifact
+from scripts.release_verification import github as github
+from scripts.release_verification.candidate_artifact import CandidateArtifact
+from scripts.release_verification.candidate_artifact import load_candidate_artifact
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.release_verification.candidate_build_plan import build_inputs
+from scripts.release_verification.candidate_build_plan import build_manifest
+from scripts.release_verification.candidate_manifest import CANDIDATE_WORKFLOW_PATH
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import ArtifactKind
+from scripts.release_verification.candidate_manifest import CandidateLocator
+from scripts.release_verification.candidate_manifest import candidate_artifact_name
+from scripts.release_verification.candidate_manifest import encode_manifest
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.acceptance.evidence.source import VerificationError
 from scripts.test_release_github_transport import ObservedGitHubClient
 
 

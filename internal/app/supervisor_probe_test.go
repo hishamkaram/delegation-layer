@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/app/infrastructurehost"
+
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
@@ -24,6 +28,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
 func TestPreparePrivateAdmissionSupervisorRecoversPendingPublication(t *testing.T) {
@@ -550,42 +555,41 @@ func TestInfrastructureRoutingDependencyPreservesCommandChoice(t *testing.T) {
 		t.Fatal("changing the command copy replaced the held store dependency choice")
 	}
 	for _, selected := range []supervisorcore.OwnerRouting{deps.infrastructureRouting(), deps.storeDependencies().infrastructureRouting()} {
-		native, ok := selected.(infrastructureOwnerRouting)
-		if !ok || native.invocation != deps.invocationSource || native.defaultRunner != deps.RunnerExecutable {
+		if selected != infrastructurehost.NewRouting(deps.invocationSource, deps.RunnerExecutable) {
 			t.Fatal("nil routing dependency lost native invocation routing")
 		}
 	}
 }
 
-func (r *componentPreparationRouting) preparation(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (supervisorcore.ExecutableLookup, pueue.Options, *infrastructure.PreparationObservation, error) {
+func (r *componentPreparationRouting) preparation(ctx context.Context, store *taskdir.Store, selected infrastructure.LaunchContext) (installation.ExecutableLookup, pueue.Options, *infrastructure.PreparationObservation, error) {
 	if ctx == nil || store == nil || r.owner == nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, os.ErrInvalid
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, os.ErrInvalid
 	}
 	if err := ctx.Err(); err != nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, err
 	}
 	pin, err := store.PinRootContext(ctx)
 	if err != nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, err
 	}
 	if pin.Root() != r.owner.root || pin.RootID() != r.owner.store.RootID || selected.SupervisorExecutable != r.client || selected.OS != runtime.GOOS {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, infrastructure.ErrIdentity
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, infrastructure.ErrIdentity
 	}
 	digest, err := selected.Digest()
 	reference := infrastructure.LaunchContextReference{SHA256: digest}
 	if err != nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, err
 	}
 	if err = reference.ValidateContext(selected, pin.Root(), pin.RootID()); err != nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, err
 	}
 	observation, err := infrastructure.NewPreparationObservation(r.owner, reference)
 	if err != nil {
-		return supervisorcore.ExecutableLookup{}, pueue.Options{}, nil, err
+		return installation.ExecutableLookup{}, pueue.Options{}, nil, err
 	}
 	options := r.owner.setupOptions(supervisorcore.OptionsForEnvironment(r.options, selected.ControlEnvironment))
 	options.DaemonStartGuard = observation
-	lookup := supervisorcore.ExecutableLookup{InitialExecutable: r.client, Environment: []string{}, AcceptedBootstrapPair: supervisorcore.BootstrapPair{Client: r.client, Daemon: filepath.Join(filepath.Dir(r.client), "pueued")}}
+	lookup := installation.ExecutableLookup{InitialExecutable: r.client, Environment: []string{}, AcceptedBootstrapPair: installation.BootstrapPair{Client: r.client, Daemon: filepath.Join(filepath.Dir(r.client), "pueued")}}
 	return lookup, options, observation, nil
 }
 
@@ -607,7 +611,7 @@ func (r *componentPreparationRouting) RecoverSaved(ctx context.Context, store *t
 	if err != nil {
 		return infrastructure.Disposition{}, err
 	}
-	saved, err := resolveInfrastructureSavedBinding(ctx, store, source)
+	saved, err := r.savedBinding(ctx, store, source)
 	if err != nil {
 		return infrastructure.Disposition{}, err
 	}
@@ -926,4 +930,51 @@ mkdir -p "$base/run"
 printf '%s\n' "$$" > "$base/run/pueue.pid"
 : > "$base/ready"
 `)
+}
+
+// The component owns explicit fixture readers; production source validation
+// remains covered in infrastructurehost's saved-binding tests.
+func (r *componentPreparationRouting) savedBinding(ctx context.Context, store *taskdir.Store, source infrastructure.SavedBindingSource) (binding task.SupervisorRef, resultErr error) {
+	if err := source.Validate(); err != nil {
+		return binding, err
+	}
+	if source.RootID != store.RootID {
+		return binding, infrastructure.ErrIdentity
+	}
+	if source.Kind == infrastructure.SavedBindingTaskMetadata {
+		return supervisorcore.ReadTaskMetadataSupervisor(ctx, store, source)
+	}
+	if source.Kind == infrastructure.SavedBindingWorkspaceRequest {
+		operation, err := workspace.LoadOperation(ctx, store, source.OwnerID)
+		if err != nil {
+			return binding, err
+		}
+		defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+		binding = operation.Request().Supervisor
+	} else {
+		td, err := store.OpenTask(source.OwnerID)
+		if err != nil {
+			return binding, err
+		}
+		defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+		switch source.Kind {
+		case infrastructure.SavedBindingTaskSubmission:
+			submission, err := td.ReadSubmission()
+			if err != nil {
+				return binding, err
+			}
+			binding = submission.Supervisor
+		case infrastructure.SavedBindingTaskStop:
+			request, err := td.ReadStopRequest(source.RecordID)
+			if err != nil {
+				return binding, err
+			}
+			binding = request.Supervisor
+		case infrastructure.SavedBindingTaskMetadata, infrastructure.SavedBindingWorkspaceRequest:
+			return binding, infrastructure.ErrIdentity
+		default:
+			return binding, infrastructure.ErrIdentity
+		}
+	}
+	return binding, source.ValidateBinding(binding)
 }

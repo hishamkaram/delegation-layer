@@ -50,11 +50,14 @@ func dispatchOptionsContext(ctx context.Context, deps Dependencies, continuation
 
 func dispatch(a Arguments, deps Dependencies) commandResult {
 	deps = deps.withCapturedEnvironment()
-	return dispatchCommandResult(tasklifecycle.Dispatch(dispatchRequest(a, deps), dispatchOptions(deps, a.ResumeTask != "")))
+	options := dispatchOptions(deps, a.ResumeTask != "")
+	options.ResourceGuards = a.ResourceGuards
+	return dispatchCommandResult(tasklifecycle.Dispatch(dispatchRequest(a, deps), options))
 }
 
 func continueTask(a Arguments, deps Dependencies) commandResult {
 	deps = deps.withCapturedEnvironment()
 	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptions(deps, true)}
+	options.Dispatch.ResourceGuards = a.ResourceGuards
 	return continuationCommandResult(tasklifecycle.Continue(dispatchRequest(a, deps), options))
 }

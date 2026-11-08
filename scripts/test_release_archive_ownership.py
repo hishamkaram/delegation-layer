@@ -23,8 +23,10 @@ from unittest.mock import Mock, patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
 # A module import, so discovery here does not collect the archive tests a second time.
 from scripts import test_verify_release_archive as archive
 

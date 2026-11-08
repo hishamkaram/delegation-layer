@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
+
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -24,7 +26,7 @@ func (r ControlRuntime) MigrateOwn(ctx context.Context, store *taskdir.Store) (i
 	if r.Routing == nil {
 		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, ErrInfrastructureAuthorityUnavailable
 	}
-	client, err := resolveInstalledSupervisorClient(r.Lookup)
+	client, err := installation.ResolveInstalledSupervisorClient(r.Lookup)
 	if err != nil {
 		return infrastructure.Disposition{}, infrastructure.ManualMigrationReport{}, err
 	}

@@ -84,7 +84,7 @@ func TestNativeContainerIdleCheckReportsOnlyHostPressureOutsideTheCgroup(t *test
 	sample := containerSample(t)
 	ctx, cancel := context.WithTimeout(context.Background(), containerCheckWindow)
 	defer cancel()
-	got, err := NewChecker().Check(ctx, selfResolver{})
+	got, err := NewChecker(GuardPolicy{}).Check(ctx, selfResolver{})
 	if err != nil {
 		t.Fatalf("Check error = %v", err)
 	}

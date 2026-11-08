@@ -37,7 +37,7 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 		RecoveryCommand: dispatchFailureRecoveryCommand(code, taskRecord),
 	}
 	if supervisorFailureCode(code) {
-		failure.ReasonCode = supervisorFailureReason(err)
+		failure.ReasonCode = supervisorcore.FailureReason(err)
 		if taskRecord == "not_created" && failure.ReasonCode == "historical_target_not_ready" {
 			failure.NextAction = "stop_and_report"
 			failure.RecoveryCommand = ""
@@ -114,7 +114,7 @@ func (e *fixedDetailPublicError) Error() string { return e.message }
 func (e *fixedDetailPublicError) Unwrap() error { return e.cause }
 
 // supervisorFailureCode reports the failure codes whose reason codes come
-// from supervisorFailureReason and whose detail is supervisor-specific.
+// from supervisorcore.FailureReason and whose detail is supervisor-specific.
 func supervisorFailureCode(code string) bool {
 	return code == "supervisor_owner_incompatible" || code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed"
 }

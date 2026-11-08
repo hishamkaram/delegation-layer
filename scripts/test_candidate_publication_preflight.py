@@ -6,8 +6,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from scripts.delegate_acceptance.release_verification import candidate_publication_preflight as preflight
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.release_verification import candidate_publication_preflight as preflight
+from scripts.acceptance.evidence.source import VerificationError
 from scripts.test_candidate_artifact_support import COMMIT, ENDPOINTS, REPOSITORY, RUN_ID, TREE, CandidateArtifactCase
 from scripts.test_release_github_transport import ObservedGitHubClient
 

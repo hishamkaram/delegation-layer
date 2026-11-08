@@ -24,20 +24,22 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import test_candidate_build_support as support
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.processes import operations
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification import (
-    candidate_build, candidate_build_finalize, commands, filesystem,
-)
-from scripts.delegate_acceptance.release_verification.candidate_build import BuildPaths, build_candidate
-from scripts.delegate_acceptance.release_verification.candidate_build_plan import BuildRequest
-from scripts.delegate_acceptance.release_verification.candidate_manifest import expected_inventory
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    UNRESOLVED_OWNERSHIP_CODES,
-)
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.acceptance.processes import operations as operations
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.release_verification import candidate_build as candidate_build
+from scripts.release_verification import candidate_build_finalize as candidate_build_finalize
+from scripts.acceptance.evidence import source as commands
+from scripts.release_verification import filesystem as filesystem
+from scripts.release_verification.candidate_build import BuildPaths
+from scripts.release_verification.candidate_build import build_candidate
+from scripts.release_verification.candidate_build_plan import BuildRequest
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import UNRESOLVED_OWNERSHIP_CODES
 
 
 RENDERER = "render-homebrew-formula.sh"

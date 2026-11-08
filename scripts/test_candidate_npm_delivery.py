@@ -21,26 +21,31 @@ from unittest.mock import patch
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification.candidate_artifact import (
-    ArtifactObservation, AttemptObservation, CandidateArtifact, WorkflowObservation,
-)
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    CANDIDATE_WORKFLOW_PATH, MANIFEST_PATH, npm_package_path, parse_manifest,
-)
-from scripts.delegate_acceptance.release_verification import candidate_npm_delivery
-from scripts.delegate_acceptance.release_verification.candidate_npm_delivery import (
-    CONFIRMATION_INTERVAL_SECONDS, CONFIRMATION_ROUNDS, deliver_npm,
-)
-from scripts.delegate_acceptance.release_verification.commands import command
-from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
-from scripts.delegate_acceptance.release_verification.github import ArtifactDownload
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    NPM_REGISTRY, npm_integrity, npm_shasum,
-)
-from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.resources import open_descriptors
+from scripts.acceptance.evidence.digests import sha
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.release_verification.candidate_artifact import ArtifactObservation
+from scripts.release_verification.candidate_artifact import AttemptObservation
+from scripts.release_verification.candidate_artifact import CandidateArtifact
+from scripts.release_verification.candidate_artifact import WorkflowObservation
+from scripts.release_verification.candidate_manifest import CANDIDATE_WORKFLOW_PATH
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import npm_package_path
+from scripts.release_verification.candidate_manifest import parse_manifest
+from scripts.release_verification import candidate_npm_delivery as candidate_npm_delivery
+from scripts.release_verification.candidate_npm_delivery import CONFIRMATION_INTERVAL_SECONDS
+from scripts.release_verification.candidate_npm_delivery import CONFIRMATION_ROUNDS
+from scripts.release_verification.candidate_npm_delivery import deliver_npm
+from scripts.acceptance.evidence.source import command
+from scripts.acceptance.evidence.source import MAX_OUTPUT
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.github import ArtifactDownload
+from scripts.release_verification.published_contract import NPM_REGISTRY
+from scripts.release_verification.published_contract import npm_integrity
+from scripts.release_verification.published_contract import npm_shasum
+from scripts.release_verification.published_ports import ConsumerPorts
 from scripts.test_candidate_artifact_support import COMMIT, VERSION, locator, manifest_bytes, payload_files
 
 

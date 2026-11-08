@@ -11,20 +11,41 @@ import unittest
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.delegate_acceptance.evidence.digests import sha
-from scripts.delegate_acceptance.release_verification.candidate_manifest import (
-    MANIFEST_PATH, ArtifactEntry, BuildInputs, CandidateLocator, CandidateManifest, SourceIdentity,
-    Toolchains, encode_manifest, expected_inventory, npm_package_path, payload_paths,
-)
-from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    Absent, ReleaseSubject, Delivery, ObservedRelease, VERIFICATION_SUMMARY, ReleaseAsset,
-    TapFormula, decide_npm, decide_release, decide_tap, npm_package, release_body,
-    release_body_matches, release_text, require_latest_delivery, verification_block,
-)
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.published_contract import (
-    PackageIdentity, git_blob_sha, npm_integrity, npm_shasum, parse_npm_view, registry_tarball_url,
-)
+from scripts.acceptance.evidence.digests import sha
+from scripts.release_verification.candidate_manifest import MANIFEST_PATH
+from scripts.release_verification.candidate_manifest import ArtifactEntry
+from scripts.release_verification.candidate_manifest import BuildInputs
+from scripts.release_verification.candidate_manifest import CandidateLocator
+from scripts.release_verification.candidate_manifest import CandidateManifest
+from scripts.release_verification.candidate_manifest import SourceIdentity
+from scripts.release_verification.candidate_manifest import Toolchains
+from scripts.release_verification.candidate_manifest import encode_manifest
+from scripts.release_verification.candidate_manifest import expected_inventory
+from scripts.release_verification.candidate_manifest import npm_package_path
+from scripts.release_verification.candidate_manifest import payload_paths
+from scripts.release_verification.candidate_publication_contract import Absent
+from scripts.release_verification.candidate_publication_contract import ReleaseSubject
+from scripts.release_verification.candidate_publication_contract import Delivery
+from scripts.release_verification.candidate_publication_contract import ObservedRelease
+from scripts.release_verification.candidate_publication_contract import VERIFICATION_SUMMARY
+from scripts.release_verification.candidate_publication_contract import ReleaseAsset
+from scripts.release_verification.candidate_publication_contract import TapFormula
+from scripts.release_verification.candidate_publication_contract import decide_npm
+from scripts.release_verification.candidate_publication_contract import decide_release
+from scripts.release_verification.candidate_publication_contract import decide_tap
+from scripts.release_verification.candidate_publication_contract import npm_package
+from scripts.release_verification.candidate_publication_contract import release_body
+from scripts.release_verification.candidate_publication_contract import release_body_matches
+from scripts.release_verification.candidate_publication_contract import release_text
+from scripts.release_verification.candidate_publication_contract import require_latest_delivery
+from scripts.release_verification.candidate_publication_contract import verification_block
+from scripts.acceptance.evidence.source import VerificationError
+from scripts.release_verification.published_contract import PackageIdentity
+from scripts.release_verification.published_contract import git_blob_sha
+from scripts.release_verification.published_contract import npm_integrity
+from scripts.release_verification.published_contract import npm_shasum
+from scripts.release_verification.published_contract import parse_npm_view
+from scripts.release_verification.published_contract import registry_tarball_url
 
 
 VERSION = "0.1.37"

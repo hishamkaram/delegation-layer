@@ -59,7 +59,7 @@ func PrepareQueuedInspectionRunnerCommand(ctx context.Context, store *taskdir.St
 	if err = validateQueuedInspectionIdentity(store, supervisor, job, request, identity); err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
 	}
-	eligible, err = queuedInspectionWorkerUpgradeEligible(ctx, store.Root, operation, request.Binding)
+	eligible, err = queuedInspectionWorkerUpgradeEligible(ctx, operation, request.Binding)
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
 	}
@@ -88,7 +88,7 @@ func validateQueuedInspectionIdentity(store *taskdir.Store, supervisor *pueue.Cl
 	return nil
 }
 
-func queuedInspectionWorkerUpgradeEligible(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) (bool, error) {
+func queuedInspectionWorkerUpgradeEligible(ctx context.Context, operation *inspection.Operation, binding inspection.Binding) (bool, error) {
 	if binding.RunnerOwnership != task.RunnerOwnershipManaged {
 		return false, nil
 	}
@@ -96,7 +96,7 @@ func queuedInspectionWorkerUpgradeEligible(ctx context.Context, root string, ope
 	if err != nil || authorized {
 		return authorized, err
 	}
-	if !ManagedInspectionWorkerExecutable(root, binding) {
+	if !ManagedInspectionWorkerExecutable(binding) {
 		return false, nil
 	}
 	if err = ValidateInspectionRunner(operation, binding.WorkerExecutable); err != nil {
@@ -122,10 +122,10 @@ func AuthorizeQueuedInspectionRunnerUpgrade(ctx context.Context, store *taskdir.
 	if err = validateInspectionReplacementIdentity(store, replacement, request, identity); err != nil {
 		return err
 	}
-	return authorizeInspectionManagedWorker(ctx, store.Root, operation, request.Binding)
+	return authorizeInspectionManagedWorker(ctx, operation, request.Binding)
 }
 
-func authorizeInspectionManagedWorker(ctx context.Context, root string, operation *inspection.Operation, binding inspection.Binding) error {
+func authorizeInspectionManagedWorker(ctx context.Context, operation *inspection.Operation, binding inspection.Binding) error {
 	if binding.RunnerOwnership != task.RunnerOwnershipManaged {
 		return task.ErrEvidenceFault
 	}
@@ -136,7 +136,7 @@ func authorizeInspectionManagedWorker(ctx context.Context, root string, operatio
 	if authorized {
 		return nil
 	}
-	if !ManagedInspectionWorkerExecutable(root, binding) {
+	if !ManagedInspectionWorkerExecutable(binding) {
 		return task.ErrEvidenceFault
 	}
 	if err = ValidateInspectionRunner(operation, binding.WorkerExecutable); err != nil {

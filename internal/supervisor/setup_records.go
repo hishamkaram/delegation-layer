@@ -3,6 +3,7 @@ package supervisor
 import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/infrastructure"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/installation"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -35,8 +36,8 @@ type AdmissionOptions struct {
 }
 
 // Lookup returns the supervisor executable lookup this configuration selects.
-func (options AdmissionOptions) Lookup() ExecutableLookup {
-	return ExecutableLookup{InitialExecutable: options.InitialExecutable, Environment: options.Environment}
+func (options AdmissionOptions) Lookup() installation.ExecutableLookup {
+	return installation.ExecutableLookup{InitialExecutable: options.InitialExecutable, Environment: options.Environment}
 }
 
 // RunnerPreparation retains the failing setup phase without wrapping its error.

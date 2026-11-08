@@ -11,7 +11,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import test_published_install as base
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.acceptance.evidence.source import VerificationError
 
 
 TAP = "owner/tap"

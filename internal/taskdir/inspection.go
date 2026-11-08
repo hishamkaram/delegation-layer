@@ -25,6 +25,11 @@ type TaskInspection struct {
 	Outcome                *task.OutcomeRecord `json:"outcome,omitempty"`
 }
 
+// Terminal reports whether this inspection has an authoritative publication.
+func (insp *TaskInspection) Terminal() bool {
+	return insp != nil && insp.Publication.Terminal()
+}
+
 func (td *TaskDir) Inspect() (*TaskInspection, error) {
 	insp := &TaskInspection{TaskID: td.TaskID, Publication: task.PublicationUnknown}
 	if err := td.inspectPresence(insp); err != nil {

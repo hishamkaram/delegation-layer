@@ -189,10 +189,40 @@ when changing ownership or dependencies. Tests and fixtures are maintained code.
 and build-excluded Go source and excluding ignored scratch. The formatter uses
 `--kind go --allow-empty` so a checkout with no Go files is a no-op.
 
-Python helpers import canonical implementations under scripts.delegate_acceptance.
-Use the existing process/directory owners and patch the namespace the consumer
-actually uses. Keep each test in ordinary discovery once; no historical
-test-name map or frozen private-signature inventory is required.
+Acceptance drivers, lifecycle helpers and fixtures live in one
+`scripts/acceptance/` feature tree. Production imports use the defining
+`scripts.acceptance.<feature>` module. Tests live in their feature's `tests/`
+directory; shared test-only helpers live in `acceptance/testing/` and are never
+production dependencies. For example:
+
+```text
+scripts/acceptance/
+  native/cli.py
+  provider_drivers/{agy,claude,codex}/cli.py
+  provider_drivers/ccr/fixture.py
+  private_cli/{capacity,handoff,nested,contention,scheduler}/
+  evidence/                  # bounded files, records and source evidence
+  processes/                 # owned command execution and completion
+  <feature>/tests/
+  testing/                   # test-only shared setup
+```
+
+Driver entrypoints support their documented direct path and module form, for
+example `python3 -m scripts.acceptance.native.cli --help`. Both use canonical
+modules. Direct CLI bootstrap removes its feature directory from the import
+search path so its files cannot shadow a standard-library module. Patch the namespace
+the consumer actually imports. `make test-native-harness` discovers acceptance
+tests; `make test-python` includes them once with all maintained Python tests.
+
+`scripts/release_verification/` separately owns release build, installation and
+gate policy, with tests in `scripts/release_tests/`. It may consume shared bounded
+source evidence from acceptance; acceptance does not import release verification.
+The repository-wide `scripts/verify_acceptance_ownership.py` and its root test
+remain governance tools: their owner is the repository inventory, not a scenario.
+Unrelated release, toolchain, static-analysis and skill checks also keep their
+existing owners. Follow [module organization](../agents/_data/maintainability-contract.md#module-organization)
+when moving a complete capability and its tests; flat files alone do not justify
+a new package.
 
 ## Provider changes
 
@@ -280,7 +310,7 @@ requires automatic startup from the leader's context; prestarting that case's
 supervisor would bypass the behavior under test.
 
 Verify the user-started scheduler host natively on Linux and macOS.
-`scripts/acceptance_scheduler.py` accepts
+`scripts/acceptance/private_cli/scheduler/cli.py` accepts
 `--hosting managed-host|service` and defaults to `managed-host`, which needs no
 systemd user manager or launchd. Choose `--hosting service` explicitly for the
 optional legacy service cases. Keep results from those modes separate; the flag's
@@ -301,7 +331,7 @@ repository root using an absent output directory (change the example output
 name for later runs):
 
 ```sh
-python3 scripts/acceptance_scheduler.py \
+python3 scripts/acceptance/private_cli/scheduler/cli.py \
   --scenario fresh-default --hosting managed-host \
   --source-root "$PWD" \
   --pueue "$PWD/bin/test-supervisor/pueue" \
@@ -309,7 +339,7 @@ python3 scripts/acceptance_scheduler.py \
   --output "$PWD/.local/archive/scheduler-fresh-default-results"
 ```
 
-Use `python3 scripts/acceptance_scheduler.py --help` for the current driver's
+Use `python3 scripts/acceptance/private_cli/scheduler/cli.py --help` for the current driver's
 scenario, source-root and supervisor-path options.
 
 For scheduler hosting changes, run the actual candidate CLI/runner on Linux and
@@ -380,18 +410,26 @@ This CI pin does not control users’ provider installations.
 Run it locally with your installed provider:
 
 ```sh
-PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py
+PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance/provider_drivers/ccr/fixture.py
 ```
 
 It covers overlapping sessions, writes, stops, continuation, aliases and replay.
 This proves the fixture integration, not an upstream account's availability.
+
+The fixture defaults to CPU and memory checks. CI passes `--cpu-guard=false`
+for macOS positive admissions in both fixture modes, including the refusal
+control's real warm-up; memory remains enabled and the injected negative is
+unchanged. This isolates provider-lifecycle coverage from unowned runner CPU
+load. The platform gate retains default-on guard coverage. Revisit this choice
+if runners provide controlled CPU isolation; it does not establish the cause of
+a historical CPU refusal or prove that CPU accounting was defective.
 
 The separate refused-admission control first completes a real warm task, then
 captures one finite synthetic resource refusal through the shared task ledger:
 
 ```sh
 make nested-survival-fixture task-inventory-fixture
-PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py --refusal-cleanup
+PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance/provider_drivers/ccr/fixture.py --refusal-cleanup
 ```
 
 Its separate gate preserves the original `unknown`/`stop_and_report` response.
@@ -403,6 +441,12 @@ CPU samples do not measure host pressure or establish the historical CPU cause.
 
 ## Agent integration and skill selection
 
+Follow the canonical [module organization guidance](../agents/_data/maintainability-contract.md#module-organization)
+when changing filename families or facade consumers. Candidate-installation
+tests live under `scripts/release_tests/candidate_install`; `make test-evidence-tools`
+selects them without expanding the native-harness suite. Full Python discovery
+still covers both test families.
+
 The [agent-integration skill](../skills/agent-integration/SKILL.md) owns external
 delegation guidance. Claude/Codex plugins package that skill and a bootstrap
 hook; they do not install provider CLIs or rewrite authentication. Keep the
@@ -410,7 +454,7 @@ canonical and plugin skill trees synchronized. Use `make plugin-package-check`
 when either distribution changes.
 
 For affected routing changes, build/use the actual CLI and run focused cases
-through scripts/acceptance_skill_routing.py. It uses fresh sessions and natural
+through scripts/acceptance/skill_routing/cli.py. It uses fresh sessions and natural
 requests without naming Delegate or preloading the skill. Normal competing
 integrations stay enabled, so a bypass can execute paid work. Only run against
 a trusted authorized test profile. Fixture routing and real Delegate execution
@@ -419,7 +463,7 @@ are different modes and claims.
 Use an explicit new private output path and preserve the selected options:
 
 ```sh
-python3 scripts/acceptance_skill_routing.py --harness claude \
+python3 scripts/acceptance/skill_routing/cli.py --harness claude \
   --split development --output "$HOME/delegation-routing-output"
 ```
 
@@ -438,7 +482,7 @@ existing routing driver, not a contributor ledger: its judgment.json binds
 status, receipt_sha256 and transcript evidence. Summarize with the same options:
 
 ```sh
-python3 scripts/acceptance_skill_routing.py --harness claude \
+python3 scripts/acceptance/skill_routing/cli.py --harness claude \
   --split development --output "$HOME/delegation-routing-output" --summarize
 ```
 
