@@ -437,14 +437,16 @@ jobs:
       - name: Install pinned repository tools
         env:
           DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
-        run: make tools
+        run: |
+          make tools
+          ./scripts/install-test-supervisor.sh
       - name: Prove native infrastructure components only
         shell: bash
         env:
           DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group
         run: |
           mkdir -p bin/independent-startup-proof
-          make acceptance-independent-startup 2>&1 | tee bin/independent-startup-proof/native.log
+          make acceptance-independent-startup-prepared 2>&1 | tee bin/independent-startup-proof/native.log
       - name: Retain bounded native component output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

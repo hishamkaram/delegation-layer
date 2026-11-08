@@ -295,6 +295,7 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
             self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", header)
             actual = {name for name, block in steps(content).items() if "DELEGATE_TOOL_DOWNLOAD_TOKEN" in block}
             self.assertEqual(actual, names)
+            self.assertEqual(content.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), len(names))
             for name in names:
                 self.assertIn("          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}\n", steps(content)[name])
 

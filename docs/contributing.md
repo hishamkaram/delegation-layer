@@ -214,9 +214,15 @@ identity, shutdown-lease, infrastructure and recovery controls. Copied-image
 custody, root editor/census and executable-byte-pin upgrade probes are retired.
 Do not invoke the historical staging probes as replacement proof.
 
-The target runs native lifetime, peer identity, shutdown-lease and resident
-infrastructure/recovery cases; the configured CI component jobs run it on Linux
-and macOS with the cooperative backend. This is component evidence, not full
+The standalone target installs the pinned supervisor pair, then invokes
+`acceptance-independent-startup-prepared`. CI prepares that pair in its
+authenticated installer step and invokes the prepared target in the token-free
+proof step. The prepared target retains the tool-version guard and every native
+check, without repeating the download.
+
+Those checks cover native lifetime, peer identity, shutdown-lease and resident
+infrastructure/recovery cases on Linux and macOS with the cooperative backend.
+This is component evidence, not full
 product acceptance or PR readiness. The separate nested-survival gate exercises
 its three topologies on each selected backend. Required host/backend claims need
 their actual results; cross-builds do not fill a missing native cell. Windows

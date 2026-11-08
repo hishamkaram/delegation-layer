@@ -47,9 +47,13 @@ def go_test_commands(target: str) -> list[tuple[list[str], list[str]]]:
     return commands
 
 
+def make_target(name: str) -> str:
+    source = (WORKFLOW.parents[2] / "Makefile").read_text()
+    return source.split(name + ": tool-versions\n", 1)[1].split("\n\n", 1)[0]
+
+
 def native_make_target() -> str:
-    source = (WORKFLOW.parents[2] / "Makefile").read_text().replace("\\\n", " ")
-    return source.split("acceptance-independent-startup: tool-versions\n", 1)[1].split("\n\n", 1)[0]
+    return make_target("acceptance-independent-startup-prepared").replace("\\\n", " ")
 
 
 NATIVE_FOUNDATION_CASES = {
@@ -236,6 +240,19 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.job = job_text(self.source, "independent-startup-component")
         self.proof = steps(self.job)["Prove native infrastructure components only"]
 
+    def test_ci_installs_supervisor_before_the_token_free_prepared_proof(self):
+        install = steps(self.job)["Install pinned repository tools"]
+        self.assertIn("make tools", install)
+        self.assertIn("./scripts/install-test-supervisor.sh", install)
+        self.assertLess(install.index("make tools"), install.index("./scripts/install-test-supervisor.sh"))
+        self.assertLess(self.job.index("- name: Install pinned repository tools"),
+                        self.job.index("- name: Prove native infrastructure components only"))
+        self.assertEqual(self.job.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 1)
+        self.assertIn("          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}", install)
+        self.assertIn("make acceptance-independent-startup-prepared 2>&1 | tee", self.proof)
+        self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", self.proof)
+        self.assertNotIn("install-test-supervisor", self.proof)
+
     def test_compiling_a_fixture_does_not_execute_its_tests(self):
         compile_only = "go test -c -race -o fixture.test ./internal/lifetime"
         execute = "PROOF=1 go test -race -count=1 -timeout=4m ./internal/lifetime"
@@ -282,7 +299,8 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
 
     def test_make_target_runs_required_native_cases_with_race_and_verified_pair(self):
         target = native_make_target()
-        self.assertIn("./scripts/install-test-supervisor.sh", target)
+        self.assertNotIn("install-test-supervisor", target)
+        self.assertNotIn("fetch_pueue", target)
         self.assertIn("DELEGATE_INDEPENDENT_EXPECTED_BACKEND:?", target)
         self.assertIn("go test -race -count=1 -timeout=4m", target)
         self.assertIn("NativeProof|PeerProof", target)
@@ -293,6 +311,49 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
             ("internal/scheduler/host", ("TestIndependentStartupPeerProof",)),
         ):
             self.assert_native_cases_exist(package, cases)
+
+    def run_local_wrapper(self, jobs, installer_status):
+        with tempfile.TemporaryDirectory(prefix="native-stage-make-") as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            installer = root / "scripts/install-test-supervisor.sh"
+            installer.write_text('''#!/bin/sh
+printf 'install-start\\n' >> "$EVENTS"
+if [ "$INSTALLER_STATUS" != 0 ]; then exit "$INSTALLER_STATUS"; fi
+: > supervisor-ready
+printf 'install-end\\n' >> "$EVENTS"
+''')
+            installer.chmod(0o700)
+            wrapper = make_target("acceptance-independent-startup")
+            self.assertIn("\t$(MAKE) acceptance-independent-startup-prepared", wrapper)
+            (root / "Makefile").write_text(
+                "SHELL := /bin/bash\n.SHELLFLAGS := -euo pipefail -c\n"
+                ".PHONY: tool-versions acceptance-independent-startup acceptance-independent-startup-prepared\n"
+                "acceptance-independent-startup: tool-versions\n" + wrapper + "\n\n"
+                "tool-versions:\n\t@printf 'tool-versions\\n' >> \"$$EVENTS\"\n\n"
+                "acceptance-independent-startup-prepared: tool-versions\n"
+                "\t@test -f supervisor-ready\n\t@printf 'proof\\n' >> \"$$EVENTS\"\n")
+            events = root / "events"
+            result = subprocess.run(
+                ["make", "--no-print-directory", f"-j{jobs}", "acceptance-independent-startup"],
+                cwd=root, env={"PATH": os.defpath, "EVENTS": str(events), "INSTALLER_STATUS": str(installer_status)},
+                capture_output=True, text=True, check=False, timeout=10)
+            return result, events.read_text().splitlines()
+
+    def test_local_make_wrapper_orders_installation_before_recursive_proof_under_parallel_make(self):
+        for jobs in (1, 4):
+            with self.subTest(jobs=jobs):
+                result, events = self.run_local_wrapper(jobs, 0)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(events, ["tool-versions", "install-start", "install-end", "tool-versions", "proof"])
+
+    def test_local_make_wrapper_stops_on_install_failure_before_any_proof_or_second_guard(self):
+        for jobs in (1, 4):
+            with self.subTest(jobs=jobs):
+                result, events = self.run_local_wrapper(jobs, 17)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Error 17", result.stderr)
+                self.assertEqual(events, ["tool-versions", "install-start"])
 
     def test_executed_native_commands_keep_race_count_and_watchdog(self):
         commands = [command for _, command in go_test_commands(native_make_target())]

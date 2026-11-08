@@ -324,9 +324,12 @@ acceptance-opencode: build test-native-harness
 acceptance-native: build test-native-harness nested-survival-fixture task-inventory-fixture
 	./scripts/acceptance_native_all.sh
 
-.PHONY: acceptance-independent-startup
+.PHONY: acceptance-independent-startup acceptance-independent-startup-prepared
 acceptance-independent-startup: tool-versions
 	./scripts/install-test-supervisor.sh
+	$(MAKE) acceptance-independent-startup-prepared
+
+acceptance-independent-startup-prepared: tool-versions
 	DELEGATE_INDEPENDENT_EXPECTED_BACKEND="$${DELEGATE_INDEPENDENT_EXPECTED_BACKEND:?set the expected native backend}" \
 	DELEGATE_TEST_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
 	DELEGATE_TEST_PUEUED="$(BIN_DIR)/test-supervisor/pueued" \
