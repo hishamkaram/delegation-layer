@@ -23,7 +23,11 @@ under `remote`; `remote.response` carries the original task envelope when
 available. Connectivity, dated
 `last_observation` and download reports are separate observations. Do not apply
 local task-field decisions to the outer origin envelope or infer task failure
-from connection loss. The [remote workflow](remote-delegation.md#observe-reconnect-and-collect)
+from connection loss. Before a task envelope exists, a validated destination
+reply can instead carry `remote.failure` and `remote.task_record`. Check
+connectivity and concrete errors first; a zero-value `remote` object after a
+connection failure is not destination evidence.
+The [remote workflow](remote-delegation.md#observe-reconnect-and-collect)
 owns remote handles, uncertainty, supported controls and transfer behavior.
 
 ## Checkpoint response

@@ -37,7 +37,9 @@ blocked by an unrelated compiler setup failure.
 6. For affected diagrams, update the existing Archify source with
    implementation-backed nodes, relationships and source references; regenerate
    the HTML and run repository-backed artifact/browser validation. Publish
-   full-diagram SVG/PNG exports, not cropped viewport screenshots. Check both
+   Archify-generated full-diagram SVG/PNG exports. Never use viewport or
+   full-page screenshots as published diagram images; captures are private
+   visual-review evidence only. Check both
    themes in the rendered page and exported assets for readable labels, every
    authored node/relationship and clipping. Update diagram checksums last.
    Automated checks and byte checksums do not replace visual inspection.
@@ -52,4 +54,4 @@ corrections that change documented behavior. Run
 `make verify-skills` for skill/link changes and the existing documentation checks.
 Diagram changes use `make verify-diagram-checksums`. Reuse unchanged results;
 do not run runtime/provider matrices merely for contributor prose. Root owns
-integration, Git and the final independent review.
+integration and Git and arranges the final independent review.

@@ -649,7 +649,7 @@
       "items": [
         "E is a separate remote request, not a step after local continuation. Destination reuses A/B execution and C cancellation. The caller owns origin intent and observation records; destination TaskDir alone owns task state (internal/remote/reference.go:19–35,66–100,184–214).",
         "A durable before-send marker prevents another admit after an uncertain transmission. Reconnection performs existing-only reconciliation under the same destination identity, not a provider restart (internal/remote/coordinator.go:24–103).",
-        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remote_cli.go:294–321)."
+        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
       ]
     }
   ]

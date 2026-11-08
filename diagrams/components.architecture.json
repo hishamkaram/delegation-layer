@@ -386,10 +386,10 @@
           "label": "Verified SSH framed exchange"
         },
         {
-          "path": "internal/app/remote_serve.go",
-          "line": 207,
-          "end_line": 258,
-          "label": "Destination reuses ordinary lifecycle"
+          "path": "internal/app/remote_cli.go",
+          "line": 26,
+          "end_line": 57,
+          "label": "Return destination data and connectivity"
         }
       ]
     },
@@ -544,6 +544,13 @@
       "label": "destination response",
       "variant": "dashed",
       "from": "control"
+    },
+    {
+      "id": "remote-result-to-lead",
+      "from": "origin",
+      "to": "lead",
+      "label": "result + connectivity",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -554,7 +561,7 @@
         "Remote requests use verified embedded Go SSH to the selected installed Delegate. The prepared destination validates root/task identity and calls the same task lifecycle shown here (internal/app/remote_exchange.go:17–39; remote_serve.go:77–99,207–258).",
         "A persistent destination supervisor must already be ready. The destination owns admission, budgets, cancellation, native closure and outcome.json. An SSH disconnect changes connectivity, not the task verdict (internal/app/remote_owner.go:41–55; remote_serve.go:272–284).",
         "The origin stores immutable intent, acceptance and dated observations. After an uncertain send, recovery reconciles the existing request; it never authorizes a second admission. Downloaded declared outputs and caches do not replace the destination outcome (internal/remote/coordinator.go:24–103,166–173).",
-        "Local Teams, schedules and managed Git capture remain optional local paths. Remote references do not support logs or continuation; provider installations, accounts and configuration remain destination-owned (internal/app/remote_cli.go:294–321)."
+        "Local Teams, schedules and managed Git capture remain optional local paths. Remote references do not support logs or continuation; provider installations, accounts and configuration remain destination-owned (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
       ]
     },
     {
