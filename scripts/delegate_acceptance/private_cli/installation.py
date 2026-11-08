@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 
+from scripts.delegate_acceptance.private_cli.errors import InstallationFailure, InstallationPhase
 from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError
 from scripts.delegate_acceptance.processes.observation import inherited_environment
@@ -26,7 +27,7 @@ def require_source_root(source_root: Path) -> Path:
     return source
 
 
-def _install_command(arguments: list[str], *, cwd: Path) -> None:
+def _install_command(arguments: list[str], *, cwd: Path, phase: InstallationPhase) -> None:
     environment = inherited_environment()
     environment.update({"GOTOOLCHAIN": "local", "CGO_ENABLED": "0"})
     try:
@@ -35,10 +36,10 @@ def _install_command(arguments: list[str], *, cwd: Path) -> None:
             capture=True, capture_stderr=True, max_output=MAX_INSTALL_OUTPUT,
         )
     except BoundedCommandError as error:
-        raise RuntimeError("candidate installation failed: " + error.reason.value) from error
+        raise InstallationFailure(phase, error.reason) from error
     if result.exit_code:
         # Compiler/download output can contain private paths or inherited settings.
-        raise RuntimeError("candidate installation command failed with exit " + str(result.exit_code))
+        raise InstallationFailure(phase, result.exit_code)
 
 
 def build_candidate_pair(source_root: Path, destination: Path) -> None:
@@ -52,6 +53,7 @@ def build_candidate_pair(source_root: Path, destination: Path) -> None:
         _install_command(
             ["go", "build", "-buildvcs=false", "-ldflags", "-X main.version=dev",
              "-o", str(destination / name), "./cmd/" + name], cwd=source,
+            phase=InstallationPhase.BUILD_DELEGATE if name == "delegate" else InstallationPhase.BUILD_DELEGATE_RUN,
         )
         target = destination / name
         if target.is_symlink() or not target.is_file() or not os.access(target, os.X_OK):
@@ -62,7 +64,7 @@ def install_supervisor_pair(destination: Path) -> None:
     """Install the independently verified original archive through its one pin owner."""
     _install_command(
         [sys.executable, str(REPOSITORY / "scripts/fetch_pueue_assets.py"), "--host", str(destination)],
-        cwd=REPOSITORY,
+        cwd=REPOSITORY, phase=InstallationPhase.INSTALL_SUPERVISOR,
     )
 
 

@@ -1,5 +1,6 @@
 """Actorless checks for independently built layouts and verified archive installation."""
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -9,6 +10,8 @@ from unittest.mock import patch
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.private_cli import installation
+from scripts.delegate_acceptance.private_cli.errors import InstallationFailure, InstallationPhase
+from scripts.delegate_acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, BoundedCommandResult, CommandFailure, command_closure_unproven
 
 
@@ -34,6 +37,12 @@ class FixtureInstallationTests(unittest.TestCase):
         target.write_text("#!/bin/sh\nexit 0\n")
         target.chmod(0o700)
         return BoundedCommandResult(0, b"")
+
+    def write_failure_receipt(self, error):
+        receipt = AcceptanceReceipt(self.root / "failure.json", 1, 1, {})
+        receipt.phase("fixture_setup")
+        receipt.write("FAIL", {"status": "passed"}, error)
+        return json.loads(receipt.output.read_text())
 
     def test_builds_both_commands_from_selected_source_directly_into_each_owned_layout(self):
         first = self.owner.create("first package", self.root / "first", self.root).directory
@@ -95,14 +104,33 @@ class FixtureInstallationTests(unittest.TestCase):
                         installation.build_candidate_pair(self.source, destination)
                 (destination / "delegate").unlink(missing_ok=True)
 
-    def test_build_failure_reports_status_without_private_output_and_stops_before_second_build(self):
-        destination = self.owner.create("installation", self.root / "install", self.root).directory
-        with patch.object(installation, "run_bounded_command",
-                          return_value=BoundedCommandResult(7, b"PRIVATE stdout", b"PRIVATE stderr")) as build:
-            with self.assertRaisesRegex(RuntimeError, "failed with exit 7") as error:
-                installation.build_candidate_pair(self.source, destination)
-        self.assertNotIn("PRIVATE", str(error.exception))
-        self.assertEqual(build.call_count, 1)
+    def test_public_install_failure_names_exact_phase_and_exit_without_private_child_output(self):
+        for index, phase in enumerate(("build-delegate", "build-delegate-run", "install-supervisor"), start=1):
+            calls = 0
+
+            def command(arguments, environment, **options):
+                nonlocal calls
+                calls += 1
+                if calls == index:
+                    return BoundedCommandResult(7, b"PRIVATE stdout canary", b"PRIVATE stderr canary")
+                return self.materialize_build(arguments, environment, **options)
+
+            with self.subTest(phase=phase), patch.object(installation, "run_bounded_command", side_effect=command):
+                with self.assertRaisesRegex(RuntimeError, "failed with exit 7") as error:
+                    installation.install_adjacent_candidate(self.owner, self.source, self.root / phase)
+                self.assertIn(f"(phase={phase})", str(error.exception))
+                self.assertNotIn("PRIVATE", str(error.exception))
+                self.assertNotIn(str(self.root), str(error.exception))
+                self.assertEqual(calls, index)
+                error.exception.args = ("PRIVATE arbitrary installation message",)
+                error.exception.__cause__ = RuntimeError("PRIVATE child cause")
+                payload = self.write_failure_receipt(error.exception)
+                self.assertEqual(payload["phase"], "fixture_setup")
+                self.assertEqual(payload["failure"], {
+                    "code": "fixture-setup-failed", "exception_type": "InstallationFailure", "phase": "fixture_setup",
+                    "installation": {"phase": phase, "exit_code": 7},
+                })
+                self.assertNotIn("PRIVATE", json.dumps(payload))
 
     def test_supervisor_uses_original_archive_installer_once_for_host_destination(self):
         with patch.object(installation, "run_bounded_command", return_value=BoundedCommandResult(0, b"")) as run:
@@ -111,12 +139,41 @@ class FixtureInstallationTests(unittest.TestCase):
                          str(installation.REPOSITORY / "scripts/fetch_pueue_assets.py"), "--host", str(self.root)])
         self.assertEqual(run.call_args.kwargs["cwd"], installation.REPOSITORY)
 
-    def test_bounded_installer_failure_is_explicit(self):
-        failure = BoundedCommandError(CommandFailure.TIMEOUT)
-        with patch.object(installation, "run_bounded_command", side_effect=failure):
-            with self.assertRaisesRegex(RuntimeError, "command_timeout") as error:
-                installation.install_supervisor_pair(self.root)
-        self.assertIs(error.exception.__cause__, failure)
+    def test_bounded_public_install_failure_names_phase_and_retains_child_owner_cause(self):
+        for index, phase in enumerate(("build-delegate", "build-delegate-run", "install-supervisor"), start=1):
+            failure = BoundedCommandError(CommandFailure.TIMEOUT)
+            calls = 0
+
+            def command(arguments, environment, **options):
+                nonlocal calls
+                calls += 1
+                if calls == index:
+                    raise failure
+                return self.materialize_build(arguments, environment, **options)
+
+            with self.subTest(phase=phase), patch.object(installation, "run_bounded_command", side_effect=command):
+                with self.assertRaisesRegex(RuntimeError, "command_timeout") as error:
+                    installation.install_adjacent_candidate(self.owner, self.source, self.root / phase)
+                self.assertIn(f"(phase={phase})", str(error.exception))
+                self.assertIs(error.exception.__cause__, failure)
+                self.assertEqual(calls, index)
+                error.exception.args = ("PRIVATE installation output",)
+                failure.args = ("PRIVATE bounded child output",)
+                payload = self.write_failure_receipt(error.exception)
+                self.assertEqual(payload["failure"], {
+                    "code": "fixture-setup-failed", "exception_type": "InstallationFailure", "phase": "fixture_setup",
+                    "installation": {"phase": phase, "reason": "command_timeout"},
+                })
+                self.assertNotIn("PRIVATE", json.dumps(payload))
+
+    def test_receipt_does_not_project_installation_details_from_untyped_message_or_cause(self):
+        error = RuntimeError("PRIVATE phase=install-supervisor exit=7")
+        error.__cause__ = InstallationFailure(InstallationPhase.INSTALL_SUPERVISOR, 7)
+        payload = self.write_failure_receipt(error)
+        self.assertEqual(payload["failure"], {
+            "code": "fixture-setup-failed", "exception_type": "RuntimeError", "phase": "fixture_setup",
+        })
+        self.assertNotIn("PRIVATE", json.dumps(payload))
 
     def test_adjacent_candidate_is_one_owned_build_with_independent_archive_pair(self):
         directory = self.root / "adjacent"

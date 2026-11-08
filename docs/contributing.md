@@ -74,6 +74,11 @@ Other supervisor fixtures retain explicit installed Pueue paths for their
 required invocation observations. Missing or incompatible installations fail
 explicitly. Unknown build/child closure retains the owned paths for diagnosis.
 
+Child installation failures identify `build-delegate`, `build-delegate-run` or
+`install-supervisor`, with an exit code or bounded-command reason. Private CLI
+receipts preserve these typed details under `failure.installation`; compiler and
+download output, arbitrary exception messages and inherited settings remain private.
+
 `make acceptance-supervisor` and `make acceptance-inspection` let their drivers
 own the fixture builds. The standalone `make supervisor-fixtures` and
 `make inspection-fixtures` remain available for direct fixture work; they are
