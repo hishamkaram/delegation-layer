@@ -33,6 +33,7 @@ from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
 SUCCESS_CANDIDATE_NAME = "success-candidate.json"
+NATIVE_OBSERVER_DIRECTORY = Path(__file__).resolve().parents[3] / "bin"
 
 
 @dataclass(frozen=True)
@@ -367,7 +368,7 @@ def prove_absent_resource_refusals(owner, tasks: frozenset[str], deadline: float
         except BoundedReadError as error:
             raise AcceptanceFailure("native refusal observation is unreadable: " + error.reason.value) from error
 
-    binaries = Path(__file__).resolve().parents[3] / "bin"
+    binaries = NATIVE_OBSERVER_DIRECTORY
     for name in ("task-inventory-fixture", "nested-lifetime-fixture"):
         executable = binaries / name
         require(executable.is_file() and os.access(executable, os.X_OK),

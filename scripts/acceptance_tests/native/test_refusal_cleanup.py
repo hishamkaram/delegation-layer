@@ -326,7 +326,13 @@ class NativeRefusalProofTests(unittest.TestCase):
         entry = {"root_id": ROOT, "root_device": state.identity[0], "root_inode": state.identity[1],
                  "task_id": REFUSED, "entry_exists": False}
         ordinary_closure = {"root_id": ROOT, "tasks": {TASK: {}}, "inspections": {}}
+        observers = base / "observers"
+        observers.mkdir()
+        for name in ("task-inventory-fixture", "nested-lifetime-fixture"):
+            # Metadata-only fixtures: process execution is replaced at its owner boundary.
+            (observers / name).touch(mode=0o700)
         case = SimpleNamespace(
+            observers=observers,
             owner=owner, token=state, models_token=models, inventory=inventory, entry=entry,
             closure=ordinary_closure, model_closure={"root_id": OTHER, "tasks": {}, "inspections": {}},
             inventory_bytes=None, entry_bytes=None, command_result={"natural_wait": True, "exit_code": 0})
@@ -358,7 +364,8 @@ class NativeRefusalProofTests(unittest.TestCase):
         return case
 
     def prove(self, case):
-        with patch.object(acceptance_lifecycle, "validate_managed_lifetime_closure", case.reader):
+        with (patch.object(acceptance_lifecycle, "validate_managed_lifetime_closure", case.reader),
+              patch.object(acceptance_lifecycle, "NATIVE_OBSERVER_DIRECTORY", case.observers)):
             return acceptance_lifecycle.prove_absent_resource_refusals(
                 case.owner, frozenset({REFUSED}), time.monotonic() + 5)
 
@@ -378,6 +385,20 @@ class NativeRefusalProofTests(unittest.TestCase):
         self.assertEqual(Path(second.args[1][0]).name, "nested-lifetime-fixture")
         self.assertEqual(second.kwargs["environment"]["DELEGATE_NESTED_FIXTURE_TASK"], REFUSED)
         self.assert_retained(case)
+
+    def test_missing_or_nonexecutable_observer_does_not_launch_or_consume_tokens(self) -> None:
+        for name, missing in (("task-inventory-fixture", True), ("nested-lifetime-fixture", False)):
+            with self.subTest(name=name, missing=missing):
+                case = self.case()
+                helper = case.observers / name
+                if missing:
+                    helper.unlink()
+                else:
+                    helper.chmod(0o600)
+                with self.assertRaisesRegex(AcceptanceFailure, "native cleanup observer is unavailable"):
+                    self.prove(case)
+                case.run.assert_not_called()
+                self.assert_retained(case)
 
     def test_untrusted_inventory_cannot_authorize_an_entry_observation(self) -> None:
         for fault in ("root", "device", "schema", "duplicate", "extra", "malformed", "oversized"):
