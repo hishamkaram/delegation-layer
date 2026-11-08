@@ -274,7 +274,7 @@ class IndependentStartupWorkflowTests(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", linux_gate)
         self.assertIn("needs: development-candidate", job_text(self.source, "development-candidate-install"))
         self.assertIn("needs.changes.outputs.full == 'true'", self.job)
-        self.assertIn("os: [ubuntu-24.04, macos-15]", self.job)
+        self.assertIn("os: [ubuntu-24.04, macos-latest]", self.job)
         self.assertIn("DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group", self.proof)
         self.assertNotIn("continue-on-error", self.job)
 

@@ -16,6 +16,9 @@ PAYLOAD = b"source-authored archive fixture"
 PYTHON_TRANSPORT = r'''
 import io, json, os, runpy, sys, urllib.error, urllib.request
 from pathlib import Path
+expected_bound = os.environ.get("TEST_EXPECTED_BOUND")
+if expected_bound is not None and sys.argv[sys.argv.index("--max-bytes") + 1] != expected_bound:
+    raise AssertionError("API did not receive the normalized byte bound")
 class Response(io.BytesIO):
     url = "https://release-assets.githubusercontent.com/fixture"
 class Opener:
@@ -82,10 +85,10 @@ exit "$TEST_CURL_EXIT"
         path.write_text(source)
         path.chmod(0o755)
 
-    def run_download(self):
+    def run_download(self, max_bytes="1024"):
         self.output = self.root / "download"
         return subprocess.run([str(ROOT / "scripts/download-tool-archive.sh"), URL,
-                               str(self.output), "1024"], env=self.env, capture_output=True,
+                               str(self.output), max_bytes], env=self.env, capture_output=True,
                               text=True, check=False, timeout=10)
 
     def test_primary_success_never_uses_api(self):
@@ -94,6 +97,64 @@ exit "$TEST_CURL_EXIT"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.read_bytes(), PAYLOAD)
         self.assertFalse(self.calls.exists())
+
+    def test_successful_primary_output_obeys_the_byte_limit_even_if_curl_does_not(self):
+        self.env.update(TEST_CURL_EXIT="0", TEST_HTTP_STATUS="200")
+        limit = len(PAYLOAD)
+        for size, expected in ((limit - 1, 0), (limit, 0), (limit + 1, 63)):
+            with self.subTest(size=size):
+                self.payload.write_bytes(b"x" * size)
+                result = self.run_download(str(limit))
+                self.assertEqual(result.returncode, expected, result.stderr)
+                arguments = (self.root / "curl-arguments").read_text().splitlines()
+                self.assertIn("--max-filesize", arguments)
+                self.assertEqual(arguments[arguments.index("--max-filesize") + 1], str(limit))
+                self.assertEqual(self.output.stat().st_size, size)
+                self.assertFalse(self.calls.exists())
+                if expected:
+                    self.assertIn("exceeds MAX_BYTES", result.stderr)
+
+    def test_invalid_limits_fail_before_transport_and_preserve_caller_output(self):
+        self.output = self.root / "download"
+        self.output.write_bytes(b"caller-owned output")
+        for limit in ("", "0", "+000", "-1", "ten", "1.5", "１２", "9223372036854775808", "1" * 100):
+            with self.subTest(limit=limit):
+                result = self.run_download(limit)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("MAX_BYTES", result.stderr)
+                self.assertFalse((self.root / "curl-arguments").exists())
+                self.assertFalse(self.calls.exists())
+                self.assertEqual(self.output.read_bytes(), b"caller-owned output")
+
+    def test_limits_are_normalized_without_octal_or_signed_integer_overflow(self):
+        self.env.update(TEST_CURL_EXIT="0", TEST_HTTP_STATUS="200")
+        self.payload.write_bytes(b"small")
+        for limit, normalized in (("+010", "10"), ("00010", "10"),
+                                  ("0" * 30 + "10", "10"),
+                                  ("9223372036854775807", "9223372036854775807")):
+            with self.subTest(limit=limit):
+                result = self.run_download(limit)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = (self.root / "curl-arguments").read_text().splitlines()
+                self.assertIn("--max-filesize", arguments)
+                self.assertEqual(arguments[arguments.index("--max-filesize") + 1], normalized)
+                self.assertEqual(self.output.read_bytes(), b"small")
+                self.assertFalse(self.calls.exists())
+
+    def test_curl_size_refusal_keeps_exit_and_partial_output_without_api(self):
+        self.env.update(TEST_CURL_EXIT="63", TEST_HTTP_STATUS="200")
+        result = self.run_download()
+        self.assertEqual(result.returncode, 63, result.stderr)
+        self.assertFalse(self.calls.exists())
+        self.assertEqual(self.output.read_bytes(), b"partial")
+
+    def test_fallback_receives_the_same_normalized_limit(self):
+        self.payload.write_bytes(b"small")
+        self.env["TEST_EXPECTED_BOUND"] = "10"
+        result = self.run_download("+010")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.output.read_bytes(), b"small")
+        self.assertEqual(len(self.calls.read_text().splitlines()), 2)
 
     def test_explicit_token_is_only_used_by_api_and_never_curl_argv_or_diagnostics(self):
         token = "source-authored-tool-download-token"

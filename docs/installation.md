@@ -97,7 +97,9 @@ The release installer installs the Delegate CLI and bundled supervisor into
 `$HOME/.local/bin` by default. Set `DELEGATION_LAYER_INSTALL_DIR` for a
 different destination.
 Keep that directory on the harness process's `PATH`. Delegate starts its
-private supervisor automatically.
+private supervisor automatically. If interrupted by HUP, INT or TERM, the shell
+installer exits with status 129, 130 or 143 and cleans its own temporary and
+staging directories. Interruption does not roll back files already installed.
 
 Verify the installed CLI:
 

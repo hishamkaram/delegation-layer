@@ -193,7 +193,10 @@ and omit executable-content digests. Historical executable SHA fields remain
 readable as recorded data; they do not authorize hashing the current program or
 rewriting sealed task evidence. Queue/callback recovery uses the selected
 installation and the existing generation transaction. These checks establish
-selection and ownership, not immutable executable bytes.
+selection and ownership, not immutable executable bytes. A passive admission
+probe can use compatible installed transport when recorded executable paths are
+missing or historical state copies. Transport selection keeps the published
+generation authoritative; the probe does not start a daemon or rewrite it.
 
 Private infrastructure starts through a per-root resident outside task lifetime
 scopes. Its authenticated operations use the existing generation and task owners;

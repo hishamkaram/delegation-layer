@@ -21,7 +21,7 @@ from .github import GitHubClient, object_value, positive_id
 STAGE = "publication-preflight"
 PRODUCER_JOB = "Distribution build"
 INSTALL_JOBS = tuple(f"Distribution install ({host}, {channel})"
-                     for host in ("ubuntu-24.04", "macos-15")
+                     for host in ("ubuntu-24.04", "macos-latest")
                      for channel in ("shell", "npm", "homebrew"))
 CHECK_JOBS = ("Gate (Linux ubuntu-24.04)", "Gate (macOS macos-15)",
               "Agent skill package (ubuntu-24.04)", "Agent skill package (macos-15)")

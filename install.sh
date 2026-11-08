@@ -48,18 +48,23 @@ esac
 
 ARCHIVE="delegation-layer_${VERSION#v}_${OS}_${ARCH}.tar.gz"
 RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
-TEMP_DIR="$(mktemp -d)"
+TEMP_DIR=""
 STAGE_DIR=""
 
 cleanup() {
   status=$?
-  trap - EXIT HUP INT TERM
+  trap '' HUP INT TERM
+  trap - EXIT
   set +e
   [ -z "$STAGE_DIR" ] || rm -rf "$STAGE_DIR"
-  rm -rf "$TEMP_DIR"
+  [ -z "$TEMP_DIR" ] || rm -rf "$TEMP_DIR"
   exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+TEMP_DIR="$(mktemp -d)"
 
 curl -fsSL --connect-timeout 5 --max-time 20 --retry 2 --retry-delay 1 --retry-max-time 30 -o "$TEMP_DIR/$ARCHIVE" "$RELEASE_URL/$ARCHIVE" || \
   fail "could not download $ARCHIVE"

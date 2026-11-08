@@ -22,7 +22,10 @@ through GitHub's public asset API. This fallback requires Python 3 and sends no
 credentials unless explicitly configured as below. The pinned release, asset
 name and whole-archive checksum stay the same. API rate limits, invalid metadata,
 incomplete downloads or checksum mismatches fail installation; the fallback does
-not guarantee availability.
+not guarantee availability. The shell archive helper validates its positive byte
+limit before network access and rejects an oversized file even when curl reports
+success. This bounds accepted files; older curl releases may continue an
+unknown-length transfer past that limit before the helper rejects the file.
 Pueue uses the fallback only when opening the primary request fails; errors
 while copying its body remain failures.
 
@@ -104,7 +107,9 @@ checks, formatting and vulnerability scanning. Do not run those suites again
 as separate targets after the aggregate unchanged. `make test-native-harness`
 is useful during acceptance-driver edits; its Python tests are already in
 `make test-python` and the final aggregate. Required CI runs the complete gate on
-Linux and `make check-platform` on macOS. The platform gate keeps Go vet, lint,
+Linux and `make check-platform` on `macos-latest`. The two macOS required check
+names retain `macos-15` for existing branch protection; runner selection follows
+GitHub's latest stable image. The platform gate keeps Go vet, lint,
 builds, race tests, and Python/Node runtime tests on both hosts, including
 platform-specific source and behavior. It omits only the shared static checks
 already run on Linux. Do not dispatch a second full workflow merely to certify
