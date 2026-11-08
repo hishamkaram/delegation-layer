@@ -1,14 +1,15 @@
 # Architecture
 
 Delegate manages the local lifecycle of a bounded task run by an installed
-agent CLI. Request storage, scheduling, native execution and result publication
-have separate owners. Adapters describe and interpret provider turns; the shared
+agent CLI. Remote requests route to that lifecycle on the destination. Request
+storage, scheduling, native execution and result publication have separate
+owners. Adapters describe and interpret provider turns; the shared
 runtime owns launch, supervision and publication.
 
 | View | Interactive | SVG | PNG |
 | --- | --- | --- | --- |
 | Components and owners | [Explore](../diagrams/components.html) | [Light](../diagrams/components.light.svg) · [Dark](../diagrams/components.dark.svg) | [Light](../diagrams/components.light.png) · [Dark](../diagrams/components.dark.png) |
-| Ordinary task lifecycle | [Explore](../diagrams/lead-interface.html) | [Light](../diagrams/lead-interface.light.svg) · [Dark](../diagrams/lead-interface.dark.svg) | [Light](../diagrams/lead-interface.light.png) · [Dark](../diagrams/lead-interface.dark.png) |
+| Task lifecycle | [Explore](../diagrams/lead-interface.html) | [Light](../diagrams/lead-interface.light.svg) · [Dark](../diagrams/lead-interface.dark.svg) | [Light](../diagrams/lead-interface.light.png) · [Dark](../diagrams/lead-interface.dark.png) |
 
 Editable sources: [components](../diagrams/components.architecture.json) and
 [lifecycle](../diagrams/lead-interface.sequence.json). This page owns the
@@ -345,9 +346,13 @@ decision as admission; it adds no reads or policy. It carries no absolute times,
 paths, process IDs, environment values or raw errors. Other resource outcomes
 and human output are unchanged.
 
-A refusal creates no ordinary task record. Running tasks, status, collect,
-cancel and existing recovery are untouched. No work is paused or offloaded;
-admission cannot guarantee that an accepted task avoids a later OOM.
+A refused fresh admission creates no ordinary task record. That storage fact
+does not always produce `task_record: not_created`: an explicit-ID request can
+retain `task_record: unknown` with `stop_and_report`. Preserve the actual public
+response rather than inferring absence or retry permission from the refusal.
+Running tasks, status, collect, cancel and existing recovery are untouched. No
+work is paused or offloaded; admission cannot guarantee that an accepted task
+avoids a later OOM.
 See [resource response handling](../skills/agent-integration/references/result-handling.md)
 for the caller's bounded retry or stop decision.
 

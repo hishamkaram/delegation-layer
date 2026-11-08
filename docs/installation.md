@@ -113,6 +113,13 @@ For a source build of current main, follow
 [Development setup](contributing.md#development-setup). It owns the compiler,
 repository tools, colocated binaries and supervisor prerequisites.
 
+## Remote-task setup
+
+Install Delegate and the selected provider on the destination too. The origin
+plugin does not prepare that machine, copy provider accounts or configure host
+services. Follow [destination preparation and SSH trust](remote-delegation.md#prepare-a-destination)
+before dispatch; local installation alone does not establish remote readiness.
+
 ## Recurring-task setup
 
 Follow the [scheduler walkthrough](getting-started.md#recurring-tasks) to start

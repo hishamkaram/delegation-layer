@@ -189,12 +189,13 @@ identity, shutdown-lease, infrastructure and recovery controls. Copied-image
 custody, root editor/census and executable-byte-pin upgrade probes are retired.
 Do not invoke the historical staging probes as replacement proof.
 
-The replacement receipt/test producers and affected native checks remain
-unverified until their migrations and execution complete. Target availability
-and workflow guard tests establish neither current product acceptance nor full
-CI or PR readiness. Native Linux/macOS checks and the three nested-survival
-topologies on each required backend need their actual results. Cross-builds do
-not fill a missing native cell; Windows remains a future, unverified host.
+The target runs native lifetime, peer identity, shutdown-lease and resident
+infrastructure/recovery cases; the configured CI component jobs run it on Linux
+and macOS with the cooperative backend. This is component evidence, not full
+product acceptance or PR readiness. The separate nested-survival gate exercises
+its three topologies on each selected backend. Required host/backend claims need
+their actual results; cross-builds do not fill a missing native cell. Windows
+remains a future, unverified host.
 
 Assert the production-selected backend and never force fallback. An abrupt owned
 fixture exit models owner loss, not external signal handling. Different-UID
@@ -238,8 +239,9 @@ The fixture records cold-start provenance, daemon continuity before recovery,
 a fresh reply from the same running worker after leader termination, queued
 launch and independent deadline, ordinary descendant containment, and native
 closure before shutdown. Failed setup, survival or cleanup remains non-passing;
-retained roots and captures are diagnostic evidence. Until the cold arrangement
-is verified on the relevant backend, prestart its supervisor outside the leader.
+retained roots and captures are diagnostic evidence. The separate-cold case
+requires automatic startup from the leader's context; prestarting that case's
+supervisor would bypass the behavior under test.
 
 Verify the user-started scheduler host natively on Linux and macOS.
 `scripts/acceptance_scheduler.py` accepts
@@ -274,8 +276,9 @@ python3 scripts/acceptance_scheduler.py \
 Use `python3 scripts/acceptance_scheduler.py --help` for the current driver's
 scenario, source-root and supervisor-path options.
 
-For the new path, run the actual candidate CLI/runner on Linux and macOS with a
-user-started `scheduler serve` in an independent terminal or tmux pane. Verify
+For scheduler hosting changes, run the actual candidate CLI/runner on Linux and
+macOS with a user-started `scheduler serve` in an independent terminal or tmux
+pane. Verify
 child failure followed by owned Wait, backoff, restart and a later scheduled
 provider result; stop and terminal signals must fence/join host and child without
 respawn while independent tasks retain their lifetimes. During joined stop,
@@ -297,7 +300,7 @@ and retain `schedule.saved: true`. Check a raw `scheduler run` after an older
 managed host stopped: status must report its current `foreground` generation,
 and public stop must leave it running with `stop_accepted: false` and
 `next_action: stop_foreground_runtime`. End that owned invocation in its original
-pane with Ctrl-C. These corrections still require integrated native verification.
+pane with Ctrl-C. These scenarios require actual integrated native results.
 Prototype results, simulated clocks and cross-builds do not pass these checks.
 Native suspend/resume remains unverified until actually exercised. The hosting
 and [upgrade procedure](cli-reference.md#scheduler-upgrades) own operator guidance;
@@ -485,11 +488,21 @@ framework or contributor receipt format is introduced.
 
 ## Documentation changes
 
+Follow the [documentation completion rule](../AGENTS.md#documentation-completion)
+after implementation and behavioral verification, before final integrated review
+and opening or completing the PR. Use [docs-updater](../skills/docs-updater/SKILL.md)
+for the source audit, packaged-reference synchronization and diagram procedure.
+The PR checklist records affected documentation/diagram changes or specific
+no-change reasons, actual checks and any visual-verification limits.
+
 Keep product documentation in README/docs and local plans/private diagnostics
 under ignored .local/archive. Describe implemented behavior and actual checks;
-mark future or unavailable behavior honestly. Use Archify full-diagram exports,
-not cropped screenshots, when a diagram changes. Do not update illustrations
-or rerun their native/provider scenarios merely for unrelated contributor prose.
+mark future or unavailable behavior honestly. Run `make check-docs` for the final
+documentation pass. Changed diagrams need repository-backed Archify validation
+and visual inspection of the page and full light/dark SVG/PNG exports, followed
+by updated checksums. Link/checksum checks alone do not establish freshness or
+visual quality. Do not regenerate unrelated diagrams or rerun runtime/provider
+scenarios solely for prose.
 
 ### Remote SSH acceptance
 

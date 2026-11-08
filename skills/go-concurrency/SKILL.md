@@ -35,3 +35,6 @@ Return the bounded implementation/tests or read-only findings, commands/results
 and unresolved limits. Run affected race tests; Root owns the full integrated
 gate. Do not add mandatory transition matrices or handoff receipts. Native
 runtime assurance is established only on the affected supported OS/backend.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

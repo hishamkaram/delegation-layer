@@ -23,6 +23,8 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `teams` | [Optional configuration and Member selection](#teams) | None |
 | `schedule` | [Recurring definitions](#schedules), [history and execution evidence](#schedule-history-and-execution) | None |
 | `scheduler serve/status/stop` (when supported), `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
+| `devices list/probe/trust` | [Remote destination discovery and trust](#remote-tasks) | List is passive; probe/trust contact the selected destination, without launching a provider |
+| `remote list/reconcile` | [Saved remote task references](#remote-tasks) | List is passive; reconcile recovers existing matching work, with no new admission |
 
 The commands below use the CLI default and omit `--root`. The advanced override
 syntax is `delegate --root ABS COMMAND ...`; use it only for an explicitly
@@ -583,7 +585,7 @@ guidance; readiness checks do not authorize provider configuration changes.
 
 ## Remote tasks
 
-See the [remote workflow](../../../docs/remote-delegation.md) for device
+See the [remote workflow](https://github.com/hishamkaram/delegation-layer/blob/main/docs/remote-delegation.md) for device
 configuration, explicit trust, file manifests and supported SSH settings.
 `--ssh-config ABS` explicitly selects one supported configuration file; the
 choice is saved for later controls. Default discovery reads user then system

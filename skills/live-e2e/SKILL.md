@@ -58,3 +58,6 @@ another account/provider for a green result. Functional deadline and cleanup
 bounds remain meaningful. Report command, binary/version/path, platform,
 task/scenario outcome, cleanup and unavailable checks without claiming universal
 proof. Root owns final integration/review and any Git or publication operation.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

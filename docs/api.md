@@ -16,6 +16,16 @@ The packaged [task response contract](../skills/agent-integration/references/res
 owns the envelope, authority fields, and descriptor rules.
 [JSON examples](../skills/agent-integration/examples/json-results.md) show abbreviated shapes.
 
+## Remote responses
+
+Remote task controls can return an origin envelope with the destination reply
+under `remote`; `remote.response` carries the original task envelope when
+available. Connectivity, dated
+`last_observation` and download reports are separate observations. Do not apply
+local task-field decisions to the outer origin envelope or infer task failure
+from connection loss. The [remote workflow](remote-delegation.md#observe-reconnect-and-collect)
+owns remote handles, uncertainty, supported controls and transfer behavior.
+
 ## Checkpoint response
 
 See the [checkpoint response contract](../skills/agent-integration/references/workspaces.md#checkpoint-response)
@@ -53,7 +63,7 @@ See [observation and result decisions](../skills/agent-integration/references/re
 
 ## Operator integration limits
 
-Ordinary complete JSON responses are bounded to 1 MiB.
+Ordinary local task/control JSON responses are bounded to 1 MiB.
 [Saved-schedule detail](../skills/agent-integration/references/command-reference.md#schedules)
 responses containing the saved request and
 [Team management responses](../skills/agent-integration/references/command-reference.md#teams)

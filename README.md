@@ -1,12 +1,14 @@
 # Delegation Layer
 
-Delegate manages the local lifecycle of bounded tasks run by the agent CLIs
-you already use: delegation, tracking, budgets, cancellation, continuation,
-and retrieving results with evidence.
+Delegate manages bounded tasks run by the agent CLIs you already use, locally
+or on a prepared remote machine over SSH: delegation, tracking, budgets,
+cancellation, and retrieving results with evidence. Local tasks also support
+exact-session continuation.
 
 **[Install](https://github.com/hishamkaram/delegation-layer/blob/main/docs/installation.md)**
 · [Example](#ask-naturally)
 · [Providers](https://github.com/hishamkaram/delegation-layer/blob/main/docs/providers.md)
+· [Remote tasks](docs/remote-delegation.md)
 · [Teams](https://github.com/hishamkaram/delegation-layer/blob/main/docs/teams.md)
 · [Start recurring tasks](docs/getting-started.md#recurring-tasks)
 · [Docs](https://github.com/hishamkaram/delegation-layer/blob/main/docs/README.md)
@@ -25,6 +27,7 @@ and retrieving results with evidence.
 | Exact-session continuation | Follow up in the recorded provider conversation. | Available | [Continuation](skills/agent-integration/references/continuation.md) |
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
+| Remote tasks over SSH | Run on a prepared destination, reconnect to the same task, and transfer explicitly selected files. | Available | [Remote workflow](docs/remote-delegation.md) |
 | Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
 | Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
 
@@ -55,6 +58,12 @@ for activation and limits.
 
 For a manual CLI task, use the packaged
 [read-only example](skills/agent-integration/examples/read-only-task.md).
+
+For another machine, follow the [remote workflow](docs/remote-delegation.md)
+to prepare the destination, verify SSH trust and choose a prepared workspace or
+explicit file snapshot. The destination owns supervision and outcomes; a lost
+connection does not authorize another launch. Remote continuation, logs and
+offline recheck are not exposed in the current remote workflow.
 
 For recurring work, follow the [scheduler walkthrough](docs/getting-started.md#recurring-tasks)
 to start `delegate scheduler serve` in your own terminal or tmux pane, even

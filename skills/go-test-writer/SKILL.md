@@ -41,3 +41,6 @@ Return meaningful tests, exact commands/results and any unavailable scenario.
 Do not introduce a test framework or contributor proof format. A mocked test
 does not prove a real provider/account or [native host](../../agents/_data/maintainability-contract.md#native-platform-checks).
 Tests and fixtures follow the same engineering guidance and quality checks.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

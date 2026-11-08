@@ -10,6 +10,14 @@ Read [result handling](../skills/agent-integration/references/result-handling.md
 before observing a response. A returned task ID alone does not prove that a
 task record exists.
 
+## Remote tasks
+
+Use the [remote workflow](remote-delegation.md) to prepare another installation,
+verify its SSH identity and dispatch to a prepared workspace or an explicit
+file snapshot. Keep the returned `remote:ID` handle for observation and controls.
+The destination owns execution and results; reconnecting does not restart work.
+The workflow also documents the remote command limits and retained file data.
+
 ## Optional Teams
 
 Use [Teams](teams.md) when you want reusable Roles, Members and provider/model

@@ -46,3 +46,6 @@ to production code, fixtures and contributor tools. No handoff index or extra
 receipt is required.
 Changed OS primitives need [native validation](../../agents/_data/maintainability-contract.md#native-platform-checks)
 before claiming supported-host behavior.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

@@ -38,6 +38,10 @@ or a successful unrelated check alone does not establish behavior approval.
    consumers; broaden only for a concrete concern. Do not request repeated full
    suites or model reviews solely to restate an unchanged verdict.
 
+Check [documentation completion](../../AGENTS.md#documentation-completion)
+against the integrated change, including source-backed reasons for unchanged
+guidance or diagrams and any unverified checks.
+
 ## Result
 
 Give findings first and identify what remains unverified. Resolve known
