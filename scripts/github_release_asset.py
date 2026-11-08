@@ -56,7 +56,7 @@ def http_failure(error: urllib.error.HTTPError, phase: Literal["metadata", "asse
     cause = "cause not reported"
     if error.code in {403, 429}:
         if "x-ratelimit-remaining" in fields and int(fields["x-ratelimit-remaining"]) == 0:
-            cause = "primary rate limit reported"
+            cause = "rate limit reported (remaining=0)"
         elif "retry-after" in fields:
             cause = "possible secondary rate limit"
     details = [f"{phase}, {mode}, HTTP {error.code}", cause]

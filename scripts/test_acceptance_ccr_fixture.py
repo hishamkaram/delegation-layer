@@ -925,6 +925,7 @@ class ProviderInstallationWorkflowTests(unittest.TestCase):
         self.write_executable("scripts/install-test-supervisor.sh", '''#!/bin/sh
 test "${DELEGATE_TOOL_DOWNLOAD_TOKEN-}" = workflow-tool-token || exit 92
 echo supervisor >> "$STUB_EVENTS"
+if [ "${STUB_SUPERVISOR_FAILURE:-}" = 1 ]; then exit 25; fi
 ''')
         self.write_executable("stubs/npm", '''#!/bin/bash
 set -euo pipefail
@@ -952,16 +953,16 @@ chmod +x "$prefix/node_modules/.bin/claude"
         path.chmod(0o755)
 
     def run_install(self):
-        result = subprocess.run(["bash", "-euo", "pipefail", "-c", self.script], cwd=self.root,
-                                env=self.environment, capture_output=True, text=True, check=False, timeout=30)
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", self.supervisor_script], cwd=self.root,
+                                env={**self.environment, "DELEGATE_TOOL_DOWNLOAD_TOKEN": "workflow-tool-token"},
+                                capture_output=True, text=True, check=False, timeout=30)
         if result.returncode:
             return result
-        supervisor = subprocess.run(["bash", "-euo", "pipefail", "-c", self.supervisor_script], cwd=self.root,
-                                    env={**self.environment, "DELEGATE_TOOL_DOWNLOAD_TOKEN": "workflow-tool-token"},
-                                    capture_output=True, text=True, check=False, timeout=30)
-        result.returncode = supervisor.returncode
-        result.stdout += supervisor.stdout
-        result.stderr += supervisor.stderr
+        provider = subprocess.run(["bash", "-euo", "pipefail", "-c", self.script], cwd=self.root,
+                                  env=self.environment, capture_output=True, text=True, check=False, timeout=30)
+        result.returncode = provider.returncode
+        result.stdout += provider.stdout
+        result.stderr += provider.stderr
         return result
 
     def test_install_uses_copied_lock_required_scripts_and_isolated_path(self):
@@ -973,14 +974,22 @@ chmod +x "$prefix/node_modules/.bin/claude"
             self.assertEqual((self.prefix / name).read_bytes(),
                              (self.repository / "tools/ccr-provider" / name).read_bytes())
         self.assertEqual(self.github_path.read_text().splitlines(), [str(self.prefix / "node_modules/.bin")])
-        self.assertEqual(self.events.read_text().splitlines(), ["claude", "supervisor"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
-    def test_install_failure_does_not_expose_provider_or_run_supervisor_install(self):
+    def test_supervisor_failure_prevents_provider_install_version_check_and_path_exposure(self):
+        self.environment["STUB_SUPERVISOR_FAILURE"] = "1"
+        result = self.run_install()
+        self.assertEqual(result.returncode, 25, result.stderr)
+        self.assertFalse(self.record.exists())
+        self.assertFalse(self.github_path.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor"])
+
+    def test_provider_install_failure_does_not_check_or_expose_provider(self):
         self.environment["STUB_INSTALL_FAILURE"] = "1"
         result = self.run_install()
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertFalse(self.events.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor"])
 
     def test_wrong_native_version_is_rejected_before_exposing_provider(self):
         self.environment["STUB_CLAUDE_VERSION"] = "2.1.317"
@@ -988,14 +997,14 @@ chmod +x "$prefix/node_modules/.bin/claude"
         self.assertEqual(result.returncode, 1)
         self.assertIn("Expected Claude Code 2.1.318; received 2.1.317", result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
-    def test_native_check_failure_does_not_expose_provider_or_run_supervisor_install(self):
+    def test_native_check_failure_does_not_expose_provider(self):
         self.environment["STUB_NATIVE_FAILURE"] = "1"
         result = self.run_install()
         self.assertEqual(result.returncode, 24, result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
 
 if __name__ == "__main__":

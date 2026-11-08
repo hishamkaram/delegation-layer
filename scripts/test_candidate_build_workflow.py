@@ -312,8 +312,8 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
         self.assertRegex(install, r"(?m)^        run: \./scripts/install-test-supervisor\.sh$")
         self.assertIn("npm ci", provider)
         self.assertIn("--ignore-scripts=false", provider)
-        self.assertLess(content.index("- name: Install locked Claude Code"),
-                        content.index("- name: Install pinned supervisor test binaries"))
+        self.assertLess(content.index("- name: Install pinned supervisor test binaries"),
+                        content.index("- name: Install locked Claude Code"))
         for name, block in blocks.items():
             if name != "Install pinned supervisor test binaries":
                 self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", block)

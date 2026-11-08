@@ -126,7 +126,7 @@ class ReleaseAssetTests(unittest.TestCase):
                 raise AssertionError("HTTP error body must not be read")
 
         cases = ((403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000000"},
-                  "primary rate limit reported"),
+                  "rate limit reported (remaining=0)"),
                  (429, {"retry-after": "60"}, "possible secondary rate limit"),
                  (403, {"x-ratelimit-remaining": "19", "x-ratelimit-reset": marker,
                         "retry-after": "9" * 21}, "cause not reported"),

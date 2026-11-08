@@ -42,6 +42,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.x'
+      - name: Install pinned supervisor test binaries
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: ./scripts/install-test-supervisor.sh
       - name: Install locked Claude Code
         run: |
           provider_dir="$RUNNER_TEMP/ccr-provider"
@@ -57,10 +61,6 @@ jobs:
           fi
           printf '%s\n' "$actual_version"
           echo "$provider_dir/node_modules/.bin" >> "$GITHUB_PATH"
-      - name: Install pinned supervisor test binaries
-        env:
-          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
-        run: ./scripts/install-test-supervisor.sh
       - name: Build Delegate
         run: |
           CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate ./cmd/delegate
