@@ -22,6 +22,8 @@ mkdir -p "${DISPOSABLE_REPO}/scripts" "${DISPOSABLE_REPO}/bin"
 
 cp "${REPO_ROOT}/scripts/check-tool-versions.sh" "${DISPOSABLE_REPO}/scripts/"
 cp "${REPO_ROOT}/scripts/install-tools.sh" "${DISPOSABLE_REPO}/scripts/"
+cp "${REPO_ROOT}/scripts/download-tool-archive.sh" "${DISPOSABLE_REPO}/scripts/"
+cp "${REPO_ROOT}/scripts/github_release_asset.py" "${DISPOSABLE_REPO}/scripts/"
 cp "${REPO_ROOT}/scripts/verify-gates.sh" "${DISPOSABLE_REPO}/scripts/"
 cp "${REPO_ROOT}/.go-version" "${DISPOSABLE_REPO}/.go-version"
 cp "${REPO_ROOT}/.golangci.yml" "${DISPOSABLE_REPO}/.golangci.yml"

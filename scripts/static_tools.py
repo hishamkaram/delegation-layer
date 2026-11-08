@@ -86,9 +86,9 @@ def install_shellcheck() -> None:
     archive, digest = shellcheck_target(platform.system(), platform.machine())
     with tempfile.TemporaryDirectory(prefix="static-tools-") as temporary:
         download = Path(temporary) / archive
-        checked(["curl", "--fail", "--location", "--silent", "--show-error", "--retry", "3",
-                 "--connect-timeout", "15", "--max-time", "120", "--output", str(download),
-                 f"https://github.com/koalaman/shellcheck/releases/download/v{SHELLCHECK_VERSION}/{archive}"])
+        checked([str(ROOT / "scripts/download-tool-archive.sh"),
+                 f"https://github.com/koalaman/shellcheck/releases/download/v{SHELLCHECK_VERSION}/{archive}",
+                 str(download), str(32 * 1024 * 1024)])
         with download.open("rb") as source:
             actual = hashlib.file_digest(source, "sha256").hexdigest()
         if actual != digest:
