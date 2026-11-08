@@ -73,6 +73,13 @@ independent confirmed pressure still can. Only new dispatch/continue admission
 runs this check. Existing-task observation, cancellation, and recovery remain
 available.
 
+`clear` means no confirmed pressure among enabled guards, not proof of host
+health. An explicit per-command opt-out adds `disabled_guards`, containing
+`cpu`, `memory`, or both in that order; the field is absent when both are enabled.
+Both disabled yields `clear` without sampling. Guard selection is response-only:
+later status/collect responses do not reconstruct it. Read this field before
+claiming a guard was exercised; it does not alter task creation or retry rules.
+
 ## Observe and collect
 
 After `task_record: "created"`, run `status` first. Keep the same root and

@@ -23,8 +23,11 @@ own shared public procedures and response decisions.
 SSH to the destination's existing lifecycle. `internal/remote` owns protocol,
 origin intent and connection retry decisions; `internal/sshconfig` and
 `internal/sshtransport` own connection configuration/trust and channel I/O.
-`internal/remotefiles` validates declared bytes; application workspace capture
-composes it after canonical closure. `internal/taskdir` retains all control-record
+`internal/app/remotecommands` owns origin/destination command workflows through
+narrow frontend ports. `internal/remote/payload` owns frozen input snapshots,
+staging, output capture and transfer receipts; `internal/remotefiles` validates
+declared bytes. Post-closure lifecycle consumers call payload capture directly;
+collection never initiates capture. `internal/taskdir` retains all control-record
 durability. Destination task/outcome records remain authoritative; no local
 cache or transfer receipt grants another launch or renews the execution budget.
 
@@ -37,17 +40,36 @@ cache or transfer receipt grants another launch or renews the execution budget.
 | `internal/task` / `internal/taskdir` | Task values and validity rules / durable records and terminal publication. |
 | `internal/provider` | Prepare provider launches and interpret native evidence through pure contracts. |
 | `internal/admission` | Required inspections and their admission evidence. |
-| `internal/tasklifecycle` | Create, submit, observe, continue and control ordinary turns. |
-| `internal/supervisor` | Select bindings, recover generations and authorize private-queue maintenance. |
+| `internal/tasklifecycle` | Create, submit, observe and continue ordinary turns. |
+| `internal/tasklifecycle/stop` | Stop policy, control completion and immutable `Outcome`; callers supply the existing control-client opener. |
+| `internal/supervisor` | Select bindings, recover generations, classify recovery reasons and authorize private-queue maintenance. |
+| `internal/supervisor/installation` | Installed executable and role selection through `ExecutableLookup`, `BootstrapPair` and runner resolvers. |
+| `internal/supervisor/infrastructure` | Durable owner protocol, provenance, resident lifecycle and accepted launch authority. |
+| `internal/app/infrastructurehost` | Captured invocation routing, installed-runner validation, preparation orchestration, saved bindings and retained Store custody. |
 | `internal/pueue` | Execute supervisor control operations through its protocol boundary. |
 | `internal/guardian` / `internal/lifetime` | Shared lifetime transition policy / native process-scope primitives. |
 | `internal/execution` | Provider start, input transport, capture, wait and sealing. |
-| `internal/workspaces` | Optional workspace provisioning, reservations, capture and release. |
+| `internal/workspaces` | Optional workspace lifecycle, reservations, capture reconciliation and release. |
+| `internal/workspaces/worker` | Supervised Git/checkpoint actions, turn baseline/capture comparison, verification and bounded failure diagnostics. |
 | `internal/resourceadmission` | Invocation-local host observations and the new-task pressure decision. |
 | `internal/scheduler` | Schedule storage and recurrence policy; the application runtime composes due claims with existing task execution. |
+| `internal/scheduler/command` | Definition construction, mutation decisions and uncertain-write readback over scheduler contracts. |
+| `internal/remote/payload` | Frozen input bytes, staging, post-closure output capture and durable transfer receipts. |
+| `internal/app/remotecommands` | Remote routing, enrollment, exchange, watch and transfer workflows over protocol, payload and frontend ports. |
 
 Consumer-owned interfaces keep decisions independent of storage and OS details.
-The [architecture guidance](../agents/_data/maintainability-contract.md#architecture-guidance)
+The application retains CLI parsing, root/workspace/brief I/O, public response
+projection and canonical lifecycle composition. Its `scheduling.go`, `remote.go`
+and `infrastructure.go` adapters connect the corresponding owners; package
+moves do not create another lifecycle authority.
+
+`remotecommands.StoreAccess` grants validated root handles; its `LocalCommands`
+port invokes canonical local commands, and `EnvelopeInspector` derives watch
+facts from the frontend's full response decoder. `infrastructurehost.NewHost`
+receives only Store access/custody, native migration and five typed callbacks.
+Its captured `Invocation` is shared across dependency copies; accepted launch
+records still select executables, environments and resident guards. The
+[architecture guidance](../agents/_data/maintainability-contract.md#architecture-guidance)
 describes ownership and dependency design.
 
 ## Ownership boundaries
@@ -156,6 +178,11 @@ The shared Git common directory identifies the repository, including when the
 source is already a linked worktree. Delegate serializes its worktree-topology
 commands under that common-directory lease; provider turns and content capture
 can proceed concurrently. External Git commands do not participate in this lease.
+
+The application owns claim, lifetime, supervision and candidate publication.
+`worker.ObserveTurnBaseline` and `worker.RunAction` borrow the existing supervised
+scope; the worker owns Git actions, comparison and diagnostics. It does not
+create a second deadline or publish the operation's terminal result.
 
 Each managed turn captures a baseline immediately before provider launch. After
 canonical provider/worker closure, a separate finite operation captures the final
@@ -332,6 +359,23 @@ Only new dispatches and continuations check host resource pressure. Resource
 observations belong to that invocation, not a background controller or shared
 capacity reservation. The lifecycle owns the admission decision.
 
+`resourceadmission.GuardPolicy` owns invocation-local CPU/memory selection; its
+zero value enables both guards. Dispatch and continue parse independent default-on
+flags. Assessments retain that immutable policy, derive `disabled_guards`, and
+can be reused only for the same policy, execution scope and freshness window.
+Disabled guards have no findings or dedicated host reads; shared target-cgroup
+reads remain available to enabled guards. With both disabled, neither checking
+nor scope refresh resolves a target or waits for samples. `clear` describes
+enabled guards only. Selection is not persisted, forwarded to the provider or
+inherited by nested tasks or scheduled work. The flags are accepted only by
+dispatch and continue.
+
+For remote overrides, the coordinator verifies the destination's
+`resource-guard-override` capability before snapshot upload and send intent.
+The verified invocation-local result is bound to destination identity and policy;
+it grants no admission authority. Policy travels only on Admit, outside saved
+intent. Existing-only reconciliation strips it and cannot launch new work.
+
 The policy distinguishes sustained CPU/memory pressure from transient readings.
 Confirmed critical pressure can refuse immediately; an unavailable metric adds
 a warning instead of refusing by itself. Confirmed pressure on another independent
@@ -381,10 +425,15 @@ drives due work under one execution owner per root.
 Its application loop composes short claims, bounded admission and reconciliation
 through consumer-owned ports. Task records remain execution/closure authority;
 the database stores occurrence identity, reservations and cached observations.
-Recurrence calculation is isolated in
-`internal/scheduler/recurrence`; the application composes it with the storage
-interface and keeps provider preparation in the existing execution path.
-Ordinary dispatch, status and collect do not depend on the scheduler database.
+Recurrence calculation is isolated in `internal/scheduler/recurrence`.
+The command owner validates captured creation inputs through `BuildDefinition`;
+`PlanStateChange` and `ApplyStateChange` own mutation decisions, while `Create`
+preserves exact-definition readback after an uncertain write. The application
+captures CLI/I/O inputs and checks public response encoding before mutation.
+Create and serve share `scheduler.OpenOrInitialize`; passive reads do not
+initialize absent storage. Provider preparation stays in the existing execution
+path. Ordinary dispatch, status and collect do not depend on the scheduler
+database.
 
 ### User-started scheduler host
 

@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "a19dc328c89489a7ddec6f20c58cbb291205c31c",
+      "revision": "9c161ec0d4369e6881933915dbbd170b0afedaf2",
       "link_mode": "local-only"
     }
   },
@@ -56,16 +56,16 @@
           "label": "Team resolution and fresh admission"
         },
         {
-          "path": "internal/config/config.go",
-          "line": 64,
-          "end_line": 70,
-          "label": "CLI owns the OS-default root"
+          "path": "internal/scheduler/command/create.go",
+          "line": 13,
+          "end_line": 41,
+          "label": "Schedule definitions and uncertain writes"
         },
         {
-          "path": "internal/app/schedule_create.go",
-          "line": 15,
-          "end_line": 59,
-          "label": "Create initializes storage and saves definition"
+          "path": "internal/app/infrastructurehost/host.go",
+          "line": 12,
+          "end_line": 39,
+          "label": "Captured preparation host dependencies"
         }
       ]
     },
@@ -94,6 +94,12 @@
           "line": 42,
           "end_line": 57,
           "label": "Select and acquire the supervisor"
+        },
+        {
+          "path": "internal/supervisor/installation/selection.go",
+          "line": 1,
+          "end_line": 55,
+          "label": "Installed executable selection"
         }
       ],
       "tag": "receipt before enqueue"
@@ -223,10 +229,10 @@
           "label": "Independent capture after closure"
         },
         {
-          "path": "internal/execution/run.go",
-          "line": 226,
-          "end_line": 250,
-          "label": "Execute in the selected directory"
+          "path": "internal/workspaces/worker/action.go",
+          "line": 21,
+          "end_line": 57,
+          "label": "Borrowed-scope workspace operations"
         }
       ],
       "tag": "Git isolation + capture: optional"
@@ -305,9 +311,9 @@
       ],
       "sources": [
         {
-          "path": "internal/app/schedule_store.go",
+          "path": "internal/scheduler/initialize.go",
           "line": 13,
-          "end_line": 36,
+          "end_line": 35,
           "label": "Create/serve initialize under owner lease"
         },
         {
@@ -365,7 +371,7 @@
       "label": "Origin remote coordinator",
       "sublabel": "verified embedded Go SSH",
       "pos": [
-        440,
+        40,
         40
       ],
       "size": [
@@ -380,15 +386,15 @@
           "label": "Admit once; later reconcile existing"
         },
         {
-          "path": "internal/app/remote_exchange.go",
+          "path": "internal/app/remotecommands/exchange.go",
           "line": 17,
           "end_line": 39,
           "label": "Verified SSH framed exchange"
         },
         {
-          "path": "internal/app/remote_cli.go",
-          "line": 26,
-          "end_line": 57,
+          "path": "internal/app/remote.go",
+          "line": 18,
+          "end_line": 55,
           "label": "Return destination data and connectivity"
         }
       ]
@@ -399,7 +405,7 @@
       "label": "Origin references",
       "sublabel": "immutable intent · dated observations",
       "pos": [
-        40,
+        440,
         40
       ],
       "size": [
@@ -558,10 +564,10 @@
       "dot": "rose",
       "title": "Origin coordinates; destination owns execution",
       "items": [
-        "Remote requests use verified embedded Go SSH to the selected installed Delegate. The prepared destination validates root/task identity and calls the same task lifecycle shown here (internal/app/remote_exchange.go:17–39; remote_serve.go:77–99,207–258).",
-        "A persistent destination supervisor must already be ready. The destination owns admission, budgets, cancellation, native closure and outcome.json. An SSH disconnect changes connectivity, not the task verdict (internal/app/remote_owner.go:41–55; remote_serve.go:272–284).",
-        "The origin stores immutable intent, acceptance and dated observations. After an uncertain send, recovery reconciles the existing request; it never authorizes a second admission. Downloaded declared outputs and caches do not replace the destination outcome (internal/remote/coordinator.go:24–103,166–173).",
-        "Local Teams, schedules and managed Git capture remain optional local paths. Remote references do not support logs or continuation; provider installations, accounts and configuration remain destination-owned (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
+        "Remote workflows own verified embedded Go SSH; the frontend adapter calls the same canonical task lifecycle shown here (internal/app/remotecommands/exchange.go:17–39; internal/app/remote.go:91–124).",
+        "A persistent destination supervisor must already be ready. The destination owns admission, budgets, cancellation, native closure and outcome.json. SSH connectivity does not own the verdict (internal/app/remotecommands/resident.go:11–28).",
+        "The origin stores immutable intent, acceptance and dated observations. An uncertain send reconciles the existing request. Declared outputs and caches do not replace the destination outcome (internal/remote/coordinator.go:24–103).",
+        "Remote payload owns frozen snapshots and captured bytes; the frontend retains full response validation. Remote references do not support logs or continuation (internal/app/remote.go:127–138; internal/app/remotecommands/origin.go:255–283)."
       ]
     },
     {
@@ -597,7 +603,7 @@
       "items": [
         "Pueue queues worker starts, not calendar recurrence. The guardian owns the task lifetime; delegate-run performs fresh preflight, starts the selected provider and captures output. Receipt precedes enqueue; closure precedes sealing and publication.",
         "TaskDir evaluates sealed evidence and commits outcome.json. Status, logs and collect observe that task; collection can reconcile saved evidence without launching a provider turn (internal/tasklifecycle/collection.go:13–63).",
-        "Confirmed pressure refuses fresh admission before ordinary task-record creation; unavailable metrics alone warn. The public response can still be unknown for a caller-supplied ID: follow its next_action, never infer absence or replay (internal/tasklifecycle/dispatch.go:17–48; resource_admission.go:119–151)."
+        "Enabled CPU/memory guards are on by default and can be disabled separately for one dispatch/continue. Confirmed enabled pressure refuses fresh work; unavailable metrics only warn. Overrides do not become nested or scheduled task policy (internal/tasklifecycle/resource_admission.go; internal/resourceadmission/assessment.go)."
       ]
     },
     {
@@ -605,7 +611,8 @@
       "title": "Optional workspace capture",
       "items": [
         "Managed Git isolation adds a checkout and capture receipts. Capture stays independent of the provider task outcome and requires its helper lifetime to close.",
-        "Workspace helpers reuse the supervised task path. The lead reviews the capture and explicitly releases the retained checkout. Provider installations, settings and accounts stay user/provider-owned."
+        "Workspace helpers reuse the supervised task path. The lead reviews the capture and explicitly releases the retained checkout. Provider installations, settings and accounts stay user/provider-owned.",
+        "The workspace worker borrows the task scope for Git, baseline and verification. App keeps guardian custody and publication; installed executable selection and stop completion have separate owners (internal/workspaces/worker/runner.go:19–46; internal/tasklifecycle/stop/operation.go:18–103)."
       ]
     }
   ]

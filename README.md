@@ -31,6 +31,11 @@ exact-session continuation.
 | Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
 | Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
 
+Fresh dispatches and continuations check CPU and memory pressure by default.
+Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command
+opt-out; it does not change running tasks, saved settings or nested tasks. See the
+[resource-check contract](skills/agent-integration/references/command-reference.md#dispatch).
+
 ## Ask naturally
 
 Inside Claude, after installing and trusting the integration, try:

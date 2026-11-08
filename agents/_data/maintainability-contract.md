@@ -34,6 +34,28 @@ Graphs describe relationships; they do not establish whether a design is sound.
 The [code-quality floor](code-quality-floor.md) owns compiler, linter, formatter
 and test requirements.
 
+### Module organization
+
+Review repeated filename families for a shared capability or responsibility.
+Use a cohesive package when it makes that owner and its dependencies clearer;
+import defining owners instead of reaching through broad compatibility facades.
+Review the complete capability: command entrypoints, implementation, fixtures,
+tests and actual consumers. Keep entrypoints thin and put feature tests with
+their owner; shared test setup must not become a production dependency. A root
+entrypoint or governance tool can remain there when its real consumer or
+repository-wide responsibility justifies it.
+
+When moving a capability, migrate its maintained imports, command paths, test
+discovery, source-evidence closure and documentation together. Verify the
+selected cases still execute; a passing empty filter is not preserved coverage.
+Do not leave a second implementation or an unused forwarding facade behind.
+
+Prefixes, flat files, file length and one consumer are not defects by themselves.
+Keep related Go files in one package when extraction would create cycles,
+forwarding layers or artificial callback interfaces. A move needs a concrete
+ownership, contract, dependency or test-selection benefit; remove obsolete
+facades after their consumers migrate instead of replacing them with new ones.
+
 ## Lifecycle tests
 
 The [delegation invariants](delegation-invariants.md) own terminal authority,
