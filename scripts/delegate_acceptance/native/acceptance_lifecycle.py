@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -12,7 +13,10 @@ from pathlib import Path
 from scripts.delegate_acceptance.directories.finalization import finalize_acceptance_artifacts
 from scripts.delegate_acceptance.evidence.bounded_files import BoundedReadError, read_bounded_regular_file
 from scripts.delegate_acceptance.evidence.files import digest, path_present, write_bytes, write_json
-from scripts.delegate_acceptance.evidence.records import status_jobs
+from scripts.delegate_acceptance.evidence.records import status_jobs, _state_root_identity
+from scripts.delegate_acceptance.evidence.task_entry import observe_task_entry, MAX_TASK_OBSERVATION_BYTES
+from scripts.delegate_acceptance.evidence.json_decoder import unique_object
+from scripts.delegate_acceptance.evidence.validation import _task_identity
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.lifetime.identity import _lifetime_record_name
@@ -88,7 +92,8 @@ def _cleanup_timeout_leases(owner) -> bool:
         return True
     return timeout_state.cleanup()
 
-def finalize(owner, success: bool, *, blocked: bool = False) -> bool:
+def finalize(owner, success: bool, *, blocked: bool = False,
+             shutdown_attempted: bool = False) -> bool:
     """Finalize the run, retaining genuine-failure state for diagnosis."""
     acceptance = owner
     failure_diagnostics_written = False
@@ -96,7 +101,7 @@ def finalize(owner, success: bool, *, blocked: bool = False) -> bool:
         # Diagnostics are independent evidence.  Persist them even when
         # supervisor shutdown cannot complete; cleanup must still run.
         failure_diagnostics_written = acceptance._write_failure_diagnostics()
-    if not acceptance.closed:
+    if not acceptance.closed and not shutdown_attempted:
         try:
             acceptance.safe_shutdown()
         except BaseException:
@@ -301,3 +306,101 @@ def safe_shutdown(owner) -> bool:
     if retained:
         acceptance.closed = True
     return retained
+
+
+def prove_absent_resource_refusals(owner, tasks: frozenset[str], deadline: float) -> frozenset[str]:
+    """Join creator evidence with canonical closure and fresh native store observations."""
+    acceptance = owner
+    require(acceptance.ops.managed_runner, "resource refusal proof requires managed lifetimes")
+    tokens = {token.directory: token for token in acceptance.owned_directories}
+    token = tokens[acceptance.state]
+    models_token = tokens[acceptance.models_state]
+    token.assert_live()
+    models_token.assert_live()
+    require(not acceptance.processes.drain(timeout=0, exclude=(acceptance.daemon,)),
+            "owned admission controls remain unfinished")
+    root, _ = _state_root_identity(acceptance.state, "refused admission root")
+    admitted = set(acceptance.ops.tasks.values())
+    closure = validate_managed_lifetime_closure(acceptance.state, admitted)
+    ordinary_closures, inspection_closures = closure.get("tasks"), closure.get("inspections")
+    if not isinstance(ordinary_closures, dict) or not isinstance(inspection_closures, dict):
+        raise AcceptanceFailure("ordinary lifetime closure is malformed")
+    require(closure.get("root_id") == root and set(ordinary_closures) == admitted,
+            "ordinary root contains unaccounted managed work")
+    inspections = acceptance.state / "inspections"
+    expected_inspections = {entry.name for entry in inspections.iterdir()} if inspections.is_dir() else set()
+    require(set(inspection_closures) == expected_inspections,
+            "ordinary inspection closure coverage is not exact")
+    if path_present(acceptance.models_state / "root.json"):
+        model_closure = validate_managed_lifetime_closure(acceptance.models_state)
+        model_inspections = acceptance.models_state / "inspections"
+        expected_models = {entry.name for entry in model_inspections.iterdir()} if model_inspections.is_dir() else set()
+        model_tasks, model_inspection_closures = model_closure.get("tasks"), model_closure.get("inspections")
+        discovery_task = acceptance.model_discovery_task_id
+        require(isinstance(model_tasks, dict) and isinstance(model_inspection_closures, dict)
+                and _task_identity(acceptance.models_root_id)
+                and model_closure.get("root_id") == acceptance.models_root_id
+                and not model_tasks and set(model_inspection_closures) == expected_models
+                and expected_models == ({discovery_task} if discovery_task is not None else set()),
+                "model discovery closure coverage is not exact")
+    else:
+        discovery = acceptance.model_discovery_state
+        require(acceptance.models_root_id is None and acceptance.model_discovery_task_id is None
+                and discovery.intent is None and discovery.response is None
+                and discovery.summary is None and discovery.exit_code is None
+                and not any(acceptance.models_state.iterdir()),
+                "uninitialized model root contains known or unknown work")
+
+    def run(arguments: list[str], environment: dict[str, str], bound: float) -> str:
+        remaining = bound - time.monotonic()
+        require(remaining > 0, "refusal observation deadline expired")
+        process = acceptance.processes.run(
+            "refusal-observer", arguments, acceptance.base,
+            timeout=remaining, environment=environment)
+        result = process.result
+        require(isinstance(result, dict) and result.get("natural_wait") is True
+                and type(result.get("exit_code")) is int and result["exit_code"] == 0,
+                "native refusal observation did not complete naturally")
+        try:
+            return read_bounded_regular_file(
+                process.directory / "stdout", MAX_TASK_OBSERVATION_BYTES).decode("utf-8")
+        except BoundedReadError as error:
+            raise AcceptanceFailure("native refusal observation is unreadable: " + error.reason.value) from error
+
+    binaries = Path(__file__).resolve().parents[3] / "bin"
+    for name in ("task-inventory-fixture", "nested-lifetime-fixture"):
+        executable = binaries / name
+        require(executable.is_file() and os.access(executable, os.X_OK),
+                "native cleanup observer is unavailable; run make "
+                "nested-survival-fixture task-inventory-fixture")
+    environment = dict(acceptance.environment)
+    environment.update(DELEGATE_TASK_INVENTORY_MODE="observe",
+                       DELEGATE_TASK_INVENTORY_ROOT=str(acceptance.state),
+                       DELEGATE_TASK_INVENTORY_ROOT_ID=root,
+                       DELEGATE_TASK_INVENTORY_ROOT_DEVICE=str(token.identity[0]),
+                       DELEGATE_TASK_INVENTORY_ROOT_INODE=str(token.identity[1]))
+    output = run([str(binaries / "task-inventory-fixture"), "-test.run=^TestTaskInventoryFixture$"],
+                 environment, min(deadline, time.monotonic() + 10))
+    prefix = "TASK_INVENTORY_OBSERVATION\t"
+    lines = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
+    require(len(lines) == 1, "native task inventory omitted its exact response")
+    inventory = json.loads(lines[0], object_pairs_hook=unique_object)
+    require(isinstance(inventory, dict)
+            and set(inventory) == {"root_id", "root_device", "root_inode", "task_ids"}
+            and inventory.get("root_id") == root
+            and type(inventory.get("root_device")) is int and type(inventory.get("root_inode")) is int
+            and (inventory["root_device"], inventory["root_inode"]) == token.identity,
+            "native task inventory changed root identity")
+    ids = inventory.get("task_ids")
+    require(isinstance(ids, list) and all(isinstance(task, str) and _task_identity(task) for task in ids)
+            and len(set(ids)) == len(ids) and ids == sorted(ids) and set(ids) == admitted,
+            "private root task inventory contains unaccounted work")
+    for task in sorted(tasks):
+        proof = observe_task_entry(acceptance.state, root, task, token,
+                                   observer=binaries / "nested-lifetime-fixture",
+                                   environment=acceptance.environment, deadline=deadline, run=run)
+        require(proof["entry_exists"] is False, "resource-refused task entry is present")
+    token.assert_live()
+    models_token.assert_live()
+    require(time.monotonic() < deadline, "refusal observation deadline expired")
+    return tasks

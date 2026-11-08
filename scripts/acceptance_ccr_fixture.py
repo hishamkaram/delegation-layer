@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import select
+import sys
 import threading
 import time
 
@@ -18,6 +19,8 @@ from acceptance_native import NativeAcceptance, build_parser, choose_output
 from acceptance_provider_common import require
 from delegate_acceptance.evidence.records import bounded_text, status_jobs
 from delegate_acceptance.evidence.validation import _task_identity
+from scripts.delegate_acceptance.native import acceptance_lifecycle
+from scripts.delegate_acceptance.tasks.operations import AdmissionFailure
 from acceptance_supervisor_common import (
     DirectoryOwner,
     rollback_owned_directories,
@@ -136,6 +139,7 @@ def require_user_cancellation(response, root_id, task_id):
 
 # This fixture's own gate; the shared native lifecycle commits and publishes its receipt.
 FIXTURE_GATE = "acceptance-ccr-fixture"
+REFUSAL_CLEANUP_GATE = "acceptance-ccr-refusal-cleanup"
 CPU_SNAPSHOT_NAME = "failure-host-cpu-snapshot.json"
 CPU_SNAPSHOT_BYTES = 256 * 1024
 CPU_SNAPSHOT_ROWS = 4096
@@ -243,8 +247,9 @@ class FixtureAcceptance(NativeAcceptance):
             self.fixture_directories = ()
             raise
 
-    def finalize(self, success: bool, *, blocked: bool = False) -> bool:
-        if not super().finalize(success, blocked=blocked):
+    def finalize(self, success: bool, *, blocked: bool = False,
+                 shutdown_attempted: bool = False) -> bool:
+        if not super().finalize(success, blocked=blocked, shutdown_attempted=shutdown_attempted):
             return False
         try:
             rollback_owned_directories(self.fixture_directories)
@@ -361,6 +366,79 @@ class FixtureAcceptance(NativeAcceptance):
         return self.success_receipt
 
 
+class RefusalCleanupAcceptance(FixtureAcceptance):
+    """Only the second admission is synthetic; warm work and cleanup are real."""
+
+    def __init__(self, args, fixture_directories=()):
+        super().__init__(args, fixture_directories)
+        self.inject_refusal = False
+        self.refused_task_id: str | None = None
+        self.observed_absence: frozenset[str] = frozenset()
+
+    def dispatch_argv(self, task_id, brief, predecessor=None, budget=None):
+        if not self.inject_refusal:
+            return super().dispatch_argv(task_id, brief, predecessor, budget)
+        require(self.refused_task_id is None and predecessor is None and _task_identity(self.root_id),
+                "refusal fixture may replace only one dispatch into its warmed root")
+        self.refused_task_id = task_id
+        self.inject_refusal = False
+        fixture = Path(__file__).parent / "delegate_acceptance/private_cli/refusal_fixture.py"
+        return [sys.executable, fixture, self.root_id, task_id]
+
+    def exercise(self, fixture):
+        self.setup()
+        brief = self.briefs / "refusal-cleanup.txt"
+        brief.write_text("Reply with CCR_FIXTURE_OK. Do not call tools.")
+        self.args.model = "ok"
+        warm = self.dispatch("warm", brief)
+        self.published("warm", warm)
+        self.inject_refusal = True
+        try:
+            self.dispatch("refused", brief)
+        except AdmissionFailure as error:
+            observations = self.ops.dispatch_observations
+            require(self.refused_task_id is not None and len(observations) == 2
+                    and observations[-1].get("task_id") == self.refused_task_id
+                    and observations[-1].get("response") == error.response
+                    and confirmed_host_cpu_refusal(observations[-1], self.root_id),
+                    "expected only the injected explicit-ID resource refusal")
+            response = dict(error.response)
+        else:
+            raise RuntimeError("refusal fixture unexpectedly admitted work")
+        self.success_receipt = {
+            "gate": REFUSAL_CLEANUP_GATE, "status": "passed", "platform": os.uname().sysname,
+            "warm_task_id": warm, "controlled_refusal": True,
+            "original_failure": {"status": "failed", "response": response},
+        }
+        return self.success_receipt
+
+    def _prove_absent_resource_refusals(self, tasks: frozenset[str], deadline: float) -> frozenset[str]:
+        self.observed_absence = frozenset()
+        proof = super()._prove_absent_resource_refusals(tasks, deadline)
+        self.observed_absence = proof
+        return proof
+
+    def safe_shutdown(self) -> bool:
+        if not super().safe_shutdown():
+            return False
+        if self.success_receipt is None:
+            return True
+        require(self.closed and self.refused_task_id is not None
+                and self.observed_absence == frozenset((self.refused_task_id,)),
+                "shared cleanup did not prove the injected refusal absent")
+        for process in self.processes.entries:
+            require(not (process.argv[0] == str(self.delegate) and self.refused_task_id in process.argv),
+                    "refused task reached another Delegate dispatch, observation or cancellation")
+        result = getattr(self.daemon, "result", None)
+        require(isinstance(result, dict) and result.get("natural_wait") is True
+                and result.get("exit_code") == 0, "private daemon was not naturally joined")
+        acceptance_lifecycle.record_lifetime_closure(self)
+        self.success_receipt.update(acceptance_lifecycle.lifecycle_receipt(self))
+        self.success_receipt.update(refusal_absence_proven=True, refused_task_controls=0,
+                                    daemon_wait={"natural_wait": True, "exit_code": 0})
+        return True
+
+
 def cleanup_fixture(run, success):
     cleanup_errors = []
     shutdown_completed = False
@@ -373,7 +451,7 @@ def cleanup_fixture(run, success):
     except BaseException as error:
         cleanup_errors.append(error)
     try:
-        if not run.finalize(success and not cleanup_errors):
+        if not run.finalize(success and not cleanup_errors, shutdown_attempted=True):
             cleanup_errors.append(RuntimeError("fixture artifact finalization was not completed"))
         else:
             artifact_finalized = True
@@ -397,7 +475,7 @@ def cleanup_fixture(run, success):
                            + str(cleanup_errors[0])) from cleanup_errors[0]
 
 
-def prepare_fixture_acceptance(output):
+def prepare_fixture_acceptance(output, *, refusal_cleanup=False):
     ownership = DirectoryOwner()
     try:
         isolated = ownership.create("CCR fixture profile", output / "profile", output).directory
@@ -412,19 +490,22 @@ def prepare_fixture_acceptance(output):
     except BaseException:
         ownership.rollback()
         raise
-    return FixtureAcceptance(args, directories)
+    acceptance = RefusalCleanupAcceptance if refusal_cleanup else FixtureAcceptance
+    return acceptance(args, directories)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output")
+    parser.add_argument("--refusal-cleanup", action="store_true",
+                        help="prove cleanup after one controlled refusal following real warm work")
     options = parser.parse_args()
     output = choose_output("ccr-fixture", options.output)
     run = None
     success_receipt = None
     primary_error = None
     try:
-        run = prepare_fixture_acceptance(output)
+        run = prepare_fixture_acceptance(output, refusal_cleanup=options.refusal_cleanup)
         with Fixture() as fixture:
             url = f"http://127.0.0.1:{fixture.server.server_port}"
             run.direct("provider-setup", [run.provider_executable, "provider", "add", "fixture",
@@ -452,7 +533,7 @@ def main():
             # Publish only the confirmed candidate bytes, after every owned cleanup completed.
             if run is None:
                 raise RuntimeError("CCR fixture acceptance was not prepared")
-            run.publish_success(expected_gate=FIXTURE_GATE)
+            run.publish_success(expected_gate=REFUSAL_CLEANUP_GATE if options.refusal_cleanup else FIXTURE_GATE)
         except BaseException as error:
             primary_error = error
     if primary_error is not None or cleanup_error is not None:

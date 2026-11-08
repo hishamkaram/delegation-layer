@@ -7,7 +7,9 @@ if __name__ != "scripts.delegate_acceptance.tasks.operations":
 
 import os
 import time
+import threading
 from copy import deepcopy
+from types import MappingProxyType
 from datetime import datetime
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.evidence.records import (
@@ -59,13 +61,22 @@ from scripts.delegate_acceptance.tasks import request_intent as intents
 from scripts.delegate_acceptance.tasks.refusal_policy import (
     empty_private_queue,
     is_static_refusal_observation,
+    is_resource_refusal_observation,
 )
 from scripts.delegate_acceptance.workspaces.admission_evidence import (
     _inspection_request_identity,
     _validate_historical_workspace_attempt,
 )
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
+
+
+class AdmissionFailure(AcceptanceFailure):
+    """Keep the response bound to the exact failed control call for its consumer."""
+
+    def __init__(self, message: str, response: dict[str, object]) -> None:
+        super().__init__(message)
+        self.response = MappingProxyType(response)
 
 
 class NativeTaskOps:
@@ -116,6 +127,51 @@ class NativeTaskOps:
         self.inspection_bindings: dict[str, dict[str, object]] = {}
         self.queue_before_replay: dict[str, object] | None = None
         self.closed = False
+        # This owner seals launches atomically with prelaunch registration.
+        # The existing observation ledger records their actual completions.
+        self._admission_lock = threading.Lock()
+        self._admissions_sealed = False
+        self._admission_calls = 0
+        self._sealed_attempts: frozenset[str] | None = None
+        self._cleanup_deadline: float | None = None
+
+    def seal_admissions(self) -> None:
+        """Prevent new fixture admissions; already owned calls must still join."""
+        with self._admission_lock:
+            if not self._admissions_sealed:
+                self._sealed_attempts = frozenset(self.dispatch_attempts)
+            self._admissions_sealed = True
+
+    def _begin_admission(self, command: str, task: str | None,
+                         request: intents.TaskRequest | None) -> tuple[int | None, int]:
+        with self._admission_lock:
+            require(not self.closed, "acceptance supervisor is closed")
+            require(not self._admissions_sealed, "acceptance admissions are closed")
+            if task is not None:
+                require(task not in self.dispatch_attempts, "duplicate dispatch attempt")
+            ordinal = self._declare_request(command, task, request)
+            call_ordinal = self._admission_calls
+            self._admission_calls += 1
+            if task is not None:
+                self.dispatch_attempts.add(task)
+            return ordinal, call_ordinal
+
+    def record_auxiliary_intent(self, record: Callable[[], None]) -> None:
+        """Fence a separate inspection owner's prelaunch intent with ordinary admissions."""
+        with self._admission_lock:
+            require(not self.closed, "acceptance supervisor is closed")
+            require(not self._admissions_sealed, "acceptance admissions are closed")
+            record()
+
+    def _admission_controls_complete(self) -> bool:
+        # Legacy fixture ledgers may be supplied without invoking this owner.
+        # New absence authority separately requires a nonzero complete count.
+        with self._admission_lock:
+            return self._admission_calls == 0 or (
+                self._admission_calls == len(self.dispatch_observations)
+                and all(record.get("natural_wait") is True
+                        and record.get("receipt_written") is True
+                        for record in self.dispatch_observations))
 
     def _expected_runner(self, task: str) -> Path:
         """Return the one runner executable every validator expects for a task.
@@ -216,16 +272,13 @@ class NativeTaskOps:
                  request: intents.TaskRequest | None = None,
                  environment: Mapping[str, str] | None = None) -> dict[str, object]:
         """Admit one exact delegate task; an explicit ``environment`` replaces the process owner's snapshot."""
-        require(not self.closed, "acceptance supervisor is closed")
-        require(task not in self.dispatch_attempts, "duplicate dispatch attempt")
-        self._declare_request(intents.DISPATCH, task, request)
-        self.dispatch_attempts.add(task)
+        _intent_ordinal, call_ordinal = self._begin_admission(intents.DISPATCH, task, request)
         process = self.processes.run(name, argv, self.state_parent,
                                      expected=None, timeout=45, environment=environment)
         try:
             response = parse_json_output(process, name)
         except BaseException:
-            self._record_dispatch_observation(name, task, process, None)
+            self._record_dispatch_observation(name, task, process, None, call_ordinal=call_ordinal)
             raise
         if response.get("admission") == "admitted":
             # Retain a valid positive identity before writing the auxiliary
@@ -234,22 +287,26 @@ class NativeTaskOps:
             try:
                 admitted = self.record_admission(name, task, response)
             except BaseException:
-                self._record_dispatch_observation(name, task, process, response)
+                self._record_dispatch_observation(name, task, process, response, call_ordinal=call_ordinal)
                 raise
-            self._record_dispatch_observation(name, task, process, response)
+            self._record_dispatch_observation(name, task, process, response, call_ordinal=call_ordinal)
             result = getattr(process, "result", None)
             require(isinstance(result, dict) and result.get("natural_wait") is True and
                     type(result.get("exit_code")) is int and result.get("exit_code") == 0,
                     f"{name} dispatch did not exit successfully")
             return admitted
-        self._record_dispatch_observation(name, task, process, response)
-        return self.record_admission(name, task, response)
+        self._record_dispatch_observation(name, task, process, response, call_ordinal=call_ordinal)
+        try:
+            return self.record_admission(name, task, response)
+        except AcceptanceFailure as error:
+            raise AdmissionFailure(str(error), response) from error
 
     def _record_dispatch_observation(self, name: str, task: str, process: object,
                                      response: dict[str, object] | None,
-                                     command: str = "dispatch") -> None:
+                                     command: str = "dispatch", *, call_ordinal: int) -> None:
         result = getattr(process, "result", None)
         observation = {
+            "call_ordinal": call_ordinal,
             "name": name,
             "task_id": task,
             "exit_code": result.get("exit_code") if isinstance(result, dict) else None,
@@ -306,8 +363,7 @@ class NativeTaskOps:
                       request: intents.TaskRequest | None = None,
                       environment: Mapping[str, str] | None = None) -> tuple[str, dict[str, object]]:
         """Admit one public continuation after Delegate assigns its successor ID."""
-        require(not self.closed, "acceptance supervisor is closed")
-        ordinal = self._declare_request(intents.CONTINUE, None, request)
+        ordinal, call_ordinal = self._begin_admission(intents.CONTINUE, None, request)
         process = self.processes.run(name, argv, self.state_parent,
                                      expected=None, timeout=45, environment=environment)
         response = parse_json_output(process, name)
@@ -323,16 +379,19 @@ class NativeTaskOps:
             try:
                 admitted = self.record_admission(name, task, response, command="continue")
             except BaseException:
-                self._record_dispatch_observation(name, task, process, response, command="continue")
+                self._record_dispatch_observation(name, task, process, response, command="continue", call_ordinal=call_ordinal)
                 raise
-            self._record_dispatch_observation(name, task, process, response, command="continue")
+            self._record_dispatch_observation(name, task, process, response, command="continue", call_ordinal=call_ordinal)
             result = getattr(process, "result", None)
             require(isinstance(result, dict) and result.get("natural_wait") is True and
                     type(result.get("exit_code")) is int and result.get("exit_code") == 0,
                     f"{name} continuation did not exit successfully")
             return task, admitted
-        self._record_dispatch_observation(name, task, process, response, command="continue")
-        return task, self.record_admission(name, task, response, command="continue")
+        self._record_dispatch_observation(name, task, process, response, command="continue", call_ordinal=call_ordinal)
+        try:
+            return task, self.record_admission(name, task, response, command="continue")
+        except AcceptanceFailure as error:
+            raise AdmissionFailure(str(error), response) from error
 
     def expect_terminal_result(self, name: str, result: str) -> None:
         require(name in self.tasks, f"terminal result has no admitted task: {name}")
@@ -527,13 +586,60 @@ class NativeTaskOps:
     def _validate_queue_membership(
             self, status: dict[str, object], allow_failure: bool
             ) -> dict[str, InspectionEvidence]:
-        return validate_queue_membership(
+        absent = self._resource_refusal_candidates() if allow_failure else frozenset()
+        journals = validate_queue_membership(
             status=status, allow_failure=allow_failure, tasks_by_name=self.tasks, labels_by_name=self.labels,
             numbers_by_name=self.numbers,
             expected_results=self.expected_results, dispatch_attempts=self.dispatch_attempts,
             expected_binding_required=self.expected_inspection_binding_required, inspection_journals=self._inspection_journals,
             durable_admission=self._durable_ordinary_admission, validate_groups=self._validate_group_snapshot,
-            validate_ordinary_row=self.validate_ordinary_queue_row, validate_inspection_row=self._validate_inspection_queue_row)
+            validate_ordinary_row=self.validate_ordinary_queue_row, validate_inspection_row=self._validate_inspection_queue_row,
+            absent_refusals=absent)
+        if absent:
+            deadline = self._cleanup_deadline
+            if deadline is None:
+                raise AcceptanceFailure("failure cleanup has no observation deadline")
+            proven = self._prove_absent_refusals(absent, deadline)
+            require(proven == absent and self._sealed_attempts == frozenset(self.dispatch_attempts),
+                    "resource refusal absence or sealed attempt inventory is not proven")
+        return journals
+
+    def _resource_refusal_candidates(self) -> frozenset[str]:
+        """Derive candidates from complete control evidence, never from missing files."""
+        with self._admission_lock:
+            if (not self._admissions_sealed or self._admission_calls == 0
+                    or self._admission_calls != len(self.dispatch_observations)):
+                return frozenset()
+        if not self._admission_controls_complete() or self._sealed_attempts != frozenset(self.dispatch_attempts):
+            return frozenset()
+        ordinals = [record.get("call_ordinal") for record in self.dispatch_observations]
+        if (any(type(ordinal) is not int for ordinal in ordinals)
+                or set(ordinals) != set(range(self._admission_calls))
+                or len(set(ordinals)) != len(ordinals)):
+            return frozenset()
+        if any(intent.command == intents.CONTINUE and intent.ordinal not in self.continuation_successors
+               for intent in self.request_intents):
+            return frozenset()
+        observed = [record.get("task_id") for record in self.dispatch_observations]
+        if (not all(isinstance(task, str) and _task_identity(task) for task in observed)
+                or len(set(observed)) != len(observed) or set(observed) != self.dispatch_attempts):
+            return frozenset()
+        possible = []
+        for record in self.dispatch_observations:
+            response = record.get("response")
+            failure = response.get("failure") if isinstance(response, dict) else None
+            if isinstance(failure, dict) and failure.get("code") == "resource_pressure":
+                possible.append(record)
+        if not possible:
+            return frozenset()
+        root = self._known_root_id()
+        return frozenset(task for record in possible
+                         if isinstance(task := record.get("task_id"), str)
+                         and is_resource_refusal_observation(record, root, task))
+
+    def _prove_absent_refusals(self, tasks: frozenset[str], deadline: float) -> frozenset[str]:
+        # Only a private-root lifecycle owner can supply fresh absence authority.
+        return frozenset()
 
     def _inspection_snapshot(self) -> dict[str, dict[str, object]]:
         parent = self.state / "inspections"
@@ -668,6 +774,8 @@ class NativeTaskOps:
 
     def shutdown(self) -> None:
         """Naturally shut down only after every owned task is Done.Success."""
+        self.seal_admissions()
+        require(self._admission_controls_complete(), "admission control completion is unproven")
         status = self.queue_status("final-queue")
         self._validate_queue_membership(status, allow_failure=False)
         excluded = () if self.daemon is None else (self.daemon,)
@@ -681,6 +789,11 @@ class NativeTaskOps:
 
     def safe_failure_shutdown(self) -> bool:
         """Observe and close only a positively finished private queue."""
+        self.seal_admissions()
+        if self._cleanup_deadline is None:
+            self._cleanup_deadline = failure_cleanup_deadline(self.watch_seconds)
+        if not self._admission_controls_complete():
+            return False
         if self.daemon is None or self.daemon.poll() is not None or self.pueue_config is None:
             return False
         try:
@@ -706,11 +819,14 @@ class NativeTaskOps:
         until it ends naturally, and an exact terminal queue observation is
         still required before reporting a successful shutdown.
         """
+        self.seal_admissions()
         reported = False
         queue_retry_at = 0.0
         queue_retry_delay = 0.25
         observation_retry_delay = 0.25
-        deadline = failure_cleanup_deadline(self.watch_seconds)
+        if self._cleanup_deadline is None:
+            self._cleanup_deadline = failure_cleanup_deadline(self.watch_seconds)
+        deadline = self._cleanup_deadline
 
         def wait(delay: float, reason: str) -> bool:
             if wait_for_failure_cleanup(deadline, delay):

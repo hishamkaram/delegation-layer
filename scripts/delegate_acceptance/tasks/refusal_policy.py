@@ -63,3 +63,32 @@ def is_static_refusal_observation(observation: dict[str, object], root: str, tas
             response.get("admission") == "unknown" and
             response.get("liveness") == "undetermined" and
             response.get("publication") == "unknown")
+
+
+def is_resource_refusal_observation(observation: dict[str, object], root: str, task: str) -> bool:
+    """Recognize a completed refusal; this alone never authorizes absence or cleanup."""
+    if (observation.get("receipt_written") is not True
+            or observation.get("task_id") != task
+            or type(observation.get("exit_code")) is not int
+            or observation.get("exit_code") != 1
+            or observation.get("natural_wait") is not True):
+        return False
+    response = observation.get("response")
+    if not isinstance(response, dict):
+        return False
+    expected = {"schema_version", "command", "root_id", "task_id", "task_record", "admission",
+                "liveness", "publication", "failure", "resource_admission", "error"}
+    if set(response) != expected:
+        return False
+    failure, admission = response.get("failure"), response.get("resource_admission")
+    return (type(response.get("schema_version")) is int and response.get("schema_version") == 1
+            and response.get("command") == "dispatch" and response.get("root_id") == root
+            and response.get("task_id") == task and response.get("task_record") == "unknown"
+            and response.get("admission") == "unknown" and response.get("liveness") == "undetermined"
+            and response.get("publication") == "unknown"
+            and isinstance(response.get("error"), str) and bool(response.get("error"))
+            and isinstance(failure, dict) and failure.get("code") == "resource_pressure"
+            and failure.get("stage") == "check-resources"
+            and isinstance(failure.get("reason_code"), str) and bool(failure.get("reason_code"))
+            and failure.get("next_action") == "stop_and_report"
+            and isinstance(admission, dict) and admission.get("status") == "pressure")

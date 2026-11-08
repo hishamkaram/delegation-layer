@@ -410,8 +410,13 @@ class NativeAcceptance:
     def _cleanup_timeout_leases(self) -> bool:
         return acceptance_lifecycle._cleanup_timeout_leases(self)
 
-    def finalize(self, success: bool, *, blocked: bool = False) -> bool:
-        return acceptance_lifecycle.finalize(self, success, blocked=blocked)
+    def _prove_absent_resource_refusals(self, tasks: frozenset[str], deadline: float) -> frozenset[str]:
+        return acceptance_lifecycle.prove_absent_resource_refusals(self, tasks, deadline)
+
+    def finalize(self, success: bool, *, blocked: bool = False,
+                 shutdown_attempted: bool = False) -> bool:
+        return acceptance_lifecycle.finalize(
+            self, success, blocked=blocked, shutdown_attempted=shutdown_attempted)
 
     def publish_success(self, *, expected_gate: str = "acceptance-native") -> None:
         return acceptance_lifecycle.publish_success(self, expected_gate=expected_gate)

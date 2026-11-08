@@ -46,6 +46,8 @@ class NativeTaskOwner(Protocol):
 
     def _without_model_discovery_queue(self, status: dict[str, object]) -> dict[str, object]: ...
 
+    def _prove_absent_resource_refusals(self, tasks: frozenset[str], deadline: float) -> frozenset[str]: ...
+
 
 class ModelDiscoveryCleanupOps(NativeTaskOps):
     """Use the model discovery state root for failure cleanup.
@@ -102,3 +104,6 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
             return model_ops.failure_queue_finished(status)
         filtered = self.owner._without_model_discovery_queue(status)
         return super().failure_queue_finished(filtered)
+
+    def _prove_absent_refusals(self, tasks: frozenset[str], deadline: float) -> frozenset[str]:
+        return self.owner._prove_absent_resource_refusals(tasks, deadline)
