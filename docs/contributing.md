@@ -19,11 +19,22 @@ If `GOROOT` is set explicitly, it must match the selected compiler; a matching
 The golangci-lint, GoReleaser, ShellCheck and test-Pueue archive installers report
 eligible transient download failures and try the same exact release asset once
 through GitHub's public asset API. This fallback requires Python 3 and sends no
-credentials. The pinned release, asset name and whole-archive checksum stay the
-same. API rate limits, invalid metadata, incomplete downloads or checksum
-mismatches fail installation; the fallback does not guarantee availability.
+credentials unless explicitly configured as below. The pinned release, asset
+name and whole-archive checksum stay the same. API rate limits, invalid metadata,
+incomplete downloads or checksum mismatches fail installation; the fallback does
+not guarantee availability.
 Pueue uses the fallback only when opening the primary request fails; errors
 while copying its body remain failures.
+
+For optional API authentication, supply `DELEGATE_TOOL_DOWNLOAD_TOKEN` in the
+installation command's environment. Unset or empty means anonymous; this
+transport does not discover `GH_TOKEN`, `GITHUB_TOKEN` or GitHub CLI credentials.
+CI installer steps supply the existing read-only `${{ github.token }}` through
+this dedicated variable. Provider installation, candidate builds and proof steps
+do not receive it. Authorization is sent only to the direct API requests and
+is never forwarded on redirects. API HTTP failures report the request phase,
+authentication mode and available numeric rate-limit fields. A 403 alone does not
+establish rate limiting.
 
 Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
 relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;

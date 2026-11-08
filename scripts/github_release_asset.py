@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 from http.client import HTTPException, HTTPMessage
 import json
+import os
 import re
 import sys
-from typing import IO
+from typing import IO, Literal
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,7 @@ import urllib.request
 METADATA_LIMIT = 1024 * 1024
 TIMEOUT_SECONDS = 30
 CHUNK = 128 * 1024
+TOKEN_ENV = "DELEGATE_TOOL_DOWNLOAD_TOKEN"
 
 
 class DownloadError(Exception):
@@ -35,6 +37,31 @@ def transient_error(error: BaseException) -> bool:
         return 500 <= error.code <= 599
     reason = error.reason if isinstance(error, urllib.error.URLError) else error
     return isinstance(reason, (TimeoutError, ConnectionError))
+
+
+def validate_token(token: str | None) -> str | None:
+    if token is None or token == "":
+        return None
+    if re.fullmatch(r"[\x21-\x7e]+", token) is None:
+        raise DownloadError("invalid explicit tool-download token: require printable ASCII without whitespace")
+    return token
+
+
+def http_failure(error: urllib.error.HTTPError, phase: Literal["metadata", "asset"], mode: str) -> str:
+    fields = {}
+    for name in ("x-ratelimit-remaining", "x-ratelimit-reset", "retry-after"):
+        value = error.headers.get(name) if error.headers is not None else None
+        if isinstance(value, str) and re.fullmatch(r"[0-9]{1,20}", value):
+            fields[name] = value
+    cause = "cause not reported"
+    if error.code in {403, 429}:
+        if "x-ratelimit-remaining" in fields and int(fields["x-ratelimit-remaining"]) == 0:
+            cause = "primary rate limit reported"
+        elif "retry-after" in fields:
+            cause = "possible secondary rate limit"
+    details = [f"{phase}, {mode}, HTTP {error.code}", cause]
+    details.extend(f"{name}={value}" for name, value in fields.items())
+    return "GitHub release-asset API failed (" + "; ".join(details) + ")"
 
 
 def release_identity(url: str) -> tuple[str, str, str, str]:
@@ -81,8 +108,10 @@ def asset_identity(metadata: object, tag: str, name: str, limit: int) -> tuple[i
     return identifier, size
 
 
-def download_asset(url: str, target: IO[bytes], limit: int) -> None:
-    """Download one exact public asset via the API, without retry or credentials."""
+def download_asset(url: str, target: IO[bytes], limit: int, *, token: str | None = None) -> None:
+    """Download one exact asset; an explicit token belongs only to direct API requests."""
+    token = validate_token(token)
+    mode = "authenticated" if token else "anonymous"
     owner, repository, tag, name = release_identity(url)
     if limit <= 0:
         raise DownloadError("GitHub asset byte bound must be positive")
@@ -91,6 +120,9 @@ def download_asset(url: str, target: IO[bytes], limit: int) -> None:
     opener = urllib.request.build_opener(HTTPSRedirects())
     request = urllib.request.Request(f"{base}/tags/{urllib.parse.quote(tag, safe='')}",
                                      headers={**headers, "Accept": "application/vnd.github+json"})
+    if token:
+        request.add_unredirected_header("Authorization", f"Bearer {token}")
+    phase: Literal["metadata", "asset"] = "metadata"
     try:
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             if urllib.parse.urlsplit(response.url).scheme != "https":
@@ -105,15 +137,18 @@ def download_asset(url: str, target: IO[bytes], limit: int) -> None:
         identifier, size = asset_identity(metadata, tag, name, limit)
         request = urllib.request.Request(f"{base}/assets/{identifier}",
                                          headers={**headers, "Accept": "application/octet-stream"})
+        if token:
+            request.add_unredirected_header("Authorization", f"Bearer {token}")
+        phase = "asset"
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             if urllib.parse.urlsplit(response.url).scheme != "https":
                 raise DownloadError("GitHub asset redirected away from HTTPS")
             if copy_bounded(response, target, limit) != size:
                 raise DownloadError("GitHub asset response length differs from release metadata")
     except urllib.error.HTTPError as error:
-        raise DownloadError(f"GitHub release-asset API failed (HTTP {error.code})") from error
+        raise DownloadError(http_failure(error, phase, mode)) from error
     except (urllib.error.URLError, HTTPException) as error:
-        raise DownloadError("GitHub release-asset API transport failed") from error
+        raise DownloadError(f"GitHub release-asset API transport failed ({phase}, {mode})") from error
 
 
 class Arguments(argparse.Namespace):
@@ -128,7 +163,7 @@ def main() -> int:
     args = Arguments()
     parser.parse_args(namespace=args)
     try:
-        download_asset(args.url, sys.stdout.buffer, args.max_bytes)
+        download_asset(args.url, sys.stdout.buffer, args.max_bytes, token=os.environ.get(TOKEN_ENV))
     except (DownloadError, OSError) as error:
         print(f"GitHub asset API fallback failed: {error}", file=sys.stderr)
         return 1

@@ -142,6 +142,17 @@ class CandidateWorkflowTests(unittest.TestCase):
         self.assertLess(self.job.index("make tools"), self.job.index("make tool-versions"))
         self.assertLess(self.job.index("make tool-versions"), self.job.index("build_development_candidate.py build"))
 
+    def test_download_token_is_only_on_the_candidate_installer_step(self):
+        install = self.steps["Install pinned tools"]
+        self.assertEqual(self.job.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 1)
+        self.assertEqual(self.job.count("github.token"), 1)
+        self.assertIn("          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}\n", install)
+        self.assertIn("        run: make tools\n", install)
+        for name, block in self.steps.items():
+            if name != "Install pinned tools":
+                self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", block)
+                self.assertNotIn("github.token", block)
+
     def test_primary_artifact_is_immutable_and_holds_only_the_payload(self):
         upload = self.steps["Upload the immutable candidate payload"]
         self.assertIn(f"uses: {UPLOAD_ACTION}", upload)
@@ -212,6 +223,7 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.assertEqual(self.job.count("github.token"), 1)
         self.assertEqual(self.job.count("GH_TOKEN"), 1)
         self.assertIn("          GH_TOKEN: ${{ github.token }}\n", proof)
+        self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", self.job)
 
     def test_checkout_is_the_built_source_commit_without_credentials(self):
         checkout = self.steps["Checkout the source commit the candidate was built from"]
@@ -266,6 +278,46 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
                           for name in ("receipt.json",)])
         for setting in ("overwrite: false", "retention-days: 90"):
             self.assertIn(setting, upload)
+
+
+class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
+    def test_ci_token_is_scoped_to_only_the_named_installer_steps(self):
+        source = WORKFLOW.read_text()
+        expected = {"gate-linux": {"Install tools", "Install pinned supervisor test binaries"},
+                    "gate-macos": {"Install platform tools", "Install pinned supervisor test binaries"},
+                    "independent-startup-component": {"Install pinned repository tools"},
+                    "nested-survival": {"Install pinned tools and supervisor"},
+                    "development-candidate": {"Install pinned tools"}}
+        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 7)
+        for job, names in expected.items():
+            content = job_text(source, job)
+            header = content.split("    steps:", 1)[0]
+            self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", header)
+            actual = {name for name, block in steps(content).items() if "DELEGATE_TOOL_DOWNLOAD_TOKEN" in block}
+            self.assertEqual(actual, names)
+            for name in names:
+                self.assertIn("          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}\n", steps(content)[name])
+
+    def test_ccr_token_does_not_reach_provider_postinstall_or_proofs(self):
+        source = WORKFLOW.with_name("ccr-integration.yml").read_text()
+        content = job_text(source, "foreground")
+        blocks = steps(content)
+        provider = blocks["Install locked Claude Code"]
+        install = blocks["Install pinned supervisor test binaries"]
+        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 1)
+        self.assertEqual(content.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 1)
+        self.assertEqual(content.count("github.token"), 1)
+        self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", content.split("    steps:", 1)[0])
+        self.assertIn("          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}\n", install)
+        self.assertRegex(install, r"(?m)^        run: \./scripts/install-test-supervisor\.sh$")
+        self.assertIn("npm ci", provider)
+        self.assertIn("--ignore-scripts=false", provider)
+        self.assertLess(content.index("- name: Install locked Claude Code"),
+                        content.index("- name: Install pinned supervisor test binaries"))
+        for name, block in blocks.items():
+            if name != "Install pinned supervisor test binaries":
+                self.assertNotIn("DELEGATE_TOOL_DOWNLOAD_TOKEN", block)
+                self.assertNotIn("github.token", block)
 
 
 if __name__ == "__main__":

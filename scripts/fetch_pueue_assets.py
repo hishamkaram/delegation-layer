@@ -203,6 +203,7 @@ def copy_bounded(source: IO[bytes] | gzip.GzipFile, target: IO[bytes], limit: in
 
 def download_archive(url: str, target: IO[bytes]) -> None:
     # Redirects are required by GitHub release assets; reject protocol downgrade.
+    token = github_release_asset.validate_token(os.environ.get(github_release_asset.TOKEN_ENV))
     request = urllib.request.Request(url, headers={"User-Agent": "delegation-layer-pueue-installer"})
     opener = urllib.request.build_opener(github_release_asset.HTTPSRedirects())
     try:
@@ -213,7 +214,7 @@ def download_archive(url: str, target: IO[bytes]) -> None:
         print(f"Release download failed ({error}); trying the exact pinned asset through GitHub's API.",
               file=sys.stderr)
         try:
-            github_release_asset.download_asset(url, target, MAX_ARCHIVE)
+            github_release_asset.download_asset(url, target, MAX_ARCHIVE, token=token)
         except (github_release_asset.DownloadError, OSError) as fallback:
             raise InstallError(f"release download failed ({error}); API fallback failed: {fallback}") from fallback
         return

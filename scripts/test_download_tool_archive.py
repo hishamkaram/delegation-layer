@@ -21,6 +21,10 @@ class Response(io.BytesIO):
 class Opener:
     def open(self, request, timeout):
         url = request.full_url
+        token = os.environ.get("DELEGATE_TOOL_DOWNLOAD_TOKEN")
+        expected = "Bearer " + token if token else None
+        if request.get_header("Authorization") != expected:
+            raise AssertionError("API authentication does not match the explicit fixture token")
         with open(os.environ["TEST_API_CALLS"], "a") as calls:
             calls.write(url + "\n")
         if os.environ.get("TEST_API_FAIL") == "1":
@@ -54,9 +58,12 @@ class ToolArchiveTests(unittest.TestCase):
         self.calls = self.root / "api-calls"
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
                     "TEST_PAYLOAD": str(self.payload), "TEST_API_CALLS": str(self.calls),
-                    "TEST_CURL_EXIT": "22", "TEST_HTTP_STATUS": "504"}
+                    "TEST_CURL_EXIT": "22", "TEST_HTTP_STATUS": "504",
+                    "TEST_CURL_RECORD": str(self.root / "curl-arguments")}
+        self.env.pop("DELEGATE_TOOL_DOWNLOAD_TOKEN", None)
         self.program("python3", f"#!{sys.executable}\n" + PYTHON_TRANSPORT)
         self.program("curl", '''#!/bin/sh
+printf '%s\\n' "$@" >"$TEST_CURL_RECORD"
 target=
 while [ "$#" -gt 0 ]; do
     if [ "$1" = -o ]; then target="$2"; shift 2; else shift; fi
@@ -87,6 +94,18 @@ exit "$TEST_CURL_EXIT"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.read_bytes(), PAYLOAD)
         self.assertFalse(self.calls.exists())
+
+    def test_explicit_token_is_only_used_by_api_and_never_curl_argv_or_diagnostics(self):
+        token = "source-authored-tool-download-token"
+        self.env["DELEGATE_TOOL_DOWNLOAD_TOKEN"] = token
+        result = self.run_download()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.output.read_bytes(), PAYLOAD)
+        self.assertEqual(len(self.calls.read_text().splitlines()), 2)
+        arguments = (self.root / "curl-arguments").read_text()
+        self.assertNotIn(token, arguments)
+        self.assertNotIn("Authorization", arguments)
+        self.assertNotIn(token, result.stdout + result.stderr)
 
     def test_transient_failure_fallback_replaces_partial_primary_bytes(self):
         for code, http_status in (("22", "504"), ("28", "000")):
@@ -130,7 +149,8 @@ exit "$TEST_CURL_EXIT"
         self.program("go", f"#!/bin/sh\nprintf '%s\\n' 'go version go{pin.strip()} linux/amd64'\n")
         self.program("uname", "#!/bin/sh\nif [ \"$1\" = -s ]; then echo Linux; else echo x86_64; fi\n")
         self.env.update(GOTOOLCHAIN="local", TEST_REPOSITORY="golangci/golangci-lint",
-                        TEST_TAG="v2.14.0", TEST_ASSET="golangci-lint-2.14.0-linux-amd64.tar.gz")
+                        TEST_TAG="v2.14.0", TEST_ASSET="golangci-lint-2.14.0-linux-amd64.tar.gz",
+                        DELEGATE_TOOL_DOWNLOAD_TOKEN="checksum-fixture-token")
         result = subprocess.run(["bash", str(scripts / "install-tools.sh")], env=self.env,
                                 capture_output=True, text=True, check=False, timeout=10)
         self.assertNotEqual(result.returncode, 0)
