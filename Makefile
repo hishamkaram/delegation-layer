@@ -214,6 +214,10 @@ acceptance-private-cli-default-stop: tool-versions
 		--runtime-only \
 		--output "$$receipt_dir/receipt.json"
 
+.PHONY: task-inventory-fixture
+task-inventory-fixture: tool-versions
+	go test -c -o "$(BIN_DIR)/task-inventory-fixture" ./internal/taskdir
+
 .PHONY: nested-survival-fixture acceptance-nested-survival
 nested-survival-fixture: tool-versions
 	go test -c -o "$(BIN_DIR)/nested-lifetime-fixture" ./internal/lifetime
@@ -317,7 +321,7 @@ acceptance-opencode: build test-native-harness
 # Individual native gates return 2 when the executable, supervisor, or native
 # login prerequisite is unavailable. The aggregate keeps that explicit state
 # neutral while still failing on a real acceptance failure (exit 1).
-acceptance-native: build test-native-harness
+acceptance-native: build test-native-harness nested-survival-fixture task-inventory-fixture
 	./scripts/acceptance_native_all.sh
 
 .PHONY: acceptance-independent-startup

@@ -23,7 +23,8 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
         inspection_journals: Callable[..., dict[str, InspectionEvidence]],
         durable_admission: Callable[..., dict[str, object] | None],
         validate_groups: Callable[..., None], validate_ordinary_row: Callable[..., None],
-        validate_inspection_row: Callable[..., None]):
+        validate_inspection_row: Callable[..., None],
+        absent_refusals: frozenset[str] = frozenset()):
     tasks = status.get("tasks")
     if not isinstance(tasks, dict):
         raise AcceptanceFailure("private queue tasks object is absent")
@@ -31,7 +32,7 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
     journals = inspection_journals(
         allow_failure, expected_binding_required)
     ordinary = _ordinary_queue_admissions(
-        allow_failure=allow_failure, dispatch_attempts=dispatch_attempts, durable_admission=durable_admission,
+        allow_failure=allow_failure, dispatch_attempts=dispatch_attempts - absent_refusals, durable_admission=durable_admission,
         expected_results=expected_results, journals=journals,
         labels_by_name=labels_by_name, numbers_by_name=numbers_by_name, tasks_by_name=tasks_by_name,
     )
@@ -39,7 +40,11 @@ def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
     require(ordinary_task_ids <= dispatch_attempts,
             "ordinary task response has no matching dispatch attempt")
     inspection_task_ids = set(journals)
-    require(ordinary_task_ids | inspection_task_ids == dispatch_attempts,
+    require(not absent_refusals or allow_failure, "absence proof is failure-cleanup only")
+    require(absent_refusals <= dispatch_attempts and
+            not absent_refusals & (ordinary_task_ids | inspection_task_ids),
+            "absent refusal conflicts with admission evidence")
+    require(ordinary_task_ids | inspection_task_ids | absent_refusals == dispatch_attempts,
             "a dispatch attempt has no exact ordinary or inspection record")
     if not allow_failure:
         require(ordinary_task_ids == dispatch_attempts,

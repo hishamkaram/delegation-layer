@@ -188,7 +188,8 @@ def discover_models(owner) -> None:
     acceptance = owner
     before = workspace_snapshot(acceptance.workspace)
     argv = acceptance.model_discovery_argv()
-    acceptance._discovery_state().record_intent(model_discovery_intent(acceptance))
+    intent = model_discovery_intent(acceptance)
+    acceptance.ops.record_auxiliary_intent(lambda: acceptance._discovery_state().record_intent(intent))
     # Bind what the command journaled before any failure freezes the diagnostics,
     # including a process failure raised after the journal was created.
     try:

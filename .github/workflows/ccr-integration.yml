@@ -62,12 +62,15 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate ./cmd/delegate
           CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate-run ./cmd/delegate-run
+          CGO_ENABLED=0 go test -c -buildvcs=false -o bin/nested-lifetime-fixture ./internal/lifetime
+          CGO_ENABLED=0 go test -c -buildvcs=false -o bin/task-inventory-fixture ./internal/taskdir
       - name: Prove foreground lifecycle using real CLIs
         run: |
           export PATH="$GITHUB_WORKSPACE/bin:$GITHUB_WORKSPACE/bin/test-supervisor:$PATH"
           # Prove the native ps format/Wait before the failure-only diagnostic consumer runs.
           python3 -m unittest discover -s scripts -p test_acceptance_ccr_fixture.py -k native_cpu_snapshot -v
           python3 scripts/acceptance_ccr_fixture.py --output "$HOME/ccr-integration-evidence"
+          python3 scripts/acceptance_ccr_fixture.py --refusal-cleanup --output "$HOME/ccr-refusal-cleanup-evidence"
       - name: Retain sanitized result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -76,10 +79,17 @@ jobs:
           # Existing public control records preserve refusals without raw streams or profiles.
           path: |
             ~/ccr-integration-evidence/success.json
+            ~/ccr-integration-evidence/cleanup.json
             ~/ccr-integration-evidence/*-dispatch-attempt.json
             ~/ccr-integration-evidence/*-continue-attempt.json
             ~/ccr-integration-evidence/failure-diagnostics.json
             ~/ccr-integration-evidence/failure-host-cpu-snapshot.json
             ~/ccr-integration-evidence/failure-cleanup.json
             ~/ccr-integration-evidence/failure-cleanup-expired.json
+            ~/ccr-refusal-cleanup-evidence/success.json
+            ~/ccr-refusal-cleanup-evidence/cleanup.json
+            ~/ccr-refusal-cleanup-evidence/*-dispatch-attempt.json
+            ~/ccr-refusal-cleanup-evidence/failure-diagnostics.json
+            ~/ccr-refusal-cleanup-evidence/failure-cleanup.json
+            ~/ccr-refusal-cleanup-evidence/failure-cleanup-expired.json
           if-no-files-found: warn

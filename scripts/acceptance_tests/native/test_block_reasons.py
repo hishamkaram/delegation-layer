@@ -27,6 +27,7 @@ from scripts.delegate_acceptance.native import (
 )
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native_evidence.contract import BlockReason
+from scripts.delegate_acceptance.tasks.operations import AdmissionFailure
 
 
 AUTH_BLOCK_RESPONSE = {
@@ -152,9 +153,11 @@ class ModelDiscoverySiteTests(unittest.TestCase):
 
 
 class AdmissionAndCollectionSiteTests(unittest.TestCase):
-    def _dispatch_operation(self, response: object):
+    def _dispatch_operation(self, response: Mapping[str, object] | None):
         def refuse(*_arguments, **_request):
-            raise gate.AcceptanceFailure("dispatch refused")
+            if response is None:
+                raise gate.AcceptanceFailure("dispatch refused")
+            raise AdmissionFailure("dispatch refused", dict(response))
 
         # Dispatch binds its request inputs before launch, as the real constructor provides them.
         temporary = tempfile.TemporaryDirectory(prefix="native-block-dispatch-")
@@ -171,8 +174,7 @@ class AdmissionAndCollectionSiteTests(unittest.TestCase):
         operation.task_command_prefix = Mock(return_value=["delegate"])
         operation._sync_ops_owned_tasks = Mock()
         self.enterContext(patch.object(operation, "ops", SimpleNamespace(
-            root_id=None, dispatch=refuse, continue_task=refuse,
-            dispatch_observations=[{"response": response}]), create=True))
+            root_id=None, dispatch=refuse, continue_task=refuse), create=True))
         return operation
 
     def test_structured_admission_block_is_auth_unavailable_for_dispatch_and_continue(self):

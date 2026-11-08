@@ -21,6 +21,7 @@ from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import acceptance_lifecycle as lifecycle_impl
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.hermetic.contract import status_document, status_job
+from scripts.delegate_acceptance.tasks.operations import AdmissionFailure, NativeTaskOps
 
 
 class FixtureCleanupTests(unittest.TestCase):
@@ -41,8 +42,8 @@ class FixtureCleanupTests(unittest.TestCase):
                 calls.append("shutdown")
                 return shutdown_result
 
-            def finalize(self, success):
-                calls.append(("finalize", success))
+            def finalize(self, success, *, shutdown_attempted=False):
+                calls.append(("finalize", success, shutdown_attempted))
                 if finalize_error is not None:
                     raise finalize_error
                 return finalize_result
@@ -54,7 +55,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
         gate.cleanup_fixture(run, True)
 
-        self.assertEqual(calls, ["shutdown", ("finalize", True)])
+        self.assertEqual(calls, ["shutdown", ("finalize", True, True)])
 
     def test_failure_still_finalizes_once_and_cleanup_failure_is_fatal(self):
         run, calls = self.fake_run(shutdown_result=False)
@@ -62,7 +63,7 @@ class FixtureCleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "fixture cleanup failed"):
             gate.cleanup_fixture(run, False)
 
-        self.assertEqual(calls, ["shutdown", ("finalize", False)])
+        self.assertEqual(calls, ["shutdown", ("finalize", False, True)])
 
     def test_finalize_failure_is_fatal(self):
         run, calls = self.fake_run(finalize_result=False)
@@ -70,7 +71,7 @@ class FixtureCleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "fixture cleanup failed"):
             gate.cleanup_fixture(run, True)
 
-        self.assertEqual(calls, ["shutdown", ("finalize", True)])
+        self.assertEqual(calls, ["shutdown", ("finalize", True, True)])
 
     def test_behavioral_success_is_not_published_when_finalization_fails(self):
         for failure in (False, OSError("injected finalization failure")):
@@ -108,7 +109,7 @@ class FixtureCleanupTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "fixture cleanup failed"):
                         gate.main()
 
-                self.assertEqual(calls, ["shutdown", ("finalize", True)])
+                self.assertEqual(calls, ["shutdown", ("finalize", True, True)])
                 self.assertFalse((output / "success.json").exists())
                 failure_receipt = json.loads((output / "failure.json").read_text())
                 self.assertTrue(failure_receipt["behavior_completed"])
@@ -157,7 +158,7 @@ class FixtureCleanupTests(unittest.TestCase):
         run.fixture_directories = ()
         with patch.object(gate.NativeAcceptance, "finalize", return_value=True) as finalize:
             self.assertTrue(run.finalize(False, blocked=True))
-        finalize.assert_called_once_with(False, blocked=True)
+        finalize.assert_called_once_with(False, blocked=True, shutdown_attempted=False)
 
     def test_finalize_retains_fixture_profile_until_native_cleanup(self):
         with tempfile.TemporaryDirectory(prefix="ccr-fixture-retain-profile-unit-") as temporary:
@@ -301,8 +302,10 @@ class FixturePublicationTests(unittest.TestCase):
         patched_cli.start()
         self.addCleanup(patched_cli.stop)
 
-    def main(self, run: gate.FixtureAcceptance, *patches):
+    def main(self, run: gate.FixtureAcceptance, *patches, refusal_cleanup=False):
         argv = ["acceptance_ccr_fixture.py", "--output", str(self.output)]
+        if refusal_cleanup:
+            argv.append("--refusal-cleanup")
         with patch.object(gate, "choose_output", return_value=self.output), \
                 patch.object(gate, "prepare_fixture_acceptance", return_value=run), \
                 patch.object(gate, "Fixture", RecordingFixture), \
@@ -314,6 +317,68 @@ class FixturePublicationTests(unittest.TestCase):
             finally:
                 for active in reversed(patches):
                     active.stop()
+
+    def test_failed_shutdown_is_not_repeated_by_real_finalizer(self):
+        run = self.closed_run()
+        run.closed = False
+        (self.output / "success.json").write_text('{"status":"passed"}\n')
+
+        with patch.object(run, "safe_shutdown", return_value=False) as shutdown, \
+                patch.object(run, "_write_failure_diagnostics", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "private supervisor cleanup was not proven"):
+                gate.cleanup_fixture(run, True)
+
+        shutdown.assert_called_once_with()
+        self.assertFalse(run.closed)
+        self.assertTrue(run.base.is_dir())
+        self.assertTrue((self.output / "profile").is_dir())
+        self.assertTrue((self.output / "processes" / "001-provider" / "stdout").is_file())
+        self.assertFalse((self.output / "success.json").exists())
+        self.assertIsNone(run.success_candidate)
+        cleanup = json.loads((self.output / "cleanup.json").read_text())
+        self.assertEqual(cleanup["status"], "retained")
+        self.assertFalse(cleanup["supervisor_shutdown_observed"])
+
+    def test_shutdown_exception_is_not_repeated_by_real_finalizer(self):
+        run = self.closed_run()
+        run.closed = False
+
+        with patch.object(run, "safe_shutdown", side_effect=OSError("shutdown observation failed")) as shutdown, \
+                patch.object(run, "_write_failure_diagnostics", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "shutdown observation failed") as raised:
+                gate.cleanup_fixture(run, False)
+
+        shutdown.assert_called_once_with()
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        self.assertTrue(run.base.is_dir())
+        self.assertTrue((self.output / "profile").is_dir())
+        self.assertFalse((self.output / "success.json").exists())
+        self.assertFalse(run.closed)
+
+    def test_standalone_real_finalizer_still_attempts_shutdown(self):
+        run = self.closed_run()
+        run.closed = False
+
+        with patch.object(run, "safe_shutdown", return_value=False) as shutdown, \
+                patch.object(run, "_write_failure_diagnostics", return_value=True):
+            self.assertFalse(run.finalize(False))
+
+        shutdown.assert_called_once_with()
+        self.assertTrue(run.base.is_dir())
+        self.assertTrue((self.output / "profile").is_dir())
+        self.assertFalse(run.closed)
+
+    def test_refusal_mode_publishes_its_own_gate_after_real_finalization(self):
+        run = self.closed_run()
+        response = cpu_refusal_observation()["response"]
+        expected: dict[str, object] = {"gate": "acceptance-ccr-refusal-cleanup", "status": "passed",
+                                      "original_failure": {"status": "failed", "response": response}}
+        run.success_receipt = expected
+        with patch.object(run, "exercise", return_value=expected):
+            self.assertEqual(self.main(run, refusal_cleanup=True), 0)
+        self.assertEqual(json.loads((self.output / "success.json").read_text()), expected)
+        self.assertFalse(run.base.exists())
+        self.assertFalse((self.output / "profile").exists())
 
     def test_success_publishes_the_confirmed_candidate_only_after_all_cleanup(self):
         run = self.closed_run()
@@ -475,9 +540,13 @@ class FixtureWorkflowTests(unittest.TestCase):
         section = upload.split("          path:", 1)[1].split("          if-no-files-found:", 1)[0]
         paths = {line.strip() for line in section.splitlines() if line.strip() not in ("", "|")}
         root = "~/ccr-integration-evidence"
-        self.assertEqual(paths, {f"{root}/{name}" for name in (
-            "success.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
-            "failure-diagnostics.json", "failure-host-cpu-snapshot.json", "failure-cleanup.json", "failure-cleanup-expired.json")})
+        expected = {f"{root}/{name}" for name in (
+            "success.json", "cleanup.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
+            "failure-diagnostics.json", "failure-host-cpu-snapshot.json", "failure-cleanup.json", "failure-cleanup-expired.json")}
+        expected.update(f"~/ccr-refusal-cleanup-evidence/{name}" for name in (
+            "success.json", "*-dispatch-attempt.json", "failure-diagnostics.json",
+            "failure-cleanup.json", "failure-cleanup-expired.json", "cleanup.json"))
+        self.assertEqual(paths, expected)
         self.assertIn("if: always()", upload)
 
     def test_native_cpu_probe_precedes_real_ccr_consumer_in_same_step(self):
@@ -485,8 +554,11 @@ class FixtureWorkflowTests(unittest.TestCase):
         step = workflow.read_text().split("      - name: Prove foreground lifecycle using real CLIs\n", 1)[1].split("      - name:", 1)[0]
         probe = "python3 -m unittest discover -s scripts -p test_acceptance_ccr_fixture.py -k native_cpu_snapshot -v"
         consumer = "python3 scripts/acceptance_ccr_fixture.py --output"
+        refusal = "python3 scripts/acceptance_ccr_fixture.py --refusal-cleanup --output"
         self.assertEqual(step.count(probe), 1)
+        self.assertEqual(step.count(refusal), 1)
         self.assertLess(step.index(probe), step.index(consumer))
+        self.assertLess(step.index(consumer), step.index(refusal))
         loader = unittest.TestLoader()
         loader.testNamePatterns = ["*native_cpu_snapshot*"]
         self.assertEqual(loader.loadTestsFromModule(sys.modules[__name__]).countTestCases(), 1)
@@ -501,6 +573,84 @@ def cpu_refusal_observation():
                     "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"},
         "resource_admission": {"status": "pressure"},
     }}
+
+
+class ControlledRefusalTests(unittest.TestCase):
+    def test_finite_injection_uses_actual_capture_wait_and_keeps_unknown_refusal(self):
+        base = Path(tempfile.mkdtemp(prefix="ccr-controlled-refusal-")).resolve(strict=True)
+        owner = DirectoryOwner()
+        owner.adopt_created("controlled refusal test", base, base.parent)
+        processes = None
+
+        def close_owned():
+            try:
+                if processes is not None and processes.drain(timeout=5):
+                    raise RuntimeError("controlled refusal command closure unproven")
+            except BaseException:
+                owner.release()
+                raise
+            owner.rollback()
+
+        self.addCleanup(close_owned)
+        processes = Processes(base / "raw", {}, owner=owner)
+        run = gate.RefusalCleanupAcceptance.__new__(gate.RefusalCleanupAcceptance)
+        run.inject_refusal, run.refused_task_id, run.root_id = True, None, ROOT_ID
+        task = "c" * 32
+        argv = run.dispatch_argv(task, base / "brief")
+        self.assertEqual(Path(argv[0]), Path(sys.executable))
+        ops = NativeTaskOps(processes, Path("/delegate"), Path("/delegate-run"), Path("/pueue"),
+                            base, base / "state", base)
+        ops.root_id = ROOT_ID
+        with self.assertRaises(AdmissionFailure) as caught:
+            ops.dispatch("refused", task, argv)
+        self.assertEqual(len(processes.entries), 1)
+        self.assertEqual(processes.entries[0].result["exit_code"], 1)
+        self.assertTrue(processes.entries[0].result["natural_wait"])
+        observation = ops.dispatch_observations[0]
+        self.assertTrue(observation["receipt_written"])
+        self.assertTrue(gate.confirmed_host_cpu_refusal(observation, ROOT_ID))
+        response = dict(caught.exception.response)
+        self.assertEqual(response["task_record"], "unknown")
+        self.assertEqual(response["failure"], {
+            "code": "resource_pressure", "stage": "check-resources",
+            "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"})
+        self.assertEqual(observation["response"], response)
+        self.assertFalse(ops.tasks)
+        self.assertEqual(run.refused_task_id, task)
+        run.inject_refusal = True
+        with self.assertRaisesRegex(RuntimeError, "only one dispatch"):
+            run.dispatch_argv(task, base / "brief")
+
+    def test_genuine_warm_refusal_is_not_the_expected_negative(self):
+        with tempfile.TemporaryDirectory(prefix="ccr-warm-refusal-") as temporary:
+            run = gate.RefusalCleanupAcceptance.__new__(gate.RefusalCleanupAcceptance)
+            run.briefs, run.args = Path(temporary), argparse.Namespace(model="ok")
+            run.inject_refusal, run.refused_task_id = False, None
+            error = AdmissionFailure("warm resource refusal", cpu_refusal_observation()["response"])
+            with patch.object(run, "setup"), patch.object(run, "dispatch", side_effect=error) as dispatch, \
+                    patch.object(run, "published") as published:
+                with self.assertRaises(AdmissionFailure) as caught:
+                    run.exercise(None)
+            self.assertIs(caught.exception, error)
+            dispatch.assert_called_once_with("warm", run.briefs / "refusal-cleanup.txt")
+            published.assert_not_called()
+            self.assertFalse(run.inject_refusal)
+            self.assertIsNone(run.refused_task_id)
+            self.assertIsNone(run.success_receipt)
+
+    def test_unknown_task_control_prevents_a_passed_cleanup_receipt(self):
+        run = gate.RefusalCleanupAcceptance.__new__(gate.RefusalCleanupAcceptance)
+        task = "c" * 32
+        run.refused_task_id, run.observed_absence = task, frozenset((task,))
+        run.success_receipt, run.closed, run.delegate = {}, True, Path("/delegate")
+        with patch.object(gate.FixtureAcceptance, "safe_shutdown", return_value=True), \
+                patch.object(run, "processes", create=True,
+                             entries=[SimpleNamespace(argv=["/delegate", "status", task])]), \
+                patch.object(gate.acceptance_lifecycle, "record_lifetime_closure") as closure:
+            with self.assertRaisesRegex(RuntimeError, "refused task reached another Delegate"):
+                run.safe_shutdown()
+        closure.assert_not_called()
+        self.assertEqual(run.success_receipt, {})
 
 
 class CPUSnapshotTests(unittest.TestCase):
@@ -685,7 +835,7 @@ class CPUSnapshotTests(unittest.TestCase):
                                     provider_executable="/ccr", direct=lambda *_args, **_kwargs: None,
                                     exercise=exercise), \
                         patch.object(run, "safe_shutdown", side_effect=lambda: order.append("cleanup") or True), \
-                        patch.object(run, "finalize", side_effect=lambda success: order.append(("finalize", success)) or True), \
+                        patch.object(run, "finalize", side_effect=lambda success, *, shutdown_attempted: order.append(("finalize", success, shutdown_attempted)) or True), \
                         patch.object(gate, "choose_output", return_value=output), \
                         patch.object(gate, "prepare_fixture_acceptance", return_value=run), \
                         patch.object(gate, "Fixture", return_value=nullcontext(fixture)), \
@@ -696,7 +846,7 @@ class CPUSnapshotTests(unittest.TestCase):
                         gate.main()
                     self.assertEqual(os.environ["LC_ALL"], "fixture-parent-locale")
                 self.assertIs(caught.exception, primary)
-                self.assertEqual(order, ["snapshot", "cleanup", ("finalize", False)])
+                self.assertEqual(order, ["snapshot", "cleanup", ("finalize", False, True)])
                 self.assertEqual(environment, {"LC_ALL": "de_DE", "KNOWN": "fixture"})
                 if fault == "write":
                     self.assertEqual(primary.__notes__, ["host_cpu_snapshot_receipt_unavailable"])
@@ -742,7 +892,7 @@ class CPUSnapshotTests(unittest.TestCase):
                 self.assertIs(caught.exception, primary)
                 snapshot.assert_not_called()
                 shutdown.assert_called_once_with()
-                finalize.assert_called_once_with(False)
+                finalize.assert_called_once_with(False, shutdown_attempted=True)
 
 
 class ProviderInstallationWorkflowTests(unittest.TestCase):

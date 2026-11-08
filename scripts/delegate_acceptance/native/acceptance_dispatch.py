@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+
 import secrets
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReaso
 from scripts.delegate_acceptance.native.acceptance_diagnostics import authentication_unavailable
 from scripts.delegate_acceptance.native.provider_policy import authentication_blocked
 from scripts.delegate_acceptance.native.constants import TASK_BUDGET, WATCH_SECONDS, case_task_budget
+from scripts.delegate_acceptance.tasks.operations import AdmissionFailure
 from scripts.delegate_acceptance.tasks.request_intent import TaskRequest
 
 
@@ -91,8 +93,7 @@ def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
         return task_id
     except AcceptanceFailure as error:
         acceptance._sync_ops_owned_tasks()
-        observation = acceptance.ops.dispatch_observations[-1] if acceptance.ops.dispatch_observations else {}
-        refused = observation.get("response") if isinstance(observation, dict) else None
+        refused = dict(error.response) if isinstance(error, AdmissionFailure) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
             raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
@@ -127,8 +128,7 @@ def continue_public(owner, name: str, brief: Path, predecessor: str, *,
         return task_id
     except AcceptanceFailure as error:
         acceptance._sync_ops_owned_tasks()
-        observation = acceptance.ops.dispatch_observations[-1] if acceptance.ops.dispatch_observations else {}
-        refused = observation.get("response") if isinstance(observation, dict) else None
+        refused = dict(error.response) if isinstance(error, AdmissionFailure) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
             raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",

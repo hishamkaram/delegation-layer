@@ -347,6 +347,21 @@ PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fi
 It covers overlapping sessions, writes, stops, continuation, aliases and replay.
 This proves the fixture integration, not an upstream account's availability.
 
+The separate refused-admission control first completes a real warm task, then
+captures one finite synthetic resource refusal through the shared task ledger:
+
+```sh
+make nested-survival-fixture task-inventory-fixture
+PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py --refusal-cleanup
+```
+
+Its separate gate preserves the original `unknown`/`stop_and_report` response.
+Cleanup seals new admissions, joins owned controls, validates canonical task and
+inspection closure, and uses the original directory identities plus native
+store inventory and absence observations. Unproven closure retains resources
+and fails the gate. This control tests cleanup after a refusal; its synthetic
+CPU samples do not measure host pressure or establish the historical CPU cause.
+
 ## Agent integration and skill selection
 
 The [agent-integration skill](../skills/agent-integration/SKILL.md) owns external
