@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import gzip
 import hashlib
-from http.client import HTTPMessage
 import os
 from pathlib import Path
 import platform
@@ -24,7 +23,13 @@ import sys
 import tarfile
 from types import FrameType, MappingProxyType
 from typing import IO, Literal
+import urllib.error
 import urllib.request
+
+if __package__ in {None, ""}:
+    import github_release_asset
+else:
+    from . import github_release_asset
 
 
 RELEASE_URL = "https://github.com/hishamkaram/delegation-layer/releases/download/v0.3.1"
@@ -196,19 +201,24 @@ def copy_bounded(source: IO[bytes] | gzip.GzipFile, target: IO[bytes], limit: in
     return total
 
 
-class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: urllib.request.Request, fp: IO[bytes], code: int,
-                         msg: str, headers: HTTPMessage, newurl: str) -> urllib.request.Request | None:
-        if not newurl.startswith("https://"):
-            raise InstallError("archive download redirected away from HTTPS")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def download_archive(url: str, target: IO[bytes]) -> None:
     # Redirects are required by GitHub release assets; reject protocol downgrade.
+    token = github_release_asset.validate_token(os.environ.get(github_release_asset.TOKEN_ENV))
     request = urllib.request.Request(url, headers={"User-Agent": "delegation-layer-pueue-installer"})
-    opener = urllib.request.build_opener(HTTPSRedirects())
-    with opener.open(request, timeout=30) as response:
+    opener = urllib.request.build_opener(github_release_asset.HTTPSRedirects())
+    try:
+        response = opener.open(request, timeout=30)
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+        if not github_release_asset.transient_error(error):
+            raise
+        print(f"Release download failed ({error}); trying the exact pinned asset through GitHub's API.",
+              file=sys.stderr)
+        try:
+            github_release_asset.download_asset(url, target, MAX_ARCHIVE, token=token)
+        except (github_release_asset.DownloadError, OSError) as fallback:
+            raise InstallError(f"release download failed ({error}); API fallback failed: {fallback}") from fallback
+        return
+    with response:
         if not response.url.startswith("https://"):
             raise InstallError("archive download redirected away from HTTPS")
         if copy_bounded(response, target, MAX_ARCHIVE) == 0:
@@ -363,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 for system, architecture in ARCHIVE_PINS:
                     install_pair(output / system / architecture, system, architecture)
-    except (InstallError, OSError, tarfile.TarError, UnicodeError, EOFError) as error:
+    except (InstallError, github_release_asset.DownloadError, OSError, tarfile.TarError, UnicodeError, EOFError) as error:
         print(f"Pueue archive installation failed: {error}", file=sys.stderr)
         return 1
     except InstallInterrupted as error:

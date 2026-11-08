@@ -1,8 +1,9 @@
 # Security and permissions
 
-Delegate is a local, single-user task supervisor. Provider CLIs own accounts,
-configuration, extensions, and native permissions. Delegate owns task lifecycle,
-its installation and supervisor, and validated result evidence.
+Delegate supervises tasks in a native single-user context. Provider CLIs own
+accounts, configuration, extensions, and native permissions. Delegate owns task
+lifecycle, its installation and supervisor, and validated result evidence.
+For remote tasks, those execution owners run on the destination.
 
 ## Native permissions
 
@@ -44,6 +45,20 @@ The lead must still evaluate whether the answer fulfills the brief.
 Read validated descriptors using the
 [result contract](../skills/agent-integration/references/result-handling.md#task-control-response);
 raw logs are task evidence, not a substitute accepted answer.
+
+## Remote trust and data
+
+Remote execution uses an embedded SSH transport and a bounded supported SSH
+configuration subset. Unknown host keys require explicit verified enrollment;
+changed or revoked keys are refused. Delegate does not forward an SSH agent or
+synchronize provider credentials. See [SSH support](remote-delegation.md#ssh-support).
+
+The destination task and outcome remain authoritative. Origin connectivity,
+cached observations and downloaded files do not prove execution stopped or
+authorize another launch. Input snapshots and output transfers include only
+explicitly selected files; retained bytes have no automatic garbage collection.
+See [file selection](remote-delegation.md#dispatch-and-files) and
+[retention](remote-delegation.md#retention) before selecting sensitive data.
 
 ## Workspace and interaction limits
 

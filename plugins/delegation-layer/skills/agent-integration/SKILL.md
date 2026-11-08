@@ -167,6 +167,7 @@ predecessor for an exact-session follow-up. The
 
 - [Commands and discovery](references/command-reference.md)
 - [Optional Teams and Members](references/command-reference.md#teams)
+- [Remote devices and tasks](references/command-reference.md#remote-tasks)
 - [Task/result decisions](references/result-handling.md), including conditional offline recheck
 - [Continuation](references/continuation.md)
 - [Interaction](references/interaction.md)

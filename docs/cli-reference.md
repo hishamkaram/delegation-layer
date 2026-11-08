@@ -1,6 +1,7 @@
 # CLI reference
 
-This page indexes task, schedule and Team commands and owns operator supervisor configuration.
+This page indexes local/remote task, device, schedule and Team commands and
+owns operator supervisor configuration.
 The packaged [command reference](../skills/agent-integration/references/command-reference.md)
 is the shared syntax/default owner; [result handling](../skills/agent-integration/references/result-handling.md)
 owns JSON decisions and exit codes.
@@ -27,6 +28,9 @@ Use `delegate help` for the installed build's command surface.
 | `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
 | `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
+
+Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).
+A local command in this index does not imply support for `remote:ID`.
 
 Global paths must be absolute. Ordinary commands omit `--root`; the CLI owns
 the default state location. Agents and manual commands under the same native
@@ -299,6 +303,11 @@ The refusal reports `reason_code: "historical_target_not_ready"` and
 without a recovery command. Restoring readiness through the original
 installation allows migration to inspect its queue. A migration that already
 recorded a safe predecessor shutdown can still resume its installed successor.
+
+Historical state-rooted executable copies are not used as the recovery client.
+Recovery selects an installed client for those bindings and still validates the
+recorded configuration and endpoint; an unavailable compatible installation
+fails explicitly. See the [installed-executable rule](../agents/_data/product-boundary.md#installed-executables).
 
 The explicit commands are for inspecting or repairing a real logical/configuration
 migration:

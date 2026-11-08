@@ -902,9 +902,15 @@ class ProviderInstallationWorkflowTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.repository = Path(__file__).resolve().parents[1]
         workflow = (self.repository / ".github/workflows/ccr-integration.yml").read_text()
-        step = workflow.split("      - name: Install locked Claude Code and test supervisor\n", 1)[1]
-        body = step.split("      - name:", 1)[0].split("        run: |\n", 1)[1]
-        self.script = "\n".join(line[10:] for line in body.splitlines())
+
+        def script(name):
+            step = workflow.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+            body = step.split("        run: ", 1)[1]
+            return ("\n".join(line[10:] for line in body[2:].splitlines())
+                    if body.startswith("|\n") else body.splitlines()[0])
+
+        self.script = script("Install locked Claude Code")
+        self.supervisor_script = script("Install pinned supervisor test binaries")
         self.prefix = self.root / "runner temp/ccr-provider"
         self.record = self.root / "npm-arguments"
         self.events = self.root / "events"
@@ -916,9 +922,14 @@ class ProviderInstallationWorkflowTests(unittest.TestCase):
         source.mkdir(parents=True)
         for name in ("package.json", "package-lock.json"):
             (source / name).write_bytes((self.repository / "tools/ccr-provider" / name).read_bytes())
-        self.write_executable("scripts/install-test-supervisor.sh", '#!/bin/sh\necho supervisor >> "$STUB_EVENTS"\n')
+        self.write_executable("scripts/install-test-supervisor.sh", '''#!/bin/sh
+test "${DELEGATE_TOOL_DOWNLOAD_TOKEN-}" = workflow-tool-token || exit 92
+echo supervisor >> "$STUB_EVENTS"
+if [ "${STUB_SUPERVISOR_FAILURE:-}" = 1 ]; then exit 25; fi
+''')
         self.write_executable("stubs/npm", '''#!/bin/bash
 set -euo pipefail
+test -z "${DELEGATE_TOOL_DOWNLOAD_TOKEN+x}" || exit 91
 printf '%s\\n' "$@" > "$STUB_NPM_RECORD"
 test "$1" = ci
 test "$2" = --prefix
@@ -928,6 +939,7 @@ test -f "$prefix/package-lock.json"
 if [ "${STUB_INSTALL_FAILURE:-}" = 1 ]; then exit 23; fi
 mkdir -p "$prefix/node_modules/.bin"
 printf '%s\\n' '#!/bin/sh' 'test ! -e "$GITHUB_PATH" || exit 99' \
+    'test -z "${DELEGATE_TOOL_DOWNLOAD_TOKEN+x}" || exit 91' \
     'echo claude >> "$STUB_EVENTS"' \
     'if [ "${STUB_NATIVE_FAILURE:-}" = 1 ]; then exit 24; fi' \
     'printf "%s\\n" "${STUB_CLAUDE_VERSION:-2.1.318} (Claude Code)"' > "$prefix/node_modules/.bin/claude"
@@ -941,8 +953,17 @@ chmod +x "$prefix/node_modules/.bin/claude"
         path.chmod(0o755)
 
     def run_install(self):
-        return subprocess.run(["bash", "-euo", "pipefail", "-c", self.script], cwd=self.root,
-                              env=self.environment, capture_output=True, text=True, check=False, timeout=30)
+        result = subprocess.run(["bash", "-euo", "pipefail", "-c", self.supervisor_script], cwd=self.root,
+                                env={**self.environment, "DELEGATE_TOOL_DOWNLOAD_TOKEN": "workflow-tool-token"},
+                                capture_output=True, text=True, check=False, timeout=30)
+        if result.returncode:
+            return result
+        provider = subprocess.run(["bash", "-euo", "pipefail", "-c", self.script], cwd=self.root,
+                                  env=self.environment, capture_output=True, text=True, check=False, timeout=30)
+        result.returncode = provider.returncode
+        result.stdout += provider.stdout
+        result.stderr += provider.stderr
+        return result
 
     def test_install_uses_copied_lock_required_scripts_and_isolated_path(self):
         result = self.run_install()
@@ -953,14 +974,22 @@ chmod +x "$prefix/node_modules/.bin/claude"
             self.assertEqual((self.prefix / name).read_bytes(),
                              (self.repository / "tools/ccr-provider" / name).read_bytes())
         self.assertEqual(self.github_path.read_text().splitlines(), [str(self.prefix / "node_modules/.bin")])
-        self.assertEqual(self.events.read_text().splitlines(), ["claude", "supervisor"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
-    def test_install_failure_does_not_expose_provider_or_run_supervisor_install(self):
+    def test_supervisor_failure_prevents_provider_install_version_check_and_path_exposure(self):
+        self.environment["STUB_SUPERVISOR_FAILURE"] = "1"
+        result = self.run_install()
+        self.assertEqual(result.returncode, 25, result.stderr)
+        self.assertFalse(self.record.exists())
+        self.assertFalse(self.github_path.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor"])
+
+    def test_provider_install_failure_does_not_check_or_expose_provider(self):
         self.environment["STUB_INSTALL_FAILURE"] = "1"
         result = self.run_install()
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertFalse(self.events.exists())
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor"])
 
     def test_wrong_native_version_is_rejected_before_exposing_provider(self):
         self.environment["STUB_CLAUDE_VERSION"] = "2.1.317"
@@ -968,14 +997,14 @@ chmod +x "$prefix/node_modules/.bin/claude"
         self.assertEqual(result.returncode, 1)
         self.assertIn("Expected Claude Code 2.1.318; received 2.1.317", result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
-    def test_native_check_failure_does_not_expose_provider_or_run_supervisor_install(self):
+    def test_native_check_failure_does_not_expose_provider(self):
         self.environment["STUB_NATIVE_FAILURE"] = "1"
         result = self.run_install()
         self.assertEqual(result.returncode, 24, result.stderr)
         self.assertFalse(self.github_path.exists())
-        self.assertEqual(self.events.read_text().splitlines(), ["claude"])
+        self.assertEqual(self.events.read_text().splitlines(), ["supervisor", "claude"])
 
 
 if __name__ == "__main__":

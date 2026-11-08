@@ -2,13 +2,13 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Delegate — Tasks and recurring work",
+    "title": "Delegate — Local, remote and recurring tasks",
     "locale": "en",
     "output": "diagrams/components.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "8a0ca355b9961c0129a67ed8066e195e86d99a4f",
+      "revision": "a19dc328c89489a7ddec6f20c58cbb291205c31c",
       "link_mode": "local-only"
     }
   },
@@ -20,7 +20,7 @@
       "sublabel": "ordinary commands omit --root",
       "pos": [
         40,
-        260
+        300
       ],
       "size": [
         210,
@@ -38,11 +38,11 @@
     {
       "id": "control",
       "type": "backend",
-      "label": "CLI + task lifecycle",
-      "sublabel": "CLI default · any project cwd",
+      "label": "Execution-host lifecycle",
+      "sublabel": "local host or prepared destination",
       "pos": [
         440,
-        260
+        300
       ],
       "size": [
         260,
@@ -51,9 +51,9 @@
       "sources": [
         {
           "path": "internal/tasklifecycle/dispatch.go",
-          "line": 12,
-          "end_line": 98,
-          "label": "Resolve Team before fresh admission"
+          "line": 17,
+          "end_line": 67,
+          "label": "Team resolution and fresh admission"
         },
         {
           "path": "internal/config/config.go",
@@ -76,7 +76,7 @@
       "sublabel": "Pueue starts queued workers",
       "pos": [
         860,
-        260
+        300
       ],
       "size": [
         260,
@@ -85,9 +85,9 @@
       "sources": [
         {
           "path": "internal/pueue/internal/control/staged.go",
-          "line": 175,
-          "end_line": 240,
-          "label": "Stage, save receipt, then enqueue"
+          "line": 177,
+          "end_line": 241,
+          "label": "Receipt commits before enqueue"
         },
         {
           "path": "internal/admission/preparation.go",
@@ -105,7 +105,7 @@
       "sublabel": "guardian + delegate-run",
       "pos": [
         1300,
-        260
+        300
       ],
       "size": [
         240,
@@ -115,14 +115,14 @@
         {
           "path": "internal/execution/run.go",
           "line": 88,
-          "end_line": 161,
-          "label": "Preflight, lifetime closure and finalization"
+          "end_line": 165,
+          "label": "Fresh preflight; closure before publication"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 323,
-          "end_line": 371,
-          "label": "Provider Start, Wait and capture"
+          "line": 327,
+          "end_line": 373,
+          "label": "Provider Start, Wait and lifetime finish"
         },
         {
           "path": "internal/guardian/finalization.go",
@@ -140,7 +140,7 @@
       "sublabel": "native settings + session",
       "pos": [
         1300,
-        520
+        560
       ],
       "size": [
         240,
@@ -155,9 +155,9 @@
         },
         {
           "path": "internal/execution/run.go",
-          "line": 222,
-          "end_line": 248,
-          "label": "Execute selected command and directory"
+          "line": 226,
+          "end_line": 250,
+          "label": "Installed executable and selected cwd"
         }
       ]
     },
@@ -165,10 +165,10 @@
       "id": "task-records",
       "type": "database",
       "label": "Task records + result",
-      "sublabel": "saved Team context + outcome.json",
+      "sublabel": "execution-host outcome.json",
       "pos": [
         860,
-        520
+        560
       ],
       "size": [
         260,
@@ -177,8 +177,8 @@
       "sources": [
         {
           "path": "internal/taskdir/taskdir.go",
-          "line": 119,
-          "end_line": 151,
+          "line": 123,
+          "end_line": 157,
           "label": "Create immutable task records"
         },
         {
@@ -189,8 +189,8 @@
         },
         {
           "path": "internal/taskdir/publication.go",
-          "line": 193,
-          "end_line": 220,
+          "line": 214,
+          "end_line": 223,
           "label": "Commit the terminal outcome"
         }
       ],
@@ -202,7 +202,7 @@
       "label": "Selected workspace",
       "sublabel": "caller directory or Git checkout",
       "pos": [
-        440,
+        1300,
         40
       ],
       "size": [
@@ -212,8 +212,8 @@
       "sources": [
         {
           "path": "internal/workspaces/admission.go",
-          "line": 16,
-          "end_line": 62,
+          "line": 19,
+          "end_line": 47,
           "label": "Optional managed workspace admission"
         },
         {
@@ -224,9 +224,9 @@
         },
         {
           "path": "internal/execution/run.go",
-          "line": 222,
-          "end_line": 248,
-          "label": "Provider uses selected working directory"
+          "line": 226,
+          "end_line": 250,
+          "label": "Execute in the selected directory"
         }
       ],
       "tag": "Git isolation + capture: optional"
@@ -239,7 +239,7 @@
       "tag": "foreground: scheduler serve",
       "pos": [
         440,
-        780
+        840
       ],
       "size": [
         260,
@@ -262,7 +262,7 @@
       "tag": "ready with zero definitions",
       "pos": [
         440,
-        500
+        560
       ],
       "size": [
         260,
@@ -297,7 +297,7 @@
       "tag": "one active occurrence per schedule",
       "pos": [
         40,
-        520
+        560
       ],
       "size": [
         230,
@@ -332,7 +332,7 @@
       "tag": "Team management owns catalog writes",
       "pos": [
         860,
-        780
+        40
       ],
       "size": [
         260,
@@ -358,6 +358,74 @@
           "label": "Caller choices and descriptive context"
         }
       ]
+    },
+    {
+      "id": "origin",
+      "type": "backend",
+      "label": "Origin remote coordinator",
+      "sublabel": "verified embedded Go SSH",
+      "pos": [
+        440,
+        40
+      ],
+      "size": [
+        250,
+        110
+      ],
+      "sources": [
+        {
+          "path": "internal/remote/coordinator.go",
+          "line": 24,
+          "end_line": 74,
+          "label": "Admit once; later reconcile existing"
+        },
+        {
+          "path": "internal/app/remote_exchange.go",
+          "line": 17,
+          "end_line": 39,
+          "label": "Verified SSH framed exchange"
+        },
+        {
+          "path": "internal/app/remote_cli.go",
+          "line": 26,
+          "end_line": 57,
+          "label": "Return destination data and connectivity"
+        }
+      ]
+    },
+    {
+      "id": "origin-records",
+      "type": "database",
+      "label": "Origin references",
+      "sublabel": "immutable intent · dated observations",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        260,
+        110
+      ],
+      "sources": [
+        {
+          "path": "internal/remote/reference.go",
+          "line": 66,
+          "end_line": 100,
+          "label": "Persist immutable intent and brief"
+        },
+        {
+          "path": "internal/remote/reference.go",
+          "line": 134,
+          "end_line": 160,
+          "label": "Send intent and acceptance receipts"
+        },
+        {
+          "path": "internal/remote/reference.go",
+          "line": 184,
+          "end_line": 214,
+          "label": "Bounded dated observation cache"
+        }
+      ]
     }
   ],
   "connections": [
@@ -365,7 +433,7 @@
       "id": "request-task",
       "from": "lead",
       "to": "control",
-      "label": "request",
+      "label": "local request",
       "variant": "emphasis"
     },
     {
@@ -411,16 +479,9 @@
     },
     {
       "id": "optional-worktree",
-      "from": "control",
+      "from": "execution",
       "to": "workspace",
-      "label": "optional Git worktree",
-      "variant": "dashed"
-    },
-    {
-      "id": "provider-workspace",
-      "from": "provider",
-      "to": "workspace",
-      "label": "use selected directory"
+      "label": "selected cwd"
     },
     {
       "id": "user-starts-host",
@@ -454,11 +515,55 @@
       "id": "team-management-resolution",
       "from": "control",
       "to": "teams",
-      "label": "manage / resolve",
+      "label": "local: manage / resolve",
+      "variant": "dashed"
+    },
+    {
+      "id": "remote-request",
+      "to": "origin",
+      "label": "remote request",
+      "variant": "emphasis",
+      "from": "lead"
+    },
+    {
+      "id": "origin-reference-access",
+      "to": "origin-records",
+      "label": "intent / cache",
+      "from": "origin"
+    },
+    {
+      "id": "remote-ssh",
+      "to": "control",
+      "label": "remote: SSH",
+      "variant": "security",
+      "from": "origin"
+    },
+    {
+      "id": "remote-response",
+      "to": "origin",
+      "label": "destination response",
+      "variant": "dashed",
+      "from": "control"
+    },
+    {
+      "id": "remote-result-to-lead",
+      "from": "origin",
+      "to": "lead",
+      "label": "result + connectivity",
       "variant": "dashed"
     }
   ],
   "cards": [
+    {
+      "dot": "rose",
+      "title": "Origin coordinates; destination owns execution",
+      "items": [
+        "Remote requests use verified embedded Go SSH to the selected installed Delegate. The prepared destination validates root/task identity and calls the same task lifecycle shown here (internal/app/remote_exchange.go:17–39; remote_serve.go:77–99,207–258).",
+        "A persistent destination supervisor must already be ready. The destination owns admission, budgets, cancellation, native closure and outcome.json. An SSH disconnect changes connectivity, not the task verdict (internal/app/remote_owner.go:41–55; remote_serve.go:272–284).",
+        "The origin stores immutable intent, acceptance and dated observations. After an uncertain send, recovery reconciles the existing request; it never authorizes a second admission. Downloaded declared outputs and caches do not replace the destination outcome (internal/remote/coordinator.go:24–103,166–173).",
+        "Local Teams, schedules and managed Git capture remain optional local paths. Remote references do not support logs or continuation; provider installations, accounts and configuration remain destination-owned (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
+      ]
+    },
     {
       "dot": "cyan",
       "title": "Saved is not running",
@@ -492,7 +597,7 @@
       "items": [
         "Pueue queues worker starts, not calendar recurrence. The guardian owns the task lifetime; delegate-run performs fresh preflight, starts the selected provider and captures output. Receipt precedes enqueue; closure precedes sealing and publication.",
         "TaskDir evaluates sealed evidence and commits outcome.json. Status, logs and collect observe that task; collection can reconcile saved evidence without launching a provider turn (internal/tasklifecycle/collection.go:13–63).",
-        "Confirmed resource pressure refuses a fresh task before record creation; unavailable metrics alone warn. Cancellation stops active work; terminal tasks stay unchanged. Eligible continuation creates a linked successor using the recorded native session (internal/tasklifecycle/cancel.go:13–41; continue.go:10–90)."
+        "Confirmed pressure refuses fresh admission before ordinary task-record creation; unavailable metrics alone warn. The public response can still be unknown for a caller-supplied ID: follow its next_action, never infer absence or replay (internal/tasklifecycle/dispatch.go:17–48; resource_admission.go:119–151)."
       ]
     },
     {

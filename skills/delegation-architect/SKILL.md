@@ -46,3 +46,6 @@ Return the selected design, ownership/dependency decisions, rejected alternative
 that affect correctness, tests and unresolved facts. The boundary is ready when
 its consumers can implement without guessing and [architecture guidance](../../agents/_data/maintainability-contract.md#architecture-guidance)
 is satisfied. Design agreement alone is not runtime or final-code approval.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

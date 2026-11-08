@@ -2,13 +2,13 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "Delegate — Run, stop or continue a task",
+    "title": "Delegate — Task lifecycle and remote coordination",
     "locale": "en",
     "output": "diagrams/lead-interface.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "8a0ca355b9961c0129a67ed8066e195e86d99a4f",
+      "revision": "a19dc328c89489a7ddec6f20c58cbb291205c31c",
       "link_mode": "local-only"
     }
   },
@@ -16,8 +16,8 @@
     {
       "id": "lead",
       "type": "external",
-      "label": "Agent / user CLI",
-      "sublabel": "ordinary: omit --root",
+      "label": "Agent / user",
+      "sublabel": "omit --root",
       "sources": [
         {
           "path": "cmd/delegate/main.go",
@@ -42,26 +42,26 @@
     {
       "id": "control",
       "type": "backend",
-      "label": "CLI / lifecycle",
+      "label": "Caller CLI",
       "sublabel": "default · any cwd",
       "sources": [
         {
-          "path": "internal/tasklifecycle/dispatch_inputs.go",
-          "line": 16,
-          "end_line": 25,
-          "label": "Omitted root uses the shared CLI default"
+          "path": "internal/tasklifecycle/dispatch.go",
+          "line": 17,
+          "end_line": 67,
+          "label": "Local dispatch and resource gate"
         },
         {
           "path": "internal/tasklifecycle/cancel.go",
-          "line": 13,
-          "end_line": 55,
-          "label": "Active cancel; terminal task is unchanged"
+          "line": 24,
+          "end_line": 56,
+          "label": "Active cancel; terminal task unchanged"
         },
         {
-          "path": "internal/tasklifecycle/continue.go",
-          "line": 10,
-          "end_line": 90,
-          "label": "Validate and dispatch a linked successor"
+          "path": "internal/app/remote_cli.go",
+          "line": 137,
+          "end_line": 180,
+          "label": "Origin references and remote operations"
         }
       ]
     },
@@ -92,6 +92,32 @@
       ]
     },
     {
+      "id": "destination",
+      "type": "backend",
+      "label": "Destination",
+      "sublabel": "remote lifecycle",
+      "sources": [
+        {
+          "path": "internal/app/remote_serve.go",
+          "line": 207,
+          "end_line": 258,
+          "label": "Admit or existing-only reconcile"
+        },
+        {
+          "path": "internal/app/remote_serve.go",
+          "line": 272,
+          "end_line": 284,
+          "label": "Controls reuse ordinary commands"
+        },
+        {
+          "path": "internal/app/remote_owner.go",
+          "line": 41,
+          "end_line": 55,
+          "label": "Require prepared persistent resident"
+        }
+      ]
+    },
+    {
       "id": "queue",
       "type": "messagebus",
       "label": "Task queue",
@@ -99,8 +125,8 @@
       "sources": [
         {
           "path": "internal/pueue/internal/control/staged.go",
-          "line": 175,
-          "end_line": 240,
+          "line": 177,
+          "end_line": 241,
           "label": "Receipt commits before enqueue"
         },
         {
@@ -120,14 +146,14 @@
         {
           "path": "internal/execution/run.go",
           "line": 88,
-          "end_line": 161,
-          "label": "Preflight and closure before finalization"
+          "end_line": 165,
+          "label": "Fresh preflight and closure before seal"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 323,
-          "end_line": 371,
-          "label": "Provider Start, Wait and output capture"
+          "line": 327,
+          "end_line": 373,
+          "label": "Provider Start, Wait and lifetime finish"
         },
         {
           "path": "internal/guardian/finalization.go",
@@ -151,9 +177,9 @@
         },
         {
           "path": "internal/execution/run.go",
-          "line": 222,
-          "end_line": 248,
-          "label": "Configured command in selected directory"
+          "line": 226,
+          "end_line": 250,
+          "label": "Installed executable and selected cwd"
         }
       ]
     },
@@ -161,12 +187,12 @@
       "id": "task-records",
       "type": "database",
       "label": "Task records",
-      "sublabel": "saved context + outcome",
+      "sublabel": "saved outcome",
       "sources": [
         {
           "path": "internal/taskdir/taskdir.go",
-          "line": 119,
-          "end_line": 151,
+          "line": 123,
+          "end_line": 157,
           "label": "Persist immutable task records"
         },
         {
@@ -204,6 +230,11 @@
       "from": 1610,
       "to": 1870,
       "label": "D · Eligible continuation — a new task"
+    },
+    {
+      "to": 2790,
+      "label": "E · Remote alternative — same destination execution, independent SSH exchanges",
+      "from": 1900
     }
   ],
   "messages": [
@@ -244,9 +275,9 @@
       "from": "control",
       "to": "lead",
       "y": 508,
-      "label": "if pressure: not_created; stop",
+      "label": "pressure refusal: follow response",
       "variant": "dashed",
-      "note": "Otherwise proceed below; unknown metrics warn."
+      "note": "No new ordinary task record is written. A supplied ID can still report unknown; do not infer absence or retry."
     },
     {
       "id": "create-task",
@@ -414,7 +445,7 @@
       "y": 1714,
       "label": "new task; same session",
       "variant": "emphasis",
-      "note": "Fresh admission again; recorded Team context and config inherit, with allowed caller overrides."
+      "note": "Local continuation re-enters fresh admission with saved session and Team context, under allowed overrides."
     },
     {
       "id": "successor-id",
@@ -423,6 +454,99 @@
       "y": 1834,
       "label": "new task id",
       "variant": "return"
+    },
+    {
+      "id": "remote-dispatch",
+      "to": "control",
+      "y": 1930,
+      "label": "dispatch --device worker",
+      "variant": "emphasis",
+      "from": "lead",
+      "note": "Remote alternative to A/B. Queue, execution, provider and task records below are on the destination."
+    },
+    {
+      "id": "ssh-admit",
+      "to": "destination",
+      "y": 2100,
+      "label": "verified SSH: admit once",
+      "variant": "security",
+      "from": "control",
+      "note": "Origin saves immutable intent and a before-send marker first. Destination validates identity and requires its persistent supervisor."
+    },
+    {
+      "id": "remote-task-record",
+      "to": "task-records",
+      "y": 2230,
+      "label": "same lifecycle: save task + binding",
+      "variant": "emphasis",
+      "from": "destination"
+    },
+    {
+      "id": "remote-submit",
+      "to": "queue",
+      "y": 2270,
+      "label": "stage; save receipt; enqueue",
+      "variant": "emphasis",
+      "from": "destination"
+    },
+    {
+      "id": "remote-worker",
+      "to": "execution",
+      "y": 2310,
+      "label": "execute B on destination",
+      "variant": "emphasis",
+      "from": "queue",
+      "note": "Destination guardian owns the task budget and closure. SSH disconnect does not cancel it."
+    },
+    {
+      "id": "remote-admission-response",
+      "to": "control",
+      "y": 2430,
+      "label": "created / unknown / refusal",
+      "variant": "return",
+      "from": "destination",
+      "note": "Origin caches a dated observation; it gains no terminal authority."
+    },
+    {
+      "id": "remote-observe",
+      "to": "control",
+      "y": 2530,
+      "label": "status / collect remote:ID",
+      "variant": "default",
+      "from": "lead"
+    },
+    {
+      "id": "ssh-observe",
+      "to": "destination",
+      "y": 2570,
+      "label": "SSH observe the same identity",
+      "variant": "security",
+      "from": "control"
+    },
+    {
+      "id": "destination-outcome",
+      "to": "task-records",
+      "y": 2610,
+      "label": "read / reconcile outcome",
+      "variant": "default",
+      "from": "destination"
+    },
+    {
+      "id": "destination-response",
+      "to": "control",
+      "y": 2650,
+      "label": "destination envelope",
+      "variant": "return",
+      "from": "destination"
+    },
+    {
+      "id": "remote-result",
+      "to": "lead",
+      "y": 2690,
+      "label": "result + observed connectivity",
+      "variant": "return",
+      "from": "control",
+      "note": "A cached observation or downloaded output is not a new terminal authority."
     }
   ],
   "activations": [
@@ -478,7 +602,7 @@
   "cards": [
     {
       "dot": "violet",
-      "title": "Two entries; one task lifecycle",
+      "title": "Local entries; one execution owner",
       "items": [
         "Agent and manual commands omit --root and share one OS-default store across project directories. Plain user-started scheduler serve can be ready before the first definition. Its host and calendar are shown in the component map; a scheduled entry calls this lifecycle in process only after a new committed claim.",
         "Optional Team selection reads current Member defaults before fresh admission. Every new scheduled occurrence resolves them anew; explicit caller choices stay authoritative and Roles grant no permissions (internal/app/teams_schedule_create.go:25–51).",
@@ -489,7 +613,7 @@
       "dot": "cyan",
       "title": "How to read the alternatives",
       "items": [
-        "A and B form the normal request/completion path only when fresh admission succeeds. Confirmed resource pressure exits A without a task record.",
+        "A and B show a local request/completion path only when fresh admission succeeds. Pressure refuses new work before ordinary task-record creation; a caller-supplied ID can retain unknown/stop_and_report, so follow the returned guidance.",
         "C is a separate active-task cancellation path, not a step after B has published a terminal outcome. D is an explicit new request after the predecessor ends.",
         "For an intentional custom or historical root, preserve its exact --root for dispatch, reads, controls and continuation. Nothing moves existing task records."
       ]
@@ -498,7 +622,7 @@
       "dot": "emerald",
       "title": "The result has one owner",
       "items": [
-        "The runner closes the task lifetime, seals provider output and asks TaskDir to finalize. TaskDir interprets that sealed evidence and commits outcome.json.",
+        "The runner joins provider output and native closure, then seals output and asks TaskDir to finalize. TaskDir interprets sealed evidence and commits outcome.json (internal/execution/run.go:131–165).",
         "A response carrying a task id alone does not establish task creation. Observe only a task_record: created response and follow its failure guidance.",
         "Collection may reconcile existing saved evidence; it does not launch another provider turn (internal/tasklifecycle/collection.go:13–63)."
       ]
@@ -517,6 +641,15 @@
       "items": [
         "This sequence shows the ordinary provider turn. Managed workspace preparation and capture are optional, with their own receipts (internal/workspaces/admission.go:16–62; capture.go:123–150).",
         "Workspace capture requires its helper lifetime to close and remains independent of the task's terminal verdict."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Remote transport does not own the task",
+      "items": [
+        "E is a separate remote request, not a step after local continuation. Destination reuses A/B execution and C cancellation. The caller owns origin intent and observation records; destination TaskDir alone owns task state (internal/remote/reference.go:19–35,66–100,184–214).",
+        "A durable before-send marker prevents another admit after an uncertain transmission. Reconnection performs existing-only reconciliation under the same destination identity, not a provider restart (internal/remote/coordinator.go:24–103).",
+        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remote_cli.go:303–321; arguments.go:481–482)."
       ]
     }
   ]

@@ -126,3 +126,6 @@ lifecycle or native guidance only when the change affects those boundaries.
   evidence, or a missing prerequisite is recorded as `BLOCKED`.
 - Historical collection remains available without the current executable, and
   no paid retry or automatic fallback was introduced.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

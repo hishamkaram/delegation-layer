@@ -6,6 +6,7 @@ Start with [installation](installation.md), then the
 | Need | Guide |
 | --- | --- |
 | Run a task manually | [Read-only example](../skills/agent-integration/examples/read-only-task.md) |
+| Run a task on another machine and transfer selected files | [Remote delegation](remote-delegation.md) |
 | Save recurring work, start its scheduler and inspect a result | [Scheduler walkthrough](getting-started.md#recurring-tasks) |
 | Find commands and operator settings | [CLI reference](cli-reference.md) |
 | Integrate JSON responses | [API index](api.md) |

@@ -123,17 +123,13 @@ compute_sha256() {
 }
 
 echo "Installing tools into ${BIN_DIR}..."
-
-# Bound retries for transient release/CDN failures, including proxy errors.
-# At most four attempts; each transfer has its own finite timeout. The
-# existing pinned checksum checks still run before extraction or installation.
-TOOL_DOWNLOAD_OPTIONS=(--retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 120)
+MAX_TOOL_ARCHIVE_BYTES=$((128 * 1024 * 1024))
 
 # 1. golangci-lint 2.14.0
 GOLANGCI_KEY="${GOLANGCI_OS}-${GOLANGCI_ARCH}"
 EXPECTED_GOLANGCI_SHA="$(get_golangci_sha256 "${GOLANGCI_KEY}")"
 echo "Downloading golangci-lint v${GOLANGCI_VERSION} (${GOLANGCI_KEY})..."
-curl "${TOOL_DOWNLOAD_OPTIONS[@]}" -sSL -f -o "${TMP_DIR}/${GOLANGCI_TAR}" "${GOLANGCI_URL}"
+"${SCRIPT_DIR}/download-tool-archive.sh" "${GOLANGCI_URL}" "${TMP_DIR}/${GOLANGCI_TAR}" "${MAX_TOOL_ARCHIVE_BYTES}"
 ACTUAL_GOLANGCI_SHA="$(compute_sha256 "${TMP_DIR}/${GOLANGCI_TAR}")"
 if [[ "${ACTUAL_GOLANGCI_SHA}" != "${EXPECTED_GOLANGCI_SHA}" ]]; then
     echo "ERROR: SHA256 mismatch for ${GOLANGCI_TAR}!" >&2
@@ -150,7 +146,7 @@ echo "Installed golangci-lint v${GOLANGCI_VERSION}"
 GORELEASER_KEY="${GORELEASER_OS}-${GORELEASER_ARCH}"
 EXPECTED_GORELEASER_SHA="$(get_goreleaser_sha256 "${GORELEASER_KEY}")"
 echo "Downloading GoReleaser v${GORELEASER_VERSION} (${GORELEASER_KEY})..."
-curl "${TOOL_DOWNLOAD_OPTIONS[@]}" -sSL -f -o "${TMP_DIR}/${GORELEASER_TAR}" "${GORELEASER_URL}"
+"${SCRIPT_DIR}/download-tool-archive.sh" "${GORELEASER_URL}" "${TMP_DIR}/${GORELEASER_TAR}" "${MAX_TOOL_ARCHIVE_BYTES}"
 ACTUAL_GORELEASER_SHA="$(compute_sha256 "${TMP_DIR}/${GORELEASER_TAR}")"
 if [[ "${ACTUAL_GORELEASER_SHA}" != "${EXPECTED_GORELEASER_SHA}" ]]; then
     echo "ERROR: SHA256 mismatch for ${GORELEASER_TAR}!" >&2

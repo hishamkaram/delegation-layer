@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from scripts.delegate_acceptance.private_cli.fingerprints import REPOSITORY
-from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
+from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked, InstallationFailure
 from scripts.delegate_acceptance.private_cli.fingerprints import descriptor_evidence
 from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprint
 from scripts.delegate_acceptance.private_cli.fingerprints import installed_executable_observation
@@ -182,4 +182,12 @@ class AcceptanceReceipt:
                 )
             )
             payload["failure"] = {"code": code, "exception_type": type(error).__name__, "phase": failure_phase}
+            if isinstance(error, InstallationFailure):
+                outcome = error.outcome
+                installation: dict[str, str | int] = {"phase": error.phase.value}
+                if isinstance(outcome, int):
+                    installation["exit_code"] = outcome
+                else:
+                    installation["reason"] = outcome.value
+                payload["failure"]["installation"] = installation
         self.output.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")

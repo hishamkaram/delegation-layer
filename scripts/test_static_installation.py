@@ -62,7 +62,7 @@ class ShellCheckInstallationTests(unittest.TestCase):
                 tools.require_banner([str(installed)], marker)
                 self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
                 command = download.call_args.args[0]
-                self.assertTrue(command[-1].endswith(f"/shellcheck-v0.11.0.{suffix}.tar.gz"))
+                self.assertTrue(command[1].endswith(f"/shellcheck-v0.11.0.{suffix}.tar.gz"))
 
     def test_missing_archive_member_is_an_actionable_failure(self):
         archive = shellcheck_archive(b"unrelated", member="unexpected-file")
@@ -249,9 +249,11 @@ def shellcheck_archive(executable: bytes, *, member: str = "shellcheck-v0.11.0/s
 
 def download_fixture(data: bytes):
     def download(command: list[str], *, environment=None) -> None:
-        if command[0] != "curl":
+        if Path(command[0]).name != "download-tool-archive.sh" or len(command) != 4:
             raise AssertionError("archive fixture received a non-download command")
-        Path(command[command.index("--output") + 1]).write_bytes(data)
+        if command[3] != str(32 * 1024 * 1024):
+            raise AssertionError("ShellCheck archive fixture requires its explicit byte bound")
+        Path(command[2]).write_bytes(data)
     return download
 
 

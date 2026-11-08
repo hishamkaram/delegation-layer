@@ -136,10 +136,14 @@ jobs:
 
       - name: Install tools
         if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: make tools
 
       - name: Install pinned supervisor test binaries
         if: ${{ needs.changes.outputs.full == 'true' }}
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: ./scripts/install-test-supervisor.sh
 
       - name: Build native repair control owner
@@ -295,9 +299,13 @@ jobs:
           python3 --version
 
       - name: Install platform tools
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: make tools-go tools-node
 
       - name: Install pinned supervisor test binaries
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: ./scripts/install-test-supervisor.sh
 
       - name: Build native repair control owner
@@ -427,14 +435,18 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install pinned repository tools
-        run: make tools
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: |
+          make tools
+          ./scripts/install-test-supervisor.sh
       - name: Prove native infrastructure components only
         shell: bash
         env:
           DELEGATE_INDEPENDENT_EXPECTED_BACKEND: process-group
         run: |
           mkdir -p bin/independent-startup-proof
-          make acceptance-independent-startup 2>&1 | tee bin/independent-startup-proof/native.log
+          make acceptance-independent-startup-prepared 2>&1 | tee bin/independent-startup-proof/native.log
       - name: Retain bounded native component output
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -470,6 +482,8 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install pinned tools and supervisor
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: |
           make tools
           ./scripts/install-test-supervisor.sh
@@ -525,6 +539,8 @@ jobs:
           node-version: '22.x'
 
       - name: Install pinned tools
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
         run: make tools
 
       - name: Verify pinned tool versions

@@ -40,9 +40,12 @@ for changed durable or process behavior.
 
 Deliver actual changes when assigned implementation; a patch proposal is not
 implementation completion. Report changed files, commands/results and blockers
-concisely to Root. Root owns shared integration, Git and final checks/review.
+concisely to Root. Root owns integration, Git and final checks and arranges independent review.
 Apply the [installed-executable rule](../../agents/_data/product-boundary.md#installed-executables)
 to production code, fixtures and contributor tools. No handoff index or extra
 receipt is required.
 Changed OS primitives need [native validation](../../agents/_data/maintainability-contract.md#native-platform-checks)
 before claiming supported-host behavior.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

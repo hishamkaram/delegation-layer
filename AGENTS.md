@@ -15,7 +15,7 @@ details.
 ## Shared engineering rules
 
 1. Do the smallest correct change. In the existing plan, name the requested
-   behavior, affected area, non-goals and done condition. No mandatory template,
+   behavior, affected area, non-goals and done condition. No mandatory plan template,
    tracking file or extra approval process.
 2. Before changing shared state or an interface, name its authoritative owner,
    writers, readers and invariant. Keep one owner per state; derive other views.
@@ -48,6 +48,25 @@ details.
 10. Report actual changes, commands/results and limitations in the conversation.
     Blocked or unverified checks are not passed. Keep credentials, inherited
     environments and unrestricted private provider output out of diagnostics.
+
+## Documentation completion
+
+After implementation and behavioral verification, reconcile affected README,
+guides, examples, skills and diagrams as the final development step before
+independent integrated review and opening or completing the PR. Implementers
+report documentation impact; Root owns reconciliation across subsystems; the
+independent reviewer verifies the integrated result against current source.
+
+Use [docs-updater](skills/docs-updater/SKILL.md) for the reconciliation procedure.
+Update only affected guidance and diagrams; a specific, source-backed reason
+for no change is valid. Record the assessment and actual checks in the PR's
+[documentation checklist](.github/pull_request_template.md). Checks for links,
+commands and checksums do not establish semantic freshness or visual quality.
+
+Corrections that change documented behavior reopen this assessment. Reconcile
+those changes before final review and rerun only invalidated checks, including
+applicable documentation checks. Do not force token documentation edits,
+unrelated diagram regeneration, or repeated runtime/provider suites for prose.
 
 ## Coordination
 

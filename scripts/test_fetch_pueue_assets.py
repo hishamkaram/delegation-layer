@@ -9,6 +9,7 @@ import gzip
 import hashlib
 from http.client import HTTPMessage
 import io
+import json
 import os
 import signal
 import stat
@@ -18,6 +19,7 @@ import tarfile
 import tempfile
 from typing import IO
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 from scripts import fetch_pueue_assets as assets
@@ -346,13 +348,53 @@ class ArchiveInstallerTests(unittest.TestCase):
                     with self.assertRaises(assets.InstallError):
                         assets.download_archive(assets.RELEASE_URL + "/archive.tar.gz", target)
         request = assets.urllib.request.Request(assets.RELEASE_URL + "/archive.tar.gz")
-        redirects = assets.HTTPSRedirects()
-        with self.assertRaisesRegex(assets.InstallError, "HTTPS"):
+        redirects = assets.github_release_asset.HTTPSRedirects()
+        with self.assertRaisesRegex(assets.github_release_asset.DownloadError, "HTTPS"):
             redirects.redirect_request(req=request, fp=io.BytesIO(), code=302, msg="redirect",
                                        headers=HTTPMessage(), newurl="http://example/archive")
         allowed = redirects.redirect_request(req=request, fp=io.BytesIO(), code=302, msg="redirect",
                                              headers=HTTPMessage(), newurl="https://example/archive")
         self.assertIsNotNone(allowed)
+
+    def test_transient_release_failure_uses_exact_asset_api_and_existing_pin(self) -> None:
+        class Response(io.BytesIO):
+            url = "https://api.github.com/repos/hishamkaram/delegation-layer/releases/assets/17"
+
+        data = archive()
+        metadata = json.dumps({"tag_name": "v0.3.1", "assets": [{"name": "delegation-layer_0.3.1_Linux_amd64.tar.gz",
+                                         "id": 17, "state": "uploaded", "size": len(data)}]}).encode()
+        responses = [urllib.error.HTTPError(assets.RELEASE_URL, 504, "timeout", HTTPMessage(), None),
+                     Response(metadata), Response(data)]
+        with patch.object(assets.urllib.request, "build_opener") as opener, \
+                patch.object(assets, "ARCHIVE_PINS", {KEY: hashlib.sha256(data).hexdigest()}), \
+                patch.dict(os.environ, {"DELEGATE_TOOL_DOWNLOAD_TOKEN": "pueue-download-token"}), \
+                patch("sys.stderr", new_callable=io.StringIO) as diagnostic:
+            opener.return_value.open.side_effect = responses
+            assets.install_pair(self.output, *KEY)
+        self.assertIn("HTTP Error 504", diagnostic.getvalue())
+        self.assertIn("trying the exact pinned asset", diagnostic.getvalue())
+        self.assertNotIn("pueue-download-token", diagnostic.getvalue())
+        self.assertEqual([call.args[0].get_header("Authorization") for call in opener.return_value.open.call_args_list],
+                         [None, "Bearer pueue-download-token", "Bearer pueue-download-token"])
+        self.assert_installed("pueue")
+        self.assert_installed("pueued")
+        self.assert_clean()
+
+    def test_invalid_download_token_fails_before_primary_or_api_and_publication(self) -> None:
+        self.existing()
+        with patch.dict(os.environ, {"DELEGATE_TOOL_DOWNLOAD_TOKEN": "private-token\r\nInjected: value"}), patch.object(
+                assets.urllib.request, "build_opener") as opener, patch.object(
+                assets.platform, "system", return_value="Linux"), patch.object(
+                assets.platform, "machine", return_value="x86_64"), patch(
+                "sys.stderr", new_callable=io.StringIO) as diagnostic:
+            self.assertEqual(assets.main(["--host", str(self.output)]), 1)
+        opener.assert_not_called()
+        self.assertIn("invalid explicit tool-download token", diagnostic.getvalue())
+        self.assertNotIn("private-token", diagnostic.getvalue())
+        self.assertNotIn("Traceback", diagnostic.getvalue())
+        self.assertEqual((self.output / "pueue").read_bytes(), b"previous pueue")
+        self.assertEqual((self.output / "pueued").read_bytes(), b"previous pueued")
+        self.assert_clean()
 
     def test_cli_interruption_restores_handlers_and_cleans_staging(self) -> None:
         self.existing()

@@ -43,6 +43,9 @@ callers, stored records and public command success/failure behavior. Use current
 
 Return a bounded change with its owner/interface decisions, actual test results
 and unavailable checks. No mandatory transition IDs or proof manifest. Run
-focused checks during edits; Root owns integrated checks and independent review.
+focused checks during edits; Root owns integrated checks and arranges independent review.
 Native runtime claims require execution on the affected supported host, not a
 cross-build, fixture on another kernel or upstream portability claim.
+
+Report affected guidance and diagram changes under the project
+[documentation completion rule](../../AGENTS.md#documentation-completion).

@@ -16,6 +16,26 @@ Keep the native `bin/delegate` and `bin/delegate-run` from the same build coloca
 If `GOROOT` is set explicitly, it must match the selected compiler; a matching
 `go version` alone does not prove the assembler and other tools use that release.
 
+The golangci-lint, GoReleaser, ShellCheck and test-Pueue archive installers report
+eligible transient download failures and try the same exact release asset once
+through GitHub's public asset API. This fallback requires Python 3 and sends no
+credentials unless explicitly configured as below. The pinned release, asset
+name and whole-archive checksum stay the same. API rate limits, invalid metadata,
+incomplete downloads or checksum mismatches fail installation; the fallback does
+not guarantee availability.
+Pueue uses the fallback only when opening the primary request fails; errors
+while copying its body remain failures.
+
+For optional API authentication, supply `DELEGATE_TOOL_DOWNLOAD_TOKEN` in the
+installation command's environment. Unset or empty means anonymous; this
+transport does not discover `GH_TOKEN`, `GITHUB_TOKEN` or GitHub CLI credentials.
+CI installer steps supply the existing read-only `${{ github.token }}` through
+this dedicated variable. Provider installation, candidate builds and proof steps
+do not receive it. Authorization is sent only to the direct API requests and
+is never forwarded on redirects. API HTTP failures report the request phase,
+authentication mode and available numeric rate-limit fields. A 403 alone does not
+establish rate limiting.
+
 Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
 relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
 `pueued` must sit beside the resolved client, rather than elsewhere on `PATH`.
@@ -53,6 +73,11 @@ their own verified archive Pueue pair; private CLI upgrade scenarios do likewise
 Other supervisor fixtures retain explicit installed Pueue paths for their
 required invocation observations. Missing or incompatible installations fail
 explicitly. Unknown build/child closure retains the owned paths for diagnosis.
+
+Child installation failures identify `build-delegate`, `build-delegate-run` or
+`install-supervisor`, with an exit code or bounded-command reason. Private CLI
+receipts preserve these typed details under `failure.installation`; compiler and
+download output, arbitrary exception messages and inherited settings remain private.
 
 `make acceptance-supervisor` and `make acceptance-inspection` let their drivers
 own the fixture builds. The standalone `make supervisor-fixtures` and
@@ -189,12 +214,19 @@ identity, shutdown-lease, infrastructure and recovery controls. Copied-image
 custody, root editor/census and executable-byte-pin upgrade probes are retired.
 Do not invoke the historical staging probes as replacement proof.
 
-The replacement receipt/test producers and affected native checks remain
-unverified until their migrations and execution complete. Target availability
-and workflow guard tests establish neither current product acceptance nor full
-CI or PR readiness. Native Linux/macOS checks and the three nested-survival
-topologies on each required backend need their actual results. Cross-builds do
-not fill a missing native cell; Windows remains a future, unverified host.
+The standalone target installs the pinned supervisor pair, then invokes
+`acceptance-independent-startup-prepared`. CI prepares that pair in its
+authenticated installer step and invokes the prepared target in the token-free
+proof step. The prepared target retains the tool-version guard and every native
+check, without repeating the download.
+
+Those checks cover native lifetime, peer identity, shutdown-lease and resident
+infrastructure/recovery cases on Linux and macOS with the cooperative backend.
+This is component evidence, not full
+product acceptance or PR readiness. The separate nested-survival gate exercises
+its three topologies on each selected backend. Required host/backend claims need
+their actual results; cross-builds do not fill a missing native cell. Windows
+remains a future, unverified host.
 
 Assert the production-selected backend and never force fallback. An abrupt owned
 fixture exit models owner loss, not external signal handling. Different-UID
@@ -238,8 +270,9 @@ The fixture records cold-start provenance, daemon continuity before recovery,
 a fresh reply from the same running worker after leader termination, queued
 launch and independent deadline, ordinary descendant containment, and native
 closure before shutdown. Failed setup, survival or cleanup remains non-passing;
-retained roots and captures are diagnostic evidence. Until the cold arrangement
-is verified on the relevant backend, prestart its supervisor outside the leader.
+retained roots and captures are diagnostic evidence. The separate-cold case
+requires automatic startup from the leader's context; prestarting that case's
+supervisor would bypass the behavior under test.
 
 Verify the user-started scheduler host natively on Linux and macOS.
 `scripts/acceptance_scheduler.py` accepts
@@ -274,8 +307,9 @@ python3 scripts/acceptance_scheduler.py \
 Use `python3 scripts/acceptance_scheduler.py --help` for the current driver's
 scenario, source-root and supervisor-path options.
 
-For the new path, run the actual candidate CLI/runner on Linux and macOS with a
-user-started `scheduler serve` in an independent terminal or tmux pane. Verify
+For scheduler hosting changes, run the actual candidate CLI/runner on Linux and
+macOS with a user-started `scheduler serve` in an independent terminal or tmux
+pane. Verify
 child failure followed by owned Wait, backoff, restart and a later scheduled
 provider result; stop and terminal signals must fence/join host and child without
 respawn while independent tasks retain their lifetimes. During joined stop,
@@ -297,7 +331,7 @@ and retain `schedule.saved: true`. Check a raw `scheduler run` after an older
 managed host stopped: status must report its current `foreground` generation,
 and public stop must leave it running with `stop_accepted: false` and
 `next_action: stop_foreground_runtime`. End that owned invocation in its original
-pane with Ctrl-C. These corrections still require integrated native verification.
+pane with Ctrl-C. These scenarios require actual integrated native results.
 Prototype results, simulated clocks and cross-builds do not pass these checks.
 Native suspend/resume remains unverified until actually exercised. The hosting
 and [upgrade procedure](cli-reference.md#scheduler-upgrades) own operator guidance;
@@ -485,11 +519,21 @@ framework or contributor receipt format is introduced.
 
 ## Documentation changes
 
+Follow the [documentation completion rule](../AGENTS.md#documentation-completion)
+after implementation and behavioral verification, before final integrated review
+and opening or completing the PR. Use [docs-updater](../skills/docs-updater/SKILL.md)
+for the source audit, packaged-reference synchronization and diagram procedure.
+The PR checklist records affected documentation/diagram changes or specific
+no-change reasons, actual checks and any visual-verification limits.
+
 Keep product documentation in README/docs and local plans/private diagnostics
 under ignored .local/archive. Describe implemented behavior and actual checks;
-mark future or unavailable behavior honestly. Use Archify full-diagram exports,
-not cropped screenshots, when a diagram changes. Do not update illustrations
-or rerun their native/provider scenarios merely for unrelated contributor prose.
+mark future or unavailable behavior honestly. Run `make check-docs` for the final
+documentation pass. Changed diagrams need repository-backed Archify validation
+and visual inspection of the page and full light/dark SVG/PNG exports, followed
+by updated checksums. Link/checksum checks alone do not establish freshness or
+visual quality. Do not regenerate unrelated diagrams or rerun runtime/provider
+scenarios solely for prose.
 
 ### Remote SSH acceptance
 

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1580 958" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14" style="--flow-cycle: 6.871s; width: 1580px; height: 958px; min-width: 0px;" width="1580" height="958" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
+<svg viewBox="0 0 1580 1018" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14" style="--flow-cycle: 6.343s; width: 1580px; height: 1018px; min-width: 0px;" width="1580" height="1018" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -399,227 +399,283 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
 }
 @keyframes archify-relay-ripple {
   0% { r: 2px; opacity: var(--flow-peak, 0.6); }
-  10.915%, 100% { r: 20px; opacity: 0; }
+  11.824%, 100% { r: 20px; opacity: 0; }
 }
 @keyframes archify-relay-comet-0 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  9.875% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  12.204%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  11.659% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  14.182%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-0 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  9.875% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  22.973%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  11.659% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  25.849%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-1 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  21.83% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  24.158%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  21.442% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  23.964%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-1 {
-  0%, 6.549% { opacity: 0; }
-  21.83% { opacity: var(--flow-peak, 0.3); }
-  34.927%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 6.433% { opacity: 0; }
+  21.442% { opacity: var(--flow-peak, 0.3); }
+  35.631%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-2 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.663% { opacity: var(--flow-peak, 0.9); }
-  8.316% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  10.644%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.802% { opacity: var(--flow-peak, 0.9); }
+  9.009% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  11.532%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-2 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  8.316% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  21.414%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  9.009% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  23.198%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-3 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  9.356% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  11.684%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  10.135% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  12.658%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-3 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  9.356% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  22.453%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  10.135% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  24.324%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-4 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.455% { opacity: var(--flow-peak, 0.9); }
-  7.277% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  9.605%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.577% { opacity: var(--flow-peak, 0.9); }
+  7.883% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.405%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-4 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  7.277% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  20.374%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  7.883% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.072%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-5 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  21.83% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  24.158%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  23.649% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  26.171%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-5 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  21.83% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  34.927%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  23.649% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  37.838%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-6 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  21.152% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  23.481%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  22.521% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  25.043%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-6 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  21.152% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  34.25%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  22.521% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  36.71%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-7 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.222% { opacity: var(--flow-peak, 0.9); }
-  6.112% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  8.441%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.689% { opacity: var(--flow-peak, 0.9); }
+  8.446% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.968%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-7 {
-  0%, 1.834% { opacity: 0; }
-  6.112% { opacity: var(--flow-peak, 0.3); }
-  19.21%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  8.446% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.635%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-8 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  21.83% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  24.158%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.351% { opacity: var(--flow-peak, 0.9); }
+  6.757% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  9.279%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-8 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  21.83% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  34.927%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  6.757% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  20.946%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-9 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.247% { opacity: var(--flow-peak, 0.9); }
-  6.237% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  8.565%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.577% { opacity: var(--flow-peak, 0.9); }
+  7.883% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.405%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-9 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  6.237% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  19.335%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  7.883% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.072%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-10 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.247% { opacity: var(--flow-peak, 0.9); }
-  6.237% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  8.565%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  9.572% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  12.095%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-10 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  6.237% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  19.335%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  9.572% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  23.761%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-11 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  8.836% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  11.164%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  22.69% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  25.212%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-11 {
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  8.836% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  21.933%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  22.69% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  36.879%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-12 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  20.944% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  23.273%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  23.649% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  26.171%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-12 {
-  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  20.944% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  34.042%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 7.095% { opacity: 0; }
+  23.649% { opacity: var(--flow-peak, 0.3); }
+  37.838%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-13 {
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.746% { opacity: var(--flow-peak, 0.9); }
-  21.83% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  24.158%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  22.403% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  24.925%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-13 {
-  0%, 6.549% { opacity: 0; }
-  21.83% { opacity: var(--flow-peak, 0.3); }
-  34.927%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  22.403% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  36.592%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+}
+@keyframes archify-relay-comet-14 {
+  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.577% { opacity: var(--flow-peak, 0.9); }
+  7.883% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.405%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+}
+@keyframes archify-relay-wake-14 {
+  0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  7.883% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.072%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+}
+@keyframes archify-relay-comet-15 {
+  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.689% { opacity: var(--flow-peak, 0.9); }
+  8.446% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.968%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+}
+@keyframes archify-relay-wake-15 {
+  0%, 2.534% { opacity: 0; }
+  8.446% { opacity: var(--flow-peak, 0.3); }
+  22.635%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+}
+@keyframes archify-relay-comet-16 {
+  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.689% { opacity: var(--flow-peak, 0.9); }
+  8.446% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.968%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+}
+@keyframes archify-relay-wake-16 {
+  0%, 2.534% { opacity: 0; }
+  8.446% { opacity: var(--flow-peak, 0.3); }
+  22.635%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+}
+@keyframes archify-relay-comet-17 {
+  0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
+  1.892% { opacity: var(--flow-peak, 0.9); }
+  23.649% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  26.171%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+}
+@keyframes archify-relay-wake-17 {
+  0%, 7.095% { opacity: 0; }
+  23.649% { opacity: var(--flow-peak, 0.3); }
+  37.838%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-node-0 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
   0% { filter: var(--ambient-node-base-filter, none); }
-  1.746%, 6.112% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  17.464% { filter: var(--ambient-node-base-filter, none); }
+  1.892%, 6.622% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  18.919% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-1 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  6.237% { filter: var(--ambient-node-base-filter, none); }
-  7.983%, 12.349% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  23.701% { filter: var(--ambient-node-base-filter, none); }
+  6.757% { filter: var(--ambient-node-base-filter, none); }
+  8.649%, 13.378% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  25.676% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-2 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  13.929% { filter: var(--ambient-node-base-filter, none); }
-  15.676%, 20.042% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  31.393% { filter: var(--ambient-node-base-filter, none); }
+  16.216% { filter: var(--ambient-node-base-filter, none); }
+  18.108%, 22.838% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  35.135% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-3 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  16.528% { filter: var(--ambient-node-base-filter, none); }
-  18.274%, 22.64% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  33.992% { filter: var(--ambient-node-base-filter, none); }
+  17.905% { filter: var(--ambient-node-base-filter, none); }
+  19.797%, 24.527% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  36.824% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-4 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  37.214% { filter: var(--ambient-node-base-filter, none); }
-  38.96%, 43.326% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  54.678% { filter: var(--ambient-node-base-filter, none); }
+  39.235% { filter: var(--ambient-node-base-filter, none); }
+  41.127%, 45.856% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  58.154% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-5 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  23.701% { filter: var(--ambient-node-base-filter, none); }
-  25.447%, 29.813% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  41.164% { filter: var(--ambient-node-base-filter, none); }
+  26.802% { filter: var(--ambient-node-base-filter, none); }
+  28.694%, 33.423% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  45.721% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-6 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  36.537% { filter: var(--ambient-node-base-filter, none); }
-  38.283%, 42.649% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  54.001% { filter: var(--ambient-node-base-filter, none); }
+  40.314% { filter: var(--ambient-node-base-filter, none); }
+  42.206%, 46.935% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  59.233% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-7 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  21.497% { filter: var(--ambient-node-base-filter, none); }
-  23.243%, 27.609% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  38.96% { filter: var(--ambient-node-base-filter, none); }
+  41.441% { filter: var(--ambient-node-base-filter, none); }
+  43.333%, 48.063% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  60.36% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-8 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  37.214% { filter: var(--ambient-node-base-filter, none); }
-  38.96%, 43.326% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  54.678% { filter: var(--ambient-node-base-filter, none); }
+  26.239% { filter: var(--ambient-node-base-filter, none); }
+  28.131%, 32.86% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  45.158% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-9 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  34.511% { filter: var(--ambient-node-base-filter, none); }
-  36.258%, 40.624% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  51.975% { filter: var(--ambient-node-base-filter, none); }
+  35.698% { filter: var(--ambient-node-base-filter, none); }
+  37.59%, 42.32% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  54.617% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-10 {
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  43.243% { filter: var(--ambient-node-base-filter, none); }
-  44.99%, 49.356% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  60.707% { filter: var(--ambient-node-base-filter, none); }
+  38.514% { filter: var(--ambient-node-base-filter, none); }
+  40.405%, 45.135% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  57.432% { filter: var(--ambient-node-base-filter, none); }
+}
+@keyframes archify-relay-node-11 {
+  0%, 100% { filter: var(--ambient-node-base-filter, none); }
+  47.973% { filter: var(--ambient-node-base-filter, none); }
+  49.865%, 54.595% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  66.892% { filter: var(--ambient-node-base-filter, none); }
+}
+@keyframes archify-relay-node-12 {
+  0%, 100% { filter: var(--ambient-node-base-filter, none); }
+  48.536% { filter: var(--ambient-node-base-filter, none); }
+  50.428%, 55.158% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  67.455% { filter: var(--ambient-node-base-filter, none); }
 }
 svg[data-node-ui] [data-node-id] &gt; rect:not(.c-mask) { stroke-width: 1.25px; }
 :is([data-theme="dark"] svg[data-node-ui], svg[data-node-ui][data-theme="dark"]) [data-node-id] &gt; rect:not(.c-mask).c-frontend { fill: color-mix(in srgb, var(--frontend-stroke) 13%, var(--mask)); stroke: color-mix(in srgb, var(--frontend-stroke) 72%, var(--mask)); }
@@ -641,7 +697,7 @@ svg[data-node-ui] g[data-edge-from] &gt; rect.c-mask { rx: 7px; stroke: var(--la
 svg[data-node-ui][data-preset="blueprint"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] &gt; rect.c-mask, .phase-chip) { rx: 2px; }
 svg[data-node-ui][data-preset="editorial"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] &gt; rect.c-mask, .phase-chip) { rx: 3px; }
 :root, svg { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #e2e7ec; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #64748b; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; --flow-cycle: ; --flow-halo-peak: ; --flow-glow-peak: ; --flow-tail-peak: ; --flow-head-peak: ; --flow-wake-peak: ; --flow-ripple-peak: ; --flow-peak: ; }
-</style><rect x="0" y="0" width="1580" height="958" fill="#f4f5f7"/><metadata id="archify-software-notices">NOTICE
+</style><rect x="0" y="0" width="1580" height="1018" fill="#f4f5f7"/><metadata id="archify-software-notices">NOTICE
 Archify
 Copyright (c) 2026 tt-a1i (Archify)
 Copyright (c) 2025 Cocoon AI
@@ -976,7 +1032,7 @@ Brand names, logos, and trademarks remain the property of their respective
 owners. This notice records provenance and known terms; it does not grant rights
 that Archify does not hold, and it does not state that every packaged mark has
 been cleared for every commercial, promotional, or redistributive use.</metadata>
-        <title id="archify-diagram-title">Delegate — Tasks and recurring work</title>
+        <title id="archify-diagram-title">Delegate — Local, remote and recurring tasks</title>
         <desc id="archify-diagram-description">An architecture diagram generated by Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -1026,257 +1082,312 @@ been cleared for every commercial, promotional, or redistributive use.</metadata
 
         <!-- Connection paths (before components for correct z-order) -->
         <g data-graph-role="automatic-crossover" style="--step:0">
-          <path data-graph-role="automatic-crossover-underlay" d="M 250 313 L 440 313" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="lead" data-edge-to="control" data-edge-label="request" data-edge-key="0" data-edge-id="request-task" data-composition-points="250,313;440,313" data-composition-crossover="halo" data-composition-independent="true" d="M 250 313 L 440 313" class="a-emphasis" data-animate="edge" style="--step: 0;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 250 368.05 L 337 368.05 Q 345 368.05 345 360.05 L 345 352.95 Q 345 344.95 353 344.95 L 440 344.95" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="lead" data-edge-to="control" data-edge-label="local request" data-edge-key="0" data-edge-id="request-task" data-composition-points="250,368.05;345,368.05;345,344.95;440,344.95" data-composition-crossover="halo" data-composition-independent="true" d="M 250 368.05 L 337 368.05 Q 345 368.05 345 360.05 L 345 352.95 Q 345 344.95 353 344.95 L 440 344.95" class="a-emphasis" data-animate="edge" style="--step: 0;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:1">
-          <path data-graph-role="automatic-crossover-underlay" d="M 556 260 L 556 244 Q 556 236 548 236 L 153 236 Q 145 236 145 244 L 145 260" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="lead" data-edge-label="task id / result" data-edge-key="1" data-edge-id="return-to-lead" data-composition-points="556,260;556,236;145,236;145,260" data-composition-crossover="halo" data-composition-independent="true" d="M 556 260 L 556 244 Q 556 236 548 236 L 153 236 Q 145 236 145 244 L 145 260" class="a-dashed" data-animate="edge" style="--step: 1;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 554.95 420 L 554.95 436 Q 554.95 444 546.95 444 L 282 444 Q 274 444 274 436 L 274 391.1 Q 274 383.1 266 383.1 L 250 383.1" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="lead" data-edge-label="task id / result" data-edge-key="1" data-edge-id="return-to-lead" data-composition-points="554.95,420;554.95,444;274,444;274,383.1;250,383.1" data-composition-crossover="halo" data-composition-independent="true" d="M 554.95 420 L 554.95 436 Q 554.95 444 546.95 444 L 282 444 Q 274 444 274 436 L 274 391.1 Q 274 383.1 266 383.1 L 250 383.1" class="a-dashed" data-animate="edge" style="--step: 1;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:2">
-          <path data-graph-role="automatic-crossover-underlay" d="M 700 311.95 L 860 311.95" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="queue" data-edge-label="admit + submit" data-edge-key="2" data-edge-id="submit-task" data-composition-points="700,311.95;860,311.95" data-composition-crossover="halo" data-composition-independent="true" d="M 700 311.95 L 860 311.95" class="a-emphasis" data-animate="edge" style="--step: 2;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 700 358.95 L 860 358.95" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="queue" data-edge-label="admit + submit" data-edge-key="2" data-edge-id="submit-task" data-composition-points="700,358.95;860,358.95" data-composition-crossover="halo" data-composition-independent="true" d="M 700 358.95 L 860 358.95" class="a-emphasis" data-animate="edge" style="--step: 2;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:3">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1120 310.9 L 1300 310.9" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="queue" data-edge-to="execution" data-edge-label="start worker" data-edge-key="3" data-edge-id="start-worker" data-composition-points="1120,310.9;1300,310.9" data-composition-crossover="halo" data-composition-independent="true" d="M 1120 310.9 L 1300 310.9" class="a-emphasis" data-animate="edge" style="--step: 3;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1120 350.9 L 1300 350.9" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="queue" data-edge-to="execution" data-edge-label="start worker" data-edge-key="3" data-edge-id="start-worker" data-composition-points="1120,350.9;1300,350.9" data-composition-crossover="halo" data-composition-independent="true" d="M 1120 350.9 L 1300 350.9" class="a-emphasis" data-animate="edge" style="--step: 3;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:4">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1420 380 L 1420 520" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="execution" data-edge-to="provider" data-edge-label="run one turn" data-edge-key="4" data-edge-id="run-provider" data-composition-points="1420,380;1420,520" data-composition-crossover="halo" data-composition-independent="true" d="M 1420 380 L 1420 520" class="a-emphasis" data-animate="edge" style="--step: 4;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1420 420 L 1420 560" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="execution" data-edge-to="provider" data-edge-label="run one turn" data-edge-key="4" data-edge-id="run-provider" data-composition-points="1420,420;1420,560" data-composition-crossover="halo" data-composition-independent="true" d="M 1420 420 L 1420 560" class="a-emphasis" data-animate="edge" style="--step: 4;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:5">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1300 327 L 1218 327 Q 1210 327 1210 335 L 1210 572 Q 1210 580 1202 580 L 1120 580" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="execution" data-edge-to="task-records" data-edge-label="seal + finalize" data-edge-key="5" data-edge-id="finalize-result" data-composition-points="1300,327;1210,327;1210,580;1120,580" data-composition-crossover="halo" data-composition-independent="true" d="M 1300 327 L 1218 327 Q 1210 327 1210 335 L 1210 572 Q 1210 580 1202 580 L 1120 580" class="a-emphasis" data-animate="edge" style="--step: 5;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1300 367 L 1218 367 Q 1210 367 1210 375 L 1210 612 Q 1210 620 1202 620 L 1120 620" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="execution" data-edge-to="task-records" data-edge-label="seal + finalize" data-edge-key="5" data-edge-id="finalize-result" data-composition-points="1300,367;1210,367;1210,620;1120,620" data-composition-crossover="halo" data-composition-independent="true" d="M 1300 367 L 1218 367 Q 1210 367 1210 375 L 1210 612 Q 1210 620 1202 620 L 1120 620" class="a-emphasis" data-animate="edge" style="--step: 5;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:6">
-          <path data-graph-role="automatic-crossover-underlay" d="M 700 327 L 772 327 Q 780 327 780 335 L 780 572 Q 780 580 788 580 L 860 580" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="task-records" data-edge-label="create / observe" data-edge-key="6" data-edge-id="task-record-access" data-composition-points="700,327;780,327;780,580;860,580" data-composition-crossover="halo" data-composition-independent="true" d="M 700 327 L 772 327 Q 780 327 780 335 L 780 572 Q 780 580 788 580 L 860 580" class="a-default" data-animate="edge" style="--step: 6;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 700 374 L 772 374 Q 780 374 780 382 L 780 612 Q 780 620 788 620 L 860 620" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="task-records" data-edge-label="create / observe" data-edge-key="6" data-edge-id="task-record-access" data-composition-points="700,374;780,374;780,620;860,620" data-composition-crossover="halo" data-composition-independent="true" d="M 700 374 L 772 374 Q 780 374 780 382 L 780 612 Q 780 620 788 620 L 860 620" class="a-default" data-animate="edge" style="--step: 6;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:7">
-          <path data-graph-role="automatic-crossover-underlay" d="M 570 260 L 570 150" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="workspace" data-edge-label="optional Git worktree" data-edge-key="7" data-edge-id="optional-worktree" data-composition-points="570,260;570,150" data-composition-crossover="halo" data-composition-independent="true" d="M 570 260 L 570 150" class="a-dashed" data-animate="edge" style="--step: 7;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1420 300 L 1420 150" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="execution" data-edge-to="workspace" data-edge-label="selected cwd" data-edge-key="7" data-edge-id="optional-worktree" data-composition-points="1420,300;1420,150" data-composition-crossover="halo" data-composition-independent="true" d="M 1420 300 L 1420 150" class="a-default" data-animate="edge" style="--step: 7;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:8">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1404.95 520 L 1404.95 504 Q 1404.95 496 1396.95 496 L 831.6 496 Q 823.6 496 823.6 488 L 823.6 103 Q 823.6 95 815.6 95 L 680 95" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="provider" data-edge-to="workspace" data-edge-label="use selected directory" data-edge-key="8" data-edge-id="provider-workspace" data-composition-points="1404.95,520;1404.95,496;823.6,496;823.6,95;680,95" data-composition-crossover="halo" data-composition-independent="true" d="M 1404.95 520 L 1404.95 504 Q 1404.95 496 1396.95 496 L 831.6 496 Q 823.6 496 823.6 488 L 823.6 103 Q 823.6 95 815.6 95 L 680 95" class="a-default" data-animate="edge" style="--step: 8;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 570 840 L 570 720" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="user-start" data-edge-to="recurring" data-edge-label="serve" data-edge-key="8" data-edge-id="user-starts-host" data-composition-points="570,840;570,720" data-composition-crossover="halo" data-composition-independent="true" d="M 570 840 L 570 720" class="a-emphasis" data-animate="edge" style="--step: 8;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:9">
-          <path data-graph-role="automatic-crossover-underlay" d="M 570 780 L 570 660" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="user-start" data-edge-to="recurring" data-edge-label="serve" data-edge-key="9" data-edge-id="user-starts-host" data-composition-points="570,780;570,660" data-composition-crossover="halo" data-composition-independent="true" d="M 570 780 L 570 660" class="a-emphasis" data-animate="edge" style="--step: 9;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 570 560 L 570 420" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="recurring" data-edge-to="control" data-edge-label="new claim: in process" data-edge-key="9" data-edge-id="scheduled-admission" data-composition-points="570,560;570,420" data-composition-crossover="halo" data-composition-independent="true" d="M 570 560 L 570 420" class="a-emphasis" data-animate="edge" style="--step: 9;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:10">
-          <path data-graph-role="automatic-crossover-underlay" d="M 561.95 500 L 561.95 380" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="recurring" data-edge-to="control" data-edge-label="new claim: in process" data-edge-key="10" data-edge-id="scheduled-admission" data-composition-points="561.95,500;561.95,380" data-composition-crossover="halo" data-composition-independent="true" d="M 561.95 500 L 561.95 380" class="a-emphasis" data-animate="edge" style="--step: 10;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 440 627 L 270 627" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="recurring" data-edge-to="calendar" data-edge-label="init / claim / skip" data-edge-key="10" data-edge-id="calendar-execution" data-composition-points="440,627;270,627" data-composition-crossover="halo" data-composition-independent="true" d="M 440 627 L 270 627" class="a-default" data-animate="edge" style="--step: 10;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:11">
-          <path data-graph-role="automatic-crossover-underlay" d="M 440 587 L 270 587" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="recurring" data-edge-to="calendar" data-edge-label="init / claim / skip" data-edge-key="11" data-edge-id="calendar-execution" data-composition-points="440,587;270,587" data-composition-crossover="halo" data-composition-independent="true" d="M 440 587 L 270 587" class="a-default" data-animate="edge" style="--step: 11;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 440 374 L 363 374 Q 355 374 355 382 L 355 605 Q 355 613 347 613 L 270 613" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="calendar" data-edge-label="save / initialize" data-edge-key="11" data-edge-id="save-schedule" data-composition-points="440,374;355,374;355,613;270,613" data-composition-crossover="halo" data-composition-independent="true" d="M 440 374 L 363 374 Q 355 374 355 382 L 355 605 Q 355 613 347 613 L 270 613" class="a-default" data-animate="edge" style="--step: 11;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:12">
-          <path data-graph-role="automatic-crossover-underlay" d="M 440 334 L 302 334 Q 294 334 294 342 L 294 565 Q 294 573 286 573 L 270 573" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="calendar" data-edge-label="save / initialize" data-edge-key="12" data-edge-id="save-schedule" data-composition-points="440,334;294,334;294,573;270,573" data-composition-crossover="halo" data-composition-independent="true" d="M 440 334 L 302 334 Q 294 334 294 342 L 294 565 Q 294 573 286 573 L 270 573" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 586 300 L 586 284 Q 586 276 594 276 L 828 276 Q 836 276 836 268 L 836 103 Q 836 95 844 95 L 860 95" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="teams" data-edge-label="local: manage / resolve" data-edge-key="12" data-edge-id="team-management-resolution" data-composition-points="586,300;586,276;836,276;836,95;860,95" data-composition-crossover="halo" data-composition-independent="true" d="M 586 300 L 586 284 Q 586 276 594 276 L 828 276 Q 836 276 836 268 L 836 103 Q 836 95 844 95 L 860 95" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:13">
-          <path data-graph-role="automatic-crossover-underlay" d="M 577 380 L 577 489 Q 577 497 585 497 L 849 497 Q 857 497 857 505 L 857 748 Q 857 756 865 756 L 982 756 Q 990 756 990 764 L 990 780" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="control" data-edge-to="teams" data-edge-label="manage / resolve" data-edge-key="13" data-edge-id="team-management-resolution" data-composition-points="577,380;577,497;857,497;857,756;990,756;990,780" data-composition-crossover="halo" data-composition-independent="true" d="M 577 380 L 577 489 Q 577 497 585 497 L 849 497 Q 857 497 857 505 L 857 748 Q 857 756 865 756 L 982 756 Q 990 756 990 764 L 990 780" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 250 337.95 L 337 337.95 Q 345 337.95 345 329.95 L 345 132.05 Q 345 124.05 353 124.05 L 440 124.05" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="lead" data-edge-to="origin" data-edge-label="remote request" data-edge-key="13" data-edge-id="remote-request" data-composition-points="250,337.95;345,337.95;345,124.05;440,124.05" data-composition-crossover="halo" data-composition-independent="true" d="M 250 337.95 L 337 337.95 Q 345 337.95 345 329.95 L 345 132.05 Q 345 124.05 353 124.05 L 440 124.05" class="a-emphasis" data-animate="edge" style="--step: 12;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:14">
+          <path data-graph-role="automatic-crossover-underlay" d="M 440 79.95 L 300 79.95" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="origin" data-edge-to="origin-records" data-edge-label="intent / cache" data-edge-key="14" data-edge-id="origin-reference-access" data-composition-points="440,79.95;300,79.95" data-composition-crossover="halo" data-composition-independent="true" d="M 440 79.95 L 300 79.95" class="a-default" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:15">
+          <path data-graph-role="automatic-crossover-underlay" d="M 572 150 L 572 300" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="origin" data-edge-to="control" data-edge-label="remote: SSH" data-edge-key="15" data-edge-id="remote-ssh" data-composition-points="572,150;572,300" data-composition-crossover="halo" data-composition-independent="true" d="M 572 150 L 572 300" class="a-security" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:16">
+          <path data-graph-role="automatic-crossover-underlay" d="M 558 300 L 558 150" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="control" data-edge-to="origin" data-edge-label="destination response" data-edge-key="16" data-edge-id="remote-response" data-composition-points="558,300;558,150" data-composition-crossover="halo" data-composition-independent="true" d="M 558 300 L 558 150" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:17">
+          <path data-graph-role="automatic-crossover-underlay" d="M 440 109 L 424 109 Q 416 109 416 117 L 416 268 Q 416 276 408 276 L 153 276 Q 145 276 145 284 L 145 300" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="origin" data-edge-to="lead" data-edge-label="result + connectivity" data-edge-key="17" data-edge-id="remote-result-to-lead" data-composition-points="440,109;416,109;416,276;145,276;145,300" data-composition-crossover="halo" data-composition-independent="true" d="M 440 109 L 424 109 Q 416 109 416 117 L 416 268 Q 416 276 408 276 L 153 276 Q 145 276 145 284 L 145 300" class="a-dashed" data-animate="edge" style="--step: 12;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
 
         <!-- Components -->
         <g id="node-lead" data-node-id="lead" data-node-label="Agent / manual CLI" tabindex="0" role="button" aria-label="Focus Agent / manual CLI, ordinary commands omit --root, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="ordinary commands omit --root" data-node-context="Architecture component">
           <title>Agent / manual CLI · ordinary commands omit --root · Architecture component</title>
-          <rect x="40" y="260" width="210" height="120" rx="8" class="c-mask"/>
-          <rect x="40" y="260" width="210" height="120" rx="8" class="c-external" data-animate="node" style="--step: 0; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 266) scale(0.6875)">
+          <rect x="40" y="300" width="210" height="120" rx="8" class="c-mask"/>
+          <rect x="40" y="300" width="210" height="120" rx="8" class="c-external" data-animate="node" style="--step: 0; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 306) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="145" y="318" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent / manual CLI</text>
-        <text x="145" y="334" class="t-muted" font-size="9" text-anchor="middle">ordinary commands omit --root</text>
+          <text data-node-label="" x="145" y="358" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent / manual CLI</text>
+        <text x="145" y="374" class="t-muted" font-size="9" text-anchor="middle">ordinary commands omit --root</text>
         </g>
 
-        <g id="node-control" data-node-id="control" data-node-label="CLI + task lifecycle" tabindex="0" role="button" aria-label="Focus CLI + task lifecycle, CLI default · any project cwd, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="CLI default · any project cwd" data-node-context="Architecture component">
-          <title>CLI + task lifecycle · CLI default · any project cwd · Architecture component</title>
-          <rect x="440" y="260" width="260" height="120" rx="8" class="c-mask"/>
-          <rect x="440" y="260" width="260" height="120" rx="8" class="c-backend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 266) scale(0.6875)">
+        <g id="node-control" data-node-id="control" data-node-label="Execution-host lifecycle" tabindex="0" role="button" aria-label="Focus Execution-host lifecycle, local host or prepared destination, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="local host or prepared destination" data-node-context="Architecture component">
+          <title>Execution-host lifecycle · local host or prepared destination · Architecture component</title>
+          <rect x="440" y="300" width="260" height="120" rx="8" class="c-mask"/>
+          <rect x="440" y="300" width="260" height="120" rx="8" class="c-backend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 306) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="570" y="318" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">CLI + task lifecycle</text>
-        <text x="570" y="334" class="t-muted" font-size="9" text-anchor="middle">CLI default · any project cwd</text>
+          <text data-node-label="" x="570" y="358" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Execution-host lifecycle</text>
+        <text x="570" y="374" class="t-muted" font-size="9" text-anchor="middle">local host or prepared destination</text>
         </g>
 
         <g id="node-queue" data-node-id="queue" data-node-label="Task queue" tabindex="0" role="button" aria-label="Focus Task queue, Pueue starts queued workers, Architecture component" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Pueue starts queued workers" data-node-tag="receipt before enqueue" data-node-context="Architecture component">
           <title>Task queue · Pueue starts queued workers · Architecture component · receipt before enqueue</title>
-          <rect x="860" y="260" width="260" height="120" rx="8" class="c-mask"/>
-          <rect x="860" y="260" width="260" height="120" rx="8" class="c-messagebus" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(866 266) scale(0.6875)">
+          <rect x="860" y="300" width="260" height="120" rx="8" class="c-mask"/>
+          <rect x="860" y="300" width="260" height="120" rx="8" class="c-messagebus" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(866 306) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="990" y="318" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task queue</text>
-        <text x="990" y="334" class="t-muted" font-size="9" text-anchor="middle">Pueue starts queued workers</text>
-        <text x="990" y="372" class="t-messagebus" font-size="7" text-anchor="middle">receipt before enqueue</text>
+          <text data-node-label="" x="990" y="358" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task queue</text>
+        <text x="990" y="374" class="t-muted" font-size="9" text-anchor="middle">Pueue starts queued workers</text>
+        <text x="990" y="412" class="t-messagebus" font-size="7" text-anchor="middle">receipt before enqueue</text>
         </g>
 
         <g id="node-execution" data-node-id="execution" data-node-label="Task execution" tabindex="0" role="button" aria-label="Focus Task execution, guardian + delegate-run, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="guardian + delegate-run" data-node-tag="finite budget · closed lifetime" data-node-context="Architecture component">
           <title>Task execution · guardian + delegate-run · Architecture component · finite budget · closed lifetime</title>
-          <rect x="1300" y="260" width="240" height="120" rx="8" class="c-mask"/>
-          <rect x="1300" y="260" width="240" height="120" rx="8" class="c-backend" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-9;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1306 266) scale(0.6875)">
+          <rect x="1300" y="300" width="240" height="120" rx="8" class="c-mask"/>
+          <rect x="1300" y="300" width="240" height="120" rx="8" class="c-backend" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-10;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1306 306) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="1420" y="318" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task execution</text>
-        <text x="1420" y="334" class="t-muted" font-size="9" text-anchor="middle">guardian + delegate-run</text>
-        <text x="1420" y="372" class="t-backend" font-size="7" text-anchor="middle">finite budget · closed lifetime</text>
+          <text data-node-label="" x="1420" y="358" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task execution</text>
+        <text x="1420" y="374" class="t-muted" font-size="9" text-anchor="middle">guardian + delegate-run</text>
+        <text x="1420" y="412" class="t-backend" font-size="7" text-anchor="middle">finite budget · closed lifetime</text>
         </g>
 
         <g id="node-provider" data-node-id="provider" data-node-label="Provider CLI" tabindex="0" role="button" aria-label="Focus Provider CLI, native settings + session, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="native settings + session" data-node-context="Architecture component">
           <title>Provider CLI · native settings + session · Architecture component</title>
-          <rect x="1300" y="520" width="240" height="120" rx="8" class="c-mask"/>
-          <rect x="1300" y="520" width="240" height="120" rx="8" class="c-external" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-10;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1306 526) scale(0.6875)">
+          <rect x="1300" y="560" width="240" height="120" rx="8" class="c-mask"/>
+          <rect x="1300" y="560" width="240" height="120" rx="8" class="c-external" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-11;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1306 566) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="1420" y="578" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider CLI</text>
-        <text x="1420" y="594" class="t-muted" font-size="9" text-anchor="middle">native settings + session</text>
+          <text data-node-label="" x="1420" y="618" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider CLI</text>
+        <text x="1420" y="634" class="t-muted" font-size="9" text-anchor="middle">native settings + session</text>
         </g>
 
-        <g id="node-task-records" data-node-id="task-records" data-node-label="Task records + result" tabindex="0" role="button" aria-label="Focus Task records + result, saved Team context + outcome.json, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="saved Team context + outcome.json" data-node-tag="TaskDir owns publication" data-node-context="Architecture component">
-          <title>Task records + result · saved Team context + outcome.json · Architecture component · TaskDir owns publication</title>
-          <rect x="860" y="520" width="260" height="120" rx="8" class="c-mask"/>
-          <rect x="860" y="520" width="260" height="120" rx="8" class="c-database" data-animate="node" style="--step: 6; --flow-node-name: archify-relay-node-6;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(866 526) scale(0.6875)">
+        <g id="node-task-records" data-node-id="task-records" data-node-label="Task records + result" tabindex="0" role="button" aria-label="Focus Task records + result, execution-host outcome.json, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="execution-host outcome.json" data-node-tag="TaskDir owns publication" data-node-context="Architecture component">
+          <title>Task records + result · execution-host outcome.json · Architecture component · TaskDir owns publication</title>
+          <rect x="860" y="560" width="260" height="120" rx="8" class="c-mask"/>
+          <rect x="860" y="560" width="260" height="120" rx="8" class="c-database" data-animate="node" style="--step: 6; --flow-node-name: archify-relay-node-6;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(866 566) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="990" y="578" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task records + result</text>
-        <text x="990" y="594" class="t-muted" font-size="9" text-anchor="middle">saved Team context + outcome.json</text>
-        <text x="990" y="632" class="t-database" font-size="7" text-anchor="middle">TaskDir owns publication</text>
+          <text data-node-label="" x="990" y="618" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Task records + result</text>
+        <text x="990" y="634" class="t-muted" font-size="9" text-anchor="middle">execution-host outcome.json</text>
+        <text x="990" y="672" class="t-database" font-size="7" text-anchor="middle">TaskDir owns publication</text>
         </g>
 
         <g id="node-workspace" data-node-id="workspace" data-node-label="Selected workspace" tabindex="0" role="button" aria-label="Focus Selected workspace, caller directory or Git checkout, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="caller directory or Git checkout" data-node-tag="Git isolation + capture: optional" data-node-context="Architecture component">
           <title>Selected workspace · caller directory or Git checkout · Architecture component · Git isolation + capture: optional</title>
-          <rect x="440" y="40" width="240" height="110" rx="8" class="c-mask"/>
-          <rect x="440" y="40" width="240" height="110" rx="8" class="c-backend" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-7;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 46) scale(0.6875)">
+          <rect x="1300" y="40" width="240" height="110" rx="8" class="c-mask"/>
+          <rect x="1300" y="40" width="240" height="110" rx="8" class="c-backend" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-12;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1306 46) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="560" y="93" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Selected workspace</text>
-        <text x="560" y="109" class="t-muted" font-size="9" text-anchor="middle">caller directory or Git checkout</text>
-        <text x="560" y="142" class="t-backend" font-size="7" text-anchor="middle">Git isolation + capture: optional</text>
+          <text data-node-label="" x="1420" y="93" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Selected workspace</text>
+        <text x="1420" y="109" class="t-muted" font-size="9" text-anchor="middle">caller directory or Git checkout</text>
+        <text x="1420" y="142" class="t-backend" font-size="7" text-anchor="middle">Git isolation + capture: optional</text>
         </g>
 
         <g id="node-user-start" data-node-id="user-start" data-node-label="User terminal / tmux" tabindex="0" role="button" aria-label="Focus User terminal / tmux, same OS-default state root, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="same OS-default state root" data-node-tag="foreground: scheduler serve" data-node-context="Architecture component">
           <title>User terminal / tmux · same OS-default state root · Architecture component · foreground: scheduler serve</title>
-          <rect x="440" y="780" width="260" height="110" rx="8" class="c-mask"/>
-          <rect x="440" y="780" width="260" height="110" rx="8" class="c-external" data-animate="node" style="--step: 9; --flow-node-name: archify-relay-node-0;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(446 786) scale(0.6875)">
+          <rect x="440" y="840" width="260" height="110" rx="8" class="c-mask"/>
+          <rect x="440" y="840" width="260" height="110" rx="8" class="c-external" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-0;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(446 846) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="570" y="833" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">User terminal / tmux</text>
-        <text x="570" y="849" class="t-muted" font-size="9" text-anchor="middle">same OS-default state root</text>
-        <text x="570" y="882" class="t-external" font-size="7" text-anchor="middle">foreground: scheduler serve</text>
+          <text data-node-label="" x="570" y="893" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">User terminal / tmux</text>
+        <text x="570" y="909" class="t-muted" font-size="9" text-anchor="middle">same OS-default state root</text>
+        <text x="570" y="942" class="t-external" font-size="7" text-anchor="middle">foreground: scheduler serve</text>
         </g>
 
         <g id="node-recurring" data-node-id="recurring" data-node-label="Scheduler host + runtime" tabindex="0" role="button" aria-label="Focus Scheduler host + runtime, Host supervises resident child, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Host supervises resident child" data-node-tag="ready with zero definitions" data-node-context="Architecture component">
           <title>Scheduler host + runtime · Host supervises resident child · Architecture component · ready with zero definitions</title>
-          <rect x="440" y="500" width="260" height="160" rx="8" class="c-mask"/>
-          <rect x="440" y="500" width="260" height="160" rx="8" class="c-backend" data-animate="node" style="--step: 10; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 506) scale(0.6875)">
+          <rect x="440" y="560" width="260" height="160" rx="8" class="c-mask"/>
+          <rect x="440" y="560" width="260" height="160" rx="8" class="c-backend" data-animate="node" style="--step: 9; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 566) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="570" y="578" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Scheduler host + runtime</text>
-        <text x="570" y="594" class="t-muted" font-size="9" text-anchor="middle">Host supervises resident child</text>
-        <text x="570" y="652" class="t-backend" font-size="7" text-anchor="middle">ready with zero definitions</text>
+          <text data-node-label="" x="570" y="638" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Scheduler host + runtime</text>
+        <text x="570" y="654" class="t-muted" font-size="9" text-anchor="middle">Host supervises resident child</text>
+        <text x="570" y="712" class="t-backend" font-size="7" text-anchor="middle">ready with zero definitions</text>
         </g>
 
         <g id="node-calendar" data-node-id="calendar" data-node-label="Scheduler SQLite calendar" tabindex="0" role="button" aria-label="Focus Scheduler SQLite calendar, definitions · claims · skips, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="definitions · claims · skips" data-node-tag="one active occurrence per schedule" data-node-context="Architecture component">
           <title>Scheduler SQLite calendar · definitions · claims · skips · Architecture component · one active occurrence per schedule</title>
-          <rect x="40" y="520" width="230" height="120" rx="8" class="c-mask"/>
-          <rect x="40" y="520" width="230" height="120" rx="8" class="c-database" data-animate="node" style="--step: 12; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(46 526) scale(0.6875)">
+          <rect x="40" y="560" width="230" height="120" rx="8" class="c-mask"/>
+          <rect x="40" y="560" width="230" height="120" rx="8" class="c-database" data-animate="node" style="--step: 11; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(46 566) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="155" y="578" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Scheduler SQLite calendar</text>
-        <text x="155" y="594" class="t-muted" font-size="9" text-anchor="middle">definitions · claims · skips</text>
-        <text x="155" y="632" class="t-database" font-size="7" text-anchor="middle">one active occurrence per schedule</text>
+          <text data-node-label="" x="155" y="618" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Scheduler SQLite calendar</text>
+        <text x="155" y="634" class="t-muted" font-size="9" text-anchor="middle">definitions · claims · skips</text>
+        <text x="155" y="672" class="t-database" font-size="7" text-anchor="middle">one active occurrence per schedule</text>
         </g>
 
         <g id="node-teams" data-node-id="teams" data-node-label="Optional Team catalog" tabindex="0" role="button" aria-label="Focus Optional Team catalog, Members · Roles · execution defaults, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="Members · Roles · execution defaults" data-node-tag="Team management owns catalog writes" data-node-context="Architecture component">
           <title>Optional Team catalog · Members · Roles · execution defaults · Architecture component · Team management owns catalog writes</title>
-          <rect x="860" y="780" width="260" height="110" rx="8" class="c-mask"/>
-          <rect x="860" y="780" width="260" height="110" rx="8" class="c-database" data-animate="node" style="--step: 12; --flow-node-name: archify-relay-node-8;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(866 786) scale(0.6875)">
+          <rect x="860" y="40" width="260" height="110" rx="8" class="c-mask"/>
+          <rect x="860" y="40" width="260" height="110" rx="8" class="c-database" data-animate="node" style="--step: 12; --flow-node-name: archify-relay-node-7;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(866 46) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="990" y="833" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Optional Team catalog</text>
-        <text x="990" y="849" class="t-muted" font-size="9" text-anchor="middle">Members · Roles · execution defaults</text>
-        <text x="990" y="882" class="t-database" font-size="7" text-anchor="middle">Team management owns catalog writes</text>
+          <text data-node-label="" x="990" y="93" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Optional Team catalog</text>
+        <text x="990" y="109" class="t-muted" font-size="9" text-anchor="middle">Members · Roles · execution defaults</text>
+        <text x="990" y="142" class="t-database" font-size="7" text-anchor="middle">Team management owns catalog writes</text>
+        </g>
+
+        <g id="node-origin" data-node-id="origin" data-node-label="Origin remote coordinator" tabindex="0" role="button" aria-label="Focus Origin remote coordinator, verified embedded Go SSH, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="verified embedded Go SSH" data-node-context="Architecture component">
+          <title>Origin remote coordinator · verified embedded Go SSH · Architecture component</title>
+          <rect x="440" y="40" width="250" height="110" rx="8" class="c-mask"/>
+          <rect x="440" y="40" width="250" height="110" rx="8" class="c-backend" data-animate="node" style="--step: 12; --flow-node-name: archify-relay-node-8;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(446 46) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" x="565" y="93" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Origin remote coordinator</text>
+        <text x="565" y="109" class="t-muted" font-size="9" text-anchor="middle">verified embedded Go SSH</text>
+        </g>
+
+        <g id="node-origin-records" data-node-id="origin-records" data-node-label="Origin references" tabindex="0" role="button" aria-label="Focus Origin references, immutable intent · dated observations, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="immutable intent · dated observations" data-node-context="Architecture component">
+          <title>Origin references · immutable intent · dated observations · Architecture component</title>
+          <rect x="40" y="40" width="260" height="110" rx="8" class="c-mask"/>
+          <rect x="40" y="40" width="260" height="110" rx="8" class="c-database" data-animate="node" style="--step: 12; --flow-node-name: archify-relay-node-9;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(46 46) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" x="170" y="93" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Origin references</text>
+        <text x="170" y="109" class="t-muted" font-size="9" text-anchor="middle">immutable intent · dated observations</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-edge-from="lead" data-edge-to="control" data-edge-label="request" data-edge-key="0" data-edge-id="request-task">
-          <rect x="323.2" y="293" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="345" y="303" class="t-edge-emphasis" font-size="8" text-anchor="middle">request</text>
+        <g data-edge-from="lead" data-edge-to="control" data-edge-label="local request" data-edge-key="0" data-edge-id="request-task">
+          <rect x="261.3" y="348.05" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="297.5" y="358.05" class="t-edge-emphasis" font-size="8" text-anchor="middle">local request</text>
         </g>
         <g data-edge-from="control" data-edge-to="lead" data-edge-label="task id / result" data-edge-key="1" data-edge-id="return-to-lead">
-          <rect x="307.1" y="216" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="350.5" y="226" class="t-edge-dashed" font-size="8" text-anchor="middle">task id / result</text>
+          <rect x="371.07500000000005" y="424" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="414.475" y="434" class="t-edge-dashed" font-size="8" text-anchor="middle">task id / result</text>
         </g>
         <g data-edge-from="control" data-edge-to="queue" data-edge-label="admit + submit" data-edge-key="2" data-edge-id="submit-task">
-          <rect x="741.4" y="291.95" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="780" y="301.95" class="t-edge-emphasis" font-size="8" text-anchor="middle">admit + submit</text>
+          <rect x="741.4" y="338.95" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="780" y="348.95" class="t-edge-emphasis" font-size="8" text-anchor="middle">admit + submit</text>
         </g>
         <g data-edge-from="queue" data-edge-to="execution" data-edge-label="start worker" data-edge-key="3" data-edge-id="start-worker">
-          <rect x="1176.2" y="290.9" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="1210" y="300.9" class="t-edge-emphasis" font-size="8" text-anchor="middle">start worker</text>
+          <rect x="1176.2" y="330.9" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1210" y="340.9" class="t-edge-emphasis" font-size="8" text-anchor="middle">start worker</text>
         </g>
         <g data-edge-from="execution" data-edge-to="provider" data-edge-label="run one turn" data-edge-key="4" data-edge-id="run-provider">
-          <rect x="1346.4" y="443" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="1380.2" y="453" class="t-edge-emphasis" font-size="8" text-anchor="middle">run one turn</text>
+          <rect x="1346.4" y="483" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1380.2" y="493" class="t-edge-emphasis" font-size="8" text-anchor="middle">run one turn</text>
         </g>
         <g data-edge-from="execution" data-edge-to="task-records" data-edge-label="seal + finalize" data-edge-key="5" data-edge-id="finalize-result">
-          <rect x="1169" y="433.5" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="1210" y="443.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">seal + finalize</text>
+          <rect x="1169" y="473.5" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="1210" y="483.5" class="t-edge-emphasis" font-size="8" text-anchor="middle">seal + finalize</text>
         </g>
         <g data-edge-from="control" data-edge-to="task-records" data-edge-label="create / observe" data-edge-key="6" data-edge-id="task-record-access">
-          <rect x="687.2" y="446.5" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="730.6" y="456.5" class="t-edge-default" font-size="8" text-anchor="middle">create / observe</text>
+          <rect x="736.6" y="477" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="780" y="487" class="t-edge-default" font-size="8" text-anchor="middle">create / observe</text>
         </g>
-        <g data-edge-from="control" data-edge-to="workspace" data-edge-label="optional Git worktree" data-edge-key="7" data-edge-id="optional-worktree">
-          <rect x="453.20000000000005" y="198" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="508.6" y="208" class="t-edge-dashed" font-size="8" text-anchor="middle">optional Git worktree</text>
+        <g data-edge-from="execution" data-edge-to="workspace" data-edge-label="selected cwd" data-edge-key="7" data-edge-id="optional-worktree">
+          <rect x="1386.2" y="280" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1420" y="290" class="t-edge-default" font-size="8" text-anchor="middle">selected cwd</text>
         </g>
-        <g data-edge-from="provider" data-edge-to="workspace" data-edge-label="use selected directory" data-edge-key="8" data-edge-id="provider-workspace">
-          <rect x="1056.4750000000001" y="476" width="115.6" height="14" rx="3" class="c-mask"/>
-          <text x="1114.275" y="486" class="t-edge-default" font-size="8" text-anchor="middle">use selected directory</text>
+        <g data-edge-from="user-start" data-edge-to="recurring" data-edge-label="serve" data-edge-key="8" data-edge-id="user-starts-host">
+          <rect x="553" y="820" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="570" y="830" class="t-edge-emphasis" font-size="8" text-anchor="middle">serve</text>
         </g>
-        <g data-edge-from="user-start" data-edge-to="recurring" data-edge-label="serve" data-edge-key="9" data-edge-id="user-starts-host">
-          <rect x="553" y="760" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="570" y="770" class="t-edge-emphasis" font-size="8" text-anchor="middle">serve</text>
+        <g data-edge-from="recurring" data-edge-to="control" data-edge-label="new claim: in process" data-edge-key="9" data-edge-id="scheduled-admission">
+          <rect x="514.6" y="540" width="110.8" height="14" rx="3" class="c-mask"/>
+          <text x="570" y="550" class="t-edge-emphasis" font-size="8" text-anchor="middle">new claim: in process</text>
         </g>
-        <g data-edge-from="recurring" data-edge-to="control" data-edge-label="new claim: in process" data-edge-key="10" data-edge-id="scheduled-admission">
-          <rect x="445.1500000000001" y="433" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="500.55000000000007" y="443" class="t-edge-emphasis" font-size="8" text-anchor="middle">new claim: in process</text>
+        <g data-edge-from="recurring" data-edge-to="calendar" data-edge-label="init / claim / skip" data-edge-key="10" data-edge-id="calendar-execution">
+          <rect x="304.4" y="637" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="355" y="647" class="t-edge-default" font-size="8" text-anchor="middle">init / claim / skip</text>
         </g>
-        <g data-edge-from="recurring" data-edge-to="calendar" data-edge-label="init / claim / skip" data-edge-key="11" data-edge-id="calendar-execution">
-          <rect x="304.4" y="567" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="355" y="577" class="t-edge-default" font-size="8" text-anchor="middle">init / claim / skip</text>
+        <g data-edge-from="control" data-edge-to="calendar" data-edge-label="save / initialize" data-edge-key="11" data-edge-id="save-schedule">
+          <rect x="309.2" y="473.5" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="355" y="483.5" class="t-edge-default" font-size="8" text-anchor="middle">save / initialize</text>
         </g>
-        <g data-edge-from="control" data-edge-to="calendar" data-edge-label="save / initialize" data-edge-key="12" data-edge-id="save-schedule">
-          <rect x="248.2" y="433.5" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="294" y="443.5" class="t-edge-default" font-size="8" text-anchor="middle">save / initialize</text>
+        <g data-edge-from="control" data-edge-to="teams" data-edge-label="local: manage / resolve" data-edge-key="12" data-edge-id="team-management-resolution">
+          <rect x="650.8" y="256" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="711" y="266" class="t-edge-dashed" font-size="8" text-anchor="middle">local: manage / resolve</text>
         </g>
-        <g data-edge-from="control" data-edge-to="teams" data-edge-label="manage / resolve" data-edge-key="13" data-edge-id="team-management-resolution">
-          <rect x="673.6" y="477" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="717" y="487" class="t-edge-dashed" font-size="8" text-anchor="middle">manage / resolve</text>
+        <g data-edge-from="lead" data-edge-to="origin" data-edge-label="remote request" data-edge-key="13" data-edge-id="remote-request">
+          <rect x="306.4" y="211" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="345" y="221" class="t-edge-emphasis" font-size="8" text-anchor="middle">remote request</text>
+        </g>
+        <g data-edge-from="origin" data-edge-to="origin-records" data-edge-label="intent / cache" data-edge-key="14" data-edge-id="origin-reference-access">
+          <rect x="331.4" y="59.95" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="370" y="69.95" class="t-edge-default" font-size="8" text-anchor="middle">intent / cache</text>
+        </g>
+        <g data-edge-from="origin" data-edge-to="control" data-edge-label="remote: SSH" data-edge-key="15" data-edge-id="remote-ssh">
+          <rect x="578" y="218" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="609.4" y="228" class="t-edge-security" font-size="8" text-anchor="middle">remote: SSH</text>
+        </g>
+        <g data-edge-from="control" data-edge-to="origin" data-edge-label="destination response" data-edge-key="16" data-edge-id="remote-response">
+          <rect x="446" y="218" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="499" y="228" class="t-edge-dashed" font-size="8" text-anchor="middle">destination response</text>
+        </g>
+        <g data-edge-from="origin" data-edge-to="lead" data-edge-label="result + connectivity" data-edge-key="17" data-edge-id="remote-result-to-lead">
+          <rect x="360.6" y="172.5" width="110.8" height="14" rx="3" class="c-mask"/>
+          <text x="416" y="182.5" class="t-edge-dashed" font-size="8" text-anchor="middle">result + connectivity</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -1284,22 +1395,22 @@ been cleared for every commercial, promotional, or redistributive use.</metadata
 
         <!-- Legend -->
         <g data-legend="">
-          <text x="40" y="922" class="t-primary" font-size="12" font-weight="650">Legend</text>
-          <g data-legend-semantic-kind="backend" data-legend-x="40" data-legend-baseline="942" data-legend-width="87">
-            <rect x="40" y="933" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
-            <text x="62" y="942" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          <text x="40" y="982" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="backend" data-legend-x="40" data-legend-baseline="1002" data-legend-width="87">
+            <rect x="40" y="993" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="62" y="1002" class="t-muted" font-size="10" font-weight="500">Backend</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-x="149" data-legend-baseline="942" data-legend-width="93">
-            <rect x="149" y="933" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
-            <text x="171" y="942" class="t-muted" font-size="10" font-weight="500">Database</text>
+          <g data-legend-semantic-kind="database" data-legend-x="149" data-legend-baseline="1002" data-legend-width="93">
+            <rect x="149" y="993" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="171" y="1002" class="t-muted" font-size="10" font-weight="500">Database</text>
           </g>
-          <g data-legend-semantic-kind="messagebus" data-legend-x="264" data-legend-baseline="942" data-legend-width="112">
-            <rect x="264" y="933" width="16" height="10" rx="2.5" class="c-messagebus" stroke-width="1"/>
-            <text x="286" y="942" class="t-muted" font-size="10" font-weight="500">Message bus</text>
+          <g data-legend-semantic-kind="messagebus" data-legend-x="264" data-legend-baseline="1002" data-legend-width="112">
+            <rect x="264" y="993" width="16" height="10" rx="2.5" class="c-messagebus" stroke-width="1"/>
+            <text x="286" y="1002" class="t-muted" font-size="10" font-weight="500">Message bus</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-x="398" data-legend-baseline="942" data-legend-width="93">
-            <rect x="398" y="933" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
-            <text x="420" y="942" class="t-muted" font-size="10" font-weight="500">External</text>
+          <g data-legend-semantic-kind="external" data-legend-x="398" data-legend-baseline="1002" data-legend-width="93">
+            <rect x="398" y="993" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="420" y="1002" class="t-muted" font-size="10" font-weight="500">External</text>
           </g>
         </g>
       </svg>

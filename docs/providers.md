@@ -18,6 +18,9 @@ For catalog/capability fields and readiness limits, use
 For model IDs, effort metadata, and discovery exits, use
 [model selection](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort).
 A catalog entry is not proof of installation, authentication, or completion.
+For [remote tasks](remote-delegation.md), the destination user's installation,
+configuration and login must support the selected profile. Origin readiness
+does not prove destination readiness.
 
 ## Shared compatibility behavior
 
