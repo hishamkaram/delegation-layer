@@ -295,7 +295,7 @@ jobs:
           python3 --version
 
       - name: Install platform tools
-        run: make tools-go
+        run: make tools-go tools-node
 
       - name: Install pinned supervisor test binaries
         run: ./scripts/install-test-supervisor.sh
@@ -473,7 +473,7 @@ jobs:
         run: |
           make tools
           ./scripts/install-test-supervisor.sh
-      - name: Prove warm controls and cold nested survival
+      - name: Prove warm controls, cold nested survival and refused leader cleanup
         env:
           DELEGATE_NESTED_EXPECTED_BACKEND: process-group
         run: make acceptance-nested-survival

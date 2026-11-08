@@ -66,11 +66,11 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertNotIn("node-version: '22.x'", package)
             self.assertEqual(package.count("run: make skill-package-check"), 1)
         for name, tool_target, check_target in (("gate-linux", "tools", "check"),
-                                                 ("gate-macos", "tools-go", "check-platform")):
+                                                 ("gate-macos", "tools-go tools-node", "check-platform")):
             with self.subTest(job=name):
                 gate = job_text(self.source, name)
                 self.assertIn("node-version: '22.x'", gate)
-                self.assertEqual(re.findall(r"^        run: make (tools(?:-go)?)$", gate, re.M), [tool_target])
+                self.assertEqual(re.findall(r"^        run: make (tools[^\n]*)$", gate, re.M), [tool_target])
                 self.assertEqual(re.findall(r"^        run: make (check(?:-platform)?)$", gate, re.M), [check_target])
 
     def test_shared_analysis_is_required_by_linux_without_a_duplicate_workflow(self):

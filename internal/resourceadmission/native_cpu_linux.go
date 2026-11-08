@@ -16,6 +16,8 @@ import (
 // procStatFile is the fixed kernel file; no environment can redirect it.
 const procStatFile = "/proc/stat"
 
+const hostCPUCounterUnit = CPUCounterTicks
+
 // procStatLimit bounds the bytes read: the aggregate line is far smaller.
 const procStatLimit = 4096
 

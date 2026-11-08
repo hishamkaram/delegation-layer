@@ -19,7 +19,9 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
 - **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
-  `make tools-go` installs only the core Go tools needed by the platform gate.
+  `make tools-go tools-node` installs the core Go tools and locked JavaScript
+  lint dependencies needed by the platform gate, including its ESLint
+  compatibility runtime tests. Shared static analysis still runs only on Linux.
 - **Static tools**: `scripts/static_tools.py` owns installation and version checks for
   ShellCheck 0.11.0 and jactionlint 2.4.0. Ruff's exact pin and wheel hashes live in
   `tools/lint/requirements.txt`; ESLint and its dependencies use the separate
