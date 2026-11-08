@@ -296,7 +296,9 @@ func TestTerminalWithoutFailedExitPreservesEOF(t *testing.T) {
 }
 
 func TestFullResponsePrecedesFailedExit(t *testing.T) {
+	peerDone := make(chan struct{})
 	client := terminalClient(t, func(stream ssh.Channel, _ <-chan *ssh.Request) {
+		defer close(peerDone)
 		if _, err := stream.Write([]byte("response")); err != nil {
 			t.Error(err)
 			return
@@ -312,6 +314,12 @@ func TestFullResponsePrecedesFailedExit(t *testing.T) {
 	content := make([]byte, len("response"))
 	if _, err = io.ReadFull(stream, content); err != nil || string(content) != "response" {
 		t.Fatalf("full response erased by exit: %q %v", content, err)
+	}
+	// The peer owns its terminal writes; join them before caller-owned teardown.
+	select {
+	case <-peerDone:
+	case <-ctx.Done():
+		t.Fatalf("peer terminal writes did not complete: %v", ctx.Err())
 	}
 	// Teardown may race the final exit status. Any observed failed exit belongs
 	// to cleanup; the completed response above remains available to its caller.
