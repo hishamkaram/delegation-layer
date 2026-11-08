@@ -166,8 +166,8 @@ class SuccessCommitTests(unittest.TestCase):
     def test_published_bytes_are_the_confirmed_candidate_not_mutable_memory(self):
         real_finalize = lifecycle_impl.finalize
 
-        def finalize_then_mutate(owner, success, *, blocked=False):
-            result = real_finalize(owner, success, blocked=blocked)
+        def finalize_then_mutate(owner, success, *, blocked=False, shutdown_attempted=False):
+            result = real_finalize(owner, success, blocked=blocked, shutdown_attempted=shutdown_attempted)
             owner.success_receipt["tasks"]["fresh"] = "mutated"
             owner.success_receipt["lifetime_closure"]["ordinary"]["tasks"].clear()
             return result
