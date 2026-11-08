@@ -30,7 +30,7 @@ import (
 func TestRemoteResourcePressurePreservesUnknownAdmission(t *testing.T) {
 	fixture := newRemoteResourceBoundary(t)
 	ownRemoteResourceResident(t, fixture)
-	resources := &recordingResources{t: t, assessments: []func() resourceadmission.Assessment{remoteBoundaryHostPressure}}
+	resources := &recordingResources{t: t, assessments: []func() resourceadmission.Assessment{cpuPressureNow}}
 	fixture.deps.ResourceChecker = resources
 	reference, origin := resourceBoundaryReference(t, fixture)
 	exchange := &resourceBoundaryExchange{server: remoteServerExchange{deps: fixture.deps}}
@@ -79,12 +79,6 @@ func TestRemoteMissingResidentPersistsDefiniteRejection(t *testing.T) {
 		t.Fatalf("durably rejected reference contacted destination again: %v", exchange.operations)
 	}
 	assertResourceBoundaryAbsent(t, fixture, reference)
-}
-
-func remoteBoundaryHostPressure() resourceadmission.Assessment {
-	return resourceadmission.NewAssessment(time.Now(), resourceadmission.Scope{}, resourceadmission.Findings{
-		Pressures: []resourceadmission.Pressure{{Metric: resourceadmission.MetricHostCPU, Basis: resourceadmission.BasisSustained}},
-	})
 }
 
 type resourceBoundaryExchange struct {
@@ -211,6 +205,27 @@ func assertRemotePressureEnvelope(t *testing.T, fixture *remoteResourceBoundaryF
 	envelope := remoteServerEnvelope(t, response)
 	if envelope.TaskID != fixture.intent.TaskID || envelope.RootID != fixture.store.RootID || envelope.TaskRecord != "unknown" || envelope.Failure == nil || envelope.Failure.Code != "resource_pressure" || envelope.Failure.ReasonCode != "host_cpu_sustained" || envelope.Failure.NextAction != "stop_and_report" || envelope.ResourceAdmission == nil || envelope.ResourceAdmission.Status != "pressure" {
 		t.Fatalf("resource refusal envelope lost: %+v", envelope)
+	}
+	assertRemotePressureDiagnostics(t, envelope.ResourceAdmission.Diagnostics)
+}
+
+func assertRemotePressureDiagnostics(t *testing.T, diagnostics *ResourceAdmissionDiagnostics) {
+	t.Helper()
+	if diagnostics == nil {
+		t.Fatal("remote envelope lost CPU diagnostic evidence")
+	}
+	// Literal fixture facts form the oracle; do not derive expected output from
+	// the presentation mapper. This proves transport, not native CPU sampling.
+	want := &HostCPUDiagnosticsResponse{
+		CounterUnit: "ticks", BusyThreshold: 0.95, RequiredStreak: 3,
+		Intervals: []HostCPUIntervalResponse{
+			{ElapsedMilliseconds: 1000, BusyDelta: cpuDiagnosticNumber(95), TotalDelta: cpuDiagnosticNumber(100), BusyFraction: cpuDiagnosticNumber(0.95), Classification: "hot", UnavailableReason: ""},
+			{ElapsedMilliseconds: 1002, BusyDelta: cpuDiagnosticNumber(198), TotalDelta: cpuDiagnosticNumber(200), BusyFraction: cpuDiagnosticNumber(0.99), Classification: "hot", UnavailableReason: ""},
+			{ElapsedMilliseconds: 1001, BusyDelta: cpuDiagnosticNumber(297), TotalDelta: cpuDiagnosticNumber(300), BusyFraction: cpuDiagnosticNumber(0.99), Classification: "hot", UnavailableReason: ""},
+		},
+	}
+	if !reflect.DeepEqual(diagnostics.HostCPU, want) {
+		t.Fatalf("remote CPU evidence changed: got%+v want%+v", diagnostics.HostCPU, want)
 	}
 }
 
