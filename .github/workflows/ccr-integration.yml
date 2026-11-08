@@ -77,10 +77,10 @@ jobs:
           # Temporary mitigation, owned by CI maintainers: this scenario does
           # not prove CPU admission. Remove the opt-out when runner CPU
           # isolation can be controlled.
-          guard_args=()
-          if [ "$RUNNER_OS" = macOS ]; then guard_args=(--cpu-guard=false); fi
-          python3 scripts/acceptance/provider_drivers/ccr/fixture.py --output "$HOME/ccr-integration-evidence" "${guard_args[@]}"
-          python3 scripts/acceptance/provider_drivers/ccr/fixture.py --refusal-cleanup --output "$HOME/ccr-refusal-cleanup-evidence" "${guard_args[@]}"
+          set --
+          if [ "$RUNNER_OS" = macOS ]; then set -- --cpu-guard=false; fi
+          python3 scripts/acceptance/provider_drivers/ccr/fixture.py --output "$HOME/ccr-integration-evidence" "$@"
+          python3 scripts/acceptance/provider_drivers/ccr/fixture.py --refusal-cleanup --output "$HOME/ccr-refusal-cleanup-evidence" "$@"
       - name: Retain sanitized result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
