@@ -148,9 +148,17 @@ remote stderr. A malformed acknowledgment after a possibly sent admission is
 still unknown, even when its protocol error is not retryable. A valid framed
 response remains evidence even if the entry point exits unsuccessfully later.
 
-Uncertain acceptance returns exit 3. A verified admission refusal records
-`not_created` for that reference; correcting a resource or readiness refusal
-requires a new reference. Repeating a rejected reference never admits it again.
+Uncertain acceptance returns exit 3. When the destination explicitly reports
+`not_created`, such as an early missing-resident refusal, the origin records a
+definite rejection. Correcting that refusal requires a new reference. Repeating
+a rejected reference never admits it again.
+
+A destination resource refusal can instead preserve `task_record: unknown`
+because remote requests carry an explicit task ID. Its nested envelope reports
+`resource_pressure` and `stop_and_report`; exit 3 does not make it a pending-only
+response. Report the failure and stop this attempt. Do not loop reconciliation
+or create another reference automatically. Reconciliation remains existing-only
+and cannot turn that refusal into a new admission.
 
 After admission might have been sent, reconnection only reconciles the original
 immutable request. Missing or unreadable remote history remains unknown. It does

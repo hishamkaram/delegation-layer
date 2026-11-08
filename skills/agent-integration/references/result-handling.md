@@ -434,8 +434,16 @@ facts remain data in a completed read.
 
 A `remote:ID` routes to recorded destination evidence. Inspect the nested remote
 response separately from origin connectivity, dated cache and download reports.
-Five bounded connection attempts never authorize paid execution retry. After a
-possibly sent admission, reconcile that same immutable request; absent history
-remains unknown, never `not_created`. Preserve acknowledged controls and sealed
-outcomes even when connection cleanup or file transfer reports an ancillary error.
-No host, root, provider, permission or task-ID substitution is automatic.
+Five bounded connection attempts never authorize paid execution retry. Inspect a
+concrete nested failure before treating exit 3 as pending: a destination resource
+refusal can retain `task_record: unknown` with `resource_pressure` and
+`next_action: stop_and_report`. Report it and stop; do not loop reconciliation or
+create a new reference automatically. Reconciliation cannot admit that request.
+
+For connection-loss uncertainty after a possibly sent admission, reconcile the
+same immutable request; absent history remains unknown, never `not_created`.
+An explicit destination `not_created`, such as an early missing-resident refusal,
+records a definite rejection that cannot be resubmitted through that reference.
+Preserve acknowledged controls and sealed outcomes even when connection cleanup
+or file transfer reports an ancillary error. No host, root, provider, permission
+or task-ID substitution is automatic.

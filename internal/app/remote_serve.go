@@ -1,8 +1,8 @@
 package app
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -285,16 +285,21 @@ func controlRemote(ctx context.Context, request remote.Request, response remote.
 }
 
 func remoteCommandEnvelope(response remote.Response, result commandResult) remote.Response {
-	data, err := json.Marshal(result.response)
+	var data bytes.Buffer
+	err := writeJSONResponse(&data, result.response.Command, &result.response, result.err)
 	if err != nil {
-		response.Failure = remoteFailure("response_encoding", err)
+		code := "response_encoding"
+		if errors.Is(err, ErrJSONResponseTooLarge) {
+			code = "response_too_large"
+		}
+		response.Failure = remoteFailure(code, err)
 		return response
 	}
-	if len(data) > remote.MaxControlBytes/2 {
+	if data.Len() > remote.MaxControlBytes/2 {
 		response.Failure = remoteFailure("response_too_large", ErrJSONResponseTooLarge)
 		return response
 	}
-	response.Envelope = data
+	response.Envelope = data.Bytes()
 	return response
 }
 
