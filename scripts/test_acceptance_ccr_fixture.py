@@ -541,7 +541,7 @@ class FixtureWorkflowTests(unittest.TestCase):
         paths = {line.strip() for line in section.splitlines() if line.strip() not in ("", "|")}
         root = "~/ccr-integration-evidence"
         expected = {f"{root}/{name}" for name in (
-            "success.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
+            "success.json", "cleanup.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
             "failure-diagnostics.json", "failure-host-cpu-snapshot.json", "failure-cleanup.json", "failure-cleanup-expired.json")}
         expected.update(f"~/ccr-refusal-cleanup-evidence/{name}" for name in (
             "success.json", "*-dispatch-attempt.json", "failure-diagnostics.json",
