@@ -11,6 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 // recordedRunnerHelper names the environment variable that carries one
@@ -72,7 +73,10 @@ func (f *recordedEnvironmentFixture) runInstalledRunner(t *testing.T, id string)
 	// The child's own test deadline bounds it; CombinedOutput reaps it.
 	child := exec.Command(f.deps.RunnerExecutable, "-test.run", "^TestRecordedEnvironmentRunnerHelper$", "-test.count=1",
 		"-test.timeout", recordedRunnerTimeout.String())
-	child.Env = append(os.Environ(), recordedRunnerHelper+"="+string(encoded))
+	environment := os.Environ()
+	raceOptions := appTestRaceOptions(verifiedexec.EnvironmentValue(environment, "GORACE"))
+	// exec.Cmd uses the last duplicate key, preserving every launch selector.
+	child.Env = append(environment, "GORACE="+raceOptions, recordedRunnerHelper+"="+string(encoded))
 	if output, runErr := child.CombinedOutput(); runErr != nil {
 		t.Fatalf("installed runner: %v: %s", runErr, output)
 	}

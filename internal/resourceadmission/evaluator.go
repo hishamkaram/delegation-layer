@@ -9,6 +9,7 @@ type evaluator struct {
 	cgroupMemory  track
 	memoryHighHit bool
 	cgroupPath    string
+	cpuIntervals  []HostCPUInterval
 }
 
 // step folds one snapshot. prev is nil for the baseline. Memory is judged on
@@ -30,7 +31,11 @@ func (e *evaluator) step(prev *snapshot, cur snapshot) {
 		return
 	}
 	elapsed := cur.at.Sub(prev.at)
-	e.hostCPU.record(hostCPUOutcome(prev.cpu, cur.cpu))
+	cpu := evaluateHostCPU(prev.cpu, cur.cpu)
+	e.hostCPU.record(cpu.outcome)
+	if cpu.outcome.state != outcomeSkipped && len(e.cpuIntervals) < requiredStreak {
+		e.cpuIntervals = append(e.cpuIntervals, hostCPUInterval(elapsed, cpu))
+	}
 	e.cgroupCPU.record(cgroupCPUOutcome(prev.cgroup, cur.cgroup, elapsed))
 	e.cgroupMemory.record(cgroupMemoryOutcome(prev.cgroup, cur.cgroup, elapsed))
 }
@@ -101,6 +106,12 @@ func (e *evaluator) findings() Findings {
 	}
 	if e.memoryHighHit {
 		f.Advisories = append(f.Advisories, AdvisoryMemoryHighNear)
+	}
+	if e.hostCPU.confirmed() {
+		f.HostCPU = &HostCPUDiagnostics{
+			CounterUnit: hostCPUCounterUnit, BusyThreshold: cpuBusyThreshold,
+			RequiredStreak: requiredStreak, Intervals: e.cpuIntervals,
+		}
 	}
 	return f
 }

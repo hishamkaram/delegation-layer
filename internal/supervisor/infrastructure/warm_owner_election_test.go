@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"errors"
 	"maps"
+	"os"
 	"os/exec"
 	"testing"
 
@@ -147,27 +148,49 @@ func TestWarmOwnerFreePendingContextMismatchRemainsBusy(t *testing.T) {
 
 func absentWarmOwnerProcess(t *testing.T) lifetime.ProcessRef {
 	t.Helper()
-	executable, err := exec.LookPath("true")
+	executable, err := exec.LookPath("cat")
 	if err != nil {
 		t.Fatal(err)
 	}
 	command := exec.Command(executable)
+	var input, release *os.File
 	waited := false
+	closePipe := func(file *os.File) error {
+		if file == nil {
+			return nil
+		}
+		return file.Close()
+	}
 	t.Cleanup(func() {
+		if closeErr := errors.Join(closePipe(release), closePipe(input)); closeErr != nil {
+			t.Error(closeErr)
+		}
 		if !waited && command.Process != nil {
 			if waitErr := command.Wait(); waitErr != nil {
 				t.Error(waitErr)
 			}
 		}
 	})
+	input, release, err = os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stdin = input
 	if err = command.Start(); err != nil {
 		t.Fatal(err)
 	}
+	closeErr := input.Close()
+	input = nil
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	process, observeErr := lifetime.ObserveStartedProcess(command.Process.Pid)
+	releaseErr := release.Close()
+	release = nil
 	waitErr := command.Wait()
 	waited = true
-	if observeErr != nil || waitErr != nil {
-		t.Fatalf("native incarnation observation/join: %v %v", observeErr, waitErr)
+	if observeErr != nil || releaseErr != nil || waitErr != nil {
+		t.Fatalf("native incarnation observation/release/join: %v %v %v", observeErr, releaseErr, waitErr)
 	}
 	present, err := lifetime.ProcessPresent(process)
 	if err != nil || present {

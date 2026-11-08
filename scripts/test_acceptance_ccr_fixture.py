@@ -1,6 +1,8 @@
 """Cleanup ownership checks for the CCR fixture gate."""
 
 import argparse
+from contextlib import nullcontext
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -8,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -29,6 +32,10 @@ class FixtureCleanupTests(unittest.TestCase):
         class Run:
             def __init__(self):
                 self.output = output
+
+            def capture_cpu_snapshot(self, _failure_observed_at):
+                # This no-CPU fake has no refusal observation to diagnose.
+                return None
 
             def safe_shutdown(self):
                 calls.append("shutdown")
@@ -289,7 +296,7 @@ class FixturePublicationTests(unittest.TestCase):
 
         patched_cli = patch.multiple(
             run, create=True, direct=lambda *_args, **_kwargs: None, setup=lambda: None,
-            ops=SimpleNamespace(client=client), dispatch=dispatch, command=command,
+            ops=SimpleNamespace(client=client, dispatch_observations=[]), dispatch=dispatch, command=command,
             wait_done=lambda *_args: None, session_ref=lambda task_id: sessions[task_id])
         patched_cli.start()
         self.addCleanup(patched_cli.stop)
@@ -470,8 +477,272 @@ class FixtureWorkflowTests(unittest.TestCase):
         root = "~/ccr-integration-evidence"
         self.assertEqual(paths, {f"{root}/{name}" for name in (
             "success.json", "*-dispatch-attempt.json", "*-continue-attempt.json",
-            "failure-diagnostics.json", "failure-cleanup.json", "failure-cleanup-expired.json")})
+            "failure-diagnostics.json", "failure-host-cpu-snapshot.json", "failure-cleanup.json", "failure-cleanup-expired.json")})
         self.assertIn("if: always()", upload)
+
+    def test_native_cpu_probe_precedes_real_ccr_consumer_in_same_step(self):
+        workflow = Path(__file__).resolve().parents[1] / ".github/workflows/ccr-integration.yml"
+        step = workflow.read_text().split("      - name: Prove foreground lifecycle using real CLIs\n", 1)[1].split("      - name:", 1)[0]
+        probe = "python3 -m unittest discover -s scripts -p test_acceptance_ccr_fixture.py -k native_cpu_snapshot -v"
+        consumer = "python3 scripts/acceptance_ccr_fixture.py --output"
+        self.assertEqual(step.count(probe), 1)
+        self.assertLess(step.index(probe), step.index(consumer))
+        loader = unittest.TestLoader()
+        loader.testNamePatterns = ["*native_cpu_snapshot*"]
+        self.assertEqual(loader.loadTestsFromModule(sys.modules[__name__]).countTestCases(), 1)
+
+
+def cpu_refusal_observation():
+    task_id = "c" * 32
+    return {"task_id": task_id, "natural_wait": True, "exit_code": 1, "response": {
+        "schema_version": 1, "command": "dispatch", "root_id": ROOT_ID, "task_id": task_id,
+        "task_record": "unknown", "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+        "failure": {"code": "resource_pressure", "stage": "check-resources",
+                    "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"},
+        "resource_admission": {"status": "pressure"},
+    }}
+
+
+class CPUSnapshotTests(unittest.TestCase):
+    def test_projection_preserves_spaces_and_public_roles_without_unknown_names(self):
+        projected = gate.cpu_snapshot_rows(
+            "150.5 /Applications/Private Canary/claude\n"
+            "20.5 /private/token-canary/unknown-secret\n"
+            "7.0 /System/with spaces/mdworker_shared\n"
+            "4.5 /System/XprotectService\n3 /bin/ccr\n2 /other/ccr\n")
+        self.assertEqual(projected, {
+            "listed_process_count": {"claude": 1, "other": 1, "mdworker_shared": 1, "xprotectservice": 1, "ccr": 2},
+            "top_cpu": [{"role": role, "native_cpu_percent": cpu} for role, cpu in (
+                ("claude", 150.5), ("other", 20.5), ("mdworker_shared", 7.0), ("xprotectservice", 4.5), ("ccr", 3.0), ("ccr", 2.0))],
+        })
+        encoded = json.dumps(projected)
+        for secret in ("Private Canary", "token-canary", "unknown-secret", "/", "pid", "live", "leaked"):
+            self.assertNotIn(secret, encoded)
+
+    def test_public_runner_security_names_are_case_insensitive_and_counts_are_only_listed(self):
+        projected = gate.cpu_snapshot_rows("4 /runner/Runner.Worker\n3 /runner/RUNNER.LISTENER\n"
+                                           "2 /system/TRUSTD\n1 /system/XProtect\n0.5 ccr <defunct>\n")
+        self.assertEqual(projected["listed_process_count"], {
+            "runner.worker": 1, "runner.listener": 1, "trustd": 1, "xprotect": 1, "other": 1})
+        self.assertEqual(projected["top_cpu"], [{"role": role, "native_cpu_percent": cpu} for role, cpu in (
+            ("runner.worker", 4.0), ("runner.listener", 3.0), ("trustd", 2.0), ("xprotect", 1.0), ("other", 0.5))])
+
+    def test_all_rows_are_validated_and_sorted_before_the_top_eight(self):
+        projected = gate.cpu_snapshot_rows("".join(f"{i} private-{i}\n" for i in range(12)) + "240 /bin/ccr\n")
+        self.assertEqual(projected["listed_process_count"], {"other": 12, "ccr": 1})
+        self.assertEqual(projected["top_cpu"], [{"role": "ccr", "native_cpu_percent": 240.0}] +
+                         [{"role": "other", "native_cpu_percent": float(i)} for i in (11, 10, 9, 8, 7, 6, 5)])
+
+    def test_empty_malformed_nonfinite_negative_partial_and_bounded_inputs_are_refused(self):
+        for text in ("", "\n", "bad ps\n", "nan ps\n", "inf ps\n", "1e999 ps\n", "-0.1 ps\n", "1,5 ps\n",
+                     "12\n", "1 /\n", "1 ccr\nbroken\n", "0 ps\n" * 4097, "0 " + "x" * (256 * 1024)):
+            with self.subTest(prefix=text[:20]), self.assertRaises(ValueError):
+                gate.cpu_snapshot_rows(text)
+
+    def test_only_exact_completed_host_cpu_refusal_is_eligible(self):
+        observation = cpu_refusal_observation()
+        self.assertTrue(gate.confirmed_host_cpu_refusal(observation, ROOT_ID))
+        self.assertTrue(gate.confirmed_host_cpu_refusal(observation, None))
+        self.assertFalse(gate.confirmed_host_cpu_refusal(observation, "invalid-known-root"))
+        for target, key, value in (
+                ("observation", "natural_wait", False), ("observation", "exit_code", 0), ("observation", "exit_code", True),
+                ("observation", "task_id", "invalid"), ("response", "root_id", "e" * 32),
+                ("response", "task_id", "d" * 32), ("response", "schema_version", True),
+                ("response", "command", "status"), ("response", "admission", "admitted"),
+                ("response", "resource_admission", {"status": "unknown"}),
+                ("response", "failure", {"code": "resource_pressure", "stage": "check-resources",
+                                           "reason_code": "host_memory_critical", "next_action": "stop_and_report"})):
+            with self.subTest(target=target, key=key):
+                changed = deepcopy(observation)
+                container = changed if target == "observation" else changed["response"]
+                container[key] = value
+                self.assertFalse(gate.confirmed_host_cpu_refusal(changed, ROOT_ID))
+        observation["response"]["root_id"] = "invalid-response-root"
+        self.assertFalse(gate.confirmed_host_cpu_refusal(observation, None))
+
+    def test_ineligible_observations_never_sample_or_write_a_snapshot(self):
+        for changes in ({"resource_admission": {"status": "unknown"}}, {"admission": "admitted"},
+                        {"failure": {"code": "resource_pressure", "stage": "check-resources",
+                                     "reason_code": "host_memory_critical", "next_action": "stop_and_report"}}):
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory(prefix="ccr-no-cpu-") as temporary:
+                output = Path(temporary)
+                observation = cpu_refusal_observation()
+                observation["response"].update(changes)
+                run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+                with patch.multiple(run, create=True, output=output, root_id=ROOT_ID,
+                                    ops=SimpleNamespace(dispatch_observations=[observation])), \
+                        patch.object(run, "processes", create=True) as processes:
+                    run.capture_cpu_snapshot(time.monotonic())
+                processes.run.assert_not_called()
+                self.assertFalse((output / gate.CPU_SNAPSHOT_NAME).exists())
+
+    def test_native_cpu_snapshot_compatibility(self):
+        # This is the one native prerequisite selected before the CCR consumer.
+        # The process registry alone owns ps Start/Wait; raw names remain private.
+        base = Path(tempfile.mkdtemp(prefix="ccr-native-ps-")).resolve(strict=True)
+        owner = DirectoryOwner()
+        owner.adopt_created("native ps test", base, base.parent)
+        processes = None
+
+        def close_owned():
+            try:
+                if processes is not None and processes.drain(timeout=5):
+                    raise RuntimeError("native ps closure unproven; retaining owned capture")
+            except BaseException:
+                owner.release()
+                raise
+            owner.rollback()
+
+        self.addCleanup(close_owned)
+        processes = Processes(base / "raw", {"LC_ALL": "C"}, owner=owner)
+        run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+        with patch.multiple(run, create=True, output=base, root_id=None, processes=processes,
+                            ops=SimpleNamespace(dispatch_observations=[cpu_refusal_observation()])):
+            run.capture_cpu_snapshot(time.monotonic())
+            self.assertIsNone(run.root_id)
+        self.assertEqual(len(processes.entries), 1)
+        process = processes.entries[0]
+        self.assertEqual(process.argv, ["/bin/ps", "-A", "-o", "pcpu=,comm="])
+        self.assertEqual(process.environment, {"LC_ALL": "C"})
+        self.assertTrue(process.result["natural_wait"])
+        self.assertEqual(process.result["exit_code"], 0)
+        receipt = json.loads((base / gate.CPU_SNAPSHOT_NAME).read_text())
+        self.assertEqual(receipt["status"], "observed")
+        self.assertTrue(receipt["listed_process_count"])
+        self.assertGreater(len(receipt["top_cpu"]), 0)
+        self.assertLessEqual(len(receipt["top_cpu"]), 8)
+        self.assertTrue(set(receipt["listed_process_count"]) <= gate.CPU_SNAPSHOT_ROLES | {"other"})
+        self.assertFalse(receipt["admission_intervals_matched"])
+        self.assertFalse(receipt["causal_attribution"])
+
+    def test_capture_offsets_bracket_delayed_ps_and_bounded_read(self):
+        with tempfile.TemporaryDirectory(prefix="ccr-cpu-offset-") as temporary:
+            output = Path(temporary)
+            clock = [10.125]
+            process = SimpleNamespace(directory=output, result={"natural_wait": True, "exit_code": 0})
+
+            def ps(*_args, **_options):
+                clock[0] = 12.125
+                return process
+
+            def read(*_args):
+                clock[0] = 12.5
+                return "123.5 /private/ccr\n"
+
+            run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+            with patch.multiple(run, create=True, output=output, root_id=ROOT_ID,
+                                processes=SimpleNamespace(run=ps, environment={"LC_ALL": "C"}),
+                                ops=SimpleNamespace(dispatch_observations=[cpu_refusal_observation()])), \
+                    patch.object(gate.time, "monotonic", side_effect=lambda: clock[0]), \
+                    patch.object(gate, "bounded_text", side_effect=read) as bounded_read:
+                run.capture_cpu_snapshot(10.0)
+            bounded_read.assert_called_once_with(output / "stdout", "native CPU listing", 256 * 1024)
+            receipt = json.loads((output / gate.CPU_SNAPSHOT_NAME).read_text())
+            self.assertEqual(receipt["origin"], "driver_failure_observed")
+            self.assertEqual(receipt["capture_started_offset_ms"], 125)
+            self.assertEqual(receipt["capture_completed_offset_ms"], 2500)
+            self.assertNotIn("offset_ms", receipt)
+
+    def test_diagnostic_faults_keep_primary_and_precede_unchanged_cleanup(self):
+        for fault in ("capture", "interrupt", "completion", "exit", "read", "parse", "write", "none"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="ccr-cpu-unit-") as temporary:
+                output = Path(temporary)
+                raw = output / "raw"
+                raw.mkdir()
+                (raw / "stdout").write_text("NaN /private/canary\n" if fault == "parse" else "123.5 /private/ccr\n")
+                primary = RuntimeError("original admission failure")
+                order = []
+
+                def ps(name, argv, cwd, **options):
+                    order.append("snapshot")
+                    self.assertEqual((name, argv, cwd, options), (
+                        "failure-host-cpu", ["/bin/ps", "-A", "-o", "pcpu=,comm="], output,
+                        {"expected": None, "timeout": 5, "environment": {"LC_ALL": "C", "KNOWN": "fixture"}}))
+                    if fault == "capture":
+                        raise OSError("private canary /secret PID=4242")
+                    if fault == "interrupt":
+                        raise KeyboardInterrupt()
+                    return SimpleNamespace(directory=raw / "missing" if fault == "read" else raw,
+                                           result={"natural_wait": fault != "completion",
+                                                   "exit_code": 1 if fault == "exit" else 0})
+
+                def exercise(_fixture):
+                    raise primary
+
+                real_write = gate.write_json
+
+                def write(path, value, **options):
+                    if path.name == gate.CPU_SNAPSHOT_NAME and fault == "write":
+                        raise OSError("private receipt canary")
+                    return real_write(path, value, **options)
+
+                run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+                environment = {"LC_ALL": "de_DE", "KNOWN": "fixture"}
+                fixture = SimpleNamespace(server=SimpleNamespace(server_port=43210))
+                with patch.multiple(run, create=True, output=output, root_id=ROOT_ID,
+                                    processes=SimpleNamespace(run=ps, environment=environment),
+                                    ops=SimpleNamespace(dispatch_observations=[cpu_refusal_observation()]),
+                                    provider_executable="/ccr", direct=lambda *_args, **_kwargs: None,
+                                    exercise=exercise), \
+                        patch.object(run, "safe_shutdown", side_effect=lambda: order.append("cleanup") or True), \
+                        patch.object(run, "finalize", side_effect=lambda success: order.append(("finalize", success)) or True), \
+                        patch.object(gate, "choose_output", return_value=output), \
+                        patch.object(gate, "prepare_fixture_acceptance", return_value=run), \
+                        patch.object(gate, "Fixture", return_value=nullcontext(fixture)), \
+                        patch.object(gate, "write_json", side_effect=write), \
+                        patch.dict(os.environ, {"LC_ALL": "fixture-parent-locale"}), \
+                        patch.object(sys, "argv", ["acceptance_ccr_fixture.py"]):
+                    with self.assertRaises(RuntimeError) as caught:
+                        gate.main()
+                    self.assertEqual(os.environ["LC_ALL"], "fixture-parent-locale")
+                self.assertIs(caught.exception, primary)
+                self.assertEqual(order, ["snapshot", "cleanup", ("finalize", False)])
+                self.assertEqual(environment, {"LC_ALL": "de_DE", "KNOWN": "fixture"})
+                if fault == "write":
+                    self.assertEqual(primary.__notes__, ["host_cpu_snapshot_receipt_unavailable"])
+                else:
+                    receipt = json.loads((output / gate.CPU_SNAPSHOT_NAME).read_text())
+                    self.assertEqual(receipt["status"], "observed" if fault == "none" else "unavailable")
+                    self.assertEqual(receipt["method"], "native_ps")
+                    self.assertEqual(receipt["argv"], ["ps", "-A", "-o", "pcpu=,comm="])
+                    self.assertEqual(receipt["timing"], "after_resource_refusal")
+                    self.assertEqual(receipt["basis"], "native_platform_historical_percent")
+                    self.assertEqual(receipt["origin"], "driver_failure_observed")
+                    self.assertGreaterEqual(receipt["capture_started_offset_ms"], 0)
+                    if fault in ("parse", "none"):
+                        self.assertGreaterEqual(receipt["capture_completed_offset_ms"], receipt["capture_started_offset_ms"])
+                    else:
+                        self.assertNotIn("capture_completed_offset_ms", receipt)
+                    self.assertFalse(receipt["admission_intervals_matched"])
+                    self.assertFalse(receipt["causal_attribution"])
+                    self.assertNotIn("canary", json.dumps(receipt))
+                    self.assertNotIn("/", json.dumps(receipt))
+
+    def test_interrupts_never_launch_snapshot_and_keep_cleanup(self):
+        for primary in (KeyboardInterrupt(), SystemExit(7)):
+            with self.subTest(kind=type(primary).__name__), tempfile.TemporaryDirectory(prefix="ccr-cpu-interrupt-") as temporary:
+                output = Path(temporary)
+                run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
+                fixture = SimpleNamespace(server=SimpleNamespace(server_port=43210))
+
+                def exercise(_fixture):
+                    raise primary
+
+                with patch.multiple(run, create=True, output=output, provider_executable="/ccr",
+                                    direct=lambda *_args, **_kwargs: None, exercise=exercise), \
+                        patch.object(run, "capture_cpu_snapshot", side_effect=AssertionError("unexpected snapshot")) as snapshot, \
+                        patch.object(run, "safe_shutdown", return_value=True) as shutdown, \
+                        patch.object(run, "finalize", return_value=True) as finalize, \
+                        patch.object(gate, "choose_output", return_value=output), \
+                        patch.object(gate, "prepare_fixture_acceptance", return_value=run), \
+                        patch.object(gate, "Fixture", return_value=nullcontext(fixture)), \
+                        patch.object(sys, "argv", ["acceptance_ccr_fixture.py"]):
+                    with self.assertRaises(type(primary)) as caught:
+                        gate.main()
+                self.assertIs(caught.exception, primary)
+                snapshot.assert_not_called()
+                shutdown.assert_called_once_with()
+                finalize.assert_called_once_with(False)
 
 
 class ProviderInstallationWorkflowTests(unittest.TestCase):

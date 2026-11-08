@@ -335,6 +335,16 @@ metric can still refuse. Linux target-cgroup observations supplement host
 observations where available; hidden ancestors and unsupported measurements limit
 what can be established.
 
+Confirmed host CPU refusals may include optional JSON evidence under
+`resource_admission.diagnostics.host_cpu`: the native counter unit (`ticks` on
+Linux, `seconds` elsewhere), busy threshold, required streak and at most three
+consumed intervals. Each interval gives elapsed milliseconds, finite counter
+deltas and a valid busy fraction when available, plus its classification and
+a stable reason when unavailable. This evidence uses the same samples and
+decision as admission; it adds no reads or policy. It carries no absolute times,
+paths, process IDs, environment values or raw errors. Other resource outcomes
+and human output are unchanged.
+
 A refusal creates no ordinary task record. Running tasks, status, collect,
 cancel and existing recovery are untouched. No work is paused or offloaded;
 admission cannot guarantee that an accepted task avoids a later OOM.

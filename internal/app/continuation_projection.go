@@ -12,7 +12,7 @@ func continuationCommandResult(observed tasklifecycle.ContinuationResult) comman
 	response := newResponse("continue")
 	response.TaskRecord = "not_created"
 	response.RootID, response.Workspace = observed.RootID, observed.Workspace
-	response.ResourceAdmission = resourceAdmissionResponse(observed.Resources)
+	response.ResourceAdmission = resourceAdmissionResponse(observed.Resources, observed.Failure)
 	code := 1
 	switch observed.Phase {
 	case tasklifecycle.ContinueProvider, tasklifecycle.ContinueValidation, tasklifecycle.ContinueSession:

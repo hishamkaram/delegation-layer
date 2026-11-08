@@ -32,6 +32,10 @@ def main():
     legacy_mode, queued_runner_check, inspection_runner_check, response_directory, run_receipt = prepare_receipt(
         args, dispatch_workers, parser
     )
+    if args.scenario == "nested-refused-leader":
+        from scripts.delegate_acceptance.private_cli.nested_refusal import run_refused_leader
+        run_refused_leader(args, response_directory, run_receipt)
+        return
     lifetime = FixtureLifetime(DirectoryOwner(), DirectoryOwner())
     success = False
     failure = None

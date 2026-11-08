@@ -84,6 +84,7 @@ type Findings struct {
 	Pressures   []Pressure
 	Unavailable []Unavailable
 	Advisories  []Advisory
+	HostCPU     *HostCPUDiagnostics
 }
 
 // Scope identifies what an assessment was measured against. Two assessments
@@ -116,6 +117,7 @@ func NewAssessment(observedAt time.Time, scope Scope, findings Findings) Assessm
 			Pressures:   slices.Clone(findings.Pressures),
 			Unavailable: slices.Clone(findings.Unavailable),
 			Advisories:  slices.Clone(findings.Advisories),
+			HostCPU:     copyHostCPUDiagnostics(findings.HostCPU),
 		},
 	}
 }
@@ -144,6 +146,17 @@ func (a Assessment) Unavailable() []Unavailable { return slices.Clone(a.findings
 
 // Advisories returns a copy of the non-gating observations.
 func (a Assessment) Advisories() []Advisory { return slices.Clone(a.findings.Advisories) }
+
+// HostCPUDiagnostics returns a defensive copy only for confirmed host CPU
+// pressure. Other assessments keep their public representation unchanged.
+func (a Assessment) HostCPUDiagnostics() *HostCPUDiagnostics {
+	for _, pressure := range a.findings.Pressures {
+		if pressure.Metric == MetricHostCPU {
+			return copyHostCPUDiagnostics(a.findings.HostCPU)
+		}
+	}
+	return nil
+}
 
 // ObservedAt is the clock reading when the check finished.
 func (a Assessment) ObservedAt() time.Time { return a.observedAt }

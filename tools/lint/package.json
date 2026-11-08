@@ -7,5 +7,13 @@
     "eslint": "10.14.0",
     "@eslint/js": "10.0.1",
     "globals": "17.14.0"
+  },
+  "overrides": {
+    "eslint@10.14.0": {
+      "minimatch": "11.0.1"
+    },
+    "@eslint/config-array@0.23.5": {
+      "minimatch": "11.0.1"
+    }
   }
 }

@@ -8,12 +8,12 @@ func dispatchCommandResult(observed tasklifecycle.DispatchResult) commandResult 
 	response.TaskRecord = taskRecordPresence(observed.Record)
 	response.Team = observed.Team.Clone()
 	result := dispatchPrimaryResult(response, observed)
-	result.response.ResourceAdmission = resourceAdmissionResponse(observed.Resources)
 	if observed.Workspace != nil {
 		applyManagedAdmissionFinish(observed.Root, *observed.Workspace, &result)
 	}
 	mergeCommandClose(&result, func() error { return observed.StoreCloseError })
 	retainTaskAdmissionCleanup(&result, observed.StoreCleanup)
+	result.response.ResourceAdmission = resourceAdmissionResponse(observed.Resources, result.err)
 	return result
 }
 

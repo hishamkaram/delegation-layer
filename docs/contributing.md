@@ -5,13 +5,14 @@
 These repository guides describe main; published installs may lag. For a source
 build, install the Go release in [`.go-version`](../.go-version) yourself and put
 it on `PATH`, with `GOTOOLCHAIN` unset or `local`. Use Python 3.12, Node.js
-22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is for installer/plugin checks;
-Python is for repository tooling and black-box tests, not the Go CLI runtime.
+22.13+ on the 22.x line or Node.js 24+, and repository-local pinned tools. Node is
+for installer, plugin and lint compatibility checks; Python is for repository
+tooling and black-box tests, not the Go CLI runtime.
 Run `make tools` to install the project's tools under ignored `bin/`; it does
-not install Go. `make tools-go` installs only the core Go tools for the platform
-checks. Then run `make build`, which requires both that compiler and the
-pinned tools checked by `make tool-versions`. Keep the native `bin/delegate`
-and `bin/delegate-run` from the same build colocated.
+not install Go. For platform checks, `make tools-go tools-node` installs the core
+Go tools and locked JavaScript lint dependencies. Then run `make build`, which
+requires both that compiler and the pinned tools checked by `make tool-versions`.
+Keep the native `bin/delegate` and `bin/delegate-run` from the same build colocated.
 If `GOROOT` is set explicitly, it must match the selected compiler; a matching
 `go version` alone does not prove the assembler and other tools use that release.
 
@@ -122,9 +123,9 @@ with temporary fixtures. Both are included in `make check`, and any finding
 fails the gate.
 
 CI runs these shared source and workflow checks once on Linux; macOS installs
-`make tools-go` and runs `make check-platform`. Go vet, lint, builds, race tests,
-and Python/Node runtime tests still run on both native hosts. The default
-`make check` runs the shared checks followed by the platform gate.
+`make tools-go tools-node` and runs `make check-platform`. Go vet, lint, builds,
+race tests, and Python/Node runtime tests still run on both native hosts. The
+default `make check` runs the shared checks followed by the platform gate.
 The source inventory command, `go run ./cmd/source-inventory --kind python`
 (or `javascript`, `shell`, `go`), emits absolute NUL-separated paths,
 including maintained untracked additions and excluding ignored scratch.

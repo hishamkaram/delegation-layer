@@ -13,14 +13,18 @@ import (
 // any consumer starts. Finite race-instrumented owners keep diagnostics and
 // explicit exit delays, without paying the runtime's default exit delay.
 func appTestControlEnvironment(environment []string) []string {
-	raceOptions := verifiedexec.EnvironmentValue(environment, "GORACE")
+	raceOptions := appTestRaceOptions(verifiedexec.EnvironmentValue(environment, "GORACE"))
+	return append(pueue.DefaultEnvironmentFrom(environment), "GORACE="+raceOptions)
+}
+
+func appTestRaceOptions(raceOptions string) string {
 	if !strings.Contains(raceOptions, "atexit_sleep_ms=") {
 		if raceOptions != "" {
 			raceOptions += " "
 		}
 		raceOptions += "atexit_sleep_ms=0"
 	}
-	return append(pueue.DefaultEnvironmentFrom(environment), "GORACE="+raceOptions)
+	return raceOptions
 }
 
 func TestAppControlFixturePreservesRaceDiagnostics(t *testing.T) {

@@ -41,13 +41,14 @@ def parse_arguments():
             SUPERVISOR_UPGRADE_RECOVERY_SCENARIO,
             MODERN_CONTENTION_SCENARIO,
             "nested-survival",
+            "nested-refused-leader",
         ),
         default="capacity",
     )
     parser.add_argument("--parallel-tasks", type=int, default=CAPACITY_TARGET_TASKS)
     parser.add_argument("--nested-topology", choices=("shared-warm", "other-warm", "other-cold"))
     parser.add_argument("--expected-backend", choices=("cgroup-v2", "process-group"))
-    parser.add_argument("--native-fixture", type=Path, help="native lifetime test binary for nested survival")
+    parser.add_argument("--native-fixture", type=Path, help="native lifetime test binary for nested acceptance")
     parser.add_argument(
         "--dispatch-workers",
         type=int,
@@ -77,13 +78,15 @@ def _validate_scenario_arguments(args, parser):
             "--noexec-state-parent is required by, and only valid for, --scenario %s" % EXTERNAL_NOEXEC_STATE_SCENARIO
         )
     nested_options = (args.nested_topology, args.expected_backend, args.native_fixture)
-    if args.scenario == "nested-survival":
+    if args.scenario in {"nested-survival", "nested-refused-leader"}:
         if (not all(nested_options) or args.parallel_tasks != 3 or args.dispatch_workers != 1
                 or not args.runtime_only or args.upgraded_source_root):
-            parser.error("nested-survival requires topology/backend/native-fixture, three tasks, one dispatch worker, "
+            parser.error("nested acceptance requires topology/backend/native-fixture, three tasks, one dispatch worker, "
                          "runtime-only and the current installation")
+        if args.scenario == "nested-refused-leader" and args.nested_topology != "shared-warm":
+            parser.error("nested-refused-leader requires shared-warm topology")
     elif any(option is not None for option in nested_options):
-        parser.error("nested topology/backend/native fixture options require nested-survival")
+        parser.error("nested topology/backend/native fixture options require a nested acceptance scenario")
     elif args.scenario == MODERN_CONTENTION_SCENARIO:
         if (args.parallel_tasks != MODERN_CONTENTION_TASK_COUNT
                 or args.upgraded_source_root is None):

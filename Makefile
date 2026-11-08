@@ -25,9 +25,12 @@ VERIFY_ACCEPTANCE_OWNERSHIP := python3 scripts/verify_acceptance_ownership.py
 tools: tools-go
 	python3 scripts/static_tools.py install
 
-.PHONY: tools-go check-platform
+.PHONY: tools-go tools-node check-platform
 tools-go:
 	./scripts/install-tools.sh
+
+tools-node:
+	python3 -c 'from scripts.static_tools import node_tools; node_tools(install=True)'
 
 .PHONY: static-tool-versions lint-static verify-static-gates diagnostic-tools diagnostics
 static-tool-versions:
@@ -231,6 +234,17 @@ acceptance-nested-survival: nested-survival-fixture
 			--parallel-tasks 3 --dispatch-workers 1 --runtime-only \
 			--output "$$receipt_dir/receipt.json" || exit $$?; \
 	done
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/nested-survival.XXXXXX") || exit $$?; \
+	echo "Nested refused leader evidence: $$receipt_dir/receipt.json"; \
+	python3 scripts/acceptance_private_cli.py \
+		--source-root "$(CURDIR)" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--scenario nested-refused-leader --nested-topology shared-warm \
+		--expected-backend "$${DELEGATE_NESTED_EXPECTED_BACKEND:-process-group}" \
+		--native-fixture "$(BIN_DIR)/nested-lifetime-fixture" \
+		--parallel-tasks 3 --dispatch-workers 1 --runtime-only \
+		--output "$$receipt_dir/receipt.json"
 
 acceptance-supervisor-handoff: tool-versions
 	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
