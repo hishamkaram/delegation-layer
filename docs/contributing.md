@@ -16,6 +16,13 @@ Keep the native `bin/delegate` and `bin/delegate-run` from the same build coloca
 If `GOROOT` is set explicitly, it must match the selected compiler; a matching
 `go version` alone does not prove the assembler and other tools use that release.
 
+The golangci-lint, GoReleaser, ShellCheck and test-Pueue archive installers report
+eligible transient download failures and try the same exact release asset once
+through GitHub's public asset API. This fallback requires Python 3 and sends no
+credentials. The pinned release, asset name and whole-archive checksum stay the
+same. API rate limits, invalid metadata, incomplete downloads or checksum
+mismatches fail installation; the fallback does not guarantee availability.
+
 Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
 relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
 `pueued` must sit beside the resolved client, rather than elsewhere on `PATH`.

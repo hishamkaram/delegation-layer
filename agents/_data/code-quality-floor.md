@@ -19,6 +19,8 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
 - **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
+  [Development setup](../../docs/contributing.md#development-setup) describes
+  the exact-asset API fallback for transient archive download failures.
   `make tools-go tools-node` installs the core Go tools and locked JavaScript
   lint dependencies needed by the platform gate, including its ESLint
   compatibility runtime tests. Shared static analysis still runs only on Linux.
