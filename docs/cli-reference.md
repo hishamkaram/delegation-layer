@@ -12,6 +12,7 @@ Use `delegate help` for the installed build's command surface.
 
 | Command | Shared reference |
 | --- | --- |
+| `devices`, remote dispatch and `remote:ID` controls | [Remote workflow](remote-delegation.md) |
 | `dispatch` | [Flags, defaults, and review scope](../skills/agent-integration/references/command-reference.md#dispatch) |
 | `providers`, `capabilities` | [Discovery](../skills/agent-integration/references/command-reference.md#providers-and-capabilities) |
 | `models` | [Model and effort discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort) |

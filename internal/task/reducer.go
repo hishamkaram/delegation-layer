@@ -23,21 +23,16 @@ func CompareRequests(a, b *TaskRecord) bool {
 	if !reflect.DeepEqual(a.RequestedConfig, b.RequestedConfig) {
 		return false
 	}
+	if !reflect.DeepEqual(a.Remote, b.Remote) {
+		return false
+	}
 	if !reflect.DeepEqual(a.Team, b.Team) {
 		return false
 	}
 	if !sameWorkspaceBinding(a.Workspace, b.Workspace) {
 		return false
 	}
-	if (a.PriorSession == nil) != (b.PriorSession == nil) {
-		return false
-	}
-	if a.PriorSession != nil {
-		if *a.PriorSession != *b.PriorSession {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(a.PriorSession, b.PriorSession)
 }
 
 // CompareOutcomes compares two OutcomeRecord values for semantic equality,

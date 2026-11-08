@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -8,8 +10,12 @@ import (
 )
 
 func submissionValidationStore(deps Dependencies) admissioncore.SubmissionStoreOpener {
+	return submissionValidationStoreContext(context.Background(), deps)
+}
+
+func submissionValidationStoreContext(ctx context.Context, deps Dependencies) admissioncore.SubmissionStoreOpener {
 	return func(root string) (*taskdir.Store, error) {
-		return openStore(root, deps.normalized().storeDependencies(), false)
+		return openStoreContext(ctx, root, deps.normalized().storeDependencies(), false)
 	}
 }
 

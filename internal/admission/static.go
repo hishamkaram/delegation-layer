@@ -16,13 +16,13 @@ func ValidateStatic(options StaticOptions, root string, request task.TaskRecord)
 	if err = candidate.ValidateStatePlacement(root); err != nil {
 		return err
 	}
-	return finalizeStaticCandidate(candidate, request)
+	_, err = finalizeStaticCandidate(candidate, request)
+	return err
 }
 
-func finalizeStaticCandidate(candidate commonprovider.ProfileCandidate, request task.TaskRecord) error {
+func finalizeStaticCandidate(candidate commonprovider.ProfileCandidate, request task.TaskRecord) (commonprovider.PreparedProfile, error) {
 	if candidate.Inspection != nil {
-		return nil
+		return commonprovider.PreparedProfile{}, nil
 	}
-	_, err := FinalizeCandidate(candidate, request, nil)
-	return err
+	return FinalizeCandidate(candidate, request, nil)
 }

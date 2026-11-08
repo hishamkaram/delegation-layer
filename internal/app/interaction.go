@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -12,13 +13,17 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-func interactionCommand(a Arguments, deps storeDependencies) (result commandResult) {
+func interactionCommand(a Arguments, deps storeDependencies) commandResult {
+	return interactionCommandContext(context.Background(), a, deps)
+}
+
+func interactionCommandContext(ctx context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse(a.Command)
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStore(root, deps, false)
+	store, err := openStoreContext(ctx, root, deps, false)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -30,13 +35,13 @@ func interactionCommand(a Arguments, deps storeDependencies) (result commandResu
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	if a.Command == "events" {
-		return observeInteraction(a, td, response)
+		return observeInteractionContext(ctx, a, td, response)
 	}
 	message, err := interactionMessage(a)
 	if err != nil {
 		return failed(response, err, 2)
 	}
-	receipt, err := td.SubmitInteraction(message)
+	receipt, err := td.SubmitInteractionContext(ctx, message)
 	if err != nil {
 		return failed(response, err, 2)
 	}
@@ -66,7 +71,7 @@ func interactionMessage(a Arguments) (task.InteractionMessage, error) {
 	return message, err
 }
 
-func observeInteraction(a Arguments, td *taskdir.TaskDir, response Response) commandResult {
+func observeInteractionContext(ctx context.Context, a Arguments, td *taskdir.TaskDir, response Response) commandResult {
 	deadline := time.Now().Add(a.Watch)
 	for {
 		if err := fillInteraction(&response, td); err != nil {
@@ -83,7 +88,7 @@ func observeInteraction(a Arguments, td *taskdir.TaskDir, response Response) com
 		if len(events) > 0 || response.Interaction.Closed {
 			return commandResult{response: response}
 		}
-		if tasklifecycle.CollectionWatchExpired(a.Watch, deadline) || !tasklifecycle.WaitForCollection(deadline) {
+		if tasklifecycle.CollectionWatchExpired(a.Watch, deadline) || !waitForInteraction(ctx, deadline) {
 			response.Pending = &PendingResponse{Kind: "interaction"}
 			return commandResult{response: response, code: 3}
 		}
@@ -125,4 +130,19 @@ func writeHumanInteractionState(output *strings.Builder, state task.InteractionS
 
 func writeHumanDelivery(output *strings.Builder, delivery task.InteractionDelivery) {
 	fmt.Fprintf(output, "delivery message_id=%q state=%s reason=%q\n", delivery.MessageID, delivery.State, delivery.Reason)
+}
+
+func waitForInteraction(ctx context.Context, deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	timer := time.NewTimer(min(remaining, 100*time.Millisecond))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }

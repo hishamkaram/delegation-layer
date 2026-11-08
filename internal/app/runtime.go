@@ -116,6 +116,15 @@ Independent scheduler:
   Run is the compatibility foreground runtime without child recovery.
   Existing admitted tasks continue after the scheduler stops.
 
+Remote tasks:
+  devices list|probe|trust --json
+  dispatch --device ALIAS --provider ID --brief FILE (--remote-cwd ABS | --input-manifest FILE)
+  status|collect|cancel|events|reply|steer remote:ID --json
+  collect remote:ID --out ABS --json
+  remote list [--after CURSOR] --json
+  remote reconcile remote:ID --json
+  supervisor ensure-owner --json
+
 Interactive tasks:
   dispatch ... --interactive
   continue --task ID ... --interactive
@@ -130,6 +139,7 @@ Use --json on task, providers, capabilities, models, preflight, continue, and re
 // hermetic acceptance harness. Production leaves hooks and profile selection at
 // their safe defaults; acceptance supplies a compiled finite profile directly.
 type Dependencies struct {
+	remoteRootPin *taskdir.RootPin
 	// TeamCatalogPath and Input are explicit command-edge dependencies. An empty
 	// catalog path is resolved from the captured user environment only on demand.
 	TeamCatalogPath string
@@ -182,6 +192,7 @@ func (d Dependencies) withCapturedEnvironmentContext(ctx context.Context) Depend
 // options remain outside this boundary. environment is a read-only copy of the
 // command's captured launch scope, with the same nil and empty meaning.
 type storeDependencies struct {
+	remoteRootPin     *taskdir.RootPin
 	predicateRegistry func() predicate.Registry
 	catalog           commonprovider.Catalog
 	supervisorOptions pueue.Options
@@ -200,6 +211,7 @@ func (d Dependencies) storeDependencies() storeDependencies {
 	}
 	return storeDependencies{
 		predicateRegistry: registry,
+		remoteRootPin:     d.remoteRootPin,
 		catalog:           d.Catalog,
 		supervisorOptions: d.supervisorControlScope(),
 		supervisorLookup:  d.supervisorLookup(),
@@ -273,6 +285,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 			return 1
 		}
 		return 0
+	}
+	if isRemoteCommand(parsed) {
+		return runRemoteCLI(parsed, deps, stdout, stderr)
 	}
 	if parsed.Command == "teams" {
 		return runTeams(parsed, deps, stdout, stderr)
@@ -404,18 +419,33 @@ func (d storeDependencies) providerCatalog() commonprovider.Catalog {
 }
 
 func openStore(root string, deps storeDependencies, create bool) (*taskdir.Store, error) {
-	registry := deps.registry()
-	if create {
-		return taskdir.InitStoreWithPredicates(root, registry)
-	}
-	return taskdir.OpenStoreWithPredicates(root, registry)
+	return openStoreContext(context.Background(), root, deps, create)
 }
 
 func openStoreContext(ctx context.Context, root string, deps storeDependencies, create bool) (*taskdir.Store, error) {
-	if create {
-		return taskdir.InitStoreWithPredicatesContext(ctx, root, deps.registry())
+	if deps.remoteRootPin != nil {
+		create = false
 	}
-	return taskdir.OpenStoreWithPredicatesContext(ctx, root, deps.registry())
+	var store *taskdir.Store
+	var err error
+	if create {
+		store, err = taskdir.InitStoreWithPredicatesContext(ctx, root, deps.registry())
+	} else {
+		store, err = taskdir.OpenStoreWithPredicatesContext(ctx, root, deps.registry())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if deps.remoteRootPin != nil {
+		pin, pinErr := store.PinRootContext(ctx)
+		if pinErr == nil && !pin.Equal(*deps.remoteRootPin) {
+			pinErr = task.ErrIdentityMismatch
+		}
+		if pinErr != nil {
+			return nil, errors.Join(pinErr, store.Close())
+		}
+	}
+	return store, nil
 }
 
 func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {

@@ -13,12 +13,20 @@ import (
 )
 
 func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (response StopOutcome, resultErr error) {
+	return StopTaskContext(context.Background(), root, td, requestID, cause, supervisorOptions, lookup, openControl)
+}
+
+// StopTaskContext uses the existing durable stop owner under a bounded operation.
+func StopTaskContext(ctx context.Context, root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (response StopOutcome, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return response, err
+	}
 	_, meta, err := td.PreparedRecords()
 	if err != nil {
 		return StopOutcome{}, err
 	}
 	supervisorOptions = supervisorcore.OptionsWithEnvironment(supervisorOptions, meta.Environment)
-	permit, err := td.PrepareStop(requestID, cause, time.Time{})
+	permit, err := td.PrepareStopContext(ctx, requestID, cause, time.Time{})
 	if err != nil {
 		return StopOutcome{}, err
 	}
@@ -26,7 +34,7 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	if err != nil {
 		return StopOutcome{}, errors.Join(err, permit.Release())
 	}
-	owner, err := td.TryAcquireLifetimeOwner()
+	owner, err := td.TryAcquireLifetimeOwnerContext(ctx)
 	if errors.Is(err, task.ErrLockBusy) {
 		consumeErr := permit.Consume()
 		releaseErr := permit.Release()
@@ -55,21 +63,21 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 		}
 	}()
 	if request.NumericTaskID == nil {
-		return stopTaskWithoutNumericTarget(td, permit, requestID, cause)
+		return stopTaskWithoutNumericTargetContext(ctx, td, permit, requestID, cause)
 	}
 	source, err := supervisorcore.NewSavedBindingSource(meta.RootID, infrastructure.SavedBindingTaskStop, td.TaskID, requestID, request.Supervisor)
 	if err != nil {
 		return StopOutcome{}, errors.Join(err, permit.Release())
 	}
-	client, err := openControl(context.Background(), root, request.Supervisor, source, supervisorOptions, lookup)
+	client, err := openControl(ctx, root, request.Supervisor, source, supervisorOptions, lookup)
 	if err != nil {
 		return StopOutcome{}, errors.Join(supervisorcore.ClosePrivateAdmissionTransition(client, err), permit.Release())
 	}
 	defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
-	stopResult, stopErr := client.Stop(pueue.WithControlLease(context.Background(), owner), permit)
+	stopResult, stopErr := client.Stop(pueue.WithControlLease(ctx, owner), permit)
 	stopErr = errors.Join(stopErr, permit.Release())
 	if stopResult.Acknowledged != nil && stopResult.NumericTaskID != nil {
-		stopErr = errors.Join(stopErr, td.RecordStopReply(requestID, task.StopReplyFacts{NumericTaskID: *stopResult.NumericTaskID, Action: stopResult.Action, Acknowledged: *stopResult.Acknowledged, Message: stopResult.Message}))
+		stopErr = errors.Join(stopErr, td.RecordStopReplyContext(ctx, requestID, task.StopReplyFacts{NumericTaskID: *stopResult.NumericTaskID, Action: stopResult.Action, Acknowledged: *stopResult.Acknowledged, Message: stopResult.Message}))
 	}
 	var pendingStop <-chan struct{}
 	if stopResult.Pending != nil {
@@ -80,7 +88,7 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	} else {
 		ownerHeld = false
 	}
-	terminated, terminationErr := recordStoppedTaskTermination(context.Background(), td, requestID, stopResult)
+	terminated, terminationErr := recordStoppedTaskTermination(ctx, td, requestID, stopResult)
 	stopErr = errors.Join(stopErr, terminationErr)
 	response = stopOutcomeFromResult(requestID, cause, stopResult)
 	response.terminated = terminated
@@ -90,8 +98,8 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 // A missing numeric receipt is not authority to control any queue row or to
 // restart its supervisor. The durable user stop fences later task launch; only
 // the existing lifetime/run owners can additionally prove never-launched.
-func stopTaskWithoutNumericTarget(td *taskdir.TaskDir, permit *taskdir.StopPermit, requestID, cause string) (StopOutcome, error) {
-	proven, err := td.ProveUnlaunchedTaskOwnedContext(context.Background())
+func stopTaskWithoutNumericTargetContext(ctx context.Context, td *taskdir.TaskDir, permit *taskdir.StopPermit, requestID, cause string) (StopOutcome, error) {
+	proven, err := td.ProveUnlaunchedTaskOwnedContext(ctx)
 	if err != nil {
 		return StopOutcome{}, errors.Join(err, permit.Release())
 	}

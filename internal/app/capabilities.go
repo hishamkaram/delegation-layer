@@ -46,22 +46,23 @@ type CapabilityResponse struct {
 // agents. Runtime versions and executable digests are observations only; they
 // never authorize a release or replace behavioral checks.
 type CapabilityReport struct {
-	Interaction      task.InteractionCapabilities      `json:"interaction"`
-	Contract         string                            `json:"contract"`
-	Provider         string                            `json:"provider"`
-	Status           string                            `json:"status"`
-	Verification     string                            `json:"verification"`
-	Continuation     string                            `json:"continuation"`
-	SupportedModes   []string                          `json:"supported_modes"`
-	SupportedOptions []string                          `json:"supported_options"`
-	RequiredOptions  []string                          `json:"required_options,omitempty"`
-	ReadOnly         commonprovider.ReadOnlyCapability `json:"read_only"`
-	Version          string                            `json:"version,omitempty"`
-	ExecutableSHA256 string                            `json:"executable_sha256,omitempty"`
-	HelpArgs         []string                          `json:"help_args,omitempty"`
-	RequiredFlags    []string                          `json:"required_flags"`
-	ReasonCode       string                            `json:"reason_code"`
-	LiveAcceptance   LiveAcceptanceReport              `json:"live_acceptance"`
+	ProviderExecutable string                            `json:"provider_executable,omitempty"`
+	Interaction        task.InteractionCapabilities      `json:"interaction"`
+	Contract           string                            `json:"contract"`
+	Provider           string                            `json:"provider"`
+	Status             string                            `json:"status"`
+	Verification       string                            `json:"verification"`
+	Continuation       string                            `json:"continuation"`
+	SupportedModes     []string                          `json:"supported_modes"`
+	SupportedOptions   []string                          `json:"supported_options"`
+	RequiredOptions    []string                          `json:"required_options,omitempty"`
+	ReadOnly           commonprovider.ReadOnlyCapability `json:"read_only"`
+	Version            string                            `json:"version,omitempty"`
+	ExecutableSHA256   string                            `json:"executable_sha256,omitempty"`
+	HelpArgs           []string                          `json:"help_args,omitempty"`
+	RequiredFlags      []string                          `json:"required_flags"`
+	ReasonCode         string                            `json:"reason_code"`
+	LiveAcceptance     LiveAcceptanceReport              `json:"live_acceptance"`
 }
 
 // LiveAcceptanceReport keeps authentication and real-provider proof separate

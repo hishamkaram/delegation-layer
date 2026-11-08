@@ -79,6 +79,9 @@ func TestPreflightWorkflowKeepsStaticEvidenceAndNeverCreatesAuthority(t *testing
 				t.Fatalf("static preflight order/result changed: %+v, calls=%d/%d", result, fixture.prepareCalls, fixture.finalizeCalls)
 			}
 			checkPreflightCapability(t, result.response.Capability, test.status, test.reason)
+			if test.status == preflightStatusReady && result.response.Capability.ProviderExecutable != "/fixture/provider" {
+				t.Fatalf("preflight lost resolved provider path: %+v", result.response.Capability)
+			}
 			if _, err := os.Lstat(fixture.root); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("preflight created durable state/supervisor authority: %v", err)
 			}

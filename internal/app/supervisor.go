@@ -117,6 +117,9 @@ func openPrivateMigrationStore(ctx context.Context, stateRoot string, store **ta
 }
 
 func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
+	if a.SupervisorAction == "ensure-owner" {
+		return supervisorEnsureOwner(a, deps)
+	}
 	if a.SupervisorAction == "stop-owner" {
 		return supervisorOwnerStop(a, deps)
 	}

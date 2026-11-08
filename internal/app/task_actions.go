@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,13 +12,17 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-func cancel(a Arguments, deps Dependencies) (result commandResult) {
+func cancel(a Arguments, deps Dependencies) commandResult {
+	return cancelContext(context.Background(), a, deps)
+}
+
+func cancelContext(ctx context.Context, a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("cancel")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	store, err := openStore(root, deps.storeDependencies(), false)
+	store, err := openStoreContext(ctx, root, deps.storeDependencies(), false)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -28,7 +33,7 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Cancel(root, td, deps.supervisorControlScope(), deps.supervisorLookup(), deps.supervisorControlClientOpener())
+	observed, err := tasklifecycle.CancelWithRequestIDContext(ctx, root, td, a.remoteCancelID, deps.supervisorControlScope(), deps.supervisorLookup(), deps.supervisorControlClientOpener())
 	fillInspection(&response, observed.Inspection)
 	if observed.Stop != nil {
 		stop := stopOutcomeResponse(*observed.Stop)
