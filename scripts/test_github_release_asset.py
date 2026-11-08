@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Buffer
-from http.client import HTTPMessage
+from http.client import BadStatusLine, HTTPMessage, IncompleteRead
 import io
 import json
 import ssl
@@ -76,6 +76,34 @@ class ReleaseAssetTests(unittest.TestCase):
                     assets.download_asset(URL, io.BytesIO(), 100)
                 self.assertIs(raised.exception.__cause__, error)
                 self.assertEqual(build.return_value.open.call_count, 1)
+
+    def test_protocol_failures_keep_cause_and_cli_error_without_protocol_body_or_traceback(self) -> None:
+        marker = "untrusted-protocol-body"
+        for error in (BadStatusLine(marker), IncompleteRead(marker.encode(), 42)):
+            class BrokenResponse(Response):
+                def read(self, size: int | None = -1, /) -> bytes:
+                    raise error
+
+            def responses():
+                return ([error] if isinstance(error, BadStatusLine)
+                        else [Response(metadata()), BrokenResponse()])
+
+            with self.subTest(error=type(error).__name__), patch.object(
+                    assets.urllib.request, "build_opener") as build:
+                build.return_value.open.side_effect = responses()
+                target = io.BytesIO()
+                with self.assertRaisesRegex(assets.DownloadError, "API transport failed") as raised:
+                    assets.download_asset(URL, target, 100)
+                self.assertIs(raised.exception.__cause__, error)
+                self.assertEqual(target.getvalue(), b"")
+                build.return_value.open.side_effect = responses()
+                with patch.object(assets.sys, "argv", ["github_release_asset.py", "--url", URL,
+                                                       "--max-bytes", "100"]), patch(
+                        "sys.stderr", new_callable=io.StringIO) as diagnostic:
+                    self.assertEqual(assets.main(), 1)
+                self.assertIn("API transport failed", diagnostic.getvalue())
+                self.assertNotIn(marker, diagnostic.getvalue())
+                self.assertNotIn("Traceback", diagnostic.getvalue())
 
     def test_metadata_and_payload_have_separate_bounds_and_exact_payload_length(self) -> None:
         with patch.object(assets, "METADATA_LIMIT", 2), patch.object(

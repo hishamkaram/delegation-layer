@@ -16,6 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SHELLCHECK_VERSION = "0.11.0"
+MAX_SHELLCHECK_ARCHIVE_BYTES = 32 * 1024 * 1024
 JACTIONLINT_VERSION = "2.4.0"
 SHELLCHECK_DIGESTS = {
     ("Linux", "x86_64"): "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6",
@@ -88,7 +89,7 @@ def install_shellcheck() -> None:
         download = Path(temporary) / archive
         checked([str(ROOT / "scripts/download-tool-archive.sh"),
                  f"https://github.com/koalaman/shellcheck/releases/download/v{SHELLCHECK_VERSION}/{archive}",
-                 str(download), str(32 * 1024 * 1024)])
+                 str(download), str(MAX_SHELLCHECK_ARCHIVE_BYTES)])
         with download.open("rb") as source:
             actual = hashlib.file_digest(source, "sha256").hexdigest()
         if actual != digest:

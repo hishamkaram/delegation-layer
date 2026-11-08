@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from http.client import HTTPMessage
+from http.client import HTTPException, HTTPMessage
 import json
 import re
 import sys
@@ -112,7 +112,7 @@ def download_asset(url: str, target: IO[bytes], limit: int) -> None:
                 raise DownloadError("GitHub asset response length differs from release metadata")
     except urllib.error.HTTPError as error:
         raise DownloadError(f"GitHub release-asset API failed (HTTP {error.code})") from error
-    except urllib.error.URLError as error:
+    except (urllib.error.URLError, HTTPException) as error:
         raise DownloadError("GitHub release-asset API transport failed") from error
 
 

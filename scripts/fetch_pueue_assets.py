@@ -212,8 +212,6 @@ def download_archive(url: str, target: IO[bytes]) -> None:
             raise
         print(f"Release download failed ({error}); trying the exact pinned asset through GitHub's API.",
               file=sys.stderr)
-        target.seek(0)
-        target.truncate()
         try:
             github_release_asset.download_asset(url, target, MAX_ARCHIVE)
         except (github_release_asset.DownloadError, OSError) as fallback:

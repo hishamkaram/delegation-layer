@@ -22,6 +22,8 @@ through GitHub's public asset API. This fallback requires Python 3 and sends no
 credentials. The pinned release, asset name and whole-archive checksum stay the
 same. API rate limits, invalid metadata, incomplete downloads or checksum
 mismatches fail installation; the fallback does not guarantee availability.
+Pueue uses the fallback only when opening the primary request fails; errors
+while copying its body remain failures.
 
 Supply a compatible `pueue`/`pueued` pair beside those binaries, in `../libexec/`
 relative to their directory, or through `PATH`. `PATH` lookup selects `pueue`;
