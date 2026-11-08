@@ -2,6 +2,7 @@ package provider
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -11,6 +12,19 @@ import (
 // revision-parameterized builder existed. Records admitted under the shared
 // native revision must keep this digest.
 const nativeFixtureDigest = "6e67ff23d73f80ee33a21ad5b8d5ea43a6fbbf087e87ecf7eaf037ecfe52fca5"
+
+func TestNativeEffectiveConfigRejectsInvalidUTF8WorkingDirectory(t *testing.T) {
+	request := task.TaskRecord{
+		Mode: "workspace-write", CanonicalCwd: "/workspace/" + string([]byte{0xff}),
+	}
+	effective, err := NativeEffectiveConfig(request, nil, "", "build:auto")
+	if err == nil || !strings.Contains(err.Error(), "policy workspace") || !strings.Contains(err.Error(), "UTF-8") {
+		t.Fatalf("invalid UTF-8 working directory must produce a workspace validation error: %v", err)
+	}
+	if effective != (task.EffectiveConfig{}) {
+		t.Fatalf("invalid working directory returned a persistable effective configuration: %+v", effective)
+	}
+}
 
 func TestNativeEffectiveConfigForRevisionKeepsSharedDigest(t *testing.T) {
 	request := task.TaskRecord{Mode: "workspace-write", CanonicalCwd: "/workspace"}

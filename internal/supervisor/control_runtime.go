@@ -186,7 +186,30 @@ func (r ControlRuntime) probeSavedWith(ctx context.Context, store *taskdir.Store
 }
 
 func (r ControlRuntime) probeAdmission(ctx context.Context, store *taskdir.Store, pin taskdir.RootPin) (*pueue.Client, error) {
-	client, err := ProbePrivateAdmissionSupervisor(ctx, store, "", "", r.Options)
+	// This read selects transport only. The canonical probe revalidates the
+	// published generation and admission gate under its own shared lease.
+	published, found, readErr := pueue.ReadPrivateSupervisorBinding(store.Root)
+	needsPair := false
+	if readErr == nil && found {
+		missing, pairErr := pueue.PrivateSupervisorPairMissing(published)
+		needsPair = pairErr == nil && (missing || pueue.IsLegacyStateSupervisorClient(store.Root, published))
+	}
+	var client *pueue.Client
+	var err error
+	if needsPair {
+		clientExecutable, daemonExecutable, selectionErr := resolveCompatiblePrivatePair(ctx, store.Root, r.Lookup)
+		if selectionErr != nil && !task.AllErrorCauses(selectionErr, func(cause error) bool { return errors.Is(cause, pueue.ErrCompatiblePairUnavailable) }) {
+			return nil, selectionErr
+		}
+		if selectionErr == nil {
+			client, err = ProbePrivateAdmissionSupervisor(ctx, store, clientExecutable, daemonExecutable, r.Options)
+		}
+	}
+	if err == nil && client == nil {
+		// Preserve existing cold/refused/incomplete routing and wrapped faults;
+		// an optional transport never authorizes a transition by itself.
+		client, err = ProbePrivateAdmissionSupervisor(ctx, store, "", "", r.Options)
+	}
 	if err != nil {
 		return client, err
 	}

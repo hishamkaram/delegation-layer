@@ -73,10 +73,11 @@ jobs:
         run: make skill-package-check
 
   skill-package-macos:
+    # Keep this required check name for existing branch protection; the runner follows latest.
     name: Agent skill package (macos-15)
     needs: changes
     if: ${{ needs.changes.outputs.full == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -263,10 +264,11 @@ jobs:
           if-no-files-found: error
 
   gate-macos:
+    # Keep this required check name for existing branch protection; the runner follows latest.
     name: Gate (macOS macos-15)
     needs: changes
     if: ${{ needs.changes.outputs.full == 'true' }}
-    runs-on: macos-15
+    runs-on: macos-latest
     timeout-minutes: 60
     steps:
       - name: Checkout repository
@@ -419,7 +421,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -466,7 +468,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -599,13 +601,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-latest]
         channel: [shell, npm, homebrew]
         include:
           - os: ubuntu-24.04
             host_os: Linux
             host_arch: amd64
-          - os: macos-15
+          - os: macos-latest
             host_os: Darwin
             host_arch: arm64
     steps:

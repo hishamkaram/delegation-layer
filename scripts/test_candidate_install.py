@@ -7,6 +7,7 @@ from pathlib import Path
 import contextlib
 import io
 import json
+import os
 import shutil
 import stat
 import sys
@@ -18,6 +19,7 @@ if __package__ in {None, ""}:
 
 from scripts import test_candidate_install_support as support
 from scripts.acceptance_tests import candidate_fixtures as fx
+from scripts.delegate_acceptance.processes.operations import run_bounded_command
 from scripts.delegate_acceptance.release_verification.candidate_install_bootstrap import InstalledBootstrapProbe
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
     CHANNEL_NPM, CHANNEL_SHELL, BootstrapTarget, RequestRecord,
@@ -118,6 +120,76 @@ class ShellInstallTests(support.CandidateCase):
         ):
             self.assertRefused(code, request, channels=channels)
         self.assertEqual(self.recording.calls, [])
+
+    def test_interrupted_installer_preserves_signal_failure_and_cleans_only_owned_paths(self):
+        request = self.request()
+        assert request.files.checksums is not None
+        real_install, real_rm = shutil.which("install"), shutil.which("rm")
+        assert real_install is not None and real_rm is not None
+        cases = [(name, code, phase, False) for name, code in (("HUP", 129), ("INT", 130), ("TERM", 143))
+                 for phase in ("curl", "install")]
+        # Cleanup must finish even if another signal arrives while it removes a path.
+        cases.append(("TERM", 143, "install", True))
+        for name, code, phase, repeated in cases:
+            with self.subTest(signal=name, phase=phase, repeated=repeated):
+                case = self.root / f"signal-{name}-{phase}-{repeated}"
+                shim, temporary, destination = (case / item for item in ("shim", "temporary", "bin"))
+                for directory in (shim, temporary, destination):
+                    directory.mkdir(parents=True)
+                sentinel = destination / "user-file"
+                sentinel.write_text("keep")
+                programs = {
+                    "curl": f"#!{sys.executable}\n" + '''import os, signal, sys
+from pathlib import Path
+out = Path(sys.argv[sys.argv.index("-o") + 1])
+source = "TEST_CHECKSUMS" if sys.argv[-1].endswith("/checksums.txt") else "TEST_ARCHIVE"
+out.write_bytes(Path(os.environ[source]).read_bytes())
+if os.environ["TEST_INTERRUPT_COMMAND"] == "curl":
+    Path(os.environ["TEST_INTERRUPTED"]).write_text("curl")
+    os.kill(os.getppid(), getattr(signal, "SIG" + os.environ["TEST_SIGNAL"]))
+''',
+                    "install": '''#!/bin/sh
+"$TEST_REAL_INSTALL" "$@" || exit "$?"
+if [ "$TEST_INTERRUPT_COMMAND" = install ]; then
+  printf install >"$TEST_INTERRUPTED"
+  kill -"$TEST_SIGNAL" "$PPID"
+fi
+exit 0
+''',
+                    "rm": '''#!/bin/sh
+if [ "$TEST_REPEAT_SIGNAL" = 1 ]; then kill -HUP "$PPID"; fi
+exec "$TEST_REAL_RM" "$@"
+''',
+                }
+                for command, source in programs.items():
+                    path = shim / command
+                    path.write_text(source)
+                    path.chmod(0o755)
+                environment = {
+                    "PATH": str(shim) + os.pathsep + os.environ["PATH"], "HOME": str(case),
+                    "TMPDIR": str(temporary), "DELEGATION_LAYER_VERSION": self.tag,
+                    "DELEGATION_LAYER_INSTALL_DIR": str(destination),
+                    "TEST_ARCHIVE": str(request.files.archive), "TEST_CHECKSUMS": str(request.files.checksums),
+                    "TEST_REAL_INSTALL": real_install, "TEST_REAL_RM": real_rm,
+                    "TEST_INTERRUPT_COMMAND": phase, "TEST_SIGNAL": name,
+                    "TEST_REPEAT_SIGNAL": "1" if repeated else "0", "TEST_INTERRUPTED": str(case / "interrupted"),
+                }
+                # A shell cannot trap signals ignored on entry (for example under nohup).
+                launch = '''import os, signal, sys
+for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(number, signal.SIG_DFL)
+os.execvp("sh", ["sh", sys.argv[1]])
+'''
+                result = self.tree.observe_operation(lambda: run_bounded_command(
+                    [sys.executable, "-c", launch, str(request.installer)], environment,
+                    capture=True, capture_stderr=True,
+                    timeout=10, max_output=16384, cwd=case))
+                self.assertEqual((case / "interrupted").read_text(), phase)
+                self.assertEqual(result.exit_code, code, result.stderr)
+                self.assertNotIn(b"Installed delegation-layer", result.output)
+                self.assertEqual(list(temporary.iterdir()), [])
+                self.assertEqual(list(destination.iterdir()), [sentinel])
+                self.assertEqual(sentinel.read_text(), "keep")
 
 
 class ShellBootstrapGateTests(support.CandidateCase):

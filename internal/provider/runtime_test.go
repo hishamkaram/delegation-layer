@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,18 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+func TestNewRuntimeInspectionDefinitionRejectsInvalidUTF8Directory(t *testing.T) {
+	// Exercise the string boundary without creating a host-specific filename.
+	directory := "/workspace/" + string([]byte{0xff})
+	_, err := NewRuntimeInspectionDefinition(
+		CLIInfo{Path: "/usr/bin/provider"}, directory, []string{"LANG=C"},
+		RuntimeCapability{VersionArgs: []string{"--version"}},
+	)
+	if !errors.Is(err, ErrProfileUnavailable) {
+		t.Fatalf("invalid UTF-8 working directory must refuse the inspection: %v", err)
+	}
+}
 
 func TestRuntimeVersionArgsAreCopiedAndBoundToTheCapabilityDigest(t *testing.T) {
 	definition, err := NewRuntimeInspectionDefinition(CLIInfo{Path: "/usr/bin/provider", SHA256: strings.Repeat("a", 64)}, "/workspace", []string{"LANG=C"}, RuntimeCapability{VersionArgs: []string{"version"}})

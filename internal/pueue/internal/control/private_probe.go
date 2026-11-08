@@ -336,10 +336,10 @@ func probePublishedPrivateClient(ctx context.Context, published task.SupervisorR
 	if err != nil {
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, privatePublishedRecoveryError(err)
 	}
-	return probeExactPublishedPrivateClient(ctx, published, selectedDaemon, resolution, options, scope)
+	return probeExactPublishedPrivateClient(ctx, published, selectedDaemon, resolution, options, scope, daemonExecutable != "")
 }
 
-func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, daemonExecutable string, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
+func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, daemonExecutable string, resolution ResolutionContext, options Options, scope privateProbeScope, transportSupplied bool) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	options.Resolution = &resolution
 	client, err := NewClient(published, options)
 	if err != nil {
@@ -353,6 +353,10 @@ func probeExactPublishedPrivateClient(ctx context.Context, published task.Superv
 	}
 	if err = attachPrivateDaemon(client, daemonExecutable); err != nil {
 		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
+	}
+	if transportSupplied {
+		// Explicit installed transport cannot replace the published generation.
+		client.binding = published
 	}
 	return probeVerifiedPrivateClient(ctx, client, scope)
 }

@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import unittest
 
+from scripts.delegate_acceptance.release_verification import candidate_publication_preflight as preflight
+
 
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml"
 SOURCE_COMMIT = "${{ github.event.pull_request.head.sha || github.sha }}"
@@ -49,7 +51,7 @@ class CandidateWorkflowTests(unittest.TestCase):
             self.assertIn("needs: changes", header)
             self.assertIn("if: ${{ needs.changes.outputs.full == 'true' }}", header)
         self.assertIn("runs-on: ubuntu-24.04", job_text(self.source, "gate-linux"))
-        self.assertIn("runs-on: macos-15", job_text(self.source, "gate-macos"))
+        self.assertIn("runs-on: macos-latest", job_text(self.source, "gate-macos"))
 
     def test_dispatch_inputs_default_to_no_candidate(self):
         dispatch = self.source.split("  workflow_dispatch:\n", 1)[1].split("\npermissions:", 1)[0]
@@ -205,12 +207,34 @@ class CandidateInstallWorkflowTests(unittest.TestCase):
         self.assertEqual(strategy, (
             "      fail-fast: false\n"
             "      matrix:\n"
-            "        os: [ubuntu-24.04, macos-15]\n"
+            "        os: [ubuntu-24.04, macos-latest]\n"
             "        channel: [shell, npm, homebrew]\n"
             "        include:\n"
             "          - os: ubuntu-24.04\n            host_os: Linux\n            host_arch: amd64\n"
-            "          - os: macos-15\n            host_os: Darwin\n            host_arch: arm64\n"))
+            "          - os: macos-latest\n            host_os: Darwin\n            host_arch: arm64\n"))
         self.assertIn("    runs-on: ${{ matrix.os }}\n", self.job)
+
+    def test_publication_preflight_matches_fixed_checks_and_expanded_install_names(self):
+        fixed = tuple(re.findall(r"^    name: (.+)$", job_text(self.source, job), re.M)[0]
+                      for job in ("gate-linux", "gate-macos", "skill-package-linux", "skill-package-macos"))
+        self.assertEqual(preflight.CHECK_JOBS, fixed)
+        self.assertIn("name: Distribution build\n", self.producer)
+        self.assertEqual(preflight.PRODUCER_JOB, "Distribution build")
+        self.assertIn("name: Distribution install (${{ matrix.os }}, ${{ matrix.channel }})\n", self.job)
+        hosts = re.findall(r"^        os: \[(.+)\]$", self.job, re.M)[0].split(", ")
+        channels = re.findall(r"^        channel: \[(.+)\]$", self.job, re.M)[0].split(", ")
+        expected = {
+            "Distribution install (ubuntu-24.04, shell)",
+            "Distribution install (ubuntu-24.04, npm)",
+            "Distribution install (ubuntu-24.04, homebrew)",
+            "Distribution install (macos-latest, shell)",
+            "Distribution install (macos-latest, npm)",
+            "Distribution install (macos-latest, homebrew)",
+        }
+        self.assertEqual({f"Distribution install ({host}, {channel})" for host in hosts for channel in channels},
+                         expected)
+        self.assertEqual(set(preflight.INSTALL_JOBS), expected)
+        self.assertEqual(len(preflight.INSTALL_JOBS), len(expected))
 
     def test_job_is_read_only_with_the_token_scoped_to_the_proof_step(self):
         self.assertRegex(self.job, r"    permissions:\n      contents: read\n"
