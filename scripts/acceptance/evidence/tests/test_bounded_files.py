@@ -9,7 +9,7 @@ import tracemalloc
 import unittest
 from unittest.mock import patch
 
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.evidence import bounded_files as bounded_files
 
 

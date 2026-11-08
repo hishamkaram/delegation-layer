@@ -25,7 +25,7 @@ if __package__ in {None, ""}:
 
 import test_candidate_build_support as support
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.processes import operations as operations
 from scripts.acceptance.processes.contracts import BoundedCommandError

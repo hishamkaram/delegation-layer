@@ -1,6 +1,8 @@
 """Non-provider regressions for native acceptance process/evidence ownership."""
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
+import io
+import secrets
 import json
 from pathlib import Path
 import sys
@@ -20,7 +22,8 @@ from scripts.acceptance.directories import finalization as directories_finalizat
 from scripts.acceptance.directories import operations as directories_operations
 from scripts.acceptance.evidence import files as evidence_files
 
-from scripts.release_tests.release_fixture import FixtureTree
+from scripts.acceptance.testing.fixture_cleanup import closing_preserving_primary
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.paths import operations as path_operations
 from scripts.acceptance.processes import operations as process_operations
 from scripts.acceptance.provider_drivers.agy import constants as agy_constants
@@ -51,18 +54,19 @@ class ObservedDaemon(process_operations.Process):
 class NativeHarnessTests(unittest.TestCase):
     @contextmanager
     def book_directory(self, *, prefix):
-        tree = FixtureTree.open(prefix=prefix, label="AGY process test fixture")
+        parent = Path(tempfile.gettempdir()).resolve(strict=True)
+        root = parent / (prefix + secrets.token_hex(6))
+        owner = directories_operations.DirectoryOwner()
+        owner.create("AGY process test fixture", root, parent)
         books = []
 
         def make_book(directory, environment=None):
             book = agy_process_capture.ProcessBook(
-                directory, environment or os.environ.copy(), owner=tree.owner)
+                directory, environment or os.environ.copy(), owner=owner)
             books.append(book)
             return book
 
-        try:
-            yield tree.root, make_book
-        finally:
+        def close_books():
             failures = []
             for book in books:
                 for process in book.entries:
@@ -73,16 +77,20 @@ class NativeHarnessTests(unittest.TestCase):
                         # failed result. A recorded result still proves this exact
                         # child was waited and its capture streams closed.
                         if process.result is None or process.process is None or process.process.returncode is None:
-                            tree.observe(error, closure_required=True)
                             failures.append(error)
                     except BaseException as error:
-                        tree.observe(error, closure_required=True)
                         failures.append(error)
-            try:
-                tree.dispose()
-            finally:
-                if failures:
-                    raise BaseExceptionGroup("AGY test process closure unverified; fixture retained", failures)
+            if failures:
+                try:
+                    owner.release()
+                except BaseException as error:
+                    failures.append(error)
+                print(f"AGY process test fixture retained: {root}", file=sys.stderr)
+                raise BaseExceptionGroup("AGY test process closure unverified; fixture retained", failures)
+            owner.rollback()
+
+        with closing_preserving_primary(close_books):
+            yield root, make_book
 
     def test_book_scope_joins_child_after_an_assertion_failure(self):
         with self.assertRaisesRegex(AssertionError, "injected early assertion"):
@@ -94,6 +102,50 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertEqual(process.process.returncode, 0)
         self.assertEqual(process.result["exit_code"], 0)
         self.assertFalse(directory.exists())
+
+    def test_unresolved_wait_retains_evidence_consumes_pins_and_preserves_assertion(self):
+        before = open_descriptors()
+        primary = AssertionError("injected assertion with unresolved Wait")
+        closure = gate.AcceptanceFailure("finite fake observation is unresolved")
+        report = io.StringIO()
+        with patch.object(process_operations.subprocess, "Popen",
+                          side_effect=AssertionError("unexpected child launch")) as launch, \
+                patch.object(process_operations.Process, "wait", side_effect=closure), \
+                redirect_stderr(report), self.assertRaises(AssertionError) as raised:
+            with self.book_directory(prefix="agy-unresolved-fake-") as (directory, make_book):
+                identity = (directory.stat().st_dev, directory.stat().st_ino)
+
+                def clean_retained():
+                    if not directory.exists():
+                        return
+                    # The fake never launched a child; only this independent
+                    # fact authorizes test-owned removal after retention.
+                    launch.assert_not_called()
+                    cleanup = directories_operations.DirectoryOwner()
+                    token = cleanup.adopt_created("retained AGY fake fixture", directory, directory.parent)
+                    if token.identity != identity:
+                        cleanup.release()
+                        self.fail("retained AGY fake fixture was replaced")
+                    cleanup.rollback()
+
+                self.addCleanup(clean_retained)
+                book = make_book(directory / "processes")
+                fake = ObservedDaemon(None)
+                fake.result, fake.process = None, None
+                book.entries.append(fake)
+                raise primary
+        launch.assert_not_called()
+        self.assertIs(raised.exception, primary)
+        cause = primary.__cause__
+        if not isinstance(cause, BaseExceptionGroup):
+            self.fail("unresolved closure did not preserve the original failure group")
+        self.assertEqual(cause.exceptions, (closure,))
+        self.assertEqual(report.getvalue(), f"AGY process test fixture retained: {directory}\n")
+        self.assertTrue(directory.is_dir())
+        self.assertEqual(open_descriptors(), before)
+        clean_retained()
+        self.assertFalse(directory.exists())
+        self.assertEqual(open_descriptors(), before)
 
     def test_process_lifecycle_uses_shared_owner(self):
         self.assertIs(agy_process_capture.OwnedProcess, process_operations.Process)

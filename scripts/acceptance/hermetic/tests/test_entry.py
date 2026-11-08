@@ -32,21 +32,40 @@ class HermeticEntryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid choice", result.stderr)
 
-    def test_flat_and_script_imports_share_one_case_and_suite(self):
+    def test_direct_and_package_entries_share_one_case_and_suite(self):
         program = "\n".join([
-            "import sys",
-            "sys.path[:0] = [sys.argv[1], sys.argv[2]]",
-            "import scripts.acceptance.hermetic.cli as flat",
-            "import scripts.acceptance.hermetic.cli as packaged",
-            "from scripts.acceptance.hermetic.case import Case",
-            "from scripts.acceptance.hermetic.suite import HermeticSuite",
-            "assert flat.Case is packaged.Case is Case",
-            "assert flat.HermeticSuite is packaged.HermeticSuite is HermeticSuite",
+            "import importlib, runpy, sys",
+            "from pathlib import Path",
+            "root = Path(sys.argv[1])",
+            "order = sys.argv[2]",
+            "entry = root / 'scripts/acceptance/hermetic/cli.py'",
+            "assert Path.cwd() != root",
+            "assert str(root) not in sys.path",
+            "name = 'scripts.acceptance.hermetic.cli'",
+            "if order == 'package-first':",
+            "    sys.path.insert(0, str(root))",
+            "    packaged = importlib.import_module(name)",
+            "sys.path.insert(0, str(entry.parent))",
+            "direct = runpy.run_path(str(entry), run_name='direct_entry')",
+            "if order == 'direct-first':",
+            "    packaged = importlib.import_module(name)",
+            "case = importlib.import_module('scripts.acceptance.hermetic.case')",
+            "suite = importlib.import_module('scripts.acceptance.hermetic.suite')",
+            "assert direct['HermeticSuite'] is packaged.HermeticSuite is suite.HermeticSuite",
+            "assert suite.Case is case.Case",
+            "assert case.Case.__module__ == 'scripts.acceptance.hermetic.case'",
+            "assert suite.HermeticSuite.__module__ == 'scripts.acceptance.hermetic.suite'",
+            "assert sys.path.count(str(root)) == 1",
+            "assert str(entry.parent) not in sys.path",
+            "queue = importlib.import_module('queue')",
+            "assert queue.Queue.__module__ == 'queue'",
+            "assert not Path(queue.__file__).is_relative_to(root)",
         ])
-        with tempfile.TemporaryDirectory() as temporary:
-            result = subprocess.run(
-                [sys.executable, "-c", program, str(ROOT / "scripts"), str(ROOT)],
-                cwd=temporary, capture_output=True, text=True, timeout=10, check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(list(Path(temporary).iterdir()), [])
+        for order in ("direct-first", "package-first"):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as temporary:
+                result = subprocess.run(
+                    [sys.executable, "-I", "-B", "-c", program, str(ROOT), order],
+                    cwd=temporary, capture_output=True, text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(list(Path(temporary).iterdir()), [])

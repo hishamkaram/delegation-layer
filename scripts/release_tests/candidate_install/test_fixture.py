@@ -16,7 +16,7 @@ if repository_root not in sys.path:
 
 from scripts.release_tests.candidate_install import fixtures as support
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.processes import operations as operations
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.contracts import CommandFailure

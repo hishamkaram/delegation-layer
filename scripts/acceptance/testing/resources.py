@@ -9,10 +9,16 @@ if __package__ in {None, ""}:
 
 
 from collections.abc import Iterable
+import os
 from unittest import TestCase
 
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.directories.operations import OwnedDirectory
+
+
+def open_descriptors() -> int:
+    """Count this process's descriptors; equal counts before and after prove pins were consumed."""
+    return len(os.listdir("/dev/fd"))
 
 
 def track_directory_pins(test_case: TestCase, entries: Iterable[OwnedDirectory]) -> None:

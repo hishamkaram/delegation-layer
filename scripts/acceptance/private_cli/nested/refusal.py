@@ -40,7 +40,7 @@ class RefusedLeaderCase(NestedCase):
             root = _read_control_record(state / "root.json", "warmed root")["root_id"]
             return run_json(
                 Path(sys.executable), self.lifetime.env,
-                [str(Path(__file__).with_name("refusal_fixture.py")), root, self.configuration["leader"]],
+                [str(Path(__file__).parent.parent / "refusal_fixture.py"), root, self.configuration["leader"]],
                 expected=(1,), timeout=10, receipt=self.receipts / "leader.json", capture_response=True,
                 capture_root=self.lifetime.capture_token,
             )

@@ -22,6 +22,7 @@ from scripts.acceptance.directories import operations as directories_operations
 from scripts.acceptance.native import workflow as acceptance_impl
 from scripts.acceptance.native.tests.support import adjacent_runner_bundle
 from scripts.acceptance.native.tests.support import fake_native_python_script
+from scripts.acceptance.native.tests.support import repository_root as fixture_repository_root
 
 
 import scripts.acceptance.native_evidence.contract as native_evidence_contract
@@ -158,8 +159,9 @@ class NonGitAcceptanceTests(unittest.TestCase):
             environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
                            "REAL_PYTHON": sys.executable, "FAKE_NATIVE_RESULT": "one-failure",
                            "FAKE_READ_STDIN": "1", "DELEGATE_ACCEPTANCE_OUTPUT_ROOT": str(root / "aggregate")}
-            result = subprocess.run(["sh", str(Path(__file__).with_name("acceptance_native_all.sh"))],
-                                    env=environment, capture_output=True, text=True, check=False, timeout=20)
+            result = subprocess.run(["sh", str(fixture_repository_root() / "scripts/acceptance/native/run_all.sh")],
+                                    cwd=fixture_repository_root(), env=environment, capture_output=True,
+                                    text=True, check=False, timeout=20)
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn(f"passed=0 blocked={len(native_evidence_contract.EXPECTED_CASES) - 1} failed=1", result.stdout)
             rows = (root / "aggregate" / "case-matrix.tsv").read_text().splitlines()[1:]
@@ -176,8 +178,9 @@ class NonGitAcceptanceTests(unittest.TestCase):
             environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"],
                            "REAL_PYTHON": sys.executable, "FAKE_LIST_EXIT": "7",
                            "DELEGATE_ACCEPTANCE_OUTPUT_ROOT": str(root / "aggregate")}
-            result = subprocess.run(["sh", str(Path(__file__).with_name("acceptance_native_all.sh"))],
-                                    env=environment, capture_output=True, text=True, check=False, timeout=20)
+            result = subprocess.run(["sh", str(fixture_repository_root() / "scripts/acceptance/native/run_all.sh")],
+                                    cwd=fixture_repository_root(), env=environment, capture_output=True,
+                                    text=True, check=False, timeout=20)
             self.assertEqual(result.returncode, 7, result.stderr)
             self.assertEqual((root / "aggregate" / "case-matrix.tsv").read_text().count("\n"), 1)
 

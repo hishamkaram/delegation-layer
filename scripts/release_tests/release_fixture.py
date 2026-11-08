@@ -10,7 +10,6 @@ if __package__ in {None, ""}:
     sys.path[:] = [_ENTRY_ROOT, *(value for value in sys.path[1:] if value != _ENTRY_ROOT)]
 
 
-import os
 import secrets
 import tempfile
 from collections.abc import Callable
@@ -31,11 +30,6 @@ T = TypeVar("T")
 
 def directory_identity(token: OwnedDirectory) -> DirectoryIdentity:
     return (token.directory, token.parent, token.identity, token.parent_identity)
-
-
-def open_descriptors() -> int:
-    """Count this process's descriptors; equal counts before and after prove pins were consumed."""
-    return len(os.listdir("/dev/fd"))
 
 
 class FixtureTree:

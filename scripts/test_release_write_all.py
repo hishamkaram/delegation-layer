@@ -19,7 +19,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.release_verification import filesystem as filesystem
 from scripts.acceptance.evidence.source import VerificationError
 

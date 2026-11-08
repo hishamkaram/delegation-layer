@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.acceptance.processes.operations import run_bounded_command
 from scripts.acceptance.evidence.source import command

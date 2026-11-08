@@ -22,7 +22,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import test_published_install as base
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.directories import operations as directories
 from scripts.acceptance.processes import operations as operations
 from scripts.acceptance.processes.contracts import BoundedCommandError

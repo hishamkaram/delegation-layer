@@ -8,7 +8,7 @@ import unittest
 from scripts.acceptance.processes.operations import run_bounded_command
 
 
-WRAPPER = (Path(__file__).resolve().parents[4] / 'scripts') / "acceptance_native.sh"
+WRAPPER = Path(__file__).resolve().parents[4] / "scripts/acceptance/native/run.sh"
 
 
 class AcceptanceModelForwardingTests(unittest.TestCase):

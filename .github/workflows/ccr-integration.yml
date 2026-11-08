@@ -74,7 +74,9 @@ jobs:
           python3 -m unittest discover -s scripts/acceptance/provider_drivers/ccr/tests -t scripts -p test_ccr_fixture.py -k native_cpu_snapshot -v
           # This job proves provider lifecycle. macOS host load is not owned by
           # the fixture; the platform gate retains default-on resource tests.
-          # Revisit this choice if runners provide controlled CPU isolation.
+          # Temporary mitigation, owned by CI maintainers: this scenario does
+          # not prove CPU admission. Remove the opt-out when runner CPU
+          # isolation can be controlled.
           guard_args=()
           if [ "$RUNNER_OS" = macOS ]; then guard_args=(--cpu-guard=false); fi
           python3 scripts/acceptance/provider_drivers/ccr/fixture.py --output "$HOME/ccr-integration-evidence" "${guard_args[@]}"

@@ -15,7 +15,7 @@ from scripts.acceptance.testing.record_fixtures import array_at
 from scripts.acceptance.testing.record_fixtures import object_at
 from scripts.release_tests.candidate_fixtures import manifest
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.release_verification.candidate_build_artifacts import BuildContext
 from scripts.release_verification.candidate_build_artifacts import observed_files

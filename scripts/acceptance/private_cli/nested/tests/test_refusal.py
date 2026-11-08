@@ -142,6 +142,8 @@ class RefusedLeaderControlTests(unittest.TestCase):
                 self.dispatch()
         require_injected_refusal(self.case)
         captured = json.loads((self.case.receipts / "leader.json").read_text())
+        fixture_source = Path(__file__).resolve().parents[2] / "refusal_fixture.py"
+        self.assertEqual(captured["arguments"], [str(fixture_source), "a" * 32, "b" * 32])
         self.assertEqual(captured["exit_code"], 1)
         self.assertEqual(captured["response"]["root_id"], "a" * 32)
         self.assertEqual(captured["response"]["task_record"], "unknown")

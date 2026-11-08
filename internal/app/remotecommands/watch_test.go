@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -41,14 +42,48 @@ func (e *expiringRemoteObservation) Call(ctx context.Context, request remote.Req
 
 func TestRemoteWatchExpiryRetainsValidatedPendingObservation(t *testing.T) {
 	reference, _ := newTestReference(t)
+	intent, err := reference.Intent()
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := Client{Envelopes: pendingEnvelope{}}
 	exchange := &expiringRemoteObservation{}
 	response, err := client.observeRemoteTask(t.Context(), originRequest{Command: "collect", Watch: 250 * time.Millisecond}, remote.Coordinator{Exchange: exchange}, reference)
-	if err != nil || response.Version != remote.ProtocolVersion || !client.observationPending("collect", response.Envelope) {
-		t.Fatalf("watch discarded pending observation: response=%+v err=%v", response, err)
+	if err != nil {
+		t.Fatalf("watch discarded validated pending observation: %v", err)
 	}
-	if exchange.calls != 2 || len(response.Diagnostics) != 1 || response.Diagnostics[0] != "observation_watch_expired" {
-		t.Fatalf("calls=%d diagnostics=%v", exchange.calls, response.Diagnostics)
+	assertPendingWatchObservation(t, response, intent.Destination)
+	// A validated response and its durable cache write can consume the watch
+	// budget before the next poll. Poll count is not part of the watch contract.
+	var expirations, cacheFailures int
+	for _, diagnostic := range response.Diagnostics {
+		switch diagnostic {
+		case "observation_watch_expired":
+			expirations++
+		case "observation_cache_write_failed":
+			cacheFailures++
+		default:
+			t.Fatalf("unexpected observation diagnostic %q", diagnostic)
+		}
+	}
+	if expirations != 1 || cacheFailures > 1 {
+		t.Fatalf("diagnostics=%v", response.Diagnostics)
+	}
+	cached, cacheErr := reference.LastObservation(t.Context())
+	if errors.Is(cacheErr, os.ErrNotExist) && cacheFailures == 1 {
+		return
+	}
+	if cacheErr != nil {
+		t.Fatalf("read last observation: %v", cacheErr)
+	}
+	assertPendingWatchObservation(t, cached.Response, intent.Destination)
+}
+
+func assertPendingWatchObservation(t *testing.T, response remote.Response, identity remote.Identity) {
+	t.Helper()
+	const pendingEnvelopeJSON = `{"pending":{"kind":"publication"},"publication":"pending"}`
+	if response.Version != remote.ProtocolVersion || response.Identity != identity || string(response.Envelope) != pendingEnvelopeJSON || response.Failure != nil {
+		t.Fatalf("watch changed validated pending observation: %+v", response)
 	}
 }
 

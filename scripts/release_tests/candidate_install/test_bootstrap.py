@@ -31,7 +31,7 @@ if repository_root not in sys.path:
 from scripts.release_tests import candidate_fixtures as fx
 from scripts.acceptance.testing.invalid_calls import invoke_invalid
 from scripts.release_tests.release_fixture import FixtureTree
-from scripts.release_tests.release_fixture import open_descriptors
+from scripts.acceptance.testing.resources import open_descriptors
 from scripts.acceptance.directories import operations as operations
 from scripts.acceptance.private_cli.capacity import entry as capacity_entry
 from scripts.acceptance.private_cli import capture as capture
