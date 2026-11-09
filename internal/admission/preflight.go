@@ -1,6 +1,8 @@
 package admission
 
 import (
+	"errors"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -16,6 +18,10 @@ func Preflight(options StaticOptions, root string, request task.TaskRecord) (res
 	candidate, candidateErr := options.Profiles.Prepare(root, request)
 	if candidateErr != nil {
 		result.Stage = PreflightStatic
+		var placement *statePlacementError
+		if errors.As(candidateErr, &placement) {
+			result.Stage = PreflightPlacement
+		}
 		return result, candidateErr
 	}
 	if candidateErr = candidate.ValidateStatePlacement(root); candidateErr != nil {

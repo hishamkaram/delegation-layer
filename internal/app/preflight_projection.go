@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
@@ -18,12 +19,13 @@ func preflightCommandResult(response Response, observed admissioncore.PreflightR
 	response.Capability = &report
 	if err != nil {
 		report.Status = capabilityStatusUnsupported
-		if observed.Stage == admissioncore.PreflightPlacement {
+		reason := staticPreflightRejection(observed, err)
+		if reason == "state_placement_rejected" {
 			response.Status = preflightStatusUnsupported
 			report.ReasonCode = "state_placement_rejected"
 		} else {
 			report.ReasonCode = "static_admission_rejected"
-			if errors.Is(err, commonprovider.ErrAuthenticationBlocked) {
+			if reason == "authentication_unavailable" {
 				response.Status = preflightStatusBlocked
 				report.LiveAcceptance.Status = acceptanceStatusBlocked
 				report.LiveAcceptance.Authentication = authenticationStatusBlocked
@@ -40,4 +42,16 @@ func preflightCommandResult(response Response, observed admissioncore.PreflightR
 	report.LiveAcceptance.Authentication = authenticationStatusUnknown
 	response.Capability = &report
 	return commandResult{response: response, code: 0}
+}
+
+// staticPreflightRejection classifies only observed static facts. It makes no
+// claim about live authentication or whether a provider turn can execute.
+func staticPreflightRejection(observed admissioncore.PreflightResult, err error) string {
+	if observed.Stage == admissioncore.PreflightPlacement || errors.Is(err, config.ErrRootWorkspaceOverlap) {
+		return "state_placement_rejected"
+	}
+	if errors.Is(err, commonprovider.ErrAuthenticationBlocked) {
+		return "authentication_unavailable"
+	}
+	return "static_admission_rejected"
 }

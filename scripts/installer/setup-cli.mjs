@@ -6,16 +6,21 @@ import { normalizeAbsolute } from "./paths.mjs";
 const bundleRoles = Object.freeze(["delegate", "delegate-run", "pueue", "pueued"]);
 
 async function delegateOnPath(path, cwd) {
-  for (const entry of path.split(delimiter)) {
+  for (const entry of path.split(delimiter).filter(Boolean)) {
     const candidate = resolve(cwd, entry, "delegate");
     // An existing but broken PATH entry must not authorize another installation.
-    if (await existingPath(candidate)) return candidate;
+    try {
+      if (await existingPath(candidate)) return candidate;
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && ["ENOTDIR", "EACCES"].includes(error.code)) continue;
+      throw error;
+    }
   }
   return null;
 }
 
 export async function inspectSetupCli({ installDir, environment, home, cwd }) {
-  const explicitDir = installDir ?? environment.DELEGATION_LAYER_INSTALL_DIR;
+  const explicitDir = installDir ?? (environment.DELEGATION_LAYER_INSTALL_DIR || undefined);
   if (explicitDir !== undefined && (!explicitDir || !isAbsolute(explicitDir))) {
     throw new Error("DELEGATION_LAYER_INSTALL_DIR must be an absolute path");
   }

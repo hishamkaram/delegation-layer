@@ -10,7 +10,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const entrypoint = await realpath(process.argv[2] ?? join(repositoryRoot, "scripts/install-agent-integration.mjs"));
 const packageRoot = resolve(dirname(entrypoint), "..");
 const { version } = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
-const root = await mkdtemp(join(tmpdir(), "delegate-publication-test-"));
+const root = await realpath(await mkdtemp(join(tmpdir(), "delegate-publication-test-")));
 const originalPath = process.env.PATH ?? "/usr/bin:/bin";
 const roles = ["delegate", "delegate-run", "pueue", "pueued"];
 

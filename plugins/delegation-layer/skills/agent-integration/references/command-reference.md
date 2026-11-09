@@ -66,6 +66,12 @@ JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
 | Exit 2 | Invalid request or reliably observed missing/unusable required bundle/provider. |
 | Exit 1 | Incomplete/unreliable observation, malformed persisted data or output error; takes precedence over observed blockers. |
 
+Provider issues preserve the static rejection reason: `authentication_unavailable`
+asks you to use the provider's native login flow; live authentication remains
+unknown. `state_placement_rejected` asks for a state root outside the provider
+workspace and all provider-writable directories. Follow `next_step`; doctor does
+not make these changes.
+
 These docs describe current main; check installed help before using doctor.
 An older installation without doctor remains usable through its supported
 commands. Guided npm `setup` requires a valid doctor response before writing
@@ -630,6 +636,8 @@ Preflight creates no task, starts no supervisor, and launches no provider.
 A ready `verification: "preflight"` result is not live authentication or
 execution proof. Report blocked/unsupported results and follow the returned
 guidance; readiness checks do not authorize provider configuration changes.
+`state_placement_rejected` identifies a state root overlapping the workspace or
+provider-writable directories; choose a separate root before retrying.
 
 ## Remote tasks
 

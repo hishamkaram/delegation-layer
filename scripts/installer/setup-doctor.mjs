@@ -3,6 +3,12 @@ import { spawn } from "node:child_process";
 const outputLimit = 1024 * 1024;
 const upgradeGuidance = "Upgrade Delegate using its original installation method to a release supporting doctor schema 1; setup never overwrites an existing CLI.";
 
+export class DoctorRequestRejectedError extends Error {
+  constructor() {
+    super("Doctor command/request rejected; check the provider options, or upgrade Delegate using its original installation method if doctor is unsupported. No skill or routing writes were started.");
+  }
+}
+
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -80,6 +86,11 @@ export async function runSetupDoctor({ executable, providerArguments, environmen
       resolvePromise({ code, signal, text: Buffer.concat(chunks).toString("utf8") });
     });
   });
+  if (result.code === 2 && !result.signal && result.text.trim() === "") {
+    // An invalid request and an older CLI can have the same exit/empty-output
+    // shape. Do not guess which occurred or echo unrestricted native stderr.
+    throw new DoctorRequestRejectedError();
+  }
   let report;
   try {
     report = JSON.parse(result.text);

@@ -13,7 +13,7 @@ const { runInstaller } = await import(pathToFileURL(join(packageRoot, "scripts/i
 const { runSetupDoctor } = await import(pathToFileURL(join(packageRoot, "scripts/installer/setup-doctor.mjs")));
 const { parseSetupArguments } = await import(pathToFileURL(join(packageRoot, "scripts/installer/setup-arguments.mjs")));
 const { shellQuote } = await import(pathToFileURL(join(packageRoot, "scripts/installer/setup-recipe.mjs")));
-const root = await mkdtemp(join(tmpdir(), "delegate-setup-test-"));
+const root = await realpath(await mkdtemp(join(tmpdir(), "delegate-setup-test-")));
 
 function doctorReport(directory, overrides = {}) {
   return {
@@ -58,7 +58,6 @@ async function run(f, args = [], options = {}) {
     CLAUDE_CONFIG_DIR: "", CODEX_HOME: "", DELEGATION_LAYER_INSTALL_DIR: "",
     ...options.environment,
   };
-  if (!options.environment?.DELEGATION_LAYER_INSTALL_DIR) delete environment.DELEGATION_LAYER_INSTALL_DIR;
   const input = options.input ?? { isTTY: false };
   const code = await runInstaller({
     argumentsList: ["setup", ...(options.defaults ? [] : ["--yes", "--harness", "claude"]), ...args], packageRoot,
@@ -134,13 +133,52 @@ try {
   const recipe = await run(provider, providerArgs);
   assert.equal(recipe.code, 0, recipe.stderr);
   const blocks = [...recipe.stdout.matchAll(/```sh\n([\s\S]*?)\n```/g)];
-  assert.equal(blocks.length, 3);
+  assert.equal(blocks.length, 4);
   for (const [, block] of blocks) {
     const syntax = spawnSync("sh", ["-n"], { input: block, encoding: "utf8" });
     assert.ifError(syntax.error);
     assert.equal(syntax.status, 0, syntax.stderr);
   }
+  assert.match(blocks[1][1], /read -r TASK$/);
+  assert.doesNotMatch(blocks[1][1], / status | collect /);
   assert.deepEqual(JSON.parse(await readFile(observed, "utf8")), ["doctor", "--json", ...providerArgs]);
+
+  const preparation = await fixture("recipe-preparation");
+  const prepShims = join(preparation.directory, "shims");
+  await mkdir(prepShims);
+  const mktempShim = join(prepShims, "mktemp");
+  await executable(mktempShim, "process.exitCode = 1;");
+  const prepareBlock = blocks[0][1];
+  const prepareEnvironment = { ...process.env, PATH: `${prepShims}:${process.env.PATH ?? ""}` };
+  const noTemp = spawnSync("sh", ["-s"], { input: `${prepareBlock}\nprintf 'shell-survived'\n`, encoding: "utf8", env: prepareEnvironment });
+  assert.ifError(noTemp.error);
+  assert.equal(noTemp.status, 0, noTemp.stderr);
+  assert.match(noTemp.stdout, /shell-survived/);
+  assert.match(noTemp.stderr, /Could not create task files/);
+  assert.deepEqual(JSON.parse(await readFile(observed, "utf8")), ["doctor", "--json", ...providerArgs], "preparation failure must not dispatch");
+
+  const failedBriefDirectory = join(preparation.directory, "failed-brief");
+  await mkdir(failedBriefDirectory);
+  await executable(mktempShim, `process.stdout.write(${JSON.stringify(failedBriefDirectory)});`);
+  await executable(join(prepShims, "cat"), "process.exitCode = 1;");
+  const noBrief = spawnSync("sh", ["-s"], { input: `${prepareBlock}\nprintf 'shell-survived'\n`, encoding: "utf8", env: prepareEnvironment });
+  assert.ifError(noBrief.error);
+  assert.equal(noBrief.status, 0, noBrief.stderr);
+  assert.match(noBrief.stdout, /shell-survived/);
+  assert.match(noBrief.stderr, /Brief preparation failed/);
+  await assert.rejects(readFile(failedBriefDirectory), { code: "ENOENT" });
+  assert.deepEqual(JSON.parse(await readFile(observed, "utf8")), ["doctor", "--json", ...providerArgs], "brief failure must not dispatch");
+
+  const unknownDirectory = join(preparation.directory, "unknown-response");
+  await mkdir(unknownDirectory);
+  await executable(mktempShim, `process.stdout.write(${JSON.stringify(unknownDirectory)});`);
+  await rm(join(prepShims, "cat"));
+  const unknownDispatch = spawnSync("sh", ["-s"], { input: prepareBlock, encoding: "utf8", env: prepareEnvironment });
+  assert.ifError(unknownDispatch.error);
+  assert.equal(unknownDispatch.status, 0, unknownDispatch.stderr);
+  assert.match(await readFile(join(unknownDirectory, "brief"), "utf8"), /Do not edit files/);
+  assert.equal(await readFile(join(unknownDirectory, "response.json"), "utf8"), JSON.stringify(payload), "retain evidence when the fixture gives no created task record");
+
   assert.match(recipe.stdout, /TASK_FILES="\$\(mktemp -d\)"/);
   assert.ok(recipe.stdout.includes(shellQuote(join(provider.bin, "delegate"))));
   for (const text of ["dispatch", "status", "collect", "cancel", "task_record", "evidence"]) assert.ok(recipe.stdout.includes(text), text);
@@ -192,6 +230,35 @@ try {
   assert.equal(defaultSelected.code, 0, defaultSelected.stderr);
   assert.ok(defaultSelected.stdout.includes(`Selected CLI: ${join(defaultBin, "delegate")}`));
 
+  const pathEntries = await fixture("path-entries");
+  await installed(pathEntries);
+  await executable(join(pathEntries.cwd, "delegate"), "throw new Error('empty PATH must not select cwd');");
+  const notDirectory = join(pathEntries.directory, "not-a-directory");
+  await writeFile(notDirectory, "regular PATH entry");
+  const inaccessible = join(pathEntries.directory, "inaccessible");
+  await mkdir(inaccessible);
+  await executable(join(inaccessible, "delegate"), "throw new Error('unavailable PATH entry');");
+  await chmod(inaccessible, 0);
+  try {
+    // Elevated users can traverse mode-000 directories; exercise EACCES on
+    // ordinary contributor/CI accounts, and still cover ENOTDIR on every host.
+    const deniedEntry = process.getuid?.() === 0 ? "" : inaccessible;
+    const unusualPath = `:${notDirectory}:${deniedEntry}::${pathEntries.bin}:`;
+    const pathSelected = await run(pathEntries, [], { environment: { PATH: unusualPath } });
+    assert.equal(pathSelected.code, 0, pathSelected.stderr);
+    assert.ok(pathSelected.stdout.includes(`Selected CLI: ${join(pathEntries.bin, "delegate")}`));
+    const explicitDespitePath = await run(pathEntries, ["--install-dir", pathEntries.bin], { environment: { PATH: `${notDirectory}:${deniedEntry}` } });
+    assert.equal(explicitDespitePath.code, 0, explicitDespitePath.stderr);
+  } finally {
+    await chmod(inaccessible, 0o700);
+  }
+  await executable(join(defaultSelection.cwd, "delegate"), "throw new Error('unset PATH must not select cwd');");
+  for (const path of [undefined, ""]) {
+    const withoutPath = await run(defaultSelection, [], { environment: { PATH: path, DELEGATION_LAYER_INSTALL_DIR: "" } });
+    assert.equal(withoutPath.code, 0, withoutPath.stderr);
+    assert.ok(withoutPath.stdout.includes(`Selected CLI: ${join(defaultBin, "delegate")}`));
+  }
+
   for (const role of ["delegate-run", "pueue", "pueued"]) {
     const partial = await fixture(`partial-${role}`);
     await symlink(join(partial.directory, "missing"), join(partial.bin, role));
@@ -227,6 +294,47 @@ try {
     await installed(f, { payload, code });
     const result = await run(f, ["--routing", "default"]);
     assert.equal(result.code, 1, name);
+    await noSkill(f);
+    await assert.rejects(readFile(join(f.home, ".claude/settings.json")), { code: "ENOENT" });
+  }
+
+  for (const initiallyInstalled of [true, false]) {
+    const rejected = await fixture(`rejected-request-${initiallyInstalled}`);
+    const rejectedSource = "process.stderr.write('private native diagnostic must not be echoed'); process.exitCode = 2;";
+    if (initiallyInstalled) await executable(join(rejected.bin, "delegate"), rejectedSource);
+    const result = await run(rejected, ["--provider", "bad:profile", "--cwd", rejected.cwd, "--routing", "default", "--install-dir", rejected.bin], {
+      install: async () => executable(join(rejected.bin, "delegate"), rejectedSource),
+    });
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, /Doctor command\/request rejected/);
+    assert.match(result.stderr, /check the provider options/);
+    assert.match(result.stderr, /if doctor is unsupported/);
+    assert.match(result.stderr, /Usage: delegation-layer setup/);
+    assert.doesNotMatch(result.stderr + result.stdout, /private native diagnostic/);
+    assert.ok(result.stdout.includes(`Completed: ${initiallyInstalled ? "none" : "CLI installation"}`));
+    await noSkill(rejected);
+    await assert.rejects(readFile(join(rejected.home, ".claude/settings.json")), { code: "ENOENT" });
+  }
+
+  const contradictory = [
+    ["installation-blocked", (report) => { report.installation.status = "blocked"; }],
+    ["installation-incomplete", (report) => { report.installation.status = "observation_incomplete"; }],
+    ["missing-role", (report) => { report.installation.roles.delegate_run.status = "missing"; }],
+    ["root-incomplete", (report) => { report.root.status = "observation_incomplete"; }],
+    ["binding-incomplete", (report) => { report.supervisor.binding = "observation_incomplete"; }],
+    ["provider-blocked", (report) => { report.provider.status = "blocked"; }],
+    ["provider-incomplete", (report) => { report.provider.status = "observation_incomplete"; }],
+    ["provider-id-mismatch", (report) => { report.provider.id = "another:profile"; }],
+  ];
+  for (const [name, change] of contradictory) {
+    const f = await fixture(name);
+    const providerReport = { id: "claude:print", status: "static_ready", executable: "/installed/provider", authentication: "unknown", verification: "static_preflight" };
+    const payload = doctorReport(f.bin, { provider: providerReport });
+    change(payload);
+    await installed(f, { payload, code: 0 });
+    const result = await run(f, ["--provider", "claude:print", "--cwd", f.cwd, "--routing", "default"]);
+    assert.equal(result.code, 1, name);
+    assert.match(result.stderr, name === "provider-id-mismatch" ? /malformed doctor report/ : /exit status conflicts/);
     await noSkill(f);
     await assert.rejects(readFile(join(f.home, ".claude/settings.json")), { code: "ENOENT" });
   }

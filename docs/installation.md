@@ -53,8 +53,13 @@ termination deadline. Setup can install CLI, skill and routing files; doctor
 itself writes no state and launches no provider, worker or supervisor. A stopped
 setup reports completed and remaining steps without global rollback. Rerun to
 reuse matching state or inspect reported conflicts. Cancellation exits 0 without
-completion; invalid arguments exit 2; blocked/failed setup exits 1; completed
-setup exits 0 with manual actions still explicit.
+completion. Invalid arguments exit 2. An empty doctor response with exit 2 also
+returns setup exit 2: check provider options, or upgrade through the original
+installer if doctor is unsupported. Malformed/incompatible reports and valid
+blocked doctor reports return setup exit 1. No skill/routing writes start in
+these cases; any already completed CLI installation is reported and retained.
+Other blocked/failed setup exits 1; completed setup exits 0 with manual actions
+still explicit.
 
 Restart or resume the harness and review native hook trust where applicable;
 activation remains unknown. With provider options, setup prints a read-only

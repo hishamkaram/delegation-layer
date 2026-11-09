@@ -4,7 +4,7 @@ import { validateSkillSource } from "./filesystem.mjs";
 import { getHarness } from "./catalog.mjs";
 import { parseSetupArguments } from "./setup-arguments.mjs";
 import { inspectSetupCli } from "./setup-cli.mjs";
-import { runSetupDoctor } from "./setup-doctor.mjs";
+import { DoctorRequestRejectedError, runSetupDoctor } from "./setup-doctor.mjs";
 import { printFirstTask } from "./setup-recipe.mjs";
 import { inspectSkill, installSkill } from "./skill-store.mjs";
 import { targetFor } from "./selection.mjs";
@@ -106,7 +106,8 @@ export async function runSetup(context) {
     return 0;
   } catch (error) {
     errorOutput.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+    if (error instanceof DoctorRequestRejectedError) errorOutput.write(`${usage}\n`);
     report(`Setup stopped at: ${step}. Completed: ${completed.length ? completed.join("; ") : "none"}. Remaining steps were not completed; no global rollback was attempted.`);
-    return 1;
+    return error instanceof DoctorRequestRejectedError ? 2 : 1;
   }
 }

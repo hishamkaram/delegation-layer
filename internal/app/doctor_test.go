@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -141,5 +142,40 @@ func TestDoctorIncompleteProviderErrorsPreserveEveryCause(t *testing.T) {
 		if code != 1 || report.Provider.Status != "observation_incomplete" {
 			t.Fatalf("incomplete cause hidden: %+v code=%d", report, code)
 		}
+	}
+}
+
+func TestDoctorPreservesActionableStaticProviderRejections(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		fault            error
+		placement        bool
+		workspaceOverlap bool
+		code             int
+		reason, step     string
+	}{
+		{name: "authentication", fault: commonprovider.ErrAuthenticationBlocked, code: 2, reason: "authentication_unavailable", step: "native login"},
+		{name: "placement", placement: true, code: 2, reason: "state_placement_rejected", step: "state root outside"},
+		{name: "workspace overlap", workspaceOverlap: true, code: 2, reason: "state_placement_rejected", step: "state root outside"},
+		{name: "authentication with incomplete read", fault: errors.Join(commonprovider.ErrAuthenticationBlocked, &os.PathError{Op: "open", Path: "private", Err: os.ErrPermission}), code: 1, reason: "authentication_unavailable", step: "native login"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "state")
+			fixture := preflightFixture{cwd: t.TempDir(), prepareFault: test.fault}
+			if test.workspaceOverlap {
+				root = filepath.Join(fixture.cwd, "state")
+			}
+			catalog := preflightFixtureCatalog(t, func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+				candidate, err := fixture.candidate(request, environment)
+				if test.placement {
+					candidate.WritableRoots = []string{root}
+				}
+				return candidate, err
+			})
+			report, code := observeDoctor(Arguments{Root: root, Cwd: fixture.cwd, Provider: "fixture:preflight", Config: task.TaskConfig{Permission: config.ModeReadOnly}}, Dependencies{Catalog: catalog, Environment: []string{}}.normalized(), doctorBundle(t), nil)
+			if code != test.code || report.Provider.Authentication != "unknown" || len(report.Issues) != 1 || report.Issues[0].Code != test.reason || !strings.Contains(report.Issues[0].NextStep, test.step) {
+				t.Fatalf("static facts/action lost: %+v code=%d", report, code)
+			}
+		})
 	}
 }

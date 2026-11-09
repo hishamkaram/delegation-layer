@@ -173,8 +173,8 @@ func (o *doctorObservation) provider(a Arguments, deps Dependencies) {
 	if root == "" {
 		report.Provider.Status = "observation_incomplete"
 	} else {
-		executable, providerErr := doctorProvider(a, deps, root)
-		report.Provider.Executable = executable
+		observed, providerErr := doctorProvider(a, deps, root)
+		report.Provider.Executable = observed.ProviderExecutable
 		if providerErr == nil {
 			report.Provider.Status = "static_ready"
 		} else {
@@ -182,22 +182,22 @@ func (o *doctorObservation) provider(a Arguments, deps Dependencies) {
 			if incomplete {
 				report.Provider.Status = "observation_incomplete"
 			}
-			o.issue("provider", "static_admission_rejected", "Check the selected provider installation, workspace and required provider options; authentication has not been checked.", incomplete)
+			reason := staticPreflightRejection(observed, providerErr)
+			o.issue("provider", reason, doctorProviderNextStep(reason), incomplete)
 		}
 	}
 }
 
-func doctorProvider(a Arguments, deps Dependencies, root string) (string, error) {
+func doctorProvider(a Arguments, deps Dependencies, root string) (admissioncore.PreflightResult, error) {
 	_, cwd, err := config.ValidateDirectories(root, a.Cwd)
 	if err != nil {
-		return "", err
+		return admissioncore.PreflightResult{}, err
 	}
 	request, err := admissioncore.BuildRequest(strings.Repeat("0", 32), strings.Repeat("1", 32), a.Provider, cwd, a.Config, []byte("doctor"), nil)
 	if err != nil {
-		return "", err
+		return admissioncore.PreflightResult{}, err
 	}
-	observed, err := admissioncore.Preflight(staticAdmissionOptions(deps), root, request)
-	return observed.ProviderExecutable, err
+	return admissioncore.Preflight(staticAdmissionOptions(deps), root, request)
 }
 
 func doctorIncomplete(err error) bool {
@@ -226,4 +226,15 @@ func writeDoctorHuman(w io.Writer, report DoctorReport) error {
 		fmt.Fprintf(&output, "%s: %s; %s\n", issue.Area, issue.Code, issue.NextStep)
 	}
 	return writeAll(w, []byte(output.String()))
+}
+
+func doctorProviderNextStep(reason string) string {
+	switch reason {
+	case "authentication_unavailable":
+		return "Sign in using the selected provider CLI native login flow, then rerun doctor; live authentication remains unknown."
+	case "state_placement_rejected":
+		return "Choose a state root outside the provider workspace and all provider writable directories, then rerun doctor."
+	default:
+		return "Check the selected provider installation, workspace and required provider options; live authentication remains unknown."
+	}
 }
