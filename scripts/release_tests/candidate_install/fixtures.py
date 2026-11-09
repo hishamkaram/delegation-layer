@@ -10,6 +10,7 @@ from pathlib import Path
 import hashlib
 import io
 import json
+import os
 import shutil
 import sys
 import tarfile
@@ -119,6 +120,29 @@ def observed_children(tree: FixtureTree, *, dependencies: tuple[FixtureTree, ...
         for module in (commands, github):
             launch = _observed(module.run_bounded_command, tree=tree, dependencies=dependencies)
             patches.enter_context(mock.patch.object(module, "run_bounded_command", launch))
+        yield
+
+
+@contextlib.contextmanager
+def deny_installed_script_reads(root: Path) -> Generator[None, None, None]:
+    """Reject both Python file-read routes for installed executable script roles."""
+    original_path_open, original_os_open = Path.open, os.open
+
+    def script(path) -> bool:
+        return Path(os.fsdecode(path)).is_relative_to(root / "scripts")
+
+    def open_data(path, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if script(path) and ("r" in mode or "+" in mode):
+            raise AssertionError("installed script bytes were read")
+        return original_path_open(path, *args, **kwargs)
+
+    def open_descriptor(path, flags, *args, **kwargs):
+        if script(path) and flags & os.O_ACCMODE != os.O_WRONLY:
+            raise AssertionError("installed script bytes were read")
+        return original_os_open(path, flags, *args, **kwargs)
+
+    with mock.patch.object(Path, "open", open_data), mock.patch.object(os, "open", open_descriptor):
         yield
 
 

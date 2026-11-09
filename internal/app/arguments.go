@@ -134,6 +134,8 @@ func ParseArguments(args []string) (Arguments, error) {
 	}
 	a := Arguments{Command: command}
 	switch command {
+	case "doctor":
+		return parseDoctorArguments(a, rest)
 	case "devices", "remote":
 		return parseRemoteArguments(a, rest)
 	case "workspace", "checkpoint", "schedule", "teams":
@@ -250,7 +252,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
+		case "help", "version", "dispatch", "continue", "preflight", "doctor", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}

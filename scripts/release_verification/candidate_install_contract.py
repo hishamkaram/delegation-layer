@@ -217,6 +217,7 @@ class InstallObservation:
     default_state: tuple[str, str, str]
     bootstrap: BootstrapObservation
     installer_sha256: str | None = None
+    onboarding: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,7 @@ class CandidateInstallFacts:
                     "delegate_version": item.delegate_version,
                     "default_state": list(item.default_state),
                     "bootstrap": item.bootstrap.to_record(),
+                    "onboarding": item.onboarding,
                 }
                 for item in self.installs
             ],
@@ -334,11 +336,11 @@ class ChannelRule:
 
 CHANNEL_RULES = {
     InstallChannel.SHELL: ChannelRule(
-        frozenset({ArtifactKind.ARCHIVE, ArtifactKind.CHECKSUMS}), None, True),
+        frozenset({ArtifactKind.ARCHIVE, ArtifactKind.CHECKSUMS, ArtifactKind.NPM_PACKAGE}), None, True),
     InstallChannel.NPM: ChannelRule(
         frozenset({ArtifactKind.ARCHIVE, ArtifactKind.CHECKSUMS, ArtifactKind.NPM_PACKAGE}),
         ArtifactKind.NPM_PACKAGE, True),
     InstallChannel.BREW: ChannelRule(
-        frozenset({ArtifactKind.ARCHIVE, ArtifactKind.HOMEBREW_FORMULA}),
+        frozenset({ArtifactKind.ARCHIVE, ArtifactKind.HOMEBREW_FORMULA, ArtifactKind.NPM_PACKAGE}),
         ArtifactKind.HOMEBREW_FORMULA, False),
 }

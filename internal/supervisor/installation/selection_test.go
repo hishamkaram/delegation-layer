@@ -69,7 +69,9 @@ func TestBundledSupervisorPairResolvesFromHomebrewLibexec(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	client, daemon, found, err := resolveBundledLibexecPair(bin)
+	selectedDirectory := selectBundledSupervisorDirectory(bin, false)
+	client, daemon, err := resolveSupervisorPair(selectedDirectory)
+	found := selectedDirectory == libexec
 	if err != nil || !found || client != expectedClient || daemon != expectedDaemon {
 		t.Fatalf("Homebrew libexec pair was not resolved: client=%q daemon=%q found=%t err=%v", client, daemon, found, err)
 	}

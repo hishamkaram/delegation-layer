@@ -1,11 +1,67 @@
 # Installation
 
-Choose the plugin for integrated startup, or install the skill and CLI
-separately. Provider CLIs and their native logins must already be usable.
+Use guided setup for a standalone installation, or the plugin for integrated
+startup. Provider CLIs and their native logins remain yours to install and manage.
 
 These repository docs describe current main. The
 [latest published release](https://github.com/hishamkaram/delegation-layer/releases/latest)
 can lag main; repository instructions do not prove a change is in your installed build.
+
+## Recommended standalone setup
+
+Requires Node.js 18 or later on Linux or macOS:
+
+```sh
+npx --yes delegation-layer setup
+```
+
+Choose global scope for use across projects. Interactive defaults are global
+scope and routing hooks for Claude/Codex. For an explicit noninteractive setup:
+
+```sh
+npx --yes delegation-layer setup --scope global --harness claude,codex --routing default --yes
+```
+
+`--yes` accepts defaults; noninteractive routing defaults to `skill-only` unless
+`--routing default` is explicit. `--force` replaces skill content only. Neither
+option overwrites an existing CLI or grants native hook trust. The plugin is
+not required for setup.
+
+Setup validates skill/routing targets before installation, selects an installed
+Delegate, installs an absent bundle at the exact npm package version, runs
+[passive doctor observations](../skills/agent-integration/references/command-reference.md#doctor),
+then refreshes and writes skill/routing state through the existing installers.
+The matching CLI release must exist; setup never falls back to latest. Current
+main support does not prove that the published npm package includes setup or
+that its matching CLI release is available.
+
+CLI selection uses `--install-dir ABS`, then `DELEGATION_LAYER_INSTALL_DIR`, then
+`delegate` on PATH, then `$HOME/.local/bin/delegate`. An explicit directory wins
+even when PATH selects another installation. Follow the printed PATH correction
+and use the printed absolute command meanwhile. Broken selected installations,
+partial bundles, or an unsupported/malformed doctor response stop setup; repair
+or upgrade using the original installation method, or select an empty directory.
+Setup does not replace existing CLI files.
+
+Optional `--provider ID --cwd ABS` adds static provider checks. `--model`,
+`--effort` and `--review-target` require that pair. Harness selection does not
+select a provider. Provider authentication remains unknown; setup does not log
+in, repair accounts or execute a provider turn.
+
+Doctor runs in the foreground until it closes; setup has no hard wall-clock
+termination deadline. Setup can install CLI, skill and routing files; doctor
+itself writes no state and launches no provider, worker or supervisor. A stopped
+setup reports completed and remaining steps without global rollback. Rerun to
+reuse matching state or inspect reported conflicts. Cancellation exits 0 without
+completion; invalid arguments exit 2; blocked/failed setup exits 1; completed
+setup exits 0 with manual actions still explicit.
+
+Restart or resume the harness and review native hook trust where applicable;
+activation remains unknown. With provider options, setup prints a read-only
+first-task recipe using the selected absolute CLI and workspace, including brief
+preparation, dispatch, status, collect, cancellation and evidence checks. Otherwise
+it prints a lead-agent prompt requiring provider/workspace selection. Review and
+execute it yourself. See [getting started](getting-started.md).
 
 ## Plugin for Codex or Claude Code
 

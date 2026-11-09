@@ -36,6 +36,24 @@ Use `--cpu-guard=false` or `--memory-guard=false` for an explicit per-command
 opt-out; it does not change running tasks, saved settings or nested tasks. See the
 [resource-check contract](skills/agent-integration/references/command-reference.md#dispatch).
 
+## Get started
+
+For a standalone installation, use guided setup (Node.js 18 or later):
+
+```sh
+npx --yes delegation-layer setup
+```
+
+Choose global scope for use across projects. Setup installs a missing CLI bundle,
+checks passive readiness, and installs the selected skill and routing integration.
+Review any printed PATH, restart and hook-trust steps yourself. It prints a
+first-task prompt or example; it does not launch a provider task.
+
+These docs describe current main; published npm and CLI releases can lag.
+Setup needs a matching CLI release when installing an absent bundle. See
+[installation](docs/installation.md) for availability, the integrated Codex/Claude
+plugin route, and advanced installation options.
+
 ## Ask naturally
 
 Inside Claude, after installing and trusting the integration, try:

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { runSetup } from "./setup.mjs";
 import { harnesses } from "./catalog.mjs";
 import { parseInstallArguments, parseLegacyArguments } from "./arguments.mjs";
 import { detectHarnesses } from "./detection.mjs";
@@ -8,7 +9,7 @@ import { defaultHarnessNames, formatDetected, resolveInstallSelection, targetFor
 import { pickOptions } from "./terminal.mjs";
 import { applyRouting, prepareRouting, printRouting } from "./routing-store.mjs";
 
-const usageText = "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force] [--routing default|skill-only]\n  delegation-layer routing status|disable [--scope project|global] [--harness NAME[,NAME...]]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]";
+const usageText = "Usage:\n  delegation-layer setup [--install-dir ABSOLUTE_DIR] [--provider ID --cwd ABS] [--model MODEL] [--effort EFFORT] [--review-target TARGET] [install options]\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force] [--routing default|skill-only]\n  delegation-layer routing status|disable [--scope project|global] [--harness NAME[,NAME...]]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]";
 const helpText = `${usageText}\n\nThe install command detects supported agent harnesses and installs the skill for a project or user.\nGlobal scope is the default; use --scope project for a project-local install.\nUse --harness universal when no specific harness is detected.`;
 
 function isFailure(value) {
@@ -134,6 +135,10 @@ export async function runInstaller({
     errorOutput.write(`Error: ${message}\n`);
   };
   const sourceDirectory = join(packageRoot, "skills", "agent-integration");
+
+  if (argumentsList[0] === "setup") {
+    return runSetup({ argumentsList: argumentsList.slice(1), packageRoot, sourceDirectory, cwd, home, resolveHome, environment, platform, input, output, errorOutput, installCliMain, chooseInstallOptions });
+  }
 
   try {
     await validateSkillSource(sourceDirectory);

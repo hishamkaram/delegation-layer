@@ -17,6 +17,20 @@ implementation overview. The packaged [command reference](../skills/agent-integr
 and [result handling](../skills/agent-integration/references/result-handling.md)
 own shared public procedures and response decisions.
 
+## Setup and passive readiness
+
+The npm `setup` coordinator owns ephemeral progress only. Existing CLI
+installation, skill storage and routing transaction owners retain their writes;
+setup validates first, observes the selected installed CLI through `doctor`,
+then refreshes plans before publication. No setup registry or readiness cache
+is introduced. Provider accounts and native settings remain provider-owned.
+
+`internal/app/doctor.go` composes installed-role filesystem observations,
+resolved-root and persisted-binding reads, and optional static admission checks.
+It does not open/init task storage, probe supervisor liveness or enter the task
+launch/publication lifecycle. The existing component owners and task sequence
+therefore remain unchanged in the diagrams above.
+
 ## Remote execution boundary
 
 [Remote delegation](remote-delegation.md) routes origin references over embedded

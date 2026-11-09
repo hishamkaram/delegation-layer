@@ -89,3 +89,10 @@ For advanced external supervisor or worker integrations, use
 [supervisor binding](cli-reference.md#supervisor-binding).
 The [architecture](architecture.md) describes implementation ownership;
 it is not a public Go API.
+
+## Passive readiness report
+
+The [doctor contract](../skills/agent-integration/references/command-reference.md#doctor)
+owns schema version 1, field meanings and exits. Its observations are separate
+from task responses: no task identity, authentication proof or launch authority
+is created.

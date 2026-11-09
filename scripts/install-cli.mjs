@@ -12,6 +12,7 @@ export async function main(argumentsList, {
   platform = process.platform,
   spawnProcess = spawn,
   errorOutput = process.stderr,
+  noReplace = false,
 } = {}) {
   const parsed = parseInstallCliArguments(argumentsList, { platform });
   if (parsed.kind === "error") throw new Error(parsed.message);
@@ -29,8 +30,11 @@ export async function main(argumentsList, {
     childEnvironment.DELEGATION_LAYER_INSTALL_DIR = parsed.options.installDir;
   }
 
+  const installerArguments = [join(packageRoot, "install.sh")];
+  if (noReplace) installerArguments.push("--publish-no-replace", process.execPath, join(packageRoot, "scripts/installer/publish-new-bundle.mjs"));
+
   await new Promise((resolvePromise, reject) => {
-    const child = spawnProcess("sh", [join(packageRoot, "install.sh")], {
+    const child = spawnProcess("sh", installerArguments, {
       env: childEnvironment,
       stdio: "inherit",
     });

@@ -18,6 +18,7 @@ Use `delegate help` for the installed build's command surface.
 | `dispatch` | [Flags, defaults, and review scope](../skills/agent-integration/references/command-reference.md#dispatch) |
 | `providers`, `capabilities` | [Discovery](../skills/agent-integration/references/command-reference.md#providers-and-capabilities) |
 | `models` | [Model and effort discovery](../skills/agent-integration/references/command-reference.md#choosing-models-and-effort) |
+| `doctor` | [Optional passive installation/root/provider observations](../skills/agent-integration/references/command-reference.md#doctor) |
 | `preflight` | [Static readiness](../skills/agent-integration/references/command-reference.md#checking-readiness) |
 | `status`, `collect`, `logs`, `cancel` | [Observation and results](../skills/agent-integration/references/result-handling.md#observe-and-collect) |
 | `continue` | [Exact-session continuation](../skills/agent-integration/references/continuation.md) |

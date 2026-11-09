@@ -30,6 +30,8 @@ from scripts.release_verification.candidate_install_contract import BootstrapTar
 from scripts.release_verification.candidate_install_contract import CandidateInstallRequest
 from scripts.release_verification.candidate_install_contract import InstallObservation
 from scripts.release_verification.candidate_install_contract import require_bootstrap
+from scripts.release_verification.candidate_install_setup import CandidateSetup
+from scripts.release_verification.candidate_install_shim import prepare_shim
 from scripts.release_verification.candidate_manifest import ArtifactKind
 from scripts.release_verification.candidate_manifest import entry_limit
 from scripts.release_verification.contract import InstalledExecutables
@@ -206,7 +208,8 @@ def _install(brew: _Brew, *, host_os: str, formula: Path, formula_sha256: str, a
 
 
 def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str], prefix: str,
-             probe: BootstrapProbe) -> tuple[InstalledExecutables, str, tuple[str, str, str], BootstrapObservation]:
+             probe: BootstrapProbe, *, onboarding: bool = False
+             ) -> tuple[InstalledExecutables, str, tuple[str, str, str], BootstrapObservation, dict[str, object] | None]:
     """Layout, selected keg paths, linked by-name delegate, exact libexec supervisors, default state, bootstrap."""
     version = request.package_version()
     try:
@@ -232,17 +235,31 @@ def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str]
         run=run, executables={"delegate": "delegate", "pueue": str(paths["pueue"]), "pueued": str(paths["pueued"])},
         package_version=version, receipt=brew.receipt)
     default_state = observe_default_state(run=run, state_root=state_root, home=home, receipt=brew.receipt)
+    setup_facts = None
+    if onboarding:
+        # Reuse the linked entry; only Delegate resolves its Homebrew libexec roles.
+        shim = prepare_shim(brew.base, {})
+        setup = CandidateSetup(request, brew.ports, brew.receipt, brew.layout, CHANNEL_BREW, brew.base,
+                               Path(prefix) / "bin",
+                               {**shim.environment(), "PATH": os.pathsep.join((
+                                   str(shim.directory), str(Path(prefix) / "bin"),
+                                   tool_path(brew.ports, ("npm", "node"))))}, select_directory=False)
+        setup.fresh()
+        setup_facts = setup.verify_repeat(paths["delegate"])
+        if shim.requests():
+            raise VerificationError("candidate_requests_unexpected", STAGE)
     # The linked bin is the only PATH directory; the keg's libexec pair is selected, never searched.
     expected = observed
     bootstrap = require_bootstrap(probe(BootstrapTarget(
         command_directory=Path(prefix) / "bin", delegate=paths["delegate"],
         supervisor_directory=paths["pueue"].parent, binaries=expected)), expected)
     brew.run("candidate-brew-test", [brew.brew, "test", brew.spec], timeout=_TEST_TIMEOUT)
-    return observed, actual, default_state, bootstrap
+    return observed, actual, default_state, bootstrap, setup_facts
 
 
 def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPorts, probe: BootstrapProbe,
-                         receipt: dict, layout: ConsumerLayout, info: dict[str, str]) -> InstallObservation:
+                         receipt: dict, layout: ConsumerLayout, info: dict[str, str],
+                         onboarding: bool = False) -> InstallObservation:
     """Install the candidate formula on a fresh supported Homebrew and return its observation.
 
     ``info`` is the caller's observed host platform; only an OS with a supported Homebrew
@@ -262,7 +279,8 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
     brew = _Brew(ports, receipt, layout)
     prefix, tapped, cache = _install(brew, host_os=host_os, formula=formula, formula_sha256=formula_sha256,
                                      archive=archive, archive_sha256=archive_sha256)
-    binaries, version, default_state, bootstrap = _observe(brew, request, info, prefix, probe)
+    binaries, version, default_state, bootstrap, setup_facts = _observe(
+        brew, request, info, prefix, probe, onboarding=onboarding)
     for path, kind, digest in ((formula, ArtifactKind.HOMEBREW_FORMULA, formula_sha256),
                                (tapped, ArtifactKind.HOMEBREW_FORMULA, formula_sha256),
                                (archive, ArtifactKind.ARCHIVE, archive_sha256),
@@ -272,4 +290,4 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
     return InstallObservation(
         channel=CHANNEL_BREW, requests=(), binaries=binaries, skill_files=0,
         delegate_version=version, default_state=default_state, bootstrap=bootstrap,
-        installer_sha256=formula_sha256)
+        installer_sha256=formula_sha256, onboarding=setup_facts)

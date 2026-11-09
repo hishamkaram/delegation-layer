@@ -1,7 +1,10 @@
 # Getting started
 
-1. Follow [installation](installation.md) for the integration and CLI.
-2. Try the [agent-first prompt](../README.md#ask-naturally).
+1. Run the [recommended standalone setup](installation.md#recommended-standalone-setup),
+   or install the integrated plugin. Complete printed PATH, restart and native
+   hook-trust steps; passive checks do not prove account readiness or activation.
+2. Review the first-task prompt/example printed by setup, or try the
+   [agent-first prompt](../README.md#ask-naturally). Setup launches no task.
 3. For direct CLI use, follow the packaged
    [read-only task example](../skills/agent-integration/examples/read-only-task.md)
    or [authorized write example](../skills/agent-integration/examples/workspace-write-task.md).

@@ -99,9 +99,31 @@ def _package_manifest(bundle: tarfile.TarFile, member: tarfile.TarInfo) -> dict:
     return value
 
 
-def installed_skill_digests(root: Path) -> dict[str, str]:
-    """Digest every regular file under an installed skill directory; links fail."""
+def _skill_executable_role(path: str) -> bool:
+    # Skill scripts are installed executable roles, even when invoked through a
+    # shell with mode 0644; the current callback is scripts/delegate-routing-context.sh.
+    return path.startswith("scripts/")
+
+
+@dataclass(frozen=True)
+class SkillExecutableMetadata:
+    path: str
+    size: int
+    mode: int
+
+
+@dataclass(frozen=True)
+class InstalledSkillObservation:
+    files: tuple[str, ...]
+    data_digests: tuple[tuple[str, str], ...]
+    executables: tuple[SkillExecutableMetadata, ...]
+
+
+def observe_installed_skill(root: Path) -> InstalledSkillObservation:
+    """Observe exact regular-file inventory; hash data, never installed callbacks."""
     digests: dict[str, str] = {}
+    files: list[str] = []
+    executables: list[SkillExecutableMetadata] = []
     pending = [(root, "", 0)]
     while pending:
         directory, prefix, depth = pending.pop()
@@ -110,19 +132,38 @@ def installed_skill_digests(root: Path) -> dict[str, str]:
         for child in _bounded_children(directory):
             relative = f"{prefix}{child.name}"
             try:
-                mode = child.lstat().st_mode
+                metadata = child.lstat()
             except OSError:
                 raise VerificationError("installed_skill_invalid", "verify-skill") from None
-            if stat.S_ISDIR(mode):
+            if stat.S_ISDIR(metadata.st_mode):
                 pending.append((child, relative + "/", depth + 1))
-            elif stat.S_ISREG(mode):
-                digests[safe_skill_path(relative)] = hashlib.sha256(
-                    _bounded_file_bytes(child, MAX_SOURCE_FILE, "installed_skill_invalid")).hexdigest()
+            elif stat.S_ISREG(metadata.st_mode):
+                relative = safe_skill_path(relative)
+                if metadata.st_size > MAX_SOURCE_FILE:
+                    raise VerificationError("installed_skill_invalid", "verify-skill")
+                files.append(relative)
+                if _skill_executable_role(relative):
+                    executables.append(SkillExecutableMetadata(relative, metadata.st_size, stat.S_IMODE(metadata.st_mode)))
+                elif metadata.st_mode & 0o111:
+                    # New executable roles need explicit classification before any byte read.
+                    raise VerificationError("installed_skill_executable_unknown", "verify-skill")
+                else:
+                    digests[relative] = hashlib.sha256(
+                        _bounded_file_bytes(child, MAX_SOURCE_FILE, "installed_skill_invalid")).hexdigest()
             else:
                 raise VerificationError("installed_skill_invalid", "verify-skill")
-            if len(digests) > MAX_SKILL_FILES:
+            if len(files) > MAX_SKILL_FILES:
                 raise VerificationError("installed_skill_invalid", "verify-skill")
-    return digests
+    return InstalledSkillObservation(tuple(sorted(files)), tuple(sorted(digests.items())),
+                                     tuple(sorted(executables, key=lambda entry: entry.path)))
+
+
+def require_installed_skill(expected: dict[str, str], observed: InstalledSkillObservation,
+                            code: str, stage: str) -> None:
+    """Compare inventory and data integrity separately from executable metadata."""
+    expected_data = {path: digest for path, digest in expected.items() if not _skill_executable_role(path)}
+    if set(observed.files) != set(expected) or dict(observed.data_digests) != expected_data:
+        raise VerificationError(code, stage)
 
 
 def require_exact_binaries(directory: Path) -> None:
