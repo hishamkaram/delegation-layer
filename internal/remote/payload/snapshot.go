@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/remote"
+	"github.com/hishamkaram/delegation-layer/internal/remotedata"
 	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -19,7 +20,7 @@ func UploadInputs(ctx context.Context, coordinator remote.Coordinator, intent re
 	if err != nil {
 		return "", err
 	}
-	request := remote.Request{IntentSHA256: digest, Version: remote.ProtocolVersion, Operation: remote.StageBegin, Expected: &intent.Destination, Root: intent.Destination.Root, TaskID: intent.TaskID, Manifest: &manifest}
+	request := remote.Request{StorageLayout: intent.StorageLayout, IntentSHA256: digest, Version: remote.ProtocolVersion, Operation: remote.StageBegin, Expected: &intent.Destination, Root: intent.Destination.Root, TaskID: intent.TaskID, Manifest: &manifest}
 	if _, err = coordinator.Call(ctx, request); err != nil {
 		return "", err
 	}
@@ -96,24 +97,19 @@ func PrepareSnapshot(ctx context.Context, store *taskdir.Store, id, sourcePath s
 	}
 	defer func() { resultErr = errors.Join(resultErr, journal.Close()) }()
 	resultErr = journal.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
-		var start remoteInputStart
-		if err := tx.Read("manifest-ready.json", &start); err == nil {
-			manifest, err = readRemoteManifest(tx)
-			if err != nil {
-				return err
-			}
-		} else if !task.RecordAbsent(err) {
-			return err
-		} else {
-			manifest, err = remotefiles.BuildManifest(ctx, source, paths)
-			if err != nil {
-				return err
-			}
-			if err = recordRemoteManifest(tx, &manifest); err != nil {
-				return err
-			}
+		if retiredErr := checkRetiredTransaction(tx); retiredErr != nil {
+			return retiredErr
 		}
-		root, openErr := openRemoteSnapshotDirectory(store.Root, store.RootID, id, true)
+		layout, layoutErr := snapshotLayout(tx, true)
+		if layoutErr != nil {
+			return layoutErr
+		}
+
+		manifest, err = snapshotManifest(ctx, tx, source, paths)
+		if err != nil {
+			return err
+		}
+		root, openErr := remotedata.Open(layout, store.Root, store.RootID, id, remotedata.Snapshot, true)
 		if openErr != nil {
 			return openErr
 		}
@@ -128,6 +124,22 @@ func PrepareSnapshot(ctx context.Context, store *taskdir.Store, id, sourcePath s
 		snapshot = nil
 	}
 	return manifest, snapshot, resultErr
+}
+
+func snapshotManifest(ctx context.Context, tx *taskdir.ControlTransaction, source *os.Root, paths []string) (remotefiles.Manifest, error) {
+	var start remoteInputStart
+	err := tx.Read("manifest-ready.json", &start)
+	if err == nil {
+		return readRemoteManifest(tx)
+	}
+	if !task.RecordAbsent(err) {
+		return remotefiles.Manifest{}, err
+	}
+	manifest, err := remotefiles.BuildManifest(ctx, source, paths)
+	if err != nil {
+		return manifest, err
+	}
+	return manifest, recordRemoteManifest(tx, &manifest)
 }
 
 func freezeRemoteSnapshot(ctx context.Context, root, source *os.Root, manifest remotefiles.Manifest, tx *taskdir.ControlTransaction) (resultErr error) {
@@ -201,6 +213,14 @@ func LoadSnapshot(ctx context.Context, store *taskdir.Store, id string) (manifes
 	}
 	defer func() { resultErr = errors.Join(resultErr, journal.Close()) }()
 	resultErr = journal.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
+		if retiredErr := checkRetiredTransaction(tx); retiredErr != nil {
+			return retiredErr
+		}
+		layout, layoutErr := snapshotLayout(tx, false)
+		if layoutErr != nil {
+			return layoutErr
+		}
+
 		var readErr error
 		manifest, readErr = readRemoteManifest(tx)
 		if readErr != nil {
@@ -217,7 +237,7 @@ func LoadSnapshot(ctx context.Context, store *taskdir.Store, id string) (manifes
 		if frozen.SHA256 != digest || frozen.Count != len(manifest.Entries) {
 			return task.ErrIdentityMismatch
 		}
-		root, openErr := openRemoteSnapshotDirectory(store.Root, store.RootID, id, false)
+		root, openErr := remotedata.Open(layout, store.Root, store.RootID, id, remotedata.Snapshot, false)
 		if openErr != nil {
 			return openErr
 		}

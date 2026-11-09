@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/guardian"
+	"github.com/hishamkaram/delegation-layer/internal/remotedata"
 	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -180,7 +180,7 @@ func (s *remoteCaptureSession) capture(name string, provenance remotefiles.Prove
 		s.source = source
 	}
 	if s.destination == nil {
-		destination, err := openRemoteCaptureDirectory(s.store.Root, s.request.RootID, s.request.TaskID, true)
+		destination, err := remotedata.Open(s.request.Remote.StorageLayout, s.store.Root, s.request.RootID, s.request.TaskID, remotedata.Outputs, true)
 		if err != nil {
 			file.Status = "incomplete"
 			file.Reason = "destination_unavailable"
@@ -209,56 +209,12 @@ func ReadCapture(ctx context.Context, store *taskdir.Store, id string) (receipt 
 	return ReadCapturePassive(ctx, root, store.RootID, id)
 }
 
-// openRemoteCaptureDirectory follows pinned rooted directory handles at every
-// level. State is outside the task root, under a root/task-specific sibling.
-func openRemoteCaptureDirectory(stateRoot, rootID, taskID string, create bool) (result *os.Root, resultErr error) {
-	if err := task.ValidateRootID(rootID); err != nil {
-		return nil, err
-	}
-	if err := task.ValidateTaskID(taskID); err != nil {
-		return nil, err
-	}
-	current, err := os.OpenRoot(filepath.Dir(stateRoot))
-	if err != nil {
-		return nil, err
-	}
-	for _, component := range []string{"." + filepath.Base(stateRoot) + ".remote-outputs", rootID, taskID} {
-		next, openErr := openPrivateRemoteDirectory(current, component, create)
-		closeErr := current.Close()
-		if err = errors.Join(openErr, closeErr); err != nil {
-			if next != nil {
-				err = errors.Join(err, next.Close())
-			}
-			return nil, err
-		}
-		current = next
-	}
-	return current, nil
+func openRemoteCaptureDirectory(stateRoot, rootID, taskID string, create bool) (*os.Root, error) {
+	return remotedata.Open(task.RemoteDataLegacy, stateRoot, rootID, taskID, remotedata.Outputs, create)
 }
 
 func openPrivateRemoteDirectory(parent *os.Root, name string, create bool) (*os.Root, error) {
-	if create {
-		if err := parent.Mkdir(name, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-	}
-	info, err := parent.Lstat(name)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("remote output directory %q must be private and without symlinks", name)
-	}
-	if create {
-		directory, openErr := parent.Open(".")
-		if openErr != nil {
-			return nil, openErr
-		}
-		if syncErr := errors.Join(directory.Sync(), directory.Close()); syncErr != nil {
-			return nil, syncErr
-		}
-	}
-	return parent.OpenRoot(name)
+	return remotedata.OpenPrivate(parent, name, create)
 }
 
 func remoteCaptureDeadline(start remoteCaptureStart) (time.Time, error) {

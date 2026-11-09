@@ -46,11 +46,15 @@ type Connection struct {
 	IdentityAgent                              string
 	UserKnownHostsFiles, GlobalKnownHostsFiles []string
 	HostKeyAlias                               string
+	SendEnv                                    []string
+	GSSAPIAuthentication                       bool
+	PubkeyAuthentication                       string
+	PreferredAuthentications                   []string
 }
 
 func Load(options Options) (*Config, error) {
 	if options.Home == "" {
-		return nil, fmt.Errorf("SSH configuration requires a home directory")
+		return nil, &Error{Code: "ssh_home_unavailable"}
 	}
 	if options.ReadFile == nil {
 		options.ReadFile = readConfigFile
@@ -69,7 +73,7 @@ func Load(options Options) (*Config, error) {
 	}{{options.UserConfig, filepath.Join(options.Home, ".ssh"), true}, {options.SystemConfig, "/etc/ssh", true}}
 	if options.ConfigFile != "" {
 		if !filepath.IsAbs(options.ConfigFile) {
-			return nil, fmt.Errorf("SSH config file must be absolute")
+			return nil, &Error{Code: "invalid_ssh_config_path", File: options.ConfigFile}
 		}
 		sources = []struct {
 			path, root string
@@ -117,23 +121,23 @@ type parser struct {
 
 func (p *parser) file(name, root string, depth int, optional bool) error {
 	if depth >= maxDepth {
-		return fmt.Errorf("SSH Include exceeds depth %d", maxDepth)
+		return &Error{Code: "ssh_config_include_depth", File: name}
 	}
 	name = filepath.Clean(name)
 	if p.stack[name] {
-		return fmt.Errorf("SSH Include cycle at %s", name)
+		return &Error{Code: "ssh_config_include_cycle", File: name}
 	}
 	data, err := p.config.options.ReadFile(name)
 	if err != nil {
 		if optional && os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("reading SSH configuration %s: %w", name, err)
+		return &Error{Code: "ssh_config_read_failed", File: name, cause: err}
 	}
 	p.files++
 	p.bytes += len(data)
 	if p.files > maxFiles || p.bytes > maxBytes {
-		return fmt.Errorf("SSH configuration exceeds file or byte limit")
+		return &Error{Code: "ssh_config_limit", File: name}
 	}
 	p.stack[name] = true
 	defer delete(p.stack, name)
@@ -148,19 +152,19 @@ func (p *parser) parse(data []byte, name, root string, depth int) error {
 		line++
 		words, parseErr := split(scanner.Text())
 		if parseErr != nil {
-			return fmt.Errorf("%s:%d: %w", name, line, parseErr)
+			return &Error{Code: "ssh_config_parse_failed", File: name, Line: line, cause: parseErr}
 		}
 		if len(words) == 0 {
 			continue
 		}
 		key, values := strings.ToLower(words[0]), words[1:]
 		if len(values) == 0 {
-			return fmt.Errorf("%s:%d: missing value", name, line)
+			return &Error{Code: "invalid_ssh_setting", File: name, Line: line, Directive: key}
 		}
 		if key == "include" {
 			p.config.directives = append(p.config.directives, directive{key: "include-begin"})
 			if includeErr := p.include(values, root, depth); includeErr != nil {
-				return fmt.Errorf("%s:%d: %w", name, line, includeErr)
+				return settingError(directive{key: key, file: name, line: line}, includeErr)
 			}
 			p.config.directives = append(p.config.directives, directive{key: "include-end"})
 			continue
@@ -170,7 +174,10 @@ func (p *parser) parse(data []byte, name, root string, depth int) error {
 		}
 		p.config.directives = append(p.config.directives, directive{key: key, values: values, file: name, line: line})
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return &Error{Code: "ssh_config_parse_failed", File: name, Line: line, cause: err}
+	}
+	return nil
 }
 
 func (p *parser) addAliases(values []string) {
@@ -320,30 +327,47 @@ func selected(d directive, alias string, active *bool, skipped *int) bool {
 
 func (c *Config) Resolve(alias string) (Connection, error) {
 	if alias == "" || strings.ContainsAny(alias, "/\\ \t\r\n\x00") {
-		return Connection{}, fmt.Errorf("invalid SSH alias")
+		return Connection{}, &Error{Code: "invalid_ssh_alias"}
 	}
 	r := Connection{Alias: alias, HostName: alias, User: c.options.LocalUser, Port: 22, IdentityAgent: os.Getenv("SSH_AUTH_SOCK")}
 	seen := map[string]bool{}
+	sources := map[string]directive{}
 	active, skipped := true, 0
 	for _, d := range c.directives {
 		if !selected(d, alias, &active, &skipped) {
 			continue
 		}
+		previouslySeen := seen[d.key]
 		if err := apply(&r, d, seen); err != nil {
-			return Connection{}, fmt.Errorf("%s:%d: %w", d.file, d.line, err)
+			return Connection{}, settingError(d, err)
+		}
+		if !previouslySeen || d.key == "identityfile" || d.key == "sendenv" {
+			sources[d.key] = d
+			for _, value := range d.values {
+				sources[d.key+"\x00"+value] = d
+			}
 		}
 	}
 	if r.User == "" {
-		return Connection{}, fmt.Errorf("SSH user is not configured")
+		return Connection{}, &Error{Code: "ssh_user_unconfigured"}
 	}
 	var err error
 	r.HostName, err = expand(r.HostName, r, c.options.Home, true)
 	if err != nil {
-		return Connection{}, err
+		return Connection{}, expansionSettingError(sources, "hostname", r.HostName, err)
 	}
 	if r.HostName == "" || strings.ContainsAny(r.HostName, " \t\r\n\x00") {
-		return Connection{}, fmt.Errorf("invalid SSH hostname")
+		return Connection{}, expansionSettingError(sources, "hostname", r.HostName, fmt.Errorf("invalid SSH hostname"))
 	}
+	c.applyDefaultFiles(&r, seen)
+	expanded, expandErr := c.expandConnection(r, sources)
+	if expandErr != nil {
+		return Connection{}, expandErr
+	}
+	return expanded, nil
+}
+
+func (c *Config) applyDefaultFiles(r *Connection, seen map[string]bool) {
 	if !seen["identityfile"] {
 		r.IdentityFiles = []string{filepath.Join(c.options.Home, ".ssh", "id_ed25519"), filepath.Join(c.options.Home, ".ssh", "id_ecdsa"), filepath.Join(c.options.Home, ".ssh", "id_rsa")}
 	}
@@ -353,16 +377,18 @@ func (c *Config) Resolve(alias string) (Connection, error) {
 	if !seen["globalknownhostsfile"] {
 		r.GlobalKnownHostsFiles = []string{"/etc/ssh/ssh_known_hosts"}
 	}
-	return c.expandConnection(r)
 }
 
-func (c *Config) expandConnection(r Connection) (Connection, error) {
+func (c *Config) expandConnection(r Connection, sources map[string]directive) (Connection, error) {
 	var err error
-	for _, list := range []*[]string{&r.IdentityFiles, &r.UserKnownHostsFiles, &r.GlobalKnownHostsFiles} {
-		for i, path := range *list {
-			(*list)[i], err = expand(path, r, c.options.Home, false)
+	for _, field := range []struct {
+		key    string
+		values *[]string
+	}{{"identityfile", &r.IdentityFiles}, {"userknownhostsfile", &r.UserKnownHostsFiles}, {"globalknownhostsfile", &r.GlobalKnownHostsFiles}} {
+		for i, path := range *field.values {
+			(*field.values)[i], err = expand(path, r, c.options.Home, false)
 			if err != nil {
-				return Connection{}, err
+				return Connection{}, expansionSettingError(sources, field.key, path, err)
 			}
 		}
 	}
@@ -370,14 +396,18 @@ func (c *Config) expandConnection(r Connection) (Connection, error) {
 		r.IdentityAgent = os.Getenv("SSH_AUTH_SOCK")
 	}
 	if r.IdentityAgent != "" && r.IdentityAgent != "none" {
-		r.IdentityAgent, err = expand(r.IdentityAgent, r, c.options.Home, false)
+		path := r.IdentityAgent
+		r.IdentityAgent, err = expand(path, r, c.options.Home, false)
+		if err != nil {
+			return Connection{}, expansionSettingError(sources, "identityagent", path, err)
+		}
 	}
-	return r, err
+	return r, nil
 }
 
 func apply(r *Connection, d directive, seen map[string]bool) error {
 	key := d.key
-	if key != "identityfile" && seen[key] {
+	if key != "identityfile" && key != "sendenv" && seen[key] {
 		return nil
 	}
 	single := func() (string, error) {
@@ -387,7 +417,7 @@ func apply(r *Connection, d directive, seen map[string]bool) error {
 		return d.values[0], nil
 	}
 	switch key {
-	case "hostname", "user", "port", "identityagent", "identitiesonly", "hostkeyalias":
+	case "hostname", "user", "port", "identityagent", "identitiesonly", "hostkeyalias", "gssapiauthentication", "pubkeyauthentication", "preferredauthentications":
 		v, err := single()
 		if err != nil {
 			return err
@@ -395,6 +425,8 @@ func apply(r *Connection, d directive, seen map[string]bool) error {
 		seen[key] = true
 		return applyScalar(r, key, v)
 
+	case "sendenv":
+		return applySendEnv(r, d.values)
 	case "identityfile":
 		v, err := single()
 		if err != nil {
@@ -409,7 +441,7 @@ func apply(r *Connection, d directive, seen map[string]bool) error {
 		r.GlobalKnownHostsFiles = withoutNone(d.values)
 	case "loglevel", "hashknownhosts", "controlmaster", "controlpersist", "controlpath": // Presentation and connection sharing do not affect this private channel.
 	default:
-		return fmt.Errorf("unsupported SSH directive %s; use a direct supported SSH configuration", key)
+		return &Error{Code: "unsupported_ssh_directive", Directive: key}
 	}
 	seen[key] = true
 	return nil
@@ -431,6 +463,14 @@ func applyScalar(r *Connection, key, v string) error {
 		r.IdentityAgent = v
 	case "hostkeyalias":
 		r.HostKeyAlias = v
+	case "gssapiauthentication", "pubkeyauthentication":
+		return applyAuthenticationToggle(r, key, v)
+	case "preferredauthentications":
+		methods, err := authenticationMethods(v)
+		if err != nil {
+			return err
+		}
+		r.PreferredAuthentications = methods
 	case "identitiesonly":
 		if v != "yes" && v != "no" {
 			return fmt.Errorf("invalid IdentitiesOnly")

@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/remote"
+	"github.com/hishamkaram/delegation-layer/internal/remotedata"
 	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -27,11 +27,17 @@ type (
 )
 
 func Stage(ctx context.Context, store *taskdir.Store, request remote.Request, response remote.Response) (remote.Response, error) {
+	if err := request.StorageLayout.Validate(); err != nil {
+		return response, err
+	}
 	journal, err := store.OpenRemoteInputJournalContext(ctx, request.TaskID, true)
 	if err != nil {
 		return response, err
 	}
 	operationErr := journal.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
+		if err := checkRetiredTransaction(tx); err != nil {
+			return err
+		}
 		if err := bindRemoteStageOwner(tx, request); err != nil {
 			return err
 		}
@@ -42,7 +48,7 @@ func Stage(ctx context.Context, store *taskdir.Store, request remote.Request, re
 		if readErr != nil {
 			return readErr
 		}
-		root, readErr := openRemoteInputDirectory(store.Root, store.RootID, request.TaskID, true)
+		root, readErr := remotedata.Open(request.StorageLayout, store.Root, store.RootID, request.TaskID, remotedata.Inputs, true)
 		if readErr != nil {
 			return readErr
 		}
@@ -107,7 +113,7 @@ func operateRemoteStage(ctx context.Context, store *taskdir.Store, request remot
 	}
 	selector := request.Transfer.Selector
 	if request.Operation == remote.StageCommit && selector == "inputs" {
-		return commitRemoteInputs(ctx, store, request.TaskID, manifest, tx, root, stage, response)
+		return commitRemoteInputs(ctx, store, request.TaskID, request.StorageLayout, manifest, tx, root, stage, response)
 	}
 	name, ok := strings.CutPrefix(selector, "input:")
 	if !ok {
@@ -122,7 +128,7 @@ func operateRemoteStage(ctx context.Context, store *taskdir.Store, request remot
 		if err == nil {
 			offset, err = stage.Offset(ctx, name)
 		}
-	case remote.Hello, remote.Prepare, remote.Admit, remote.Reconcile, remote.Status, remote.Collect, remote.Cancel, remote.Events, remote.Reply, remote.Steer, remote.StageCommit, remote.Download:
+	case remote.Hello, remote.Prepare, remote.Admit, remote.Reconcile, remote.Status, remote.Collect, remote.Cancel, remote.Events, remote.Reply, remote.Steer, remote.StageCommit, remote.Download, remote.Usage, remote.Retire:
 		return remote.ErrProtocol
 	}
 	if err == nil {
@@ -131,12 +137,16 @@ func operateRemoteStage(ctx context.Context, store *taskdir.Store, request remot
 	return err
 }
 
-func commitRemoteInputs(ctx context.Context, store *taskdir.Store, id string, manifest remotefiles.Manifest, tx *taskdir.ControlTransaction, root *os.Root, stage *remotefiles.Stage, response *remote.Response) error {
+func commitRemoteInputs(ctx context.Context, store *taskdir.Store, id string, layout task.RemoteDataLayout, manifest remotefiles.Manifest, tx *taskdir.ControlTransaction, root *os.Root, stage *remotefiles.Stage, response *remote.Response) error {
 	digest, err := remotefiles.ManifestSHA256(manifest)
 	if err != nil {
 		return err
 	}
-	expected := remoteInputReady{SHA256: digest, Cwd: InputWorkspace(store.Root, store.RootID, id)}
+	cwd, err := remotedata.InputWorkspace(layout, store.Root, store.RootID, id)
+	if err != nil {
+		return err
+	}
+	expected := remoteInputReady{SHA256: digest, Cwd: cwd}
 	var saved remoteInputReady
 	if err = tx.Read("ready.json", &saved); err == nil {
 		if saved != expected {
@@ -165,48 +175,15 @@ func commitRemoteInputs(ctx context.Context, store *taskdir.Store, id string, ma
 	return nil
 }
 
-func InputWorkspace(root, rootID, id string) string {
-	return filepath.Join(filepath.Dir(root), "."+filepath.Base(root)+".remote-inputs", rootID, id, "workspace")
+func LayoutInputWorkspace(layout task.RemoteDataLayout, root, rootID, id string) (string, error) {
+	return remotedata.InputWorkspace(layout, root, rootID, id)
 }
 
-func openRemoteInputDirectory(stateRoot, rootID, id string, create bool) (*os.Root, error) {
-	return openRemoteByteDirectory(stateRoot, rootID, id, "remote-inputs", create)
-}
-
-func openRemoteSnapshotDirectory(stateRoot, rootID, id string, create bool) (*os.Root, error) {
-	return openRemoteByteDirectory(stateRoot, rootID, id, "remote-snapshots", create)
-}
-
-func openRemoteByteDirectory(stateRoot, rootID, id, family string, create bool) (*os.Root, error) {
-	if err := task.ValidateRootID(rootID); err != nil {
-		return nil, err
-	}
-	if err := task.ValidateTaskID(id); err != nil {
-		return nil, err
-	}
-	current, err := os.OpenRoot(filepath.Dir(stateRoot))
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range []string{"." + filepath.Base(stateRoot) + "." + family, rootID, id} {
-		next, openErr := openPrivateRemoteDirectory(current, name, create)
-		err = errors.Join(openErr, current.Close())
-		if err != nil {
-			if next != nil {
-				err = errors.Join(err, next.Close())
-			}
-			return nil, err
-		}
-		current = next
-	}
-	return current, nil
-}
-
-func VerifyInputs(ctx context.Context, store *taskdir.Store, id, intentSHA, inputSHA, cwd string) (resultErr error) {
-	if inputSHA == "" {
+func VerifyInputs(ctx context.Context, store *taskdir.Store, intent remote.Intent, intentSHA string) (resultErr error) {
+	if intent.InputSHA256 == "" {
 		return nil
 	}
-	journal, err := store.OpenRemoteInputJournalContext(ctx, id, false)
+	journal, err := store.OpenRemoteInputJournalContext(ctx, intent.TaskID, false)
 	if err != nil {
 		return err
 	}
@@ -215,28 +192,36 @@ func VerifyInputs(ctx context.Context, store *taskdir.Store, id, intentSHA, inpu
 	if err = journal.Read("stage-owner.json", &owner); err != nil {
 		return err
 	}
-	if owner.IntentSHA256 != intentSHA {
+	if owner.IntentSHA256 != intentSHA || owner.StorageLayout != intent.StorageLayout {
+		return task.ErrIdentityMismatch
+	}
+	expectedCwd, cwdErr := remotedata.InputWorkspace(owner.StorageLayout, store.Root, store.RootID, intent.TaskID)
+	if cwdErr != nil {
+		return cwdErr
+	}
+	if expectedCwd != intent.RemoteCwd {
 		return task.ErrIdentityMismatch
 	}
 	var ready remoteInputReady
 	if err = journal.Read("ready.json", &ready); err != nil {
 		return err
 	}
-	if ready.SHA256 != inputSHA || ready.Cwd != cwd || cwd != InputWorkspace(store.Root, store.RootID, id) {
+	if ready.SHA256 != intent.InputSHA256 || ready.Cwd != intent.RemoteCwd {
 		return task.ErrIdentityMismatch
 	}
 	return nil
 }
 
 type remoteStageOwner struct {
-	IntentSHA256 string `json:"intent_sha256"`
+	StorageLayout task.RemoteDataLayout `json:"storage_layout,omitempty"`
+	IntentSHA256  string                `json:"intent_sha256"`
 }
 
 func bindRemoteStageOwner(tx *taskdir.ControlTransaction, request remote.Request) error {
 	if err := task.ValidateSHA256(request.IntentSHA256); err != nil {
 		return err
 	}
-	owner := remoteStageOwner{IntentSHA256: request.IntentSHA256}
+	owner := remoteStageOwner{IntentSHA256: request.IntentSHA256, StorageLayout: request.StorageLayout}
 	var saved remoteStageOwner
 	err := tx.Read("stage-owner.json", &saved)
 	if err == nil {

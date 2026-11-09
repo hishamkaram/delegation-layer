@@ -146,19 +146,22 @@ func TestRemoteSnapshotFrozenBeforeUploadAndLoadsWithoutOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest, err := remotefiles.ManifestSHA256(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = VerifyInputs(t.Context(), destination, id, mustRemoteIntentDigest(t, intent), digest, cwd); err != nil {
+	if err = VerifyInputs(t.Context(), destination, intent, mustRemoteIntentDigest(t, intent)); err != nil {
 		t.Fatal(err)
 	}
 	actual, err := os.ReadFile(filepath.Join(cwd, "file.txt"))
 	if err != nil || string(actual) != "original" {
 		t.Fatalf("bytes=%q err=%v", actual, err)
 	}
-	if err = VerifyInputs(t.Context(), destination, id, mustRemoteIntentDigest(t, intent), strings.Repeat("f", 64), cwd); err == nil {
+	changed := intent
+	changed.InputSHA256 = strings.Repeat("f", 64)
+	if err = VerifyInputs(t.Context(), destination, changed, mustRemoteIntentDigest(t, intent)); err == nil {
 		t.Fatal("changed input identity admitted")
+	}
+	changed = intent
+	changed.StorageLayout = task.RemoteDataOrganized
+	if err = VerifyInputs(t.Context(), destination, changed, mustRemoteIntentDigest(t, intent)); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("different layout verified staged inputs: %v", err)
 	}
 }
 
@@ -351,7 +354,11 @@ func remoteTransferIntent(t *testing.T, origin, destination *taskdir.Store, id s
 	if err != nil {
 		t.Fatal(err)
 	}
-	return remote.Intent{Version: remote.ProtocolVersion, OriginRootID: origin.RootID, TaskID: id, Device: "worker", Executable: "delegate", Destination: remote.Identity{Host: "example", Port: 22, User: "user", HostKey: "SHA256:fixture", Root: destination.Root, RootID: destination.RootID}, Provider: "claude:print", Config: task.TaskConfig{Permission: "read-only", Budget: "1m"}, RemoteCwd: InputWorkspace(destination.Root, destination.RootID, id), Brief: remote.Descriptor{Name: "brief", Length: 5, SHA256: task.ComputeSHA256([]byte("brief"))}, InputSHA256: inputSHA}
+	cwd, err := LayoutInputWorkspace(task.RemoteDataLegacy, destination.Root, destination.RootID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return remote.Intent{Version: remote.ProtocolVersion, OriginRootID: origin.RootID, TaskID: id, Device: "worker", Executable: "delegate", Destination: remote.Identity{Host: "example", Port: 22, User: "user", HostKey: "SHA256:fixture", Root: destination.Root, RootID: destination.RootID}, Provider: "claude:print", Config: task.TaskConfig{Permission: "read-only", Budget: "1m"}, RemoteCwd: cwd, Brief: remote.Descriptor{Name: "brief", Length: 5, SHA256: task.ComputeSHA256([]byte("brief"))}, InputSHA256: inputSHA}
 }
 
 func mustRemoteIntentDigest(t *testing.T, intent remote.Intent) string {
@@ -409,11 +416,7 @@ func TestRemoteStageIdentityCannotReplaceReadyInput(t *testing.T) {
 	if err != nil || string(content) != "retained" {
 		t.Fatalf("ready bytes changed: %q %v", content, err)
 	}
-	manifestSHA, err := remotefiles.ManifestSHA256(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = VerifyInputs(t.Context(), destination, id, strings.Repeat("e", 64), manifestSHA, cwd); err == nil {
+	if err = VerifyInputs(t.Context(), destination, intent, strings.Repeat("e", 64)); err == nil {
 		t.Fatal("different intent verified staged inputs")
 	}
 }

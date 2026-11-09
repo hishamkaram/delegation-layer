@@ -3,6 +3,7 @@ package remotecommands
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/remote"
 	"github.com/hishamkaram/delegation-layer/internal/remote/payload"
@@ -37,5 +38,8 @@ func (c Client) downloadRemote(ctx context.Context, request remote.Request, resp
 			result.Diagnostics = append(result.Diagnostics, "download reader close failed: "+err.Error())
 		}
 	}()
+	if request.Transfer != nil && strings.HasPrefix(request.Transfer.Selector, "log:") {
+		return remoteLogDownload(ctx, reader, request, response)
+	}
 	return payload.Download(ctx, reader, request, response)
 }

@@ -463,6 +463,47 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  remote-ssh:
+    name: Remote SSH acceptance (ubuntu-24.04)
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '.go-version'
+          cache: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned SSH Go tools
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: make tools-go
+      - name: Install pinned SSH supervisor
+        env:
+          DELEGATE_TOOL_DOWNLOAD_TOKEN: ${{ github.token }}
+        run: ./scripts/install-test-supervisor.sh
+      - name: Prove source-built remote SSH behavior
+        run: make acceptance-remote-prepared
+      - name: Retain allowlisted SSH acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: remote-ssh-${{ github.run_attempt }}
+          path: |
+            bin/remote-acceptance/run.*/evidence/receipt.json
+            bin/remote-acceptance/run.*/evidence/control-evidence-*.json
+          retention-days: 7
+          if-no-files-found: error
+
   nested-survival:
     name: Nested survival (${{ matrix.os }})
     needs: changes

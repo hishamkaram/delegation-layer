@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/config"
 
 	"github.com/hishamkaram/delegation-layer/internal/app/remotecommands"
 	"github.com/hishamkaram/delegation-layer/internal/remote"
@@ -35,6 +38,8 @@ func runRemoteCLI(a Arguments, deps Dependencies, stdout, stderr io.Writer) int 
 
 func remoteOrigin(ctx context.Context, a Arguments, client remotecommands.Client) (remotecommands.Report, error) {
 	switch {
+	case a.Command == "remote" && (a.RemoteAction == "usage" || a.RemoteAction == "retire"):
+		return client.Storage(ctx, a.Root, remotecommands.StorageInput{Action: a.RemoteAction, TaskID: a.TaskID, Scope: a.RemoteScope, Apply: a.RemoteApply})
 	case a.Command == "remote" && a.RemoteAction == "list":
 		return client.List(ctx, a.Root, a.RemoteAfter)
 	case a.Command == "devices":
@@ -49,7 +54,7 @@ func remoteOrigin(ctx context.Context, a Arguments, client remotecommands.Client
 			messageError = err
 			message = &value
 		}
-		return client.Task(ctx, a.Root, remotecommands.TaskInput{Operation: a.Command, TaskID: a.TaskID, OutputDirectory: a.OutputDirectory, Watch: a.Watch, After: a.After, Control: message, ControlError: messageError})
+		return client.Task(ctx, a.Root, remotecommands.TaskInput{Logs: remotecommands.LogInput{Stream: a.LogStream, Cursor: a.LogCursor, Offset: a.LogOffset, Limit: a.LogLimit, OffsetSet: a.LogOffsetSet}, Operation: a.Command, TaskID: a.TaskID, OutputDirectory: a.OutputDirectory, Watch: a.Watch, After: a.After, Control: message, ControlError: messageError})
 	}
 }
 
@@ -95,6 +100,15 @@ func (a remoteLocalAdapter) Admit(ctx context.Context, pin taskdir.RootPin, requ
 	deps := a.deps
 	deps.remoteRootPin = &pin
 	result := dispatchRemoteAdmission(ctx, request, binding, deps)
+	if result.err != nil {
+		retained, retired, retireErr := remoteFeature(deps).RetiredAdmission(ctx, pin, request, response, result.err)
+		if retired && retireErr == nil {
+			return retained
+		}
+		if retireErr != nil {
+			result.err = errors.Join(result.err, retireErr)
+		}
+	}
 	response = remoteCommandEnvelope(response, result)
 	response.TaskRecord = result.response.TaskRecord
 	if request.Operation == remote.Reconcile && response.TaskRecord == "not_created" {
@@ -136,10 +150,7 @@ func (remoteEnvelopeInspector) Inspect(data json.RawMessage) (remotecommands.Obs
 
 func remoteCLIResultCode(command string, report remotecommands.Report, err error) int {
 	if err != nil {
-		if remote.Transient(err) || errors.Is(err, remote.ErrAcceptanceUnknown) {
-			return 3
-		}
-		return 1
+		return remoteCommandErrorCode(command, report, err)
 	}
 	if report.Remote != nil && len(report.Remote.Envelope) > 0 {
 		var envelope Response
@@ -157,6 +168,19 @@ func remoteCLIResultCode(command string, report remotecommands.Report, err error
 		}
 	}
 	return 0
+}
+
+func remoteCommandErrorCode(command string, report remotecommands.Report, err error) int {
+	if command == "logs" || report.Usage != nil || report.Retirement != nil {
+		if task.AllErrorCauses(err, func(leaf error) bool { return remote.Transient(leaf) || errors.Is(leaf, task.ErrLockBusy) }) {
+			return 3
+		}
+		return 1
+	}
+	if remote.Transient(err) || errors.Is(err, remote.ErrAcceptanceUnknown) {
+		return 3
+	}
+	return 1
 }
 
 func controlRemote(ctx context.Context, request remote.Request, response remote.Response, deps Dependencies) remote.Response {
@@ -297,4 +321,21 @@ func dispatchRemoteAdmission(ctx context.Context, request remote.Request, bindin
 		result = dispatchCommandResult(tasklifecycle.DispatchContext(ctx, dispatchRequest(a, deps), options))
 	}
 	return result
+}
+
+func (a remoteLocalAdapter) Retired(ctx context.Context, pin taskdir.RootPin, request remote.Request, response remote.Response, cause error) remote.Response {
+	reader, err := a.Read(ctx, request.Root, &pin)
+	envelope := newResponse("dispatch")
+	envelope.RootID, envelope.TaskID, envelope.TaskRecord = response.Identity.RootID, request.TaskID, "created"
+	if err == nil {
+		var readErr error
+		envelope, readErr = passiveRemoteEnvelope(ctx, reader, request, response)
+		err = errors.Join(readErr, reader.Close())
+		envelope.Command = "dispatch"
+		envelope.TaskRecord = "created"
+	}
+	if errors.Is(cause, config.ErrInvalidCwd) && task.AllErrorCauses(cause, func(leaf error) bool { return errors.Is(leaf, config.ErrInvalidCwd) || errors.Is(leaf, os.ErrNotExist) }) {
+		cause = nil
+	}
+	return remoteCommandEnvelope(response, commandResult{response: envelope, err: errors.Join(cause, err)})
 }

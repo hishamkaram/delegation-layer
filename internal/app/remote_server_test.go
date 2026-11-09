@@ -64,6 +64,14 @@ func newRemoteServerFixture(t *testing.T, sealed bool) *remoteServerFixture {
 
 func sealRemoteServerFixture(t *testing.T, td *taskdir.TaskDir) {
 	t.Helper()
+	sealRemoteServerFixtureEvidence(t, td)
+	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
+		t.Fatal(errors.Join(cleanupErr, collectErr))
+	}
+}
+
+func sealRemoteServerFixtureEvidence(t *testing.T, td *taskdir.TaskDir) {
+	t.Helper()
 	permit, err := td.PrepareStart(0)
 	if err != nil {
 		t.Fatal(err)
@@ -87,9 +95,6 @@ func sealRemoteServerFixture(t *testing.T, td *taskdir.TaskDir) {
 	}
 	if err = permit.Release(); err != nil {
 		t.Fatal(err)
-	}
-	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
-		t.Fatal(errors.Join(cleanupErr, collectErr))
 	}
 }
 

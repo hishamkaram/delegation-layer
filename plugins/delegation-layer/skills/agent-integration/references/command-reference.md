@@ -14,7 +14,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
-| `logs TASK --json` | Read validated stream descriptors | No launch |
+| `logs TASK --json` | Read stream descriptors; remote handles support explicit bounded snapshots | No launch |
 | `cancel TASK --json` | Record an explicit stop | No launch |
 | `continue --task TASK ... --json` | Create an exact-session successor | At most one successor launch attempt |
 | `recheck TASK --json` | Reassess eligible evidence offline | None |
@@ -25,6 +25,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `scheduler serve/status/stop` (when supported), `scheduler run` | [User-started host and compatibility runtime](#scheduler-runtime) | Due occurrences use normal dispatch; status/stop do not launch providers |
 | `devices list/probe/trust` | [Remote destination discovery and trust](#remote-tasks) | List is passive; probe/trust contact the selected destination, without launching a provider |
 | `remote list/reconcile` | [Saved remote task references](#remote-tasks) | List is passive; reconcile recovers existing matching work, with no new admission |
+| `remote usage/retire` | [Retained remote bytes](#remote-tasks) | Usage and preview are passive; only explicit `--apply` retires owned byte families |
 
 The commands below use the CLI default and omit `--root`. The advanced override
 syntax is `delegate --root ABS COMMAND ...`; use it only for an explicitly
@@ -599,6 +600,22 @@ configuration, explicit trust, file manifests and supported SSH settings.
 choice is saved for later controls. Default discovery reads user then system
 configuration. `dispatch --device ALIAS` requires `--remote-cwd ABS` or `--input-manifest FILE`
 instead of local workspace options. Preserve the returned `remote:ID` on status,
-collect, cancel, events, reply and steer. `collect --out ABS` downloads selected
+collect, logs, cancel, events, reply and steer. `collect --out ABS` downloads selected
 files; it does not apply them. `remote reconcile remote:ID` retains the original
 intent after uncertain admission. Do not strip the prefix or use a new ID.
+
+`logs remote:ID --json` returns metadata only. Add `--stream stdout|stderr` for
+an explicit binary snapshot in `logs.data_base64`, with a 65,536-byte default and
+maximum `--limit`. Resume with the returned opaque `--cursor`; an explicit
+`--offset` must agree. Replacement and truncation fail. A live EOF does not mean
+execution ended; a sealed whole checksum is expected metadata, while the range
+checksum describes only returned bytes. There is no follow mode or raw-log cache.
+
+`remote usage remote:ID [--scope origin|destination|both] --json` observes retained
+families. `remote retire remote:ID` defaults to preview; `--dry-run` is explicit
+preview and `--apply` authorizes deletion. Scope defaults to both sides. Apply
+requires closed owners/consumers and complete capture, fences new managed use,
+and removes only owned byte families. It retains journals, raw logs, outcomes,
+downloads and a prepared user cwd. Preserve partial per-side progress and errors.
+Legacy input consumers can block retirement. Follow the workflow's recovery
+guidance; never replace this with manual journal deletion.

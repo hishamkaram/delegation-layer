@@ -22,6 +22,12 @@ func registerRemoteFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.StringVar(&a.OutputManifest, "output-manifest", "", "selected output paths")
 		fs.StringVar(&a.RemoteExecutable, "remote-executable", "", "installed remote Delegate path")
 	}
+	if a.Command == "logs" {
+		fs.StringVar(&a.LogStream, "stream", "", "explicit remote stdout or stderr range")
+		fs.StringVar(&a.LogCursor, "cursor", "", "remote log observation cursor")
+		fs.Int64Var(&a.LogOffset, "offset", 0, "remote log byte offset")
+		fs.Int64Var(&a.LogLimit, "limit", 64<<10, "remote log range limit")
+	}
 	if a.Command == "collect" {
 		fs.StringVar(&a.OutputDirectory, "out", "", "explicit remote download directory")
 	}
@@ -50,6 +56,9 @@ func parseRemoteArguments(a Arguments, rest []string) (Arguments, error) {
 	fs.StringVar(&a.Fingerprint, "fingerprint", "", "expected host key fingerprint")
 	fs.BoolVar(&a.Stdio, "stdio", false, "framed control protocol")
 	fs.BoolVar(&a.JSON, "json", false, "machine readable output")
+	fs.StringVar(&a.RemoteScope, "scope", "both", "origin, destination or both")
+	fs.BoolVar(&a.RemoteApply, "apply", false, "retire selected owned bytes")
+	fs.BoolVar(&a.RemoteDryRun, "dry-run", false, "preview retirement")
 	ordered, err := orderFlags(fs, remaining)
 	if err != nil {
 		return a, err
@@ -57,32 +66,61 @@ func parseRemoteArguments(a Arguments, rest []string) (Arguments, error) {
 	if err = fs.Parse(ordered); err != nil {
 		return a, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "scope" {
+			a.remoteScopeSet = true
+		}
+	})
 	return validateRemoteAction(a, fs.Args())
 }
 
 func validateRemoteAction(a Arguments, positional []string) (Arguments, error) {
+	if err := validateRemoteStorageOptions(a); err != nil {
+		return a, err
+	}
 	switch a.Command {
 	case "remote":
-		switch a.RemoteAction {
-		case "serve":
-			if !a.Stdio || len(positional) != 0 {
-				return a, errors.New("remote serve requires --stdio")
-			}
-		case "reconcile":
-			if len(positional) != 1 || !strings.HasPrefix(positional[0], "remote:") {
-				return a, errors.New("reconcile requires remote:ID")
-			}
-			a.TaskID = positional[0]
-			return a, validateRoutedTaskID(a.TaskID)
-		case "list":
-			if len(positional) != 0 {
-				return a, errors.New("remote list takes no positional arguments")
-			}
-		default:
-			return a, fmt.Errorf("unsupported remote action %q", a.RemoteAction)
-		}
+		return validateRemoteSubcommand(a, positional)
 	case "devices":
 		return validateDeviceAction(a, positional)
+	}
+	return a, nil
+}
+
+func validateRemoteStorageOptions(a Arguments) error {
+	if a.RemoteAction != "retire" && a.RemoteAction != "usage" && (a.RemoteApply || a.RemoteDryRun || a.remoteScopeSet) {
+		return errors.New("storage options require remote usage or retire")
+	}
+	if a.RemoteApply && a.RemoteDryRun {
+		return errors.New("apply conflicts with dry-run")
+	}
+	if a.RemoteScope != "both" && a.RemoteScope != "origin" && a.RemoteScope != "destination" {
+		return errors.New("scope must be origin, destination or both")
+	}
+	if a.RemoteAction == "usage" && (a.RemoteApply || a.RemoteDryRun) {
+		return errors.New("usage is read-only")
+	}
+	return nil
+}
+
+func validateRemoteSubcommand(a Arguments, positional []string) (Arguments, error) {
+	switch a.RemoteAction {
+	case "serve":
+		if !a.Stdio || len(positional) != 0 {
+			return a, errors.New("remote serve requires --stdio")
+		}
+	case "reconcile", "usage", "retire":
+		if len(positional) != 1 || !strings.HasPrefix(positional[0], "remote:") {
+			return a, errors.New("reconcile requires remote:ID")
+		}
+		a.TaskID = positional[0]
+		return a, validateRoutedTaskID(a.TaskID)
+	case "list":
+		if len(positional) != 0 {
+			return a, errors.New("remote list takes no positional arguments")
+		}
+	default:
+		return a, fmt.Errorf("unsupported remote action %q", a.RemoteAction)
 	}
 	return a, nil
 }
@@ -137,4 +175,23 @@ func validateDeviceAction(a Arguments, positional []string) (Arguments, error) {
 		return a, fmt.Errorf("unknown devices action %q", a.RemoteAction)
 	}
 	return a, nil
+}
+
+func (a *Arguments) validateLogArguments() error {
+	if a.Command != "logs" {
+		return nil
+	}
+	if !a.logOptionsSet {
+		return nil
+	}
+	if !strings.HasPrefix(a.TaskID, "remote:") {
+		return errors.New("log range options require remote:ID")
+	}
+	if a.LogStream != "stdout" && a.LogStream != "stderr" {
+		return errors.New("log ranges require --stream stdout or stderr")
+	}
+	if a.LogOffset < 0 || a.LogLimit < 1 || a.LogLimit > 64<<10 {
+		return errors.New("log range requires nonnegative offset and limit 1..65536")
+	}
+	return nil
 }

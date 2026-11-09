@@ -310,9 +310,10 @@ class InstallerDownloadTokenWorkflowTests(unittest.TestCase):
         expected = {"gate-linux": {"Install tools", "Install pinned supervisor test binaries"},
                     "gate-macos": {"Install platform tools", "Install pinned supervisor test binaries"},
                     "independent-startup-component": {"Install pinned repository tools"},
+                    "remote-ssh": {"Install pinned SSH Go tools", "Install pinned SSH supervisor"},
                     "nested-survival": {"Install pinned tools and supervisor"},
                     "development-candidate": {"Install pinned tools"}}
-        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 7)
+        self.assertEqual(source.count("DELEGATE_TOOL_DOWNLOAD_TOKEN"), 9)
         for job, names in expected.items():
             content = job_text(source, job)
             header = content.split("    steps:", 1)[0]

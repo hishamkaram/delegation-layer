@@ -405,9 +405,12 @@ inspection-fixtures: tool-versions
 acceptance-inspection: tool-versions test-native-harness
 	./scripts/acceptance/inspections/run.sh
 
-.PHONY: acceptance-remote
+.PHONY: acceptance-remote acceptance-remote-prepared
 acceptance-remote: tool-versions
 	./scripts/install-test-supervisor.sh
+	$(MAKE) acceptance-remote-prepared
+
+acceptance-remote-prepared: tool-versions
 	@mkdir -p "$(BIN_DIR)/remote-acceptance"
 	@run_directory=$$(mktemp -d "$(BIN_DIR)/remote-acceptance/run.XXXXXXXX"); \
 	python3 scripts/acceptance/remote/cli.py --build \

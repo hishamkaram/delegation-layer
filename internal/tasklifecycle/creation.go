@@ -23,6 +23,15 @@ func CreateTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 }
 
 func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSelection, options CreationOptions, store *taskdir.Store, req task.TaskRecord, brief []byte, briefPath string, gate *resourceGate) (result CreationResult) {
+	use, useErr := store.BeginRemoteDataUse(ctx, req)
+	if useErr != nil {
+		return creationFailure(result, CreationAdmission, admissioncore.WithStage("protect-remote-data", useErr))
+	}
+	defer func() {
+		if err := use.Close(); err != nil {
+			result.Failure = errors.Join(result.Failure, err)
+		}
+	}()
 	prepared, err := admissioncore.PrepareContext(ctx, selection, options.Admission, store, req)
 	if err != nil {
 		err = admissioncore.WithStage("prepare-admission", annotateMissingDispatchStage("preparing inspection admission", err))
@@ -47,6 +56,9 @@ func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 			return creationFailure(result, CreationBrief, admissioncore.WithStage("read-brief", err))
 		}
 	}
+	if err = use.Register(ctx); err != nil {
+		return creationFailure(result, CreationRecord, admissioncore.WithStage("register-remote-data-use", err))
+	}
 	td, err := store.CreateTaskContext(ctx, req.TaskID, &req, brief, &meta)
 	if err != nil {
 		result.TaskRecord = CreationRecordUnknown
@@ -54,6 +66,10 @@ func createTaskContext(ctx context.Context, selection supervisorcore.AdmissionSe
 		return creationFailure(result, CreationRecord, admissioncore.WithStage("create-task-record", err))
 	}
 	result.TaskRecord = CreationRecordCreated
+	if err = use.Close(); err != nil {
+		return creationFailure(result, CreationRecord, admissioncore.WithStage("release-remote-data-use", errors.Join(err, td.Close())))
+	}
+	use = nil
 	persistedSupervisor := meta.SupervisorConfig
 	result.Supervisor = &persistedSupervisor
 	// The canonical task decides the winner before any capture obligation is
