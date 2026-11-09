@@ -1723,7 +1723,7 @@ been cleared for every commercial, promotional, or redistributive use.</metadata
         </g>
 
         <!-- Legend -->
-        <g data-legend="">
+        <g data-legend="" style="">
           <text x="40" y="2814" class="t-primary" font-size="12" font-weight="650">Legend</text>
           <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="2834" data-legend-width="118">
             <path d="M 40 2831 L 74 2831" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>

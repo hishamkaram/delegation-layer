@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "9c161ec0d4369e6881933915dbbd170b0afedaf2",
+      "revision": "90a0044ea73fedaf7353c63ade8e0863d8f0eeb3",
       "link_mode": "local-only"
     }
   },
@@ -387,14 +387,14 @@
         },
         {
           "path": "internal/app/remotecommands/exchange.go",
-          "line": 17,
-          "end_line": 39,
+          "line": 18,
+          "end_line": 47,
           "label": "Verified SSH framed exchange"
         },
         {
           "path": "internal/app/remote.go",
-          "line": 18,
-          "end_line": 55,
+          "line": 21,
+          "end_line": 58,
           "label": "Return destination data and connectivity"
         }
       ]
@@ -564,10 +564,10 @@
       "dot": "rose",
       "title": "Origin coordinates; destination owns execution",
       "items": [
-        "Remote workflows own verified embedded Go SSH; the frontend adapter calls the same canonical task lifecycle shown here (internal/app/remotecommands/exchange.go:17–39; internal/app/remote.go:91–124).",
+        "Remote workflows own verified embedded Go SSH; the frontend adapter calls the same canonical task lifecycle shown here (internal/app/remotecommands/exchange.go:18–47; internal/app/remote.go:99–133).",
         "A persistent destination supervisor must already be ready. The destination owns admission, budgets, cancellation, native closure and outcome.json. SSH connectivity does not own the verdict (internal/app/remotecommands/resident.go:11–28).",
         "The origin stores immutable intent, acceptance and dated observations. An uncertain send reconciles the existing request. Declared outputs and caches do not replace the destination outcome (internal/remote/coordinator.go:24–103).",
-        "Remote payload owns frozen snapshots and captured bytes; the frontend retains full response validation. Remote references do not support logs or continuation (internal/app/remote.go:127–138; internal/app/remotecommands/origin.go:255–283)."
+        "Remote payload owns frozen snapshots and captured bytes; the frontend validates bounded live/sealed stdout/stderr logs. Remote continuation remains unsupported (internal/app/remotecommands/logs.go:43–120,124–143; internal/app/arguments.go:470–478)."
       ]
     },
     {

@@ -82,6 +82,10 @@ explicitly; Delegate never silently switches to password or interactive login.
 The remote SSH server may decline selected environment requests; this produces
 a count diagnostic and does not by itself fail the connection. Selection is
 limited to 128 variables, 32 KiB per entry and 256 KiB total before dialing.
+Other system policy remains subject to the supported subset. For example, a
+macOS origin selecting `Ciphers` through its system configuration still needs
+an explicit supported configuration; Ubuntu default compatibility does not
+imply complete OpenSSH configuration support on every host.
 
 After verifying a host fingerprint independently:
 

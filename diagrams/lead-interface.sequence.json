@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "9c161ec0d4369e6881933915dbbd170b0afedaf2",
+      "revision": "90a0044ea73fedaf7353c63ade8e0863d8f0eeb3",
       "link_mode": "local-only"
     }
   },
@@ -59,8 +59,8 @@
         },
         {
           "path": "internal/app/remote.go",
-          "line": 18,
-          "end_line": 55,
+          "line": 21,
+          "end_line": 58,
           "label": "Origin references and remote operations"
         }
       ]
@@ -99,14 +99,14 @@
       "sources": [
         {
           "path": "internal/app/remote.go",
-          "line": 91,
-          "end_line": 124,
+          "line": 99,
+          "end_line": 133,
           "label": "Canonical admission, reconciliation and controls"
         },
         {
           "path": "internal/app/remotecommands/server.go",
-          "line": 145,
-          "end_line": 202,
+          "line": 138,
+          "end_line": 168,
           "label": "Single destination operation router"
         },
         {
@@ -649,7 +649,7 @@
       "items": [
         "E is a separate remote request, not a step after local continuation. Destination reuses A/B execution and C cancellation. The caller owns origin intent and observation records; destination TaskDir alone owns task state (internal/remote/reference.go:19–35,66–100,184–214).",
         "A durable before-send marker prevents another admit after an uncertain transmission. Reconnection performs existing-only reconciliation under the same destination identity, not a provider restart (internal/remote/coordinator.go:24–103).",
-        "Remote cancellation is sent to the destination with its recorded request identity. Logs and continuation are unsupported for remote references; no local fallback or fresh dispatch is implied (internal/app/remotecommands/origin.go:255–283)."
+        "Remote cancellation is sent to the destination with its recorded request identity. Bounded live/sealed stdout/stderr logs are available; continuation remains unsupported, with no local fallback or fresh dispatch implied (internal/app/remotecommands/logs.go:43–120,124–143; internal/app/arguments.go:470–478)."
       ]
     }
   ]
