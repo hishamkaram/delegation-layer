@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
@@ -20,14 +21,18 @@ import (
 )
 
 func TestWaitOwnerProcessClosedRetainsOriginalAfterSuccessorElection(t *testing.T) {
-	f, original := newOwnerStopReleasedSuccessorFixture(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
-	defer cancel()
-	result, err := WaitOwnerProcessClosed(ctx, f.reader, original.reference)
-	if !errors.Is(err, context.DeadlineExceeded) || result.State != OwnerServingReleased || result.ProcessClosure != OwnerProcessPending || result.Startup != original.reference || result.Process != original.assumption.Process {
-		t.Fatalf("serving release or successor replaced original process closure: %+v %v", result, err)
-	}
-	assertAvailable(t, f.lease.path, false)
+	// Bubble time advances when the actual wait timer blocks, so native fixture
+	// setup and durable read latency do not consume the functional deadline.
+	synctest.Test(t, func(t *testing.T) {
+		f, original := newOwnerStopReleasedSuccessorFixture(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+		defer cancel()
+		result, err := WaitOwnerProcessClosed(ctx, f.reader, original.reference)
+		if !errors.Is(err, context.DeadlineExceeded) || result.State != OwnerServingReleased || result.ProcessClosure != OwnerProcessPending || result.Startup != original.reference || result.Process != original.assumption.Process {
+			t.Fatalf("serving release or successor replaced original process closure: %+v %v", result, err)
+		}
+		assertAvailable(t, f.lease.path, false)
+	})
 }
 
 func TestWaitOwnerProcessClosedObservesAbsentOriginalAfterSuccessorElection(t *testing.T) {
@@ -156,7 +161,14 @@ func writeOwnerStopServingFence(ctx context.Context, f ownerContactFixture) erro
 
 func TestOwnerStopClientUnknownWireDoesNotResendAndRetainsPositiveRelease(t *testing.T) {
 	f := newOwnerContactFixture(t)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	// EOF and exact serving release are the contract here, not one-second
+	// storage latency. Keep the enclosing finite test watchdog; dedicated
+	// deadline/cancellation cases retain their shorter functional deadlines.
+	deadline, finite := t.Deadline()
+	if !finite {
+		t.Fatal("owner stop exchange requires a finite test watchdog")
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
 	defer cancel()
 	join := serveOwnerStopFixture(t, f, func(connection *net.UnixConn) error {
 		if _, err := readOwnerFrame[ownerStopRequest](bufio.NewReader(connection)); err != nil {
@@ -168,11 +180,11 @@ func TestOwnerStopClientUnknownWireDoesNotResendAndRetainsPositiveRelease(t *tes
 		return errors.Join(f.auth.listener.Close(), f.lease.Close()) // Natural EOF, no acknowledgement.
 	})
 	result, err := StopOwnerServing(ctx, f.reader)
-	if !errors.Is(err, io.EOF) || result.State != OwnerServingReleased || result.ProcessClosure != OwnerProcessPending {
-		t.Fatalf("unknown exchange lost original fault or same-owner release: %+v %v", result, err)
+	if joinErr := join(); joinErr != nil {
+		t.Fatal(joinErr)
 	}
-	if err = join(); err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, io.EOF) || result.State != OwnerServingReleased || result.ProcessClosure != OwnerProcessPending || result.Startup != f.auth.request.Owner || result.Process != f.auth.assumption.Process {
+		t.Fatalf("unknown exchange lost original fault or same-owner release: %+v %v", result, err)
 	}
 	if _, err = os.Stat(ownerEndpointPath(f.auth.root, 1)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("passive closure observation recreated endpoint: %v", err)

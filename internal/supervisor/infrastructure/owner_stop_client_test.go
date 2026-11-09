@@ -150,10 +150,34 @@ func TestOwnerStopAtDoesNotContactConcurrentSuccessor(t *testing.T) {
 	requireNoOwnerContactConnection(t, listener)
 }
 
+func TestOwnerStopFixtureStartsAcceptAfterPreparation(t *testing.T) {
+	f := newOwnerContactFixture(t)
+	// The completed authentication/setup phase must not lend its old accept
+	// deadline to the separately owned stop exchange.
+	if err := f.auth.listener.SetDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	join := serveOwnerStopFixture(t, f, func(*net.UnixConn) error { return nil })
+	address := &net.UnixAddr{Name: ownerEndpointPath(f.auth.root, 1), Net: "unix"}
+	connection, err := net.DialUnix("unix", nil, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err = join(); err != nil {
+		t.Fatalf("completed setup expired the stop accept turn: %v", err)
+	}
+}
+
 // These same-process native peers own one finite exchange and join it before
 // fixture cleanup. No resident process, daemon, provider or replacement starts.
 func serveOwnerStopFixture(t *testing.T, f ownerContactFixture, handle func(*net.UnixConn) error) func() error {
 	t.Helper()
+	f.beginAccept(t)
 	done := make(chan error, 1)
 	go func() {
 		connection, err := f.auth.listener.AcceptUnix()

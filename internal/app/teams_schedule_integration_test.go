@@ -363,6 +363,11 @@ func TestTeamsScheduleUpgradedRestartReadsLegacyAndTargetedRows(t *testing.T) {
 		}
 	})
 	f.state, f.arguments.Root, f.arguments.ScheduleID = state, root, strings.Repeat("e", 32)
+	refused := createTeamScheduleCommand(f.arguments, f.deps)
+	if refused.code != 1 || !errors.Is(refused.err, schedulecontract.ErrMigrationRequired) {
+		t.Fatalf("legacy Team create did not require explicit migration: code=%d err=%v", refused.code, refused.err)
+	}
+	migrateLegacySchedule(t, root)
 	newDefinition := f.create(t)
 	newBytes, _ := teamsScheduleStoredRequest(t, root, newDefinition.ScheduleID)
 	teamsScheduleAssertLegacyDecoder(t, before, newBytes)
