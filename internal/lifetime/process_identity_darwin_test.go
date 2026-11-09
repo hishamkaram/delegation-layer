@@ -65,6 +65,72 @@ func TestDarwinKinfoDecodeDistinguishesExitFromABIMismatch(t *testing.T) {
 	}
 }
 
+func TestDarwinStartedProcessGroupIDUsesOnlyESRCHFallback(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		group int
+		err   error
+	}{
+		{"live", 42, nil},
+		{"permission", 0, unix.EPERM},
+		{"io", 0, unix.EIO},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group, err := startedDarwinProcessGroupIDWith(42, func(pid int) (int, error) {
+				if pid != 42 {
+					t.Fatal("group lookup changed the started PID")
+				}
+				return test.group, test.err
+			}, func(int) (*unix.KinfoProc, error) {
+				t.Fatal("non-ESRCH group observation used kinfo fallback")
+				return nil, nil
+			})
+			if group != test.group || !errors.Is(err, test.err) {
+				t.Fatalf("group=%d error=%v, want %d/%v", group, err, test.group, test.err)
+			}
+		})
+	}
+}
+
+func TestDarwinStartedProcessGroupIDValidatesFallbackRecord(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		process *unix.KinfoProc
+		err     error
+		want    int
+		wantErr error
+	}{
+		{"exiting", darwinStartedGroupFixture(42, 42), nil, 42, nil},
+		{"absent", nil, nil, 0, ErrUnverifiableLaunch},
+		{"different PID", darwinStartedGroupFixture(43, 42), nil, 0, ErrUnverifiableLaunch},
+		{"zero group", darwinStartedGroupFixture(42, 0), nil, 0, ErrUnverifiableLaunch},
+		{"init group", darwinStartedGroupFixture(42, 1), nil, 0, ErrUnverifiableLaunch},
+		{"lookup failure", nil, unix.EPERM, 0, unix.EPERM},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			group, err := startedDarwinProcessGroupIDWith(42,
+				func(int) (int, error) { return 0, unix.ESRCH },
+				func(pid int) (*unix.KinfoProc, error) {
+					if pid != 42 {
+						t.Fatal("fallback changed the started PID")
+					}
+					return test.process, test.err
+				})
+			if group != test.want || !errors.Is(err, test.wantErr) {
+				t.Fatalf("group=%d error=%v, want %d/%v", group, err, test.want, test.wantErr)
+			}
+		})
+	}
+}
+
+func darwinStartedGroupFixture(pid, group int32) *unix.KinfoProc {
+	process := darwinKinfoFixture(int(pid))
+	process.Eproc.Pgid = group
+	// Exiting processes can lose Getpgid visibility before entering SZOMB.
+	process.Proc.P_stat = 2
+	return process
+}
+
 func TestDarwinProcessIdentityTreatsKinfoEIOThenEmptyAsExit(t *testing.T) {
 	lookups := 0
 	procInfoCalls := 0

@@ -123,11 +123,20 @@ func observeProcessIdentity(pid int) (bool, string, error) {
 // succeeded and the caller still owns the single Wait. Until Wait reaps it,
 // the PID cannot be reused and its start token remains stable launch evidence.
 func observeStartedProcessIdentity(pid int) (bool, string, error) {
-	present, _, token, err := inspectDarwinProcessIdentity(pid)
+	present, identity, err := inspectDarwinProcessIdentityWith(pid, nativeDarwinStartedProcInfo, nativeDarwinProcessKinfoLookup)
 	if err != nil || !present {
 		return present, "", err
 	}
-	return true, token, nil
+	return true, identity.startToken, nil
+}
+
+func nativeDarwinStartedProcInfo(callNum int32, pid int32, flavor uint32, arg uint64, buffer []byte) (int, error) {
+	if callNum == darwinProcInfoCallPIDInfo && flavor == darwinProcPIDUniqIdentifierInfo {
+		// Only a successfully started, unreaped child may include zombie
+		// identity. Live observation and signal authority keep their arg 0.
+		arg = 1
+	}
+	return nativeDarwinProcInfo(callNum, pid, flavor, arg, buffer)
 }
 
 func inspectDarwinProcessIdentity(pid int) (bool, bool, string, error) {
@@ -449,6 +458,27 @@ func processGroupID(pid int) (int, error) {
 		return 0, err
 	}
 	return pgid, nil
+}
+
+func startedProcessGroupID(pid int) (int, error) {
+	return startedDarwinProcessGroupIDWith(pid, processGroupID, nativeDarwinProcessKinfoLookup)
+}
+
+func startedDarwinProcessGroupIDWith(pid int, groupID func(int) (int, error), lookup darwinProcessKinfoLookup) (int, error) {
+	pgid, err := groupID(pid)
+	if !errors.Is(err, unix.ESRCH) {
+		return pgid, err
+	}
+	// Getpgid excludes exited processes. The caller still owns this child's
+	// single Wait, so its PID and kinfo group cannot belong to a reused PID.
+	process, err := lookup(pid)
+	if err != nil {
+		return 0, err
+	}
+	if process == nil || int(process.Proc.P_pid) != pid || process.Eproc.Pgid <= 1 {
+		return 0, fmt.Errorf("%w: started process-group kinfo is absent or invalid", ErrUnverifiableLaunch)
+	}
+	return int(process.Eproc.Pgid), nil
 }
 
 func signalProcessGroup(pgid int, signal syscall.Signal) error {

@@ -8,6 +8,11 @@ import uuid
 
 from scripts.acceptance.evidence.files import write_json
 from scripts.acceptance.evidence.records import _read_control_record
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_ARGV
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_BYTES
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_TIMEOUT_SECONDS
+from scripts.acceptance.evidence.cpu_snapshot import confirmed_host_cpu_response
+from scripts.acceptance.evidence.cpu_snapshot import cpu_snapshot_rows
 from scripts.acceptance.evidence.validation import AcceptanceFailure
 from scripts.acceptance.evidence.validation import require
 from scripts.acceptance.private_cli.admission import observe_created_admission
@@ -24,6 +29,8 @@ from scripts.acceptance.lifetime.closure import validate_managed_lifetime_closur
 from scripts.acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.acceptance.private_cli.nested.policy import queue_ended_evidence
 from scripts.acceptance.private_cli.receipt import resource_admission_evidence
+from scripts.acceptance.processes.operations import run_bounded_command
+from scripts.acceptance.processes.contracts import command_closure_unproven
 
 
 class NestedCase:
@@ -82,6 +89,7 @@ class NestedCase:
                         phase="nested-external-observer", capture_root=self.lifetime.capture_token)
 
     def _record_failed_admission(self, name, task_id, response, *, capture=None):
+        observed_at = time.monotonic()
         public = response if isinstance(response, dict) else {}
         projected = {"name": name, "requested_task_id": task_id, "failure": {}}
         for key in ("schema_version", "command", "root_id", "task_id", "task_record", "admission"):
@@ -102,6 +110,50 @@ class NestedCase:
             projected["exit_code"] = code if type(code) is int and -(2**31) <= code < 2**31 else None
             projected["response_present"] = isinstance(response, dict)
         self.evidence["failed_admission"] = projected
+        snapshot = self._capture_refusal_cpu(name, task_id, public, capture, observed_at)
+        if snapshot is not None:
+            projected["host_cpu_snapshot"] = snapshot
+
+    def _capture_refusal_cpu(self, name, task_id, response, capture, observed_at):
+        if not confirmed_host_cpu_response(response, task_id, None):
+            return None
+        snapshot: dict[str, object] = {
+            "method": "native_ps", "timing": "after_resource_refusal",
+            "basis": "native_platform_historical_percent", "origin": "driver_failure_observed",
+            "admission_intervals_matched": False, "causal_attribution": False,
+        }
+        reason = "control_completion_unavailable"
+        try:
+            if capture is None:
+                capture = _read_control_record(self.receipts / (name + ".json"), "completed nested control")
+            # run_json records the parsed response only after its capture owner
+            # has joined the child. An invocation fault cannot authorize a probe.
+            require(type(capture.get("exit_code")) is int and capture["exit_code"] == 1
+                    and capture.get("failure_class") == "nonzero_exit"
+                    and capture.get("natural_wait", True) is True and "invocation_error" not in capture
+                    and confirmed_host_cpu_response(capture.get("response"), task_id, response.get("root_id"))
+                    and capture.get("response") == response,
+                    "nested CPU diagnostic requires a completed matching refusal")
+            snapshot["capture_started_offset_ms"] = int((time.monotonic() - observed_at) * 1000)
+            reason = "capture_unavailable"
+            result = run_bounded_command(
+                list(CPU_SNAPSHOT_ARGV), {"LC_ALL": "C"}, cwd=self.fixture.workspace, capture=True,
+                timeout=CPU_SNAPSHOT_TIMEOUT_SECONDS, max_output=CPU_SNAPSHOT_BYTES,
+            )
+            reason = "native_completion_unavailable"
+            require(type(result.exit_code) is int and result.exit_code == 0,
+                    "native CPU listing did not complete successfully")
+            reason = "invalid_output"
+            text = result.output.decode("utf-8")
+            snapshot["capture_completed_offset_ms"] = int((time.monotonic() - observed_at) * 1000)
+            snapshot.update(cpu_snapshot_rows(text), status="observed")
+        except BaseException as error:
+            # Diagnostics are secondary, including interruption; the original
+            # refusal still reaches the existing sequential cleanup and exit.
+            snapshot.update(status="unavailable", reason=reason)
+            if command_closure_unproven(error):
+                snapshot["closure_unproven"] = True
+        return snapshot
 
     def dispatch(self, state, task_id, brief, budget, name):
         if name == "warm-b":

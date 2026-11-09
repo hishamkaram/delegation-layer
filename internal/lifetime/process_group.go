@@ -138,7 +138,7 @@ func (s *processGroupScope) observeStarted(pid int) (LaunchRef, error) {
 	if !present {
 		return LaunchRef{}, fmt.Errorf("%w: process %d is absent", ErrUnverifiableLaunch, pid)
 	}
-	pgid, err := processGroupID(pid)
+	pgid, err := startedProcessGroupID(pid)
 	if err != nil {
 		return LaunchRef{}, fmt.Errorf("observe process-group membership for PID %d: %w", pid, err)
 	}

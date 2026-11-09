@@ -80,6 +80,7 @@ func TestProcessGroupObservesStartedZombieBeforeWait(t *testing.T) {
 		}
 	})
 	waitForDarwinZombie(t, command.Process.Pid)
+	assertDarwinZombieRawGroup(t, command.Process.Pid)
 
 	standalone, err := ObserveStartedProcess(command.Process.Pid)
 	if err != nil {
@@ -104,6 +105,22 @@ func TestProcessGroupObservesStartedZombieBeforeWait(t *testing.T) {
 	waited = true
 	if waitErr != nil {
 		t.Fatal(waitErr)
+	}
+}
+
+func assertDarwinZombieRawGroup(t *testing.T, pid int) {
+	t.Helper()
+	group, groupErr := processGroupID(pid)
+	if groupErr == nil {
+		if group != pid {
+			t.Fatalf("raw zombie Getpgid returned group %d, want owned PID %d", group, pid)
+		}
+		t.Log("raw owned-zombie Getpgid: exact_pid")
+	} else {
+		if !errors.Is(groupErr, syscall.ESRCH) {
+			t.Fatalf("raw zombie Getpgid: %v", groupErr)
+		}
+		t.Log("raw owned-zombie Getpgid: esrch")
 	}
 }
 

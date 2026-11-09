@@ -424,6 +424,16 @@ load. The platform gate retains default-on guard coverage. Revisit this choice
 if runners provide controlled CPU isolation; it does not establish the cause of
 a historical CPU refusal or prove that CPU accounting was defective.
 
+Nested-survival acceptance keeps its default resource guards. After a completed
+host-CPU refusal, its receipt includes one bounded, failure-only `ps` projection:
+allowlisted role hints, counts and up to eight native historical CPU percentages.
+These hints cannot identify owned processes or establish causality, and the
+post-refusal snapshot does not match the admission sampling intervals. Capture
+faults remain secondary to the original refusal and sequential cleanup. A
+`closure_unproven: true` flag records unverified closure of the diagnostic `ps`
+process; the failed run retains its owned root and evidence, and must not be
+reported as fully cleaned up.
+
 The separate refused-admission control first completes a real warm task, then
 captures one finite synthetic resource refusal through the shared task ledger:
 

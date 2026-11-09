@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import scripts.acceptance.provider_drivers.ccr.fixture as gate
+from scripts.acceptance.evidence import cpu_snapshot
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.testing.resources import track_directory_pins
 from scripts.acceptance.native import lifecycle as lifecycle_impl
@@ -710,8 +711,15 @@ class ControlledRefusalTests(unittest.TestCase):
 
 
 class CPUSnapshotTests(unittest.TestCase):
+    def test_compiler_and_nested_fixture_roles_are_allowlisted_hints_only(self):
+        roles = ("go", "compile", "link", "nested-lifetime-fixture", "pi")
+        projected = cpu_snapshot.cpu_snapshot_rows("".join(f"1 /private/{role}\n" for role in roles))
+        self.assertEqual(projected["listed_process_count"], dict.fromkeys(roles, 1))
+        self.assertEqual(projected["top_cpu"], [{"role": role, "native_cpu_percent": 1.0} for role in roles])
+        self.assertNotIn("owned", json.dumps(projected))
+
     def test_projection_preserves_spaces_and_public_roles_without_unknown_names(self):
-        projected = gate.cpu_snapshot_rows(
+        projected = cpu_snapshot.cpu_snapshot_rows(
             "150.5 /Applications/Private Canary/claude\n"
             "20.5 /private/token-canary/unknown-secret\n"
             "7.0 /System/with spaces/mdworker_shared\n"
@@ -726,7 +734,7 @@ class CPUSnapshotTests(unittest.TestCase):
             self.assertNotIn(secret, encoded)
 
     def test_public_runner_security_names_are_case_insensitive_and_counts_are_only_listed(self):
-        projected = gate.cpu_snapshot_rows("4 /runner/Runner.Worker\n3 /runner/RUNNER.LISTENER\n"
+        projected = cpu_snapshot.cpu_snapshot_rows("4 /runner/Runner.Worker\n3 /runner/RUNNER.LISTENER\n"
                                            "2 /system/TRUSTD\n1 /system/XProtect\n0.5 ccr <defunct>\n")
         self.assertEqual(projected["listed_process_count"], {
             "runner.worker": 1, "runner.listener": 1, "trustd": 1, "xprotect": 1, "other": 1})
@@ -734,7 +742,7 @@ class CPUSnapshotTests(unittest.TestCase):
             ("runner.worker", 4.0), ("runner.listener", 3.0), ("trustd", 2.0), ("xprotect", 1.0), ("other", 0.5))])
 
     def test_all_rows_are_validated_and_sorted_before_the_top_eight(self):
-        projected = gate.cpu_snapshot_rows("".join(f"{i} private-{i}\n" for i in range(12)) + "240 /bin/ccr\n")
+        projected = cpu_snapshot.cpu_snapshot_rows("".join(f"{i} private-{i}\n" for i in range(12)) + "240 /bin/ccr\n")
         self.assertEqual(projected["listed_process_count"], {"other": 12, "ccr": 1})
         self.assertEqual(projected["top_cpu"], [{"role": "ccr", "native_cpu_percent": 240.0}] +
                          [{"role": "other", "native_cpu_percent": float(i)} for i in (11, 10, 9, 8, 7, 6, 5)])
@@ -743,7 +751,7 @@ class CPUSnapshotTests(unittest.TestCase):
         for text in ("", "\n", "bad ps\n", "nan ps\n", "inf ps\n", "1e999 ps\n", "-0.1 ps\n", "1,5 ps\n",
                      "12\n", "1 /\n", "1 ccr\nbroken\n", "0 ps\n" * 4097, "0 " + "x" * (256 * 1024)):
             with self.subTest(prefix=text[:20]), self.assertRaises(ValueError):
-                gate.cpu_snapshot_rows(text)
+                cpu_snapshot.cpu_snapshot_rows(text)
 
     def test_only_exact_completed_host_cpu_refusal_is_eligible(self):
         observation = cpu_refusal_observation()
@@ -817,7 +825,7 @@ class CPUSnapshotTests(unittest.TestCase):
         self.assertTrue(receipt["listed_process_count"])
         self.assertGreater(len(receipt["top_cpu"]), 0)
         self.assertLessEqual(len(receipt["top_cpu"]), 8)
-        self.assertTrue(set(receipt["listed_process_count"]) <= gate.CPU_SNAPSHOT_ROLES | {"other"})
+        self.assertTrue(set(receipt["listed_process_count"]) <= cpu_snapshot.CPU_SNAPSHOT_ROLES | {"other"})
         self.assertFalse(receipt["admission_intervals_matched"])
         self.assertFalse(receipt["causal_attribution"])
 

@@ -15,7 +15,6 @@ if __package__ in {None, ""}:
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import math
 import os
 import select
 import threading
@@ -25,6 +24,11 @@ import time
 from scripts.acceptance.native.cli import NativeAcceptance
 from scripts.acceptance.native.cli import build_parser
 from scripts.acceptance.native.cli import choose_output
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_ARGV
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_BYTES
+from scripts.acceptance.evidence.cpu_snapshot import CPU_SNAPSHOT_TIMEOUT_SECONDS
+from scripts.acceptance.evidence.cpu_snapshot import confirmed_host_cpu_refusal
+from scripts.acceptance.evidence.cpu_snapshot import cpu_snapshot_rows
 from scripts.acceptance.evidence.records import bounded_text
 from scripts.acceptance.evidence.records import status_jobs
 from scripts.acceptance.evidence.validation import _task_identity
@@ -149,63 +153,6 @@ def require_user_cancellation(response, root_id, task_id):
 FIXTURE_GATE = "acceptance-ccr-fixture"
 REFUSAL_CLEANUP_GATE = "acceptance-ccr-refusal-cleanup"
 CPU_SNAPSHOT_NAME = "failure-host-cpu-snapshot.json"
-CPU_SNAPSHOT_BYTES = 256 * 1024
-CPU_SNAPSHOT_ROWS = 4096
-CPU_SNAPSHOT_ARGV = ("/bin/ps", "-A", "-o", "pcpu=,comm=")
-CPU_SNAPSHOT_ROLES = frozenset((
-    "delegate", "delegate-run", "pueue", "pueued", "ccr", "claude", "node",
-    "python", "python3", "python3.12", "ps", "mds", "mds_stores", "mdworker_shared",
-    "syspolicyd", "xprotectservice", "amfid", "kernel_task",
-    "runner.worker", "runner.listener", "trustd", "xprotect",
-))
-
-
-def confirmed_host_cpu_refusal(observation: object, root: object) -> bool:
-    if not isinstance(observation, dict):
-        return False
-    response = observation.get("response")
-    task = observation.get("task_id")
-    if not isinstance(response, dict) or not _task_identity(task):
-        return False
-    resource = response.get("resource_admission")
-    return (observation.get("natural_wait") is True and type(observation.get("exit_code")) is int and
-            observation.get("exit_code") == 1 and type(response.get("schema_version")) is int and
-            response.get("schema_version") == 1 and response.get("command") == "dispatch" and
-            _task_identity(response.get("root_id")) and
-            (root is None or (_task_identity(root) and response.get("root_id") == root)) and
-            response.get("task_id") == task and
-            response.get("task_record") == "unknown" and response.get("admission") == "unknown" and
-            response.get("liveness") == "undetermined" and response.get("publication") == "unknown" and
-            response.get("failure") == {"code": "resource_pressure", "stage": "check-resources",
-                                        "reason_code": "host_cpu_sustained", "next_action": "stop_and_report"} and
-            isinstance(resource, dict) and resource.get("status") == "pressure")
-
-
-def cpu_snapshot_rows(text: str) -> dict[str, object]:
-    """Project one native historical-percent listing, never identity or closure."""
-    if len(text.encode("utf-8")) > CPU_SNAPSHOT_BYTES:
-        raise ValueError("cpu_snapshot_byte_limit")
-    lines = text.splitlines()
-    if not lines or len(lines) > CPU_SNAPSHOT_ROWS:
-        raise ValueError("cpu_snapshot_row_limit_or_empty")
-    rows: list[tuple[float, str]] = []
-    counts: dict[str, int] = {}
-    for line in lines:
-        fields = line.split(maxsplit=1)
-        if len(fields) != 2:
-            raise ValueError("cpu_snapshot_malformed_row")
-        percent = float(fields[0])
-        if not math.isfinite(percent) or percent < 0:
-            raise ValueError("cpu_snapshot_invalid_percent")
-        basename = Path(fields[1]).name.lower()
-        if not basename:
-            raise ValueError("cpu_snapshot_missing_command")
-        role = basename if basename in CPU_SNAPSHOT_ROLES else "other"
-        rows.append((percent, role))
-        counts[role] = counts.get(role, 0) + 1
-    rows.sort(key=lambda row: row[0], reverse=True)
-    return {"listed_process_count": counts,
-            "top_cpu": [{"role": role, "native_cpu_percent": percent} for percent, role in rows[:8]]}
 
 
 class FixtureAcceptance(NativeAcceptance):
@@ -227,7 +174,7 @@ class FixtureAcceptance(NativeAcceptance):
         reason = "capture_unavailable"
         try:
             process = self.processes.run("failure-host-cpu", list(CPU_SNAPSHOT_ARGV), self.output,
-                expected=None, timeout=5, environment={**self.processes.environment, "LC_ALL": "C"})
+                expected=None, timeout=CPU_SNAPSHOT_TIMEOUT_SECONDS, environment={**self.processes.environment, "LC_ALL": "C"})
             reason = "native_completion_unavailable"
             require(isinstance(process.result, dict) and process.result.get("natural_wait") is True and
                     type(process.result.get("exit_code")) is int and process.result.get("exit_code") == 0,
