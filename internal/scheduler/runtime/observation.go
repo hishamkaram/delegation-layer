@@ -42,23 +42,28 @@ func (l *loop) finish(ctx context.Context, result taskResult) error {
 		l.event(result.occurrence, phase, result.state.Observation.FaultCode)
 	}
 	if result.state.Release != nil {
-		release := *result.state.Release
-		if err := contract.ValidateRelease(release); err != nil {
-			return storeError("invalid release", result.occurrence, errors.Join(task.ErrInvariantFault, err))
-		}
 		occurrence := result.occurrence
-		occurrence.Release = &release
 		if result.state.Attempt != nil {
 			occurrence.Attempt = result.state.Attempt
 		}
-		ready, projectionErr := l.projectBeforeRelease(ctx, occurrence)
-		if projectionErr != nil || !ready {
-			return projectionErr
-		}
-		return l.recordRelease(ctx, result.occurrence, release)
+		return l.finishRelease(ctx, occurrence, *result.state.Release)
 	}
 	l.event(result.occurrence, phase, "observed")
 	return nil
+}
+
+// Release is gated by validated evidence and any quota hold in the same
+// owner path; task-local uncertainty retains the reservation instead.
+func (l *loop) finishRelease(ctx context.Context, occurrence contract.Occurrence, release contract.Release) error {
+	if err := contract.ValidateRelease(release); err != nil {
+		return storeError("invalid release", occurrence, errors.Join(task.ErrInvariantFault, err))
+	}
+	occurrence.Release = &release
+	ready, err := l.projectBeforeRelease(ctx, occurrence)
+	if err != nil || !ready {
+		return err
+	}
+	return l.recordRelease(ctx, occurrence, release)
 }
 
 func (l *loop) reportTaskError(result taskResult) error {
