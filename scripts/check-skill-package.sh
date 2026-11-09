@@ -64,5 +64,7 @@ cmp "${REPO_ROOT}/skills/agent-integration/SKILL.md" "${TARGET}/SKILL.md"
 "${NODE_BINARY}" "${INSTALLER}" install-cli --help >/dev/null
 "${NODE_BINARY}" "${REPO_ROOT}/scripts/test-install-agent-integration.mjs" "${INSTALLER}"
 "${NODE_BINARY}" "${REPO_ROOT}/scripts/test-install-routing.mjs" "${INSTALLER}"
+"${NODE_BINARY}" "${REPO_ROOT}/scripts/test-setup.mjs" "${INSTALLER}"
+"${NODE_BINARY}" "${REPO_ROOT}/scripts/test-install-publication.mjs" "${INSTALLER}"
 
 echo "Agent skill package check passed: ${PACKAGE_TARBALL}"

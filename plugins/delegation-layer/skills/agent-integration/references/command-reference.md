@@ -10,6 +10,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `providers --json` | List compiled profiles | None |
 | `capabilities --provider ID --json` | Read a compiled contract | None |
 | `models --provider ID [--cwd ABS] --json` | Discover model/effort facts | Native inspection, no admitted task |
+| `doctor [--provider ID --cwd ABS] --json` | Optional passive bundle/root/provider observations | None |
 | `preflight --provider ID --cwd ABS --json` | Check static readiness | None |
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
@@ -31,6 +32,50 @@ The commands below use the CLI default and omit `--root`. The advanced override
 syntax is `delegate --root ABS COMMAND ...`; use it only for an explicitly
 supplied or already recorded custom or historical root, preserved exactly under
 the main skill's [root rule](../SKILL.md#3-prepare-separate-paths-and-a-finite-brief).
+
+## Doctor
+
+Optional readiness observations; never a dispatch admission requirement:
+
+```text
+delegate doctor [--root ABS] [--json]
+delegate doctor [--root ABS] --provider ID --cwd ABS \
+  [--model MODEL] [--effort EFFORT] [--review-target TARGET] [--json]
+```
+
+`--provider` and `--cwd` must appear together. Model, effort and review options
+require that pair; the provider catalog validates required native options.
+Provider checks use static, native read-only preflight only. Doctor does not
+execute provider inspection or a paid turn, launch a worker/supervisor, initialize
+a store, modify files, or probe supervisor liveness. It does not accept custom
+`--runner` or `--pueue-config` modes; ordinary dispatch still supports those modes.
+
+JSON has `schema_version: 1`, `command: "doctor"`, `root`, `installation`,
+`supervisor`, optional `provider`, and bounded `issues` with `code`, `area` and
+`next_step`. Preserve the process exit separately:
+
+| Observation | Meaning |
+| --- | --- |
+| `root.status` | `not_initialized`, `present`, or `observation_incomplete`; an absent root is allowed. |
+| `installation` | `scope: installation_bundle`, `verification: filesystem_metadata`, `compatibility: not_checked`; reports paths/statuses for `delegate`, `delegate_run`, `pueue`, `pueued`. |
+| Installation/role statuses | Installation: `observed`, `blocked`, `observation_incomplete`; roles: `available`, `missing`, `unusable`, `observation_incomplete`. |
+| `supervisor.binding` | `not_initialized`, `present`, `binding_absent`, or `observation_incomplete`; persisted binding observation only. Absence does not prove an existing root is unused. |
+| `supervisor.liveness`, `active_work` | Always `not_checked`, `unknown`. |
+| `provider` | ID, executable and `static_ready`, `blocked`, or `observation_incomplete`; `verification: static_preflight`, `authentication: unknown`. |
+| Exit 0 | Requested observations complete, with no observed blocker. Does not prove runtime compatibility, authentication or task success. |
+| Exit 2 | Invalid request or reliably observed missing/unusable required bundle/provider. |
+| Exit 1 | Incomplete/unreliable observation, malformed persisted data or output error; takes precedence over observed blockers. |
+
+Provider issues preserve the static rejection reason: `authentication_unavailable`
+asks you to use the provider's native login flow; live authentication remains
+unknown. `state_placement_rejected` asks for a state root outside the provider
+workspace and all provider-writable directories. Follow `next_step`; doctor does
+not make these changes.
+
+These docs describe current main; check installed help before using doctor.
+An older installation without doctor remains usable through its supported
+commands. Guided npm `setup` requires a valid doctor response before writing
+skill/routing state; upgrade an unsupported CLI through its original installer.
 
 ## Dispatch
 
@@ -591,6 +636,8 @@ Preflight creates no task, starts no supervisor, and launches no provider.
 A ready `verification: "preflight"` result is not live authentication or
 execution proof. Report blocked/unsupported results and follow the returned
 guidance; readiness checks do not authorize provider configuration changes.
+`state_placement_rejected` identifies a state root overlapping the workspace or
+provider-writable directories; choose a separate root before retrying.
 
 ## Remote tasks
 

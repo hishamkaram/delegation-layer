@@ -36,6 +36,8 @@ from scripts.acceptance.evidence.digests import sha
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.release_verification import candidate_install_proof as app
+from scripts.release_verification import candidate_install as installer
+from scripts.release_verification.candidate_install_setup import CandidateSetup
 from scripts.release_verification import cleanup as cleanup
 from scripts.acceptance.evidence import source as commands
 from scripts.release_verification import filesystem as filesystem
@@ -116,7 +118,7 @@ class ChannelFilesTests(ProofCase):
                 self.assertEqual({role for role, _ in files.roles()},
                                  {role for role, kind in WITNESS_ROLE_KINDS.items() if kind in consumed})
                 self.assertEqual(files.archive, payload / self.manifest.archive(*platform).path)
-        self.assertNotIn("package", dict(app.channel_files(self.manifest, payload, InstallChannel.BREW,
+        self.assertIn("package", dict(app.channel_files(self.manifest, payload, InstallChannel.BREW,
                                                            ("Darwin", "arm64")).roles()))
 
     def test_an_unlisted_host_platform_refuses(self) -> None:
@@ -372,17 +374,29 @@ class FullFlowTests(CandidateArtifactCase):
         ports = ConsumerPorts(run=self.run_child, which=shutil.which)
         probe = (contextlib.nullcontext() if self.probe is None
                  else mock.patch.object(app, "InstalledBootstrapProbe", self.probe))
-        with mock.patch.dict(os.environ, environment), observed_children(self.tree), probe, \
+        # The fake artifact package and version-only Delegate isolate the existing
+        # artifact/install/lifecycle composition. Packed setup has its own real-child cases.
+        skill_manifest = mock.Mock()
+        skill_manifest.digests.return_value = {}
+        with mock.patch.object(app, "fetch_skill_manifest", return_value=skill_manifest), \
+                mock.patch.object(installer, "_require_package_identity",
+                                  side_effect=lambda request: sha(request.files.package.read_bytes())), \
+                mock.patch.object(CandidateSetup, "fresh") as fresh, \
+                mock.patch.object(CandidateSetup, "verify_repeat", return_value={"repeat": "completed"}) as repeat, \
+                mock.patch.dict(os.environ, environment), observed_children(self.tree), probe, \
                 self.spy(app, "export_file", "export"), \
                 mock.patch.object(cleanup, "prepare_directory_cleanup", side_effect=prepare), \
                 contextlib.redirect_stderr(io.StringIO()):
-            return app.prove_candidate_install(request, ports=ports)
+            result = app.prove_candidate_install(request, ports=ports)
+            self.setup_calls = (fresh.call_count, repeat.call_count)
+            return result
 
     def receipt(self) -> dict:
         return json.loads((self.output / app.RECEIPT_NAME).read_text(encoding="utf-8"))
 
     def test_a_verified_install_records_actual_facts_and_cleans_the_workspace(self) -> None:
         self.assertEqual(self.prove(), 0)
+        self.assertEqual(self.setup_calls, (1, 1))
         self.assertEqual(self.events, ["export", "cleanup"])
         self.assertEqual(self.at_cleanup, {app.WORKSPACE_NAME: True})
         self.assertFalse((self.output / app.WORKSPACE_NAME).exists())
@@ -477,6 +491,33 @@ class FullFlowTests(CandidateArtifactCase):
         self.assertEqual(code, 1)
         self.assertEqual((receipt["failure"]["code"], receipt["failure"]["stage"]),
                          ("command_timeout", "candidate-shell-install"))
+
+class OnboardingWiringTests(ProofCase):
+    def test_production_proof_always_requests_packed_onboarding_for_every_channel(self) -> None:
+        artifact = mock.Mock()
+        artifact.manifest = self.manifest
+        artifact.locator.repository = "hishamkaram/delegation-layer"
+        artifact.observation_record.return_value = {"verified": True}
+        skill = mock.Mock()
+        skill.digests.return_value = {}
+        for channel in InstallChannel:
+            with self.subTest(channel=channel):
+                output = self.tree.root / channel.value
+                request = replace(self.request(output=output, channel=channel), bootstrap_parent=self.tree.root)
+                facts = mock.Mock()
+                facts.installs = (mock.Mock(channel=channel.value),)
+                facts.to_record.return_value = {"channel": channel.value}
+                with mock.patch.object(app, "load_candidate_artifact", return_value=artifact), \
+                        mock.patch.object(app, "extract_archive"), mock.patch.object(app, "inspect_binaries"), \
+                        mock.patch.object(app, "fetch_skill_manifest", return_value=skill), \
+                        mock.patch.object(app, "verify_candidate_install", return_value=facts) as verify:
+                    self.assertEqual(self.call(app.prove_candidate_install, request), 0)
+                ((install_request,), options) = verify.call_args
+                self.assertIs(options["onboarding"], True)
+                self.assertEqual(options["channels"], (channel.value,))
+                self.assertIsNotNone(install_request.files.package)
+                self.assertEqual(self.receipt(output)["verdict"], "pass")
+
 
 class ImportClosureTests(unittest.TestCase):
     def test_artifact_kinds_of_every_channel_installer_are_consumed(self) -> None:

@@ -107,17 +107,14 @@ func ResolvePrivateSupervisorExecutables(lookup ExecutableLookup) (client, daemo
 	if err != nil {
 		return "", "", err
 	}
-	client, daemon, clientErr := resolveSupervisorPair(directory)
+	selectedDirectory := selectBundledSupervisorDirectory(directory, lookup.InitialExecutable != "")
+	client, daemon, clientErr := resolveSupervisorPair(selectedDirectory)
 	if clientErr == nil {
 		return client, daemon, nil
 	}
 	clientErr = classifyUnavailableBundledPair(clientErr)
-	if lookup.InitialExecutable != "" || bundledSupervisorPairHasEntry(directory) {
+	if lookup.InitialExecutable != "" || bundledSupervisorPairHasEntry(selectedDirectory) {
 		return "", "", clientErr
-	}
-	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
-	if found {
-		return client, daemon, classifyUnavailableBundledPair(libexecErr)
 	}
 
 	pathClient, pathErr := lookup.lookPath("pueue")
@@ -159,16 +156,17 @@ func bundledSupervisorPairHasEntry(directory string) bool {
 	return false
 }
 
-func resolveBundledLibexecPair(binaryDirectory string) (client, daemon string, found bool, resultErr error) {
-	directory := filepath.Clean(filepath.Join(binaryDirectory, "..", "libexec"))
-	client, daemon, err := resolveSupervisorPair(directory)
-	if err == nil {
-		return client, daemon, true, nil
+// selectBundledSupervisorDirectory owns bundle layout selection for runtime
+// resolution and passive metadata observation. Any colocated entry wins.
+func selectBundledSupervisorDirectory(directory string, explicit bool) string {
+	if explicit || bundledSupervisorPairHasEntry(directory) {
+		return directory
 	}
-	if bundledSupervisorPairHasEntry(directory) {
-		return "", "", true, err
+	libexec := filepath.Clean(filepath.Join(directory, "..", "libexec"))
+	if bundledSupervisorPairHasEntry(libexec) {
+		return libexec
 	}
-	return "", "", false, nil
+	return directory
 }
 
 func bundledSupervisorDirectory(initialSupervisorExecutable string) (string, error) {

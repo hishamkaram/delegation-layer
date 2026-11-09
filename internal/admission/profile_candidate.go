@@ -67,12 +67,19 @@ func (profiles Profiles) candidateForTask(root string, req task.TaskRecord, meta
 	return candidate, nil
 }
 
+// statePlacementError retains the placement stage across candidate preparation.
+// The wrapped owner error remains the authority for error identity and details.
+type statePlacementError struct{ cause error }
+
+func (e *statePlacementError) Error() string { return e.cause.Error() }
+func (e *statePlacementError) Unwrap() error { return e.cause }
+
 func validatePreparedCandidate(root string, req task.TaskRecord, candidate commonprovider.ProfileCandidate) (commonprovider.ProfileCandidate, error) {
 	if candidate.Directory != req.CanonicalCwd || candidate.Finalize == nil {
 		return commonprovider.ProfileCandidate{}, commonprovider.ErrProfileUnavailable
 	}
 	if err := candidate.ValidateStatePlacement(root); err != nil {
-		return commonprovider.ProfileCandidate{}, err
+		return commonprovider.ProfileCandidate{}, &statePlacementError{cause: err}
 	}
 	if candidate.Inspection != nil {
 		definition, _, snapshotErr := candidate.Inspection.Snapshot()

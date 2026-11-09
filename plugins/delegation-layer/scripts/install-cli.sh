@@ -10,6 +10,18 @@ fail() {
   exit 1
 }
 
+# Setup opts into exact-destination no-replace publication using its existing
+# Node runtime. Ordinary shell/plugin installs retain their upgrade behavior.
+PUBLISH_NODE=""
+PUBLISH_HELPER=""
+if [ "${1:-}" = "--publish-no-replace" ]; then
+  [ "$#" -eq 3 ] || fail "no-replace publication requires the Node runtime and helper paths"
+  PUBLISH_NODE="$2"
+  PUBLISH_HELPER="$3"
+  case "$PUBLISH_NODE" in /*) ;; *) fail "publication runtime must be an absolute path" ;; esac
+  case "$PUBLISH_HELPER" in /*) ;; *) fail "publication helper must be an absolute path" ;; esac
+fi
+
 for command_name in awk curl grep install mkdir mktemp mv rm tar uname; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
@@ -97,12 +109,17 @@ for binary in delegate delegate-run pueue pueued; do
   [ -x "$STAGE_DIR/$binary" ] || fail "staged release bundle does not contain executable $binary"
 done
 
-# Rename staged files only after the complete bundle has been downloaded,
+# Publish staged files only after the complete bundle has been downloaded,
 # verified, extracted, and checked. Keep delegate last so a fresh install never
 # exposes the control command before its runner and supervisor are ready.
-for binary in delegate-run pueue pueued delegate; do
-  mv "$STAGE_DIR/$binary" "$INSTALL_DIR/$binary" || fail "could not publish $binary"
-done
+if [ -n "$PUBLISH_NODE" ]; then
+  "$PUBLISH_NODE" "$PUBLISH_HELPER" "$STAGE_DIR" "$INSTALL_DIR" || \
+    fail "fresh CLI publication stopped; inspect the reported roles or choose an empty install directory"
+else
+  for binary in delegate-run pueue pueued delegate; do
+    mv "$STAGE_DIR/$binary" "$INSTALL_DIR/$binary" || fail "could not publish $binary"
+  done
+fi
 rm -rf "$STAGE_DIR"
 STAGE_DIR=""
 

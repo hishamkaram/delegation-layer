@@ -41,6 +41,7 @@ from scripts.release_verification.candidate_install_contract import url_served_f
 from scripts.release_verification.candidate_install_contract import validate_request
 from scripts.release_verification.candidate_install_brew import observe_brew_install
 from scripts.release_verification.candidate_install_brew import require_brew_host
+from scripts.release_verification.candidate_install_setup import CandidateSetup
 from scripts.release_verification.candidate_install_shim import CurlShim
 from scripts.release_verification.candidate_install_shim import prepare_shim
 from scripts.release_verification.candidate_manifest import entry_limit
@@ -52,7 +53,8 @@ from scripts.release_verification.published_contract import NPM_PACKAGE
 from scripts.release_verification.published_contract import UNRESOLVED_OWNERSHIP_CODES
 from scripts.release_verification.published_contract import compare_hashes
 from scripts.release_verification.published_contract import npm_environment
-from scripts.release_verification.published_files import installed_skill_digests
+from scripts.release_verification.published_files import observe_installed_skill
+from scripts.release_verification.published_files import require_installed_skill
 from scripts.release_verification.published_files import read_package
 from scripts.release_verification.published_files import read_package_bytes
 from scripts.release_verification.published_files import require_exact_binaries
@@ -89,6 +91,7 @@ class _Channel:
     base: Path
     shim: CurlShim
     installer_sha256: str
+    onboarding: bool = False
 
     @property
     def bin_dir(self) -> Path:
@@ -166,13 +169,14 @@ def _installer_digests(request: CandidateInstallRequest, channels: tuple[str, ..
 
 def _open_channel(
         name: str, *, ports: ConsumerPorts, probe: BootstrapProbe, receipt: dict, request: CandidateInstallRequest,
-        urls: ReleaseUrls, info: dict[str, str], layout: ConsumerLayout, installer_sha256: str) -> _Channel:
+        urls: ReleaseUrls, info: dict[str, str], layout: ConsumerLayout, installer_sha256: str,
+        onboarding: bool = False) -> _Channel:
     base = layout.root / name
     base.mkdir(mode=0o700)
     shim = prepare_shim(base, url_served_files(request, urls))
     return _Channel(
         name=name, ports=ports, probe=probe, receipt=receipt, request=request, urls=urls, info=info,
-        layout=layout, base=base, shim=shim, installer_sha256=installer_sha256)
+        layout=layout, base=base, shim=shim, installer_sha256=installer_sha256, onboarding=onboarding)
 
 
 def _shell_environment(channel: _Channel) -> dict[str, str]:
@@ -205,7 +209,16 @@ def _install_shell(channel: _Channel) -> None:
     channel.run("install", [shell, str(channel.request.installer)], _shell_environment(channel), timeout=300)
 
 
+def _setup(channel: _Channel) -> CandidateSetup:
+    return CandidateSetup(channel.request, channel.ports, channel.receipt, channel.layout, channel.name,
+                          channel.base, channel.bin_dir,
+                          {**channel.shim.environment(), "PATH": _npm_environment(channel)["PATH"]})
+
+
 def _install_npm(channel: _Channel) -> None:
+    if channel.onboarding:
+        _setup(channel).fresh()
+        return
     npm = channel.ports.which("npm")
     if npm is None:
         raise VerificationError("npm_unavailable", "locate-tools")
@@ -229,15 +242,24 @@ def _observe(channel: _Channel) -> InstallObservation:
     installed = installed_executables(paths)
     skill_files = 0
     if channel.name == CHANNEL_NPM:
-        skill = installed_skill_digests(channel.skill_dir)
-        compare_hashes(channel.request.skill_digests(), skill, "installed_skill_mismatch", "verify-skill")
-        skill_files = len(skill)
+        skill_directory = (_setup(channel).home / ".claude" / "skills" / "agent-integration"
+                           if channel.onboarding else channel.skill_dir)
+        skill = observe_installed_skill(skill_directory)
+        require_installed_skill(channel.request.skill_digests(), skill, "installed_skill_mismatch", "verify-skill")
+        skill_files = len(skill.files)
     home = channel.base / "exercise-home"
     home.mkdir(mode=0o700)
     exercise_default_path(
         paths, channel.bin_dir, scratch, channel.request.package_version(), channel.info, home,
         cwd=channel.layout.cwd)
     state = scratch["default_path_observation"]
+    onboarding = None
+    if channel.onboarding:
+        setup = _setup(channel)
+        if channel.name != CHANNEL_NPM:
+            setup.fresh()
+        onboarding = setup.verify_repeat(paths["delegate"])
+        require_requests(channel.shim.requests(), channel.urls)
     # The archive layout ships the supervisor pair beside delegate, in the one PATH directory.
     expected = installed
     bootstrap = require_bootstrap(channel.probe(BootstrapTarget(
@@ -247,15 +269,17 @@ def _observe(channel: _Channel) -> InstallObservation:
         channel=channel.name, requests=requests, binaries=installed,
         skill_files=skill_files, delegate_version=scratch["delegate_build_identity"]["version"],
         default_state=(state["state_before"], state["observed_state"], state["state_after"]),
-        bootstrap=bootstrap, installer_sha256=channel.installer_sha256)
+        bootstrap=bootstrap, installer_sha256=channel.installer_sha256, onboarding=onboarding)
 
 
 def verify_candidate_install(
         request: CandidateInstallRequest, *, ports: ConsumerPorts, probe: BootstrapProbe, receipt: dict,
         layout: ConsumerLayout, info: dict[str, str],
-        channels: tuple[str, ...] = CHANNELS) -> CandidateInstallFacts:
+        channels: tuple[str, ...] = CHANNELS, onboarding: bool = False) -> CandidateInstallFacts:
     """Install the candidate per channel and prove binaries, skill and default-path behavior.
 
+    ``onboarding`` adds packed setup to this reusable observer; the production proof
+    always enables it. Legacy distribution-only consumers can retain their narrower scope.
     ``probe`` runs each channel's installed default fixture turn only after that
     channel's selected layout and fresh default state matched; it is never skipped.
     ``info`` is the caller's expected platform; the facts record the observed host
@@ -268,6 +292,8 @@ def verify_candidate_install(
         raise VerificationError("candidate_channels_invalid", "validate-channels")
     validate_request(request)
     before = _candidate_digests(request)
+    if onboarding and _require_package_identity(request) != dict(before).get("package"):
+        raise VerificationError("candidate_file_changed", "verify-candidate")
     installers = _installer_digests(request, channels, before)
     actual = platform_identity()
     if (info.get("os"), info.get("arch")) != (actual["os"], actual["arch"]):
@@ -280,11 +306,12 @@ def verify_candidate_install(
         if name == CHANNEL_BREW:
             receipt["stage"] = "candidate-install-brew"
             observed.append(observe_brew_install(
-                request, ports=ports, probe=probe, receipt=receipt, layout=layout, info=actual))
+                request, ports=ports, probe=probe, receipt=receipt, layout=layout, info=actual,
+                onboarding=onboarding))
             continue
         channel = _open_channel(
             name, ports=ports, probe=probe, receipt=receipt, request=request, urls=urls, info=actual,
-            layout=layout, installer_sha256=installers[name])
+            layout=layout, installer_sha256=installers[name], onboarding=onboarding)
         receipt["stage"] = f"candidate-install-{name}"
         (_install_shell if name == CHANNEL_SHELL else _install_npm)(channel)
         observed.append(_observe(channel))

@@ -506,46 +506,73 @@ func (p *shutdownLeaseProof) cleanup(parent context.Context, t *testing.T) {
 	}
 }
 
-func (p *shutdownLeaseProof) closeActors(ctx context.Context) (resultErr error) {
+func (p *shutdownLeaseProof) closeActors(ctx context.Context) error {
+	return p.closeActorGateAfter(func() error { return p.settleActors(ctx) })
+}
+
+// closeActorGateAfter owns the exit-triggering connection through settlement.
+func (p *shutdownLeaseProof) closeActorGateAfter(settle func() error) (resultErr error) {
+	defer func() {
+		if p.connection != nil {
+			if err := p.connection.Close(); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close CLI exit gate: %w", err))
+			}
+		}
+		if p.listener != nil {
+			if err := p.listener.Close(); err != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close CLI exit-gate listener: %w", err))
+			}
+		}
+	}()
+	return settle()
+}
+
+func (p *shutdownLeaseProof) settleActors(ctx context.Context) (resultErr error) {
 	if p.directory.root != nil {
-		resultErr = p.directory.write("abort", []byte("no-more-launches\n"))
-	}
-	if p.connection != nil {
-		resultErr = errors.Join(resultErr, p.connection.Close())
-	}
-	if p.listener != nil {
-		resultErr = errors.Join(resultErr, p.listener.Close())
+		if err := p.directory.write("abort", []byte("no-more-launches\n")); err != nil {
+			resultErr = fmt.Errorf("prevent further actor launches: %w", err)
+		}
 	}
 	if p.control != nil {
 		_, err := p.control.Write([]byte("q"))
-		if !errors.Is(err, syscall.EPIPE) {
-			resultErr = errors.Join(resultErr, err)
+		if err != nil && !errors.Is(err, syscall.EPIPE) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("request caller shutdown: %w", err))
 		}
 	}
 	if p.caller == nil {
 		return resultErr
 	}
-	resultErr = errors.Join(resultErr, p.caller.close(ctx))
+	if err := p.caller.close(ctx); err != nil {
+		resultErr = errors.Join(resultErr, fmt.Errorf("settle caller: %w", err))
+	}
 	for _, name := range []string{"owner", "cli"} {
-		ref, ok := p.refs[name]
-		if !ok {
-			var err error
-			ref, err = p.readRef(ctx, name)
-			if err != nil {
-				resultErr = errors.Join(resultErr, err)
-				continue
-			}
-			p.refs[name] = ref
+		resultErr = errors.Join(resultErr, p.settleActor(ctx, name))
+	}
+	return resultErr
+}
+
+func (p *shutdownLeaseProof) settleActor(ctx context.Context, name string) (resultErr error) {
+	ref, ok := p.refs[name]
+	if !ok {
+		var err error
+		ref, err = p.readRef(ctx, name)
+		if err != nil {
+			return fmt.Errorf("read %s actor identity: %w", name, err)
 		}
-		present, err := ProcessPresent(ref)
-		resultErr = errors.Join(resultErr, err)
-		if present {
-			signalErr := shutdownLeaseSignal(ctx, ref, syscall.SIGKILL)
-			if !errors.Is(signalErr, errProcessNoSuchEntity) {
-				resultErr = errors.Join(resultErr, signalErr)
-			}
+		p.refs[name] = ref
+	}
+	present, err := ProcessPresent(ref)
+	if err != nil {
+		resultErr = fmt.Errorf("observe %s actor: %w", name, err)
+	}
+	if present {
+		signalErr := shutdownLeaseSignal(ctx, ref, syscall.SIGKILL)
+		if signalErr != nil && !errors.Is(signalErr, errProcessNoSuchEntity) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("signal %s actor: %w", name, signalErr))
 		}
-		resultErr = errors.Join(resultErr, WaitProcessAbsent(ctx, ref))
+	}
+	if err := WaitProcessAbsent(ctx, ref); err != nil {
+		resultErr = errors.Join(resultErr, fmt.Errorf("wait for %s actor absence: %w", name, err))
 	}
 	return resultErr
 }

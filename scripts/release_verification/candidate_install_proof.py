@@ -240,7 +240,7 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
         installer = dict(files.roles())[next(role for role, kind in WITNESS_ROLE_KINDS.items()
                                              if kind is rule.installer_kind)]
     skill: tuple[tuple[str, str], ...] = ()
-    if request.channel is InstallChannel.NPM:
+    if files.package is not None:
         receipt["stage"] = "fetch-skill-manifest"
         skill = tuple(sorted(fetch_skill_manifest(
             ports, receipt, locator.repository, manifest.source.commit, github_env).digests().items()))
@@ -251,7 +251,7 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
     receipt["candidate_install"]["bootstrap_parent"] = str(bootstrap_parent)
     probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=bootstrap_parent)
     facts = verify_candidate_install(install_request, ports=ports, probe=probe, receipt=receipt, layout=layout,
-                                     info=info, channels=(request.channel.value,))
+                                     info=info, channels=(request.channel.value,), onboarding=True)
     if tuple(observation.channel for observation in facts.installs) != (request.channel.value,):
         raise VerificationError("candidate_install_channel_mismatch", STAGE)
     receipt["candidate_install"].update({

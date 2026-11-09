@@ -42,6 +42,7 @@ Commands:
   events        Read interaction events, optionally with a bounded watch
   cancel        Request one explicit supervisor stop
   logs          Return validated output descriptors
+  doctor        Observe installation and static readiness without launching
   preflight     Check one provider without creating a task
   continue      Continue one terminal task through its exact session
   supervisor    Inspect or migrate the private supervisor, or stop its infrastructure owner
@@ -303,6 +304,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	normalized := deps
 	if parsed.Command != "schedule" {
 		normalized = deps.normalized()
+	}
+	if parsed.Command == "doctor" {
+		return runDoctor(parsed, normalized, stdout, stderr)
 	}
 	if parsed.Command == "providers" {
 		return runProviders(parsed.JSON, stdout, stderr, normalized.Catalog)

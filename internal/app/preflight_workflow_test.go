@@ -5,8 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -107,5 +110,32 @@ func checkPreflightCapability(t *testing.T, report *CapabilityReport, status, re
 		if report.LiveAcceptance.Status != wantAcceptance || report.LiveAcceptance.Authentication != wantAuthentication {
 			t.Fatalf("static preflight invented live proof: %+v", report.LiveAcceptance)
 		}
+	}
+}
+
+func TestPreflightPlacementRejectionRetainsOwnerIdentity(t *testing.T) {
+	root, cwd := filepath.Join(t.TempDir(), "state"), t.TempDir()
+	fixture := preflightFixture{cwd: cwd}
+	catalog := preflightFixtureCatalog(t, func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+		candidate, err := fixture.candidate(request, environment)
+		candidate.WritableRoots = []string{root}
+		return candidate, err
+	})
+	deps := Dependencies{Catalog: catalog, Environment: []string{}}.normalized()
+	requested := task.TaskConfig{Permission: config.ModeReadOnly}
+	request, err := admissioncore.BuildRequest(strings.Repeat("0", 32), strings.Repeat("1", 32), "fixture:preflight", cwd, requested, []byte("preflight"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := admissioncore.Preflight(staticAdmissionOptions(deps), root, request)
+	if observed.Stage != admissioncore.PreflightPlacement || !errors.Is(err, commonprovider.ErrProfileUnavailable) {
+		t.Fatalf("placement identity/stage lost: stage=%v err=%v", observed.Stage, err)
+	}
+	result := preflight(Arguments{Root: root, Cwd: cwd, Provider: request.Provider, Config: requested}, deps)
+	if result.code != 2 || result.response.Status != preflightStatusUnsupported || result.response.Capability == nil || result.response.Capability.ReasonCode != "state_placement_rejected" {
+		t.Fatalf("public preflight lost placement rejection: %+v", result)
+	}
+	if fixture.finalizeCalls != 0 {
+		t.Fatalf("finalized rejected placement %d times", fixture.finalizeCalls)
 	}
 }

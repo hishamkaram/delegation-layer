@@ -27,6 +27,7 @@ from scripts.acceptance.processes import operations as operations
 from scripts.acceptance.processes.contracts import BoundedCommandError
 from scripts.acceptance.processes.contracts import CommandFailure
 from scripts.release_verification import candidate_install as install
+from scripts.release_verification import candidate_install_brew as brew_install
 from scripts.release_verification import published_homebrew as published_homebrew
 from scripts.release_verification.assets import exercise_default_path
 from scripts.release_verification.assets import inspect_binaries
@@ -245,6 +246,26 @@ class ObservationTest(BrewCase):
         self.assertEqual((self.tap_dir / "Formula" / "delegation-layer.rb").read_bytes(), FORMULA)
         self.assertEqual(self.receipt["candidate_brew"]["cache"]["state"], "absent-seeded")
         self.assertEqual(self.receipt["default_path_observation"]["path_source"], "PATH")
+
+    def test_onboarding_reuses_linked_delegate_before_bootstrap_without_reimplementing_libexec(self):
+        events = []
+        setup = mock.Mock()
+        setup.fresh.side_effect = lambda: events.append("fresh")
+        setup.verify_repeat.side_effect = lambda delegate: events.append("repeat") or {"repeat": "completed"}
+        self.probe = RecordingProbe(lambda target: events.append("bootstrap") or fx.bootstrap(target.binaries))
+        ports = self.recording.ports()
+        ports = replace(ports, which=lambda name: str(self.brew) if name == "brew" else shutil.which(name))
+        with mock.patch.object(brew_install, "CandidateSetup", return_value=setup) as constructor:
+            observation = observe_brew_install(
+                self.request(), ports=ports, probe=self.probe, receipt=self.receipt,
+                layout=self.layout, info=DARWIN, onboarding=True)
+        self.assertEqual(events, ["fresh", "repeat", "bootstrap"])
+        args, options = constructor.call_args
+        self.assertEqual(args[6], self.prefix / "bin")
+        self.assertIs(options["select_directory"], False)
+        setup.verify_repeat.assert_called_once_with(self.keg / "bin" / "delegate")
+        self.assertEqual(observation.onboarding, {"repeat": "completed"})
+        self.assertEqual(self.probe.targets[0].supervisor_directory, self.keg / "libexec")
 
     def test_brew_children_are_credential_free_with_owned_cache_and_logs(self):
         self.observe()

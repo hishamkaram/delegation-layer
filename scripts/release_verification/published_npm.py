@@ -21,7 +21,8 @@ from scripts.release_verification.published_contract import parse_npm_latest
 from scripts.release_verification.published_contract import parse_npm_view
 from scripts.release_verification.published_contract import parse_pack_filename
 from scripts.release_verification.published_contract import record_fact
-from scripts.release_verification.published_files import installed_skill_digests
+from scripts.release_verification.published_files import observe_installed_skill
+from scripts.release_verification.published_files import require_installed_skill
 from scripts.release_verification.published_files import read_package
 from scripts.release_verification.published_files import read_package_bytes
 from scripts.release_verification.published_files import require_exact_binaries
@@ -107,14 +108,14 @@ def _install(
     ledger = session.receipt if explicit else {"binaries": {}}
     paths = inspect_binaries(bin_dir, ledger)
     installed = installed_executables(paths)
-    skill = installed_skill_digests(skill_dir)
-    compare_hashes(manifest.digests(), skill, "installed_skill_mismatch", "verify-skill")
+    skill = observe_installed_skill(skill_dir)
+    require_installed_skill(manifest.digests(), skill, "installed_skill_mismatch", "verify-skill")
     if explicit:
         home = base / "exercise-home"
         home.mkdir(mode=0o700)
         exercise_default_path(paths, bin_dir, session.receipt, archive.package_version, info, home,
                               cwd=session.layout.cwd)
-    return InstallFacts(label, spec, installed, len(skill))
+    return InstallFacts(label, spec, installed, len(skill.files))
 
 
 def verify_npm_consumer(
