@@ -319,7 +319,7 @@
         {
           "path": "internal/scheduler/internal/sqlitestore/schema.go",
           "line": 52,
-          "end_line": 145,
+          "end_line": 174,
           "label": "Calendar and reliability schema"
         },
         {
