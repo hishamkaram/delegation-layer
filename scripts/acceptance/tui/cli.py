@@ -96,6 +96,43 @@ def unrestored_termios_case(book: Processes, helper: Path, base: Path) -> dict[s
             terminal.close()
 
 
+def nonleader_unrestored_termios_case(book: Processes, helper: Path, base: Path) -> dict[str, object]:
+    """Match Keyboard's direct child; the fixed RAW role launches no children."""
+    terminal = Terminal()
+    process = None
+    try:
+        flags = termios.ICANON | termios.ECHO
+        baseline = terminal.original[3]
+        require(isinstance(baseline, int) and baseline & flags == flags,
+                "nonleader control requires canonical input and echo initially")
+        process = book.start("unrestored-nonleader-termios-rejected",
+                             [str(helper), "--test-tui-terminal-raw-exit"], base,
+                             terminal=terminal.stdio, start_new_session=False)
+        wait_child(process, terminal)
+        observed = termios.tcgetattr(terminal.master)[3]
+        require(isinstance(observed, int) and observed & flags == 0,
+                "completed nonleader RAW child lost its canonical/echo counterexample")
+        try:
+            terminal.assert_restored()
+        except TerminalTermiosMismatch:
+            pass
+        else:
+            raise RuntimeError("unrestored nonleader RAW terminal incorrectly passed restoration")
+        require(process.stderr_path.read_bytes() == b"", "unexpected nonleader RAW fixture stderr")
+        return {"case": "unrestored-nonleader-termios-rejected", "exit_code": 0,
+                "exact_wait": True, "fixed_role_launches_no_children": True,
+                "raw_flags_observed": True, "termios_mismatch_rejected": True}
+    finally:
+        try:
+            if process is not None:
+                if process.poll() is None:
+                    terminal.hangup()
+                    wait_child(process, terminal, timeout=20)
+                (process.directory / "terminal.bin").write_bytes(terminal.data)
+        finally:
+            terminal.close()
+
+
 def interactive_case(book: Processes, binary: Path, helper: Path, base: Path, name: str,
                      *, navigation: bool = False, ctrl_c: bool = False) -> dict[str, object]:
     terminal = Terminal()
@@ -225,6 +262,7 @@ def run(binary: Path, helper: Path, output: Path, *, task_binary: Path | None = 
                        "XDG_CACHE_HOME": str(home.directory / "cache"),
                        "TERM": "xterm-256color", "LANG": "C.UTF-8", "NO_COLOR": "1"}
         book = Processes(output / "processes", environment=environment, owner=captures, environment_keys_only=True)
+        cases.append(nonleader_unrestored_termios_case(book, helper, base))
         cases.append(unrestored_termios_case(book, helper, base))
         cases.append(interactive_case(book, binary, helper, base, "navigate-resize-paste", navigation=True))
         cases.append(interactive_case(book, binary, helper, base, "control-c", ctrl_c=True))

@@ -135,9 +135,13 @@ class Terminal:
             self.drain(min(0.05, max(0.0, deadline - time.monotonic())))
 
     def assert_restored(self) -> None:
+        """Verify after exact child Wait, with no reader left on this owned PTY."""
         if self.master < 0:
             raise RuntimeError("terminal master is already closed")
         self.drain(0.05)
+        # Discard our completed fixture's input queue, including Darwin's
+        # PENDIN state. This never restores configuration flags, speeds or control characters.
+        termios.tcflush(self.master, termios.TCIFLUSH)
         observed = termios.tcgetattr(self.master)
         if observed != self.original:
             raise TerminalTermiosMismatch(self.original, observed)

@@ -96,6 +96,38 @@ class TerminalAcceptanceTests(unittest.TestCase):
         finally:
             terminal.close()
 
+    def test_owned_input_flush_error_is_fatal_before_attribute_observation(self):
+        terminal = Terminal()
+        error = termios.error(25, "native input flush unavailable")
+        try:
+            terminal.data.extend(b"\x1b[?1049h\x1b[?1049l")
+            with (
+                patch("scripts.acceptance.tui.terminal.termios.tcflush", side_effect=error) as flush,
+                patch("scripts.acceptance.tui.terminal.termios.tcgetattr", wraps=termios.tcgetattr) as read,
+            ):
+                with self.assertRaises(termios.error) as raised:
+                    terminal.assert_restored()
+            flush.assert_called_once_with(terminal.master, termios.TCIFLUSH)
+            read.assert_not_called()
+            self.assertIs(raised.exception, error)
+        finally:
+            terminal.close()
+
+    def test_owned_input_flush_cannot_restore_raw_configuration(self):
+        terminal = Terminal()
+        try:
+            raw = termios.tcgetattr(terminal.slave)
+            raw[3] &= ~(termios.ICANON | termios.ECHO)
+            termios.tcsetattr(terminal.slave, termios.TCSANOW, raw)
+            terminal.data.extend(b"\x1b[?1049h\x1b[?1049l")
+            with patch("scripts.acceptance.tui.terminal.termios.tcflush", wraps=termios.tcflush) as flush:
+                with self.assertRaises(TerminalTermiosMismatch):
+                    terminal.assert_restored()
+            flush.assert_called_once_with(terminal.master, termios.TCIFLUSH)
+            self.assertEqual(termios.tcgetattr(terminal.master)[3] & (termios.ICANON | termios.ECHO), 0)
+        finally:
+            terminal.close()
+
     def test_terminal_port_preserves_shared_process_wait_and_separate_stderr(self):
         owner = DirectoryOwner()
         root = Path(tempfile.mkdtemp(prefix="tui-terminal-port-")).resolve(strict=True)
