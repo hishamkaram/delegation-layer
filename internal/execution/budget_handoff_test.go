@@ -78,23 +78,34 @@ func TestBudgetPreparationFailurePreventsSupervisorOperation(t *testing.T) {
 	clock := newManualClock()
 	failed := errors.New("durable stop intent failed")
 	prepared := make(chan struct{})
+	operated := make(chan struct{}, 1)
 	opts := Options{Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
 		close(prepared)
-		return nil, failed
+		return func(context.Context) error { operated <- struct{}{}; return nil }, failed
 	})}
 	owner, _ := armBudget(clock, time.Second, opts)
-	clock.timer.ch <- clock.now.Add(time.Second)
 	t.Cleanup(func() { owner.complete(opts); <-owner.done })
+	clock.timer.ch <- clock.now.Add(time.Second)
+	// A failed preparation can finish the observer before the test resumes.
+	// Join first, then check both facts instead of racing their ready channels.
+	select {
+	case <-owner.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("budget observer did not finish failed preparation")
+	}
 	select {
 	case <-prepared:
-	case <-owner.done:
-		t.Fatalf("budget observer returned without preparation: %v", owner.await())
-	case <-time.After(5 * time.Second):
-		t.Fatal("budget preparation did not run")
+	default:
+		t.Fatal("budget observer returned without preparation")
 	}
 	owner.complete(opts)
 	if !errors.Is(owner.await(), failed) {
 		t.Fatal("lost durable preparation failure")
+	}
+	select {
+	case <-operated:
+		t.Fatal("failed preparation granted a supervisor operation")
+	default:
 	}
 }
 

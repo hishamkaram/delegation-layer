@@ -52,7 +52,9 @@ class CandidateSetup:
             global_npmrc=str(self.layout.global_npmrc), inherited=self.ports.inherited)
         return {**env, **self.extra_environment, "npm_config_offline": "true",
                 # Exact package metadata must beat an inherited release selection.
-                "DELEGATION_LAYER_VERSION": "v0.0.0"}
+                "DELEGATION_LAYER_VERSION": "v0.0.0",
+                # Doctor must observe state outside provider-writable temp paths.
+                "TMPDIR": str(self.base / "setup-tmp")}
 
     def setup(self, label: str, provider_arguments: tuple[str, ...] = ()) -> bytes:
         npm = self.ports.which("npm")
@@ -73,6 +75,7 @@ class CandidateSetup:
 
     def fresh(self) -> None:
         self.home.mkdir(mode=0o700)
+        (self.base / "setup-tmp").mkdir(mode=0o700)
         self._require_output(self.setup("fresh"))
 
     def verify_repeat(self, delegate: Path) -> dict[str, object]:

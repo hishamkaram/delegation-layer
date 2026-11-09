@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 import shutil
 import unittest
 
@@ -13,7 +15,11 @@ from scripts.release_verification.candidate_install_contract import RequestRecor
 from scripts.release_verification.candidate_install_contract import release_urls
 from scripts.release_verification.assets import platform_identity
 from scripts.release_verification import candidate_install as install
+from scripts.release_tests.release_fixture import FixtureTree
+from scripts.release_verification.candidate_install_setup import CandidateSetup
+from scripts.release_verification.published_ports import prepare_layout
 from scripts.acceptance.evidence.source import VerificationError
+from scripts.acceptance.evidence.source import child_environment
 
 
 def doctor_binary(version: str) -> bytes:
@@ -81,6 +87,36 @@ class PackedSetupTests(support.PackedCandidateCase):
         self.assertFalse((self.layout.root / "shell" / "setup-providers" / "launched").exists())
         self.assertFalse((self.layout.root / "shell" / "setup-home" / "doctor-state").exists())
         self.finish_workspace()
+
+    def test_recipe_passes_real_provider_doctor_without_launching_provider(self):
+        # Pi treats system temp trees as writable. Keep the passive state outside
+        # them, as distribution CI does, and build this owned candidate in place.
+        tree = FixtureTree.open(Path.home(), prefix="candidate-setup-doctor", label="real setup doctor")
+        self.addCleanup(tree.dispose)
+        recording = support.RecordingPorts(tree, dependencies=self.dependencies)
+        layout = prepare_layout(tree.root)
+        base = tree.root / "npm"
+        base.mkdir()
+        binaries = base / "bin"
+        binaries.mkdir()
+        recording.run(self.receipt, "build-setup-doctor",
+                      ["go", "build", "-buildvcs=false", "-o", str(binaries / "delegate"), "./cmd/delegate"],
+                      child_environment(os.environ), timeout=180, cwd=support.REPO_ROOT)
+        for name in ("delegate-run", "pueue", "pueued"):
+            role = binaries / name
+            role.write_text("#!/bin/sh\nexit 98\n", encoding="utf-8")
+            role.chmod(0o700)
+        setup = CandidateSetup(self.request(), recording.ports(), self.receipt, layout,
+                               CHANNEL_NPM, base, binaries, {})
+        setup.fresh()
+        self.assertEqual(setup.verify_recipe(binaries / "delegate"),
+                         "validated-absolute-command-provider-workspace-read-only")
+        self.assertFalse((base / "setup-providers" / "launched").exists())
+        doctor = json.loads(recording.run(
+            self.receipt, "passive-doctor-after-recipe", [str(binaries / "delegate"), "doctor", "--json"],
+            setup.environment(), capture=True, cwd=layout.cwd))
+        self.assertEqual(doctor["root"]["status"], "not_initialized")
+        self.assertFalse(Path(doctor["root"]["path"]).exists())
 
     def test_unsupported_doctor_blocks_packed_setup_before_skill_publication_and_bootstrap(self):
         self.layout = install.open_workspace(owner=self.tree.owner, parent=self.parent, receipt=self.receipt)
