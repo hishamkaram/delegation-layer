@@ -22,6 +22,7 @@ PRODUCER_STARTER_CASES = (
 
 
 NATIVE_OBSERVATION_CASES = (
+    "TestProcessGroupObservesStartedZombieBeforeWait",
     "TestShutdownLeasePollInterruptedWait",
     "TestShutdownLeasePollInterruptRespectsOriginalContext",
     "TestShutdownLeasePollPreservesFaults",

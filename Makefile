@@ -338,7 +338,7 @@ acceptance-independent-startup-prepared: tool-versions
 		./internal/lifetime ./internal/scheduler/host
 	# Check native identity and shutdown leases before resident fixtures.
 	go test -race -count=1 -timeout=4m -v \
-		-run '^Test(SameProcess|NewProcessRefRejectsMalformedRecognizedDarwinTokens|DarwinProcessPresent|NestedNativeObservationPreservesCallerContext)' ./internal/lifetime
+		-run '^Test(SameProcess|NewProcessRefRejectsMalformedRecognizedDarwinTokens|DarwinProcessPresent|ProcessGroupObservesStartedZombieBeforeWait|NestedNativeObservationPreservesCallerContext)' ./internal/lifetime
 	DELEGATE_SHUTDOWN_LEASE_PROOF=1 \
 	DELEGATE_SHUTDOWN_LEASE_PUEUE="$(BIN_DIR)/test-supervisor/pueue" \
 	go test -race -count=1 -timeout=4m -v -run '^TestShutdownLease' ./internal/lifetime
