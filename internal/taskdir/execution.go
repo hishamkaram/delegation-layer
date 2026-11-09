@@ -304,8 +304,21 @@ func (td *TaskDir) readSeal(predicate task.PredicateRef, spec, meta string) (*ta
 }
 
 func (td *TaskDir) readSealRecord(predicate task.PredicateRef, spec, meta string) (*task.ProviderExitRecord, error) {
+	seal, err := td.readSealMetadata(predicate, spec, meta, td.store.readRecord)
+	if err != nil {
+		return nil, err
+	}
+	if err = td.validateSealedFiles(seal); err != nil {
+		return nil, err
+	}
+	return seal, nil
+}
+
+// readSealMetadata validates the seal's expected identities without
+// reading captured bytes. It grants observation, never publication authority.
+func (td *TaskDir) readSealMetadata(predicate task.PredicateRef, spec, meta string, readRecord func(string, any) error) (*task.ProviderExitRecord, error) {
 	var seal task.ProviderExitRecord
-	if err := td.store.readRecord(filepath.Join(td.Dir, "provider.exit"), &seal); err != nil {
+	if err := readRecord(filepath.Join(td.Dir, "provider.exit"), &seal); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, task.ErrNoSeal
 		}
@@ -327,7 +340,7 @@ func (td *TaskDir) readSealRecord(predicate task.PredicateRef, spec, meta string
 	if !startExists {
 		return nil, task.ErrEvidenceFault
 	}
-	if err := td.validateSealedFiles(&seal); err != nil {
+	if err := td.validateManifestDeclarations(seal.RawManifest); err != nil {
 		return nil, err
 	}
 	return &seal, nil

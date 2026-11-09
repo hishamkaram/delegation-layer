@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/remote"
+	"github.com/hishamkaram/delegation-layer/internal/remotedata"
 	"github.com/hishamkaram/delegation-layer/internal/remotefiles"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -70,7 +71,7 @@ func openRemoteDownload(ctx context.Context, root *os.Root, request remote.Reque
 		return artifact, nil
 	}
 	artifact.Entry = *captured.Entry
-	captureRoot, err := openRemoteCaptureDirectory(request.Root, request.Expected.RootID, request.TaskID, false)
+	captureRoot, err := remotedata.Open(binding.StorageLayout, request.Root, request.Expected.RootID, request.TaskID, remotedata.Outputs, false)
 	if err != nil {
 		return artifact, err
 	}
@@ -410,7 +411,7 @@ func remoteUnavailableDownload(report DownloadReport, receipt remote.TransferRec
 	report.Availability = receipt.Availability
 	report.Download = "not_requested"
 	switch receipt.Availability {
-	case "absent":
+	case "absent", "retired":
 		return report, nil
 	case "rejected", "over_budget", "incomplete":
 		if receipt.Capture == nil {
@@ -498,11 +499,19 @@ func Download(ctx context.Context, reader *taskdir.ReadOnlyStore, request remote
 		return response
 	}
 	artifact, err := openRemoteDownload(ctx, root, request, stored.Remote)
+	retired, err := retiredDownload(ctx, reader, request.TaskID, err)
+	if retired {
+		response.Transfer = &remote.TransferReceipt{Availability: "retired", Descriptor: remote.Descriptor{
+			Name: strings.TrimPrefix(request.Transfer.Selector, "output:"), Length: artifact.Entry.Size,
+			SHA256: artifact.Entry.SHA256, Executable: artifact.Entry.Executable,
+		}}
+	}
+
 	if err == nil {
 		if artifact.File != nil {
 			response, err = readRemoteDownload(request, response, artifact.Entry, artifact.File)
 			err = errors.Join(err, artifact.File.Close())
-		} else if artifact.Capture != nil {
+		} else if artifact.Capture != nil && response.Transfer == nil {
 			response.Transfer = &remote.TransferReceipt{Availability: artifact.Capture.Status, Descriptor: remote.Descriptor{Name: artifact.Capture.Path}}
 		}
 		if response.Transfer != nil {
@@ -515,4 +524,20 @@ func Download(ctx context.Context, reader *taskdir.ReadOnlyStore, request remote
 		response.Failure = remote.FailureResponse("download_failed", fmt.Errorf("selected artifact %q: %w", request.Transfer.Selector, err))
 	}
 	return response
+}
+
+// An absent artifact becomes retired only when every failure is absence.
+// Joined close or evidence faults remain visible to the caller.
+func retiredDownload(ctx context.Context, reader *taskdir.ReadOnlyStore, id string, artifactErr error) (bool, error) {
+	if !task.AllErrorCauses(artifactErr, func(cause error) bool { return errors.Is(cause, os.ErrNotExist) }) {
+		return false, artifactErr
+	}
+	_, retired, err := ReadRetirement(ctx, reader, id, remotedata.Destination)
+	if err != nil {
+		return false, errors.Join(artifactErr, err)
+	}
+	if retired {
+		return true, nil
+	}
+	return false, artifactErr
 }

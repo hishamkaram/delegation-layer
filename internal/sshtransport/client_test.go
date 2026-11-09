@@ -37,6 +37,11 @@ func key(t *testing.T) ssh.Signer {
 
 func server(t *testing.T, host ssh.Signer, extra ...ssh.Signer) (sshconfig.Connection, string) {
 	t.Helper()
+	return serverChannel(t, host, nil, extra...)
+}
+
+func serverChannel(t *testing.T, host ssh.Signer, serve func(*testing.T, ssh.Channel, <-chan *ssh.Request), extra ...ssh.Signer) (sshconfig.Connection, string) {
+	t.Helper()
 	_, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +64,7 @@ func server(t *testing.T, host ssh.Signer, extra ...ssh.Signer) (sshconfig.Conne
 	for _, signer := range extra {
 		config.AddHostKey(signer)
 	}
-	fixture := &sshFixture{listener: listener, config: config, done: make(chan struct{})}
+	fixture := &sshFixture{listener: listener, config: config, done: make(chan struct{}), serveChannel: serve}
 	go fixture.serve(t)
 	t.Cleanup(func() { fixture.close(t) })
 	hostName, portText, err := net.SplitHostPort(listener.Addr().String())
@@ -91,11 +96,12 @@ func server(t *testing.T, host ssh.Signer, extra ...ssh.Signer) (sshconfig.Conne
 }
 
 type sshFixture struct {
-	listener    net.Listener
-	config      *ssh.ServerConfig
-	workers     sync.WaitGroup
-	connections sync.Map
-	done        chan struct{}
+	serveChannel func(*testing.T, ssh.Channel, <-chan *ssh.Request)
+	listener     net.Listener
+	config       *ssh.ServerConfig
+	workers      sync.WaitGroup
+	connections  sync.Map
+	done         chan struct{}
 }
 
 func (f *sshFixture) serve(t *testing.T) {
@@ -130,7 +136,11 @@ func (f *sshFixture) connection(t *testing.T, socket net.Conn) {
 		if acceptErr != nil {
 			return
 		}
-		f.channel(t, channel, channelRequests)
+		if f.serveChannel != nil {
+			f.serveChannel(t, channel, channelRequests)
+		} else {
+			f.channel(t, channel, channelRequests)
+		}
 	}
 }
 

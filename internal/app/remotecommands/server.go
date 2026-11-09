@@ -88,7 +88,7 @@ func (c Client) Execute(ctx context.Context, request remote.Request) (response r
 		return response
 	}
 	c.pin = &pin
-	response.Capabilities = []string{"remote-v1", "existing-only-reconcile", "five-attempt-recovery", "declared-files", remote.ResourceGuardCapability}
+	response.Capabilities = []string{"remote-v1", "existing-only-reconcile", "five-attempt-recovery", "declared-files", remote.ResourceGuardCapability, remote.DataLayoutCapability, remote.LogsCapability, remote.RetirementCapability}
 	request.Root = response.Identity.Root
 	if err = verifyRemoteOperationBinding(ctx, reader, request); err != nil {
 		response.Failure = remoteBindingFailure(err)
@@ -143,32 +143,41 @@ func (c Client) routeRemoteOperation(ctx context.Context, request remote.Request
 		response.Failure = remote.FailureResponse("identity_required", remote.ErrIdentity)
 		return response
 	}
+	if response.RootPinChanged && !remotePassiveRequest(request) {
+		response.Failure = remote.FailureResponse("root_pin_changed", remote.ErrIdentity)
+		return response
+	}
 	switch request.Operation {
 	case remote.Status, remote.Collect, remote.Events:
-		if response.RootPinChanged {
-			return c.Local.Observe(ctx, *c.pin, request, response, true)
-		}
-		return c.Local.Observe(ctx, *c.pin, request, response, false)
+		return c.Local.Observe(ctx, *c.pin, request, response, response.RootPinChanged)
+	case remote.Usage, remote.Retire:
+		return c.storageRemote(ctx, request, response)
 	case remote.Download:
 		return c.downloadRemote(ctx, request, response)
 	case remote.Admit, remote.Reconcile:
-		if !response.RootPinChanged {
-			return c.admitRemote(ctx, request, response)
-		}
+		return c.admitRemote(ctx, request, response)
 	case remote.Cancel, remote.Reply, remote.Steer:
-		if !response.RootPinChanged {
-			return c.Local.Observe(ctx, *c.pin, request, response, false)
-		}
+		return c.Local.Observe(ctx, *c.pin, request, response, false)
 	case remote.StageBegin, remote.StageChunk, remote.StageCommit:
-		if !response.RootPinChanged {
-			return c.transferRemote(ctx, request, response)
-		}
+		return c.transferRemote(ctx, request, response)
 	case remote.Hello, remote.Prepare:
 		response.Failure = remote.FailureResponse("unsupported_operation", remote.ErrProtocol)
 		return response
 	}
-	response.Failure = remote.FailureResponse("root_pin_changed", remote.ErrIdentity)
+	response.Failure = remote.FailureResponse("unsupported_operation", remote.ErrProtocol)
 	return response
+}
+
+func remotePassiveRequest(request remote.Request) bool {
+	switch request.Operation {
+	case remote.Status, remote.Collect, remote.Events, remote.Usage, remote.Download:
+		return true
+	case remote.Retire:
+		return !request.Apply
+	case remote.Hello, remote.Prepare, remote.Admit, remote.Reconcile, remote.Cancel, remote.Reply, remote.Steer, remote.StageBegin, remote.StageChunk, remote.StageCommit:
+		return false
+	}
+	return false
 }
 
 func (c Client) verifyRemoteAdmissionInputs(ctx context.Context, intent remote.Intent, digest string) error {
@@ -179,13 +188,13 @@ func (c Client) verifyRemoteAdmissionInputs(ctx context.Context, intent remote.I
 	if err != nil {
 		return err
 	}
-	inputErr := payload.VerifyInputs(ctx, store, intent.TaskID, digest, intent.InputSHA256, intent.RemoteCwd)
+	inputErr := payload.VerifyInputs(ctx, store, intent, digest)
 	return errors.Join(inputErr, store.Close())
 }
 
 func remoteTaskOperation(operation remote.Operation) bool {
 	switch operation {
-	case remote.Status, remote.Collect, remote.Events, remote.Cancel, remote.Reply, remote.Steer, remote.Download:
+	case remote.Status, remote.Collect, remote.Events, remote.Cancel, remote.Reply, remote.Steer, remote.Download, remote.Usage, remote.Retire:
 		return true
 	case remote.Hello, remote.Prepare, remote.Admit, remote.Reconcile, remote.StageBegin, remote.StageChunk, remote.StageCommit:
 		return false
@@ -239,7 +248,7 @@ func (c Client) probeRemoteContext(ctx context.Context, request remote.Request, 
 		response.Failure = remote.FailureResponse("resident_not_ready", err)
 		return response
 	}
-	if request.Provider != "" {
+	if request.Provider != "" && request.Cwd != "" {
 		return c.Local.Probe(ctx, *c.pin, request, response)
 	}
 	return response
@@ -264,6 +273,14 @@ func (c Client) admitRemote(ctx context.Context, request remote.Request, respons
 		response.Failure = remote.FailureResponse("invalid_intent", err)
 		return response
 	}
+	request.IntentSHA256 = digest
+	if retained, retired, retireErr := c.RetiredAdmission(ctx, *c.pin, request, response, nil); retireErr != nil {
+		response.TaskRecord = "unknown"
+		response.Failure = remote.FailureResponse("retirement_evidence_unavailable", retireErr)
+		return response
+	} else if retired {
+		return retained
+	}
 	if request.Operation == remote.Admit {
 		if err = c.requireRemoteResident(ctx, intent.Destination.Root); err != nil {
 			response.Failure = remote.FailureResponse("resident_not_ready", err)
@@ -274,6 +291,6 @@ func (c Client) admitRemote(ctx context.Context, request remote.Request, respons
 		response.Failure = remote.FailureResponse("input_unavailable", err)
 		return response
 	}
-	binding := &task.RemoteBinding{OriginRootID: intent.OriginRootID, IntentSHA256: digest, InputSHA256: intent.InputSHA256, OutputPaths: intent.OutputPaths}
+	binding := &task.RemoteBinding{OriginRootID: intent.OriginRootID, IntentSHA256: digest, InputSHA256: intent.InputSHA256, OutputPaths: intent.OutputPaths, StorageLayout: intent.StorageLayout}
 	return c.Local.Admit(ctx, *c.pin, request, binding, response)
 }

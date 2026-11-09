@@ -7,12 +7,34 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/filepaths"
 )
 
+// RemoteDataLayout selects a recorded byte layout, not an arbitrary path.
+// Zero preserves historical record bytes and the original sibling families.
+type RemoteDataLayout uint8
+
+const (
+	RemoteDataLegacy    RemoteDataLayout = 0
+	RemoteDataOrganized RemoteDataLayout = 2
+)
+
+func (l RemoteDataLayout) Validate() error {
+	if l != RemoteDataLegacy && l != RemoteDataOrganized {
+		return fmt.Errorf("unsupported remote data layout %d", l)
+	}
+	return nil
+}
+
+// RemoteOriginLayout is selected once by origin snapshot preparation.
+type RemoteOriginLayout struct {
+	StorageLayout RemoteDataLayout `json:"storage_layout"`
+}
+
 // RemoteBinding pins the originating intent; it grants no launch authority.
 type RemoteBinding struct {
-	OriginRootID string   `json:"origin_root_id"`
-	IntentSHA256 string   `json:"intent_sha256"`
-	InputSHA256  string   `json:"input_sha256,omitempty"`
-	OutputPaths  []string `json:"output_paths,omitempty"`
+	StorageLayout RemoteDataLayout `json:"storage_layout,omitempty"`
+	OriginRootID  string           `json:"origin_root_id"`
+	IntentSHA256  string           `json:"intent_sha256"`
+	InputSHA256   string           `json:"input_sha256,omitempty"`
+	OutputPaths   []string         `json:"output_paths,omitempty"`
 }
 
 // Clone returns an independently owned immutable binding value.
@@ -28,6 +50,9 @@ func (b *RemoteBinding) Clone() *RemoteBinding {
 func validateRemoteBinding(b *RemoteBinding) error {
 	if b == nil {
 		return nil
+	}
+	if err := b.StorageLayout.Validate(); err != nil {
+		return err
 	}
 	if err := ValidateRootID(b.OriginRootID); err != nil {
 		return err

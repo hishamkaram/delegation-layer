@@ -27,7 +27,7 @@ exact-session continuation.
 | Exact-session continuation | Follow up in the recorded provider conversation. | Available | [Continuation](skills/agent-integration/references/continuation.md) |
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
-| Remote tasks over SSH | Run on a prepared destination, reconnect to the same task, and transfer explicitly selected files. | Available | [Remote workflow](docs/remote-delegation.md) |
+| Remote tasks over SSH | Reconnect to the same task, inspect bounded logs, transfer selected files, and explicitly retire retained bytes. | Available | [Remote workflow](docs/remote-delegation.md) |
 | Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
 | Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
 
@@ -67,8 +67,8 @@ For a manual CLI task, use the packaged
 For another machine, follow the [remote workflow](docs/remote-delegation.md)
 to prepare the destination, verify SSH trust and choose a prepared workspace or
 explicit file snapshot. The destination owns supervision and outcomes; a lost
-connection does not authorize another launch. Remote continuation, logs and
-offline recheck are not exposed in the current remote workflow.
+connection does not authorize another launch. Remote continuation and offline
+recheck are not exposed in the current remote workflow.
 
 For recurring work, follow the [scheduler walkthrough](docs/getting-started.md#recurring-tasks)
 to start `delegate scheduler serve` in your own terminal or tmux pane, even

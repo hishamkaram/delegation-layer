@@ -125,8 +125,11 @@ Remote tasks:
   dispatch --device ALIAS --provider ID --brief FILE (--remote-cwd ABS | --input-manifest FILE)
   status|collect|cancel|events|reply|steer remote:ID --json
   collect remote:ID --out ABS --json
+  logs remote:ID [--stream stdout|stderr --offset N --limit N --cursor CURSOR] --json
   remote list [--after CURSOR] --json
   remote reconcile remote:ID --json
+  remote usage remote:ID [--scope origin|destination|both] --json
+  remote retire remote:ID [--scope origin|destination|both] [--dry-run | --apply] --json
   supervisor ensure-owner --json
 
 Interactive tasks:

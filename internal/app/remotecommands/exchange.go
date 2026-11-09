@@ -3,6 +3,7 @@ package remotecommands
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/remote"
 	"github.com/hishamkaram/delegation-layer/internal/sshconfig"
@@ -31,6 +32,13 @@ func (e sshExchange) Call(ctx context.Context, request remote.Request) (response
 	}
 	if response, err = frame.ReadResponse(); err != nil {
 		return response, err
+	}
+	for _, d := range client.Diagnostics() {
+		diagnostic := d.Code
+		if d.Count > 0 {
+			diagnostic = fmt.Sprintf("%s:%d", d.Code, d.Count)
+		}
+		response.Diagnostics = append(response.Diagnostics, diagnostic)
 	}
 	response.Identity.Host = e.connection.HostName
 	response.Identity.Port = e.connection.Port

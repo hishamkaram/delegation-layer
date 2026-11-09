@@ -30,6 +30,13 @@ connection failure is not destination evidence.
 The [remote workflow](remote-delegation.md#observe-reconnect-and-collect)
 owns remote handles, uncertainty, supported controls and transfer behavior.
 
+Remote log commands add `logs.streams` metadata or an explicitly requested
+`logs.range` with `logs.data_base64`; these are observations, not task outcomes.
+`remote usage` and `remote retire` return per-side `usage` or `retirement` maps.
+With `--scope both`, one side can report progress while the other fails; preserve
+both reports and the error. Device probes add derived `stages` with state, code
+and next action, without promoting static preparation to authentication proof.
+
 ## Checkpoint response
 
 See the [checkpoint response contract](../skills/agent-integration/references/workspaces.md#checkpoint-response)

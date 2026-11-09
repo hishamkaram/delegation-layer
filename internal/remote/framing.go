@@ -161,7 +161,7 @@ func requestDataLength(request Request) (int64, error) {
 			return request.Transfer.Length, nil
 		}
 		return 0, nil
-	case Hello, Prepare, Status, Collect, Cancel, Events, Reply, Steer, StageCommit, Download:
+	case Hello, Prepare, Status, Collect, Cancel, Events, Reply, Steer, StageCommit, Download, Usage, Retire:
 		return 0, nil
 	}
 	return 0, ErrProtocol

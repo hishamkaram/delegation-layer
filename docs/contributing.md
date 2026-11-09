@@ -588,10 +588,17 @@ scenarios solely for prose.
 
 `make acceptance-remote` builds a candidate CLI/runner from this checkout and
 executes them in place through an isolated Docker SSH daemon. It exercises the
-production Pi adapter with a finite protocol fixture, input/output transfer,
-disconnection, cancellation and expiry, and verifies owned task closure before
+production Pi adapter with a finite protocol fixture, default SSH configuration,
+input/output transfer, bounded live/sealed logs, organized usage and explicit
+retirement, disconnection, cancellation and expiry. It verifies owned task closure before
 container cleanup. Docker and access to distro packages for the owned test image
 are required. The driver reports remaining resources on cleanup failure.
+
+The full-change `Remote SSH acceptance (ubuntu-24.04)` CI job installs the pinned
+Go tools and supervisor, then runs `make acceptance-remote-prepared`. That
+installer-free target retains the normal toolchain guard. Download tokens are
+confined to installer steps; the proof runs without them. CI uploads only the
+bounded receipt and control evidence, excluding fixture keys and raw log bytes.
 
 This is container SSH/lifecycle evidence. It does not establish native macOS,
 logind logout-policy behavior, or a real provider account. Those require prepared

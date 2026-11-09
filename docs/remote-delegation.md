@@ -39,6 +39,14 @@ Preflight reports the resolved provider executable when static preparation
 identifies it. The destination's SSH environment selects that installation.
 Use only hosts and provider contexts validated for the intended workload.
 
+`devices probe` reports separate configuration, connectivity, trust,
+authentication, endpoint, root, resident and provider-preparation stages.
+Stages remain unknown or skipped when earlier evidence cannot establish them.
+Without both `--provider` and `--remote-cwd`, provider preparation is skipped.
+Provider authentication always remains unknown: static preparation does not
+execute an authenticated provider task. Diagnostics contain codes, source
+locations and counts; they do not contain forwarded environment values.
+
 ## SSH support
 
 | Setting | Behavior |
@@ -48,6 +56,9 @@ Use only hosts and provider contexts validated for the intended workload.
 | Include relative paths | User `~/.ssh`, system `/etc/ssh`; depth 16, 128 files, 4 MiB |
 | Hostname, user, port, identities, agent, known-host files/alias | Supported bounded subset; `IdentityFile` is additive |
 | Authentication | Supported file keys or Unix agent; encrypted file keys need an agent |
+| `PubkeyAuthentication`, `PreferredAuthentications` | Honor key-authentication selection; refuse before key/agent access if it excludes public-key authentication |
+| `GSSAPIAuthentication` | Accept configuration; key/agent authentication remains available, with an explicit diagnostic when selected GSSAPI cannot be used |
+| `SendEnv` | Ordered additive patterns and `-pattern` removals select from one captured invocation environment; send before remote exec |
 | Unknown key | Explicit fingerprint enrollment required |
 | Changed/revoked key | Refused |
 | `Match`, jump/proxy routing, executable helpers, canonicalization | Explicit unsupported-setting errors |
@@ -64,9 +75,13 @@ This is not complete OpenSSH configuration compatibility. A stock configuration
 containing an unsupported setting can be refused; diagnostics identify its
 source. No fallback to an external SSH/SCP/SFTP command occurs. No agent
 forwarding or credential synchronization occurs.
-On the tested stock Ubuntu 24.04 origin, system `Host *` settings include
-unsupported `SendEnv` and `GSSAPIAuthentication`; `--ssh-config` is required.
-Use an explicit supported file on any origin with those system settings.
+Stock Ubuntu `SendEnv LANG LC_*` and `GSSAPIAuthentication yes` settings do not
+require `--ssh-config` for key/agent connections. Full Kerberos authentication
+is not implemented. An authentication policy excluding public keys fails
+explicitly; Delegate never silently switches to password or interactive login.
+The remote SSH server may decline selected environment requests; this produces
+a count diagnostic and does not by itself fail the connection. Selection is
+limited to 128 variables, 32 KiB per entry and 256 KiB total before dialing.
 
 After verifying a host fingerprint independently:
 
@@ -137,11 +152,12 @@ delegate collect remote:ID --watch 30s --out /absolute/downloads --json
 delegate cancel remote:ID --json
 delegate remote reconcile remote:ID --json
 delegate remote list --json
+delegate logs remote:ID --json
 ```
 
 Clarification replies and steering use the existing commands with that handle
 and their original message IDs. Support remains provider-capability dependent.
-Remote continuation, logs and offline recheck are not exposed in v1. Teams,
+Remote continuation and offline recheck are not exposed. Teams,
 schedules and local-workspace options do not implicitly target remote machines.
 
 Transient connection failures receive at most five total attempts, with 1, 2, 4
@@ -193,23 +209,81 @@ directories are task-specific siblings of the root and use rooted component
 access. These checks do not protect against malicious same-user replacement
 and restoration within one operation; the user already owns the stored state.
 
-## Retention
+## Bounded log snapshots
+
+`logs remote:ID --json` returns metadata for stdout and stderr without raw bytes
+or destination absolute paths. Explicitly select a stream to read a snapshot:
+
+```sh
+delegate logs remote:ID --stream stdout --offset 0 --limit 65536 --json
+delegate logs remote:ID --stream stdout --cursor SAVED_CURSOR --limit 65536 --json
+```
+
+The limit defaults to 65,536 bytes and cannot exceed it. `logs.data_base64`
+preserves arbitrary bytes; `logs.range` reports the offset, returned length,
+observed file size, seal state, range checksum and next opaque cursor. Empty
+EOF ranges are valid. A live EOF is only an observation; a later snapshot may
+contain appended bytes. There is no follow mode.
+
+A cursor binds the destination root, task, stream and native file object.
+Foreign cursors, replacement and truncation fail explicitly. An explicit offset
+must agree with a supplied cursor. Sealed whole-stream checksums are expected
+manifest metadata; range checksums attest only the returned bytes. Seal and
+complete flags do not certify a full reread of the file. Full task/result
+evidence keeps its existing validation. Log snapshots neither cache raw bytes
+in origin history nor acquire admission, capture or execution authority.
+Older destinations lacking the log capability are refused before a log request.
+
+## Storage and explicit retirement
 
 The origin reference owns its retained snapshot; the destination task owns its
 staged workspace and captured outputs. These are retained history, with no
-automatic garbage collection in v1. A snapshot can retain both staging bytes
+automatic garbage collection. A snapshot can retain both staging bytes
 and a materialized workspace, so budget disk space for both copies per host.
 
-Manual retirement is an operator action after canonical task closure and
-completed capture, with no concurrent transfers or further use of that handle.
-The task-specific byte directories sit beneath
-`.<root-name>.remote-snapshots/<root-id>/<task-id>`,
-`.<root-name>.remote-inputs/<root-id>/<task-id>`, and
-`.<root-name>.remote-outputs/<root-id>/<task-id>` beside the corresponding root.
-Retire only the selected task's bytes and matching `remote-refs`, `remote-inputs`
-or `remote-captures` journal beneath that root; retain ordinary task/result
-evidence and unrelated tasks. Removing these bytes forfeits further transfer
-or recovery from that reference. No cleanup command is implied by task expiry.
+New byte families use the recorded layout
+`.<root-name>.remote-data/<root-id>/<task-id>/{snapshot,inputs,outputs}` beside
+the corresponding state root. Origin and destination select their layouts
+independently; destination layout is negotiated before its cwd and intent are
+fixed. Existing legacy snapshot/input/output directories remain in place and
+are read through their recorded layout. No migration is inferred from path
+existence.
+
+```sh
+delegate remote usage remote:ID --scope both --json
+delegate remote retire remote:ID --scope both --dry-run --json
+delegate remote retire remote:ID --scope both --apply --json
+```
+
+`--scope` accepts `origin`, `destination` or `both` (the default). Usage is
+passive and reports observation time, layout, family paths, bytes, entries and
+availability. Its walk stops after 10,000 entries per family and marks truncated
+observations. Preview is the default for `retire`; `--dry-run` makes it explicit.
+It writes no records and never probes execution locks. Preview is advisory;
+`--apply` rechecks all requirements while holding the role's exclusive byte
+lease. A busy lease or transient-only fault returns exit 3; a concrete fault
+remains exit 1, including when joined with a transient error.
+
+Destination retirement requires canonical terminal closure, released execution
+and completed declared-output capture. Origin retirement requires a sent or
+definitely rejected reference. Newly admitted Delegate tasks whose cwd is inside
+a managed family register an immutable dependency before task creation;
+retirement also waits for those consumers' canonical closure and capture.
+Uncreated, missing or unreadable consumer evidence blocks deletion. Legacy
+destination input workspaces report `legacy_inputs_consumers_unknown`; there
+is no force option. These checks cover admitted Delegate consumers, not arbitrary
+shell processes or tasks admitted by older installations.
+
+Apply records a durable tombstone before deleting only the selected byte
+families, then records completion. Retries preserve the tombstone and repeat
+incomplete deletion safely. Failure leaves the tombstone in place; correct the
+reported filesystem problem and repeat the same operation. No new upload or
+managed consumer can adopt retired bytes. Origin references, destination task
+records, capture receipts, raw logs, result payloads, downloaded files and a
+user-prepared cwd remain intact. Status, collect, reconciliation and bounded
+logs remain available; removed captured outputs report `retired` without a new
+download. No cleanup command is implied by task expiry. Older destinations
+lacking retirement support are refused; origin-only scope remains independent.
 
 Selector validation rejects case collisions but does not normalize Unicode.
 Different Unicode spellings that collide on the destination filesystem fail

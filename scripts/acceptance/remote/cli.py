@@ -32,6 +32,7 @@ from scripts.acceptance.private_cli.installation import build_candidate_pair
 
 
 REPOSITORY = Path(__file__).resolve().parents[3]
+DOCKER_CONTEXT = Path(__file__).resolve().parent
 IMAGE = "delegation-layer-acceptance:remote-ssh-v1"
 PROVIDER = "pi:json"
 REMOTE_ROOT = "/state"
@@ -48,6 +49,8 @@ if "--help" in sys.argv:
 if "--list-models" in sys.argv:
  print("provider model context max-out thinking images\nfixture bounded 128000 8192 enabled enabled");sys.exit(0)
 request=json.loads(sys.stdin.read())
+if os.environ.get("LANG")!=request.get("expected_lang"):
+ raise RuntimeError("selected locale did not reach the finite provider")
 task=request.get("task_id")
 if not isinstance(task,str) or len(task)!=32 or any(c not in "0123456789abcdef" for c in task):
  raise RuntimeError("fixture task identity required")
@@ -58,7 +61,14 @@ with (receipts/(uuid.uuid4().hex+".json")).open("x") as receipt:
 print(json.dumps({"type":"session","id":str(uuid.uuid4())}),flush=True)
 print(json.dumps({"type":"agent_start"}),flush=True)
 print(json.dumps({"type":"turn_start"}),flush=True)
+if request.get("gate") is True:
+ deadline=time.monotonic()+25
+ while not Path("/remote/snapshot-release").exists() and time.monotonic()<deadline:
+  time.sleep(0.05)
+ if not Path("/remote/snapshot-release").exists():raise RuntimeError("owned snapshot gate timed out")
 time.sleep(min(max(float(request.get("delay",0)),0),45))
+if request.get("extra_file") is True:
+ Path("provider-created.txt").write_text("created by finite provider\n")
 answer=str(request.get("answer","remote SSH fixture completed"))
 message={"role":"assistant","content":[{"type":"text","text":answer}],"stopReason":"stop"}
 for event in ({"type":"message_start","message":{"role":"assistant","content":[]}},
@@ -270,30 +280,24 @@ class Exercise:
         )
 
     def delegate(
-        self, *args: str, allow: tuple[int, ...] = (0,), timeout: float = 60
+        self, *args: str, allow: tuple[int, ...] = (0,), timeout: float = 60,
+        record: bool = True,
     ) -> dict[str, object]:
-        selected = list(args)
-        if args[0] in {"devices", "dispatch"}:
-            selected.extend(
-                [
-                    "--ssh-config",
-                    str(self.directory / "origin-home" / ".ssh" / "config"),
-                ]
-            )
         result = command(
             [
                 str(self.candidate / "delegate"),
                 "--root",
                 str(self.directory / "origin-state"),
-                *selected,
+                *args,
                 "--json",
             ],
             self.origin_environment(),
             timeout=timeout,
         )
         response = decode_object(result.output, "origin response")
-        self.control_count += 1
-        write_json(self.directory / f"control-{self.control_count:03d}.json", response)
+        if record:
+            self.control_count += 1
+            write_json(self.directory / f"control-{self.control_count:03d}.json", response)
         if result.exit_code not in allow:
             raise AcceptanceError(
                 f"Delegate {args[0]} exit {result.exit_code}: {response.get('error', '')}"
@@ -305,6 +309,7 @@ class Exercise:
             **self.environment,
             "HOME": str(self.directory / "origin-home"),
             "XDG_CONFIG_HOME": str(self.directory / "origin-home" / ".config"),
+            "LANG": "C.UTF-8",
         }
 
     def prepare(self) -> None:
@@ -341,7 +346,7 @@ class Exercise:
             "AuthorizedKeysFile /remote/client.pub\nStrictModes no\nUsePAM no\n"
             "PermitRootLogin prohibit-password\nPasswordAuthentication no\n"
             "KbdInteractiveAuthentication no\nPubkeyAuthentication yes\n"
-            f"SetEnv PATH={path} HOME=/root\nLogLevel ERROR\n"
+            f"SetEnv PATH={path} HOME=/root\nAcceptEnv LANG LC_*\nLogLevel ERROR\n"
         )
         (self.directory / "sshd_config").write_text(config)
         name = "delegate-remote-" + secrets.token_hex(8)
@@ -514,12 +519,14 @@ class Exercise:
         delay: int,
         budget: str,
         snapshot: bool = False,
+        gate: bool = False,
         ack_failure: Literal["disconnect", "endpoint"] | None = None,
     ) -> str:
         task = secrets.token_hex(16)
         brief = self.directory / f"{name}-brief.json"
         write_json(
-            brief, {"task_id": task, "delay": delay, "answer": "remote SSH " + name}
+            brief, {"task_id": task, "delay": delay, "answer": "remote SSH " + name,
+                    "gate": gate, "extra_file": snapshot, "expected_lang": "C.UTF-8"}
         )
         executable = str(self.candidate / "delegate")
         if ack_failure is not None:
@@ -598,12 +605,19 @@ class Exercise:
         raise AcceptanceError("remote task did not reach a terminal observation")
 
     def exercise(self) -> None:
-        task = self.dispatch("snapshot", delay=4, budget="30s", snapshot=True)
+        task = self.dispatch("snapshot", delay=0, budget="30s", snapshot=True, gate=True)
         (self.directory / "input-source" / "selected.txt").write_text(
             "changed after admission\n"
         )
+        # The fixture keeps the provider active until live reads finish; a slow
+        # caller cannot accidentally turn this into a sealed-only log check.
+        try:
+            self.await_fixture_invocation(task)
+            self.verify_logs(task, sealed=False)
+        finally:
+            (self.directory / "snapshot-release").write_text("release\n")
         # The dispatch control process and SSH channel have both exited. The
-        # remote provider's delayed result must still complete independently.
+        # remote provider still completes independently after the owned gate.
         envelope = self.await_terminal(task)
         if envelope.get("publication") != "committed":
             raise AcceptanceError("snapshot task did not commit")
@@ -619,6 +633,8 @@ class Exercise:
                 "committed result did not fulfill the synthetic brief"
             )
         self.delegate("remote", "reconcile", "remote:" + task)
+        sealed_log_identity = self.verify_logs(task, sealed=True)
+        self.verify_retirement(task, sealed_log_identity)
         self.exercise_acknowledgments()
         canceled = self.dispatch("cancel", delay=30, budget="35s")
         self.await_fixture_invocation(canceled)
@@ -641,6 +657,194 @@ class Exercise:
             )
         self.exercise_expiry()
         self.verify_closure()
+
+    def verify_logs(self, task: str, *, sealed: bool) -> tuple[int, str]:
+        handle = "remote:" + task
+        metadata = object_value(self.delegate("logs", handle).get("logs"), "log metadata")
+        streams = metadata.get("streams")
+        if not isinstance(streams, list):
+            raise AcceptanceError("log metadata has no streams")
+        stdout = next((object_value(stream, "stream") for stream in streams
+                       if isinstance(stream, dict) and stream.get("stream") == "stdout"), None)
+        if stdout is None or stdout.get("available") is not True or stdout.get("sealed") is not sealed:
+            raise AcceptanceError("stdout metadata did not preserve availability and seal state")
+        first, first_range = self.read_log_range(handle, "--offset", "0", "--limit", "19")
+        if len(first) != 19 or first_range.get("offset") != 0:
+            raise AcceptanceError("initial log range did not preserve the requested bound")
+        cursor = first_range.get("cursor")
+        if not isinstance(cursor, str) or not cursor:
+            raise AcceptanceError("log range has no resumable cursor")
+        rest, rest_range = self.read_log_range(handle, "--cursor", cursor, "--limit", "65536")
+        if rest_range.get("offset") != len(first):
+            raise AcceptanceError("log cursor did not resume after the previous range")
+        if first_range.get("sealed") is not sealed or rest_range.get("sealed") is not sealed:
+            raise AcceptanceError("log range seal state differs from the controlled fixture")
+        combined = first + rest
+        if sealed:
+            expected = decode_object(self.inside(
+                "python3", "-c",
+                "from pathlib import Path;import hashlib,json,sys;"
+                "b=(Path('/state/tasks')/sys.argv[1]/'raw/stdout').read_bytes();"
+                "print(json.dumps({'length':len(b),'sha256':hashlib.sha256(b).hexdigest()}))",
+                task), "owned raw log identity")
+            if expected != {"length": len(combined), "sha256": hashlib.sha256(combined).hexdigest()}:
+                raise AcceptanceError("remote log ranges differ from the owned destination bytes")
+            if (stdout.get("size") != expected["length"]
+                    or stdout.get("sha256") != expected["sha256"]
+                    or first_range.get("whole_sha256") != expected["sha256"]
+                    or rest_range.get("whole_sha256") != expected["sha256"]):
+                raise AcceptanceError("sealed log metadata differs from its retained evidence")
+            if b"remote SSH snapshot" not in combined:
+                raise AcceptanceError("sealed log does not belong to the requested fixture task")
+            cursor = rest_range.get("cursor")
+            if not isinstance(cursor, str) or not cursor:
+                raise AcceptanceError("final log range has no cursor")
+            eof, _ = self.read_log_range(handle, "--cursor", cursor, "--limit", "65536")
+            if eof:
+                raise AcceptanceError("sealed log cursor did not stop at EOF")
+        elif not combined or stdout.get("sha256") or first_range.get("whole_sha256") or rest_range.get("whole_sha256"):
+            raise AcceptanceError("live log was empty or claimed a whole-file checksum")
+        identity = len(combined), hashlib.sha256(combined).hexdigest()
+        self.scenarios.append({"name": "logs-sealed" if sealed else "logs-live",
+                               "task_id": task, "length": identity[0],
+                               "range_sha256": identity[1]})
+        return identity
+
+    def read_log_range(self, handle: str, *args: str) -> tuple[bytes, dict[str, object]]:
+        response = self.delegate("logs", handle, "--stream", "stdout", *args, record=False)
+        logs = object_value(response.get("logs"), "log range response")
+        chunk = object_value(logs.get("range"), "log range")
+        encoded = logs.get("data_base64")
+        if not isinstance(encoded, str):
+            raise AcceptanceError("log range bytes are not encoded")
+        data = base64.b64decode(encoded, validate=True)
+        if chunk.get("length") != len(data) or len(data) > 65536:
+            raise AcceptanceError("log range length is not bounded or differs from its bytes")
+        if data and chunk.get("range_sha256") != hashlib.sha256(data).hexdigest():
+            raise AcceptanceError("log range checksum differs from its bytes")
+        return data, chunk
+
+    def verify_retirement(self, task: str, sealed_log_identity: tuple[int, str]) -> None:
+        handle = "remote:" + task
+        before = object_value(self.delegate("remote", "usage", handle).get("usage"), "usage report")
+        paths: dict[str, list[str]] = {}
+        for role, expected_families in (("origin", {"snapshot"}),
+                                        ("destination", {"inputs", "outputs"})):
+            report = object_value(before.get(role), "usage side")
+            if report.get("role") != role or report.get("layout_version") != 2 or report.get("retired") is not False:
+                raise AcceptanceError("new task usage did not select the organized byte layout")
+            families = report.get("families")
+            if not isinstance(families, list):
+                raise AcceptanceError("usage report has no families")
+            seen: set[str] = set()
+            paths[role] = []
+            for item in families:
+                family = object_value(item, "usage family")
+                name, path = family.get("family"), family.get("path")
+                size, entries = family.get("bytes"), family.get("entries")
+                if not isinstance(name, str) or not isinstance(path, str):
+                    raise AcceptanceError("usage family has no name or path")
+                if name not in expected_families or name in seen:
+                    raise AcceptanceError("usage returned unexpected or duplicate byte families")
+                seen.add(name)
+                selected = Path(path)
+                if (not selected.is_absolute() or len(selected.parts) < 5
+                        or selected.name != name or selected.parent.name != task
+                        or not selected.parents[2].name.endswith(".remote-data")):
+                    raise AcceptanceError("usage path is outside the task-organized data tree")
+                minimum = len(b"declared SSH input\n")
+                if name == "inputs":
+                    minimum += len(b"created by finite provider\n")
+                    self.inside("test", "-f", str(selected / "workspace" / "provider-created.txt"))
+                if (not isinstance(size, int) or isinstance(size, bool) or size < minimum
+                        or not isinstance(entries, int) or isinstance(entries, bool) or entries < 1
+                        or family.get("truncated") is True or family.get("availability") != "available"):
+                    raise AcceptanceError("usage omitted known fixture bytes or returned an incomplete measurement")
+                paths[role].append(path)
+            if seen != expected_families:
+                raise AcceptanceError("usage omitted an owned byte family")
+
+        deadline = time.monotonic() + 20
+        while True:
+            preview = object_value(self.delegate("remote", "retire", handle, "--scope", "both", "--dry-run").get("retirement"), "retirement preview")
+            pending = False
+            for role in ("origin", "destination"):
+                side = object_value(preview.get(role), "retirement side")
+                if (side.get("role") != role or side.get("layout_version") != 2
+                        or side.get("applied") is not False):
+                    raise AcceptanceError("retirement preview deleted bytes")
+                if side.get("retirable") is not True:
+                    blockers = side.get("blockers")
+                    if (not isinstance(blockers, list) or not blockers
+                            or any(blocker not in {"task_not_closed", "execution_owned", "capture_pending"}
+                                   for blocker in blockers)):
+                        raise AcceptanceError("fixture retirement has an unexpected blocker")
+                    pending = True
+                elif side.get("blockers") != []:
+                    raise AcceptanceError("retirable fixture retained contradictory blockers")
+            if not pending:
+                break
+            if time.monotonic() >= deadline:
+                raise AcceptanceError("completed fixture did not become eligible for retirement")
+            time.sleep(0.1)
+
+        for path in paths["origin"]:
+            if not Path(path).is_relative_to(self.directory) or not Path(path).is_dir():
+                raise AcceptanceError("preview changed the owned origin snapshot")
+        for path in paths["destination"]:
+            self.inside("test", "-d", path)
+        applied = object_value(self.delegate("remote", "retire", handle, "--scope", "both", "--apply").get("retirement"), "retirement result")
+        repeated = object_value(self.delegate("remote", "retire", handle, "--scope", "both", "--apply").get("retirement"), "repeated retirement")
+        after = object_value(self.delegate("remote", "usage", handle).get("usage"), "retired usage")
+        for role in ("origin", "destination"):
+            if object_value(applied.get(role), "applied retirement").get("applied") is not True:
+                raise AcceptanceError("retirement did not complete a requested side")
+            if object_value(repeated.get(role), "idempotent retirement").get("already_done") is not True:
+                raise AcceptanceError("repeated retirement did not preserve idempotence")
+            usage = object_value(after.get(role), "retired usage side")
+            if usage.get("retired") is not True:
+                raise AcceptanceError("retired bytes were reported as retained")
+            families = usage.get("families")
+            if not isinstance(families, list):
+                raise AcceptanceError("retired usage omitted its byte families")
+            retired_paths = set()
+            for item in families:
+                family = object_value(item, "retired family")
+                path = family.get("path")
+                if not isinstance(path, str) or path in retired_paths:
+                    raise AcceptanceError("retired usage returned missing or duplicate paths")
+                retired_paths.add(path)
+                if (family.get("availability") != "retired" or family.get("bytes") != 0
+                        or family.get("entries") != 0 or family.get("truncated") is True):
+                    raise AcceptanceError("removed bytes were not distinguished as retired")
+            if retired_paths != set(paths[role]):
+                raise AcceptanceError("removed bytes were not distinguished as retired")
+        for path in paths["origin"]:
+            if Path(path).exists():
+                raise AcceptanceError("origin byte family remains after completed retirement")
+        for path in paths["destination"]:
+            self.inside("test", "!", "-e", path)
+        for command_name in ("status", "collect"):
+            if remote_envelope(self.delegate(command_name, handle)).get("publication") != "committed":
+                raise AcceptanceError("retirement changed authoritative task history")
+        reconciled = self.delegate("remote", "reconcile", handle)
+        remote = object_value(reconciled.get("remote"), "retired reconciliation")
+        if remote.get("existing") is not True or remote.get("task_record") != "created":
+            raise AcceptanceError("retired accepted task became uncertain on reconciliation")
+        if self.verify_logs(task, sealed=True) != sealed_log_identity:
+            raise AcceptanceError("retirement changed retained raw log evidence")
+        output = self.directory / "retired-downloads"
+        collection = self.delegate("collect", handle, "--out", str(output))
+        if (output / task / "result" / "result.txt").read_text() != "remote SSH snapshot":
+            raise AcceptanceError("retirement removed sealed result evidence")
+        downloads = collection.get("downloads")
+        if not isinstance(downloads, list) or not any(
+                object_value(item, "download report").get("availability") == "retired"
+                for item in downloads):
+            raise AcceptanceError("retired declared output was not reported as unavailable")
+        self.scenarios.append({"name": "organized-storage-retirement", "task_id": task,
+                               "layout_version": 2, "both_sides_removed": True,
+                               "history_preserved": True})
 
     def exercise_acknowledgments(self) -> None:
         recovered = self.dispatch(
@@ -742,7 +946,12 @@ class Exercise:
         try:
             self.capture_control_evidence("before-cleanup")
         finally:
-            self._cleanup_resources()
+            try:
+                self._cleanup_resources()
+            finally:
+                if self.container_removed:
+                    for name in ("client", "server"):
+                        (self.directory / name).unlink(missing_ok=True)
 
     def _cleanup_resources(self) -> None:
         if not self.container:
@@ -822,8 +1031,6 @@ class Exercise:
             self.docker("stop", "--time", "10", self.container)
             self.docker("rm", self.container)
             self.container_removed = True
-            for name in ("client", "server"):
-                (self.directory / name).unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -850,27 +1057,22 @@ def main() -> int:
     args = parser.parse_args()
     candidate = args.candidate.resolve()
     environment = dict(os.environ)
-    if args.build:
-        candidate.mkdir(mode=0o700, parents=True)
-        build_candidate_pair(REPOSITORY, candidate)
-    checked(
-        [
-            "docker",
-            "build",
-            "-t",
-            IMAGE,
-            str(REPOSITORY / "scripts" / "remote-acceptance"),
-        ],
-        environment,
-        timeout=300,
-    )
     args.output.resolve().parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     exercise = Exercise(
         candidate, args.output.resolve(), args.supervisor.resolve(), environment
     )
     failure = ""
     cleanup_failure = ""
+    interrupted = False
     try:
+        if args.build:
+            candidate.mkdir(mode=0o700, parents=True)
+            build_candidate_pair(REPOSITORY, candidate)
+        checked(
+            ["docker", "build", "-t", IMAGE, str(DOCKER_CONTEXT)],
+            environment,
+            timeout=300,
+        )
         exercise.prepare()
         if args.expiry_only:
             exercise.exercise_expiry()
@@ -880,11 +1082,17 @@ def main() -> int:
             exercise.verify_closure()
         else:
             exercise.exercise()
+    except KeyboardInterrupt:
+        interrupted = True
+        failure = "acceptance interrupted"
     except Exception as error:
         failure = str(error)
     finally:
         try:
             exercise.cleanup()
+        except KeyboardInterrupt:
+            interrupted = True
+            cleanup_failure = "cleanup interrupted"
         except Exception as error:
             cleanup_failure = str(error)
     receipt = {
@@ -903,10 +1111,15 @@ def main() -> int:
         "unverified": ["real provider account", "native macOS", "logind logout policy"],
     }
     receipt_path = args.output.resolve() / "receipt.json"
-    if args.output.is_dir():
-        write_json(receipt_path, receipt)
+    args.output.resolve().mkdir(mode=0o700, parents=True, exist_ok=True)
+    write_json(receipt_path, receipt)
     print(json.dumps(receipt, sort_keys=True))
-    return 1 if failure or cleanup_failure or exercise.evidence_failures else 0
+    if interrupted:
+        return 130
+    return 1 if (
+        failure or cleanup_failure or exercise.evidence_failures
+        or not exercise.closure_verified or not exercise.container_removed
+    ) else 0
 
 
 if __name__ == "__main__":

@@ -26,7 +26,11 @@ origin intent and connection retry decisions; `internal/sshconfig` and
 `internal/app/remotecommands` owns origin/destination command workflows through
 narrow frontend ports. `internal/remote/payload` owns frozen input snapshots,
 staging, output capture and transfer receipts; `internal/remotefiles` validates
-declared bytes. Post-closure lifecycle consumers call payload capture directly;
+declared bytes. `internal/remotedata` owns recorded byte-family paths and rooted
+filesystem access. Taskdir byte leases fence upload/consumer registration against
+retirement; immutable use records refer to consumers' canonical task and closure
+authorities. Passive usage, previews and log snapshots acquire no execution
+authority. Post-closure lifecycle consumers call payload capture directly;
 collection never initiates capture. `internal/taskdir` retains all control-record
 durability. Destination task/outcome records remain authoritative; no local
 cache or transfer receipt grants another launch or renews the execution budget.

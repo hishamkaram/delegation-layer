@@ -254,7 +254,7 @@ func validateExchangeResponse(request Request, response Response) (Response, err
 
 // Is preserves admission uncertainty through the machine-readable failure code.
 func (e *OperationError) Is(target error) bool {
-	return target == ErrAcceptanceUnknown && e.Code == "acceptance_unknown"
+	return (target == ErrAcceptanceUnknown && e.Code == "acceptance_unknown") || (target == task.ErrLockBusy && e.Code == "storage_busy")
 }
 
 // ResourceGuardCapability names support for invocation-local admission overrides.

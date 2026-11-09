@@ -52,11 +52,13 @@ const (
 	StageChunk  Operation = "stage-chunk"
 	StageCommit Operation = "stage-commit"
 	Download    Operation = "download"
+	Usage       Operation = "usage"
+	Retire      Operation = "retire"
 )
 
 func (o Operation) Validate() error {
 	switch o {
-	case Hello, Prepare, Admit, Reconcile, Status, Collect, Cancel, Events, Reply, Steer, StageBegin, StageChunk, StageCommit, Download:
+	case Hello, Prepare, Admit, Reconcile, Status, Collect, Cancel, Events, Reply, Steer, StageBegin, StageChunk, StageCommit, Download, Usage, Retire:
 		return nil
 	}
 	return fmt.Errorf("%w: unsupported operation %q", ErrProtocol, o)
@@ -102,23 +104,27 @@ type Descriptor struct {
 // Intent is immutable after persistence. Paths describe remote paths or labels,
 // never an implicit translation of an origin absolute path.
 type Intent struct {
-	InputSelectionSHA256 string          `json:"input_selection_sha256,omitempty"`
-	SSHConfig            string          `json:"ssh_config,omitempty"`
-	Version              int             `json:"version"`
-	OriginRootID         string          `json:"origin_root_id"`
-	TaskID               string          `json:"task_id"`
-	Device               string          `json:"device"`
-	Executable           string          `json:"executable"`
-	Destination          Identity        `json:"destination"`
-	Provider             string          `json:"provider"`
-	Config               task.TaskConfig `json:"config"`
-	RemoteCwd            string          `json:"remote_cwd"`
-	Brief                Descriptor      `json:"brief"`
-	InputSHA256          string          `json:"input_sha256,omitempty"`
-	OutputPaths          []string        `json:"output_paths,omitempty"`
+	StorageLayout        task.RemoteDataLayout `json:"storage_layout,omitempty"`
+	InputSelectionSHA256 string                `json:"input_selection_sha256,omitempty"`
+	SSHConfig            string                `json:"ssh_config,omitempty"`
+	Version              int                   `json:"version"`
+	OriginRootID         string                `json:"origin_root_id"`
+	TaskID               string                `json:"task_id"`
+	Device               string                `json:"device"`
+	Executable           string                `json:"executable"`
+	Destination          Identity              `json:"destination"`
+	Provider             string                `json:"provider"`
+	Config               task.TaskConfig       `json:"config"`
+	RemoteCwd            string                `json:"remote_cwd"`
+	Brief                Descriptor            `json:"brief"`
+	InputSHA256          string                `json:"input_sha256,omitempty"`
+	OutputPaths          []string              `json:"output_paths,omitempty"`
 }
 
 func (i Intent) Validate() error {
+	if err := i.StorageLayout.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrProtocol, err)
+	}
 	if i.SSHConfig != "" && !filepath.IsAbs(i.SSHConfig) {
 		return fmt.Errorf("%w: SSH config path must be absolute", ErrProtocol)
 	}
@@ -181,6 +187,7 @@ type Control struct {
 }
 
 type TransferRequest struct {
+	Cursor   string `json:"cursor,omitempty"`
 	Selector string `json:"selector"`
 	Offset   int64  `json:"offset"`
 	Length   int64  `json:"length"`
@@ -188,6 +195,8 @@ type TransferRequest struct {
 }
 
 type Request struct {
+	Apply          bool                           `json:"apply,omitempty"`
+	StorageLayout  task.RemoteDataLayout          `json:"storage_layout,omitempty"`
 	ResourceGuards *resourceadmission.GuardPolicy `json:"resource_guards,omitempty"`
 	BeforeWrite    func() error                   `json:"-"`
 	IntentSHA256   string                         `json:"intent_sha256,omitempty"`
@@ -214,6 +223,16 @@ func (r Request) Validate() error {
 	if err := r.Operation.Validate(); err != nil {
 		return err
 	}
+	if err := r.validateIdentityRecords(); err != nil {
+		return err
+	}
+	if err := r.validateObservation(); err != nil {
+		return err
+	}
+	return r.validateBindings()
+}
+
+func (r Request) validateIdentityRecords() error {
 	if r.TaskID != "" {
 		if err := task.ValidateTaskID(r.TaskID); err != nil {
 			return err
@@ -229,21 +248,45 @@ func (r Request) Validate() error {
 			return err
 		}
 	}
+	return nil
+}
 
+func (r Request) validateObservation() error {
 	if r.WatchNanos < 0 || r.WatchNanos > int64(DefaultOperationTimeout) {
 		return fmt.Errorf("%w: observation wait exceeds bound", ErrProtocol)
 	}
-	if r.Transfer != nil && (r.Transfer.Offset < 0 || r.Transfer.Length < 0) {
+	if r.Transfer == nil {
+		return nil
+	}
+	if r.Transfer.Offset < 0 || r.Transfer.Length < 0 {
 		return fmt.Errorf("%w: invalid transfer range", ErrProtocol)
 	}
-	return r.validateBindings()
+	if r.Transfer.Cursor != "" && (r.Operation != Download || !strings.HasPrefix(r.Transfer.Selector, "log:")) {
+		return fmt.Errorf("%w: cursor requires a log range", ErrProtocol)
+	}
+	return nil
 }
 
-func (r Request) validateBindings() error {
+func (r Request) validateMutationBindings() error {
+	if r.Apply && r.Operation != Retire {
+		return fmt.Errorf("%w: apply requires retirement", ErrProtocol)
+	}
+	if err := r.StorageLayout.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrProtocol, err)
+	}
+	if r.StorageLayout != task.RemoteDataLegacy && r.Operation != StageBegin && r.Operation != StageChunk && r.Operation != StageCommit {
+		return fmt.Errorf("%w: request storage layout requires staging", ErrProtocol)
+	}
 	if r.ResourceGuards != nil && r.Operation != Admit {
 		return fmt.Errorf("%w: resource guards require admission", ErrProtocol)
 	}
+	return nil
+}
 
+func (r Request) validateBindings() error {
+	if err := r.validateMutationBindings(); err != nil {
+		return err
+	}
 	if r.Intent != nil && r.TaskID != "" && r.Intent.TaskID != r.TaskID {
 		return ErrConflict
 	}
@@ -257,7 +300,6 @@ func (r Request) validateBindings() error {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -267,6 +309,7 @@ type Failure struct {
 }
 
 type TransferReceipt struct {
+	Range        *LogRange                 `json:"range,omitempty"`
 	Capture      *remotefiles.CapturedFile `json:"capture,omitempty"`
 	Provenance   *remotefiles.Provenance   `json:"provenance,omitempty"`
 	Availability string                    `json:"availability,omitempty"`
@@ -274,6 +317,38 @@ type TransferReceipt struct {
 	Descriptor   Descriptor                `json:"descriptor"`
 	Offset       int64                     `json:"offset"`
 	Complete     bool                      `json:"complete"`
+}
+
+const (
+	DataLayoutCapability = "remote-data-v2"
+	LogsCapability       = "remote-logs-v1"
+	RetirementCapability = "remote-retire-v1"
+)
+
+// LogRange describes a bounded observation, not a sealed file descriptor.
+type LogRange struct {
+	Stream       string `json:"stream"`
+	Offset       int64  `json:"offset"`
+	Length       int64  `json:"length"`
+	ObservedSize int64  `json:"observed_size"`
+	Sealed       bool   `json:"sealed"`
+	WholeSHA256  string `json:"whole_sha256,omitempty"`
+	RangeSHA256  string `json:"range_sha256,omitempty"`
+	Cursor       string `json:"cursor"`
+}
+
+type LogStream struct {
+	Stream    string `json:"stream"`
+	Available bool   `json:"available"`
+	Sealed    bool   `json:"sealed"`
+	Size      *int64 `json:"size,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
+}
+
+type LogReport struct {
+	Streams    []LogStream `json:"streams,omitempty"`
+	Range      *LogRange   `json:"range,omitempty"`
+	DataBase64 *string     `json:"data_base64,omitempty"`
 }
 
 // Response.Envelope is the bounded original Delegate response, validated at the
@@ -309,21 +384,64 @@ func (r Response) validateWire() error {
 	if r.Version != ProtocolVersion {
 		return fmt.Errorf("%w: unsupported response version", ErrProtocol)
 	}
-	if r.Identity.RootID != "" {
-		if err := task.ValidateRootID(r.Identity.RootID); err != nil {
+	if r.Transfer != nil {
+		if err := r.Transfer.validateLogRange(); err != nil {
 			return err
 		}
-		if !filepath.IsAbs(r.Identity.Root) {
-			return fmt.Errorf("%w: invalid root path", ErrProtocol)
-		}
-	} else if r.Failure == nil && len(r.Capabilities) == 0 {
-		return fmt.Errorf("%w: response has no root identity", ErrProtocol)
+	}
+	if err := r.validateWireRoot(); err != nil {
+		return err
 	}
 	envelope := bytes.TrimSpace(r.Envelope)
 	if len(envelope) > MaxControlBytes || (len(envelope) > 0 && (!json.Valid(envelope) || envelope[0] != '{')) {
 		return fmt.Errorf("%w: invalid Delegate envelope", ErrProtocol)
 	}
 	return nil
+}
+
+func (r Response) validateWireRoot() error {
+	if r.Identity.RootID == "" {
+		if r.Failure == nil && len(r.Capabilities) == 0 {
+			return fmt.Errorf("%w: response has no root identity", ErrProtocol)
+		}
+		return nil
+	}
+	if err := task.ValidateRootID(r.Identity.RootID); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(r.Identity.Root) {
+		return fmt.Errorf("%w: invalid root path", ErrProtocol)
+	}
+	return nil
+}
+
+func (receipt TransferReceipt) validateLogRange() error {
+	if receipt.Range == nil {
+		return nil
+	}
+	value := receipt.Range
+	if !value.validBounds(receipt.Length) {
+		return fmt.Errorf("%w: invalid log range", ErrProtocol)
+	}
+	if value.Sealed {
+		if err := task.ValidateSHA256(value.WholeSHA256); err != nil {
+			return fmt.Errorf("%w: sealed log identity", ErrProtocol)
+		}
+	} else if value.WholeSHA256 != "" {
+		return fmt.Errorf("%w: live log has sealed identity", ErrProtocol)
+	}
+	if value.Length > 0 {
+		if err := task.ValidateSHA256(value.RangeSHA256); err != nil {
+			return fmt.Errorf("%w: log range digest", ErrProtocol)
+		}
+	} else if value.RangeSHA256 != "" {
+		return fmt.Errorf("%w: empty log range digest", ErrProtocol)
+	}
+	return nil
+}
+
+func (value LogRange) validBounds(length int64) bool {
+	return (value.Stream == "stdout" || value.Stream == "stderr") && value.Offset >= 0 && value.Length >= 0 && value.Length <= MaxDataBytes && value.Length == length && value.ObservedSize >= value.Offset && value.Length <= value.ObservedSize-value.Offset && len(value.Cursor) > 0 && len(value.Cursor) <= 2048
 }
 
 func Handle(id string) string { return "remote:" + id }

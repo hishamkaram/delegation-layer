@@ -26,9 +26,10 @@ import (
 
 // Error classifies transport failure without exposing native authentication data.
 type Error struct {
-	Code        string
-	Fingerprint string
-	cause       error
+	Code              string
+	Fingerprint       string
+	GSSAPIUnavailable bool
+	cause             error
 }
 
 func (e *Error) Error() string {
@@ -53,6 +54,8 @@ func hostIdentityFingerprint(key ssh.PublicKey) string {
 type Options struct {
 	KnownHostsFile, PinnedHostKey, DelegateExecutable string
 	DialTimeout, HandshakeTimeout                     time.Duration
+	// Environment is an invocation snapshot; nil captures the ambient environment.
+	Environment []string
 	// WithTrustLock serializes enrollment through the caller-owned durable store.
 	WithTrustLock func(context.Context, func() error) error
 }
@@ -64,6 +67,8 @@ type Client struct {
 	agent       net.Conn
 	executable  string
 	fingerprint string
+	environment []EnvironmentVariable
+	diagnostics []Diagnostic
 	opened      atomic.Bool
 	closeOnce   sync.Once
 	closeErr    error
@@ -124,6 +129,17 @@ func timeout(value time.Duration) time.Duration {
 
 // Dial verifies host trust and authenticates using keys or the selected local agent.
 func Dial(ctx context.Context, connection sshconfig.Connection, options Options) (*Client, error) {
+	environment := options.Environment
+	if environment == nil {
+		environment = os.Environ()
+	}
+	selectedEnvironment, err := SelectEnvironment(connection, environment)
+	if err != nil {
+		return nil, err
+	}
+	if !connection.PublicKeyAllowed() {
+		return nil, &Error{Code: "authentication_unavailable", GSSAPIUnavailable: connection.GSSAPISelected()}
+	}
 	command, err := invocation(options.DelegateExecutable)
 	if err != nil {
 		return nil, err
@@ -146,23 +162,36 @@ func Dial(ctx context.Context, connection sshconfig.Connection, options Options)
 		}
 	})
 	defer stopAgent()
-	result := &Client{agent: agentConn, executable: command}
+	result := &Client{agent: agentConn, executable: command, environment: selectedEnvironment}
+	if connection.GSSAPISelected() {
+		result.diagnostics = append(result.diagnostics, Diagnostic{Code: "gssapi_unavailable"})
+	}
 	var fingerprint string
 	config := &ssh.ClientConfig{User: connection.User, Auth: auth, HostKeyAlgorithms: algorithms, HostKeyCallback: func(host string, remote net.Addr, key ssh.PublicKey) error {
 		fingerprint = hostIdentityFingerprint(key)
 		return callback(host, remote, key)
 	}}
+	result.conn, err = dialSSHConnection(ctx, connection, options, config)
+	if err != nil {
+		return nil, errors.Join(err, closeAgent(agentConn))
+	}
+	result.fingerprint = fingerprint
+	return result, nil
+}
+
+// dialSSHConnection owns the socket until the verified SSH client takes it.
+func dialSSHConnection(ctx context.Context, connection sshconfig.Connection, options Options, config *ssh.ClientConfig) (*ssh.Client, error) {
 	dialer := net.Dialer{Timeout: timeout(options.DialTimeout)}
 	socket, err := dialer.DialContext(ctx, "tcp", address(connection))
 	if err != nil {
-		return nil, errors.Join(&Error{Code: "unreachable", cause: err}, closeAgent(agentConn))
+		return nil, &Error{Code: "unreachable", cause: err}
 	}
 	deadline := time.Now().Add(timeout(options.HandshakeTimeout))
 	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
 		deadline = end
 	}
 	if err = socket.SetDeadline(deadline); err != nil {
-		return nil, errors.Join(err, socket.Close(), closeAgent(agentConn))
+		return nil, errors.Join(err, socket.Close())
 	}
 	stop := context.AfterFunc(ctx, func() { closeConnection(socket) })
 	native, chans, requests, err := ssh.NewClientConn(socket, address(connection), config)
@@ -174,16 +203,14 @@ func Dial(ctx context.Context, connection sshconfig.Connection, options Options)
 			if strings.Contains(err.Error(), "unable to authenticate") {
 				code = "authentication_failed"
 			}
-			err = &Error{Code: code, cause: err}
+			err = &Error{Code: code, cause: err, GSSAPIUnavailable: code == "authentication_failed" && connection.GSSAPISelected()}
 		}
-		return nil, errors.Join(err, socket.Close(), closeAgent(agentConn))
+		return nil, errors.Join(err, socket.Close())
 	}
 	if err = socket.SetDeadline(time.Time{}); err != nil {
-		return nil, errors.Join(err, native.Close(), closeAgent(agentConn))
+		return nil, errors.Join(err, native.Close())
 	}
-	result.conn = ssh.NewClient(native, chans, requests)
-	result.fingerprint = fingerprint
-	return result, nil
+	return ssh.NewClient(native, chans, requests), nil
 }
 
 func closeConnection(c net.Conn) {
@@ -375,13 +402,13 @@ func verifyAuthorityLine(line []byte, expected ssh.PublicKey) (bool, error) {
 func authentication(ctx context.Context, c sshconfig.Connection, bound time.Duration) ([]ssh.AuthMethod, net.Conn, error) {
 	signers, agentConn, err := agentSigners(ctx, c.IdentityAgent, bound)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, annotateAuthenticationFailure(err, c)
 	}
 	var selected []ssh.Signer
 	for _, name := range c.IdentityFiles {
 		keys, keyErr := fileSigners(name, signers, c.IdentitiesOnly)
 		if keyErr != nil {
-			return nil, nil, errors.Join(keyErr, closeAgent(agentConn))
+			return nil, nil, errors.Join(annotateAuthenticationFailure(keyErr, c), closeAgent(agentConn))
 		}
 		selected = append(selected, keys...)
 	}
@@ -389,9 +416,18 @@ func authentication(ctx context.Context, c sshconfig.Connection, bound time.Dura
 		selected = append(selected, signers...)
 	}
 	if len(selected) == 0 {
-		return nil, nil, errors.Join(&Error{Code: "authentication_unavailable"}, closeAgent(agentConn))
+		return nil, nil, errors.Join(&Error{Code: "authentication_unavailable", GSSAPIUnavailable: c.GSSAPISelected()}, closeAgent(agentConn))
 	}
 	return []ssh.AuthMethod{ssh.PublicKeys(selected...)}, agentConn, nil
+}
+
+func annotateAuthenticationFailure(err error, connection sshconfig.Connection) error {
+	var failure *Error
+	if errors.As(err, &failure) {
+		// Authentication owns these fresh errors until it returns them to Dial.
+		failure.GSSAPIUnavailable = connection.GSSAPISelected()
+	}
+	return err
 }
 
 func agentSigners(ctx context.Context, path string, bound time.Duration) ([]ssh.Signer, net.Conn, error) {
@@ -497,6 +533,10 @@ func (c *Client) Open(ctx context.Context) (io.ReadWriteCloser, error) {
 		return nil, errors.Join(err, c.Close())
 	}
 	session.Stderr = io.Discard
+	if err = c.sendEnvironment(session); err != nil {
+		stop()
+		return nil, errors.Join(err, session.Close(), c.Close())
+	}
 	if err = session.Start(c.executable); err != nil {
 		stop()
 		return nil, errors.Join(err, c.Close())

@@ -23,19 +23,23 @@ import (
 )
 
 type Report struct {
-	References    []string                 `json:"references,omitempty"`
-	NextCursor    string                   `json:"next_cursor,omitempty"`
-	SchemaVersion int                      `json:"schema_version"`
-	Command       string                   `json:"command"`
-	TaskID        string                   `json:"task_id,omitempty"`
-	Connectivity  string                   `json:"connectivity"`
-	ObservedAt    string                   `json:"observed_at,omitempty"`
-	Remote        *remote.Response         `json:"remote,omitempty"`
-	Downloads     []payload.DownloadReport `json:"downloads,omitempty"`
-	Cached        *remote.Observation      `json:"last_observation,omitempty"`
-	Devices       []string                 `json:"devices,omitempty"`
-	Diagnostics   []string                 `json:"diagnostics,omitempty"`
-	Error         string                   `json:"error,omitempty"`
+	Stages        []ProbeStage                        `json:"stages,omitempty"`
+	Usage         map[string]payload.UsageReport      `json:"usage,omitempty"`
+	Retirement    map[string]payload.RetirementReport `json:"retirement,omitempty"`
+	Logs          *remote.LogReport                   `json:"logs,omitempty"`
+	References    []string                            `json:"references,omitempty"`
+	NextCursor    string                              `json:"next_cursor,omitempty"`
+	SchemaVersion int                                 `json:"schema_version"`
+	Command       string                              `json:"command"`
+	TaskID        string                              `json:"task_id,omitempty"`
+	Connectivity  string                              `json:"connectivity"`
+	ObservedAt    string                              `json:"observed_at,omitempty"`
+	Remote        *remote.Response                    `json:"remote,omitempty"`
+	Downloads     []payload.DownloadReport            `json:"downloads,omitempty"`
+	Cached        *remote.Observation                 `json:"last_observation,omitempty"`
+	Devices       []string                            `json:"devices,omitempty"`
+	Diagnostics   []string                            `json:"diagnostics,omitempty"`
+	Error         string                              `json:"error,omitempty"`
 }
 
 func loadSSHConfiguration(file string) (*sshconfig.Config, error) {
@@ -78,7 +82,7 @@ func remoteDeviceCLI(ctx context.Context, a originRequest, c Client, root string
 	if err != nil {
 		return report, err
 	}
-	options := sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), DelegateExecutable: a.RemoteExecutable}
+	options := sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), DelegateExecutable: a.RemoteExecutable, Environment: c.environment}
 	if a.RemoteAction == "trust" {
 		return report, enrollRemoteDevice(ctx, connection, options, a.Fingerprint, c, root)
 	}
@@ -97,7 +101,11 @@ func remoteTaskCLI(ctx context.Context, a originRequest, c Client, root string) 
 	if err != nil {
 		return report, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	defer func() {
+		if !taskdir.CleanupRetainsStore(resultErr, store) {
+			resultErr = errors.Join(resultErr, store.Close())
+		}
+	}()
 	id, err := remoteCLIIdentifier(a)
 	if err != nil {
 		return report, err
@@ -108,11 +116,11 @@ func remoteTaskCLI(ctx context.Context, a originRequest, c Client, root string) 
 		return report, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, reference.Close()) }()
-	intent, err := loadOrPrepareRemoteIntent(ctx, a, store, id, reference)
+	intent, err := c.loadOrPrepareRemoteIntent(ctx, a, store, id, reference)
 	if err != nil {
 		return report, err
 	}
-	coordinator, err := prepareRemoteTaskCoordinator(ctx, a, root, intent, reference)
+	coordinator, err := c.prepareRemoteTaskCoordinator(ctx, a, root, intent, reference)
 	if err != nil {
 		return report, err
 	}
@@ -147,10 +155,10 @@ func remoteCLIIdentifier(a originRequest) (string, error) {
 	return a.TaskID, task.ValidateTaskID(a.TaskID)
 }
 
-func prepareRemoteReference(ctx context.Context, a originRequest, store *taskdir.Store, id string, configuration *sshconfig.Config, reference *remote.Reference) error {
+func (c Client) prepareRemoteReference(ctx context.Context, a originRequest, store *taskdir.Store, id string, configuration *sshconfig.Config, reference *remote.Reference) error {
 	intent, err := reference.Intent()
 	if errors.Is(err, os.ErrNotExist) {
-		candidate, brief, prepareErr := prepareRemoteIntent(ctx, a, store, id, configuration, store.Root)
+		candidate, brief, prepareErr := c.prepareRemoteIntent(ctx, a, store, id, configuration, store.Root)
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -205,7 +213,7 @@ func validateRemoteReplayInputs(ctx context.Context, a originRequest, intent rem
 	return nil
 }
 
-func recordedRemoteCoordinator(configuration *sshconfig.Config, root string, intent remote.Intent) (remote.Coordinator, error) {
+func (c Client) recordedRemoteCoordinator(configuration *sshconfig.Config, root string, intent remote.Intent) (remote.Coordinator, error) {
 	connection, err := configuration.Resolve(intent.Device)
 	if err != nil {
 		return remote.Coordinator{}, err
@@ -213,12 +221,24 @@ func recordedRemoteCoordinator(configuration *sshconfig.Config, root string, int
 	if connection.HostName != intent.Destination.Host || connection.Port != intent.Destination.Port || connection.User != intent.Destination.User {
 		return remote.Coordinator{}, remote.ErrIdentity
 	}
-	exchange := sshExchange{connection: connection, options: sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), PinnedHostKey: intent.Destination.HostKey, DelegateExecutable: intent.Executable}}
+	exchange := sshExchange{connection: connection, options: sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), PinnedHostKey: intent.Destination.HostKey, DelegateExecutable: intent.Executable, Environment: c.environment}}
 	return remote.Coordinator{Exchange: exchange}, nil
 }
 
 func uploadPendingRemoteSnapshot(ctx context.Context, store *taskdir.Store, intent remote.Intent, coordinator remote.Coordinator) (resultErr error) {
 	if intent.InputSHA256 == "" {
+		return nil
+	}
+	lease, err := store.AcquireRemoteByteUse(ctx, intent.TaskID, true, false)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, lease.Close()) }()
+	retired, err := payload.OriginRetired(ctx, store, intent.TaskID)
+	if err != nil {
+		return err
+	}
+	if retired {
 		return nil
 	}
 	journal, err := store.OpenRemoteReferenceContext(ctx, intent.TaskID, false)
@@ -273,7 +293,7 @@ func (c Client) runRemoteTaskOperation(ctx context.Context, a originRequest, coo
 	}
 }
 
-func prepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.Store, id string, configuration *sshconfig.Config, root string) (remote.Intent, []byte, error) {
+func (c Client) prepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.Store, id string, configuration *sshconfig.Config, root string) (remote.Intent, []byte, error) {
 	connection, err := configuration.Resolve(a.Device)
 	if err != nil {
 		return remote.Intent{}, nil, err
@@ -282,7 +302,7 @@ func prepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.St
 	if err != nil {
 		return remote.Intent{}, nil, err
 	}
-	exchange := sshExchange{connection: connection, options: sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), DelegateExecutable: a.RemoteExecutable}}
+	exchange := sshExchange{connection: connection, options: sshtransport.Options{KnownHostsFile: filepath.Join(root, "remote-known_hosts"), DelegateExecutable: a.RemoteExecutable, Environment: c.environment}}
 	response, err := (remote.Coordinator{Exchange: exchange}).Call(ctx, remote.Request{Version: remote.ProtocolVersion, Operation: remote.Prepare, Root: a.RemoteRoot})
 	if err != nil {
 		return remote.Intent{}, nil, err
@@ -292,6 +312,9 @@ func prepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.St
 		return remote.Intent{}, nil, err
 	}
 	intent := remote.Intent{SSHConfig: a.SSHConfig, Version: remote.ProtocolVersion, OriginRootID: store.RootID, TaskID: id, Device: a.Device, Executable: a.RemoteExecutable, Destination: response.Identity, Provider: a.Provider, Config: a.Config, RemoteCwd: a.RemoteCwd, Brief: remote.Descriptor{Name: "brief", Length: int64(len(brief)), SHA256: task.ComputeSHA256(brief)}, OutputPaths: outputs}
+	if slices.Contains(response.Capabilities, remote.DataLayoutCapability) {
+		intent.StorageLayout = task.RemoteDataOrganized
+	}
 	if a.InputManifest != "" {
 		source, paths, readErr := readRemoteInputSelection(a.InputManifest)
 		if readErr != nil {
@@ -312,7 +335,10 @@ func prepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.St
 		if err != nil {
 			return intent, nil, err
 		}
-		intent.RemoteCwd = payload.InputWorkspace(intent.Destination.Root, intent.Destination.RootID, id)
+		intent.RemoteCwd, err = payload.LayoutInputWorkspace(intent.StorageLayout, intent.Destination.Root, intent.Destination.RootID, id)
+		if err != nil {
+			return intent, nil, err
+		}
 	}
 	return intent, brief, intent.Validate()
 }
@@ -453,13 +479,13 @@ func waitRemotePoll(ctx context.Context) bool {
 	}
 }
 
-func loadOrPrepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.Store, id string, reference *remote.Reference) (remote.Intent, error) {
+func (c Client) loadOrPrepareRemoteIntent(ctx context.Context, a originRequest, store *taskdir.Store, id string, reference *remote.Reference) (remote.Intent, error) {
 	if a.Command == "dispatch" {
 		configuration, err := loadSSHConfiguration(a.SSHConfig)
 		if err != nil {
 			return remote.Intent{}, err
 		}
-		if err = prepareRemoteReference(ctx, a, store, id, configuration, reference); err != nil {
+		if err = c.prepareRemoteReference(ctx, a, store, id, configuration, reference); err != nil {
 			return remote.Intent{}, err
 		}
 	}
@@ -506,12 +532,12 @@ func remoteSelectionDigest(source string, paths []string) (string, error) {
 
 // prepareRemoteTaskCoordinator validates override support before any snapshot
 // upload. The returned coordinator owns the invocation-local verified result.
-func prepareRemoteTaskCoordinator(ctx context.Context, a originRequest, root string, intent remote.Intent, reference *remote.Reference) (remote.Coordinator, error) {
+func (c Client) prepareRemoteTaskCoordinator(ctx context.Context, a originRequest, root string, intent remote.Intent, reference *remote.Reference) (remote.Coordinator, error) {
 	configuration, err := loadSSHConfiguration(intent.SSHConfig)
 	if err != nil {
 		return remote.Coordinator{}, err
 	}
-	coordinator, err := recordedRemoteCoordinator(configuration, root, intent)
+	coordinator, err := c.recordedRemoteCoordinator(configuration, root, intent)
 	if err != nil {
 		return remote.Coordinator{}, err
 	}

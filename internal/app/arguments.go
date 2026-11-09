@@ -18,6 +18,16 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	LogStream            string
+	LogCursor            string
+	LogOffset            int64
+	LogLimit             int64
+	LogOffsetSet         bool
+	logOptionsSet        bool
+	RemoteScope          string
+	RemoteApply          bool
+	RemoteDryRun         bool
+	remoteScopeSet       bool
 	ResourceGuards       resourceadmission.GuardPolicy
 	Device               string
 	RemoteRoot           string
@@ -168,6 +178,13 @@ func ParseArguments(args []string) (Arguments, error) {
 func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.Visit(func(selected *flag.Flag) {
 		switch a.Command {
+		case "logs":
+			if selected.Name == "offset" {
+				a.LogOffsetSet = true
+			}
+			if selected.Name == "offset" || selected.Name == "stream" || selected.Name == "limit" || selected.Name == "cursor" {
+				a.logOptionsSet = true
+			}
 		case "supervisor":
 			switch selected.Name {
 			case "pueue-config":
@@ -400,7 +417,10 @@ func (a *Arguments) validateTaskInteraction(positional []string, watch string) e
 	if err := a.validateTaskCommand(positional, watch); err != nil {
 		return err
 	}
-	return a.validateInteractionArguments()
+	if err := a.validateInteractionArguments(); err != nil {
+		return err
+	}
+	return a.validateLogArguments()
 }
 
 func (a *Arguments) validateRecheck(positional []string) error {
