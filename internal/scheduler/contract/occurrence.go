@@ -81,6 +81,7 @@ type Occurrence struct {
 	Due         time.Time
 	ArmedAt     time.Time
 	Observation *Observation
+	Attempt     *AttemptFailure
 	// Release is nil while the occurrence is the schedule's active reservation.
 	Release *Release
 }
@@ -104,6 +105,11 @@ func ValidateOccurrence(o Occurrence) error {
 			return err
 		}
 	}
+	if o.Attempt != nil {
+		if err := ValidateAttempt(*o.Attempt); err != nil {
+			return err
+		}
+	}
 	if o.Release != nil {
 		return ValidateRelease(*o.Release)
 	}
@@ -115,6 +121,10 @@ func (o Occurrence) clone() Occurrence {
 	if o.Observation != nil {
 		observation := *o.Observation
 		o.Observation = &observation
+	}
+	if o.Attempt != nil {
+		attempt := *o.Attempt
+		o.Attempt = &attempt
 	}
 	if o.Release != nil {
 		release := *o.Release

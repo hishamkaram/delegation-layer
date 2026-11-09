@@ -114,14 +114,14 @@ func schedulerRuntime(ctx context.Context, root, rootID string, schedules contra
 	var reportMu sync.Mutex
 	var reportErr error
 	err = schedulerruntime.Run(runCtx, schedulerruntime.Config{
-		Store: schedules, Tasks: tasks, Waker: wakes,
+		Store: schedules, Tasks: tasks, Waker: wakes, Evidence: tasks, Hooks: schedulerHooks{dependencies: deps},
 		Report: func(event schedulerruntime.Event) {
 			reportMu.Lock()
 			defer reportMu.Unlock()
 			if reportErr != nil {
 				return
 			}
-			_, reportErr = fmt.Fprintf(stderr, "scheduler phase=%s schedule_id=%s task_id=%s code=%s\n", event.Phase, event.ScheduleID, event.TaskID, event.Code)
+			_, reportErr = fmt.Fprintf(stderr, "scheduler phase=%s schedule_id=%s task_id=%s code=%s stage=%s next_action=%s\n", event.Phase, event.ScheduleID, event.TaskID, event.Code, event.Stage, event.NextAction)
 			if reportErr != nil {
 				cancel()
 			}
@@ -135,7 +135,7 @@ func schedulerRuntimeError(err error, resident bool) error {
 	if resident && errors.Is(err, schedulerruntime.ErrTaskCleanupUnresolved) {
 		return fmt.Errorf("%w: scheduler task cleanup remains unresolved: %w", host.ErrCleanupUnresolved, err)
 	}
-	if resident && (errors.Is(err, task.ErrUnsupportedSchema) || errors.Is(err, task.ErrInvariantFault)) {
+	if resident && (errors.Is(err, task.ErrUnsupportedSchema) || errors.Is(err, contract.ErrMigrationRequired) || errors.Is(err, task.ErrInvariantFault)) {
 		return fmt.Errorf("%w: scheduler storage validation failed: %w", host.ErrIncompatible, err)
 	}
 	return err

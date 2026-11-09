@@ -49,7 +49,7 @@ func (td *TaskDir) budgetHandoffDigests() ([]string, error) {
 	}
 	var digests []string
 	for _, record := range records {
-		if record.Request == nil || record.Request.Cause != "budget" || record.Observation == nil || !record.Observation.Terminated {
+		if record.Request == nil || !task.IsDeadlineStopCause(record.Request.Cause) || record.Observation == nil || !record.Observation.Terminated {
 			continue
 		}
 		digest, err := canonicalRecordDigest(record.Observation)

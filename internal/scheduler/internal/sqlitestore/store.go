@@ -110,6 +110,8 @@ func (s *Store) initialize(ctx context.Context, tx *sql.Tx, objects []schemaObje
 	switch {
 	case version == schemaVersion:
 		return s.verifySchemaAndRoot(ctx, tx)
+	case version == 1:
+		return s.migrateV1(ctx, tx)
 	case version > schemaVersion:
 		return fmt.Errorf("%w: user_version %d", errNewerSchema, version)
 	case version < 0:

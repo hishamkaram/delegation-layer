@@ -22,13 +22,13 @@ exact-session continuation.
 | Capability | Benefit | Status | Reference |
 | --- | --- | --- | --- |
 | Supervised agent tasks | Track one bounded turn through a provider-neutral interface. | Available | [Task commands](skills/agent-integration/references/command-reference.md) |
-| Budgets and cancellation | Bound execution time and request an explicit stop. | Available | [Result handling](skills/agent-integration/references/result-handling.md) |
-| Durable results | Collect validated answers and evidence after the turn ends. | Available | [Results](skills/agent-integration/references/result-handling.md) |
+| Budgets and cancellation | Bound execution time, opt into output-silence limits and request an explicit stop. | Available | [Result handling](skills/agent-integration/references/result-handling.md) |
+| Durable results | Passively wait for several tasks and collect validated evidence after each turn ends. | Available | [Results](skills/agent-integration/references/result-handling.md) |
 | Exact-session continuation | Follow up in the recorded provider conversation. | Available | [Continuation](skills/agent-integration/references/continuation.md) |
 | Native clarification | Answer questions and steer supported active turns. | Available | [Interaction](skills/agent-integration/references/interaction.md) |
 | Managed Git workspaces | Separate parallel writes and review captured changes before landing them. | Available | [Workspaces](skills/agent-integration/references/workspaces.md) |
 | Remote tasks over SSH | Reconnect to the same task, inspect bounded logs, transfer selected files, and explicitly retire retained bytes. | Available | [Remote workflow](docs/remote-delegation.md) |
-| Recurring background tasks | Run saved schedules independently and inspect their execution history. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
+| Recurring background tasks | Run immutable schedules with health, optional failure hooks and bounded opt-in quota holds. | Available | [Recurring tasks](docs/getting-started.md#recurring-tasks) |
 | Optional Teams | Save scoped Roles, Members and execution defaults; explicitly choose a Member for direct or scheduled work. | Available | [Teams](docs/teams.md) |
 
 Fresh dispatches and continuations check CPU and memory pressure by default.

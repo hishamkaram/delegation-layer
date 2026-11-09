@@ -312,6 +312,7 @@ type PayloadDescriptor struct {
 
 // OutcomeRecord is stored in outcome.json (the sole publication authority).
 type OutcomeRecord struct {
+	Quota          *QuotaAdvice       `json:"quota,omitempty"`
 	SchemaVersion  int                `json:"schema_version"`
 	RootID         string             `json:"root_id"`
 	TaskID         string             `json:"task_id"`
@@ -703,6 +704,9 @@ func validateOutcomePayload(r *OutcomeRecord) error {
 func ValidateOutcomeRecord(r *OutcomeRecord) error {
 	if r == nil {
 		return errors.New("nil outcome record")
+	}
+	if err := validateQuotaEvidence(r.Quota, r.Verdict, r.Diagnostics); err != nil {
+		return err
 	}
 	if r.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("%w: outcome.json schema version %d", ErrUnsupportedSchema, r.SchemaVersion)

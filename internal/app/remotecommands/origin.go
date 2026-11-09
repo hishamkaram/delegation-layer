@@ -171,6 +171,12 @@ func (c Client) prepareRemoteReference(ctx context.Context, a originRequest, sto
 }
 
 func validateRemoteReplay(ctx context.Context, a originRequest, intent remote.Intent) error {
+	config, configErr := remote.NormalizeOutputSilenceConfig(a.Config)
+	if configErr != nil {
+		return configErr
+	}
+	a.Config = config
+
 	brief, err := tasklifecycle.ReadBrief(a.Brief)
 	if err != nil {
 		return err
@@ -307,6 +313,11 @@ func (c Client) prepareRemoteIntent(ctx context.Context, a originRequest, store 
 	if err != nil {
 		return remote.Intent{}, nil, err
 	}
+	a.Config, err = remote.PrepareOutputSilenceConfig(a.Config, response.Capabilities)
+	if err != nil {
+		return remote.Intent{}, nil, err
+	}
+
 	outputs, err := remoteOutputPaths(a.OutputManifest)
 	if err != nil {
 		return remote.Intent{}, nil, err

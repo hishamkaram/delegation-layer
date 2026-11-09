@@ -15,20 +15,25 @@ import (
 // Workers only return immutable results. A live ID excludes reconciliation
 // from before ClaimAndArm until the attempt retires or Dispatch fully settles.
 type loop struct {
-	config           Config
-	startup          time.Time
-	live             map[string]bool
-	held             map[string]time.Time
-	admissions       int
-	reconciling      string
-	selectionAfter   string
-	idleAfter        string
-	observedRound    map[string]uint64
-	observedDue      map[string]time.Time
-	observationRound uint64
-	observationAt    time.Time
-	workers          sync.WaitGroup
-	results          chan taskResult
+	config             Config
+	startup            time.Time
+	live               map[string]bool
+	held               map[string]time.Time
+	admissions         int
+	reconciling        string
+	selectionAfter     string
+	idleAfter          string
+	observedRound      map[string]uint64
+	observedDue        map[string]time.Time
+	observationRound   uint64
+	observationAt      time.Time
+	workers            sync.WaitGroup
+	results            chan taskResult
+	reliabilityRunning bool
+	reliabilityAfter   string
+	notificationAfter  string
+	reliabilityAt      time.Time
+	reliabilityResults chan reliabilityResult
 }
 
 type taskResult struct {
@@ -56,16 +61,22 @@ func Run(ctx context.Context, config Config) (runErr error) {
 	if config.NewTaskID == nil {
 		config.NewTaskID = randomid.NewRandomID
 	}
+	if config.NewNotificationID == nil {
+		config.NewNotificationID = randomid.NewRandomID
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	l := &loop{
 		config: config, startup: config.Clock.Now().UTC(), live: make(map[string]bool),
 		held: make(map[string]time.Time), observedRound: make(map[string]uint64),
-		observedDue: make(map[string]time.Time), results: make(chan taskResult, AdmissionLimit+1),
+		observedDue: make(map[string]time.Time), results: make(chan taskResult, AdmissionLimit+1), reliabilityResults: make(chan reliabilityResult, 1),
 	}
 	defer func() {
 		cancel()
 		l.workers.Wait()
 		runErr = errors.Join(runErr, l.settledErrors())
+		if l.reliabilityRunning {
+			runErr = errors.Join(runErr, l.finishReliability(<-l.reliabilityResults))
+		}
 	}()
 	if err := contract.ValidateInstant("scheduler startup", l.startup); err != nil {
 		return err
@@ -97,6 +108,7 @@ func (l *loop) run(ctx context.Context) error {
 		if err := l.drain(ctx); err != nil {
 			return err
 		}
+		l.startReliability(ctx)
 		if err := l.scan(ctx); err != nil {
 			return err
 		}
@@ -110,6 +122,10 @@ func (l *loop) run(ctx context.Context) error {
 func (l *loop) drain(ctx context.Context) error {
 	for {
 		select {
+		case result := <-l.reliabilityResults:
+			if err := l.finishReliability(result); err != nil {
+				return err
+			}
 		case result := <-l.results:
 			if err := l.finish(ctx, result); err != nil {
 				return err
@@ -130,6 +146,13 @@ func (l *loop) wait(ctx context.Context) error {
 	case err := <-waited:
 		cancel()
 		return err
+	case result := <-l.reliabilityResults:
+		cancel()
+		waitErr := <-waited
+		if !cancellationOnly(waitErr) {
+			return waitErr
+		}
+		return l.finishReliability(result)
 	case result := <-l.results:
 		cancel()
 		waitErr := <-waited

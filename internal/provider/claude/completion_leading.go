@@ -1,5 +1,7 @@
 package claude
 
+import "github.com/hishamkaram/delegation-layer/internal/task"
+
 // leadingStage is the boundary state of the scoped completion policy before
 // the principal result. A resumed session can answer old background
 // completions with empty zero-turn results that precede the caller's own
@@ -83,6 +85,7 @@ func (a *completionAttribution) recordLeadingAcknowledgement(state *eventState, 
 	}
 	fault := a.statedFault(result, completion)
 	fault.quota = quota
+	fault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 	switch fault.refusal {
 	case "":
 		state.markSemantic("leading acknowledgement carries an answer")

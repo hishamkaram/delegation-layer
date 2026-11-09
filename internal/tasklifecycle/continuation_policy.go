@@ -12,7 +12,7 @@ func TimeoutContinuation(req *task.TaskRecord, records []taskdir.StopRecord, cat
 		return nil
 	}
 	launch := continuationLaunch{runner: runner, commandRunner: commandRunner, supervisor: supervisor, stateRecorded: launchStateRecorded}
-	return continuationOffer(req, catalog, continuationOfferFacts{cause: ContinuationTimedOut, source: source, launch: launch, runnerReleased: runnerReleased})
+	return continuationOffer(req, catalog, continuationOfferFacts{cause: timeoutContinuationCause(records), source: source, launch: launch, runnerReleased: runnerReleased})
 }
 
 // continuationLaunch holds the retained coordinates a successor launch needs.
@@ -55,4 +55,13 @@ func withUserCancellation(offer ContinuationOffer) *ContinuationOffer {
 	offer.Resumable, offer.CommandRunner, offer.Supervisor, offer.Cancelled = false, "", nil, true
 	offer.Reason = "task was cancelled by the user"
 	return &offer
+}
+
+func timeoutContinuationCause(records []taskdir.StopRecord) ContinuationCause {
+	for _, record := range records {
+		if record.Request != nil && record.Request.Cause == task.StopCauseOutputSilence && record.Observation != nil && record.Observation.Terminated {
+			return ContinuationIdleTimedOut
+		}
+	}
+	return ContinuationTimedOut
 }

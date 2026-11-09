@@ -1,10 +1,13 @@
 package sqlitestore
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // schemaVersion is the PRAGMA user_version this code reads and writes. Only
 // the 0 to 1 initialization exists; there is no shipped later version.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Every timestamp column holds caller-supplied UTC Unix nanoseconds. Text
 // shapes repeat the contract's stored-value rules so that a write bypassing the
@@ -23,11 +26,11 @@ type schemaObject struct {
 
 // schemaObjects returns the exact schema objects of version 1 in creation
 // order. The guard compares sqlite_schema against them in every transaction.
-func schemaObjects() []schemaObject {
+func legacySchemaObjects() []schemaObject {
 	objects := metadataObjects()
 	objects = append(objects, scheduleObjects()...)
 	objects = append(objects, occurrenceObjects()...)
-	return append(objects, skipSpanObjects()...)
+	return append(objects, legacySkipSpanObjects()...)
 }
 
 func check(format, column string) string { return fmt.Sprintf(format, column) }
@@ -125,7 +128,7 @@ ON occurrences (schedule_id) WHERE released_at_unix_nanos IS NULL`},
 }
 
 // skipSpanObjects holds immutable (from, to] spans keyed by their endpoint.
-func skipSpanObjects() []schemaObject {
+func legacySkipSpanObjects() []schemaObject {
 	return []schemaObject{
 		{kind: "table", name: "skip_spans", sql: `CREATE TABLE skip_spans (
 	schedule_id TEXT NOT NULL REFERENCES schedules (schedule_id),
@@ -137,4 +140,35 @@ func skipSpanObjects() []schemaObject {
 		trigger("skip_spans_immutable", "BEFORE UPDATE ON skip_spans", "skip spans are immutable"),
 		trigger("skip_spans_permanent", "BEFORE DELETE ON skip_spans", "skip spans are permanent"),
 	}
+}
+
+func schemaObjects() []schemaObject {
+	objects := legacySchemaObjects()
+	for i := range objects {
+		if objects[i].name == "skip_spans" {
+			objects[i].sql = strings.Replace(objects[i].sql, "'paused'))", "'paused', 'provider_quota_exhausted'))", 1)
+		}
+	}
+	return append(objects, reliabilityObjects()...)
+}
+
+func reliabilityObjects() []schemaObject {
+	var objects []schemaObject
+	for _, table := range []struct {
+		name, columns string
+		immutable     bool
+	}{
+		{"schedule_hooks", `schedule_id TEXT PRIMARY KEY REFERENCES schedules (schedule_id), hook_json BLOB NOT NULL CHECK (length(hook_json) BETWEEN 1 AND 8192)`, true},
+		{"occurrence_attempts", `task_id TEXT PRIMARY KEY REFERENCES occurrences (task_id), attempt_json BLOB NOT NULL CHECK (length(attempt_json) BETWEEN 1 AND 2048)`, true},
+		{"occurrence_results", `task_id TEXT PRIMARY KEY REFERENCES occurrences (task_id), observed_at INTEGER NOT NULL, verdict TEXT NOT NULL CHECK (verdict IN ('unknown','committed','rejected','not_created','closed_without_outcome')), code TEXT, outcome_sha256 TEXT, quota_until INTEGER`, false},
+		{"schedule_policy", `schedule_id TEXT PRIMARY KEY REFERENCES schedules (schedule_id), enabled INTEGER NOT NULL CHECK (enabled IN (0,1)), max_hold INTEGER NOT NULL CHECK (max_hold > 0 AND max_hold <= 604800000000000), revision INTEGER NOT NULL CHECK (revision > 0), source_floor INTEGER NOT NULL`, false},
+		{"schedule_holds", `schedule_id TEXT PRIMARY KEY REFERENCES schedules (schedule_id), source_task_id TEXT NOT NULL REFERENCES occurrences (task_id), created_at INTEGER NOT NULL, until_at INTEGER NOT NULL CHECK (until_at > created_at), capped INTEGER NOT NULL CHECK (capped IN (0,1))`, false},
+		{"notification_attempts", `event_id TEXT PRIMARY KEY CHECK (` + check(hex32Check, "event_id") + `), schedule_id TEXT NOT NULL REFERENCES schedules (schedule_id), kind TEXT NOT NULL CHECK (kind IN ('failure','recovery')), anchor_task_id TEXT NOT NULL REFERENCES occurrences (task_id), last_task_id TEXT NOT NULL REFERENCES occurrences (task_id), streak_count INTEGER NOT NULL CHECK (streak_count >= 0), failure_code TEXT NOT NULL, created_at INTEGER NOT NULL, result TEXT NOT NULL CHECK (result IN ('claimed','succeeded','failed','timed_out','unavailable','uncertain'))`, false},
+	} {
+		objects = append(objects, schemaObject{kind: "table", name: table.name, sql: "CREATE TABLE " + table.name + " (\n" + table.columns + "\n) STRICT"})
+		if table.immutable {
+			objects = append(objects, trigger(table.name+"_immutable", "BEFORE UPDATE ON "+table.name, "immutable scheduler fact"), trigger(table.name+"_permanent", "BEFORE DELETE ON "+table.name, "permanent scheduler fact"))
+		}
+	}
+	return objects
 }

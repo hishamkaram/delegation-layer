@@ -30,7 +30,7 @@ func IsPureSupervisorUncertaintyError(err error) bool {
 
 func HasTerminatedBudgetStop(records []taskdir.StopRecord) bool {
 	for _, record := range records {
-		if record.Request != nil && record.Request.Cause == "budget" && record.Observation != nil && record.Observation.Terminated {
+		if record.Request != nil && task.IsDeadlineStopCause(record.Request.Cause) && record.Observation != nil && record.Observation.Terminated {
 			return true
 		}
 	}
@@ -109,7 +109,7 @@ func savedSupervisor(meta *task.MetaRecord) *task.SupervisorRef {
 
 func budgetStopNeedsObservation(records []taskdir.StopRecord) bool {
 	for _, record := range records {
-		if record.Request != nil && record.Request.Cause == "budget" && (record.Observation == nil || !record.Observation.Terminated) {
+		if record.Request != nil && task.IsDeadlineStopCause(record.Request.Cause) && (record.Observation == nil || !record.Observation.Terminated) {
 			return true
 		}
 	}

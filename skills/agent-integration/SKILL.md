@@ -147,6 +147,10 @@ blocker; detach only when requested and retain the exact task IDs and root.
 A pending watch is not success. Read the complete validated answer and check
 the requested deliverables before claiming completion.
 
+For several workers, use [passive multi-task wait](references/command-reference.md#wait)
+instead of handwritten polling loops. Readiness is not provider success;
+inspect each summary and collect results through the normal result rules.
+
 ### 6. Continue a timed out or interrupted turn
 
 Read [continuation](references/continuation.md) for eligibility, cancellation

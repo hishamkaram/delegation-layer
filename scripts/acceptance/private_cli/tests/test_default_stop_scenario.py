@@ -54,7 +54,7 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
     def test_closure_watches_follow_the_recorded_deadline_for_budget_and_stay_fixed_for_user(self):
         records = _run_stop_scenario(self, budget={"now_ns": BUDGET_DEADLINE_NS - 40 * 10**9})
         user_task, budget_task = records["dispatches"][0][0], records["dispatches"][1][0]
-        self.assertEqual(records["closure_timeouts"], [(user_task, 30), (budget_task, 70)])
+        self.assertEqual(records["closure_timeouts"], [(user_task, 30), (budget_task, 70), (records["attempted"][2], 120)])
         self.assertEqual(records["evidence"]["tasks"]["budget_stop"]["closure"]["budget_deadline"], {
             "deadline": BUDGET_DEADLINE, "termination_observed_at": "2026-10-14T00:00:02Z",
         })
@@ -452,6 +452,8 @@ def _run_stop_scenario(self, *, error=None, ended_changes=None, user_closure_cau
             user_closure_cause=user_closure_cause, user_request_id=user_request_id,
             budget=budget, closure_timeouts=records["closure_timeouts"])
         records["shutdown"] = shutdown
+        lifecycle = records["lifecycle"]
+        assert isinstance(lifecycle, list)
 
         def run():
             return stop_impl.run_default_stop_acceptance(
@@ -469,7 +471,8 @@ def _run_stop_scenario(self, *, error=None, ended_changes=None, user_closure_cau
                 patch.object(stop_impl.time, "time_ns", return_value=budget["now_ns"]), \
                 patch.object(stop_impl, "default_stop_live_lease", side_effect=live_lease), \
                 patch.object(stop_impl, "await_managed_lifetime_closure", side_effect=closure), \
-                patch.object(stop_impl, "shutdown_terminal_private_supervisor", side_effect=shutdown_private):
+                patch.object(stop_impl, "shutdown_terminal_private_supervisor", side_effect=shutdown_private), \
+                patch.object(stop_impl, "wait_for_pueue_state", side_effect=lambda *_args, **_kwargs: lifecycle.append("queue-done")):
             if error is None:
                 records["evidence"] = run()
             else:
@@ -523,15 +526,16 @@ def _stop_scenario_callbacks(*, budget, calls, closure_timeouts, dispatches, end
         task_id = tuple(task_ids)[0]
         closure_timeouts.append((task_id, timeout))
         is_user = task_id == dispatches[0][0]
+        is_silence = len(dispatches) == 3 and task_id == dispatches[2][0]
         return {"tasks": {task_id: {
-            "intent": {"deadline": BUDGET_DEADLINE if is_user else budget["closure_deadline"],
+            "intent": {"deadline": "2026-10-14T00:05:00Z" if is_silence else (BUDGET_DEADLINE if is_user else budget["closure_deadline"]),
                         "created_at": "2026-10-14T00:00:00Z"},
             "registration": {"scope_kind": "process-group", "assurance": "cooperative"},
             "worker_wait": {"child_pid": 101, "result": "exit-error",
                              "exit_code": 143, "observed_at": "2026-10-14T00:00:01Z"},
             "launches": [{"pid": 101}] if is_user else budget["launches"],
-            "termination": {"cause": user_closure_cause if is_user else "budget", "scope_empty": True,
-                            "observed_at": "2026-10-14T00:00:02Z" if is_user else budget["terminated_at"]},
+            "termination": {"cause": "output-silence" if is_silence else (user_closure_cause if is_user else "budget"), "scope_empty": True,
+                            "observed_at": "2026-10-14T00:01:30Z" if is_silence else ("2026-10-14T00:00:02Z" if is_user else budget["terminated_at"])},
         }}}
 
     shutdown = []
@@ -573,6 +577,13 @@ def _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, st
                 observed = {**_user_interrupted_status(identity, user_request_id), **ended_changes.get("user", {})}
             else:
                 observed = _user_pending_interruption_status(identity, user_request_id)
+        elif len(dispatches) == 3 and task_id == dispatches[2][0]:
+            observed = {
+                **identity, "status": "idle_timed_out", "liveness": "undetermined",
+                "last_provider_output_at": "2026-10-14T00:00:00Z",
+                "continuation": {"mode": "native", "resumable": True, "predecessor_task_id": task_id},
+                "failure": {"code": "task_idle_timed_out", "next_action": "continue_task"},
+            }
         else:
             self.assertEqual(task_id, dispatches[1][0])
             if status_reads[task_id] > 1:
@@ -629,19 +640,20 @@ def _budget_timed_out_status(identity):
 def _assert_stop_expectations(*, attempted, calls, closure_timeouts, dispatches, evidence, lease_cleanup_calls,
                               lifecycle, receipt, self, shutdown):
     self.assertEqual([command[2] for command in calls], [
-        "dispatch", "cancel", "status", "status", "dispatch", "status", "status",
+        "dispatch", "cancel", "status", "status", "dispatch", "status", "status", "dispatch", "status",
     ])
     self.assertEqual(
         [budget for _, budget in dispatches],
-        [private_cli_configuration.DEFAULT_STOP_TASK_BUDGET, private_cli_configuration.DEFAULT_STOP_BUDGET],
+        [private_cli_configuration.DEFAULT_STOP_TASK_BUDGET, private_cli_configuration.DEFAULT_STOP_BUDGET, private_cli_configuration.DEFAULT_STOP_TASK_BUDGET],
     )
-    self.assertEqual(attempted, [dispatches[0][0], dispatches[1][0]])
+    self.assertEqual(attempted, [dispatches[0][0], dispatches[1][0], dispatches[2][0]])
     self.assertEqual(evidence["scenario"], private_cli_configuration.DEFAULT_STOP_SCENARIO)
-    self.assertEqual(set(evidence["tasks"]), {"user_stop", "budget_stop"})
-    self.assertEqual(lease_cleanup_calls, [True, True])
+    self.assertEqual(set(evidence["tasks"]), {"user_stop", "budget_stop", "output_silence"})
+    self.assertEqual(lease_cleanup_calls, [True, True, True])
     self.assertEqual(lifecycle, [
         "enter", "cancel", "closure", "interrupted:running", "interrupted:ended", "remove", "exit",
         "enter", "closure", "status:running", "status:ended", "remove", "exit",
+        "enter", "closure", "queue-done", "status:undetermined", "remove", "exit",
     ])
     self.assertEqual(
         evidence["tasks"]["user_stop"]["status"]["queue_ended_observation"],
@@ -680,6 +692,52 @@ def _assert_stop_expectations(*, attempted, calls, closure_timeouts, dispatches,
     self.assertEqual(calls[3][2:], ["status", dispatches[0][0], "--json"])
     self.assertFalse(evidence["stop_poll_policy"]["override"])
     self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"], 0)
-    self.assertEqual(receipt.counts["dispatch_completed_count"], 2)
-    self.assertEqual(receipt.counts["admitted_task_count"], 2)
+    self.assertEqual(receipt.counts["dispatch_completed_count"], 3)
+    self.assertEqual(receipt.counts["admitted_task_count"], 3)
     self.assertEqual(shutdown, [True])
+
+
+class OutputSilenceStopPolicyTests(unittest.TestCase):
+    def fixture(self):
+        task_id, root_id = "a" * 32, "b" * 32
+        status = {
+            "task_id": task_id, "root_id": root_id, "status": "idle_timed_out",
+            "last_provider_output_at": "2026-11-09T12:00:00Z",
+            "failure": {"code": "task_idle_timed_out", "next_action": "continue_task"},
+            "continuation": {"mode": "native", "resumable": True, "predecessor_task_id": task_id},
+            "private_output": "must-not-enter-receipt",
+        }
+        closure = {
+            "intent": {"deadline": "2026-11-09T12:05:00Z"},
+            "registration": {"scope_kind": "process-group", "assurance": "cooperative"},
+            "worker_wait": {"child_pid": 101, "result": "exit-error", "exit_code": 143},
+            "launches": [{"pid": 101}],
+            "termination": {"cause": "output-silence", "scope_empty": True,
+                            "observed_at": "2026-11-09T12:01:30Z"},
+        }
+        return task_id, root_id, status, closure
+
+    def test_silence_proof_preserves_exact_session_offer_and_no_private_output(self):
+        task_id, root_id, status, closure = self.fixture()
+        evidence = stop_impl.silence_stop_evidence(status, closure, task_id, root_id)
+        self.assertEqual(evidence["status"]["status"], "idle_timed_out")
+        self.assertTrue(evidence["status"]["continuation"]["resumable"])
+        self.assertEqual(evidence["closure"]["termination"]["cause"], "output-silence")
+        self.assertNotIn("must-not-enter-receipt", json.dumps(evidence))
+
+    def test_wrong_native_cause_or_wall_expiry_cannot_prove_silence(self):
+        for cause, observed_at in (("budget", "2026-11-09T12:01:30Z"),
+                                   ("output-silence", "2026-11-09T12:05:00Z")):
+            with self.subTest(cause=cause, observed_at=observed_at):
+                task_id, root_id, status, closure = self.fixture()
+                closure["termination"].update(cause=cause, observed_at=observed_at)
+                with self.assertRaises(RuntimeError):
+                    stop_impl.silence_stop_evidence(status, closure, task_id, root_id)
+
+    def test_missing_or_ineligible_continuation_and_wrong_identity_fail(self):
+        for change in ({"resumable": False}, {"predecessor_task_id": "c" * 32}, {"mode": "unsupported"}):
+            with self.subTest(change=change):
+                task_id, root_id, status, closure = self.fixture()
+                status["continuation"].update(change)
+                with self.assertRaises(RuntimeError):
+                    stop_impl.silence_stop_evidence(status, closure, task_id, root_id)

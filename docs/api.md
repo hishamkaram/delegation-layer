@@ -96,3 +96,27 @@ The [doctor contract](../skills/agent-integration/references/command-reference.m
 owns schema version 1, field meanings and exits. Its observations are separate
 from task responses: no task identity, authentication proof or launch authority
 is created.
+
+## Passive wait and scheduler reliability
+
+`wait` returns `wait.mode`, `satisfied` and bounded `tasks` in requested order.
+Each entry retains admission/liveness/publication independently, plus `ready`,
+a readiness reason and optional status/failure. Readiness does not establish
+provider success or continuation eligibility. Exit codes are 0 for the condition,
+1 for a typed missing-task/observation fault, 2 for invalid input and 3 for expiry.
+
+`schedule health` returns the durable `schedule_health` projection, including
+coverage gaps and holds, independently of cached history and host readiness.
+History/execution retain public-safe admission diagnostics in
+`occurrence.failure`; absence of task files cannot erase the occurrence.
+`schedule policy` owns mutable quota policy outside immutable definitions.
+
+Quota rejections may carry optional `outcome.quota.not_before` reset advice,
+validated separately from the unchanged quota diagnostic. It is provider advice,
+not permission to retry or a promise of account readiness. Existing sealed
+outcomes are not rewritten. Opt-in policy alone determines bounded holds.
+
+`last_provider_output_at` and `provider_output_activity` are approximate capture
+metadata after validated provider start, not liveness or heartbeat authority.
+`idle_timed_out` identifies opt-in output-silence expiry. Preserve actual outcome,
+stop, failure and continuation facts independently.

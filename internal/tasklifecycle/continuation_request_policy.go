@@ -11,6 +11,9 @@ import (
 
 func ContinuationConfig(requested, overrides task.TaskConfig) task.TaskConfig {
 	requested.Interactive = requested.Interactive || overrides.Interactive
+	if overrides.OutputSilenceTimeout != "" {
+		requested.OutputSilenceTimeout = overrides.OutputSilenceTimeout
+	}
 	if overrides.Budget != "" {
 		requested.Budget = overrides.Budget
 	}

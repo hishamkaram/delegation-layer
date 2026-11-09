@@ -23,6 +23,7 @@ type Coordinator struct {
 	Retry          RetryPolicy
 	ResourceGuards resourceadmission.GuardPolicy
 	guardSupport   *verifiedGuardSupport
+	silenceSupport *Identity
 }
 
 // Dispatch writes send-intent before the first admitting request. A lost response
@@ -54,7 +55,7 @@ func (c Coordinator) Dispatch(ctx context.Context, reference *Reference) (Respon
 	}
 	request := Request{IntentSHA256: digest, Version: ProtocolVersion, Operation: operation, Expected: &intent.Destination, Root: intent.Destination.Root, TaskID: intent.TaskID, Intent: &intent, Data: brief}
 	if operation == Admit {
-		c, err = c.verifyGuardSupport(ctx, intent.Destination)
+		c, err = c.verifyAdmissionSupport(ctx, intent.Destination, intent.Config)
 		if err != nil {
 			return Response{}, err
 		}
@@ -275,9 +276,6 @@ type verifiedGuardSupport struct {
 // Existing rejections and recorded sends retain their existing recovery path.
 // Dispatch enforces the same requirement for callers without a preparation step.
 func (c Coordinator) PrepareDispatch(ctx context.Context, reference *Reference) (Coordinator, error) {
-	if c.ResourceGuards == (resourceadmission.GuardPolicy{}) {
-		return c, nil
-	}
 	intent, err := reference.Intent()
 	if err != nil {
 		return c, err
@@ -299,7 +297,7 @@ func (c Coordinator) PrepareDispatch(ctx context.Context, reference *Reference) 
 	if sent {
 		return c, nil
 	}
-	return c.verifyGuardSupport(ctx, intent.Destination)
+	return c.verifyAdmissionSupport(ctx, intent.Destination, intent.Config)
 }
 
 func (c Coordinator) verifyGuardSupport(ctx context.Context, destination Identity) (Coordinator, error) {
@@ -325,4 +323,27 @@ func existingOnly(request Request) Request {
 	request.BeforeWrite = nil
 	request.ResourceGuards = nil
 	return request
+}
+
+func (c Coordinator) verifySilenceSupport(ctx context.Context, destination Identity, config task.TaskConfig) (Coordinator, error) {
+	duration, err := task.ParseOutputSilenceTimeout(config.OutputSilenceTimeout)
+	if err != nil {
+		return c, err
+	}
+	if duration == 0 || c.silenceSupport != nil && *c.silenceSupport == destination {
+		return c, nil
+	}
+	if err = c.RequireCapability(ctx, destination, OutputSilenceCapability); err != nil {
+		return c, err
+	}
+	c.silenceSupport = &destination
+	return c, nil
+}
+
+func (c Coordinator) verifyAdmissionSupport(ctx context.Context, destination Identity, config task.TaskConfig) (Coordinator, error) {
+	c, err := c.verifySilenceSupport(ctx, destination, config)
+	if err != nil {
+		return c, err
+	}
+	return c.verifyGuardSupport(ctx, destination)
 }

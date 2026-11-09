@@ -23,6 +23,7 @@ type CreateInput struct {
 	TimezoneSet bool
 	Request     contract.Request
 	Brief       []byte
+	Hook        *contract.FailureHook
 }
 
 var ErrInvalidInput = errors.New("invalid schedule request")

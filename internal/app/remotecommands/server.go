@@ -88,7 +88,7 @@ func (c Client) Execute(ctx context.Context, request remote.Request) (response r
 		return response
 	}
 	c.pin = &pin
-	response.Capabilities = []string{"remote-v1", "existing-only-reconcile", "five-attempt-recovery", "declared-files", remote.ResourceGuardCapability, remote.DataLayoutCapability, remote.LogsCapability, remote.RetirementCapability}
+	response.Capabilities = []string{"remote-v1", "existing-only-reconcile", "five-attempt-recovery", "declared-files", remote.OutputSilenceCapability, remote.ResourceGuardCapability, remote.DataLayoutCapability, remote.LogsCapability, remote.RetirementCapability}
 	request.Root = response.Identity.Root
 	if err = verifyRemoteOperationBinding(ctx, reader, request); err != nil {
 		response.Failure = remoteBindingFailure(err)

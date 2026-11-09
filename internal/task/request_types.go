@@ -31,13 +31,14 @@ const (
 
 // TaskConfig captures requested configuration parameters.
 type TaskConfig struct {
-	Interactive   bool          `json:"interactive,omitempty"`
-	Model         string        `json:"model,omitempty"`
-	Effort        string        `json:"effort,omitempty"`
-	Permission    string        `json:"permission,omitempty"`
-	Budget        string        `json:"budget,omitempty"`
-	NativeTimeout string        `json:"native_timeout,omitempty"`
-	ReviewTarget  *ReviewTarget `json:"review_target,omitempty"`
+	Interactive          bool          `json:"interactive,omitempty"`
+	Model                string        `json:"model,omitempty"`
+	Effort               string        `json:"effort,omitempty"`
+	Permission           string        `json:"permission,omitempty"`
+	Budget               string        `json:"budget,omitempty"`
+	OutputSilenceTimeout string        `json:"output_silence_timeout,omitempty"`
+	NativeTimeout        string        `json:"native_timeout,omitempty"`
+	ReviewTarget         *ReviewTarget `json:"review_target,omitempty"`
 }
 
 // EffectiveConfig captures resolved non-secret effective configuration.

@@ -216,7 +216,7 @@ func (g *Guardian) recordTermination(ctx context.Context) error {
 
 func (g *Guardian) freezeTerminationCause(cause string) error {
 	switch cause {
-	case task.LifetimeTerminationCompleted,
+	case task.StopCauseOutputSilence, task.LifetimeTerminationCompleted,
 		task.LifetimeTerminationBudget,
 		task.LifetimeTerminationRequested,
 		task.LifetimeTerminationRecovery:

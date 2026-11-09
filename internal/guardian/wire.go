@@ -28,6 +28,7 @@ const (
 )
 
 type lifetimeMessage struct {
+	Cause    string `json:"cause,omitempty"`
 	Version  int    `json:"version"`
 	Type     string `json:"type"`
 	TaskID   string `json:"task_id"`
@@ -219,6 +220,9 @@ func readLifetimeFrame[T lifetimeFrame](c *lifetimeCodec, value *T) error {
 
 func validateLifetimeMessage(message lifetimeMessage) error {
 	if message.Version != lifetimeProtocolVersion || task.ValidateTaskID(message.TaskID) != nil {
+		return task.ErrEvidenceFault
+	}
+	if message.Cause != "" && (message.Type != lifetimeMessageStop || message.Cause != task.StopCauseOutputSilence) {
 		return task.ErrEvidenceFault
 	}
 	switch message.Type {

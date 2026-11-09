@@ -18,7 +18,7 @@ when applicable, and three separate dimensions:
 | `publication` | `unknown`, `pending`, `committed`, `rejected` |
 
 Queue state is not a liveness value. Optional `status` describes
-`timed_out`, `interrupted`, or `blocked`. Responses can also include
+`timed_out`, `idle_timed_out`, `interrupted`, or `blocked`. Responses can also include
 `task_record`, `parent_task_id`, `capability`, `continuation`,
 `supervisor`, `raw`, `pending`, `stops`, `stop`, `failure`,
 `resource_admission`, `diagnostics`, `recheck`, `workspace`, `team`, and `error`
@@ -92,7 +92,7 @@ task ID; observation never launches or retries provider work.
    validated rejected outcome, use [offline recovery](#offline-recovery) once
    only when `failure.next_action` is `recheck`; otherwise diagnose and report
    the rejection using [failure diagnosis](#failure-diagnosis).
-3. With no terminal outcome, handle `timed_out` before waiting on publication:
+3. With no terminal outcome, handle `timed_out` or `idle_timed_out` before waiting on publication:
    follow [continuation](continuation.md), including its busy-workspace exception.
    For `interrupted`, all three of `failure.code: "task_interrupted"`,
    `failure.next_action: "continue_task"`, and
@@ -133,6 +133,15 @@ For an `inspect-provider` failure, preserve the optional
 the report. They are bounded diagnostics, not a new recovery instruction.
 Follow `failure.next_action`; do not infer provider authentication or settings
 from an inspection-worker or supervisor-observation failure.
+
+## Waiting for multiple tasks
+
+Use [`delegate wait`](command-reference.md#wait) instead of shell polling loops.
+`wait` is passive and does not collect pending sealed evidence. Exit `0` means
+its readiness condition was met, not that tasks succeeded. Inspect each returned
+summary, then collect validated results as needed. Exit `1` carries typed
+`task_not_found` or an observation fault; `2` is invalid input; `3` is expiry.
+An undetermined task without canonical terminal evidence remains pending.
 
 ## Failure diagnosis
 
@@ -302,8 +311,17 @@ does not prove that case.
 
 Inspect the task again with `schedule execution` after recovery. History may
 still show its last cached observation; manual collection does not promise to
-refresh it. There is no historical repair scan, replacement dispatch, automatic
-retry/continuation, forced expiry or general corruption repair.
+refresh it. The runtime now reconciles a separate health projection in bounded historical
+pages. It does not repair task evidence, replace dispatches, automatically retry
+or continue providers, force expiry, or repair corruption.
+
+Admission failures remain on `occurrence.failure` with safe code, stage,
+next action and message, including after restart. Missing tasks do not imply
+successful execution; follow the occurrence guidance rather than polling an
+absent task. `supervisor_upgrade_required` requires explicit supervisor migration;
+the scheduler never performs it automatically. Use `schedule health` for the
+durable projection and coverage, not host `ready` or an old cached observation.
+Hook claims are at-most-once attempts; a hook result does not change a task result.
 
 ## Managed workspace results
 

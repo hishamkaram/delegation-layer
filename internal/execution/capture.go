@@ -11,13 +11,14 @@ import (
 )
 
 type capture struct {
-	name    string
-	observe *observedReader
-	framer  *providerjson.Framer
-	reader  *os.File
-	writer  *os.File
-	raw     io.WriteCloser
-	done    chan error
+	activity func()
+	name     string
+	observe  *observedReader
+	framer   *providerjson.Framer
+	reader   *os.File
+	writer   *os.File
+	raw      io.WriteCloser
+	done     chan error
 }
 
 func newCapture(td *taskdir.TaskDir, name string) (*capture, error) {
@@ -72,11 +73,12 @@ func (c *capture) run(opts Options) {
 			dst = observedWriter{raw: c.raw, observer: opts.Identity}
 		}
 	}
+	reader := activityReader{Reader: c.reader, activity: c.activity}
 	var err error
 	if opts.Hooks.Capture != nil {
-		err = opts.Hooks.Capture(c.name, dst, c.reader)
+		err = opts.Hooks.Capture(c.name, dst, reader)
 	} else {
-		_, err = io.Copy(dst, c.reader)
+		_, err = io.Copy(dst, reader)
 	}
 	if err == nil {
 		opts.emit(c.name + "-eof")
@@ -84,7 +86,7 @@ func (c *capture) run(opts Options) {
 		// Once capture is faulty no seal is possible, but we still own the pipe.
 		// Drain it to natural EOF so a finite child can finish without backpressure
 		// or a reader-close-induced broken pipe. Preserve the original failure.
-		_, drainErr := io.Copy(io.Discard, c.reader)
+		_, drainErr := io.Copy(io.Discard, reader)
 		err = errors.Join(err, drainErr)
 		if drainErr == nil {
 			opts.emit(c.name + "-drained-after-error")
@@ -148,3 +150,17 @@ func (r *observedReader) Close() error {
 
 // recordReader exposes reads only; adapters cannot close the core-owned file.
 type recordReader struct{ io.ReaderAt }
+
+// activityReader observes native bytes independently of writer/parser success.
+type activityReader struct {
+	io.Reader
+	activity func()
+}
+
+func (r activityReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 && r.activity != nil {
+		r.activity()
+	}
+	return n, err
+}

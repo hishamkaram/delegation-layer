@@ -1,7 +1,9 @@
 package claude
 
 import (
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
@@ -32,7 +34,11 @@ func (a *completionAttribution) observeRateLimit(state *eventState, event claude
 	if a == nil || !a.failedRequests {
 		return
 	}
+	a.quotaPending = nil
 	a.quotaRejected = state.initSeen && claudeEventSessionIs(event, state.init.sessionID) && claudeRateLimitRejection(event.value)
+	if a.quotaRejected {
+		a.quotaPending = claudeResetAdvice(event.value)
+	}
 }
 
 // consumeQuota attributes the pending rejection to one root result and resets
@@ -43,6 +49,11 @@ func (a *completionAttribution) consumeQuota(completion claudeResultCompletion) 
 	}
 	correlated := a.quotaRejected && completion.terminalReason == claudeTerminalAPIError
 	a.quotaRejected = false
+	a.quotaConsumed = nil
+	if correlated {
+		a.quotaConsumed = a.quotaPending
+	}
+	a.quotaPending = nil
 	return correlated
 }
 
@@ -117,4 +128,44 @@ func claudeQuotaDiagnostic() task.OutputDiagnostic {
 		Message: "Claude reported that its usage quota was exhausted.",
 		Field:   "rate_limit_info",
 	}
+}
+
+// claudeResetAdvice accepts only a bounded integral Unix reset, never raw telemetry.
+func claudeResetAdvice(value providerjson.Value) *task.QuotaAdvice {
+	fields, err := value.Object("rate_limit_info")
+	if err != nil {
+		return nil
+	}
+	info, ok := fields["rate_limit_info"]
+	if !ok {
+		return nil
+	}
+	values, err := info.Object("status", "resetsAt")
+	if err != nil {
+		return nil
+	}
+	reset, ok := values["resetsAt"]
+	if !ok {
+		return nil
+	}
+	data, err := reset.Raw(20)
+	if err != nil {
+		return nil
+	}
+	seconds, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil || seconds <= 0 || seconds > 253402300799 {
+		return nil
+	}
+	return &task.QuotaAdvice{NotBefore: time.Unix(seconds, 0).UTC().Format(time.RFC3339Nano)}
+}
+
+func claudeQuotaAdvice(input predicate.Input, state eventState, refusal, providerID string) *task.QuotaAdvice {
+	if providerID != Provider || !claudeQuotaExhausted(input, state, refusal, providerID) || state.attribution == nil {
+		return nil
+	}
+	a := state.attribution
+	if state.resultSeen && a.resultFault(state.result).refusal != "" {
+		return task.CloneQuotaAdvice(a.principalFault.quotaAdvice)
+	}
+	return task.CloneQuotaAdvice(a.completionFault().quotaAdvice)
 }

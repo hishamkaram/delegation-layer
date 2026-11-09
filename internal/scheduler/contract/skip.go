@@ -21,13 +21,14 @@ const (
 	// SkipMissedCapacity: no admission worker became available in time.
 	SkipMissedCapacity SkipReason = "missed_capacity"
 	// SkipPaused: the schedule was paused; recorded only when it is resumed.
-	SkipPaused SkipReason = "paused"
+	SkipPaused         SkipReason = "paused"
+	SkipQuotaExhausted SkipReason = "provider_quota_exhausted"
 )
 
 // ValidateSkipReason accepts only the closed reason values.
 func ValidateSkipReason(reason SkipReason) error {
 	switch reason {
-	case SkipOverlapActive, SkipBlockedUncertain, SkipMissedUnavailable, SkipMissedCapacity, SkipPaused:
+	case SkipOverlapActive, SkipBlockedUncertain, SkipMissedUnavailable, SkipMissedCapacity, SkipPaused, SkipQuotaExhausted:
 		return nil
 	default:
 		return fmt.Errorf("%w: skip reason %q", task.ErrInvalidEnum, reason)

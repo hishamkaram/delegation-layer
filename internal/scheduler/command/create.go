@@ -18,7 +18,7 @@ func BuildDefinition(input CreateInput) (contract.Definition, []Warning, error) 
 		return contract.Definition{}, nil, err
 	}
 	definition := contract.Definition{DefinitionHeader: contract.DefinitionHeader{
-		ScheduleID: input.ID, CreatedAt: input.CreatedAt, Cron: input.Cron, Timezone: zone, Request: input.Request,
+		ScheduleID: input.ID, CreatedAt: input.CreatedAt, Cron: input.Cron, Timezone: zone, Request: input.Request, Hook: input.Hook,
 	}, Brief: input.Brief}
 	if err = contract.ValidateDefinition(definition); err != nil {
 		return contract.Definition{}, nil, InvalidInput(err)

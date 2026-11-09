@@ -57,7 +57,7 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 	}
 	return schedulecommand.CreateInput{
 		Root: root, ID: id, CreatedAt: createdAt, Cron: a.ScheduleCron,
-		Timezone: a.ScheduleTimezone, TimezoneSet: a.ScheduleTimezoneSet, Request: request, Brief: brief,
+		Timezone: a.ScheduleTimezone, TimezoneSet: a.ScheduleTimezoneSet, Request: request, Brief: brief, Hook: a.ScheduleHook,
 	}, nil
 }
 
@@ -216,7 +216,7 @@ func scheduleCommand(a Arguments, deps storeDependencies) (result commandResult)
 	if a.ScheduleAction == "create" {
 		return createScheduleCommand(a, deps)
 	}
-	if a.ScheduleAction == "history" || a.ScheduleAction == "execution" {
+	if a.ScheduleAction == "history" || a.ScheduleAction == "execution" || a.ScheduleAction == "health" || (a.ScheduleAction == "policy" && a.SchedulePolicyOperation == "get") {
 		return scheduleQueryCommand(a, deps)
 	}
 	response := newResponse("schedule")
@@ -246,11 +246,17 @@ func scheduleCommand(a Arguments, deps storeDependencies) (result commandResult)
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, schedules.Close) }()
+	return executeStoredScheduleCommand(ctx, schedules, a, response)
+}
+
+func executeStoredScheduleCommand(ctx context.Context, schedules contract.Store, a Arguments, response Response) commandResult {
 	switch a.ScheduleAction {
 	case "list":
 		return listSchedules(ctx, schedules, a, response)
 	case "show":
 		return showSchedule(ctx, schedules, a.ScheduleID, response)
+	case "policy":
+		return schedulePolicy(ctx, schedules, a, response)
 	case "pause", "resume", "delete":
 		return changeScheduleState(ctx, schedules, a, response, time.Now().UTC())
 	default:
@@ -342,6 +348,10 @@ func changeScheduleState(ctx context.Context, store contract.Store, a Arguments,
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	if resumed, ok := resumeHeldSchedule(ctx, store, a, current, response, now); ok {
+		return resumed
+	}
+
 	change, warning, err := schedulecommand.PlanStateChange(current, a.ScheduleAction, now)
 	if err != nil {
 		return failed(response, err, 2)
@@ -411,9 +421,10 @@ var errScheduleQueryClose = errors.New("schedule query resource close failed")
 
 func scheduleQueryCommand(a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("schedule")
-	if a.ScheduleAction == "execution" {
+	switch a.ScheduleAction {
+	case "execution":
 		response.TaskID = a.TaskID
-	} else {
+	case "history":
 		response.ScheduleHistory = &ScheduleHistoryResponse{ScheduleID: a.ScheduleID}
 	}
 	if err := validateScheduleRequest(a); err != nil {
@@ -436,6 +447,12 @@ func scheduleQueryCommand(a Arguments, deps storeDependencies) (result commandRe
 		return failedScheduleQuery(response, err)
 	}
 	defer func() { mergeScheduleQueryClose(&result, store.Close) }()
+	if a.ScheduleAction == "health" {
+		return scheduleHealth(ctx, store, a.ScheduleID, response)
+	}
+	if a.ScheduleAction == "policy" {
+		return schedulePolicy(ctx, store, a, response)
+	}
 	if a.ScheduleAction == "history" {
 		return scheduleHistory(ctx, store, a, response)
 	}
@@ -479,6 +496,12 @@ func scheduleExecution(ctx context.Context, schedules contract.Store, evidence *
 	// The generic task axes derive from local evidence, never the cached row.
 	response.Admission, response.Liveness, response.Publication = projection.Admission, projection.Liveness, projection.Publication
 	item.NextAction = scheduleExecutionNextAction(projection)
+	if projection.TaskPresence == "absent" {
+		item.NextAction = "inspect_schedule"
+		if occurrence.Attempt != nil {
+			item.NextAction = occurrence.Attempt.NextAction
+		}
+	}
 	if err = writeJSON(io.Discard, response); err != nil {
 		item.LocalEvidence, item.Complete = nil, false
 		return failedScheduleQuery(response, err)
@@ -504,6 +527,9 @@ func failedScheduleQuery(response Response, err error) commandResult {
 	code := scheduleQueryErrorCode(err)
 	response.ScheduleQueryError = &ScheduleQueryErrorResponse{Code: code}
 	message := fmt.Sprintf("schedule query failed (%s)", code)
+	if code == "migration_required" {
+		message += "; stop the scheduler and run delegate scheduler migrate for the same state root"
+	}
 	if code == "database_busy" {
 		message += "; retry this read after database contention settles"
 	}
@@ -519,6 +545,8 @@ func mergeScheduleQueryClose(result *commandResult, closeFn func() error) {
 
 func scheduleQueryErrorCode(err error) string {
 	switch {
+	case errors.Is(err, contract.ErrMigrationRequired):
+		return "migration_required"
 	case errors.Is(err, ErrJSONResponseTooLarge):
 		return "response_too_large"
 	case errors.Is(err, task.ErrIdentityMismatch):
@@ -627,4 +655,29 @@ func savedScheduleHostResult(result commandResult, observed SchedulerResponse, o
 	result.response.Scheduler.NextAction = "inspect_scheduler"
 	result.response.Pending = &PendingResponse{Kind: "scheduler"}
 	return result
+}
+
+func resumeHeldSchedule(ctx context.Context, store contract.Store, a Arguments, current contract.Schedule, response Response, now time.Time) (commandResult, bool) {
+	if a.ScheduleAction != "resume" {
+		return commandResult{}, false
+	}
+	reliability, ok := store.(contract.ReliabilityStore)
+	if !ok {
+		return commandResult{}, false
+	}
+	hold, err := reliability.QuotaHold(ctx, a.ScheduleID)
+	if err != nil {
+		return failed(response, err, 1), true
+	}
+	if current.State != contract.StatePaused && hold == nil {
+		return commandResult{}, false
+	}
+	if err = reliability.ResumeWithHold(ctx, a.ScheduleID, now); err != nil {
+		return failed(response, err, 1), true
+	}
+	response.Schedule.State = contract.StateEnabled
+	if now.Before(current.Cursor) {
+		response.ScheduleWarnings = []ScheduleWarning{{Code: "clock_behind_cursor", Message: "Clock is behind the schedule cursor; the cursor was preserved."}}
+	}
+	return commandResult{response: response}, true
 }

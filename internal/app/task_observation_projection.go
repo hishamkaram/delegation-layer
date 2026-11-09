@@ -51,6 +51,12 @@ func applyContinuationOffer(response *Response, root string, offer *tasklifecycl
 	case offer.Cancelled && response.Outcome == nil:
 		// A committed or rejected outcome stays the authoritative result.
 		response.Failure = &DispatchFailureResponse{Code: "task_cancelled", Stage: response.Command, NextAction: "stop_and_report"}
+	case offer.Cause == tasklifecycle.ContinuationIdleTimedOut:
+		next := "stop_and_report"
+		if offer.Resumable {
+			next = "continue_task"
+		}
+		response.Failure = &DispatchFailureResponse{Code: "task_idle_timed_out", Stage: response.Command, NextAction: next}
 	}
 }
 

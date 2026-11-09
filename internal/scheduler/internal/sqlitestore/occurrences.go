@@ -66,6 +66,9 @@ func armOccurrence(ctx context.Context, tx *sql.Tx, claim contract.Claim) error 
 	if cursor != claim.ExpectedCursor.UnixNano() {
 		return fmt.Errorf("%w: schedule %s cursor moved", contract.ErrConflict, claim.ScheduleID)
 	}
+	if err := quotaClaimAllowed(ctx, tx, claim.ScheduleID, claim.Due); err != nil {
+		return err
+	}
 	var active int64
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM occurrences
 	WHERE schedule_id = ? AND released_at_unix_nanos IS NULL`, claim.ScheduleID).Scan(&active); err != nil {

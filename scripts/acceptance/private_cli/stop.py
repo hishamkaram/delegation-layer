@@ -1,5 +1,6 @@
 """Private CLI stop workflow."""
 
+from scripts.acceptance.private_cli.configuration import DEFAULT_SILENCE_TIMEOUT
 from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_BUDGET
 from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_SCENARIO
 from scripts.acceptance.private_cli.configuration import DEFAULT_STOP_TASK_BUDGET
@@ -12,6 +13,7 @@ from pathlib import Path
 from scripts.acceptance.private_cli.admission import await_created_task_ended
 from scripts.acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.acceptance.private_cli.capacity.records import capacity_lease_specifications
+from scripts.acceptance.private_cli.stop_policy import silence_stop_evidence
 from scripts.acceptance.private_cli.stop_policy import budget_closure_evidence
 from scripts.acceptance.private_cli.stop_policy import budget_closure_watch_seconds
 from scripts.acceptance.private_cli.stop_policy import budget_deadline_ns
@@ -132,6 +134,12 @@ def run_default_stop_acceptance(
             task_evidence=task_evidence,
             waiter_directory=waiter_directory,
         )
+        _prove_default_silence_stop(
+            attempted_task_ids=attempted_task_ids, capture_root=capture_root, client=client, config=config,
+            delegate=delegate, dispatch_fixture=dispatch_fixture, env=env, lease_nonce=lease_nonce,
+            receipts=receipts, run_receipt=run_receipt, state=state, task_evidence=task_evidence,
+            waiter_directory=waiter_directory,
+        )
         require_empty_fixture_waiters(waiter_directory)
         acceptance_evidence["cleanup"]["fixture_waiter_entries"] = 0
         release_gate.release()
@@ -152,7 +160,14 @@ def run_default_stop_acceptance(
 
 
 def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_receipt, state, waiting_brief, workspace):
-    def dispatch_fixture(task_id, budget, receipt_name):
+    def dispatch_fixture(task_id, budget, receipt_name, *, output_silence_timeout=None):
+        selected_brief = waiting_brief
+        silence_arguments = []
+        if output_silence_timeout is not None:
+            selected_brief = waiting_brief.with_name("default-stop-silence-brief.md")
+            selected_brief.write_text("DELEGATE_PRIVATE_SILENCE_WAIT\n")
+            selected_brief.chmod(0o600)
+            silence_arguments = ["--output-silence-timeout", output_silence_timeout]
         response = run_json(
             delegate,
             env,
@@ -163,7 +178,7 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
                 "--provider",
                 "pi:json",
                 "--brief",
-                str(waiting_brief),
+                str(selected_brief),
                 "--cwd",
                 str(workspace),
                 "--id",
@@ -172,6 +187,7 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
                 "read-only",
                 "--budget",
                 budget,
+                *silence_arguments,
                 "--json",
             ],
             expected=(0, 1),
@@ -382,3 +398,39 @@ def initial_stop_evidence(provider_fixture, task_evidence):
         },
     }
     return acceptance_evidence
+
+
+def _prove_default_silence_stop(
+    *, attempted_task_ids, capture_root, client, config, delegate, dispatch_fixture, env,
+    lease_nonce, receipts, run_receipt, state, task_evidence, waiter_directory,
+):
+    """Prove the opt-in output deadline through the real guardian and public CLI."""
+    run_receipt.phase("default_stop_output_silence")
+    task_id = uuid.uuid4().hex
+    attempted_task_ids.append(task_id)
+    response = dispatch_fixture(
+        task_id, DEFAULT_STOP_TASK_BUDGET, "dispatch-default-stop-silence.json",
+        output_silence_timeout=DEFAULT_SILENCE_TIMEOUT,
+    )
+    specification, cohort, lease = default_stop_live_lease(
+        client, config, env, state, response, waiter_directory, lease_nonce, capture_root=capture_root,
+    )
+    run_receipt.update_counts(running_task_count=1, live_lease_count=1)
+    with cohort:
+        closure = await_managed_lifetime_closure(state, (task_id,), timeout=120)
+        task_closure = closure.get("tasks", {}).get(task_id)
+        label = "delegate:" + response["root_id"] + ":" + task_id
+        wait_for_pueue_state(client, config, env, label, "Done", capture_root=capture_root)
+        status = run_json(
+            delegate, env, ["--root", str(state), "status", task_id, "--json"],
+            receipt=receipts / "status-default-stop-silence.json", capture_root=capture_root,
+        )
+        task_evidence["output_silence"] = {
+            "budget": DEFAULT_STOP_TASK_BUDGET, "output_silence_timeout": DEFAULT_SILENCE_TIMEOUT,
+            "dispatch": default_stop_dispatch_evidence(response),
+            "lease": default_stop_lease_evidence(specification, lease),
+            **silence_stop_evidence(status, task_closure, task_id, response["root_id"]),
+            "queue_ended_observation": {"kind": "exact-label-done"},
+            "fixture_lease_cleanup": cohort.remove_closed_fifos(),
+        }
+        run_receipt.update_counts(running_task_count=0, live_lease_count=0)

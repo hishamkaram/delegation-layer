@@ -12,7 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestInitializeCreatesPrivateVersionOneDeleteJournalDatabase(t *testing.T) {
+func TestInitializeCreatesPrivateCurrentDeleteJournalDatabase(t *testing.T) {
 	root := newRoot(t)
 	if err := Initialize(testContext(t), root, testRootID); err != nil {
 		t.Fatalf("initialize: %v", err)
@@ -26,11 +26,11 @@ func TestInitializeCreatesPrivateVersionOneDeleteJournalDatabase(t *testing.T) {
 	if version := rawInt(t, conn, "PRAGMA user_version"); version != schemaVersion {
 		t.Fatalf("user_version %d", version)
 	}
-	if strict := rawInt(t, conn, "SELECT count(*) FROM pragma_table_list WHERE schema = 'main' AND strict = 1"); strict != 4 {
-		t.Fatalf("%d STRICT tables, want exactly 4", strict)
+	if strict := rawInt(t, conn, "SELECT count(*) FROM pragma_table_list WHERE schema = 'main' AND strict = 1"); strict != 10 {
+		t.Fatalf("%d STRICT tables, want exactly 10", strict)
 	}
-	if tables := rawInt(t, conn, "SELECT count(*) FROM sqlite_schema WHERE type = 'table'"); tables != 4 {
-		t.Fatalf("%d tables, want exactly 4", tables)
+	if tables := rawInt(t, conn, "SELECT count(*) FROM sqlite_schema WHERE type = 'table'"); tables != 10 {
+		t.Fatalf("%d tables, want exactly 10", tables)
 	}
 	if root := rawText(t, conn, "SELECT root_id FROM scheduler_metadata"); root != testRootID {
 		t.Fatalf("root %q", root)

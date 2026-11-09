@@ -46,6 +46,10 @@ case "$prompt" in
       exit 17
     fi
     ;;
+  *DELEGATE_PRIVATE_SILENCE_WAIT*)
+    exec __PYTHON_EXECUTABLE__ -c __PI_WAIT_PROGRAM__ \
+      "$gate_path" "$waiter_directory" "$lease_nonce" session
+    ;;
   *DELEGATE_PRIVATE_UPGRADE_WAIT*)
     exec __PYTHON_EXECUTABLE__ -c __PI_WAIT_PROGRAM__ \
       "$gate_path" "$waiter_directory" "$lease_nonce"
@@ -69,7 +73,8 @@ import signal
 import stat
 import sys
 
-gate_path, waiter_directory, lease_nonce = sys.argv[1:]
+gate_path, waiter_directory, lease_nonce = sys.argv[1:4]
+emit_session = sys.argv[4:] == ["session"]
 lease_fifo = os.path.join(waiter_directory, lease_nonce + "-" + str(os.getpid()) + ".fifo")
 descriptor = -1
 gate_descriptor = -1
@@ -90,6 +95,9 @@ try:
     descriptor = os.open(lease_fifo, flags)
     handshake = lease_nonce + "\t" + str(os.getpid()) + "\n"
     os.write(descriptor, handshake.encode())
+    if emit_session:
+        sys.stdout.write('{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n')
+        sys.stdout.flush()
     gate_flags = os.O_RDONLY
     gate_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     gate_descriptor = os.open(gate_path, gate_flags)
@@ -98,7 +106,9 @@ try:
         raise RuntimeError("capacity fixture gate is unsafe")
     fcntl.flock(gate_descriptor, fcntl.LOCK_SH)
     fcntl.flock(gate_descriptor, fcntl.LOCK_UN)
-    sys.stdout.write('''{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n{"type":"agent_start"}\n{"type":"turn_start"}\n{"type":"message_start","message":{"role":"assistant","content":[]}}\n{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n''')
+    if not emit_session:
+        sys.stdout.write('{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n')
+    sys.stdout.write('''{"type":"agent_start"}\n{"type":"turn_start"}\n{"type":"message_start","message":{"role":"assistant","content":[]}}\n{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n''')
 finally:
     if gate_descriptor >= 0:
         os.close(gate_descriptor)

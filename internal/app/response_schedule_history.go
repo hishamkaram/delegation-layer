@@ -41,6 +41,7 @@ type ScheduleOccurrenceResponse struct {
 	Reservation string                      `json:"reservation"`
 	Release     *ScheduleReleaseResponse    `json:"release,omitempty"`
 	Observation ScheduleObservationResponse `json:"observation"`
+	Failure     *contract.AttemptFailure    `json:"failure,omitempty"`
 }
 
 type ScheduleReleaseResponse struct {
@@ -73,7 +74,7 @@ func scheduleOccurrence(item contract.Occurrence) ScheduleOccurrenceResponse {
 	}
 	result := ScheduleOccurrenceResponse{
 		ScheduleID: item.ScheduleID, TaskID: item.TaskID, Due: item.Due,
-		ArmedAt: item.ArmedAt, Reservation: "active", Observation: observation,
+		ArmedAt: item.ArmedAt, Reservation: "active", Observation: observation, Failure: item.Attempt,
 	}
 	if release := item.Release; release != nil {
 		result.Reservation = "released"
@@ -133,6 +134,9 @@ func writeHumanScheduleOccurrence(output *strings.Builder, item ScheduleOccurren
 		fmt.Fprintf(output, " fault_code=%s", observation.FaultCode)
 	}
 	output.WriteByte('\n')
+	if f := item.Failure; f != nil {
+		fmt.Fprintf(output, "failure code=%s stage=%s next_action=%s message=%s\n", f.Code, f.Stage, f.NextAction, f.Message)
+	}
 	if release := item.Release; release != nil {
 		fmt.Fprintf(output, "release released_at=%s kind=%s ref=%s\n", release.ReleasedAt.Format(time.RFC3339Nano), release.Kind, release.Ref)
 	}

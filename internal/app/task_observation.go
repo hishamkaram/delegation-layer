@@ -41,6 +41,14 @@ func statusContext(ctx context.Context, a Arguments, deps Dependencies) (result 
 	}()
 	defer func() { fillRecordedTaskContextForOperation(ctx, store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
+	activity, activityErr := td.ReadOutputActivityContext(ctx)
+	if activityErr != nil {
+		return failed(response, activityErr, 1)
+	}
+	if activity != nil {
+		response.LastProviderOutputAt = activity.LastProviderOutputAt
+		response.ProviderOutputActivity = activity
+	}
 	observed, err := tasklifecycle.StatusContext(ctx, store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup(), deps.infrastructureRouting()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)

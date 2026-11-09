@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
+
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 )
 
@@ -53,7 +55,8 @@ type completionFault struct {
 	field   string
 	// quota marks a result the follow-up policy correlated with an exhausted
 	// quota; it never carries a provider value.
-	quota bool
+	quota       bool
+	quotaAdvice *task.QuotaAdvice
 }
 
 func newCompletionFault(refusal, field string) completionFault {

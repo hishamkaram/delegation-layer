@@ -44,6 +44,16 @@ func (l *loop) admit(ctx context.Context, summary contract.ScheduleSummary, due 
 	l.event(occurrence, "claim", "armed")
 	l.workers.Go(func() {
 		state, dispatchErr := l.config.Tasks.Dispatch(request)
+		if state.Attempt != nil {
+			if store, ok := l.config.Store.(contract.ReliabilityStore); ok {
+				saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				saveErr := store.RecordAttempt(saveCtx, request.TaskID, *state.Attempt)
+				cancel()
+				if saveErr != nil {
+					dispatchErr = errors.Join(dispatchErr, ErrAttemptPersistence, saveErr)
+				}
+			}
+		}
 		l.results <- taskResult{occurrence: occurrence, state: state, err: dispatchErr, dispatch: true}
 	})
 	return nil

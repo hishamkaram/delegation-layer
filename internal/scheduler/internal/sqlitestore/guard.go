@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 )
 
 // Guards run as the first statements of every operation transaction. The
@@ -64,6 +66,8 @@ func (s *Store) currentGuard(ctx context.Context, tx *sql.Tx) error {
 	switch {
 	case version == schemaVersion:
 		return s.verifySchemaAndRoot(ctx, tx)
+	case version == 1:
+		return contract.ErrMigrationRequired
 	case version == 0:
 		eligible, eligibleErr := s.uninitialized(ctx, tx)
 		if eligibleErr != nil {
@@ -139,8 +143,12 @@ func (s *Store) verifySchemaAndRoot(ctx context.Context, tx *sql.Tx) error {
 }
 
 func verifySchemaObjects(ctx context.Context, tx *sql.Tx) error {
+	return verifyObjectSet(ctx, tx, schemaObjects())
+}
+
+func verifyObjectSet(ctx context.Context, tx *sql.Tx, objects []schemaObject) error {
 	expected := make(map[string]schemaObject)
-	for _, object := range schemaObjects() {
+	for _, object := range objects {
 		expected[object.name] = object
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT type, name, sql FROM sqlite_schema")

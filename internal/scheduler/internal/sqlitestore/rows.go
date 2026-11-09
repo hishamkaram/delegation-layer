@@ -16,18 +16,20 @@ import (
 // silently coerced zero value.
 
 const scheduleColumns = `schedule_id, created_at_unix_nanos, cron, timezone, request_json,
-	brief_sha256, definition_sha256, state, cursor_unix_nanos`
+	brief_sha256, definition_sha256, state, cursor_unix_nanos,
+ (SELECT hook_json FROM schedule_hooks WHERE schedule_hooks.schedule_id = schedules.schedule_id)`
 
 type scheduleRow struct {
 	id, cron, timezone, briefSHA256, definitionSHA256, state string
 	created, cursor                                          int64
 	request                                                  []byte
+	hook                                                     []byte
 }
 
 // targets lists scan destinations in scheduleColumns order; database/sql's
 // Scan API takes them as any.
 func (r *scheduleRow) targets() []any {
-	return []any{&r.id, &r.created, &r.cron, &r.timezone, &r.request, &r.briefSHA256, &r.definitionSHA256, &r.state, &r.cursor}
+	return []any{&r.id, &r.created, &r.cron, &r.timezone, &r.request, &r.briefSHA256, &r.definitionSHA256, &r.state, &r.cursor, &r.hook}
 }
 
 func (r *scheduleRow) header() (contract.DefinitionHeader, error) {
@@ -35,7 +37,17 @@ func (r *scheduleRow) header() (contract.DefinitionHeader, error) {
 	if err != nil {
 		return contract.DefinitionHeader{}, storedFault("schedule "+r.id+" request", err)
 	}
+	var hook *contract.FailureHook
+	if len(r.hook) > 0 {
+		if err := task.DecodeStrict(r.hook, &hook); err != nil {
+			return contract.DefinitionHeader{}, storedFault("hook", err)
+		}
+		if hook == nil {
+			return contract.DefinitionHeader{}, storedFault("hook", fmt.Errorf("null hook"))
+		}
+	}
 	return contract.DefinitionHeader{
+		Hook:       hook,
 		ScheduleID: r.id,
 		CreatedAt:  contract.InstantFromUnixNanos(r.created),
 		Cron:       r.cron,
@@ -81,7 +93,8 @@ func (r *scheduleRow) summary(briefLength int64) (contract.ScheduleSummary, erro
 
 const occurrenceColumns = `task_id, schedule_id, due_unix_nanos, armed_at_unix_nanos,
 	observed_at_unix_nanos, admission, liveness, publication, outcome_sha256, fault_code,
-	released_at_unix_nanos, release_kind, release_ref`
+	released_at_unix_nanos, release_kind, release_ref,
+ (SELECT attempt_json FROM occurrence_attempts WHERE occurrence_attempts.task_id = occurrences.task_id)`
 
 type occurrenceRow struct {
 	taskID, scheduleID                             string
@@ -89,6 +102,7 @@ type occurrenceRow struct {
 	observedAt, admission, liveness, publication   sql.NullInt64
 	outcomeSHA256, faultCode, releaseKind, release sql.NullString
 	releasedAt                                     sql.NullInt64
+	attempt                                        []byte
 }
 
 // targets lists scan destinations in occurrenceColumns order.
@@ -96,7 +110,7 @@ func (r *occurrenceRow) targets() []any {
 	return []any{
 		&r.taskID, &r.scheduleID, &r.due, &r.armedAt,
 		&r.observedAt, &r.admission, &r.liveness, &r.publication, &r.outcomeSHA256, &r.faultCode,
-		&r.releasedAt, &r.releaseKind, &r.release,
+		&r.releasedAt, &r.releaseKind, &r.release, &r.attempt,
 	}
 }
 
@@ -106,6 +120,14 @@ func (r *occurrenceRow) occurrence() (contract.Occurrence, error) {
 		ScheduleID: r.scheduleID,
 		Due:        contract.InstantFromUnixNanos(r.due),
 		ArmedAt:    contract.InstantFromUnixNanos(r.armedAt),
+	}
+	if len(r.attempt) > 0 {
+		if err := task.DecodeStrict(r.attempt, &occurrence.Attempt); err != nil {
+			return contract.Occurrence{}, storedFault("attempt", err)
+		}
+		if occurrence.Attempt == nil {
+			return contract.Occurrence{}, storedFault("attempt", fmt.Errorf("null attempt"))
+		}
 	}
 	observation, err := r.observation()
 	if err == nil {

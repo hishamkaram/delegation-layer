@@ -46,6 +46,14 @@ func (l *loop) finish(ctx context.Context, result taskResult) error {
 		if err := contract.ValidateRelease(release); err != nil {
 			return storeError("invalid release", result.occurrence, errors.Join(task.ErrInvariantFault, err))
 		}
+		occurrence := result.occurrence
+		occurrence.Release = &release
+		if result.state.Attempt != nil {
+			occurrence.Attempt = result.state.Attempt
+		}
+		if err := l.projectBeforeRelease(ctx, occurrence); err != nil {
+			return err
+		}
 		return l.recordRelease(ctx, result.occurrence, release)
 	}
 	l.event(result.occurrence, phase, "observed")
@@ -53,6 +61,10 @@ func (l *loop) finish(ctx context.Context, result taskResult) error {
 }
 
 func (l *loop) reportTaskError(result taskResult) error {
+	if result.state.Attempt != nil && l.config.Report != nil {
+		f := result.state.Attempt
+		l.config.Report(Event{ScheduleID: result.occurrence.ScheduleID, TaskID: result.occurrence.TaskID, Phase: "admission", Code: f.Code, Stage: f.Stage, NextAction: f.NextAction})
+	}
 	if result.err == nil {
 		return nil
 	}
@@ -61,7 +73,7 @@ func (l *loop) reportTaskError(result taskResult) error {
 		phase = "dispatch"
 	}
 	l.event(result.occurrence, phase, "task_error")
-	if errors.Is(result.err, ErrRootIdentity) || errors.Is(result.err, ErrTaskCleanupUnresolved) {
+	if errors.Is(result.err, ErrRootIdentity) || errors.Is(result.err, ErrTaskCleanupUnresolved) || errors.Is(result.err, ErrAttemptPersistence) {
 		return storeError(phase, result.occurrence, result.err)
 	}
 	return nil
@@ -138,4 +150,24 @@ func (l *loop) recordRelease(ctx context.Context, occurrence contract.Occurrence
 		}
 	}
 	return nil
+}
+
+// Admission cannot pass the reservation until the current outcome's quota
+// advice has been installed. Late publication is revisited separately.
+func (l *loop) projectBeforeRelease(ctx context.Context, o contract.Occurrence) error {
+	store, ok := l.config.Store.(contract.ReliabilityStore)
+	if !ok || l.config.Evidence == nil {
+		return nil
+	}
+	fact, err := l.config.Evidence.ReadResult(ctx, o)
+	if err != nil {
+		return storeError("release projection", o, err)
+	}
+	if fact.TaskID != o.TaskID {
+		return task.ErrIdentityMismatch
+	}
+	if err = store.RecordResult(ctx, fact); err != nil {
+		return storeError("release projection", o, err)
+	}
+	return store.ConsiderQuotaHold(ctx, o.TaskID, l.config.Clock.Now().UTC())
 }

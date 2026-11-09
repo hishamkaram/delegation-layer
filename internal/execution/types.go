@@ -57,6 +57,12 @@ type Stopper interface {
 	PrepareBudget(time.Time) (BudgetRequest, error)
 }
 
+// CauseStopper durably prepares an expiry with its explicit reason.
+// Historical finite helpers need only Stopper; provider silence requires this port.
+type CauseStopper interface {
+	PrepareStop(time.Time, string) (BudgetRequest, error)
+}
+
 // BudgetRequest observes a prepared stop through the bound supervisor.
 type BudgetRequest func(context.Context) error
 

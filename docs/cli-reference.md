@@ -27,8 +27,8 @@ Use `delegate help` for the installed build's command surface.
 | `workspace`, `checkpoint` | [Workspaces and checkpoints](../skills/agent-integration/references/workspaces.md) |
 | `teams register/update/delete/list/show`, `teams default show/set/clear` | [Team syntax and responses](../skills/agent-integration/references/command-reference.md#teams) · [Teams guide](teams.md) |
 | `schedule create/list/show/pause/resume/delete` | [Saved recurring definitions](../skills/agent-integration/references/command-reference.md#schedules) |
-| `schedule history`, `schedule execution` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
-| `scheduler serve/status/stop`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
+| `schedule history`, `schedule execution`, `schedule health`, `schedule policy` | [Passive execution history and evidence](../skills/agent-integration/references/command-reference.md#schedule-history-and-execution) |
+| `scheduler serve/status/stop/migrate`, `scheduler run` | [User-started host and compatibility runtime](../skills/agent-integration/references/command-reference.md#scheduler-runtime) |
 | `supervisor status`, `supervisor migrate` | [Operator recovery](#supervisor-recovery) |
 
 Remote handles use the supported controls in the [remote workflow](remote-delegation.md#observe-reconnect-and-collect).
@@ -402,3 +402,19 @@ requested budget stop; it never submits provider work.
 
 See [supervisor recovery](#supervisor-recovery) and
 [troubleshooting](troubleshooting.md) for operator actions.
+
+## Scheduler reliability and multi-task wait
+
+See the canonical [wait](../skills/agent-integration/references/command-reference.md#wait)
+and [schedule reliability](../skills/agent-integration/references/command-reference.md#schedule-reliability)
+contracts for finite any/all observation, immutable failure hooks and mutable
+opt-in quota policy. Host readiness does not certify schedule success.
+
+Stop the scheduler before explicit `delegate scheduler migrate --json` when
+`migration_required` is reported. Passive reads never perform that
+migration. It preserves old definitions, occurrences and task evidence.
+
+Dispatch, schedule creation and continuation support
+`--output-silence-timeout DURATION`; default off, explicit `0` disables, and
+continuation inherits otherwise. Waiting for background work or a reply counts
+as silence. The normal wall budget remains in force.

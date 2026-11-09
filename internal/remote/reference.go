@@ -66,6 +66,12 @@ func IntentDigest(intent Intent) (string, error) {
 // SaveIntent persists chunks first and the immutable intent last. An intent's
 // existence therefore implies its exact brief bytes are available for recovery.
 func (r *Reference) SaveIntent(ctx context.Context, intent Intent, brief []byte) error {
+	var configErr error
+	intent.Config, configErr = NormalizeOutputSilenceConfig(intent.Config)
+	if configErr != nil {
+		return configErr
+	}
+
 	if _, err := IntentDigest(intent); err != nil {
 		return err
 	}

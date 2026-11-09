@@ -49,11 +49,11 @@ func TestSchedulerArgumentsRejectInvalidRequests(t *testing.T) {
 		argv []string
 		want string
 	}{
-		{"missing action", []string{"scheduler"}, "scheduler requires serve, status, stop or run"},
-		{"missing action with globals", []string{"--root", root, "scheduler", "--json"}, "scheduler requires serve, status, stop or run"},
-		{"invalid action", []string{"scheduler", "start"}, "scheduler requires serve, status, stop or run"},
-		{"supervisor action", []string{"scheduler", "migrate"}, "scheduler requires serve, status, stop or run"},
-		{"case sensitive action", []string{"scheduler", "Run"}, "scheduler requires serve, status, stop or run"},
+		{"missing action", []string{"scheduler"}, "scheduler requires serve, status, stop, run or migrate"},
+		{"missing action with globals", []string{"--root", root, "scheduler", "--json"}, "scheduler requires serve, status, stop, run or migrate"},
+		{"invalid action", []string{"scheduler", "start"}, "scheduler requires serve, status, stop, run or migrate"},
+		{"supervisor action", []string{"scheduler", "stop-owner"}, "scheduler requires serve, status, stop, run or migrate"},
+		{"case sensitive action", []string{"scheduler", "Run"}, "scheduler requires serve, status, stop, run or migrate"},
 		{"extra argument", []string{"scheduler", "run", "extra"}, "unexpected extra argument"},
 		{"extra action", []string{"scheduler", "run", "run"}, "unexpected extra argument"},
 		{"argument after separator", []string{"scheduler", "run", "--", "extra"}, "unexpected extra argument"},
@@ -141,5 +141,18 @@ func requireSchedulerRequestedConfig(t *testing.T, got Arguments) {
 	t.Helper()
 	if got.Config.Model != "model-exact" || got.Config.Effort != "high" || got.Config.Permission != "workspace-write" || got.Config.Budget != "17m" || got.Config.NativeTimeout != "3m" {
 		t.Fatalf("requested execution values changed: %+v", got.Config)
+	}
+}
+
+func TestSchedulerMigrationArguments(t *testing.T) {
+	root := t.TempDir()
+	for _, argv := range [][]string{{"scheduler", "migrate", "--root", root, "--json"}, {"--root", root, "scheduler", "migrate", "--json"}} {
+		got, err := ParseArguments(argv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Command != "scheduler" || got.SchedulerAction != "migrate" || got.Root != root || !got.JSON {
+			t.Fatalf("migration arguments changed: %+v", got)
+		}
 	}
 }

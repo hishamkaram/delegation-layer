@@ -38,6 +38,8 @@ const (
 	// guardian recorded a budget empty-scope termination, then the worker's
 	// native Wait exited with an error.
 	rebootLifetimeClosedBudget
+	// Closed by the opt-in provider output-silence deadline.
+	rebootLifetimeClosedSilence
 	// rebootLifetimeClosedRequested is the same native closure after a user
 	// stop won the recorded termination cause.
 	rebootLifetimeClosedRequested
@@ -248,6 +250,8 @@ func recordRebootLifetime(t *testing.T, td *taskdir.TaskDir, stage rebootLifetim
 		}
 	case rebootLifetimeClosedBudget:
 		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationBudget)
+	case rebootLifetimeClosedSilence:
+		recordNativeLifetimeClosure(t, td, task.StopCauseOutputSilence)
 	case rebootLifetimeClosedRequested:
 		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationRequested)
 	}

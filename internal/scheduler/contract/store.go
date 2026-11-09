@@ -16,6 +16,8 @@ import (
 // cursor, or an occurrence's release, no longer matches what the caller expected.
 var ErrConflict = errors.New("scheduler compare-and-set conflict: stored state does not match the expected state")
 
+var ErrMigrationRequired = errors.New("scheduler migration required: stop scheduler and run delegate scheduler migrate")
+
 // Store is the scheduler's transactional storage port. Each method is one
 // short domain transaction; no SQL handle, generic record access, or caller
 // transaction crosses it. Methods validate their input with this package's

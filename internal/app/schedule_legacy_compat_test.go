@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -61,6 +62,15 @@ func legacyScheduleSnapshot(t *testing.T, root string) map[string]string {
 
 func TestScheduleLegacyV1HistoryAndEvidenceArePassive(t *testing.T) {
 	root := materializeLegacySchedule(t)
+	beforeMigration := legacyScheduleSnapshot(t, root)
+	refused, code, _ := runScheduleTest(t, root, "history", strings.Repeat("a", 32))
+	if code != 1 || refused.ScheduleQueryError == nil || refused.ScheduleQueryError.Code != "migration_required" {
+		t.Fatalf("legacy read did not require explicit migration: %+v code=%d", refused, code)
+	}
+	if !reflect.DeepEqual(beforeMigration, legacyScheduleSnapshot(t, root)) {
+		t.Fatal("passive legacy refusal mutated storage")
+	}
+	migrateLegacySchedule(t, root)
 	before := legacyScheduleSnapshot(t, root)
 	history, code, _ := runScheduleTest(t, root, "history", strings.Repeat("a", 32))
 	if code != 0 || history.ScheduleHistory == nil || len(history.ScheduleHistory.Entries) != 2 {
@@ -102,6 +112,7 @@ func assertLegacyExecutionEvidence(t *testing.T, root, id, publication string) {
 
 func TestScheduleLegacyV1CollectRepairsSameReleasedOccurrence(t *testing.T) {
 	root := materializeLegacySchedule(t)
+	migrateLegacySchedule(t, root)
 	id := strings.Repeat("c", 32)
 	before, code, _ := runScheduleTest(t, root, "execution", id)
 	if code != 0 || before.ScheduleExecution.LocalEvidence.Publication != task.PublicationPending.String() {
@@ -127,5 +138,13 @@ func TestScheduleLegacyV1CollectRepairsSameReleasedOccurrence(t *testing.T) {
 	currentStart, err := os.ReadFile(startPath)
 	if err != nil || string(start) != string(currentStart) {
 		t.Fatalf("collection changed the original start: %v", err)
+	}
+}
+
+func migrateLegacySchedule(t *testing.T, root string) {
+	t.Helper()
+	result := runSchedulerMigrate(context.Background(), Arguments{Root: root}, Dependencies{}.normalized())
+	if result.err != nil || result.code != 0 || result.response.Scheduler == nil || result.response.Scheduler.State != "migrated" {
+		t.Fatalf("explicit migration failed: %+v", result)
 	}
 }

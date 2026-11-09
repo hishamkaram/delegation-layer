@@ -48,8 +48,9 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 	options.Creation.Admission.Supervisor.Routing = tasks.routing
 	dispatched := tasklifecycle.Dispatch(dispatchRequest(arguments, tasks.dependencies), options)
 	projected := dispatchCommandResult(dispatched)
+	attempt := schedulerAdmissionFailure(projected.err, projected.response.TaskRecord)
 	if cleanupErr := schedulerTaskCleanupError(projected.err); errors.Is(cleanupErr, schedulerruntime.ErrTaskCleanupUnresolved) {
-		return schedulerruntime.TaskState{}, cleanupErr
+		return schedulerruntime.TaskState{Attempt: attempt}, cleanupErr
 	}
 	// WaitForPendingClose makes the ordinary lifecycle's deferred close join its
 	// existing owner. Observing/fencing now cannot race this invocation's launch.
@@ -57,6 +58,7 @@ func (tasks schedulerTasks) Dispatch(request schedulerruntime.DispatchRequest) (
 	if projected.err != nil && state.Observation.FaultCode == "" {
 		state.Observation.FaultCode = "admission_failed"
 	}
+	state.Attempt = attempt
 	return state, errors.Join(projected.err, observeErr)
 }
 
@@ -217,4 +219,21 @@ func (tasks schedulerTasks) observeNeverStarted(td *taskdir.TaskDir, observed ta
 		state.Release = &contract.Release{ReleasedAt: time.Now().UTC(), Kind: contract.ReleaseClosed, Ref: ref}
 	}
 	return state, nil
+}
+
+func schedulerAdmissionFailure(err error, record string) *contract.AttemptFailure {
+	if err == nil {
+		return nil
+	}
+	failure := dispatchFailure(err, record)
+	next := failure.NextAction
+	switch next {
+	case "correct_request":
+		next = "recreate_schedule"
+	case "check_status":
+		next = "inspect_schedule_execution"
+	case "retry_later", "retry_dispatch", "watch_workspace":
+		next = "wait_next_occurrence"
+	}
+	return &contract.AttemptFailure{Code: failure.Code, Stage: failure.Stage, NextAction: next, Message: dispatchFailureMessage(failure.Code)}
 }

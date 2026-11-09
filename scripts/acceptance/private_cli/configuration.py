@@ -39,7 +39,7 @@ SUPERVISOR_UPGRADE_RECOVERY_SCENARIO = "supervisor-upgrade-recovery"
 EXTERNAL_NOEXEC_STATE_SCENARIO = "external-noexec-state"
 
 
-DEFAULT_STOP_TASK_COUNT = 2
+DEFAULT_STOP_TASK_COUNT = 3
 
 
 EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT = 2
@@ -55,6 +55,9 @@ DEFAULT_STOP_TASK_BUDGET = "5m"
 
 
 DEFAULT_STOP_BUDGET = "90s"
+
+# Preserve enough startup/lease-observation margin on both native CI hosts.
+DEFAULT_SILENCE_TIMEOUT = "90s"
 
 
 DEFAULT_DISPATCH_WORKERS = 16

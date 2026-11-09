@@ -96,8 +96,9 @@ def run_stop_scenario(lease_nonce, lifetime, response_directory, run_receipt, fi
         checks=[
             "a user cancellation was issued only after the exact fake provider lease was live",
             "a finite budget expired after the exact fake-provider lease was live before its recorded deadline",
-            "both tasks reached canonical worker Wait and empty native-scope closure",
-            "the private supervisor shutdown was verified after both closures",
+            "all three tasks reached canonical worker Wait and empty native-scope closure",
+            "an opt-in output silence deadline preserved the exact native continuation evidence before wall expiry",
+            "the private supervisor shutdown was verified after all closures",
         ],
     )
     run_receipt.stage("default-stop-proved")

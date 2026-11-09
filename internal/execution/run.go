@@ -74,9 +74,10 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 }
 
 func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (result Result) {
+	launchPlan, startErr := prepareLaunchPlan(i, budgetNanos, plan, opts, allowRuntimeRefresh)
+	i.stdout.activity, i.stderr.activity = i.budget.outputActivity, i.budget.outputActivity
 	go i.stdout.run(opts)
 	go i.stderr.run(opts)
-	launchPlan, startErr := prepareLaunchPlan(i, budgetNanos, plan, opts, allowRuntimeRefresh)
 	if startErr == nil {
 		startErr = i.start(opts)
 	} else {
@@ -105,6 +106,15 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 		}
 	}
 	i.budget = armBudgetUntil(clock, deadline, opts)
+	request, _, requestErr := i.td.PreparedRecords()
+	if requestErr != nil {
+		return launchPlan, errors.Join(startErr, requestErr)
+	}
+	silence, silenceErr := task.ParseOutputSilenceTimeout(request.RequestedConfig.OutputSilenceTimeout)
+	if silenceErr != nil {
+		return launchPlan, errors.Join(startErr, silenceErr)
+	}
+	i.budget.configureOutputSilence(silence)
 	opts.emit("start-entry")
 	if startErr != nil {
 		return launchPlan, startErr
@@ -331,9 +341,11 @@ func (i *invocation) start(opts Options) error {
 	}
 	err := i.budget.authorizeAndStart(opts, start)
 	if err == nil {
+		i.budget.providerStarted()
 		opts.emit("started")
 		go func() {
 			waitErr := opts.wait(i.cmd)
+			i.budget.providerWaited()
 			opts.emit("wait-completed")
 			i.wait <- waitErr
 		}()
@@ -405,6 +417,11 @@ func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr erro
 	} else {
 		return nil, nil, errors.New("successful Start has no observed process state")
 	}
+	i.budget.mu.Lock()
+	if i.budget.expired && i.budget.cause == task.StopCauseOutputSilence {
+		diagnostic = "provider output silence timeout"
+	}
+	i.budget.mu.Unlock()
 	if err := td.ImportOutputArtifacts(); err != nil {
 		return nil, nil, err
 	}

@@ -43,6 +43,9 @@ func prepareDispatchContinuationContext(ctx context.Context, store *taskdir.Stor
 	if err != nil {
 		return options, nil, err
 	}
+	if request.RequestedConfig.OutputSilenceTimeout == "" {
+		request.RequestedConfig.OutputSilenceTimeout = predecessor.RequestedConfig.OutputSilenceTimeout
+	}
 	if err = ValidateContinuationEnvironment(meta); err != nil {
 		return options, nil, err
 	}

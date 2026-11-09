@@ -210,7 +210,7 @@ acceptance-private-cli-default-stop: tool-versions
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario default-stop \
-		--parallel-tasks 2 \
+		--parallel-tasks 3 \
 		--runtime-only \
 		--output "$$receipt_dir/receipt.json"
 
