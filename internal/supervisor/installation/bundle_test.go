@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 )
 
 func TestBundleObservationUsesInstalledRolesAndRefusesPartialPairFallback(t *testing.T) {
@@ -47,7 +49,7 @@ func TestBundleObservationUsesInstalledRolesAndRefusesPartialPairFallback(t *tes
 
 func bundleLayoutFixture(t *testing.T) (root, bin, libexec string) {
 	t.Helper()
-	root = t.TempDir()
+	root = supervisorfixture.CanonicalPath(t, t.TempDir())
 	bin, libexec = filepath.Join(root, "bin"), filepath.Join(root, "libexec")
 	for _, directory := range []string{bin, libexec} {
 		if err := os.Mkdir(directory, 0o700); err != nil {
