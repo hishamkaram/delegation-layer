@@ -187,9 +187,17 @@ func (td *TaskDir) sessionProofAcquisitionError(ctx context.Context, digest stri
 	if !task.AllErrorCauses(acquisitionErr, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) }) {
 		return labelled
 	}
-	// A busy flock alone cannot identify its owner. Only already validated
-	// immutable terminal evidence permits waiting for a possible collector.
-	// This read grants no release authority and performs no acknowledgement.
+	// Start advisory validation only after the outcome name is already visible:
+	// publication could otherwise occur between absence and consistency reads.
+	// This restricts waiting, not the EX-held release's accepted proof families.
+	present, presenceErr := td.store.exists(filepath.Join(td.Dir, "outcome.json"))
+	if presenceErr != nil {
+		return errors.Join(labelled, presenceErr)
+	}
+	if !present {
+		return fmt.Errorf("%w: active runner: %w", task.ErrSessionBusy, acquisitionErr)
+	}
+	// Proof reads grant no release authority or durability acknowledgement.
 	_, proofErr := td.sessionProofRecordContext(ctx, digest)
 	return errors.Join(labelled, proofErr)
 }

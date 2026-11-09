@@ -320,3 +320,46 @@ func assertSessionReleaseIdempotent(t *testing.T, store *taskdir.Store, td *task
 		t.Fatalf("idempotent release changed canonical evidence: %v", err)
 	}
 }
+
+// unpublishedReleaseFault counts record durability barriers after fixture setup.
+type unpublishedReleaseFault struct {
+	releaseLockFault
+	acknowledgements int
+}
+
+func (f *unpublishedReleaseFault) OnPostLinkDirBarrier(string) error {
+	f.acknowledgements++
+	return nil
+}
+
+func TestContinuationSessionReleaseDoesNotWaitOnSealWithoutOutcome(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store, td, request := claimedContinuationSession(t, true)
+		data, err := os.ReadFile(filepath.Join(td.Dir, "provider.exit"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var seal task.ProviderExitRecord
+		if err = task.DecodeStrict(data, &seal); err != nil {
+			t.Fatal(err)
+		}
+		outcome := &task.OutcomeRecord{EvidenceSHA256: seal.ManifestSHA256}
+		fault := &unpublishedReleaseFault{releaseLockFault: releaseLockFault{runFailures: []error{unix.EWOULDBLOCK}}}
+		store.SetFaultInjector(fault)
+		started := time.Now()
+		err = ReleaseContinuationSession(td, request, outcome)
+		store.SetFaultInjector(nil)
+		if !errors.Is(err, task.ErrSessionBusy) || time.Since(started) != 0 || fault.runCalls != 1 {
+			t.Fatalf("unpublished seal granted wait permission: elapsed=%s attempts=%d err=%v", time.Since(started), fault.runCalls, err)
+		}
+		if fault.acknowledgements != 0 {
+			t.Fatalf("denied acquisition acknowledged evidence: %d", fault.acknowledgements)
+		}
+		assertSessionReleaseAbsent(t, store, request)
+		// Waiting eligibility is narrower; the established EX-held seal proof
+		// remains sufficient for an explicit release after contention settles.
+		if err = td.ReleaseSession(request.Provider, request.PriorSession.ConversationID, seal.ManifestSHA256); err != nil {
+			t.Fatalf("advisory guard changed actual seal release policy: %v", err)
+		}
+	})
+}
