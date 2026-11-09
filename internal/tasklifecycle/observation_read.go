@@ -40,15 +40,26 @@ func ReleaseContinuationSessionContext(ctx context.Context, td *taskdir.TaskDir,
 	acquisition, cancel := context.WithTimeout(ctx, sessionReleaseContentionWait)
 	defer cancel()
 	deadline, _ := acquisition.Deadline()
+	var priorContention error
 	for {
 		err := td.ReleaseSessionContext(acquisition, req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 		if !continuationReleaseContended(err) {
-			return err
+			return retainContinuationContention(err, priorContention, acquisition.Err())
 		}
+		priorContention = err
 		if !waitForCollectionContext(acquisition, deadline) {
 			return errors.Join(err, acquisition.Err())
 		}
 	}
+}
+
+func retainContinuationContention(err, prior, contextErr error) error {
+	if prior != nil && contextErr != nil && task.AllErrorCauses(err, func(cause error) bool {
+		return errors.Is(cause, contextErr)
+	}) {
+		return errors.Join(prior, err)
+	}
+	return err
 }
 
 func continuationReleaseContended(err error) bool {

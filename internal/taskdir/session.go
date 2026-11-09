@@ -150,52 +150,96 @@ func (td *TaskDir) ClaimSessionContext(ctx context.Context, provider, conversati
 }
 
 func (td *TaskDir) terminalProofContext(ctx context.Context, digest string) (resultErr error) {
+	if err := td.localSessionRunnerError(); err != nil {
+		return err
+	}
 	if err := td.runLock.LockEXNonblockingContext(ctx); err != nil {
-		return &sessionProofLockError{cause: err}
+		return td.sessionProofAcquisitionError(ctx, digest, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.runLock.Unlock()) }()
+	record, err := td.sessionProofRecordContext(ctx, digest)
+	if err != nil || record == "" {
+		return err
+	}
+	return td.acknowledgeRecord(record)
+}
+
+func (td *TaskDir) localSessionRunnerError() error {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	if td.runnerLease == nil || td.runnerLease.state == nil {
+		return nil
+	}
+	state := td.runnerLease.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.releaseErr != nil {
+		return errors.Join(task.ErrSessionBusy, state.releaseErr)
+	}
+	if !state.released {
+		return task.ErrSessionBusy
+	}
+	return nil
+}
+
+func (td *TaskDir) sessionProofAcquisitionError(ctx context.Context, digest string, acquisitionErr error) error {
+	labelled := &sessionProofLockError{cause: acquisitionErr}
+	if !task.AllErrorCauses(acquisitionErr, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) }) {
+		return labelled
+	}
+	// A busy flock alone cannot identify its owner. Only already validated
+	// immutable terminal evidence permits waiting for a possible collector.
+	// This read grants no release authority and performs no acknowledgement.
+	_, proofErr := td.sessionProofRecordContext(ctx, digest)
+	return errors.Join(labelled, proofErr)
+}
+
+// sessionProofRecordContext resolves immutable proof to the record requiring a
+// durability acknowledgement. Its caller must acquire run EX and validate again
+// before acknowledging or releasing; an empty name denotes a handoff witness.
+func (td *TaskDir) sessionProofRecordContext(ctx context.Context, digest string) (string, error) {
 	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	winner, err := td.readWinner(meta, spec, metaHash)
 	if err == nil {
 		if winner.EvidenceSHA256 == digest || winner.Payload.SHA256 == digest {
-			return td.acknowledgeRecord("outcome.json")
+			return "outcome.json", nil
 		}
 		// A handoff release is a valid proof even when the provider publishes
 		// its terminal outcome after the release. Keep the recorded handoff
 		// valid while outcome.json remains the terminal authority.
 		if matches, matchErr := td.matchesHandoffProofContext(ctx, digest); matchErr != nil {
-			return matchErr
+			return "", matchErr
 		} else if matches {
-			return td.acknowledgeRecord("outcome.json")
+			return "outcome.json", nil
 		}
-		return task.ErrEvidenceFault
+		return "", task.ErrEvidenceFault
 	}
 	if !errors.Is(err, errNoOutcome) {
-		return err
+		return "", err
 	}
 	exists, err := td.store.exists(filepath.Join(td.Dir, "outcome.json"))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if exists {
-		return task.ErrEvidenceFault
+		return "", task.ErrEvidenceFault
 	}
 	if matches, matchErr := td.matchesHandoffProofContext(ctx, digest); matchErr != nil {
-		return matchErr
+		return "", matchErr
 	} else if matches {
-		return nil
+		return "", nil
 	}
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
 	if err != nil {
-		return fmt.Errorf("%w: %w", task.ErrSessionBusy, err)
+		return "", fmt.Errorf("%w: %w", task.ErrSessionBusy, err)
 	}
 	if seal.ManifestSHA256 == digest {
-		return td.acknowledgeRecord("provider.exit")
+		return "provider.exit", nil
 	}
-	return task.ErrSessionBusy
+	return "", task.ErrSessionBusy
 }
 
 // sessionProofLockError labels a failed acquisition without adding active

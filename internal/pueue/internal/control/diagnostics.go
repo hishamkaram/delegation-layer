@@ -1,6 +1,10 @@
 package control
 
-import "log"
+import (
+	"log"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
+)
 
 // ReportDiagnostic emits best-effort maintenance telemetry through the
 // selected invocation sink. It grants no lifecycle authority.
@@ -21,7 +25,7 @@ func reportDiagnostic(report func(error), err error) {
 // cleanup, avoiding globals and preserving causal ownership after callers exit.
 func reportRetained(pending []*Pending, err error) {
 	for _, command := range pending {
-		if report := command.DiagnosticReporter(); report != nil {
+		if report := transport.PendingDiagnosticReporter(command); report != nil {
 			reportDiagnostic(report, err)
 			return
 		}

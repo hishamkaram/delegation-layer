@@ -140,8 +140,9 @@ type InFlightError struct{ Pending *Pending }
 func (e *InFlightError) Error() string { return ErrInFlight.Error() }
 func (e *InFlightError) Unwrap() error { return ErrInFlight }
 
-// DiagnosticReporter is immutable invocation telemetry, not lifecycle authority.
-func (p *Pending) DiagnosticReporter() func(error) {
+// PendingDiagnosticReporter exposes immutable invocation telemetry only inside
+// Pueue's internal implementation. It grants no lifecycle authority.
+func PendingDiagnosticReporter(p *Pending) func(error) {
 	if p == nil {
 		return nil
 	}
