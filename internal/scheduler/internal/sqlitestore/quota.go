@@ -139,7 +139,7 @@ func quotaCoverageAllows(ctx context.Context, tx *sql.Tx, source quotaSource) (b
 		return false, nil
 	}
 	var blockers int64
-	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM occurrences o LEFT JOIN occurrence_results r ON r.task_id=o.task_id WHERE o.schedule_id=? AND o.due_unix_nanos>? AND o.due_unix_nanos<=? AND (r.task_id IS NULL OR r.verdict IN ('unknown','committed'))`, source.ScheduleID, source.Due, cursor).Scan(&blockers)
+	err = tx.QueryRowContext(ctx, `SELECT count(*) FROM occurrences o LEFT JOIN occurrence_results r ON r.task_id=o.task_id WHERE o.schedule_id=? AND o.due_unix_nanos>? AND o.due_unix_nanos<=? AND (r.task_id IS NULL OR r.verdict IN ('unknown','closed_without_outcome','committed'))`, source.ScheduleID, source.Due, cursor).Scan(&blockers)
 	return blockers == 0, classify(err)
 }
 

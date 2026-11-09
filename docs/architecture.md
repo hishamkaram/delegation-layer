@@ -591,7 +591,9 @@ The dispatch worker saves typed admission-attempt diagnostics before result
 delivery, even when cleanup or observation fails. Attempt facts cannot release
 a reservation. A separate passive evidence port feeds paged health reconciliation,
 including late publication after release. The durable result ledger owns only a
-derived projection: outcomes remain task-owned. Unknown later gaps block asserted
+derived projection: outcomes remain task-owned. A task-local evidence fault
+retains that reservation while other schedules continue; root identity, storage
+and unresolved cleanup faults remain fatal. Unknown later gaps block asserted
 failure streaks and defer quota decisions. The reconciliation worker has its own
 bounded mailbox; shutdown joins never depend on an undrained admission channel.
 

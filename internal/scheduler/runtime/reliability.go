@@ -57,7 +57,7 @@ func (l *loop) reconcilePage(ctx context.Context, store contract.ReliabilityStor
 		f, readErr := l.config.Evidence.ReadResult(pageCtx, o)
 		if readErr != nil {
 			l.event(o, "health", "evidence_unavailable")
-			if errors.Is(readErr, ErrRootIdentity) {
+			if fatalResultReadError(readErr) {
 				return reliabilityResult{err: readErr}
 			}
 			if pageCtx.Err() != nil {
@@ -169,4 +169,10 @@ func (l *loop) quotaSkip(ctx context.Context, summary *contract.ScheduleSummary)
 	}
 	skip := contract.Skip{ScheduleID: summary.Header.ScheduleID, ExpectedCursor: summary.Cursor, Span: contract.SkipSpan{From: summary.Cursor, To: end, Reason: contract.SkipQuotaExhausted}}
 	return l.skipTick(ctx, summary, skip.Span)
+}
+
+// Root identity and retained cleanup owners affect the whole runtime. Other
+// read faults remain confined to the occurrence whose evidence is unavailable.
+func fatalResultReadError(err error) bool {
+	return errors.Is(err, ErrRootIdentity) || errors.Is(err, ErrTaskCleanupUnresolved)
 }

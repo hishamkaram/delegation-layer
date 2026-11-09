@@ -51,8 +51,9 @@ func (l *loop) finish(ctx context.Context, result taskResult) error {
 		if result.state.Attempt != nil {
 			occurrence.Attempt = result.state.Attempt
 		}
-		if err := l.projectBeforeRelease(ctx, occurrence); err != nil {
-			return err
+		ready, projectionErr := l.projectBeforeRelease(ctx, occurrence)
+		if projectionErr != nil || !ready {
+			return projectionErr
 		}
 		return l.recordRelease(ctx, result.occurrence, release)
 	}
@@ -154,20 +155,39 @@ func (l *loop) recordRelease(ctx context.Context, occurrence contract.Occurrence
 
 // Admission cannot pass the reservation until the current outcome's quota
 // advice has been installed. Late publication is revisited separately.
-func (l *loop) projectBeforeRelease(ctx context.Context, o contract.Occurrence) error {
+func (l *loop) projectBeforeRelease(ctx context.Context, o contract.Occurrence) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	store, ok := l.config.Store.(contract.ReliabilityStore)
 	if !ok || l.config.Evidence == nil {
-		return nil
+		return true, nil
 	}
 	fact, err := l.config.Evidence.ReadResult(ctx, o)
 	if err != nil {
-		return storeError("release projection", o, err)
+		return l.releaseProjectionReadError(ctx, o, err)
 	}
 	if fact.TaskID != o.TaskID {
-		return task.ErrIdentityMismatch
+		return false, task.ErrIdentityMismatch
 	}
 	if err = store.RecordResult(ctx, fact); err != nil {
-		return storeError("release projection", o, err)
+		return false, storeError("release projection", o, err)
 	}
-	return store.ConsiderQuotaHold(ctx, o.TaskID, l.config.Clock.Now().UTC())
+	if err = store.ConsiderQuotaHold(ctx, o.TaskID, l.config.Clock.Now().UTC()); err != nil {
+		return false, storeError("release quota", o, err)
+	}
+	return true, nil
+}
+
+func (l *loop) releaseProjectionReadError(ctx context.Context, o contract.Occurrence, cause error) (bool, error) {
+	if fatalResultReadError(cause) {
+		return false, storeError("release projection", o, cause)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// A task-local evidence fault cannot establish quota safety or release, but
+	// it does not revoke admission for unrelated schedules in the same root.
+	l.event(o, "release", "evidence_unavailable")
+	return false, nil
 }

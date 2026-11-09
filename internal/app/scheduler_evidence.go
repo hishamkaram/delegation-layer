@@ -19,7 +19,7 @@ func (tasks schedulerTasks) ReadResult(ctx context.Context, o contract.Occurrenc
 	if err != nil {
 		return result, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, reader.Close()) }()
+	defer func() { resultErr = schedulerTaskCleanupError(errors.Join(resultErr, reader.Close())) }()
 	if reader.RootID() != tasks.rootID {
 		return result, schedulerruntime.ErrRootIdentity
 	}

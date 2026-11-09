@@ -149,10 +149,11 @@ func (l *loop) wait(ctx context.Context) error {
 	case result := <-l.reliabilityResults:
 		cancel()
 		waitErr := <-waited
+		resultErr := l.finishReliability(result)
 		if !cancellationOnly(waitErr) {
-			return waitErr
+			return errors.Join(waitErr, resultErr)
 		}
-		return l.finishReliability(result)
+		return resultErr
 	case result := <-l.results:
 		cancel()
 		waitErr := <-waited
