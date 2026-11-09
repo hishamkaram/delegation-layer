@@ -27,7 +27,7 @@ func (v views) reply(id string) ui.Action {
 		Fields: []ui.Field{
 			textField("Request ID", "copy the exact pending request from Inspect/events", "", func(a *app.Arguments, s string) { a.RequestID = s }),
 			textField("Answers file", "choose a file or inline answers JSON", "", func(a *app.Arguments, s string) { a.Answers = s }),
-			{Label: "Answers JSON", Hint: "native answer array; choose JSON or a file", Multiline: true, Apply: func(a *app.Arguments, s string) error {
+			{Label: "Answers JSON", Hint: `JSON object keyed by question ID, e.g. {"color":["Blue"]}; choose JSON or a file`, Multiline: true, Apply: func(a *app.Arguments, s string) error {
 				if s != "" {
 					a.AnswersBytes = []byte(s)
 				}
