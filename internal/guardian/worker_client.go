@@ -174,6 +174,14 @@ func (c *WorkerClient) FinishCommand(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func (c *WorkerClient) Terminate(ctx context.Context) error {
+	return c.TerminateForCause(ctx, "budget")
+}
+
+// TerminateForCause preserves the runner-selected expiry in canonical closure.
+func (c *WorkerClient) TerminateForCause(ctx context.Context, cause string) error {
+	if !task.IsDeadlineStopCause(cause) {
+		return task.ErrInvalidEnum
+	}
 	if c == nil {
 		return task.ErrEvidenceFault
 	}
@@ -182,7 +190,11 @@ func (c *WorkerClient) Terminate(ctx context.Context) error {
 	if c.terminal {
 		return nil
 	}
-	err := c.controlCall(ctx, c.message(lifetimeMessageStop, 0, 0))
+	message := c.message(lifetimeMessageStop, 0, 0)
+	if cause == task.StopCauseOutputSilence {
+		message.Cause = cause
+	}
+	err := c.controlCall(ctx, message)
 	if err == nil {
 		c.terminal = true
 	}

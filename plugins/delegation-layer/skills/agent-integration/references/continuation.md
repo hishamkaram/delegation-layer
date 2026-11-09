@@ -196,3 +196,13 @@ response as described in [result handling](result-handling.md).
 If the response says `stop_and_report`, stop that attempt; do not automatically
 retry it. A caller may make a later request after observing the predecessor.
 Native `codex:review` tasks cannot be continued.
+
+## Output-silence policy
+
+An eligible output-silence stop reports `idle_timed_out` distinctly from wall
+budget expiry. Follow the returned failure and continuation decision; a sealed
+turn is collected first. Cancellation and concrete faults retain precedence.
+`--output-silence-timeout` is inherited by both `continue --task` and legacy
+`dispatch --resume-task`. Omission inherits, a positive duration replaces, and
+explicit `0` disables. Each successor gets a fresh silence clock; inherited
+`0s` remains an explicit disable. This policy does not renew the wall budget.

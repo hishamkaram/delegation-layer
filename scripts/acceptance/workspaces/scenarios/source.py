@@ -157,23 +157,11 @@ def _install_workspace_fixture(
     nonce: str,
     session_marker: Path,
 ) -> None:
-    private_cli_fixtures.install_pi_fixture(provider_bin, gate, waiters, nonce)
+    private_cli_fixtures.install_pi_fixture(provider_bin, gate, waiters, nonce, emit_session=False)
     fixture = provider_bin / "pi"
     original = fixture.read_text(encoding="utf-8")
     marker = "prompt=$(/bin/cat)\n"
     require(original.count(marker) == 1, "private fixture shape changed")
-    session_line = '{"type":"session","id":"' + FIXTURE_SESSION + '"}\n'
-    require(original.count(session_line) == 1, "private fixture session event shape changed")
-    original = original.replace(session_line, "", 1)
-    wait_program = private_cli_fixtures.PI_WAIT_PROGRAM
-    wait_session_line = '{"type":"session","id":"' + FIXTURE_SESSION + '"}\\n'
-    require(wait_program.count(wait_session_line) == 1,
-            "private fixture wait session event shape changed")
-    original_wait_program = shlex.quote(wait_program)
-    fixture_wait_program = shlex.quote(wait_program.replace(wait_session_line, "", 1))
-    require(original.count(original_wait_program) == 1,
-            "private fixture wait program shape changed")
-    original = original.replace(original_wait_program, fixture_wait_program, 1)
     transformation = r'''prompt=$(/bin/cat)
 session_id=__FIXTURE_SESSION_JSON__
 session_marker=__FIXTURE_SESSION_MARKER_JSON__

@@ -12,26 +12,62 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 // RunIsolatedCommand joins a dedicated one-shot owner. That process alone
 // binds native containment; the caller's other descendants are never owned.
 // The command's streams remain owned by RunScopedCommand, including failures.
-func RunIsolatedCommand(ctx context.Context, ownerExecutable string, command *exec.Cmd) (resultErr error) {
+func RunIsolatedCommand(ctx context.Context, ownerExecutable string, command *exec.Cmd) error {
+	return runIsolatedCommand(ctx, ownerExecutable, command, false)
+}
+
+// RunIsolatedCommandNullOutput runs a bounded callback without output pipes.
+// Stdin must be a caller-owned regular file or nil, so exec.Wait owns no input copy worker.
+func RunIsolatedCommandNullOutput(ctx context.Context, ownerExecutable string, command *exec.Cmd) error {
+	if command == nil {
+		return errors.New("native command is required")
+	}
+	if command.Stdin != nil {
+		file, ok := command.Stdin.(*os.File)
+		if !ok {
+			return errors.New("native null-output command requires regular-file stdin")
+		}
+		info, err := file.Stat()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("native null-output command requires regular-file stdin")
+		}
+	}
+	return runIsolatedCommand(ctx, ownerExecutable, command, true)
+}
+
+func runIsolatedCommand(ctx context.Context, ownerExecutable string, command *exec.Cmd, nullOutput bool) (resultErr error) {
 	invocation, err := prepareNativeInvocation(ctx, ownerExecutable, command)
 	if err != nil {
 		return err
 	}
+	invocation.request.NullOutput = nullOutput
 	defer func() { resultErr = errors.Join(resultErr, invocation.close()) }()
 	canceled := make(chan error, 1)
-	stop := context.AfterFunc(ctx, func() { canceled <- invocation.connection.CloseWrite() })
+	stop := context.AfterFunc(ctx, func() {
+		// The helper owns the identical absolute deadline. A parent deadline must
+		// not race its clock by masquerading as an untyped peer disconnect.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			canceled <- nil
+			return
+		}
+		canceled <- invocation.connection.CloseWrite()
+	})
 	defer func() {
 		if !stop() {
 			resultErr = errors.Join(resultErr, <-canceled)
 		}
 	}()
-	runErr := RunScopedCommand(nativeParentScope{ctx}, invocation.owner, CommandHooks{Started: invocation.started})
+	runErr := RunScopedCommand(nativeParentScope{ctx}, invocation.owner, CommandHooks{Started: invocation.started, NullOutput: nullOutput})
 	if !invocation.launched {
 		return runErr
 	}
@@ -163,11 +199,65 @@ func nativeRecordedError(result nativeCommandResult) error {
 	if result.Fault != "" {
 		resultErr = errors.Join(resultErr, errors.New(result.Fault))
 	}
-	if result.Canceled {
+	if result.Canceled && (!result.Expired || result.Fault != "") {
 		resultErr = errors.Join(resultErr, context.Canceled)
 	}
-	if result.Expired {
-		resultErr = errors.Join(resultErr, context.DeadlineExceeded)
-	}
+	resultErr = errors.Join(resultErr, nativeDeadlineError(result))
+
 	return resultErr
+}
+
+// NativeCommandExitCode reports a proven callback exit only when no helper,
+// cleanup, cancellation or transport failure accompanies that observation.
+func NativeCommandExitCode(err error) (int, bool) {
+	if err == nil {
+		return 0, true
+	}
+	code := -1
+	valid := task.AllErrorCauses(err, func(leaf error) bool {
+		var exit nativeCommandExitError
+		if !errors.As(leaf, &exit) || code >= 0 && code != exit.code {
+			return false
+		}
+		code = exit.code
+		return true
+	})
+	return code, valid && code >= 0
+}
+
+type nativeCommandTimeoutError struct{}
+
+func (nativeCommandTimeoutError) Error() string        { return "native command exceeded its deadline" }
+func (nativeCommandTimeoutError) Is(target error) bool { return target == context.DeadlineExceeded }
+
+// NativeCommandTimedOut requires a helper-reported expiry with successful
+// teardown and no accompanying transport, owner or cleanup failure.
+func NativeCommandTimedOut(err error) bool {
+	if err == nil {
+		return false
+	}
+	proven := false
+	pure := task.AllErrorCauses(err, func(leaf error) bool {
+		var timeout nativeCommandTimeoutError
+		if errors.As(leaf, &timeout) {
+			proven = true
+			return true
+		}
+		var callbackExit nativeCommandExitError
+		if errors.As(leaf, &callbackExit) {
+			return true
+		}
+		return errors.Is(leaf, context.DeadlineExceeded)
+	})
+	return pure && proven
+}
+
+func nativeDeadlineError(result nativeCommandResult) error {
+	if !result.Expired {
+		return nil
+	}
+	if result.Fault != "" {
+		return context.DeadlineExceeded
+	}
+	return nativeCommandTimeoutError{}
 }

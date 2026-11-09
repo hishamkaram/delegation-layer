@@ -112,7 +112,7 @@ def retire_case_services(case: SchedulerCase) -> None:
         raise BaseExceptionGroup("scheduler service retirement failed", errors)
 
 
-def stop_case_hosts(case: SchedulerCase) -> None:
+def stop_case_hosts(case: SchedulerCase) -> float:
     """Join every generation before discovery, supervisor cleanup or deletion."""
     deadline = time.monotonic() + 45
     errors: list[BaseException] = []
@@ -124,6 +124,7 @@ def stop_case_hosts(case: SchedulerCase) -> None:
             errors.append(error)
     if errors:
         raise BaseExceptionGroup("scheduler hosting closure failed", errors)
+    return deadline
 
 
 def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetime: FixtureLifetime,
@@ -138,8 +139,8 @@ def finish_case(*, args: SchedulerArguments, case: SchedulerCase | None, lifetim
             )
     try:
         if case is not None:
-            stop_case_hosts(case)
-            case.discover()
+            cleanup_deadline = stop_case_hosts(case)
+            case.reconcile_cleanup_tasks(case.discover(), deadline=cleanup_deadline)
     except BaseException as cleanup_error:
         if failure is not None:
             cleanup_error = BaseExceptionGroup("scheduler case and closure failed", [failure, cleanup_error])

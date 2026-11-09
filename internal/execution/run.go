@@ -70,13 +70,13 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 			return result
 		}
 	}
-	return runPreparedInvocation(i, request.BudgetNanos, plan, opts, allowRuntimeRefresh)
+	return runPreparedInvocation(i, request, plan, opts, allowRuntimeRefresh)
 }
 
-func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (result Result) {
+func runPreparedInvocation(i *invocation, request *task.TaskRecord, plan Plan, opts Options, allowRuntimeRefresh bool) (result Result) {
+	launchPlan, startErr := prepareLaunchPlan(i, request, plan, opts, allowRuntimeRefresh)
 	go i.stdout.run(opts)
 	go i.stderr.run(opts)
-	launchPlan, startErr := prepareLaunchPlan(i, budgetNanos, plan, opts, allowRuntimeRefresh)
 	if startErr == nil {
 		startErr = i.start(opts)
 	} else {
@@ -89,12 +89,12 @@ func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Opt
 // constructs the one unstarted provider command from the plan it returns.
 // Nothing is bound before preflight, so a provider update between admission
 // and launch is resolved by the preflight rather than by a stale binding.
-func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (Plan, error) {
+func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts Options, allowRuntimeRefresh bool) (Plan, error) {
 	launchPlan := plan
 	_, startErr := i.prepareLaunchFiles(plan)
 	clock := opts.clock()
 	i.started = clock.Now()
-	deadline := i.started.Add(time.Duration(budgetNanos))
+	deadline := i.started.Add(time.Duration(request.BudgetNanos))
 	if !opts.Deadline.IsZero() {
 		if opts.Deadline.After(deadline) {
 			// Keep the admitted deadline and arm its owner before finalizing
@@ -105,6 +105,14 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 		}
 	}
 	i.budget = armBudgetUntil(clock, deadline, opts)
+	silence, silenceErr := task.ParseOutputSilenceTimeout(request.RequestedConfig.OutputSilenceTimeout)
+	if silenceErr != nil {
+		return launchPlan, errors.Join(startErr, silenceErr)
+	}
+	i.budget.configureOutputSilence(silence)
+	if silence > 0 {
+		i.stdout.activity, i.stderr.activity = i.budget.outputActivity, i.budget.outputActivity
+	}
 	opts.emit("start-entry")
 	if startErr != nil {
 		return launchPlan, startErr
@@ -331,9 +339,11 @@ func (i *invocation) start(opts Options) error {
 	}
 	err := i.budget.authorizeAndStart(opts, start)
 	if err == nil {
+		i.budget.providerStarted()
 		opts.emit("started")
 		go func() {
 			waitErr := opts.wait(i.cmd)
+			i.budget.providerWaited()
 			opts.emit("wait-completed")
 			i.wait <- waitErr
 		}()
@@ -405,6 +415,11 @@ func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr erro
 	} else {
 		return nil, nil, errors.New("successful Start has no observed process state")
 	}
+	i.budget.mu.Lock()
+	if i.budget.expired && i.budget.cause == task.StopCauseOutputSilence {
+		diagnostic = "provider output silence timeout"
+	}
+	i.budget.mu.Unlock()
 	if err := td.ImportOutputArtifacts(); err != nil {
 		return nil, nil, err
 	}

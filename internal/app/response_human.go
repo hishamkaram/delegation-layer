@@ -14,6 +14,11 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	if response.Command != "schedule" {
 		writeHumanSummary(&output, response)
 	}
+	writeHumanWait(&output, response.Wait)
+	writeHumanScheduleReliability(&output, response)
+	if response.LastProviderOutputAt != "" {
+		fmt.Fprintf(&output, "last_provider_output_at=%s source=capture_metadata\n", response.LastProviderOutputAt)
+	}
 	writeHumanResourceAdmission(&output, response.ResourceAdmission)
 	if selected := response.Team; selected != nil {
 		fmt.Fprintf(&output, "team scope=%s id=%s member=%s revision=%d\n", selected.Target.Team.Scope, selected.Target.Team.TeamID, selected.Target.MemberID, selected.TeamRevision)

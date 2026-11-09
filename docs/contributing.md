@@ -278,7 +278,7 @@ real account; a cross-build or a different kernel is not native runtime proof.
 | `make acceptance-supervisor` | Finite hermetic cases and an owned native Pueue lifecycle using source-built fixture commands. |
 | `make acceptance-inspection` | Source-built inspection fixtures against a selected installed Pueue pair. |
 | `make acceptance-private-cli` | Current CLI/private-supervisor bootstrap, dispatch/status/collect and 200-running-task capacity with finite provider fixtures. |
-| `make acceptance-private-cli-default-stop` | User and budget stop behavior. |
+| `make acceptance-private-cli-default-stop` | User, wall-budget and opt-in output-silence stops through the real guardian. |
 | `make acceptance-scheduler` | Native ticks and stop isolation with finite fixtures. The driver defaults to `--hosting managed-host` for foreground `scheduler serve`, without an OS service manager. Optional `--hosting service` retains the legacy `scheduler run` service path. |
 | `make acceptance-supervisor-handoff` | Inspection handoff while existing external work continues. |
 | `make acceptance-supervisor-upgrade-recovery` | Private-supervisor upgrade recovery. |
@@ -423,6 +423,16 @@ unchanged. This isolates provider-lifecycle coverage from unowned runner CPU
 load. The platform gate retains default-on guard coverage. Revisit this choice
 if runners provide controlled CPU isolation; it does not establish the cause of
 a historical CPU refusal or prove that CPU accounting was defective.
+
+Nested-survival acceptance keeps its default resource guards. After a completed
+host-CPU refusal, its receipt includes one bounded, failure-only `ps` projection:
+allowlisted role hints, counts and up to eight native historical CPU percentages.
+These hints cannot identify owned processes or establish causality, and the
+post-refusal snapshot does not match the admission sampling intervals. Capture
+faults remain secondary to the original refusal and sequential cleanup. A
+`closure_unproven: true` flag records unverified closure of the diagnostic `ps`
+process; the failed run retains its owned root and evidence, and must not be
+reported as fully cleaned up.
 
 The separate refused-admission control first completes a real warm task, then
 captures one finite synthetic resource refusal through the shared task ledger:

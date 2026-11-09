@@ -78,9 +78,9 @@ func TestForeignWALDatabaseIsRefusedWithoutConversion(t *testing.T) {
 func TestNewerWALDatabaseIsRefusedWithoutConversion(t *testing.T) {
 	_, root := initializedStore(t)
 	conn := rawConn(t, DatabasePath(root))
-	rawExec(t, conn, "PRAGMA user_version = 2", "CREATE TABLE foreign_data (x INTEGER)", "INSERT INTO foreign_data VALUES (7)", "PRAGMA journal_mode = WAL")
+	rawExec(t, conn, "PRAGMA user_version = 3", "CREATE TABLE foreign_data (x INTEGER)", "INSERT INTO foreign_data VALUES (7)", "PRAGMA journal_mode = WAL")
 	closeRaw(t, conn)
-	fixture := foreignFixture{root: root, path: DatabasePath(root), mode: "wal", version: 2, rows: 1}
+	fixture := foreignFixture{root: root, path: DatabasePath(root), mode: "wal", version: 3, rows: 1}
 	requireRefused(t, root, errJournalMode)
 	fixture.requireUntouched(t)
 }
@@ -107,7 +107,7 @@ func TestCurrentDatabaseConvertedToWALIsRefusedNotRepaired(t *testing.T) {
 func TestNewerDatabaseIsRefusedAsUnsupported(t *testing.T) {
 	_, root := initializedStore(t)
 	conn := rawConn(t, DatabasePath(root))
-	rawExec(t, conn, "PRAGMA user_version = 2", "CREATE TABLE foreign_data (x INTEGER)")
+	rawExec(t, conn, "PRAGMA user_version = 3", "CREATE TABLE foreign_data (x INTEGER)")
 	closeRaw(t, conn)
 	before, err := os.ReadFile(DatabasePath(root))
 	if err != nil {
@@ -117,7 +117,7 @@ func TestNewerDatabaseIsRefusedAsUnsupported(t *testing.T) {
 	if after, err := os.ReadFile(DatabasePath(root)); err != nil || !bytes.Equal(after, before) {
 		t.Fatalf("refusing a newer database changed its bytes: %v", err)
 	}
-	(foreignFixture{root: root, path: DatabasePath(root), mode: "delete", version: 2, rows: 0}).requireUntouched(t)
+	(foreignFixture{root: root, path: DatabasePath(root), mode: "delete", version: 3, rows: 0}).requireUntouched(t)
 }
 
 func TestHeaderBearingVersionZeroDatabaseIsForeign(t *testing.T) {

@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "90a0044ea73fedaf7353c63ade8e0863d8f0eeb3",
+      "revision": "1e4feaa2a002557c5703072f7a0b75ac4acdb867",
       "link_mode": "local-only"
     }
   },

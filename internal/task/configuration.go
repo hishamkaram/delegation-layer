@@ -51,6 +51,10 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	}
 	r.BudgetNanos = int64(duration)
 	r.RequestedConfig.Budget = duration.String()
+	r.RequestedConfig.OutputSilenceTimeout, err = NormalizeOutputSilenceTimeout(r.RequestedConfig.OutputSilenceTimeout)
+	if err != nil {
+		return err
+	}
 	r.RequestedConfig.NativeTimeout, err = normalizedNativeTimeout(r.Provider, r.RequestedConfig.NativeTimeout, r.BudgetNanos)
 	if err != nil {
 		return err
@@ -87,6 +91,11 @@ func validateNativeTimeout(provider string, request TaskConfig, budget int64) er
 }
 
 func validateRequestedConfig(provider string, request TaskConfig, mode string, budget int64) error {
+	if normalized, err := NormalizeOutputSilenceTimeout(request.OutputSilenceTimeout); err != nil {
+		return err
+	} else if normalized != request.OutputSilenceTimeout {
+		return errors.New("output silence timeout must be normalized")
+	}
 	if mode == "" || request.Permission == "" || request.Permission != mode {
 		return errors.New("requested permission must match the explicit task mode")
 	}

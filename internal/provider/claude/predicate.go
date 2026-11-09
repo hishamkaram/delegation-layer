@@ -168,6 +168,7 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	if refusal := refusalForProvider(input, state, v.Reference().Adapter); refusal != "" {
 		result := rejectedWithUsage(refusal, claudeCurrentUsageMetadata(state, task.UsageReliabilityUnreliable))
 		if state.current {
+			result.Quota = claudeQuotaAdvice(input, state, refusal, v.Reference().Adapter)
 			result.Diagnostics = append(result.Diagnostics, claudeRejectionDiagnostic(input, state, refusal, v.Reference().Adapter))
 			result.Diagnostics = append(result.Diagnostics, claudeCurrentUsageWarning(state)...)
 		}

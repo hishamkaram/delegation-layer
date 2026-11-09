@@ -42,17 +42,35 @@ func (l *loop) finish(ctx context.Context, result taskResult) error {
 		l.event(result.occurrence, phase, result.state.Observation.FaultCode)
 	}
 	if result.state.Release != nil {
-		release := *result.state.Release
-		if err := contract.ValidateRelease(release); err != nil {
-			return storeError("invalid release", result.occurrence, errors.Join(task.ErrInvariantFault, err))
+		occurrence := result.occurrence
+		if result.state.Attempt != nil {
+			occurrence.Attempt = result.state.Attempt
 		}
-		return l.recordRelease(ctx, result.occurrence, release)
+		return l.finishRelease(ctx, occurrence, *result.state.Release)
 	}
 	l.event(result.occurrence, phase, "observed")
 	return nil
 }
 
+// Release is gated by validated evidence and any quota hold in the same
+// owner path; task-local uncertainty retains the reservation instead.
+func (l *loop) finishRelease(ctx context.Context, occurrence contract.Occurrence, release contract.Release) error {
+	if err := contract.ValidateRelease(release); err != nil {
+		return storeError("invalid release", occurrence, errors.Join(task.ErrInvariantFault, err))
+	}
+	occurrence.Release = &release
+	ready, err := l.projectBeforeRelease(ctx, occurrence)
+	if err != nil || !ready {
+		return err
+	}
+	return l.recordRelease(ctx, occurrence, release)
+}
+
 func (l *loop) reportTaskError(result taskResult) error {
+	if result.state.Attempt != nil && l.config.Report != nil {
+		f := result.state.Attempt
+		l.config.Report(Event{ScheduleID: result.occurrence.ScheduleID, TaskID: result.occurrence.TaskID, Phase: "admission", Code: f.Code, Stage: f.Stage, NextAction: f.NextAction})
+	}
 	if result.err == nil {
 		return nil
 	}
@@ -61,7 +79,7 @@ func (l *loop) reportTaskError(result taskResult) error {
 		phase = "dispatch"
 	}
 	l.event(result.occurrence, phase, "task_error")
-	if errors.Is(result.err, ErrRootIdentity) || errors.Is(result.err, ErrTaskCleanupUnresolved) {
+	if errors.Is(result.err, ErrRootIdentity) || errors.Is(result.err, ErrTaskCleanupUnresolved) || errors.Is(result.err, ErrAttemptPersistence) {
 		return storeError(phase, result.occurrence, result.err)
 	}
 	return nil
@@ -138,4 +156,43 @@ func (l *loop) recordRelease(ctx context.Context, occurrence contract.Occurrence
 		}
 	}
 	return nil
+}
+
+// Admission cannot pass the reservation until the current outcome's quota
+// advice has been installed. Late publication is revisited separately.
+func (l *loop) projectBeforeRelease(ctx context.Context, o contract.Occurrence) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	store, ok := l.config.Store.(contract.ReliabilityStore)
+	if !ok || l.config.Evidence == nil {
+		return true, nil
+	}
+	fact, err := l.config.Evidence.ReadResult(ctx, o)
+	if err != nil {
+		return l.releaseProjectionReadError(ctx, o, err)
+	}
+	if fact.TaskID != o.TaskID {
+		return false, task.ErrIdentityMismatch
+	}
+	if err = store.RecordResult(ctx, fact); err != nil {
+		return false, storeError("release projection", o, err)
+	}
+	if err = store.ConsiderQuotaHold(ctx, o.TaskID, l.config.Clock.Now().UTC()); err != nil {
+		return false, storeError("release quota", o, err)
+	}
+	return true, nil
+}
+
+func (l *loop) releaseProjectionReadError(ctx context.Context, o contract.Occurrence, cause error) (bool, error) {
+	if fatalResultReadError(cause) {
+		return false, storeError("release projection", o, cause)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// A task-local evidence fault cannot establish quota safety or release, but
+	// it does not revoke admission for unrelated schedules in the same root.
+	l.event(o, "release", "evidence_unavailable")
+	return false, nil
 }

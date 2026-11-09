@@ -240,8 +240,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 self.assertIn("must be exactly 200", errors.getvalue())
                 setup.assert_not_called()
 
-    def test_default_stop_requires_exact_two_tasks_before_fixture_setup(self):
-        for total in (0, 1, 3, 200):
+    def test_default_stop_requires_exact_three_tasks_before_fixture_setup(self):
+        for total in (0, 1, 2, 200):
             with self.subTest(total=total):
                 errors = io.StringIO()
                 with patch.object(
@@ -252,7 +252,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                     with self.assertRaises(SystemExit) as raised:
                         application_impl.main()
                 self.assertEqual(raised.exception.code, 2)
-                self.assertIn("must be exactly 2", errors.getvalue())
+                self.assertIn("must be exactly 3", errors.getvalue())
                 setup.assert_not_called()
 
     def test_external_handoff_requires_exact_two_tasks_before_fixture_setup(self):

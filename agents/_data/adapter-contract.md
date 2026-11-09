@@ -182,3 +182,13 @@ Delivery reservation is durable before writing; uncertain messages are never
 replayed. Native acknowledgement and completion of requested work remain
 separate facts. The core seals the closed interaction journal with stdout and
 stderr; outcome.json remains terminal authority.
+
+## Optional provider-output silence
+
+The runner owns `output_silence_timeout`, independently of native provider
+settings. Positive stdout/stderr reads reset its monotonic activity deadline;
+incoming clarification input does not. Waiting for a reply or healthy background
+work counts as silence when the caller opts in. The interaction ready deadline
+continues to describe wall budget only. Explicit zero disables, omission inherits
+on continuation, and each successor has a fresh activity clock. Default behavior
+remains unchanged. Provider-native final result events alone do not close a turn.

@@ -88,6 +88,10 @@ def require_inner_failure(case, inner):
     require(captured.get("exit_code") == 1
             and case.evidence["failed_admission"]["resource_admission"] == response.get("resource_admission"),
             "finite refusal CPU diagnostics changed in the allowlisted admission receipt")
+    snapshot = case.evidence["failed_admission"].get("host_cpu_snapshot")
+    require(isinstance(snapshot, dict) and snapshot.get("closure_unproven") is not True
+            and snapshot.get("reason") != "control_completion_unavailable",
+            "CPU diagnostic completion is unverified; retain refused-leader evidence")
     require(inner.get("result") == "FAIL"
             and inner.get("failure") == {"code": "nested-setup-failed", "exception_type": "AcceptanceFailure",
                                          "phase": "nested_setup"}
@@ -179,12 +183,12 @@ def run_refused_leader(args, responses, receipt):
     cleanup = {"status": "retained", "private_root": {"status": "retained", "verified": False}}
     try:
         inner = _read_control_record(inner_receipt.output, "inner failed acceptance receipt")
-        if case is not None and before is not None and case.a in lifetime.closed_roots:
-            cleanup = dispose_retained_root(case, before)
         if case is None or before is None or not expected:
             raise AcceptanceFailure("real warm setup or finalization failed before expected refusal proof") from (
                 finalization_failure or failure)
         require_inner_failure(case, inner)
+        if case.a in lifetime.closed_roots:
+            cleanup = dispose_retained_root(case, before)
         require(cleanup["status"] == "passed", "outer owner did not freshly prove and dispose the retained root")
         receipt.add_details(refused_leader={"inner": inner, "commands": case.commands,
                                             "warm_task_ids": lifetime.attempted_task_ids[:-1]})

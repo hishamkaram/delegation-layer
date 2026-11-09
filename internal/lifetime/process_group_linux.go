@@ -170,6 +170,8 @@ func processGroupID(pid int) (int, error) {
 	return pgid, nil
 }
 
+func startedProcessGroupID(pid int) (int, error) { return processGroupID(pid) }
+
 type linuxProcessHandle struct {
 	pid int
 	fd  int

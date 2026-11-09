@@ -21,6 +21,8 @@ import (
 
 func runSchedulerCommand(ctx context.Context, a Arguments, deps Dependencies, stderr io.Writer) commandResult {
 	switch a.SchedulerAction {
+	case "migrate":
+		return runSchedulerMigrate(ctx, a, deps)
 	case "serve":
 		return serveScheduler(ctx, a, deps)
 	case "status", "stop":

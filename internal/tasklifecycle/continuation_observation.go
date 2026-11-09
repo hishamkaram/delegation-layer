@@ -47,9 +47,14 @@ func ObserveTimeoutContinuationWithRunner(root string, td *taskdir.TaskDir, req 
 }
 
 func ObserveTimeoutContinuationWithRunnerContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
-	var offer *ContinuationOffer
-	var err error
-	if HasTerminatedBudgetStop(records) {
+	offer, err := observeSilenceContinuation(ctx, root, td, req, meta, catalog, runnerReleased)
+	if err != nil {
+		return nil, err
+	}
+	if offer != nil {
+		// A validated native closure carries the cause even when the runner sealed
+		// before a later queue observation could annotate its stop request.
+	} else if HasTerminatedBudgetStop(records) {
 		offer, err = observeBudgetContinuation(ctx, root, td, req, meta, records, catalog, runnerReleased)
 	} else {
 		offer, err = observeInterruptedContinuation(ctx, root, td, req, meta, catalog, runnerReleased)
@@ -120,6 +125,9 @@ func observeInterruptedContinuation(ctx context.Context, root string, td *taskdi
 // closureContinuationCause reports a timeout only for an explicit budget
 // termination; every other recorded cause is an interruption.
 func closureContinuationCause(proof guardian.ClosureProof) ContinuationCause {
+	if proof.TerminationCause() == task.StopCauseOutputSilence {
+		return ContinuationIdleTimedOut
+	}
 	if proof.TerminationCause() == task.LifetimeTerminationBudget {
 		return ContinuationTimedOut
 	}
@@ -138,4 +146,40 @@ func observeContinuationLaunch(ctx context.Context, root string, td *taskdir.Tas
 		runner: meta.RunnerExecutable, commandRunner: TimeoutContinuationCommandRunner(meta, ownership),
 		supervisor: savedSupervisor(meta), stateRecorded: meta.EnvironmentRecorded || len(meta.Environment) > 0,
 	}, nil
+}
+
+func observeSilenceContinuation(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
+	if req == nil || !runnerReleased {
+		return nil, nil
+	}
+	proof, err := guardian.ReadClosureProof(ctx, td)
+	if errors.Is(err, guardian.ErrProofPending) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if proof.TerminationCause() != task.StopCauseOutputSilence {
+		return nil, nil
+	}
+	source, err := observedSessionSource(td, req)
+	if err != nil {
+		return nil, err
+	}
+	launch, err := observeContinuationLaunch(ctx, root, td, meta)
+	if err != nil {
+		return nil, err
+	}
+	offer := continuationOffer(req, catalog, continuationOfferFacts{cause: ContinuationIdleTimedOut, source: source, launch: launch, runnerReleased: runnerReleased})
+	inspection, err := td.Inspect()
+	if err != nil {
+		return nil, err
+	}
+	if inspection.SealExists && inspection.Outcome == nil {
+		offer.Resumable = false
+		offer.CommandRunner = ""
+		offer.Supervisor = nil
+		offer.Reason = "sealed turn must be collected first"
+	}
+	return offer, nil
 }

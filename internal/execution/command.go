@@ -22,9 +22,11 @@ type CommandScope interface {
 // before the command is waited, which lets callers release descriptors that
 // were needed only during Start.
 type CommandHooks struct {
-	Start   func(*exec.Cmd) error
-	Wait    func(*exec.Cmd) error
-	Started func() error
+	// NullOutput connects stdout/stderr directly to the null device, without capture pipes.
+	NullOutput bool
+	Start      func(*exec.Cmd) error
+	Wait       func(*exec.Cmd) error
+	Started    func() error
 }
 
 var errInvalidCommandScope = errors.New("invalid command scope")
@@ -45,6 +47,9 @@ func RunScopedCommand(scope CommandScope, cmd *exec.Cmd, hooks CommandHooks) err
 		return err
 	}
 
+	if hooks.NullOutput {
+		return runNullOutputCommand(scope, cmd, hooks)
+	}
 	originalStdout := cmd.Stdout
 	originalStderr := cmd.Stderr
 	stdout, err := newCommandStream(commandWriter(originalStdout))
@@ -164,4 +169,34 @@ func joinCommandErrors(errs ...error) error {
 		joined = errors.Join(joined, err)
 	}
 	return joined
+}
+
+// runNullOutputCommand has no output-copy goroutines or inherited output pipes.
+// A regular-file stdin remains caller owned; Start/Wait are still singular.
+func runNullOutputCommand(scope CommandScope, cmd *exec.Cmd, hooks CommandHooks) error {
+	ctx := scope.Context()
+	stdout, stderr := cmd.Stdout, cmd.Stderr
+	cmd.Stdout, cmd.Stderr = nil, nil
+	defer func() { cmd.Stdout, cmd.Stderr = stdout, stderr }()
+	start := hooks.Start
+	if start == nil {
+		start = func(c *exec.Cmd) error { return c.Start() }
+	}
+	wait := hooks.Wait
+	if wait == nil {
+		wait = func(c *exec.Cmd) error { return c.Wait() }
+	}
+	started := false
+	startErr := scope.StartCommand(cmd, func() error { err := start(cmd); started = err == nil; return err })
+	var hookErr, waitErr, finishErr error
+	if started {
+		if hooks.Started != nil {
+			hookErr = hooks.Started()
+		}
+		waitErr = wait(cmd)
+		finishErr = scope.FinishCommand(cmd)
+	} else if startErr == nil {
+		startErr = errInvalidCommandScope
+	}
+	return joinCommandErrors(startErr, hookErr, waitErr, finishErr, ctx.Err())
 }

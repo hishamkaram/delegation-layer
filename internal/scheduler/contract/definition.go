@@ -25,6 +25,7 @@ type DefinitionHeader struct {
 	Cron       string
 	Timezone   string
 	Request    Request
+	Hook       *FailureHook
 }
 
 // Definition is the immutable schedule definition. It never changes after
@@ -43,18 +44,23 @@ type Digests struct {
 }
 
 type definitionDigestRecord struct {
-	DigestVersion      int     `json:"digest_version"`
-	ScheduleID         string  `json:"schedule_id"`
-	CreatedAtUnixNanos int64   `json:"created_at_unix_nanos"`
-	Cron               string  `json:"cron"`
-	Timezone           string  `json:"timezone"`
-	Request            Request `json:"request"`
-	BriefSHA256        string  `json:"brief_sha256"`
+	DigestVersion      int          `json:"digest_version"`
+	ScheduleID         string       `json:"schedule_id"`
+	CreatedAtUnixNanos int64        `json:"created_at_unix_nanos"`
+	Cron               string       `json:"cron"`
+	Timezone           string       `json:"timezone"`
+	Request            Request      `json:"request"`
+	BriefSHA256        string       `json:"brief_sha256"`
+	Hook               *FailureHook `json:"hook,omitempty"`
 }
 
 // Clone returns a definition that shares no mutable memory with the input.
 func (d Definition) Clone() Definition {
 	d.Request = d.Request.clone()
+	if d.Hook != nil {
+		hook := *d.Hook
+		d.Hook = &hook
+	}
 	d.Brief = append([]byte(nil), d.Brief...)
 	return d
 }
@@ -97,6 +103,7 @@ func HeaderSHA256(header DefinitionHeader, briefSHA256 string) (string, error) {
 		Timezone:           header.Timezone,
 		Request:            header.Request,
 		BriefSHA256:        briefSHA256,
+		Hook:               header.Hook,
 	})
 	if err != nil {
 		return "", fmt.Errorf("schedule definition digest: %w", err)
@@ -128,6 +135,9 @@ func validateHeader(header DefinitionHeader) error {
 		return err
 	}
 	if err := validateOpaqueText("schedule timezone", header.Timezone); err != nil {
+		return err
+	}
+	if err := ValidateFailureHook(header.Hook); err != nil {
 		return err
 	}
 	_, err := encodeRequest(header.Request)

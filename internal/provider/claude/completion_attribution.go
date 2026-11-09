@@ -2,6 +2,7 @@ package claude
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // completionPolicy selects the versioned interpretation of Claude root
@@ -71,6 +72,8 @@ type completionAttribution struct {
 	// rate-limit rejection; quota_attribution.go owns the correlation.
 	failedRequests bool
 	quotaRejected  bool
+	quotaPending   *task.QuotaAdvice
+	quotaConsumed  *task.QuotaAdvice
 	principalQuota bool
 	// advisory is fixed by the immutable completion policy and selects the
 	// advisory wire projection, init authority, and unsupported reasons.
@@ -214,6 +217,7 @@ func (a *completionAttribution) acceptPrincipal(state *eventState, value provide
 	a.principalQuota = a.consumeQuota(completion)
 	a.principalFault = completion.fault()
 	a.principalFault.quota = a.principalQuota
+	a.principalFault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 	if a.project {
 		a.selected = &claudeSelectedAnswer{index: a.nextIndex - 1, origin: "caller", text: state.result.currentAnswer}
 	}
@@ -253,6 +257,7 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 	}
 	if fault.refusal != "" {
 		fault.quota = quota
+		fault.quotaAdvice = task.CloneQuotaAdvice(a.quotaConsumed)
 		a.recordFollowUpFault(fault)
 	} else if a.project {
 		a.hasFollowUpAnswers = true

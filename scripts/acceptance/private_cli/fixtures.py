@@ -46,13 +46,17 @@ case "$prompt" in
       exit 17
     fi
     ;;
+  *DELEGATE_PRIVATE_SILENCE_WAIT*)
+    exec __PYTHON_EXECUTABLE__ -c __PI_WAIT_PROGRAM__ \
+      "$gate_path" "$waiter_directory" "$lease_nonce" session
+    ;;
   *DELEGATE_PRIVATE_UPGRADE_WAIT*)
     exec __PYTHON_EXECUTABLE__ -c __PI_WAIT_PROGRAM__ \
       "$gate_path" "$waiter_directory" "$lease_nonce"
     ;;
 esac
 /bin/cat <<'EOF'
-{"type":"session","id":"00000000-0000-4000-8000-000000000001"}
+__SESSION_EVENT__
 {"type":"agent_start"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[]}}
@@ -69,7 +73,9 @@ import signal
 import stat
 import sys
 
-gate_path, waiter_directory, lease_nonce = sys.argv[1:]
+gate_path, waiter_directory, lease_nonce = sys.argv[1:4]
+include_session = __INCLUDE_SESSION__
+emit_session = sys.argv[4:] == ["session"]
 lease_fifo = os.path.join(waiter_directory, lease_nonce + "-" + str(os.getpid()) + ".fifo")
 descriptor = -1
 gate_descriptor = -1
@@ -90,6 +96,9 @@ try:
     descriptor = os.open(lease_fifo, flags)
     handshake = lease_nonce + "\t" + str(os.getpid()) + "\n"
     os.write(descriptor, handshake.encode())
+    if include_session and emit_session:
+        sys.stdout.write('{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n')
+        sys.stdout.flush()
     gate_flags = os.O_RDONLY
     gate_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     gate_descriptor = os.open(gate_path, gate_flags)
@@ -98,7 +107,9 @@ try:
         raise RuntimeError("capacity fixture gate is unsafe")
     fcntl.flock(gate_descriptor, fcntl.LOCK_SH)
     fcntl.flock(gate_descriptor, fcntl.LOCK_UN)
-    sys.stdout.write('''{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n{"type":"agent_start"}\n{"type":"turn_start"}\n{"type":"message_start","message":{"role":"assistant","content":[]}}\n{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n''')
+    if include_session and not emit_session:
+        sys.stdout.write('{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n')
+    sys.stdout.write('''{"type":"agent_start"}\n{"type":"turn_start"}\n{"type":"message_start","message":{"role":"assistant","content":[]}}\n{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n''')
 finally:
     if gate_descriptor >= 0:
         os.close(gate_descriptor)
@@ -111,13 +122,18 @@ finally:
 """
 
 
-def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce):
+def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce, *, emit_session: bool = True):
     pi = install_dir / "pi"
     script = PI_FIXTURE.replace("__GATE_PATH_JSON__", shlex.quote(str(gate_file)))
     script = script.replace("__WAITER_DIRECTORY_JSON__", shlex.quote(str(waiter_directory)))
     script = script.replace("__LEASE_NONCE_JSON__", shlex.quote(lease_nonce))
     script = script.replace("__PYTHON_EXECUTABLE__", shlex.quote(sys.executable))
-    script = script.replace("__PI_WAIT_PROGRAM__", shlex.quote(PI_WAIT_PROGRAM))
+    # Workspace fixtures own their early session header and suppress ordinary/wait
+    # headers through this boundary, rather than rewriting generated program text.
+    session_event = '{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n' if emit_session else ""
+    script = script.replace("__SESSION_EVENT__\n", session_event)
+    wait_program = PI_WAIT_PROGRAM.replace("__INCLUDE_SESSION__", repr(emit_session))
+    script = script.replace("__PI_WAIT_PROGRAM__", shlex.quote(wait_program))
     repository = str(Path(__file__).resolve().parents[3])
     nested_program = ("import sys; sys.path.insert(0, " + repr(repository)
                       + "); from scripts.acceptance.private_cli.nested.fixture import main; main(sys.argv[1])")

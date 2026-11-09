@@ -212,3 +212,31 @@ def default_stop_closure_evidence(closure, task_id, cause):
         "launch_count": len(launches),
         "scope": {"kind": registration.get("scope_kind"), "assurance": registration.get("assurance")},
     }
+
+
+def silence_stop_evidence(status, closure, task_id, root_id):
+    """Keep typed idle/continuation facts after independent native closure proof."""
+    evidence = default_stop_closure_evidence(closure, task_id, "output-silence")
+    termination = _canonical_timestamp(closure["termination"].get("observed_at"), "silence termination")
+    wall_deadline = _canonical_timestamp(closure["intent"].get("deadline"), "silence wall deadline")
+    if not _timestamp_before(termination, wall_deadline):
+        raise RuntimeError("output silence did not close the provider before its wall budget")
+    failure, continuation = status.get("failure"), status.get("continuation")
+    outcome = status.get("outcome")
+    rejected = (status.get("publication") == "rejected" and isinstance(outcome, dict)
+                and outcome.get("verdict") == "rejected")
+    # The caller requires exit 0. A validated rejection retains its provider
+    # error independently of successful passive observation and native closure.
+    if (status.get("task_id") != task_id or status.get("root_id") != root_id
+            or status.get("status") != "idle_timed_out" or (status.get("error") and not rejected)
+            or not isinstance(failure, dict) or failure.get("code") != "task_idle_timed_out"
+            or not isinstance(continuation, dict) or continuation.get("mode") != "native"
+            or continuation.get("resumable") is not True or continuation.get("predecessor_task_id") != task_id):
+        raise RuntimeError("output silence lost its distinct public cause or exact continuation evidence")
+    _canonical_timestamp(status.get("last_provider_output_at"), "provider output activity")
+    last_output = status["last_provider_output_at"]
+    return {
+        "closure": evidence,
+        "status": {"status": "idle_timed_out", "last_provider_output_at": last_output,
+                   "continuation": {"mode": "native", "resumable": True, "predecessor_task_id": task_id}},
+    }

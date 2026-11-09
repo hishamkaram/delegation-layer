@@ -362,7 +362,7 @@ func ValidateLifetimeTerminationRecord(r *LifetimeTerminationRecord) error {
 		return err
 	}
 	switch r.Cause {
-	case LifetimeTerminationCompleted, LifetimeTerminationBudget, LifetimeTerminationRequested, LifetimeTerminationRecovery, LifetimeTerminationPreviousBoot:
+	case StopCauseOutputSilence, LifetimeTerminationCompleted, LifetimeTerminationBudget, LifetimeTerminationRequested, LifetimeTerminationRecovery, LifetimeTerminationPreviousBoot:
 	default:
 		return fmt.Errorf("invalid lifetime termination cause: %w", ErrInvalidEnum)
 	}

@@ -88,13 +88,19 @@ func runNativeOwnerRequest(connection *net.UnixConn, identity nativeCommandIdent
 		disconnected <- stopErr
 	}()
 	workErr, stopErr := RunSupervisedContext(ctx, identity.deadline, SupervisedOptions{Stopper: owner, Lifetime: owner}, func(scope PreflightScope) error {
-		return RunScopedCommand(scope, command, CommandHooks{})
+		return RunScopedCommand(scope, command, CommandHooks{NullOutput: identity.nullOutput, Wait: nativeCallbackWait})
 	})
 	complete.Store(true)
 	readCloseErr := connection.CloseRead()
 	disconnectErr := <-disconnected
 	closeErr := owner.close(context.WithoutCancel(ctx))
-	return nativeCompletion(command.ProcessState, errors.Join(workErr, stopErr, readCloseErr, disconnectErr, closeErr, ctx.Err()))
+	result := nativeCompletion(command.ProcessState, errors.Join(workErr, stopErr, readCloseErr, disconnectErr, closeErr, ctx.Err()))
+	if errors.Join(stopErr, readCloseErr, disconnectErr, closeErr, ctx.Err()) == nil && expectedNativeTimeout(workErr) {
+		result.Fault = ""
+		result.Expired = true
+		result.Canceled = false
+	}
+	return result
 }
 
 func nativeCompletion(state *os.ProcessState, resultErr error) nativeCommandResult {
@@ -121,4 +127,34 @@ func nativeCompletion(state *os.ProcessState, resultErr error) nativeCommandResu
 	result.Fault = string(message[:min(len(message), 2048)])
 	result.Canceled, result.Expired = errors.Is(resultErr, context.Canceled), errors.Is(resultErr, context.DeadlineExceeded)
 	return result
+}
+
+// expectedNativeTimeout distinguishes the worker's finite deadline from helper
+// or cleanup faults. It never interprets arbitrary error text.
+func expectedNativeTimeout(err error) bool {
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, errBudgetExpiredBeforeStart) {
+		return false
+	}
+	return task.AllErrorCauses(err, func(leaf error) bool {
+		if errors.Is(leaf, context.DeadlineExceeded) || errors.Is(leaf, context.Canceled) || errors.Is(leaf, errBudgetExpiredBeforeStart) {
+			return true
+		}
+		var exit nativeCallbackWaitError
+		return errors.As(leaf, &exit)
+	})
+}
+
+// Keep callback Wait errors distinct from command-owner and cleanup errors.
+// As preserves the ordinary native exit contract without erasing this origin.
+type nativeCallbackWaitError struct{ exit *exec.ExitError }
+
+func (e nativeCallbackWaitError) Error() string      { return "native callback exited unsuccessfully" }
+func (e nativeCallbackWaitError) As(target any) bool { return errors.As(e.exit, target) }
+func nativeCallbackWait(command *exec.Cmd) error {
+	err := command.Wait()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return nativeCallbackWaitError{exit: exit}
+	}
+	return err
 }

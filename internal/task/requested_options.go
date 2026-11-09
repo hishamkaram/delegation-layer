@@ -17,6 +17,9 @@ var errNativeTimeoutBounds = errors.New("native timeout must be positive and no 
 // both are supplied, because an omitted budget takes a provider-specific
 // default that this function cannot know. The request is never modified.
 func ValidateRequestedOptions(request TaskConfig) error {
+	if _, err := ParseOutputSilenceTimeout(request.OutputSilenceTimeout); err != nil {
+		return err
+	}
 	if request.Permission != "" {
 		if err := policy.ValidateMode(request.Permission); err != nil {
 			return err

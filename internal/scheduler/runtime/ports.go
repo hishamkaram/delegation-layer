@@ -19,6 +19,8 @@ var ErrRootIdentity = errors.New("scheduler state root identity changed")
 // remain in its error graph. The runtime must stop admission and join workers.
 var ErrTaskCleanupUnresolved = errors.New("scheduler task cleanup unresolved")
 
+var ErrAttemptPersistence = errors.New("scheduler admission diagnostic could not be persisted")
+
 const (
 	// AdmissionLimit bounds unfinished admissions, including retained control work.
 	AdmissionLimit = 4
@@ -42,6 +44,7 @@ type DispatchRequest struct {
 type TaskState struct {
 	Observation contract.Observation
 	Release     *contract.Release
+	Attempt     *contract.AttemptFailure
 }
 
 // Tasks is the loop's consumer-owned execution boundary. Once admitted by the
@@ -76,6 +79,8 @@ type Event struct {
 	TaskID     string
 	Phase      string
 	Code       string
+	Stage      string
+	NextAction string
 }
 
 // Config supplies the existing owners. Nil Clock, Waker and NewTaskID select
@@ -83,10 +88,13 @@ type Event struct {
 // generator. Report is optional. Store, Waker lifecycle and the exclusive
 // scheduler owner lease belong to the caller.
 type Config struct {
-	Store     contract.Store
-	Tasks     Tasks
-	Clock     Clock
-	Waker     Waker
-	NewTaskID func() (string, error)
-	Report    func(Event)
+	Store             contract.Store
+	Tasks             Tasks
+	Clock             Clock
+	Waker             Waker
+	NewTaskID         func() (string, error)
+	NewNotificationID func() (string, error)
+	Report            func(Event)
+	Evidence          ResultReader
+	Hooks             HookRunner
 }

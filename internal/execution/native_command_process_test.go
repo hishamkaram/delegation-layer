@@ -112,3 +112,43 @@ func TestNativeCommandDedicatedOwnerPreservesOutputAndNaturalExit(t *testing.T) 
 		})
 	}
 }
+
+func TestNativeCommandNullOutputReportsOnlyProvenCallbackExit(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		mode string
+		code int
+	}{{"success", 0}, {"exit128", 128}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			stdin, err := os.CreateTemp(t.TempDir(), "context-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := stdin.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			command := exec.Command(executable, "-test.run=^TestNativeCommandExitHelper$")
+			command.Dir = t.TempDir()
+			command.Env = []string{"DELEGATE_NATIVE_COMMAND_TEST=" + tc.mode}
+			command.Stdin = stdin
+			var output bytes.Buffer
+			command.Stdout = &output
+			command.Stderr = &output
+			runErr := RunIsolatedCommandNullOutput(ctx, executable, command)
+			code, proven := NativeCommandExitCode(runErr)
+			if !proven || code != tc.code || output.Len() != 0 {
+				t.Fatalf("exit=%d proven=%t output=%q err=%v", code, proven, output.String(), runErr)
+			}
+			if _, proven = NativeCommandExitCode(errors.Join(runErr, errors.New("helper closure unproven"))); proven {
+				t.Fatal("cleanup fault became proven callback exit")
+			}
+		})
+	}
+}

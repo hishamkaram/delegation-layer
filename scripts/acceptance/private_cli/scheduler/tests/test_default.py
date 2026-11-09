@@ -1,6 +1,7 @@
 """Default-root driver contracts; no native scheduler or provider is launched."""
 
 from contextlib import redirect_stderr, redirect_stdout
+from copy import deepcopy
 from dataclasses import replace
 import io
 import json
@@ -21,7 +22,10 @@ from scripts.acceptance.private_cli.scheduler import acceptance as application
 from scripts.acceptance.private_cli.scheduler import cases as cases
 from scripts.acceptance.private_cli.scheduler import default as default
 from scripts.acceptance.private_cli.scheduler import host as foreground
+from scripts.acceptance.private_cli.scheduler import sequence as sequence
 from scripts.acceptance.private_cli import packaged_defaults as packaged_defaults
+from scripts.acceptance.evidence.validation import AcceptanceFailure
+from scripts.acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.acceptance.private_cli.configuration import PRIVATE_ACCEPTANCE_PREFIX
 from scripts.acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.acceptance.private_cli.fixture_lifetime import FixtureLifetime
@@ -34,6 +38,17 @@ from scripts.acceptance.private_cli.scheduler.occurrences import Occurrence
 ROOT_ID = "a" * 32
 SCHEDULE_ID = "b" * 32
 TASK_ID = "c" * 32
+
+
+def not_created_response(task_id=TASK_ID, due="1970-01-01T00:01:00Z"):
+    return {"schema_version": 1, "command": "schedule", "root_id": ROOT_ID, "task_id": task_id,
+            "schedule_execution": {"complete": True, "occurrence": {
+                "schedule_id": SCHEDULE_ID, "task_id": task_id, "due": due,
+                "reservation": "released", "release": {"kind": "not_created", "ref": "task_absent"},
+                "failure": {"code": "resource_pressure", "stage": "check-resources",
+                            "next_action": "stop_and_report", "message": "do not copy raw messages"}},
+                "local_evidence": {"provenance": "validated_local", "task_presence": "absent",
+                                   "supervisor_receipt": False}}}
 
 
 class SchedulerDefaultTests(unittest.TestCase):
@@ -262,6 +277,8 @@ class SchedulerDefaultTests(unittest.TestCase):
         case.deadline = time.monotonic() - 1
         failure = RuntimeError("create response lost")
         events = []
+        for task_id in (TASK_ID, "d" * 32):
+            (case.fixture.state / "tasks" / task_id).mkdir(parents=True)
 
         def finalized(_args, observed_failure, lifetime, _receipt, success):
             self.assertIs(observed_failure, failure)
@@ -281,13 +298,140 @@ class SchedulerDefaultTests(unittest.TestCase):
         self.assertEqual(events, ["delete", "stop", "finalize"])
         self.assertTrue(self.base.is_dir())
 
+    def test_definite_refusal_fails_before_waiting_for_admission_or_provider_seal(self):
+        case = self.case(use_default=False)
+        case.root_id, case.schedule_id = ROOT_ID, SCHEDULE_ID
+        row = Occurrence(TASK_ID, SCHEDULE_ID, MINUTE_NS)
+
+        def poll_once(predicate, **_options):
+            result = predicate()
+            self.assertTrue(result, "attempted an impossible task-file wait")
+            return result
+
+        for boundary in (lambda: case.await_admitted(row), lambda: sequence.collect_failed(case, row)):
+            with self.subTest(boundary=boundary):
+                with (patch.object(case, "command", return_value=not_created_response()) as command,
+                      patch.object(cases, "wait_until", side_effect=poll_once),
+                      patch.object(sequence, "wait_until", side_effect=poll_once),
+                      self.assertRaisesRegex(AcceptanceFailure, "resource_pressure.*check-resources.*stop_and_report")):
+                    boundary()
+                self.assertEqual(command.call_args.args[1], ["schedule", "execution", TASK_ID])
+                failure = self.receipt.details["scheduler_admission_failure"]
+                self.assertEqual(failure, {"task_id": TASK_ID, "schedule_id": SCHEDULE_ID, "due_unix_nanos": MINUTE_NS,
+                                           "code": "resource_pressure", "stage": "check-resources",
+                                           "next_action": "stop_and_report"})
+
+    def test_cleanup_excludes_only_proven_not_created_after_every_host_joins(self):
+        case = self.case(use_default=False)
+        case.root_id, case.schedule_id = ROOT_ID, SCHEDULE_ID
+        case.deadline = time.monotonic() - 1
+        row = Occurrence(TASK_ID, SCHEDULE_ID, MINUTE_NS)
+        previous = Mock(spec=foreground.SchedulerHost)
+        case.previous_services.append(previous)
+        events = []
+        original_list = self.lifetime.attempted_task_ids
+        failure = AcceptanceFailure("primary refusal")
+        (case.fixture.state / "root.json").write_text(json.dumps({
+            "schema_version": 1, "root_id": ROOT_ID, "created_at": "1970-01-01T00:00:00Z"}))
+        (case.fixture.state / "tasks").mkdir()
+
+        def execution(_name, arguments, expected=(0,), *, deadline=None):
+            self.assertEqual(events, ["current-stop", "previous-stop"])
+            self.assertEqual(arguments, ["schedule", "execution", TASK_ID])
+            if not isinstance(deadline, float):
+                self.fail("cleanup execution lost its finite host-stop deadline")
+            self.assertGreater(deadline, time.monotonic())
+            self.assertEqual(deadline, case.service.deadline)
+            events.append("execution")
+            return not_created_response()
+
+        def finalized(_args, _failure, lifetime, _receipt, _success):
+            closure = validate_managed_lifetime_closure(case.fixture.state, lifetime.attempted_task_ids)
+            self.assertEqual(closure["tasks"], {})
+
+        with (patch.object(case.service, "stop", side_effect=lambda: events.append("current-stop")),
+              patch.object(previous, "stop", side_effect=lambda: events.append("previous-stop")),
+              patch.object(cases, "read_occurrences", return_value=(row,)),
+              patch.object(case, "command", side_effect=execution),
+              patch.object(application, "finalize_fixture", side_effect=finalized) as finalize):
+            with self.assertRaisesRegex(AcceptanceFailure, "primary refusal"):
+                application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
+                                        receipt=self.receipt, failure=failure)
+        self.assertEqual(events, ["current-stop", "previous-stop", "execution"])
+        self.assertIs(self.lifetime.attempted_task_ids, original_list)
+        self.assertIs(self.lifetime.managed_state_roots[0][1], original_list)
+        self.assertEqual(original_list, [])
+        self.assertIs(finalize.call_args.args[1], failure)
+        self.assertIs(finalize.call_args.args[4], False)
+        self.assertEqual(self.receipt.details["scheduler_reserved_occurrences"], [
+            {"task_id": TASK_ID, "schedule_id": SCHEDULE_ID, "due_unix_nanos": MINUTE_NS}])
+        self.assertEqual(self.receipt.details["scheduler_not_created_tasks"][0]["code"], "resource_pressure")
+
+    def test_unknown_absence_still_blocks_the_existing_lifetime_finalizer(self):
+        case = self.case(use_default=False)
+        case.root_id, case.schedule_id = ROOT_ID, SCHEDULE_ID
+        (case.fixture.state / "root.json").write_text(json.dumps({
+            "schema_version": 1, "root_id": ROOT_ID, "created_at": "1970-01-01T00:00:00Z"}))
+        (case.fixture.state / "tasks").mkdir()
+        row = Occurrence(TASK_ID, SCHEDULE_ID, MINUTE_NS)
+        failure = AcceptanceFailure("case failed")
+        unknowns = []
+        for section, name, value in (
+            ("occurrence", "reservation", "active"),
+            ("", "complete", False),
+            ("release", "kind", "ended"),
+            ("release", "ref", "unknown"),
+            ("local_evidence", "provenance", "cached"),
+            ("local_evidence", "task_presence", "unknown"),
+            ("local_evidence", "supervisor_receipt", True),
+        ):
+            unknown = not_created_response()
+            execution = unknown["schedule_execution"]
+            target = execution["occurrence"]["release"] if section == "release" else execution.get(section, execution)
+            target[name] = value
+            unknowns.append(unknown)
+
+        def finalized(_args, _failure, lifetime, _receipt, _success):
+            self.assertEqual(lifetime.attempted_task_ids, [TASK_ID])
+            validate_managed_lifetime_closure(case.fixture.state, lifetime.attempted_task_ids)
+
+        for unknown in unknowns:
+            with self.subTest(execution=unknown["schedule_execution"]):
+                with (patch.object(case.service, "stop"), patch.object(cases, "read_occurrences", return_value=(row,)),
+                      patch.object(case, "command", return_value=unknown) as command,
+                      patch.object(application, "finalize_fixture", side_effect=finalized),
+                      self.assertRaisesRegex(AcceptanceFailure, "ordinary task directory is missing")):
+                    application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
+                                            receipt=self.receipt, failure=failure)
+                command.assert_called_once()
+
+    def test_invalid_or_unavailable_execution_keeps_cleanup_inventory_unchanged(self):
+        case = self.case(use_default=False)
+        case.root_id, case.schedule_id = ROOT_ID, SCHEDULE_ID
+        rows = (Occurrence(TASK_ID, SCHEDULE_ID, MINUTE_NS), Occurrence("d" * 32, SCHEDULE_ID, 2 * MINUTE_NS))
+        wrong_root = deepcopy(not_created_response("d" * 32, "1970-01-01T00:02:00Z"))
+        wrong_root["root_id"] = "e" * 32
+        wrong_due = deepcopy(not_created_response("d" * 32))
+        for second in (wrong_root, wrong_due, RuntimeError("passive query failed")):
+            with (self.subTest(second=second), patch.object(case.service, "stop"),
+                  patch.object(cases, "read_occurrences", return_value=rows),
+                  patch.object(case, "command", side_effect=[not_created_response(), second]),
+                  patch.object(application, "retain_unknown_service") as retain,
+                  patch.object(application, "finalize_fixture") as finalize,
+                  self.assertRaisesRegex(RuntimeError, "remains uncertain")):
+                application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,
+                                        receipt=self.receipt, failure=AcceptanceFailure("original"))
+            self.assertEqual(self.lifetime.attempted_task_ids, [TASK_ID, "d" * 32])
+            retain.assert_called_once()
+            finalize.assert_not_called()
+
     def test_delete_failure_still_stops_host_and_finalizes_with_both_faults(self):
         case = self.case()
         original, deletion = RuntimeError("case failed"), RuntimeError("delete failed")
         events = []
         with (patch.object(application, "delete_default_schedule", side_effect=deletion),
               patch.object(case.service, "stop", side_effect=lambda: events.append("stop")),
-              patch.object(case, "discover", side_effect=lambda: events.append("discover")),
+              patch.object(case, "discover", side_effect=lambda: events.append("discover") or ()),
               patch.object(application, "finalize_fixture") as finalize):
             with self.assertRaises(BaseExceptionGroup) as raised:
                 application.finish_case(args=application.parse_arguments([]), case=case, lifetime=self.lifetime,

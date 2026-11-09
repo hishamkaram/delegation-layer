@@ -455,7 +455,11 @@ type budgetStopper struct {
 }
 
 func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetRequest, error) {
-	permit, request, err := s.prepareStop(deadline)
+	return s.PrepareStop(deadline, "budget")
+}
+
+func (s *budgetStopper) PrepareStop(deadline time.Time, cause string) (execution.BudgetRequest, error) {
+	permit, request, err := s.prepareStopForCause(deadline, cause)
 	if err != nil {
 		return nil, err
 	}
@@ -477,7 +481,18 @@ func (s *budgetStopper) stopLifetime(ctx context.Context, permit *taskdir.StopPe
 	if err := permit.Consume(); err != nil {
 		return errors.Join(err, permit.Release())
 	}
-	terminateErr := s.lifetime.Terminate(ctx)
+	var terminateErr error
+	if request.Cause == task.StopCauseOutputSilence {
+		if lifetime, ok := s.lifetime.(interface {
+			TerminateForCause(context.Context, string) error
+		}); ok {
+			terminateErr = lifetime.TerminateForCause(ctx, request.Cause)
+		} else {
+			terminateErr = errors.New("lifetime does not support output silence cause")
+		}
+	} else {
+		terminateErr = s.lifetime.Terminate(ctx)
+	}
 	var recordErr error
 	if terminateErr == nil {
 		facts := task.StopReplyFacts{NumericTaskID: *request.NumericTaskID, Action: "terminate", Acknowledged: true}
@@ -486,8 +501,11 @@ func (s *budgetStopper) stopLifetime(ctx context.Context, permit *taskdir.StopPe
 	return errors.Join(terminateErr, recordErr, permit.Release())
 }
 
-func (s *budgetStopper) prepareStop(deadline time.Time) (*taskdir.StopPermit, *task.StopRequestRecord, error) {
-	permit, err := s.taskDir.PrepareStop("budget", "budget", deadline)
+func (s *budgetStopper) prepareStopForCause(deadline time.Time, cause string) (*taskdir.StopPermit, *task.StopRequestRecord, error) {
+	if !task.IsDeadlineStopCause(cause) {
+		return nil, nil, task.ErrInvalidEnum
+	}
+	permit, err := s.taskDir.PrepareStop(cause, cause, deadline)
 	if err != nil {
 		return nil, nil, err
 	}

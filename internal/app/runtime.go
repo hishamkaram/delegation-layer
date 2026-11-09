@@ -40,6 +40,7 @@ Commands:
   reply         Answer an outstanding native clarification request
   steer         Send guidance to a supported active native turn
   events        Read interaction events, optionally with a bounded watch
+  wait          Passively wait for any or all task results with a finite watch
   cancel        Request one explicit supervisor stop
   logs          Return validated output descriptors
   doctor        Observe installation and static readiness without launching
@@ -49,7 +50,7 @@ Commands:
   workspace     Inspect, verify, release, or forget a managed Git workspace
   checkpoint    Create, observe, list, or remove a Git content checkpoint
   schedule      Manage recurring definitions and inspect executions
-  scheduler     Serve, inspect, stop, or run the local scheduler
+  scheduler     Serve, inspect, stop, run, or explicitly migrate the local scheduler
   teams         Register, update, inspect, and explicitly select optional Teams
   help          Show this help message
   version       Print version information
@@ -91,6 +92,10 @@ Recurring definitions:
   schedule show|pause|resume|delete ID --json
   schedule history SCHEDULE_ID [--before RFC3339Nano] [--limit 50] --json
   schedule execution TASK_ID --json
+  schedule health SCHEDULE_ID --json
+  schedule policy get SCHEDULE_ID --json
+  schedule policy set SCHEDULE_ID --quota-hold on|off [--quota-max-hold DURATION] --json
+  schedule create ... [--failure-hook ABS --failure-threshold N --failure-hook-timeout DURATION]
   Saving a definition never launches a provider. If no scheduler host is
   ready, the saved ID is retained and start_required gives the user command.
   History and execution are passive reads; collect TASK_ID recovers publication.
@@ -112,6 +117,7 @@ Independent scheduler:
   scheduler serve [--root ABS] [--pueue-config ABS]
   scheduler status --json
   scheduler stop --json
+  scheduler migrate --json
   scheduler run [--root ABS] [--pueue-config ABS]
   Requires the automatic managed worker. Use colocated delegate/delegate-run
   binaries from the same build and omit the advanced --runner override.
@@ -132,6 +138,17 @@ Remote tasks:
   remote usage remote:ID [--scope origin|destination|both] --json
   remote retire remote:ID [--scope origin|destination|both] [--dry-run | --apply] --json
   supervisor ensure-owner --json
+
+Passive multi-task wait:
+  wait [--any|--all] [--watch DURATION] [--json] TASK_ID...
+  Defaults to any-of and a finite 5m watch; 0s observes once. Maximum 32 unique IDs.
+
+Output silence (opt-in):
+  dispatch ... [--output-silence-timeout DURATION]
+  schedule create ... [--output-silence-timeout DURATION]
+  continue --task ID ... [--output-silence-timeout DURATION]
+  Off by default; 0 explicitly disables. Continuation inherits unless overridden.
+  Waiting for a reply also counts as provider output silence.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -379,6 +396,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return preflight(a, deps)
 	case "continue":
 		return continueTask(a, deps)
+	case "wait":
+		return waitTasks(a, deps.storeDependencies())
 	case "status":
 		return status(a, deps)
 	case "collect":

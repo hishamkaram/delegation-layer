@@ -19,10 +19,12 @@ from scripts.acceptance.private_cli.nested.case import NestedCase
 from scripts.acceptance.private_cli.nested.refusal import RefusedLeaderCase
 from scripts.acceptance.private_cli.nested.refusal import dispose_retained_root
 from scripts.acceptance.private_cli.nested.refusal import require_injected_refusal
+from scripts.acceptance.private_cli.nested.refusal import require_inner_failure
 from scripts.acceptance.private_cli.nested.refusal import run_refused_leader
 from scripts.acceptance.private_cli.receipt import AcceptanceReceipt
 from scripts.acceptance.private_cli.receipt import resource_admission_evidence
 from scripts.acceptance.private_cli.stop_policy import default_stop_dispatch_evidence
+from scripts.acceptance.testing.record_fixtures import object_at
 
 
 class InnerReceiptFailureTests(unittest.TestCase):
@@ -132,6 +134,78 @@ class RefusedLeaderControlTests(unittest.TestCase):
 
     def dispatch(self):
         return self.case.dispatch(self.state.directory, "b" * 32, self.state.directory / "brief", "3m", "leader")
+
+    def inner_failure(self):
+        return json.loads(json.dumps({
+            "result": "FAIL",
+            "failure": {"code": "nested-setup-failed", "exception_type": "AcceptanceFailure", "phase": "nested_setup"},
+            "cleanup": {"status": "retained", "pending_supervisor_count": 0},
+            "nested_survival": {"failed_admission": self.case.evidence["failed_admission"],
+                                "cleanup": {"status": "canonical-closure-proven"}},
+        }))
+
+    def test_inner_failure_requires_diagnostic_completion_before_outer_success(self):
+        with self.assertRaisesRegex(AcceptanceFailure, "never redispatch"):
+            self.dispatch()
+        require_inner_failure(self.case, self.inner_failure())
+        failure = object_at(self.case.evidence, "failed_admission")
+        for snapshot in (None, "invalid", {"status": "unavailable", "closure_unproven": True},
+                         {"status": "unavailable", "reason": "control_completion_unavailable"}):
+            with self.subTest(snapshot=snapshot):
+                if snapshot is None:
+                    failure.pop("host_cpu_snapshot", None)
+                else:
+                    failure["host_cpu_snapshot"] = snapshot
+                with self.assertRaisesRegex(AcceptanceFailure, "CPU diagnostic"):
+                    require_inner_failure(self.case, self.inner_failure())
+        failure["host_cpu_snapshot"] = {"status": "unavailable", "reason": "capture_unavailable"}
+        require_inner_failure(self.case, self.inner_failure())
+
+    def test_outer_control_retains_root_and_never_disposes_on_unproven_diagnostic_wait(self):
+        with self.assertRaisesRegex(AcceptanceFailure, "never redispatch") as refused:
+            self.dispatch()
+        failure = object_at(self.case.evidence, "failed_admission")
+        failure["host_cpu_snapshot"] = {"status": "unavailable", "closure_unproven": True}
+        inner = self.inner_failure()
+        parent = self.state.directory.parent
+        warm = "c" * 32
+        directory = self.state.directory / "tasks" / warm / "lifetime"
+        directory.mkdir(parents=True)
+        write_json(directory / "intent.json", {})
+        self.case.configuration["leader_brief"] = str(self.state.directory / "brief")
+        self.case.responses["warm-a"] = {"task_id": warm}
+        self.case.lifetime.base = parent
+        args = SimpleNamespace(output=parent / "outer.json", pueue=Path(sys.executable),
+                               pueued=Path(sys.executable), native_fixture=Path(sys.executable),
+                               expected_backend="process-group")
+        receipt = AcceptanceReceipt(args.output, 3, 1, {})
+
+        def finalize(_args, primary, lifetime, inner_receipt, success):
+            self.assertIs(primary, refused.exception)
+            self.assertFalse(success)
+            lifetime.closed_roots[self.state.directory] = None
+            write_json(inner_receipt.output, inner)
+
+        with patch("scripts.acceptance.private_cli.nested.refusal.FixtureLifetime", return_value=self.case.lifetime), \
+                patch("scripts.acceptance.private_cli.nested.refusal.prepare_fixture", return_value=self.case.fixture), \
+                patch("scripts.acceptance.private_cli.nested.refusal.RefusedLeaderCase", return_value=self.case), \
+                patch("scripts.acceptance.private_cli.nested.refusal.bootstrap"), \
+                patch("scripts.acceptance.private_cli.nested.refusal.observe_live_supervisor", return_value={}), \
+                patch("scripts.acceptance.private_cli.nested.refusal.require_backend"), \
+                patch.object(self.case, "dispatch", side_effect=refused.exception), \
+                patch("scripts.acceptance.private_cli.nested.refusal.finalize_fixture", side_effect=finalize), \
+                patch("scripts.acceptance.private_cli.nested.refusal.dispose_retained_root",
+                      return_value={"status": "passed"}) as dispose:
+            with self.assertRaisesRegex(AcceptanceFailure, "CPU diagnostic"):
+                run_refused_leader(args, parent / "responses", receipt)
+        dispose.assert_not_called()
+        outer = json.loads(args.output.read_text())
+        self.assertEqual(outer["result"], "FAIL")
+        self.assertEqual(outer["cleanup"]["status"], "retained")
+        self.assertEqual(outer["refused_leader"]["inner"]["failure"], inner["failure"])
+        self.assertEqual(outer["refused_leader"]["failure_context"]["primary"], "AcceptanceFailure")
+        self.assertEqual(len(self.case.commands), 1)
+        self.state.assert_live()
 
     def test_real_capture_wait_returns_explicit_id_unknown_stop_once_without_task_creation(self):
         # The fixture is an actual finite child of the existing capture owner.

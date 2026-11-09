@@ -224,7 +224,7 @@ func (td *TaskDir) newStopRequest(id, cause string, deadline time.Time) (*task.S
 	if err = task.ValidateStopRequestRecord(r); err != nil {
 		return nil, err
 	}
-	if cause == "budget" {
+	if task.IsDeadlineStopCause(cause) {
 		var start task.ProviderStartRecord
 		if err = td.store.readRecord(filepath.Join(td.Dir, "provider.start"), &start); err != nil {
 			return nil, err

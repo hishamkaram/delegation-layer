@@ -33,7 +33,7 @@ const (
 	// fixtureDeadline bounds a hold across one complete ordinary CLI round.
 	fixtureDeadline = 120 * time.Second
 	// unsupportedVersion is a user_version this build never writes.
-	unsupportedVersion = 2
+	unsupportedVersion = 3
 )
 
 // corruptDatabase is private non-SQLite bytes at the database path.

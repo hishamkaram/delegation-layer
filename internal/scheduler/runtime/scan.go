@@ -116,6 +116,14 @@ func (l *loop) consider(ctx context.Context, summary contract.ScheduleSummary, a
 	if err := contract.ValidateSummary(summary); err != nil {
 		return fmt.Errorf("scheduler metadata %s: %w", summary.Header.ScheduleID, err)
 	}
+	proceed, err := l.quotaSkip(ctx, &summary)
+	if err != nil || !proceed {
+		return err
+	}
+	return l.considerReady(ctx, summary, active, priority)
+}
+
+func (l *loop) considerReady(ctx context.Context, summary contract.ScheduleSummary, active map[string]contract.Occurrence, priority map[string]bool) error {
 	id := summary.Header.ScheduleID
 	if summary.State != contract.StateEnabled || !l.held[id].After(summary.Cursor) {
 		delete(l.held, id)
@@ -126,7 +134,7 @@ func (l *loop) consider(ctx context.Context, summary contract.ScheduleSummary, a
 	}
 	// At most the startup span, unavailable span, and fresh candidate. Each
 	// successful span changes the local cursor just as its transaction did.
-	for range 3 {
+	for range 4 {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

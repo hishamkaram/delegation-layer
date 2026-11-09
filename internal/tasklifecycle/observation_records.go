@@ -54,7 +54,8 @@ type ContinuationCause string
 const (
 	// ContinuationTimedOut is a terminated budget stop, or a canonical closed
 	// lifetime whose validated termination cause is the budget.
-	ContinuationTimedOut ContinuationCause = "timed_out"
+	ContinuationTimedOut     ContinuationCause = "timed_out"
+	ContinuationIdleTimedOut ContinuationCause = "idle_timed_out"
 	// ContinuationInterrupted is a canonical closed native lifetime with no
 	// seal or outcome, for example after a machine reboot. It proves that the
 	// old scope ended, not provider success or publication.

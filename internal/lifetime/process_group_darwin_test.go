@@ -65,6 +65,88 @@ func TestDarwinProcessGroupRegistrationUsesPlanAndPrivateSession(t *testing.T) {
 	assertDarwinCommandStartsPrivateSession(t, scope, cmd)
 }
 
+func TestProcessGroupObservesStartedZombieBeforeWait(t *testing.T) {
+	scope, command := commandForProcessGroup(t, "exit 0")
+	t.Cleanup(func() { cleanupProcessGroupTestScope(t, scope) })
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			if err := command.Wait(); err != nil {
+				t.Errorf("cleanup Wait: %v", err)
+			}
+		}
+	})
+	waitForDarwinZombie(t, command.Process.Pid)
+	assertDarwinZombieRawGroup(t, command.Process.Pid)
+
+	standalone, err := ObserveStartedProcess(command.Process.Pid)
+	if err != nil {
+		t.Fatalf("ObserveStartedProcess zombie: %v", err)
+	}
+	launch, err := scope.ObserveStarted(command.Process.Pid)
+	if err != nil {
+		t.Fatalf("ObserveStarted zombie: %v", err)
+	}
+	if launch.PID() != command.Process.Pid || launch.StartToken() == "" || launch.PGID() != command.Process.Pid {
+		t.Fatalf("ObserveStarted zombie returned %#v", launch)
+	}
+	process, err := NewProcessRef(launch.PID(), launch.StartToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := SameProcess(standalone, process)
+	if err != nil || !same {
+		t.Fatalf("standalone and scoped zombie identities differ: %v", err)
+	}
+	waitErr := command.Wait()
+	waited = true
+	if waitErr != nil {
+		t.Fatal(waitErr)
+	}
+}
+
+func assertDarwinZombieRawGroup(t *testing.T, pid int) {
+	t.Helper()
+	group, groupErr := processGroupID(pid)
+	if groupErr == nil {
+		if group != pid {
+			t.Fatalf("raw zombie Getpgid returned group %d, want owned PID %d", group, pid)
+		}
+		t.Log("raw owned-zombie Getpgid: exact_pid")
+	} else {
+		if !errors.Is(groupErr, syscall.ESRCH) {
+			t.Fatalf("raw zombie Getpgid: %v", groupErr)
+		}
+		t.Log("raw owned-zombie Getpgid: esrch")
+	}
+}
+
+func waitForDarwinZombie(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		process, err := nativeDarwinProcessKinfoLookup(pid)
+		if err != nil {
+			t.Fatalf("read owned child kinfo: %v", err)
+		}
+		if process != nil {
+			if process.Proc.P_pid != int32(pid) || process.Eproc.Ppid != int32(os.Getpid()) {
+				t.Fatal("owned unreaped child kinfo changed identity or parent")
+			}
+			if process.Proc.P_stat == 5 { // Darwin SZOMB, before the caller's sole Wait.
+				return
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("owned child did not become a zombie before Wait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestDarwinProcessGroupRejectsNumericSignalAuthority(t *testing.T) {
 	if err := signalProcessGroup(4343, syscall.SIGTERM); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("numeric process-group signal error = %v, want ErrUnsupported", err)

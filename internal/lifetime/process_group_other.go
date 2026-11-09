@@ -35,6 +35,8 @@ func processGroupID(int) (int, error) {
 	return 0, fmt.Errorf("%w: process-group observation", ErrUnsupported)
 }
 
+func startedProcessGroupID(pid int) (int, error) { return processGroupID(pid) }
+
 func signalProcessGroup(int, syscall.Signal) error {
 	return ErrUnsupported
 }

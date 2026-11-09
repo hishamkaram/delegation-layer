@@ -13,6 +13,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
+	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -64,6 +65,8 @@ type Arguments struct {
 	ResumeTask           string
 	JSON                 bool
 	Watch                time.Duration
+	WaitTaskIDs          []string
+	WaitAll              bool
 	Isolation            string
 	WorkspaceID          string
 	Base                 string
@@ -86,14 +89,18 @@ type Arguments struct {
 	CheckpointBudget      string
 
 	// Schedule values record the requested definition and query cursors only.
-	ScheduleAction      string
-	ScheduleID          string
-	ScheduleCron        string
-	ScheduleTimezone    string
-	ScheduleTimezoneSet bool
-	ScheduleAfter       string
-	ScheduleBefore      string
-	ScheduleLimit       int
+	ScheduleAction          string
+	ScheduleID              string
+	ScheduleCron            string
+	ScheduleTimezone        string
+	ScheduleTimezoneSet     bool
+	ScheduleAfter           string
+	ScheduleBefore          string
+	ScheduleLimit           int
+	ScheduleHook            *schedulercontract.FailureHook
+	SchedulePolicyOperation string
+	ScheduleQuotaHold       string
+	ScheduleQuotaMaxHold    string
 
 	TeamAction           string
 	TeamDefaultAction    string
@@ -134,6 +141,8 @@ func ParseArguments(args []string) (Arguments, error) {
 	}
 	a := Arguments{Command: command}
 	switch command {
+	case "wait":
+		return parseWaitArguments(a, rest)
 	case "doctor":
 		return parseDoctorArguments(a, rest)
 	case "devices", "remote":
@@ -152,7 +161,7 @@ func ParseArguments(args []string) (Arguments, error) {
 	if command == "scheduler" {
 		a.SchedulerAction, rest, err = parseSupervisorAction(rest)
 		if err != nil {
-			return Arguments{}, errors.New("scheduler requires serve, status, stop or run")
+			return Arguments{}, errors.New("scheduler requires serve, status, stop, run or migrate")
 		}
 	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -252,7 +261,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "doctor", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
+		case "help", "version", "dispatch", "continue", "preflight", "doctor", "providers", "capabilities", "models", "wait", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -366,10 +375,10 @@ func (a *Arguments) validateCommand(positional []string, watch string) error {
 			return errors.New("scheduler resident requires its exact inherited host channels")
 		}
 		switch a.SchedulerAction {
-		case "serve", "status", "stop", "run":
+		case "serve", "status", "stop", "run", "migrate":
 			return validateNoPositional("scheduler "+a.SchedulerAction, positional)
 		default:
-			return errors.New("scheduler requires serve, status, stop or run")
+			return errors.New("scheduler requires serve, status, stop, run or migrate")
 		}
 	case "models":
 		return a.validateModels(positional)
@@ -403,6 +412,9 @@ func (a *Arguments) validateModels(positional []string) error {
 }
 
 func (a *Arguments) validatePreparationCommand(positional []string) error {
+	if _, err := task.ParseOutputSilenceTimeout(a.Config.OutputSilenceTimeout); err != nil {
+		return err
+	}
 	switch a.Command {
 	case "preflight":
 		return a.validatePreflight(positional)
@@ -658,6 +670,7 @@ func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
 	if a.Command != "dispatch" && a.Command != "continue" {
 		return
 	}
+	fs.StringVar(&a.Config.OutputSilenceTimeout, "output-silence-timeout", "", "optional provider output-silence limit; 0 disables")
 	fs.Var(guardFlag{disabled: &a.ResourceGuards.DisableCPU}, "cpu-guard", "check CPU pressure before fresh admission (default true)")
 	fs.Var(guardFlag{disabled: &a.ResourceGuards.DisableMemory}, "memory-guard", "check memory pressure before fresh admission (default true)")
 	if a.Command == "continue" {

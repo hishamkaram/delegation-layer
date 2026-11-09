@@ -59,7 +59,7 @@ func ValidateProviderRefRecord(r *ProviderRefRecord) error {
 }
 
 func ValidateStopRequestID(id string) error {
-	if id == "budget" {
+	if id == "budget" || id == StopCauseOutputSilence {
 		return nil
 	}
 	return ValidateTaskID(id)
@@ -92,8 +92,8 @@ func ValidateStopRequestRecord(r *StopRequestRecord) error {
 
 func validateStopDeadline(r *StopRequestRecord) error {
 	switch r.Cause {
-	case "budget":
-		if r.RequestID != "budget" {
+	case "budget", StopCauseOutputSilence:
+		if r.RequestID != r.Cause {
 			return ErrIdentityMismatch
 		}
 		return validateTimestamp(r.Deadline)
@@ -103,7 +103,7 @@ func validateStopDeadline(r *StopRequestRecord) error {
 		}
 		fallthrough
 	case "user":
-		if r.RequestID == "budget" || r.Deadline != "" {
+		if IsDeadlineStopCause(r.RequestID) || r.Deadline != "" {
 			return ErrIdentityMismatch
 		}
 		return nil

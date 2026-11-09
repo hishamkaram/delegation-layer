@@ -7,6 +7,9 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 )
 
 const defaultSchedulePageSize = 50
@@ -17,6 +20,13 @@ func parseScheduleArguments(a Arguments, rest []string) (Arguments, error) {
 	if err != nil {
 		return Arguments{}, err
 	}
+	if a.ScheduleAction == "policy" {
+		a.SchedulePolicyOperation, rest, err = scheduleAction(rest)
+		if err != nil || (a.SchedulePolicyOperation != "get" && a.SchedulePolicyOperation != "set") {
+			return Arguments{}, errors.New("schedule policy requires get or set")
+		}
+	}
+
 	fs := flag.NewFlagSet("schedule", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	registerScheduleFlags(fs, &a)
@@ -38,11 +48,10 @@ func parseScheduleArguments(a Arguments, rest []string) (Arguments, error) {
 	if err = validateSchedulePositionals(&a, fs.Args()); err != nil {
 		return Arguments{}, err
 	}
-	if a.ScheduleAction == "create" {
-		if err = validateTeamTargetInputs(a); err != nil {
-			return Arguments{}, err
-		}
+	if err = validateScheduleCreateOptions(&a); err != nil {
+		return Arguments{}, err
 	}
+
 	return a, nil
 }
 
@@ -73,6 +82,10 @@ func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	switch a.ScheduleAction {
 	case "create":
+		a.ScheduleHook = &contract.FailureHook{Threshold: 1, Timeout: 10 * time.Second}
+		fs.StringVar(&a.ScheduleHook.Executable, "failure-hook", "", "absolute failure-hook executable")
+		fs.Int64Var(&a.ScheduleHook.Threshold, "failure-threshold", 1, "consecutive failures before notification")
+		fs.DurationVar(&a.ScheduleHook.Timeout, "failure-hook-timeout", 10*time.Second, "bounded hook timeout")
 		registerTeamTargetFlags(fs, a)
 		fs.StringVar(&a.ScheduleID, "id", "", "schedule ID")
 		fs.StringVar(&a.Brief, "brief", "", "brief file")
@@ -85,8 +98,14 @@ func registerScheduleFlags(fs *flag.FlagSet, a *Arguments) {
 		fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
 		fs.StringVar(&a.Config.Permission, "permission", "", "requested permission")
 		fs.StringVar(&a.Config.Budget, "budget", "", "requested budget")
+		fs.StringVar(&a.Config.OutputSilenceTimeout, "output-silence-timeout", "", "opt-in provider output silence timeout; 0 disables")
 		fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "requested native timeout")
 		fs.StringVar(&a.ReviewTarget, "review-target", "", "requested review target")
+	case "policy":
+		if a.SchedulePolicyOperation == "set" {
+			fs.StringVar(&a.ScheduleQuotaHold, "quota-hold", "", "on or off")
+			fs.StringVar(&a.ScheduleQuotaMaxHold, "quota-max-hold", "", "maximum quota hold duration")
+		}
 	case "list":
 		fs.StringVar(&a.ScheduleAfter, "after", "", "schedule cursor")
 		fs.IntVar(&a.ScheduleLimit, "limit", defaultSchedulePageSize, "schedules per page")
@@ -100,7 +119,7 @@ func validateSchedulePositionals(a *Arguments, positional []string) error {
 	switch a.ScheduleAction {
 	case "create", "list":
 		return validateNoPositional("schedule "+a.ScheduleAction, positional)
-	case "show", "history", "pause", "resume", "delete":
+	case "show", "health", "policy", "history", "pause", "resume", "delete":
 		if len(positional) != 1 {
 			return fmt.Errorf("schedule %s requires exactly one schedule ID", a.ScheduleAction)
 		}
@@ -115,4 +134,19 @@ func validateSchedulePositionals(a *Arguments, positional []string) error {
 	default:
 		return fmt.Errorf("unknown schedule action %q", a.ScheduleAction)
 	}
+}
+
+func validateScheduleCreateOptions(a *Arguments) error {
+	if a.ScheduleAction != "create" {
+		return nil
+	}
+	if a.ScheduleHook.Executable == "" {
+		if a.ScheduleHook.Threshold != 1 || a.ScheduleHook.Timeout != 10*time.Second {
+			return errors.New("failure threshold/timeout require --failure-hook")
+		}
+		a.ScheduleHook = nil
+	} else if err := contract.ValidateFailureHook(a.ScheduleHook); err != nil {
+		return err
+	}
+	return validateTeamTargetInputs(*a)
 }

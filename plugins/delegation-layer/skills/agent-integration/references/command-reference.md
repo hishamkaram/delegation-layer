@@ -15,6 +15,7 @@ The main skill owns [root selection](../SKILL.md#3-prepare-separate-paths-and-a-
 | `dispatch [--auto \| --provider ID] ... --json` | Admit a bounded turn; a Member may supply the destination | At most one launch attempt |
 | `status TASK --json` | Observe task state | No launch |
 | `collect TASK [--watch DURATION] --json` | Read or wait for publication | No launch |
+| `wait [--any\|--all] [--watch DURATION] TASK... --json` | Passively wait for several local tasks | None |
 | `logs TASK --json` | Read stream descriptors; remote handles support explicit bounded snapshots | No launch |
 | `cancel TASK --json` | Record an explicit stop | No launch |
 | `continue --task TASK ... --json` | Create an exact-session successor | At most one successor launch attempt |
@@ -83,6 +84,7 @@ skill/routing state; upgrade an unsupported CLI through its original installer.
 delegate dispatch [--auto | --provider ID] --brief FILE \
   --cwd ABS [--id TASK_ID] [--permission MODE] [--budget DURATION] \
   [--model MODEL] [--effort EFFORT] [--native-timeout DURATION] \
+  [--output-silence-timeout DURATION] \
   [--interactive] [--review-target TARGET] [--resume-task TASK_ID] \
   [--team-scope user|project --team TEAM_ID --member MEMBER_ID] \
   [--project-root ABS] --json
@@ -100,6 +102,7 @@ delegate dispatch [--auto | --provider ID] --brief FILE \
 | `--model MODEL` | Exact selector for a profile advertising `model`: Codex, CCR, Claude, AGY, Pi, or OpenCode. CCR requires a configured alias. |
 | `--effort VALUE` | Advertised effort selector; omitted or `default` preserves native defaults. |
 | `--native-timeout DURATION` | Antigravity print timeout, no greater than `--budget`. |
+| `--output-silence-timeout DURATION` | Optional provider-output silence limit. Default off; `0` explicitly disables. Positive subsecond values are preserved. Continuation inherits unless overridden. |
 | `--interactive` | Enable the profile's advertised native interaction; steering is a separate capability. See [interaction](interaction.md). |
 | `--review-target TARGET` | Required only for native [Codex review](#codex-review). |
 | `--resume-task TASK_ID` | Compatibility form for exact-predecessor continuation; prefer [continue](continuation.md). |
@@ -136,6 +139,17 @@ Omit `--runner`: Delegate selects its managed worker. A custom override
 conflicting with managed workspaces or a predecessor returns `invalid_request`
 with `managed_workspace_runner_conflict` or `continuation_runner_conflict`.
 Correct it only under the returned task-creation guidance.
+
+Provider silence counts positive stdout/stderr reads, including partial chunks.
+The clock starts after successful provider start, independently of queueing and
+preparation. Waiting for background work or an interactive reply also counts;
+user input does not reset provider-output activity. Wall budget still applies.
+`status.last_provider_output_at` is approximate nonempty capture metadata after
+provider-start evidence, not a heartbeat or watchdog authority. Native provider
+exit disarms silence before capture joins. Forced silence expiry has distinct
+`idle_timed_out` evidence; use the returned continuation decision, never infer
+eligibility from the timeout label. Remote positive policies require destination
+capability support; unsupported policies are refused rather than stripped.
 
 ## Teams
 
@@ -242,6 +256,32 @@ The task's canonical execution fields remain authoritative. Apply normal
 [result decisions](result-handling.md#task-control-response); Team context does
 not prove admission, provider readiness or successful publication.
 
+## Wait
+
+Use this for several workers instead of writing shell polling loops:
+
+```text
+delegate wait --any --watch 30m --json TASK_ID_1 TASK_ID_2 TASK_ID_3
+delegate wait --all --watch 30m --json TASK_ID_1 TASK_ID_2 TASK_ID_3
+```
+
+Pass each local task ID as its own argument. The default is any-of with a `5m`
+watch; `--watch 0s` observes once. At most 32 unique IDs are accepted. One finite
+deadline covers opening and all task reads. Any-of reports every task ready in
+its completing observation round; summaries remain in input order.
+
+`wait.tasks[].ready` means validated result or terminal evidence is ready for
+inspection, not provider success. A sealed closed task can report
+`collect_required`; use `collect` separately. `closed_without_outcome` does not
+promise that later sealing is impossible. Running uncertainty and cancellation
+intent alone are not readiness. The command never launches, fences, repairs,
+collects or publishes anything.
+
+Exit `0` means the any/all condition was met, `1` is typed `task_not_found` or an
+observation fault, `2` is invalid input, and `3` is watch expiry. A rejected task
+is ready data, not a successful provider answer. Preserve per-task status and
+failure fields; apply normal result handling after waiting.
+
 ## Schedules
 
 The management commands below save and inspect definitions; they do not start a
@@ -268,6 +308,9 @@ delegate schedule show SCHEDULE_ID --json
 delegate schedule pause SCHEDULE_ID --json
 delegate schedule resume SCHEDULE_ID --json
 delegate schedule delete SCHEDULE_ID --json
+delegate schedule health SCHEDULE_ID --json
+delegate schedule policy get SCHEDULE_ID --json
+delegate schedule policy set SCHEDULE_ID --quota-hold on --quota-max-hold 6h --json
 ```
 
 - Requested provider options remain as supplied, including omissions. Creation
@@ -320,6 +363,53 @@ and follow [result handling](result-handling.md#schedule-definition-and-host-res
 `--json` applies to handler responses; argument/usage errors retain the CLI's
 normal stderr behavior. A valid rule with no future occurrence in the supported
 timestamp range has a distinct range error, not a claim of permanent invalidity.
+
+### Schedule reliability
+
+`schedule health` is a passive stored projection, separate from scheduler-host
+readiness. It reports last occurrence, last committed due time and observation
+time, the proven consecutive non-committed suffix, its dominant code, unresolved
+coverage, quota hold/deferment and latest notification. Unknown executed gaps
+break the proven suffix; skipped appointments are neutral. Historical evidence
+is reconciled in bounded pages while the runtime runs, including late results
+for released occurrences. Missing old details remain unknown.
+
+Create an immutable failure hook with `--failure-hook /absolute/program`,
+`--failure-threshold N` (default `1`) and `--failure-hook-timeout DURATION`
+(default `10s`, maximum `1m`). Existing schedules adopt it by recreation.
+The executable runs directly, without a shell command string, from its parent
+directory. It receives at most 4 KiB JSON on regular-file stdin: event/schedule
+IDs, failure/recovery kind, streak count, safe failure code and last task ID.
+Only PATH, HOME, TMPDIR, LANG and LC_* environment entries are inherited;
+stdout/stderr are discarded without capture pipes.
+
+A durable claim allows at most one launch attempt per alerted streak and one
+recovery notice. A crash may lose an alert; uncertain attempts are not retried.
+Historical reconciliation does not replay old alert episodes. Hook failures,
+timeouts or helper uncertainty are recorded independently and never change task
+results. The callback helper uses cooperative containment; missing completion
+is not proof that escaped descendants closed.
+
+Quota holds are separate mutable operational policy, disabled by default for
+both new and migrated schedules. Enable with `schedule policy set`; the default
+maximum is `6h`, configurable to a positive duration up to `168h`. Only verified
+direct Claude reset advice is supported initially; CCR has no reset advice.
+Bad, missing, past or unrepresentable timestamps create no hold; distant valid
+resets are capped. Unknown later evidence defers a stale source rather than
+assuming that no newer occurrence succeeded.
+
+The stored hold shows its reason and end. Due appointments through that end are
+recorded as one quota skipped interval, never a catch-up queue. Manual
+`schedule resume` clears pause and hold, including enabled-but-held schedules,
+and consumes prior/in-flight sources. Enabling/re-enabling excludes occurrences
+already claimed. Policy edits affect future holds only. There is no account
+credential inspection or verified free quota probe; manual resume and finite
+expiry provide early clearance.
+
+Existing scheduler v1 storage requires explicit `delegate scheduler migrate
+--json` with the host stopped. Observation never migrates it. The migration
+preserves definitions, occurrences and task evidence; old binaries may refuse
+the newer schema. Restart `scheduler serve` independently afterward.
 
 ### Schedule history and execution
 

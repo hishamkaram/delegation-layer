@@ -3,6 +3,7 @@ package sqlitestore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -35,7 +36,18 @@ func (s *Store) CreateSchedule(ctx context.Context, definition contract.Definiti
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			stored.ScheduleID, created, stored.Cron, stored.Timezone, request, stored.Brief,
 			digests.BriefSHA256, digests.DefinitionSHA256, string(initial.State), created)
-		return classify(execErr)
+		if execErr != nil {
+			return classify(execErr)
+		}
+		if stored.Hook != nil {
+			encoded, err := json.Marshal(stored.Hook)
+			if err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, "INSERT INTO schedule_hooks(schedule_id,hook_json) VALUES (?,?)", stored.ScheduleID, encoded)
+			return classify(err)
+		}
+		return nil
 	})
 }
 

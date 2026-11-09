@@ -8,6 +8,7 @@ import fcntl
 import os
 import sys
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch, Mock
 from types import SimpleNamespace
@@ -37,6 +38,10 @@ from scripts.acceptance.private_cli.nested.fixture import wait_gate
 from scripts.acceptance.private_cli.nested.fixture import dispatch_worker
 from scripts.acceptance.private_cli.nested.case import NestedCase
 from scripts.acceptance.private_cli.receipt import AcceptanceReceipt
+from scripts.acceptance.processes.contracts import BoundedCommandResult
+from scripts.acceptance.processes.contracts import BoundedCommandError
+from scripts.acceptance.processes.contracts import CommandFailure
+from scripts.acceptance.testing.record_fixtures import object_at
 
 
 class NestedSurvivalOracleTests(unittest.TestCase):
@@ -522,6 +527,122 @@ class NestedBootstrapCleanupTests(unittest.TestCase):
     def test_warm_a_refusal_closes_without_reclassifying_primary_failure_or_creating_b(self):
         self.assert_refusal_cleanup("warm-a")
         self.assertFalse(self.case.b.exists())
+
+    def completed_cpu_refusal(self, state, arguments, name, **options):
+        response = self.command(state, arguments, name, **options)
+        if arguments[0] == "dispatch":
+            response.update(liveness="undetermined", publication="unknown",
+                            resource_admission={"status": "pressure"})
+            write_json(self.receipts / (name + ".json"), {
+                "exit_code": 1, "failure_class": "nonzero_exit", "response": response,
+            })
+        return response
+
+    def test_cpu_refusal_snapshot_is_bounded_redacted_and_keeps_primary_cleanup(self):
+        listing = b"220 /private/build-canary/go\n100 /private/compile\n4 /private/secret-name\n"
+        with patch("scripts.acceptance.private_cli.nested.case.NestedCase.command",
+                   side_effect=self.completed_cpu_refusal), \
+                patch("scripts.acceptance.private_cli.nested.case.run_bounded_command",
+                      return_value=BoundedCommandResult(0, listing)) as snapshot_owner:
+            self.assert_refusal_cleanup("warm-a")
+        published = json.loads(self.receipt.output.read_text())
+        snapshot = published["nested_survival"]["failed_admission"]["host_cpu_snapshot"]
+        snapshot_owner.assert_called_once_with(
+            ["/bin/ps", "-A", "-o", "pcpu=,comm="], {"LC_ALL": "C"},
+            cwd=self.case.fixture.workspace, capture=True, timeout=5, max_output=256 * 1024,
+        )
+        self.assertEqual(snapshot["status"], "observed")
+        self.assertEqual(snapshot["listed_process_count"], {"go": 1, "compile": 1, "other": 1})
+        self.assertEqual(snapshot["top_cpu"], [
+            {"role": "go", "native_cpu_percent": 220.0},
+            {"role": "compile", "native_cpu_percent": 100.0},
+            {"role": "other", "native_cpu_percent": 4.0},
+        ])
+        self.assertFalse(snapshot["admission_intervals_matched"])
+        self.assertFalse(snapshot["causal_attribution"])
+        self.assertGreaterEqual(snapshot["capture_started_offset_ms"], 0)
+        self.assertGreaterEqual(snapshot["capture_completed_offset_ms"], snapshot["capture_started_offset_ms"])
+        encoded = json.dumps(snapshot)
+        for private in ("build-canary", "secret-name", "/", "argv", "environment", "pid"):
+            self.assertNotIn(private, encoded)
+
+    def test_cpu_snapshot_interruption_remains_secondary_to_refusal_and_cleanup(self):
+        with patch("scripts.acceptance.private_cli.nested.case.NestedCase.command",
+                   side_effect=self.completed_cpu_refusal), \
+                patch("scripts.acceptance.private_cli.nested.case.run_bounded_command",
+                      side_effect=KeyboardInterrupt("private-canary")) as snapshot_owner:
+            self.assert_refusal_cleanup("warm-a")
+        snapshot_owner.assert_called_once()
+        published = json.loads(self.receipt.output.read_text())
+        snapshot = published["nested_survival"]["failed_admission"]["host_cpu_snapshot"]
+        self.assertEqual(snapshot["status"], "unavailable")
+        self.assertEqual(snapshot["reason"], "capture_unavailable")
+        self.assertNotIn("private-canary", json.dumps(published))
+
+    def test_cpu_snapshot_unproven_wait_retains_failure_and_unverified_resource_evidence(self):
+        with patch("scripts.acceptance.private_cli.nested.case.NestedCase.command",
+                   side_effect=self.completed_cpu_refusal), \
+                patch("scripts.acceptance.private_cli.nested.case.run_bounded_command",
+                      side_effect=BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT)):
+            self.assert_refusal_cleanup("warm-a")
+        published = json.loads(self.receipt.output.read_text())
+        snapshot = published["nested_survival"]["failed_admission"]["host_cpu_snapshot"]
+        self.assertTrue(snapshot["closure_unproven"])
+        self.assertEqual(snapshot["status"], "unavailable")
+        self.assertEqual(published["result"], "FAIL")
+        self.assertEqual(published["cleanup"]["status"], "retained")
+
+    def test_cpu_snapshot_capture_and_projection_faults_are_secondary_evidence(self):
+        response = self.completed_cpu_refusal(self.case.a, ["dispatch"], "probe")
+        capture = json.loads((self.receipts / "probe.json").read_text())
+        cases = (
+            (OSError("private-canary"), None, "capture_unavailable"),
+            (BoundedCommandError(CommandFailure.TIMEOUT), None, "capture_unavailable"),
+            (BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT), None, "capture_unavailable"),
+            (SystemExit(9), None, "capture_unavailable"),
+            (None, BoundedCommandResult(1, b""), "native_completion_unavailable"),
+            (None, BoundedCommandResult(0, b"nan private-canary\n"), "invalid_output"),
+            (None, BoundedCommandResult(0, b"\xff"), "invalid_output"),
+        )
+        for fault, result, reason in cases:
+            with self.subTest(fault=type(fault).__name__, reason=reason), \
+                    patch("scripts.acceptance.private_cli.nested.case.run_bounded_command",
+                          side_effect=fault, return_value=result) as snapshot_owner:
+                self.case._record_failed_admission("probe", self.task_id, response, capture=capture)
+            snapshot_owner.assert_called_once()
+            projected = self.case.evidence["failed_admission"]
+            self.assertEqual(projected["failure"], self.failure)
+            snapshot = object_at(projected, "host_cpu_snapshot")
+            self.assertEqual(snapshot["status"], "unavailable")
+            self.assertEqual(snapshot["reason"], reason)
+            self.assertEqual(snapshot.get("closure_unproven", False),
+                             isinstance(fault, BoundedCommandError) and fault.reason == CommandFailure.TERMINATION_TIMEOUT)
+            self.assertNotIn("private-canary", json.dumps(projected))
+
+    def test_cpu_snapshot_requires_exact_response_and_completed_matching_control(self):
+        response = self.completed_cpu_refusal(self.case.a, ["dispatch"], "probe")
+        capture = json.loads((self.receipts / "probe.json").read_text())
+        for key, value in (("schema_version", True), ("task_id", "d" * 32), ("admission", "admitted"),
+                           ("resource_admission", {"status": "unknown"}),
+                           ("failure", {**self.failure, "reason_code": "host_memory_critical"})):
+            changed = {**response, key: value}
+            with self.subTest(key=key), \
+                    patch("scripts.acceptance.private_cli.nested.case.run_bounded_command") as snapshot_owner:
+                self.case._record_failed_admission("probe", self.task_id, changed, capture=capture)
+            snapshot_owner.assert_not_called()
+            self.assertNotIn("host_cpu_snapshot", self.case.evidence["failed_admission"])
+        for key, value in (("exit_code", True), ("exit_code", 0), ("failure_class", "invocation_error"),
+                           ("invocation_error", "private-canary"), ("natural_wait", False),
+                           ("response", {**response, "root_id": "d" * 32}),
+                           ("response", {**response, "schema_version": True})):
+            changed_capture = {**deepcopy(capture), key: value}
+            with self.subTest(key=key, value=value), \
+                    patch("scripts.acceptance.private_cli.nested.case.run_bounded_command") as snapshot_owner:
+                self.case._record_failed_admission("probe", self.task_id, response, capture=changed_capture)
+            snapshot_owner.assert_not_called()
+            projected = self.case.evidence["failed_admission"]
+            self.assertEqual(object_at(projected, "host_cpu_snapshot")["reason"], "control_completion_unavailable")
+            self.assertNotIn("private-canary", json.dumps(projected))
 
     def test_warm_b_refusal_uses_its_immediately_precreated_original_token(self):
         self.assertFalse(self.case.b.exists())

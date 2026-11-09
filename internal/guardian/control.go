@@ -156,7 +156,11 @@ func (g *Guardian) handleMessage(ctx context.Context, message lifetimeMessage) (
 	case lifetimeMessageFinish:
 		return false, g.handleFinish(ctx, message)
 	case lifetimeMessageStop:
-		return g.handleTermination(ctx, message, task.LifetimeTerminationBudget)
+		cause := task.LifetimeTerminationBudget
+		if message.Cause == task.StopCauseOutputSilence {
+			cause = message.Cause
+		}
+		return g.handleTermination(ctx, message, cause)
 	case lifetimeMessageClose:
 		return g.handleTermination(ctx, message, task.LifetimeTerminationCompleted)
 	default:

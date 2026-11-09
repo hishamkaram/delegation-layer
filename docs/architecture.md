@@ -564,10 +564,12 @@ Existing root metadata is preserved. Passive reads only open existing storage;
 list can report absent storage as empty. Compatibility `scheduler run` requires
 existing storage. Neither path initializes it.
 The database and directory must be private, user-owned and not symlinks.
-Task files and artifacts are preserved; there is no task-history backfill.
+Task files and artifacts are preserved. Bounded passive reconciliation derives
+health from existing evidence; it never repairs or rewrites task history.
 
-Schema v1 has root metadata, schedules, occurrences and skip spans in strict
-tables. Transactions verify schema/root identity and required SQLite settings.
+Schema v2 retains root metadata, schedules, occurrences and skip spans in strict
+tables, with immutable admission-attempt/hook records and separate derived
+results, notification claims, quota policy and active holds. Transactions verify schema/root identity and required SQLite settings.
 One unreleased occurrence per schedule is database-enforced. Short immediate
 transactions use a reserved connection; uncertain commits require readback.
 Only a newly committed claim authorizes its invocation, not a rediscovered row.
@@ -582,6 +584,35 @@ execution. The scheduler's contract and sealed adapter retain this boundary.
 Existing compatible schema/data are reopened unchanged. Unsupported or corrupt
 schemas fail explicitly; inspection does not repair them. Scheduler storage does
 not migrate ordinary task JSON, results or logs into SQLite.
+
+### Reliability ownership
+
+The dispatch worker saves typed admission-attempt diagnostics before result
+delivery, even when cleanup or observation fails. Attempt facts cannot release
+a reservation. A separate passive evidence port feeds paged health reconciliation,
+including late publication after release. The durable result ledger owns only a
+derived projection: outcomes remain task-owned. A task-local evidence fault
+retains that reservation while other schedules continue; root identity, storage
+and unresolved cleanup faults remain fatal. Unknown later gaps block asserted
+failure streaks and defer quota decisions. The reconciliation worker has its own
+bounded mailbox; shutdown joins never depend on an undrained admission channel.
+
+Immutable hook configuration is a child of the schedule header and its digest,
+not the provider request. Durable notification claims precede one bounded native
+callback attempt. Its regular-file stdin and null output use the existing
+isolated command owner. Callback faults cannot change occurrence results.
+
+Quota policy is mutable operational state. Claims check holds transactionally;
+a monotonic source floor excludes earlier work on enable/resume and prevents
+late advice from reinstalling or extending consumed holds. Held appointments
+become compact skips without catch-up. Existing positive policies do not alter
+already admitted tasks.
+
+The existing runner budget owner also arbitrates optional output silence from
+monotonic positive capture reads. Guardian termination, stop receipts and
+continuation use the same cause-aware lifecycle path. Native Wait disarms only
+the silence timer before stream joins; wall-budget cleanup remains enforced.
+Status timestamps are approximate capture metadata, not another timeout owner.
 
 ## Failure and recovery
 

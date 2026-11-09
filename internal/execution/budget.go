@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 var errBudgetExpiredBeforeStart = errors.New("execution budget expired before provider start")
@@ -19,16 +21,21 @@ type budgetOwner struct {
 	completed bool
 	// expired records the arbitration decision; prepared records that the
 	// observer has durably prepared the single supervisor request.
-	expired      bool
-	prepared     bool
-	timer        Timer
-	cancel       context.CancelFunc
-	workContext  context.Context
-	workCancel   context.CancelFunc
-	wake         chan struct{}
-	preparedDone chan struct{}
-	done         chan struct{}
-	stopErr      error
+	expired         bool
+	prepared        bool
+	timer           Timer
+	cancel          context.CancelFunc
+	workContext     context.Context
+	workCancel      context.CancelFunc
+	wake            chan struct{}
+	preparedDone    chan struct{}
+	done            chan struct{}
+	stopErr         error
+	cause           string
+	silenceDuration time.Duration
+	silenceActive   bool
+	lastOutput      time.Time
+	activity        chan struct{}
 }
 
 func armBudget(clock Clock, budget time.Duration, opts Options) (*budgetOwner, time.Time) {
@@ -57,6 +64,8 @@ func armBudgetUntilContext(parent context.Context, clock Clock, deadline time.Ti
 		workContext:  workContext,
 		workCancel:   workCancel,
 		wake:         make(chan struct{}, 1),
+		activity:     make(chan struct{}, 1),
+		cause:        "budget",
 		preparedDone: make(chan struct{}),
 		done:         make(chan struct{}),
 	}
@@ -70,12 +79,10 @@ func (b *budgetOwner) observe(observerContext, ctx context.Context, deadline tim
 	defer close(b.done)
 	opts.emit("timer-armed")
 	close(ready)
-	select {
-	case <-observerContext.Done():
+	if !b.awaitExpiry(observerContext, opts) {
 		return
-	case <-b.timer.C():
-	case <-b.wake:
 	}
+
 	request, err := b.prepareExpiry(deadline, opts)
 	b.recordStopError(err)
 	if request != nil {
@@ -101,7 +108,17 @@ func (b *budgetOwner) prepareExpiry(deadline time.Time, opts Options) (BudgetReq
 		b.mu.Unlock()
 		return nil, errors.New("budget expired without a supervisor stop capability")
 	}
-	request, err := opts.Stopper.PrepareBudget(deadline)
+	var request BudgetRequest
+	var err error
+	if b.cause == task.StopCauseOutputSilence {
+		if stopper, ok := opts.Stopper.(CauseStopper); ok {
+			request, err = stopper.PrepareStop(b.lastOutput.Add(b.silenceDuration), b.cause)
+		} else {
+			err = errors.New("output silence expired without a cause-aware stop capability")
+		}
+	} else {
+		request, err = opts.Stopper.PrepareBudget(deadline)
+	}
 	b.prepared = true
 	close(b.preparedDone)
 	b.mu.Unlock()
@@ -130,7 +147,7 @@ func (b *budgetOwner) authorizeAndStart(opts Options, start func() error) error 
 		return errBudgetExpiredBeforeStart
 	}
 	b.mu.Lock()
-	if b.completed || b.expired || b.prepared || !b.clock.Now().Before(b.deadline) {
+	if b.completed || b.expired || b.prepared || b.observeClockExpiryLocked(opts) {
 		b.mu.Unlock()
 		return b.authorize(opts, "start-authorized")
 	}
@@ -150,7 +167,7 @@ func (b *budgetOwner) authorize(opts Options, event string) error {
 		b.mu.Unlock()
 		return errBudgetExpiredBeforeStart
 	}
-	clockExpired := !b.clock.Now().Before(b.deadline)
+	clockExpired := b.observeClockExpiryLocked(opts)
 	if b.expired || b.prepared || clockExpired {
 		if !b.expired {
 			b.expired = true
@@ -196,10 +213,7 @@ func (b *budgetOwner) complete(opts Options) {
 		}
 		// A delayed timer delivery cannot let work completed after the
 		// deadline cancel the observer before it records expiry.
-		if !b.expired && !b.clock.Now().Before(b.deadline) {
-			b.expired = true
-			b.workCancel()
-			opts.emit("deadline-observed")
+		if !b.expired && b.observeClockExpiryLocked(opts) {
 			select {
 			case b.wake <- struct{}{}:
 			default:
@@ -227,4 +241,116 @@ func (b *budgetOwner) await() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.stopErr
+}
+
+// awaitExpiry is the sole timer observer for wall and output-silence expiry.
+// Activity changes only its monotonic deadline; it cannot revoke a selected stop.
+func (b *budgetOwner) awaitExpiry(ctx context.Context, opts Options) bool {
+	var silence Timer
+	var silenceC <-chan time.Time
+	defer func() {
+		if silence != nil {
+			silence.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-b.timer.C():
+			return true
+		case <-b.wake:
+			return true
+		case <-b.activity:
+		case <-silenceC:
+		}
+		b.mu.Lock()
+		if silence != nil {
+			silence.Stop()
+			silence = nil
+			silenceC = nil
+		}
+		now := b.clock.Now()
+		if !b.completed && !b.expired && b.silenceActive && b.silenceDuration > 0 {
+			deadline := b.lastOutput.Add(b.silenceDuration)
+			if !now.Before(deadline) {
+				b.expired = true
+				if now.Before(b.deadline) {
+					b.cause = task.StopCauseOutputSilence
+				}
+				b.workCancel()
+				opts.emit("output-silence-observed")
+				b.mu.Unlock()
+				return true
+			}
+			silence = b.clock.NewTimer(deadline.Sub(now))
+			silenceC = silence.C()
+		}
+		b.mu.Unlock()
+	}
+}
+
+func (b *budgetOwner) configureOutputSilence(duration time.Duration) {
+	b.mu.Lock()
+	b.silenceDuration = duration
+	b.mu.Unlock()
+}
+
+func (b *budgetOwner) providerStarted() {
+	b.mu.Lock()
+	if b.silenceDuration > 0 && !b.completed && !b.expired {
+		b.silenceActive = true
+		if b.lastOutput.IsZero() {
+			b.lastOutput = b.clock.Now()
+		}
+	}
+	b.mu.Unlock()
+	b.wakeActivity()
+}
+
+func (b *budgetOwner) outputActivity() {
+	b.mu.Lock()
+	if b.silenceDuration > 0 && !b.completed && !b.expired {
+		now := b.clock.Now()
+		// Delayed timer delivery cannot let overdue output renew an elapsed window.
+		if !b.silenceActive || now.Before(b.lastOutput.Add(b.silenceDuration)) {
+			b.lastOutput = now
+		}
+	}
+	b.mu.Unlock()
+	b.wakeActivity()
+}
+
+func (b *budgetOwner) providerWaited() {
+	b.mu.Lock()
+	b.silenceActive = false
+	b.mu.Unlock()
+	b.wakeActivity()
+}
+
+func (b *budgetOwner) wakeActivity() {
+	select {
+	case b.activity <- struct{}{}:
+	default:
+	}
+}
+
+// Authorization and completion cannot let delayed timer delivery extend an
+// elapsed deadline. The caller holds mu; wall expiry wins a simultaneous tie.
+func (b *budgetOwner) observeClockExpiryLocked(opts Options) bool {
+	now := b.clock.Now()
+	wall := !now.Before(b.deadline)
+	silence := b.silenceActive && b.silenceDuration > 0 && !now.Before(b.lastOutput.Add(b.silenceDuration))
+	if !wall && !silence {
+		return false
+	}
+	if !b.expired {
+		b.expired = true
+		if !wall {
+			b.cause = task.StopCauseOutputSilence
+		}
+		b.workCancel()
+		opts.emit("deadline-observed")
+	}
+	return true
 }

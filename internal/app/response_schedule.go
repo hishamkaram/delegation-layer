@@ -21,19 +21,20 @@ type ScheduleListRow struct {
 
 // ScheduleResponse is an acknowledgement or a complete, brief-free show.
 type ScheduleResponse struct {
-	ID                string            `json:"id"`
-	Saved             bool              `json:"saved,omitempty"`
-	State             contract.State    `json:"state,omitempty"`
-	CreatedAt         *time.Time        `json:"created_at,omitempty"`
-	Cursor            *time.Time        `json:"cursor,omitempty"`
-	Cron              string            `json:"cron,omitempty"`
-	Timezone          string            `json:"timezone,omitempty"`
-	Request           *contract.Request `json:"request,omitempty"`
-	BriefLength       int               `json:"brief_length,omitempty"`
-	BriefSHA256       string            `json:"brief_sha256,omitempty"`
-	DefinitionSHA256  string            `json:"definition_sha256,omitempty"`
-	DefinitionMatched bool              `json:"definition_matched,omitempty"`
-	NextAction        string            `json:"next_action,omitempty"`
+	ID                string                `json:"id"`
+	Saved             bool                  `json:"saved,omitempty"`
+	State             contract.State        `json:"state,omitempty"`
+	CreatedAt         *time.Time            `json:"created_at,omitempty"`
+	Cursor            *time.Time            `json:"cursor,omitempty"`
+	Cron              string                `json:"cron,omitempty"`
+	Timezone          string                `json:"timezone,omitempty"`
+	Request           *contract.Request     `json:"request,omitempty"`
+	Hook              *contract.FailureHook `json:"hook,omitempty"`
+	BriefLength       int                   `json:"brief_length,omitempty"`
+	BriefSHA256       string                `json:"brief_sha256,omitempty"`
+	DefinitionSHA256  string                `json:"definition_sha256,omitempty"`
+	DefinitionMatched bool                  `json:"definition_matched,omitempty"`
+	NextAction        string                `json:"next_action,omitempty"`
 }
 
 type ScheduleWarning struct {
@@ -54,7 +55,7 @@ func scheduleShow(item contract.Schedule) (ScheduleResponse, error) {
 	return ScheduleResponse{
 		ID: definition.ScheduleID, State: item.State, CreatedAt: &definition.CreatedAt,
 		Cursor: &item.Cursor, Cron: definition.Cron, Timezone: definition.Timezone,
-		Request: &definition.Request, BriefLength: len(definition.Brief),
+		Request: &definition.Request, Hook: definition.Hook, BriefLength: len(definition.Brief),
 		BriefSHA256: digests.BriefSHA256, DefinitionSHA256: digests.DefinitionSHA256,
 	}, nil
 }

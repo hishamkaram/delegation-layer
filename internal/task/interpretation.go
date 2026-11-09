@@ -23,6 +23,7 @@ type (
 		Session     *SessionIdentity
 		Usage       []UsageMetadata
 		Diagnostics []OutputDiagnostic
+		Quota       *QuotaAdvice
 	}
 )
 
@@ -34,6 +35,10 @@ func ValidateSessionIdentity(v SessionIdentity) error {
 }
 
 func ValidateInterpretation(v Interpretation) error {
+	if err := validateQuotaEvidence(v.Quota, v.Verdict, v.Diagnostics); err != nil {
+		return err
+	}
+
 	if err := ValidateUsageMetadataList(v.Usage); err != nil {
 		return err
 	}

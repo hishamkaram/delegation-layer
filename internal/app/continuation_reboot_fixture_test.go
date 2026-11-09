@@ -38,6 +38,8 @@ const (
 	// guardian recorded a budget empty-scope termination, then the worker's
 	// native Wait exited with an error.
 	rebootLifetimeClosedBudget
+	// Closed by the opt-in provider output-silence deadline.
+	rebootLifetimeClosedSilence
 	// rebootLifetimeClosedRequested is the same native closure after a user
 	// stop won the recorded termination cause.
 	rebootLifetimeClosedRequested
@@ -66,6 +68,8 @@ type rebootSetup struct {
 	// seal writes raw output and provider.exit under the consumed start
 	// permit, so the reboot left sealed evidence that was never collected.
 	seal bool
+	// sealExitCode selects the sealed invocation result; zero is a successful turn.
+	sealExitCode int
 }
 
 // rebootFixture is the historical private-supervisor fixture whose only queue
@@ -188,17 +192,17 @@ func recordRebootRunnerEvidence(t *testing.T, fixture *historicalSupervisorFixtu
 		}
 	}
 	if setup.seal {
-		sealRebootTurn(t, td)
+		sealRebootTurn(t, td, setup.sealExitCode)
 	}
 	recordRebootLifetime(t, td, setup.stage)
 }
 
-func sealRebootTurn(t *testing.T, td *taskdir.TaskDir) {
+func sealRebootTurn(t *testing.T, td *taskdir.TaskDir, exitCode int) {
 	t.Helper()
 	if err := td.WriteRawFiles("answer\n", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef()); err != nil {
+	if _, err := td.Seal(task.InvocationStarted, exitCode, "", task.FixturePredicateRef()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -248,6 +252,8 @@ func recordRebootLifetime(t *testing.T, td *taskdir.TaskDir, stage rebootLifetim
 		}
 	case rebootLifetimeClosedBudget:
 		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationBudget)
+	case rebootLifetimeClosedSilence:
+		recordNativeLifetimeClosure(t, td, task.StopCauseOutputSilence)
 	case rebootLifetimeClosedRequested:
 		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationRequested)
 	}

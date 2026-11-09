@@ -8,7 +8,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "90a0044ea73fedaf7353c63ade8e0863d8f0eeb3",
+      "revision": "1e4feaa2a002557c5703072f7a0b75ac4acdb867",
       "link_mode": "local-only"
     }
   },
@@ -137,7 +137,7 @@
           "label": "Guardian closes scope and records termination"
         }
       ],
-      "tag": "finite budget · closed lifetime"
+      "tag": "wall budget · optional silence"
     },
     {
       "id": "provider",
@@ -265,7 +265,7 @@
       "type": "backend",
       "label": "Scheduler host + runtime",
       "sublabel": "Host supervises resident child",
-      "tag": "ready with zero definitions",
+      "tag": "calendar · health · hook claims",
       "pos": [
         440,
         560
@@ -288,18 +288,18 @@
           "label": "Only a new committed claim dispatches"
         },
         {
-          "path": "internal/app/scheduler_tasks.go",
-          "line": 16,
-          "end_line": 53,
-          "label": "In-process ordinary lifecycle handoff"
+          "path": "internal/app/scheduler_evidence.go",
+          "line": 18,
+          "end_line": 76,
+          "label": "Passive task evidence projection"
         }
       ]
     },
     {
       "id": "calendar",
       "type": "database",
-      "label": "Scheduler SQLite calendar",
-      "sublabel": "definitions · claims · skips",
+      "label": "Calendar + reliability",
+      "sublabel": "immutable definitions · derived health",
       "tag": "one active occurrence per schedule",
       "pos": [
         40,
@@ -319,8 +319,8 @@
         {
           "path": "internal/scheduler/internal/sqlitestore/schema.go",
           "line": 52,
-          "end_line": 139,
-          "label": "Definitions, active claims and skips"
+          "end_line": 174,
+          "label": "Calendar and reliability schema"
         },
         {
           "path": "internal/scheduler/internal/sqlitestore/occurrences.go",
@@ -371,7 +371,7 @@
       "label": "Origin remote coordinator",
       "sublabel": "verified embedded Go SSH",
       "pos": [
-        40,
+        445,
         40
       ],
       "size": [
@@ -405,7 +405,7 @@
       "label": "Origin references",
       "sublabel": "immutable intent · dated observations",
       "pos": [
-        440,
+        40,
         40
       ],
       "size": [
@@ -430,6 +430,35 @@
           "line": 184,
           "end_line": 214,
           "label": "Bounded dated observation cache"
+        }
+      ]
+    },
+    {
+      "id": "failure-hook",
+      "type": "external",
+      "label": "Isolated failure hook",
+      "sublabel": "optional installed callback",
+      "tag": "claimed once · bounded attempt",
+      "pos": [
+        860,
+        840
+      ],
+      "size": [
+        260,
+        110
+      ],
+      "sources": [
+        {
+          "path": "internal/app/scheduler_hook.go",
+          "line": 19,
+          "end_line": 73,
+          "label": "Bounded callback and owned stdin"
+        },
+        {
+          "path": "internal/execution/native_command.go",
+          "line": 18,
+          "end_line": 72,
+          "label": "One-shot native owner with null output"
         }
       ]
     }
@@ -557,6 +586,20 @@
       "to": "lead",
       "label": "result + connectivity",
       "variant": "dashed"
+    },
+    {
+      "id": "project-health",
+      "from": "recurring",
+      "to": "task-records",
+      "label": "read evidence",
+      "variant": "dashed"
+    },
+    {
+      "id": "invoke-hook",
+      "from": "recurring",
+      "to": "failure-hook",
+      "label": "claimed callback",
+      "variant": "dashed"
     }
   ],
   "cards": [
@@ -576,7 +619,8 @@
       "items": [
         "Start plain delegate scheduler serve in an independent user terminal or tmux pane, even before the first definition. Agent and manual commands omit --root and share that OS-default store from any project cwd; each schedule retains its workspace. Saving never starts a host.",
         "The host supervises/restarts its resident child. The child runs the calendar loop; GoCron only offers wake hints, with no definition or claim authority (internal/scheduler/pulse/source.go:18–54).",
-        "Explicit serve and schedule create share the absent-storage initializer. An empty calendar can be ready; passive reads and compatibility scheduler run never initialize storage. Existing custom roots remain available with their exact --root."
+        "Explicit serve and schedule create share the absent-storage initializer. An empty calendar can be ready; passive reads and compatibility scheduler run never initialize storage. Existing custom roots remain available with their exact --root.",
+        "Host readiness is not schedule health. A passive ledger reports due-ordered results and unknown gaps. Opt-in quota holds suppress claims through a bounded reset without retry or catch-up (internal/scheduler/runtime/reliability.go; internal/scheduler/internal/sqlitestore/quota.go)."
       ]
     },
     {
@@ -585,7 +629,8 @@
       "items": [
         "A retryable child exit recovers with backoff while the host lives. Host/pane loss or reboot needs manual start again; permanent host faults stop retries (internal/scheduler/host/lifecycle.go:61–113).",
         "Downtime becomes compact skipped history, with no catch-up backlog. Active or uncertain occurrences block overlap (internal/scheduler/runtime/decision.go:26–69).",
-        "Stop acceptance is not completed shutdown. Wait for host/child closure; already admitted independent workers continue under their own supervisors and budgets (internal/scheduler/host/lifecycle.go:116–190; internal/scheduler/runtime/loop.go:41–45)."
+        "Stop acceptance is not completed shutdown. Wait for host/child closure; already admitted independent workers continue under their own supervisors and budgets (internal/scheduler/host/lifecycle.go:116–190; internal/scheduler/runtime/loop.go:41–45).",
+        "Explicit v1→v2 scheduler migration requires a stopped host. Notification claims allow at most one hook attempt; failures never alter task results. The helper does not prove closure of escaped descendants (internal/app/schedule_reliability.go; internal/app/scheduler_hook.go)."
       ]
     },
     {
@@ -603,7 +648,8 @@
       "items": [
         "Pueue queues worker starts, not calendar recurrence. The guardian owns the task lifetime; delegate-run performs fresh preflight, starts the selected provider and captures output. Receipt precedes enqueue; closure precedes sealing and publication.",
         "TaskDir evaluates sealed evidence and commits outcome.json. Status, logs and collect observe that task; collection can reconcile saved evidence without launching a provider turn (internal/tasklifecycle/collection.go:13–63).",
-        "Enabled CPU/memory guards are on by default and can be disabled separately for one dispatch/continue. Confirmed enabled pressure refuses fresh work; unavailable metrics only warn. Overrides do not become nested or scheduled task policy (internal/tasklifecycle/resource_admission.go; internal/resourceadmission/assessment.go)."
+        "Enabled CPU/memory guards are on by default and can be disabled separately for one dispatch/continue. Confirmed enabled pressure refuses fresh work; unavailable metrics only warn. Overrides do not become nested or scheduled task policy (internal/tasklifecycle/resource_admission.go; internal/resourceadmission/assessment.go).",
+        "Passive any/all wait reads canonical evidence without publication. Opt-in output silence shares the existing budget/guardian owner; native Wait disarms silence before capture joins (internal/app/wait.go; internal/execution/budget.go)."
       ]
     },
     {

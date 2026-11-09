@@ -13,7 +13,8 @@ import (
 // authority. Its private Store reuses the canonical record readers; callers
 // cannot obtain its mutation methods or task control handles.
 type ReadOnlyStore struct {
-	store *Store
+	store        *Store
+	proofCleanup *readOnlyProofCleanup
 }
 
 // OpenReadOnlyStoreContext validates an existing root without filesystem
@@ -54,6 +55,9 @@ func (r *ReadOnlyStore) Close() error {
 	if r.store.closed {
 		return nil
 	}
+	if err := r.closeProofCleanup(); err != nil {
+		return err
+	}
 	r.store.closed = true
 	return r.store.rootHandle.Close()
 }
@@ -67,6 +71,9 @@ func (r *ReadOnlyStore) checkReadContext(ctx context.Context) error {
 	}
 	if r.store.closed {
 		return os.ErrClosed
+	}
+	if r.proofCleanup != nil {
+		return r.proofCleanup.cause
 	}
 	return nil
 }

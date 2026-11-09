@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -28,44 +29,49 @@ var ErrJSONResponseTooLarge = fmt.Errorf("%w: JSON response exceeds maximum perm
 // rooted paths and availability. Answer bytes are streamed by a future typed
 // result API rather than copied into an unbounded control object.
 type Response struct {
-	Interaction       *task.InteractionState     `json:"interaction,omitempty"`
-	Delivery          *task.InteractionDelivery  `json:"delivery,omitempty"`
-	Events            []task.InteractionEvent    `json:"events,omitempty"`
-	Cursor            *uint64                    `json:"cursor,omitempty"`
-	SchemaVersion     int                        `json:"schema_version"`
-	Command           string                     `json:"command"`
-	RootID            string                     `json:"root_id,omitempty"`
-	TaskID            string                     `json:"task_id,omitempty"`
-	TaskRecord        string                     `json:"task_record,omitempty"`
-	Team              *task.TeamContext          `json:"team,omitempty"`
-	ParentTaskID      string                     `json:"parent_task_id,omitempty"`
-	Status            string                     `json:"status,omitempty"`
-	Admission         string                     `json:"admission"`
-	Liveness          string                     `json:"liveness"`
-	Publication       string                     `json:"publication"`
-	Outcome           *task.OutcomeRecord        `json:"outcome,omitempty"`
-	Payload           *task.PayloadDescriptor    `json:"payload,omitempty"`
-	Raw               []taskdir.LogDescriptor    `json:"raw,omitempty"`
-	EvidenceSHA256    string                     `json:"evidence_sha256,omitempty"`
-	Supervisor        *SupervisorResponse        `json:"supervisor,omitempty"`
-	SupervisorControl *SupervisorControlResponse `json:"supervisor_control,omitempty"`
-	SupervisorOwner   *SupervisorOwnerResponse   `json:"supervisor_owner,omitempty"`
-	Stops             []StopResponse             `json:"stops,omitempty"`
-	Stop              *StopResponse              `json:"stop,omitempty"`
-	Pending           *PendingResponse           `json:"pending,omitempty"`
-	Capability        *CapabilityReport          `json:"capability,omitempty"`
-	Continuation      *ContinuationResponse      `json:"continuation,omitempty"`
-	Failure           *DispatchFailureResponse   `json:"failure,omitempty"`
-	ResourceAdmission *ResourceAdmissionResponse `json:"resource_admission,omitempty"`
-	Diagnostics       []task.OutputDiagnostic    `json:"diagnostics,omitempty"`
-	Recheck           *RecheckResponse           `json:"recheck,omitempty"`
-	Error             string                     `json:"error,omitempty"`
-	ErrorTruncated    bool                       `json:"error_truncated,omitempty"`
-	Workspace         *WorkspaceResponse         `json:"workspace,omitempty"`
-	Workspaces        []WorkspaceResponse        `json:"workspaces,omitempty"`
-	WorkspaceCursor   string                     `json:"workspace_cursor,omitempty"`
-	WorkspaceSupport  *WorkspaceSupportReport    `json:"workspace_support,omitempty"`
-	Checkpoint        *CheckpointResponse        `json:"checkpoint,omitempty"`
+	LastProviderOutputAt   string                         `json:"last_provider_output_at,omitempty"`
+	ProviderOutputActivity *taskdir.OutputActivity        `json:"provider_output_activity,omitempty"`
+	Wait                   *WaitResponse                  `json:"wait,omitempty"`
+	ScheduleHealth         *schedulercontract.Health      `json:"schedule_health,omitempty"`
+	SchedulePolicy         *schedulercontract.QuotaPolicy `json:"schedule_policy,omitempty"`
+	Interaction            *task.InteractionState         `json:"interaction,omitempty"`
+	Delivery               *task.InteractionDelivery      `json:"delivery,omitempty"`
+	Events                 []task.InteractionEvent        `json:"events,omitempty"`
+	Cursor                 *uint64                        `json:"cursor,omitempty"`
+	SchemaVersion          int                            `json:"schema_version"`
+	Command                string                         `json:"command"`
+	RootID                 string                         `json:"root_id,omitempty"`
+	TaskID                 string                         `json:"task_id,omitempty"`
+	TaskRecord             string                         `json:"task_record,omitempty"`
+	Team                   *task.TeamContext              `json:"team,omitempty"`
+	ParentTaskID           string                         `json:"parent_task_id,omitempty"`
+	Status                 string                         `json:"status,omitempty"`
+	Admission              string                         `json:"admission"`
+	Liveness               string                         `json:"liveness"`
+	Publication            string                         `json:"publication"`
+	Outcome                *task.OutcomeRecord            `json:"outcome,omitempty"`
+	Payload                *task.PayloadDescriptor        `json:"payload,omitempty"`
+	Raw                    []taskdir.LogDescriptor        `json:"raw,omitempty"`
+	EvidenceSHA256         string                         `json:"evidence_sha256,omitempty"`
+	Supervisor             *SupervisorResponse            `json:"supervisor,omitempty"`
+	SupervisorControl      *SupervisorControlResponse     `json:"supervisor_control,omitempty"`
+	SupervisorOwner        *SupervisorOwnerResponse       `json:"supervisor_owner,omitempty"`
+	Stops                  []StopResponse                 `json:"stops,omitempty"`
+	Stop                   *StopResponse                  `json:"stop,omitempty"`
+	Pending                *PendingResponse               `json:"pending,omitempty"`
+	Capability             *CapabilityReport              `json:"capability,omitempty"`
+	Continuation           *ContinuationResponse          `json:"continuation,omitempty"`
+	Failure                *DispatchFailureResponse       `json:"failure,omitempty"`
+	ResourceAdmission      *ResourceAdmissionResponse     `json:"resource_admission,omitempty"`
+	Diagnostics            []task.OutputDiagnostic        `json:"diagnostics,omitempty"`
+	Recheck                *RecheckResponse               `json:"recheck,omitempty"`
+	Error                  string                         `json:"error,omitempty"`
+	ErrorTruncated         bool                           `json:"error_truncated,omitempty"`
+	Workspace              *WorkspaceResponse             `json:"workspace,omitempty"`
+	Workspaces             []WorkspaceResponse            `json:"workspaces,omitempty"`
+	WorkspaceCursor        string                         `json:"workspace_cursor,omitempty"`
+	WorkspaceSupport       *WorkspaceSupportReport        `json:"workspace_support,omitempty"`
+	Checkpoint             *CheckpointResponse            `json:"checkpoint,omitempty"`
 	// Checkpoints is set only by a successful list. The pointer keeps an
 	// empty page as [] there while every other command omits the field.
 	Checkpoints        *[]workspacescore.CheckpointDescription `json:"checkpoints,omitempty"`
