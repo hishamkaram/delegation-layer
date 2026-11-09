@@ -230,3 +230,16 @@ func PlanOperationalResume(state State, cursor, now time.Time, hold *QuotaHold) 
 	}
 	return &SkipSpan{From: cursor, To: end, Reason: reason}, nil
 }
+
+// EffectiveFailureCode derives schedule failure attribution from independently
+// validated evidence. A quota rejection remains primary; otherwise an admission
+// attempt provides the actionable cause. Call only for non-committed results.
+func EffectiveFailureCode(canonicalCode string, attempt *AttemptFailure) string {
+	if canonicalCode == "provider_quota_exhausted" {
+		return canonicalCode
+	}
+	if attempt != nil {
+		return attempt.Code
+	}
+	return canonicalCode
+}

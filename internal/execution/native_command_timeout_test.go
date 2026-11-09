@@ -18,3 +18,13 @@ func TestNativeTimeoutClassificationRequiresProvenCompletion(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeTimeoutIncludesConfirmedCallbackNonzeroExit(t *testing.T) {
+	expired := nativeRecordedError(nativeCommandResult{Exited: true, ExitCode: 1, Expired: true})
+	if !NativeCommandTimedOut(expired) {
+		t.Fatal("known expiry with callback nonzero exit became uncertain")
+	}
+	if NativeCommandTimedOut(errors.Join(expired, io.EOF)) {
+		t.Fatal("callback expiry hid joined transport fault")
+	}
+}

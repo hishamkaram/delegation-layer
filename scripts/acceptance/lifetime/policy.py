@@ -204,7 +204,7 @@ def _validate_lifetime_termination(
             termination["launch_count"] == len(launches) and
             termination.get("launch_set_sha256") == launch_set_digest and
             isinstance(cause, str) and cause in {
-                "completed", "budget", "requested", "recovery", "previous-boot"} and
+                "completed", "budget", "output-silence", "requested", "recovery", "previous-boot"} and
             termination.get("scope_empty") is True,
             f"{evidence} lifetime termination binding mismatch for {task}")
     terminated_at = _canonical_timestamp(

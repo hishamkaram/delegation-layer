@@ -54,6 +54,9 @@ func CompareOutcomes(a, b *OutcomeRecord) bool {
 	if !a.Predicate.Equal(b.Predicate) {
 		return false
 	}
+	if !reflect.DeepEqual(a.Quota, b.Quota) {
+		return false
+	}
 	if a.Payload != b.Payload {
 		return false
 	}

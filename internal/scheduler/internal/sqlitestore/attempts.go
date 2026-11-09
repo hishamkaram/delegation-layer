@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+
 	"github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -30,13 +31,16 @@ func (s *Store) RecordAttempt(ctx context.Context, id string, f contract.Attempt
 			if !bytes.Equal(prior, encoded) {
 				return storedFault("attempt", errors.New("immutable attempt changed"))
 			}
-			return nil
+			return normalizeResultAttempt(ctx, tx, id)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return classify(err)
 		}
 		_, err = tx.ExecContext(ctx, "INSERT INTO occurrence_attempts(task_id,attempt_json) VALUES (?,?)", id, encoded)
-		return classify(err)
+		if err != nil {
+			return classify(err)
+		}
+		return normalizeResultAttempt(ctx, tx, id)
 	})
 }
 
@@ -61,16 +65,56 @@ func (s *Store) RecordResult(ctx context.Context, f contract.ResultFact) error {
 			if verdict != f.Verdict || reference.String != f.OutcomeSHA256 {
 				return storedFault("result", errors.New("terminal outcome projection changed"))
 			}
-			return nil
+			return normalizeResultAttempt(ctx, tx, f.TaskID)
 		}
-		var quota sql.NullInt64
-		if !f.QuotaNotBefore.IsZero() {
-			quota = sql.NullInt64{Int64: f.QuotaNotBefore.UnixNano(), Valid: true}
+		if writeErr := upsertResultProjection(ctx, tx, f); writeErr != nil {
+			return writeErr
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO occurrence_results(task_id,observed_at,verdict,code,outcome_sha256,quota_until) VALUES (?,?,?,?,?,?)
- ON CONFLICT(task_id) DO UPDATE SET observed_at=excluded.observed_at,verdict=excluded.verdict,code=excluded.code,outcome_sha256=excluded.outcome_sha256,quota_until=excluded.quota_until WHERE excluded.observed_at > occurrence_results.observed_at`, f.TaskID, f.ObservedAt.UnixNano(), f.Verdict, nullableText(f.Code), nullableText(f.OutcomeSHA256), quota)
-		return classify(err)
+		return normalizeResultAttempt(ctx, tx, f.TaskID)
 	})
+}
+
+// The transaction owner decides whether replacement is allowed; this primitive
+// stores only that approved projection, preserving its monotonic observed time.
+func upsertResultProjection(ctx context.Context, tx *sql.Tx, f contract.ResultFact) error {
+	var quota sql.NullInt64
+	if !f.QuotaNotBefore.IsZero() {
+		quota = sql.NullInt64{Int64: f.QuotaNotBefore.UnixNano(), Valid: true}
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO occurrence_results(task_id,observed_at,verdict,code,outcome_sha256,quota_until) VALUES (?,?,?,?,?,?)
+ ON CONFLICT(task_id) DO UPDATE SET observed_at=excluded.observed_at,verdict=excluded.verdict,code=excluded.code,outcome_sha256=excluded.outcome_sha256,quota_until=excluded.quota_until WHERE excluded.observed_at > occurrence_results.observed_at`, f.TaskID, f.ObservedAt.UnixNano(), f.Verdict, nullableText(f.Code), nullableText(f.OutcomeSHA256), quota)
+	return classify(err)
+}
+
+// normalizeResultAttempt joins the scheduler's two independent durable facts.
+// Their arrival order cannot become attribution authority. Only the derived
+// failure code changes; verdict, outcome reference, advice and notification
+// claims keep their original owners and immutable evidence.
+func normalizeResultAttempt(ctx context.Context, tx *sql.Tx, id string) error {
+	var code sql.NullString
+	var encoded []byte
+	err := tx.QueryRowContext(ctx, `SELECT r.code,a.attempt_json FROM occurrence_results r
+ JOIN occurrence_attempts a ON a.task_id=r.task_id
+ WHERE r.task_id=? AND r.verdict IN ('rejected','not_created','closed_without_outcome')`, id).Scan(&code, &encoded)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return classify(err)
+	}
+	var attempt contract.AttemptFailure
+	if err = task.DecodeStrict(encoded, &attempt); err != nil {
+		return storedFault("attempt", err)
+	}
+	if err = contract.ValidateAttempt(attempt); err != nil {
+		return storedFault("attempt", err)
+	}
+	effective := contract.EffectiveFailureCode(code.String, &attempt)
+	if effective == code.String {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, "UPDATE occurrence_results SET code=? WHERE task_id=?", effective, id)
+	return classify(err)
 }
 
 // ReconciliationPage pages immutable occurrence identities, not just active

@@ -725,6 +725,20 @@ class OutputSilenceStopPolicyTests(unittest.TestCase):
         self.assertEqual(evidence["closure"]["termination"]["cause"], "output-silence")
         self.assertNotIn("must-not-enter-receipt", json.dumps(evidence))
 
+    def test_idle_status_can_retain_the_validated_provider_rejection_error(self):
+        task_id, root_id, status, closure = self.fixture()
+        status.update(publication="rejected", outcome={"verdict": "rejected"},
+                      error="provider_failed: private-rejection-canary")
+        evidence = stop_impl.silence_stop_evidence(status, closure, task_id, root_id)
+        self.assertEqual(evidence["status"]["status"], "idle_timed_out")
+        self.assertNotIn("private-rejection-canary", json.dumps(evidence))
+
+    def test_operational_error_without_a_rejected_outcome_is_not_silence_proof(self):
+        task_id, root_id, status, closure = self.fixture()
+        status["error"] = "observation failed"
+        with self.assertRaises(RuntimeError):
+            stop_impl.silence_stop_evidence(status, closure, task_id, root_id)
+
     def test_wrong_native_cause_or_wall_expiry_cannot_prove_silence(self):
         for cause, observed_at in (("budget", "2026-11-09T12:01:30Z"),
                                    ("output-silence", "2026-11-09T12:05:00Z")):

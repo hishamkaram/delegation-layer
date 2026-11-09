@@ -89,13 +89,7 @@ func ClassifyPassiveTaskEvidence(facts taskdir.TaskEvidence, neverStartedReferen
 		return passiveClosedEvidence(facts, result), nil
 	}
 	if neverStartedReference != "" {
-		if err = task.ValidateSHA256(neverStartedReference); err != nil {
-			return result, err
-		}
-		if facts.Started != nil || facts.Seal != nil || facts.Lifetime.Intent != nil || facts.Lifetime.Registration != nil || facts.Lifetime.Worker != nil || len(facts.Lifetime.Launches) != 0 {
-			return result, fmt.Errorf("%w: never-started proof conflicts with execution", task.ErrEvidenceFault)
-		}
-		result.Ready, result.Readiness, result.Liveness = true, PassiveNeverStarted, task.LivenessEnded
+		return passiveNeverStartedEvidence(facts, neverStartedReference, result)
 	}
 	return result, nil
 }
@@ -127,4 +121,15 @@ func passiveClosedEvidence(facts taskdir.TaskEvidence, result PassiveTaskObserva
 		}
 	}
 	return result
+}
+
+func passiveNeverStartedEvidence(facts taskdir.TaskEvidence, reference string, result PassiveTaskObservation) (PassiveTaskObservation, error) {
+	if err := task.ValidateSHA256(reference); err != nil {
+		return result, err
+	}
+	if facts.Started != nil || facts.Seal != nil || facts.Lifetime.Intent != nil || facts.Lifetime.Registration != nil || facts.Lifetime.Worker != nil || len(facts.Lifetime.Launches) != 0 {
+		return result, fmt.Errorf("%w: never-started proof conflicts with execution", task.ErrEvidenceFault)
+	}
+	result.Ready, result.Readiness, result.Liveness = true, PassiveNeverStarted, task.LivenessEnded
+	return result, nil
 }

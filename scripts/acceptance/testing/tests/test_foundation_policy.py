@@ -93,6 +93,22 @@ class FoundationPolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(AcceptanceFailure, "termination binding mismatch"):
                     self.validate_termination(self.termination(cause), {"result": "success"})
 
+    def test_output_silence_closure_keeps_wait_and_identity_requirements(self):
+        record = self.termination("output-silence")
+        self.validate_termination(record, {"result": "success"})
+        with self.assertRaisesRegex(AcceptanceFailure, "worker Wait is missing"):
+            self.validate_termination(record, None)
+        changes = (("root_id", "d" * 32), ("task_id", "d" * 32),
+                   ("registration_sha256", "d" * 64), ("launch_count", 1),
+                   ("launch_set_sha256", "d" * 64), ("scope_empty", False),
+                   ("cause", "output_silence"), ("cause", "unknown"))
+        for key, value in changes:
+            with self.subTest(key=key, value=value):
+                changed = deepcopy(record)
+                changed[key] = value
+                with self.assertRaisesRegex(AcceptanceFailure, "termination binding mismatch"):
+                    self.validate_termination(changed, {"result": "success"})
+
     def test_recovered_absence_cannot_be_projected_as_inspection_success(self):
         result: dict[str, object] = {"reason": "eligible"}
         completion: dict[str, object] = {"native_exit": "successful-exit"}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
@@ -83,11 +84,7 @@ func watchWaitTasks(ctx context.Context, a Arguments, reader tasklifecycle.Passi
 	for {
 		ready, fault := observeWaitRound(readCtx, reader, watch)
 		if fault != nil {
-			if a.Watch > 0 && errors.Is(readCtx.Err(), context.DeadlineExceeded) {
-				return commandResult{response: response, code: 3}
-			}
-			response.TaskID = fault.taskID
-			return waitFailure(response, fault.code, fault.err)
+			return waitRoundFailure(readCtx, a.Watch, response, fault)
 		}
 		watch.Satisfied = ready > 0 && (!a.WaitAll || ready == len(a.WaitTaskIDs))
 		if watch.Satisfied {
@@ -179,4 +176,14 @@ func awaitWaitPoll(ctx context.Context, deadline time.Time, poll time.Duration) 
 	case <-timer.C:
 		return nil
 	}
+}
+
+// A finite watch expiring cannot erase an independently observed evidence or
+// cleanup fault. Only a whole deadline error is the pending exit convention.
+func waitRoundFailure(ctx context.Context, watch time.Duration, response Response, fault *waitReadFault) commandResult {
+	if watch > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded) && task.AllErrorCauses(fault.err, func(leaf error) bool { return errors.Is(leaf, context.DeadlineExceeded) }) {
+		return commandResult{response: response, code: 3}
+	}
+	response.TaskID = fault.taskID
+	return waitFailure(response, fault.code, fault.err)
 }

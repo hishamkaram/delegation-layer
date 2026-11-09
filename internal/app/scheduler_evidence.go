@@ -88,16 +88,14 @@ func schedulerRejectionCode(outcome *task.OutcomeRecord, attempt *contract.Attem
 	var codes []string
 	for _, diagnostic := range outcome.Diagnostics {
 		if diagnostic.Code == "provider_quota_exhausted" {
-			return diagnostic.Code
+			return contract.EffectiveFailureCode(diagnostic.Code, attempt)
 		}
 		codes = append(codes, diagnostic.Code)
 	}
-	if attempt != nil {
-		return attempt.Code
+	canonicalCode := "provider_output_rejected"
+	if len(codes) != 0 {
+		sort.Strings(codes)
+		canonicalCode = codes[0]
 	}
-	if len(codes) == 0 {
-		return "provider_output_rejected"
-	}
-	sort.Strings(codes)
-	return codes[0]
+	return contract.EffectiveFailureCode(canonicalCode, attempt)
 }

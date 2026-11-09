@@ -323,3 +323,14 @@ func TestWaitRedactsEvidenceDiagnosticsAndPreservesCause(t *testing.T) {
 		t.Fatalf("evidence failure lost safe typed context: %+v", result)
 	}
 }
+
+func TestWaitDeadlineDoesNotHideConcreteEvidenceFault(t *testing.T) {
+	reader := waitEvidenceFake{read: func(ctx context.Context, id string) (taskdir.TaskEvidence, error) {
+		<-ctx.Done()
+		return taskdir.TaskEvidence{TaskID: id}, errors.Join(ctx.Err(), task.ErrEvidenceFault)
+	}}
+	result := watchWaitTasks(t.Context(), Arguments{Watch: time.Millisecond, WaitTaskIDs: []string{waitFirstID}}, reader, newResponse("wait"), time.Second)
+	if result.code != 1 || result.response.Failure == nil || result.response.Failure.Code != "task_observation_failed" || !errors.Is(result.err, task.ErrEvidenceFault) {
+		t.Fatalf("deadline hid concrete evidence fault: %+v", result)
+	}
+}

@@ -243,6 +243,10 @@ func NativeCommandTimedOut(err error) bool {
 			proven = true
 			return true
 		}
+		var callbackExit nativeCommandExitError
+		if errors.As(leaf, &callbackExit) {
+			return true
+		}
 		return errors.Is(leaf, context.DeadlineExceeded)
 	})
 	return pure && proven
