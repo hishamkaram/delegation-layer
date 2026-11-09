@@ -88,6 +88,140 @@ func (s silenceTestStopper) PrepareStop(d time.Time, c string) (BudgetRequest, e
 	return s.prepare(d, c)
 }
 
+type silenceRunStop struct {
+	deadline time.Time
+	cause    string
+}
+
+// The fixture owns hook gates and Run's finite child/capture join. Its result is
+// read only after done closes; cleanup releases every gate before joining Run.
+type silenceRunFixture struct {
+	clock                             *silenceTestClock
+	started, readOutput, finish, done chan struct{}
+	captured                          chan error
+	stopped                           chan silenceRunStop
+	readOnce, finishOnce              sync.Once
+	result                            Result
+}
+
+func newSilenceRunFixture(t *testing.T) *silenceRunFixture {
+	t.Helper()
+	td, permit, plan, _ := fixtureTaskWithPlan(t, "echo", func(meta *task.MetaRecord, _ *Plan) {
+		meta.RequestedConfig.OutputSilenceTimeout = "10s"
+	})
+	f := &silenceRunFixture{
+		clock: newSilenceTestClock(), started: make(chan struct{}), readOutput: make(chan struct{}),
+		finish: make(chan struct{}), done: make(chan struct{}), captured: make(chan error, 1), stopped: make(chan silenceRunStop, 1),
+	}
+	opts := Options{Clock: f.clock, Stopper: silenceTestStopper{prepare: func(deadline time.Time, cause string) (BudgetRequest, error) {
+		return func(context.Context) error {
+			f.stopped <- silenceRunStop{deadline, cause}
+			f.release()
+			return nil
+		}, nil
+	}}, Hooks: Hooks{
+		Event: func(event string) {
+			if event == "started-receipt" {
+				close(f.started)
+			}
+		},
+		Wait: func(cmd *exec.Cmd) error {
+			<-f.finish
+			return cmd.Wait()
+		},
+		Capture: f.capture,
+	}}
+	t.Cleanup(func() {
+		f.release()
+		if _, err := f.join(); err != nil {
+			t.Error(err)
+		}
+	})
+	go func() { f.result = Run(td, permit, plan, opts); close(f.done) }()
+	select {
+	case <-f.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not record an actual provider start")
+	}
+	return f
+}
+
+func (f *silenceRunFixture) releaseRead() {
+	f.readOnce.Do(func() { close(f.readOutput) })
+}
+
+func (f *silenceRunFixture) release() {
+	f.releaseRead()
+	f.finishOnce.Do(func() { close(f.finish) })
+}
+
+func (f *silenceRunFixture) join() (Result, error) {
+	select {
+	case <-f.done:
+		return f.result, nil
+	case <-time.After(5 * time.Second):
+		return Result{}, errors.New("Run did not join its finite child and capture hooks")
+	}
+}
+
+func (f *silenceRunFixture) capture(name string, dst io.Writer, src io.Reader) error {
+	if name != "stdout" {
+		_, err := io.Copy(dst, src)
+		return err
+	}
+	<-f.readOutput
+	_, err := io.CopyN(dst, src, 1)
+	f.captured <- err
+	if err != nil {
+		return err
+	}
+	<-f.finish
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func TestRunCaptureActivityExtendsOutputSilenceDeadline(t *testing.T) {
+	f := newSilenceRunFixture(t)
+	start := f.clock.Now()
+	if wall := awaitSilenceTimer(t, f.clock); !wall.Equal(start.Add(time.Minute)) {
+		t.Fatalf("wall deadline=%s, want %s", wall, start.Add(time.Minute))
+	}
+	if initial := awaitSilenceTimer(t, f.clock); !initial.Equal(start.Add(10 * time.Second)) {
+		t.Fatalf("initial silence deadline=%s, want %s", initial, start.Add(10*time.Second))
+	}
+	f.clock.advance(5 * time.Second)
+	f.releaseRead()
+	select {
+	case err := <-f.captured:
+		require(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run capture did not read the released provider byte")
+	}
+	if extended := awaitSilenceTimer(t, f.clock); !extended.Equal(start.Add(15 * time.Second)) {
+		t.Fatalf("captured output silence deadline=%s, want %s", extended, start.Add(15*time.Second))
+	}
+	f.clock.advance(5 * time.Second)
+	select {
+	case stop := <-f.stopped:
+		t.Fatalf("Run stopped at the original deadline after later output: %+v", stop)
+	default:
+	}
+	f.clock.advance(5 * time.Second)
+	select {
+	case stop := <-f.stopped:
+		if stop.cause != task.StopCauseOutputSilence || !stop.deadline.Equal(start.Add(15*time.Second)) {
+			t.Fatalf("Run selected the wrong stop after captured output: %+v", stop)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop at the extended silence deadline")
+	}
+	result, err := f.join()
+	require(t, err)
+	if result.Outcome == nil || result.StopError != nil {
+		t.Fatalf("Run did not publish and join its stop request: %+v", result)
+	}
+}
+
 func TestOutputSilenceActivityExtendsOnlySilenceDeadline(t *testing.T) {
 	c := newSilenceTestClock()
 	selected := make(chan string, 1)

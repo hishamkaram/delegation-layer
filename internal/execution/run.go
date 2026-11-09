@@ -70,12 +70,11 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 			return result
 		}
 	}
-	return runPreparedInvocation(i, request.BudgetNanos, plan, opts, allowRuntimeRefresh)
+	return runPreparedInvocation(i, request, plan, opts, allowRuntimeRefresh)
 }
 
-func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (result Result) {
-	launchPlan, startErr := prepareLaunchPlan(i, budgetNanos, plan, opts, allowRuntimeRefresh)
-	i.stdout.activity, i.stderr.activity = i.budget.outputActivity, i.budget.outputActivity
+func runPreparedInvocation(i *invocation, request *task.TaskRecord, plan Plan, opts Options, allowRuntimeRefresh bool) (result Result) {
+	launchPlan, startErr := prepareLaunchPlan(i, request, plan, opts, allowRuntimeRefresh)
 	go i.stdout.run(opts)
 	go i.stderr.run(opts)
 	if startErr == nil {
@@ -90,12 +89,12 @@ func runPreparedInvocation(i *invocation, budgetNanos int64, plan Plan, opts Opt
 // constructs the one unstarted provider command from the plan it returns.
 // Nothing is bound before preflight, so a provider update between admission
 // and launch is resolved by the preflight rather than by a stale binding.
-func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options, allowRuntimeRefresh bool) (Plan, error) {
+func prepareLaunchPlan(i *invocation, request *task.TaskRecord, plan Plan, opts Options, allowRuntimeRefresh bool) (Plan, error) {
 	launchPlan := plan
 	_, startErr := i.prepareLaunchFiles(plan)
 	clock := opts.clock()
 	i.started = clock.Now()
-	deadline := i.started.Add(time.Duration(budgetNanos))
+	deadline := i.started.Add(time.Duration(request.BudgetNanos))
 	if !opts.Deadline.IsZero() {
 		if opts.Deadline.After(deadline) {
 			// Keep the admitted deadline and arm its owner before finalizing
@@ -106,15 +105,14 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 		}
 	}
 	i.budget = armBudgetUntil(clock, deadline, opts)
-	request, _, requestErr := i.td.PreparedRecords()
-	if requestErr != nil {
-		return launchPlan, errors.Join(startErr, requestErr)
-	}
 	silence, silenceErr := task.ParseOutputSilenceTimeout(request.RequestedConfig.OutputSilenceTimeout)
 	if silenceErr != nil {
 		return launchPlan, errors.Join(startErr, silenceErr)
 	}
 	i.budget.configureOutputSilence(silence)
+	if silence > 0 {
+		i.stdout.activity, i.stderr.activity = i.budget.outputActivity, i.budget.outputActivity
+	}
 	opts.emit("start-entry")
 	if startErr != nil {
 		return launchPlan, startErr
