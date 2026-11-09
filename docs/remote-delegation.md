@@ -263,10 +263,13 @@ delegate remote retire remote:ID --scope both --apply --json
 passive and reports observation time, layout, family paths, bytes, entries and
 availability. Its walk stops after 10,000 entries per family and marks truncated
 observations. Preview is the default for `retire`; `--dry-run` makes it explicit.
-It writes no records and never probes execution locks. Preview is advisory;
+Preview writes no records and never probes execution locks. Preview is advisory;
 `--apply` rechecks all requirements while holding the role's exclusive byte
 lease. A busy lease or transient-only fault returns exit 3; a concrete fault
 remains exit 1, including when joined with a transient error.
+
+`--apply --scope both` applies each side independently: origin bytes may be
+retired even when the destination refuses or cannot be reached.
 
 Destination retirement requires canonical terminal closure, released execution
 and completed declared-output capture. Origin retirement requires a sent or

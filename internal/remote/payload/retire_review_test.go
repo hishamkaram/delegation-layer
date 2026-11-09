@@ -15,16 +15,22 @@ import (
 
 type retirementBarrierFailure struct {
 	taskdir.BaseFaultInjector
-	target string
-	cause  error
-	hits   int
-	retry  bool
+	target        string
+	cause         error
+	hits          int
+	retry         bool
+	directoryHits int
 }
 
 func (f *retirementBarrierFailure) OnDirBarrier(path string) error {
 	if f.retry && path == filepath.Dir(f.target) {
-		f.hits++
-		return f.cause
+		f.directoryHits++
+		// The first journal open precedes the byte lease. Fail the second
+		// open, whose barrier acknowledges the fence while holding EX.
+		if f.directoryHits == 2 {
+			f.hits++
+			return f.cause
+		}
 	}
 	return nil
 }
