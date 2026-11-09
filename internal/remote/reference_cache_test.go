@@ -10,8 +10,66 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
+
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestPassiveLastObservationUsesCanonicalOwnerValidation(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	intent := testIntent()
+	intent.OriginRootID = store.RootID
+	reference, err := OpenReference(t.Context(), store, intent.TaskID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reference.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err = reference.SaveIntent(t.Context(), intent, []byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	response := responseFor(Request{})
+	response.Identity = intent.Destination
+	if err = reference.Observe(t.Context(), response); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := taskdir.OpenReadOnlyStoreContext(t.Context(), store.Root, predicate.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := reader.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	observation, err := ReadLastObservation(t.Context(), reader, intent.TaskID, intent)
+	if err != nil || observation.Sequence != 1 {
+		t.Fatalf("passive cached observation: %+v, %v", observation, err)
+	}
+	name := filepath.Join(store.Root, "remote-refs", intent.TaskID, "observation-00000000000000000001.json")
+	file, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := file.Write([]byte(" "))
+	if err = errors.Join(writeErr, file.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ReadLastObservation(t.Context(), reader, intent.TaskID, intent); err == nil {
+		t.Fatal("noncanonical cached observation accepted")
+	}
+}
 
 func observationCacheNames(t *testing.T, reference *Reference) []string {
 	t.Helper()

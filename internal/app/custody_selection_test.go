@@ -31,7 +31,7 @@ func TestLifetimeGuardianWithoutPlacementDoesNotCreateCustody(t *testing.T) {
 			if err := fixture.WaitRun(t); err != nil {
 				t.Fatal(err)
 			}
-			if err := releaseLifetimeCustody(t.Context(), closure); err != nil {
+			if err := releaseLifetimeCustody(t.Context(), closure, nil); err != nil {
 				t.Fatal(err)
 			}
 			if pending, err := lifetimeCustodyPending(t.Context(), closure); err != nil || pending {
@@ -61,7 +61,7 @@ func TestLegacyCustodyReleasesOnlyAfterGuardianClosure(t *testing.T) {
 			fixture.Hello(t)
 			registration, _ := readCustodyContractRegistration(t, s)
 			bindCustodyTestView(t, registration)
-			if err := releaseLifetimeCustody(t.Context(), closure); err != nil || !custodyTestPending(t, registration) {
+			if err := releaseLifetimeCustody(t.Context(), closure, nil); err != nil || !custodyTestPending(t, registration) {
 				t.Fatalf("release before closure: %v; want view retained", err)
 			}
 			fixture.CloseTask(t)

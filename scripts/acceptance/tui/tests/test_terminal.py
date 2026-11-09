@@ -1,0 +1,45 @@
+"""Native descriptor and output-mode contracts without launching Delegate."""
+
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+from scripts.acceptance.directories.operations import DirectoryOwner
+from scripts.acceptance.processes.contracts import TerminalIO
+from scripts.acceptance.processes.operations import Processes
+from scripts.acceptance.tui.terminal import Terminal, plain_text, restored_modes
+
+
+class TerminalAcceptanceTests(unittest.TestCase):
+    def test_control_sequences_are_removed_and_exit_modes_are_checked(self):
+        output = b"\x1b[?1049h\x1b[?25l\x1b[?2004hhello\x1b]11;rgb:0000/0000/0000\x07"
+        self.assertFalse(restored_modes(output))
+        self.assertEqual(plain_text(output), "hello")
+        self.assertTrue(restored_modes(output + b"\x1b[?1049l\x1b[?2004l\x1b[?25h"))
+
+    def test_terminal_port_preserves_shared_process_wait_and_separate_stderr(self):
+        owner = DirectoryOwner()
+        root = Path(tempfile.mkdtemp(prefix="tui-terminal-port-")).resolve(strict=True)
+        owner.adopt_created("terminal port test", root, root.parent)
+        book = Processes(root / "captures", environment={}, owner=owner, environment_keys_only=True)
+        terminal = Terminal()
+        try:
+            source = "import os,sys; assert os.isatty(0) and os.isatty(1); print('terminal-port'); print('separate-error',file=sys.stderr)"
+            child = book.start("terminal", [str(Path(sys.executable).resolve()), "-c", source], root, terminal=terminal.stdio)
+            terminal.wait_text("terminal-port")
+            self.assertEqual(child.wait(timeout=5), 0)
+            self.assertEqual(child.stderr_path.read_bytes(), b"separate-error\n")
+            self.assertEqual(child.stdout_path.read_bytes(), b"")
+            self.assertTrue(book.finished_naturally())
+            with self.assertRaisesRegex(ValueError, "terminal stdio"):
+                book.start("bad-stdin", [str(Path(sys.executable).resolve())], root, stdin=b"", terminal=terminal.stdio)
+            with self.assertRaises(ValueError):
+                book.start("bad-port", [str(Path(sys.executable).resolve())], root, terminal=TerminalIO(-1, -1))
+            self.assertEqual(len(book.entries), 1)
+        finally:
+            terminal.close()
+            if book.drain(timeout=5):
+                owner.release()
+                raise RuntimeError("terminal port child closure unproven; retained " + str(root))
+            owner.rollback()

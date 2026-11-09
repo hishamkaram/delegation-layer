@@ -20,6 +20,12 @@ func LaunchQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable,
 // StartQueueMaintenanceOwnerWithEnvironment retains the selected bounded
 // environment through Start and the exact child's natural Wait.
 func StartQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, root string, environment []string) (<-chan error, error) {
+	return StartQueueMaintenanceOwnerWithReporter(ctx, executable, root, environment, nil)
+}
+
+// StartQueueMaintenanceOwnerWithReporter retains an invocation sink with the
+// exact natural Wait owner. The sink must remain safe after its UI closes.
+func StartQueueMaintenanceOwnerWithReporter(ctx context.Context, executable, root string, environment []string, report func(error)) (<-chan error, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -52,13 +58,19 @@ func StartQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, 
 	// best-effort attempt: a new session alone cannot outlive every finite task
 	// scope, and interruption leaves the wake available for later root activity.
 	// Keep one Wait while this caller lives so an early helper exit is reaped.
-	go func() {
-		waitErr := command.Wait()
-		if waitErr != nil {
+	go waitMaintenanceOwner(command, report, done)
+	return done, nil
+}
+
+func waitMaintenanceOwner(command *exec.Cmd, report func(error), done chan<- error) {
+	waitErr := command.Wait()
+	if waitErr != nil {
+		if report != nil {
+			report(waitErr)
+		} else {
 			log.Printf("delegate: maintenance process deferred: %v", waitErr)
 		}
-		done <- waitErr
-		close(done)
-	}()
-	return done, nil
+	}
+	done <- waitErr
+	close(done)
 }

@@ -29,7 +29,7 @@ func TestStatusCaptureStreamsLargeQueueThroughNaturalWait(t *testing.T) {
 	var events []CommandEvent
 	pending := startOwnedCaptured(cmd, "large-status", func(event CommandEvent) {
 		events = append(events, event)
-	}, FixtureVersion)
+	}, FixtureVersion, nil)
 	result := statusCaptureTestWait(t, pending)
 	if result.Err != nil {
 		t.Fatal(result.Err)
@@ -49,7 +49,7 @@ func TestStatusCaptureFinishesSingleObjectFixtureAfterNaturalExit(t *testing.T) 
 		"single-status",
 		nil,
 		FixtureVersion,
-	)
+		nil)
 	result := statusCaptureTestWait(t, pending)
 	if result.Err != nil {
 		t.Fatal(result.Err)
@@ -82,7 +82,7 @@ func TestStatusCaptureDrainsParserFailureToNaturalExit(t *testing.T) {
 			executable := finiteExecutable(t, "cat \"$1\"\nprintf 'drained' >\"$2\"\nprintf 'drained\\n' >&2\nexit \"$3\"")
 			marker := filepath.Join(t.TempDir(), "completed")
 			cmd := exec.Command(executable, statusCaptureTestPayloadFile(t, []byte(tc.data)), marker, strconv.Itoa(tc.exitCode))
-			pending := startOwnedCaptured(cmd, "drain-status", nil, FixtureVersion)
+			pending := startOwnedCaptured(cmd, "drain-status", nil, FixtureVersion, nil)
 			result := statusCaptureTestWait(t, pending)
 			statusCaptureTestExited(t, result, tc.exitCode)
 			if !errors.Is(result.Err, tc.wantErr) {
@@ -106,7 +106,7 @@ func TestStatusCaptureStartFailureFinishesCapture(t *testing.T) {
 	var events []CommandEvent
 	pending := startOwnedCaptured(cmd, "failed-start", func(event CommandEvent) {
 		events = append(events, event)
-	}, FixtureVersion)
+	}, FixtureVersion, nil)
 	result := statusCaptureTestWait(t, pending)
 	if !errors.Is(result.Err, os.ErrNotExist) || !errors.Is(result.Err, ErrUnknown) {
 		t.Fatalf("Start or empty-capture error was lost: %v", result.Err)
@@ -128,7 +128,7 @@ func TestStatusCapturePendingResultSnapshotsAreIndependent(t *testing.T) {
 		Groups: map[string]Group{"default": {Status: "Running", ParallelTasks: 2}},
 	}
 	executable := finiteExecutable(t, "cat \"$1\"\nprintf 'immutable\\n' >&2")
-	pending := startOwnedCaptured(exec.Command(executable, statusCaptureTestPayloadFile(t, data)), "immutable-status", nil, FixtureVersion)
+	pending := startOwnedCaptured(exec.Command(executable, statusCaptureTestPayloadFile(t, data)), "immutable-status", nil, FixtureVersion, nil)
 	original := statusCaptureTestWait(t, pending)
 	if original.Err != nil {
 		t.Fatal(original.Err)

@@ -369,7 +369,7 @@ func TestEndpointObservationRejectsTruncatedStatusCapture(t *testing.T) {
 				removePrivateTestPath(t, fixture.socketPath)
 			}
 			executable := finiteExecutable(t, `printf '{"tasks"'; exit 1`)
-			result, commandErr := observeCommand(context.Background(), startOwnedCaptured(exec.Command(executable), "", nil, FixtureVersion), time.Second)
+			result, commandErr := observeCommand(context.Background(), startOwnedCaptured(exec.Command(executable), "", nil, FixtureVersion, nil), time.Second)
 			if commandErr == nil || !result.Started || result.ExitCode != 1 || !errors.Is(result.Err, io.ErrUnexpectedEOF) {
 				t.Fatalf("truncated status capture = %+v, %v", result, commandErr)
 			}
@@ -412,7 +412,7 @@ func TestRefusedEndpointRequiresNormalCompletedCommand(t *testing.T) {
 		{name: "signaled command", result: withErr(&controlExitError{code: -1}), err: exitErr},
 		{name: "captured response", result: withStdout, err: exitErr},
 		{name: "wait fault", result: withErr(errors.New("wait infrastructure failure")), err: exitErr},
-		{name: "pending command", result: exited, err: errors.Join(exitErr, &InFlightError{Pending: transport.NewPending(nil)})},
+		{name: "pending command", result: exited, err: errors.Join(exitErr, &InFlightError{Pending: transport.NewPending(nil, nil)})},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

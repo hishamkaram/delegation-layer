@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,55 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+func TestNoninteractiveControlReportsUnavailableWithoutCreatingInteraction(t *testing.T) {
+	store := testStore(t)
+	req, meta, brief := preparedInput(t, store)
+	td, err := store.CreateTask(req.TaskID, req, brief, meta)
+	must(t, err)
+	t.Cleanup(func() { must(t, td.Close()) })
+	permit := consumeStart(t, td)
+	t.Cleanup(func() { must(t, permit.Release()) })
+	must(t, td.RecordStarted(0))
+	_, err = td.SubmitInteractionContext(t.Context(), task.InteractionMessage{ID: strings.Repeat("a", 32), Kind: "steer", Text: "guidance"})
+	if !errors.Is(err, task.ErrInteractionUnavailable) {
+		t.Fatalf("noninteractive control hid its unsupported contract: %v", err)
+	}
+	for _, name := range []string{".interaction.lock", "interaction"} {
+		if _, err := os.Lstat(filepath.Join(td.Dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unsupported control created %s: %v", name, err)
+		}
+	}
+}
+
+func TestMissingInteractionLockPreservesInteractiveRequestFaults(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
+			store := testStore(t)
+			req, meta, brief := preparedInput(t, store)
+			req.RequestedConfig.Interactive = true
+			meta.RequestedConfig = req.RequestedConfig
+			td, err := store.CreateTask(req.TaskID, req, brief, meta)
+			must(t, err)
+			t.Cleanup(func() { must(t, td.Close()) })
+			if corrupt {
+				must(t, os.WriteFile(filepath.Join(td.Dir, "meta.json"), []byte("{"), 0o600))
+			}
+			_, err = td.SubmitInteractionContext(t.Context(), task.InteractionMessage{ID: strings.Repeat("b", 32), Kind: "steer", Text: "guidance"})
+			if err == nil || errors.Is(err, task.ErrInteractionUnavailable) {
+				t.Fatalf("interactive request fault was hidden as unsupported: %v", err)
+			}
+			if corrupt {
+				var syntax *json.SyntaxError
+				if !errors.As(err, &syntax) {
+					t.Fatalf("corrupt interactive metadata lost its parse cause: %v", err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("uninitialized interactive lock lost its absence: %v", err)
+			}
+		})
+	}
+}
 
 // defaultInteractiveBudget is the product budget of an ordinary interactive
 // fixture task; scenarios that outlast it must ask for a longer one.

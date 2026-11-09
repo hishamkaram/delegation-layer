@@ -27,7 +27,9 @@ for changed durable or process behavior.
    upstream post-image is applied and checked before dependent implementation.
 2. Name the state owner/invariant; keep data, decisions and I/O separate. Apply
    [module organization](../../agents/_data/maintainability-contract.md#module-organization)
-   before moving a capability. Use existing values and consumer-owned ports.
+   before adding files or moving a capability. Choose its owning package first;
+   report any source-backed owner-local exception for integrated review. Use
+   existing values and consumer-owned ports.
    Do not extract a helper that just passes an entire local state through a long
    positional argument list.
 3. Preserve contexts, wrapped errors, persisted behavior, permissions and

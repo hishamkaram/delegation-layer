@@ -110,7 +110,7 @@ func TestBootstrapCleanupReleaseFaultIsOwnedAndReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	lock := &bootstrapLock{file: file}
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	reported := make(chan error, 1)
 	owner := retainBootstrapLock(&lock, []*Pending{pending}, func(err error) { reported <- err })
 	transport.CompletePending(pending, CommandResult{})

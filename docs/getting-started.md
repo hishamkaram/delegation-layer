@@ -13,6 +13,14 @@ Read [result handling](../skills/agent-integration/references/result-handling.md
 before observing a response. A returned task ID alone does not prove that a
 task record exists.
 
+## Terminal interface
+
+Run `delegate tui` in a terminal for Tasks, Teams, Schedules and System views.
+Use `a` for actions and `?` for keys. Opening the workbench starts no provider
+task or scheduler; effects use the existing CLI owners. Read the
+[workbench guide](terminal-workbench.md) for dated history, confirmations and
+shutdown. For scripts, keep using ordinary commands with `--json`.
+
 ## Remote tasks
 
 Use the [remote workflow](remote-delegation.md) to prepare another installation,

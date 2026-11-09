@@ -444,6 +444,21 @@ loop on the same recheck. Continue bounded [failure diagnosis](#failure-diagnosi
 without a separate troubleshooting request. New provider work or repairs still
 need authorization covering that action.
 
+## Terminal observation versus operation results
+
+The optional `delegate tui` is a human frontend. Its automatic task rows use
+passive evidence and dated catalog observations, preserving independent
+admission/liveness/publication. A status filter describes the last catalog
+observation, not guaranteed current global state. Explicit Inspect and Collect
+call their existing owners and can return newer evidence or finalize publication;
+those results remain separate from passive browsing.
+
+Closing the interface never requests task cancellation. If a UI operation is
+unresolved at force exit, inspect the printed resource and exact-root command;
+do not automatically repeat the operation. TUI exit `3` means unresolved UI work,
+not collect's pending verdict. Agents should continue using the machine response
+and exit contracts below rather than scraping the terminal interface.
+
 ## Exit codes
 
 | Exit | Control meaning |

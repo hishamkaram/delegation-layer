@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -35,45 +34,6 @@ func validateWorkspaceDispatch(a Arguments) error {
 		return err
 	}
 	return nil
-}
-
-func parseWorkspaceArguments(a Arguments, rest []string) (Arguments, error) {
-	var err error
-	a.WorkspaceAction, rest, err = parseSupervisorAction(rest)
-	if err != nil {
-		return Arguments{}, errors.New("workspace requires list, status, exec, release, or forget")
-	}
-	flags, command := rest, []string(nil)
-	if a.WorkspaceAction == "exec" {
-		for index, argument := range rest {
-			if argument == "--" {
-				flags, command = rest[:index], rest[index+1:]
-				break
-			}
-		}
-		if len(command) == 0 || command[0] == "" {
-			return Arguments{}, errors.New("workspace exec requires a command after --")
-		}
-		a.ExecArguments = append([]string(nil), command...)
-	}
-	fs := flag.NewFlagSet("workspace", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	registerWorkspaceFlags(fs, &a)
-	watch := "0s"
-	if a.WorkspaceAction == "status" {
-		fs.StringVar(&watch, "watch", "0s", "finite workspace observation bound")
-	}
-	ordered, err := orderFlags(fs, flags)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateWorkspaceArguments(&a, fs.Args(), watch); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
 }
 
 func registerWorkspaceFlags(fs *flag.FlagSet, a *Arguments) {

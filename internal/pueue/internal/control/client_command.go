@@ -44,9 +44,9 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 				return CommandResult{}, consumeErr
 			}
 		}
-		pending = startOwnedCaptured(cmd, commandID, c.options.Observer, statusVersion)
+		pending = startOwnedCaptured(cmd, commandID, c.options.Observer, statusVersion, c.options.ReportDiagnostic)
 	} else {
-		pending = startControlOwnedCapturedWithConsume(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion, consume)
+		pending = startControlOwnedCapturedWithConsume(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion, consume, c.options.ReportDiagnostic)
 	}
 	finishPending := finishWork
 	finishWork = nil

@@ -8,7 +8,6 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 
-	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -47,21 +46,15 @@ func dispatchInputs(a DispatchRequest) (root, cwd string, brief []byte, err erro
 	} else {
 		cwd = a.Cwd
 	}
-	if a.BriefBytes != nil {
-		if len(a.BriefBytes) == 0 {
-			return "", "", nil, config.ErrBriefEmpty
+	briefPath := a.BriefPath
+	if a.BriefBytes == nil {
+		var pathErr error
+		briefPath, pathErr = filepath.Abs(briefPath)
+		if pathErr != nil {
+			return "", "", nil, pathErr
 		}
-		brief = append([]byte(nil), a.BriefBytes...)
-		if len(brief) > task.MaxBriefSize {
-			return "", "", nil, config.ErrBriefTooLarge
-		}
-		return root, cwd, brief, nil
 	}
-	briefPath, pathErr := filepath.Abs(a.BriefPath)
-	if pathErr != nil {
-		return "", "", nil, pathErr
-	}
-	brief, err = ReadBrief(briefPath)
+	brief, err = ReadBriefInput(briefPath, a.BriefBytes)
 	return root, cwd, brief, err
 }
 

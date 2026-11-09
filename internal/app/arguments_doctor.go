@@ -3,15 +3,12 @@ package app
 import (
 	"errors"
 	"flag"
-	"io"
 	"path/filepath"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 )
 
-func parseDoctorArguments(a Arguments, rest []string) (Arguments, error) {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+func registerDoctorFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	fs.StringVar(&a.Provider, "provider", "", "provider profile")
@@ -19,35 +16,27 @@ func parseDoctorArguments(a Arguments, rest []string) (Arguments, error) {
 	fs.StringVar(&a.Config.Model, "model", "", "requested model")
 	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
 	fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target")
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateNoPositional("doctor", fs.Args()); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateDoctorArguments(&a, fs); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
 }
 
 func validateDoctorArguments(a *Arguments, fs *flag.FlagSet) error {
-	if a.Root != "" && !filepath.IsAbs(a.Root) {
-		return errors.New("doctor --root must be absolute")
-	}
-	if (a.Provider == "") != (a.Cwd == "") {
-		return errors.New("doctor requires --provider and --cwd together")
-	}
 	dependent := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "model" || f.Name == "effort" || f.Name == "review-target" {
 			dependent = true
 		}
 	})
+	return validateDoctorValues(a, dependent)
+}
+
+// validateDoctorValues is shared by argv and typed application callers. The
+// caller supplies whether model-related values were explicitly requested.
+func validateDoctorValues(a *Arguments, dependent bool) error {
+	if a.Root != "" && !filepath.IsAbs(a.Root) {
+		return errors.New("doctor --root must be absolute")
+	}
+	if (a.Provider == "") != (a.Cwd == "") {
+		return errors.New("doctor requires --provider and --cwd together")
+	}
 	if a.Provider == "" && dependent {
 		return errors.New("doctor model, effort and review-target require --provider and --cwd")
 	}

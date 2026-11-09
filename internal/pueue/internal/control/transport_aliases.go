@@ -16,8 +16,8 @@ type (
 
 var ErrInFlight = transport.ErrInFlight
 
-func startOwnedCaptured(command *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string) *Pending {
-	return transport.StartOwnedCaptured(command, commandID, observer, statusVersion)
+func startOwnedCaptured(command *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, report func(error)) *Pending {
+	return transport.StartOwnedCaptured(command, commandID, observer, statusVersion, report)
 }
 
 func runOwnedCommand(command *exec.Cmd, statusVersion string, onStarted func(CommandResult)) CommandResult {

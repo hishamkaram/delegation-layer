@@ -75,6 +75,27 @@ type LiveAcceptanceReport struct {
 }
 
 func runCapabilities(jsonOutput bool, stdout, stderr io.Writer, catalog commonprovider.Catalog, providerID string) int {
+	response, lookupErr := observeCapability(catalog, providerID)
+
+	if jsonOutput {
+		if err := writeCapabilityJSON(stdout, response); err != nil {
+			return writeProviderError(stderr, err)
+		}
+		if lookupErr != nil {
+			return 2
+		}
+		return 0
+	}
+	if err := writeCapabilityHuman(stdout, response); err != nil {
+		return 1
+	}
+	if lookupErr != nil {
+		return writeCLIError(stderr, fmt.Errorf("provider capability unavailable"), 2)
+	}
+	return 0
+}
+
+func observeCapability(catalog commonprovider.Catalog, providerID string) (CapabilityResponse, error) {
 	response := CapabilityResponse{
 		SchemaVersion: OutputSchemaVersion,
 		Command:       "capabilities",
@@ -105,22 +126,7 @@ func runCapabilities(jsonOutput bool, stdout, stderr io.Writer, catalog commonpr
 		response.Capability = declaredCapability(registration.Description)
 	}
 
-	if jsonOutput {
-		if err := writeCapabilityJSON(stdout, response); err != nil {
-			return writeProviderError(stderr, err)
-		}
-		if response.Error != "" {
-			return 2
-		}
-		return 0
-	}
-	if err := writeCapabilityHuman(stdout, response); err != nil {
-		return 1
-	}
-	if response.Error != "" {
-		return writeCLIError(stderr, fmt.Errorf("provider capability unavailable"), 2)
-	}
-	return 0
+	return response, err
 }
 
 func declaredCapability(description commonprovider.Description) CapabilityReport {

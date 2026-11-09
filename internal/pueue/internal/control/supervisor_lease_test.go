@@ -73,7 +73,7 @@ func withPrivateTransitionForTest(ctx context.Context, stateRoot string, callbac
 
 func TestWithSupervisorLeaseRetainsLockUntilPendingCompletion(t *testing.T) {
 	stateRoot := supervisorLeaseTestRoot(t)
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	complete := sync.OnceFunc(func() { transport.CompletePending(pending, CommandResult{}) })
 	t.Cleanup(func() {
 		complete()

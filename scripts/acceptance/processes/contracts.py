@@ -38,6 +38,18 @@ class OutputSink(Protocol):
 
 
 @dataclass(frozen=True)
+class TerminalIO:
+    """Borrowed terminal descriptors; the caller keeps them through exact Wait.
+
+    stderr retains the ordinary separate process capture. This port changes
+    stdio only, never process/session ownership, signals or cleanup authority.
+    """
+
+    input_fd: int
+    output_fd: int
+
+
+@dataclass(frozen=True)
 class BoundedCommandResult:
     """``output`` is empty when a sink received the stdout bytes instead.
 

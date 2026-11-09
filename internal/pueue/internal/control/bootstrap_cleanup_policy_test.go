@@ -49,7 +49,7 @@ func newBootstrapPolicyFixture(t *testing.T) (string, *transport.Pending, **cont
 	if err != nil {
 		t.Fatal(err)
 	}
-	pending := transport.NewPending(nil)
+	pending := transport.NewPending(nil, nil)
 	var owner *control.BootstrapCleanupError
 	t.Cleanup(func() {
 		transport.CompletePending(pending, transport.CommandResult{})

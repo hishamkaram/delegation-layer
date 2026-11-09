@@ -67,11 +67,18 @@ func collectPrepared(ctx context.Context, root string, td *taskdir.TaskDir, req 
 		if collectionAttemptEnded(&observed) {
 			return observed, nil
 		}
-		if CollectionWatchExpired(options.Watch, deadline) || !WaitForCollection(deadline) {
-			observed.Pending, observed.Waiting = PendingPublication, true
-			return observed, nil
+		if CollectionWatchExpired(options.Watch, deadline) || !waitForCollectionContext(ctx, deadline) {
+			return finishCollectionWatch(ctx, observed)
 		}
 	}
+}
+
+func finishCollectionWatch(ctx context.Context, observed CollectionResult) (CollectionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return observed, err
+	}
+	observed.Pending, observed.Waiting = PendingPublication, true
+	return observed, nil
 }
 
 // refreshContinuation replaces the observation's offer with this pass's

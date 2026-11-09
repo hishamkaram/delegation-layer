@@ -8,11 +8,19 @@ owns JSON decisions and exit codes.
 
 ## Synopsis
 
-Use `delegate help` for the installed build's command surface.
+Use `delegate help` for the installed build's command surface. Use
+`delegate help schedule create` or `delegate schedule create --help` for scoped
+flags, types, defaults, required inputs, examples and relevant exits. Group help
+lists its actions; leaf help shows their flags. Help writes stdout and exits `0`
+without opening state or probing providers. An option-looking value remains a
+value, and `--` ends option recognition; help does not bypass malformed lexical
+input. Invalid requests keep exit `2` with scoped usage on the error stream.
 `delegate-run` is the supervisor-owned worker and is normally invoked for you.
 
 | Command | Shared reference |
 | --- | --- |
+| `tui` | [Terminal workbench, keys and TUI-specific exits](terminal-workbench.md) |
+| `help [COMMAND [ACTION...]]` | Installed command tree and registered flags |
 | `devices`, remote dispatch and `remote:ID` controls | [Remote workflow](remote-delegation.md) |
 | `remote usage/retire`, remote `logs` ranges | [Storage and logs](remote-delegation.md#storage-and-explicit-retirement) |
 | `dispatch` | [Flags, defaults, and review scope](../skills/agent-integration/references/command-reference.md#dispatch) |

@@ -221,12 +221,12 @@ func writeControlOwnerCompletion(connection net.Conn, result CommandResult) erro
 
 // The caller owns the permit policy. This boundary prepares actual inherited
 // resources before consuming it, then attempts the external owner's Start once.
-func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error) *Pending {
+func startControlOwnedCapturedWithConsume(ctx context.Context, ownerExecutable string, cmd *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string, consume func() error, report func(error)) *Pending {
 	var commandArgs []string
 	if cmd != nil {
 		commandArgs = append([]string(nil), cmd.Args...)
 	}
-	pending := transport.NewPending(commandArgs)
+	pending := transport.NewPending(commandArgs, report)
 	fail := func(err error) *Pending {
 		result := CommandResult{ExitCode: -1, Err: err}
 		if cmd != nil {

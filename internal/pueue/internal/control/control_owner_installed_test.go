@@ -23,7 +23,7 @@ func TestControlOwnerValidatesInstalledRoleBeforeConsume(t *testing.T) {
 			command := exec.Command("/bin/sh", "-c", "exit 0")
 			command.Dir, command.Env = root, []string{}
 			consumed := false
-			pending := startControlOwnedCapturedWithConsume(t.Context(), owner, command, strings.Repeat("b", 32), nil, "", func() error { consumed = true; return nil })
+			pending := startControlOwnedCapturedWithConsume(t.Context(), owner, command, strings.Repeat("b", 32), nil, "", func() error { consumed = true; return nil }, nil)
 			result, complete := pending.Result()
 			if !complete || result.Started || consumed {
 				t.Fatalf("unavailable or historical owner consumed command: complete=%t started=%t consumed=%t err=%v", complete, result.Started, consumed, result.Err)

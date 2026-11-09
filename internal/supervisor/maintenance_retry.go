@@ -2,7 +2,7 @@ package supervisor
 
 import (
 	"context"
-	"log"
+	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 )
@@ -13,10 +13,10 @@ func ResumeRetainedQueueMaintenanceContext(ctx context.Context, stateRoot string
 	}
 	pending, err := pueue.PrivateQueueMaintenanceRetryNeededContext(ctx, stateRoot)
 	if err != nil {
-		log.Printf("delegation-layer: retained terminal cleanup probe deferred: %v", err)
+		supervisor.ReportDiagnostic(fmt.Errorf("delegation-layer: retained terminal cleanup probe deferred: %w", err))
 		return
 	}
 	if pending && !supervisor.ScheduleRequestedPrivateQueueMaintenance(ctx) {
-		log.Printf("delegation-layer: retained terminal cleanup owner deferred")
+		supervisor.ReportDiagnostic(fmt.Errorf("delegation-layer: retained terminal cleanup owner deferred"))
 	}
 }

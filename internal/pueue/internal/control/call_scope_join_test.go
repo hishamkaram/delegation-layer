@@ -91,7 +91,7 @@ func TestCallScopeCleanupJoinsCallAfterExpiredDeadline(t *testing.T) {
 func TestCallScopeCleanupJoinsPendingAfterExpiredDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		scope, reports := expiredCallScope(t)
-		pending := transport.NewPending(nil)
+		pending := transport.NewPending(nil, nil)
 		call := startTestCall(scope, func() heldScopeResult { return heldScopeResult{pending: pending} })
 		<-call.done
 		cleanupDone := runScopeCleanup(scope)

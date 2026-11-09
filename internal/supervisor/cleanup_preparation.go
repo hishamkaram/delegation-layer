@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -30,7 +31,11 @@ func (c *Cleanup) PrepareTerminalEvidence(ctx context.Context, root string, supe
 			return err
 		}
 		if err = c.PrepareEndedInspectionEvidence(ctx, store, group, candidate.taskID, candidate.job); err != nil {
-			log.Printf("delegate: terminal inspection %s evidence preparation deferred: %v", candidate.taskID, err)
+			if c.report != nil {
+				c.report(fmt.Errorf("delegate: terminal inspection %s evidence preparation deferred: %w", candidate.taskID, err))
+			} else {
+				log.Printf("delegate: terminal inspection %s evidence preparation deferred: %v", candidate.taskID, err)
+			}
 		}
 	}
 	return ctx.Err()

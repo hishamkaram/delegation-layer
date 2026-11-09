@@ -10,20 +10,27 @@ import (
 )
 
 func privateCleanupOwner() *supervisorcore.Cleanup {
-	return supervisorcore.NewCleanup(inspectionCustodyEvidence{}, workspaces.InspectPrivateOperation)
+	return privateCleanupOwnerWithReporter(nil)
 }
 
 // inspectionCustodyEvidence keeps the native inspection evidence policy and
 // adds the custody release of a canonically closed inspection lifetime.
-type inspectionCustodyEvidence struct{ admission.TerminalEvidence }
+type inspectionCustodyEvidence struct {
+	admission.TerminalEvidence
+	report func(error)
+}
 
 var _ supervisorcore.InspectionCustody = inspectionCustodyEvidence{}
 
-func (inspectionCustodyEvidence) PrepareVerifiedLifetime(ctx context.Context, operation *inspection.Operation) error {
-	return releaseLifetimeCustody(ctx, operation)
+func (e inspectionCustodyEvidence) PrepareVerifiedLifetime(ctx context.Context, operation *inspection.Operation) error {
+	return releaseLifetimeCustody(ctx, operation, e.report)
 }
 
 func (inspectionCustodyEvidence) AuthorizeInspectionRemoval(ctx context.Context, operation *inspection.Operation) (bool, error) {
 	pending, err := lifetimeCustodyPending(ctx, operation)
 	return err == nil && !pending, err
+}
+
+func privateCleanupOwnerWithReporter(report func(error)) *supervisorcore.Cleanup {
+	return supervisorcore.NewCleanup(inspectionCustodyEvidence{report: report}, workspaces.InspectPrivateOperation).WithDiagnosticReporter(report)
 }

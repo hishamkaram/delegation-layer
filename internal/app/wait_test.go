@@ -31,15 +31,15 @@ func TestWaitArgumentsValidateEveryIDAndMode(t *testing.T) {
 		{"--any", "--all", waitFirstID},
 		{"--watch", "-1s", waitFirstID},
 	} {
-		if _, err := parseWaitArguments(Arguments{Command: "wait"}, rest); err == nil {
+		if _, err := ParseArguments(append([]string{"wait"}, rest...)); err == nil {
 			t.Errorf("accepted invalid wait argv %q", rest)
 		}
 	}
-	args, err := parseWaitArguments(Arguments{Command: "wait"}, []string{waitFirstID, "--json", "--watch", "0s", waitSecondID})
+	args, err := ParseArguments(append([]string{"wait"}, []string{waitFirstID, "--json", "--watch", "0s", waitSecondID}...))
 	if err != nil || args.WaitAll || args.Watch != 0 || !args.JSON || !reflect.DeepEqual(args.WaitTaskIDs, []string{waitFirstID, waitSecondID}) {
 		t.Fatalf("argument boundaries changed: %+v, %v", args, err)
 	}
-	defaults, err := parseWaitArguments(Arguments{Command: "wait"}, []string{waitFirstID})
+	defaults, err := ParseArguments(append([]string{"wait"}, []string{waitFirstID}...))
 	if err != nil || defaults.Watch != 5*time.Minute {
 		t.Fatalf("default watch=%v, err=%v", defaults.Watch, err)
 	}

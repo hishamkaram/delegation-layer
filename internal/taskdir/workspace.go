@@ -38,6 +38,21 @@ func (s *Store) OpenWorkspace(ctx context.Context, id string, create bool) (*Con
 	return s.openControlDirContext(ctx, filepath.Join(s.Root, "workspaces", id), create)
 }
 
+// ReadWorkspaceRequestBytes observes only the committed bounded resource
+// request. The workspace owner decodes and validates its schema and identity;
+// this method grants no journal lock, initialization or mutation capability.
+func (r *ReadOnlyStore) ReadWorkspaceRequestBytes(ctx context.Context, id string) ([]byte, error) {
+	r.store.mu.Lock()
+	defer r.store.mu.Unlock()
+	if err := r.checkReadContext(ctx); err != nil {
+		return nil, err
+	}
+	if err := task.ValidateTaskID(id); err != nil {
+		return nil, err
+	}
+	return r.store.readBytesContext(ctx, filepath.Join(r.store.Root, "workspaces", id, "request.json"), task.MaxControlRecordSize)
+}
+
 // OpenWorkspaceOperation opens one finite workspace operation journal. Native
 // lifecycle records share the existing control-directory durability protocol.
 func (s *Store) OpenWorkspaceOperation(ctx context.Context, id string, create bool) (*ControlDir, error) {

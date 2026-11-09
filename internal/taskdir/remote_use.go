@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base32"
@@ -257,16 +258,44 @@ func (u *RemoteDataUse) Close() error {
 // ReadRemoteRecord reads only a named, bounded journal record, without creating
 // locks or directories. capture selects the destination capture receipt owner.
 func (r *ReadOnlyStore) ReadRemoteRecord(ctx context.Context, id string, origin, capture bool, name string, value any) error {
+	data, err := r.remoteRecordBytes(ctx, id, origin, capture, name)
+	if err != nil {
+		return err
+	}
+	return task.DecodeStrict(data, value)
+}
+
+// ReadCanonicalRemoteRecord is for immutable records whose owner requires
+// canonical serialization as well as a valid decoded value.
+func (r *ReadOnlyStore) ReadCanonicalRemoteRecord(ctx context.Context, id string, origin, capture bool, name string, value any) error {
+	data, err := r.remoteRecordBytes(ctx, id, origin, capture, name)
+	if err != nil {
+		return err
+	}
+	if err = task.DecodeStrict(data, value); err != nil {
+		return err
+	}
+	canonical, err := task.MarshalCanonical(value)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(data, canonical) {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func (r *ReadOnlyStore) remoteRecordBytes(ctx context.Context, id string, origin, capture bool, name string) ([]byte, error) {
 	r.store.mu.Lock()
 	defer r.store.mu.Unlock()
 	if err := r.checkReadContext(ctx); err != nil {
-		return err
+		return nil, err
 	}
 	if err := task.ValidateTaskID(id); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateControlName(name); err != nil {
-		return err
+		return nil, err
 	}
 	family := "remote-inputs"
 	if origin {
@@ -274,15 +303,15 @@ func (r *ReadOnlyStore) ReadRemoteRecord(ctx context.Context, id string, origin,
 	}
 	if capture {
 		if origin {
-			return fmt.Errorf("origin has no capture journal")
+			return nil, fmt.Errorf("origin has no capture journal")
 		}
 		family = "remote-captures"
 	}
 	data, err := r.store.readBytes(filepath.Join(r.store.Root, family, id, name), task.MaxControlRecordSize)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return task.DecodeStrict(data, value)
+	return data, nil
 }
 
 func (r *ReadOnlyStore) RemoteRecordNames(ctx context.Context, id string, origin bool) (names []string, resultErr error) {

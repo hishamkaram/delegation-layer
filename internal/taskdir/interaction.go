@@ -44,12 +44,8 @@ func (td *TaskDir) BeginInteraction() error {
 		return task.ErrEvidenceFault
 	}
 	state.mu.Unlock()
-	req, _, err := td.PreparedRecords()
-	if err != nil {
+	if _, err = td.configuredInteractionRequest(); err != nil {
 		return err
-	}
-	if !req.RequestedConfig.Interactive {
-		return task.ErrInteractionUnavailable
 	}
 	if err = td.store.mkdir(filepath.Join(td.Dir, "interaction"), td.store.faultInjector); err != nil {
 		return err
@@ -68,6 +64,13 @@ func (td *TaskDir) withInteraction(fn func() error) error {
 func (td *TaskDir) withInteractionContext(parent context.Context, fn func() error) (resultErr error) {
 	lock, err := td.store.openExistingLock(filepath.Join(td.Dir, ".interaction.lock"), LockLevelRun)
 	if err != nil {
+		if task.RecordAbsent(err) {
+			_, requestErr := td.configuredInteractionRequest()
+			if errors.Is(requestErr, task.ErrInteractionUnavailable) {
+				return requestErr
+			}
+			return errors.Join(err, requestErr)
+		}
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
@@ -78,6 +81,20 @@ func (td *TaskDir) withInteractionContext(parent context.Context, fn func() erro
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Unlock()) }()
 	return fn()
+}
+
+// The immutable request owns interaction opt-in. A noninteractive task never
+// creates an interaction lock; absent optional machinery is unsupported, while
+// unreadable or corrupt task records keep their concrete failure causes.
+func (td *TaskDir) configuredInteractionRequest() (*task.TaskRecord, error) {
+	req, _, err := td.PreparedRecords()
+	if err != nil {
+		return nil, err
+	}
+	if !req.RequestedConfig.Interactive {
+		return nil, task.ErrInteractionUnavailable
+	}
+	return req, nil
 }
 
 func (td *TaskDir) interactionRecords() ([]task.InteractionEvent, interactionSnapshot, error) {
@@ -212,12 +229,9 @@ func (td *TaskDir) interactionOpen(state task.InteractionState) error {
 			return task.ErrInteractionClosed
 		}
 	}
-	req, _, err := td.PreparedRecords()
+	req, err := td.configuredInteractionRequest()
 	if err != nil {
 		return err
-	}
-	if !req.RequestedConfig.Interactive {
-		return task.ErrInteractionUnavailable
 	}
 	stops, err := td.ReadStopRecords()
 	if err != nil {

@@ -45,7 +45,7 @@ func remoteOrigin(ctx context.Context, a Arguments, client remotecommands.Client
 	case a.Command == "devices":
 		return client.Device(ctx, a.Root, remotecommands.DeviceInput{Action: a.RemoteAction, Device: a.Device, SSHConfig: a.SSHConfig, Fingerprint: a.Fingerprint, RemoteExecutable: a.RemoteExecutable, RemoteRoot: a.RemoteRoot, Provider: a.Provider, RemoteCwd: a.RemoteCwd})
 	case a.Command == "dispatch":
-		return client.Dispatch(ctx, a.Root, remotecommands.DispatchInput{TaskID: a.TaskID, Device: a.Device, SSHConfig: a.SSHConfig, RemoteExecutable: a.RemoteExecutable, RemoteRoot: a.RemoteRoot, RemoteCwd: a.RemoteCwd, Provider: a.Provider, Brief: a.Brief, InputManifest: a.InputManifest, OutputManifest: a.OutputManifest, Config: a.Config, ResourceGuards: a.ResourceGuards})
+		return client.Dispatch(ctx, a.Root, remotecommands.DispatchInput{TaskID: a.TaskID, Device: a.Device, SSHConfig: a.SSHConfig, RemoteExecutable: a.RemoteExecutable, RemoteRoot: a.RemoteRoot, RemoteCwd: a.RemoteCwd, Provider: a.Provider, Brief: a.Brief, BriefBytes: a.BriefBytes, InputManifest: a.InputManifest, OutputManifest: a.OutputManifest, Config: a.Config, ResourceGuards: a.ResourceGuards})
 	default:
 		var message *task.InteractionMessage
 		var messageError error

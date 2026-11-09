@@ -3,7 +3,7 @@ package control
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -342,14 +342,14 @@ func (c *Client) registerStagedInspectionTerminalEvent(ctx context.Context, id i
 	known = true
 	enabled, err := c.PrivateTerminalEventsEnabled(ctx)
 	if err != nil {
-		log.Printf("delegate: staged terminal event registration deferred: %v", err)
+		c.ReportDiagnostic(fmt.Errorf("delegate: staged terminal event registration deferred: %w", err))
 		return known, false
 	}
 	if !enabled {
 		return known, false
 	}
 	if err := c.RegisterPrivateTerminalEvent(ctx, id); err != nil {
-		log.Printf("delegate: staged terminal event registration deferred: %v", err)
+		c.ReportDiagnostic(fmt.Errorf("delegate: staged terminal event registration deferred: %w", err))
 		return known, false
 	}
 	return known, true

@@ -151,7 +151,7 @@ func (td *TaskDir) ClaimSessionContext(ctx context.Context, provider, conversati
 
 func (td *TaskDir) terminalProofContext(ctx context.Context, digest string) (resultErr error) {
 	if err := td.runLock.LockEXNonblockingContext(ctx); err != nil {
-		return fmt.Errorf("%w: active runner: %w", task.ErrSessionBusy, err)
+		return &sessionProofLockError{cause: err}
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.runLock.Unlock()) }()
 	_, meta, spec, metaHash, err := td.loadAndValidatePreparedSetContext(ctx)
@@ -197,6 +197,21 @@ func (td *TaskDir) terminalProofContext(ctx context.Context, digest string) (res
 	}
 	return task.ErrSessionBusy
 }
+
+// sessionProofLockError labels a failed acquisition without adding active
+// session ownership as an independent cause. A plain ErrSessionBusy still means
+// the claim/proof rules refused release, rather than temporary lock contention.
+type sessionProofLockError struct{ cause error }
+
+func (e *sessionProofLockError) Error() string {
+	return fmt.Sprintf("%s: active runner: %v", task.ErrSessionBusy, e.cause)
+}
+
+func (e *sessionProofLockError) Is(target error) bool {
+	return target == task.ErrSessionBusy
+}
+
+func (e *sessionProofLockError) Unwrap() error { return e.cause }
 
 // ReleaseSessionAfterTimeout transfers a continuation claim after a budget
 // stop has a durable ended observation but before the provider can publish an

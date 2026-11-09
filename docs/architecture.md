@@ -17,6 +17,49 @@ implementation overview. The packaged [command reference](../skills/agent-integr
 and [result handling](../skills/agent-integration/references/result-handling.md)
 own shared public procedures and response decisions.
 
+## Terminal frontend and command syntax
+
+`cmd/delegate` routes only explicit `tui` invocations to `internal/tui`; ordinary
+commands remain in `internal/app`. The terminal frontend composes typed
+`app.Workbench` operations, not a shell or a subprocess copy of the CLI. Its
+feature packages (`tasks`, `teams`, `schedules`, `system` and the System resource
+packages) own presentation/forms; existing lifecycle/catalog owners keep policy,
+validation and writes. `internal/app/command` owns typed lexical routing and
+help rendering. One application command tree binds the actual flag registrars,
+validators and help metadata. Help/defaults do not come from a parallel catalog.
+
+`internal/tui/session` owns operation registration and shutdown. Cooperative
+reads receive the session context; effects retain their existing owner deadline
+and outlive navigation/read cancellation. Explicit status/collection and other
+write-capable or uncancellable observations are effects. Completion from an old
+view stays in operation results rather than replacing the current view. A
+retained-cleanup result blocks further effects on that root; force exit reports
+reconciliation references rather than replaying work or cancelling tasks.
+
+`internal/history` owns a disposable, metadata-only SQLite search cache outside
+the execution root. It reads through validated taskdir read-only APIs and
+canonical passive local/origin-cached observation owners. A stable OS lease
+selects one catalog writer; every opener retains a cache-use lease until its
+connections close. Metadata batches interleave bounded observation batches;
+readers see committed pages while coverage grows. Only a completed,
+source-revalidated metadata pass without unresolved record/enumeration faults can
+reconcile individually confirmed absent rows. Reported junk entries and partial
+admissions without a request may coexist with completed discovery; they do not
+prevent reconciliation of other records confirmed absent. Rebuild
+needs exclusive cache use and replaces only the cache files, never source data
+or stable lock files. Root replacement invalidates the source binding.
+
+Task rows preserve independent admission/liveness/publication and dated
+observations; background browsing neither repairs nor publishes. Live remote
+inspection is explicit, with no background SSH. The scheduler's passive reader
+uses read-only SQLite connections and deferred transactions, rejects unsupported
+journal state, and never initializes/migrates/repairs storage. Cache WAL belongs
+to the separate disposable history database, not the scheduler database.
+
+See the [terminal guide](terminal-workbench.md) for public actions, cache privacy,
+search coverage and shutdown limits. These frontend/cache additions preserve
+the runtime owners and task lifecycle shown in the existing diagrams above.
+
 ## Setup and passive readiness
 
 The npm `setup` coordinator owns ephemeral progress only. Existing CLI
@@ -53,7 +96,11 @@ cache or transfer receipt grants another launch or renews the execution budget.
 
 | Owner | Responsibility |
 | --- | --- |
-| `internal/app` | Compose commands, capture caller context and project CLI responses. |
+| `internal/app` | Compose commands, capture caller context and project CLI/typed workbench responses. |
+| `internal/app/command` | Typed command syntax, routing and generated help; application callbacks bind actual flags and validation. |
+| `internal/tui` and its feature packages | Terminal rendering, forms and consumer-owned ports over the application owners. |
+| `internal/tui/session` / `internal/tui/browse` | Invocation operation/quit ownership / history handle and refresh scheduling. |
+| `internal/history` | Disposable metadata search, dated observations and elected cache writer; source stores stay authoritative. |
 | `internal/teams/contract` / `internal/teams` | Pure Team definitions/default merging / the authoritative SQLite catalog, project identity and optional project-default references. |
 | `internal/task` / `internal/taskdir` | Task values and validity rules / durable records and terminal publication. |
 | `internal/provider` | Prepare provider launches and interpret native evidence through pure contracts. |

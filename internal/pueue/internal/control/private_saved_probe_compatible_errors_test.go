@@ -63,7 +63,7 @@ func TestProbeSavedPrivateCompatibleRestoresBindingTagForCompletedFault(t *testi
 func TestProbeSavedPrivateCompatibleRetainsPendingExceptionAndJoinedFault(t *testing.T) {
 	f := newCompletedPrivateSuccessorTestFixture(t, true)
 	damageCompatibleProbePair(t, f, "missing client")
-	pending := transport.NewPending([]string{"component-selector"})
+	pending := transport.NewPending([]string{"component-selector"}, nil)
 	// This component handle owns no process. Settle it before the fixture paths
 	// close, and prove the retained shared generation hold has actually released.
 	t.Cleanup(func() {

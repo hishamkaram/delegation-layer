@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -305,7 +304,7 @@ func (c *Client) CloseAfterPending(err error) error {
 			owner.work.Wait()
 		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
-			log.Printf("delegation-layer: deferred private supervisor cleanup failed: %v", cleanupErr)
+			c.ReportDiagnostic(fmt.Errorf("delegation-layer: deferred private supervisor cleanup failed: %w", cleanupErr))
 		}
 	}()
 	return nil

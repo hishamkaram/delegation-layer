@@ -51,7 +51,7 @@ func (f checkpointRuntimeFixture) cli(t *testing.T, argv ...string) (int, Respon
 func (f checkpointRuntimeFixture) admit(t *testing.T, a Arguments) commandResult {
 	t.Helper()
 	a.Command, a.Root = "checkpoint", f.lineage.store.Root
-	return runCheckpointCommand(a, f.deps.storeDependencies(), f.options)
+	return runCheckpointCommandContext(t.Context(), a, f.deps.storeDependencies(), f.options)
 }
 
 // requireCheckpoint asserts the exit, IDs and command guidance of a result.

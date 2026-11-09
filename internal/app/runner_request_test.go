@@ -150,8 +150,16 @@ func TestHelpDescribesRunnerAsAdvancedOverride(t *testing.T) {
 	if code := Run([]string{"help"}, &stdout, &stderr, Dependencies{}); code != 0 {
 		t.Fatalf("help exit = %d stderr=%q", code, &stderr)
 	}
-	const want = "--runner ABS            Advanced custom runner override; omit for the automatic runner\n"
-	if !strings.Contains(stdout.String(), want) {
+	// Padding is presentation; the path type and automatic-runner guidance
+	// must remain together on the actual registered runner flag.
+	var runnerHelp string
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--runner ABS ") {
+			runnerHelp = line
+			break
+		}
+	}
+	if !strings.Contains(runnerHelp, "Advanced custom runner override; omit for the automatic runner") {
 		t.Fatalf("help does not describe --runner as an advanced override:\n%s", &stdout)
 	}
 	for _, flag := range []string{"--root ABS ", "--pueue-config ABS "} {

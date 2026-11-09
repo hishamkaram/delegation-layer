@@ -14,6 +14,39 @@ type Execution struct {
 	Config   task.TaskConfig
 }
 
+// Selection is the complete value shown for an explicit Member selection.
+// Catalog reads own its inputs; neither this value nor its equality grants
+// admission authority or changes persisted Team definitions.
+type Selection struct {
+	Execution Execution
+	Context   *task.TeamContext
+}
+
+var ErrTeamSelectionChanged = fmt.Errorf("%w: Team selection changed; preview it again before dispatch", task.ErrInvalidTeamSelection)
+
+func Select(member ResolvedMember, intent task.TeamIntent) (Selection, error) {
+	execution, err := MergeExecution(member.Member.ExecutionDefaults, intent)
+	if err != nil {
+		return Selection{}, err
+	}
+	selection, err := SelectionContext(member, intent)
+	if err != nil {
+		return Selection{}, err
+	}
+	return Selection{Execution: execution, Context: selection}, nil
+}
+
+func (s Selection) Equal(other Selection) bool { return reflect.DeepEqual(s, other) }
+
+func (s Selection) Clone() Selection {
+	s.Context = s.Context.Clone()
+	if s.Execution.Config.ReviewTarget != nil {
+		target := *s.Execution.Config.ReviewTarget
+		s.Execution.Config.ReviewTarget = &target
+	}
+	return s
+}
+
 // MergeExecution preserves caller choices; defaults never grant task permissions.
 func MergeExecution(defaults *ExecutionDefaults, requested task.TeamIntent) (Execution, error) {
 	result := Execution{Provider: requested.Provider, Auto: requested.Auto, Config: requested.Config}

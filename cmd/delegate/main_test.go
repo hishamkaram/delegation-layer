@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/app"
 )
 
 type errWriter struct{}
@@ -15,6 +17,10 @@ func (e errWriter) Write(_ []byte) (int, error) {
 }
 
 func TestRunSuccessHelp(t *testing.T) {
+	expected, err := app.HelpText(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name string
 		args []string
@@ -35,7 +41,7 @@ func TestRunSuccessHelp(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("expected exit code 0, got %d", code)
 			}
-			if stdout.String() != usageText {
+			if stdout.String() != expected {
 				t.Fatalf("expected usage text on stdout, got: %q", stdout.String())
 			}
 			if stderr.Len() != 0 {
@@ -102,8 +108,8 @@ func TestRunUnknownCommandOrFlag(t *testing.T) {
 			if !strings.Contains(errMsg, expectedErr) {
 				t.Fatalf("expected %q in stderr, got: %q", expectedErr, errMsg)
 			}
-			if !strings.Contains(errMsg, usageText) {
-				t.Fatalf("expected usage text in stderr, got: %q", errMsg)
+			if !strings.Contains(errMsg, "Usage: delegate") || !strings.Contains(errMsg, "--help") {
+				t.Fatalf("expected scoped usage and help guidance in stderr, got: %q", errMsg)
 			}
 		})
 	}
@@ -115,8 +121,8 @@ func TestRunExtraArguments(t *testing.T) {
 		args        []string
 		expectedSub string
 	}{
-		{"help with extra argument", []string{"help", "extra"}, "unexpected extra argument \"extra\" for help"},
-		{"--help with extra argument", []string{"--help", "foo"}, "unexpected extra argument \"foo\" for help"},
+		{"help with extra argument", []string{"help", "extra"}, "unknown help command \"extra\""},
+		{"--help with extra argument", []string{"--help", "foo"}, "unknown help command \"foo\""},
 		{"version with extra argument", []string{"version", "extra"}, "unexpected extra argument \"extra\" for version"},
 		{"--version with extra argument", []string{"--version", "bar"}, "unexpected extra argument \"bar\" for version"},
 	}
@@ -137,8 +143,8 @@ func TestRunExtraArguments(t *testing.T) {
 			if !strings.Contains(errMsg, tc.expectedSub) {
 				t.Fatalf("expected %q in stderr, got: %q", tc.expectedSub, errMsg)
 			}
-			if !strings.Contains(errMsg, usageText) {
-				t.Fatalf("expected usage text in stderr, got: %q", errMsg)
+			if !strings.Contains(errMsg, "Usage: delegate") || !strings.Contains(errMsg, "--help") {
+				t.Fatalf("expected scoped usage and help guidance in stderr, got: %q", errMsg)
 			}
 		})
 	}

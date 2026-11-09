@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"time"
 
@@ -14,29 +13,6 @@ import (
 
 // defaultCheckpointPageSize is both the default and the largest list page.
 const defaultCheckpointPageSize = 50
-
-func parseCheckpointArguments(a Arguments, rest []string) (Arguments, error) {
-	var err error
-	a.CheckpointAction, rest, err = parseSupervisorAction(rest)
-	if err != nil {
-		return Arguments{}, errors.New("checkpoint requires create, status, list, or remove")
-	}
-	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	watch := "0s"
-	registerCheckpointFlags(fs, &a, &watch)
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err = fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	if err = validateCheckpointArguments(&a, fs.Args(), watch); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
-}
 
 func registerCheckpointFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.StringVar(&a.Root, "root", "", "absolute state root")

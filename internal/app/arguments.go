@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/resourceadmission"
 	schedulercontract "github.com/hishamkaram/delegation-layer/internal/scheduler/contract"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	teamcontract "github.com/hishamkaram/delegation-layer/internal/teams/contract"
 )
 
 // Arguments contains requested values only. Parsing grants no external authority.
@@ -47,6 +47,9 @@ type Arguments struct {
 	MessageID            string
 	RequestID            string
 	Answers              string
+	AnswersBytes         []byte
+	SuccessorTaskID      string
+	HelpPath             []string
 	After                uint64
 	Command              string
 	SupervisorAction     string
@@ -102,18 +105,20 @@ type Arguments struct {
 	ScheduleQuotaHold       string
 	ScheduleQuotaMaxHold    string
 
-	TeamAction           string
-	TeamDefaultAction    string
-	TeamScope            string
-	TeamID               string
-	MemberID             string
-	TeamDefinition       string
-	TeamExpectedRevision int64
-	TeamAfter            string
-	TeamLimit            int
-	ProjectRoot          string
-	teamTarget           *task.TeamTarget
-	teamContext          *task.TeamContext
+	TeamAction            string
+	TeamDefaultAction     string
+	TeamScope             string
+	TeamID                string
+	MemberID              string
+	TeamDefinitionBytes   []byte
+	TeamDefinition        string
+	ExpectedTeamSelection *teamcontract.Selection
+	TeamExpectedRevision  int64
+	TeamAfter             string
+	TeamLimit             int
+	ProjectRoot           string
+	teamTarget            *task.TeamTarget
+	teamContext           *task.TeamContext
 
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
@@ -132,58 +137,6 @@ type Arguments struct {
 	schedulerHostReadFD      int
 	schedulerHostWriteFD     int
 	schedulerResident        bool
-}
-
-func ParseArguments(args []string) (Arguments, error) {
-	command, rest, err := separateCommand(args)
-	if err != nil {
-		return Arguments{}, err
-	}
-	a := Arguments{Command: command}
-	switch command {
-	case "wait":
-		return parseWaitArguments(a, rest)
-	case "doctor":
-		return parseDoctorArguments(a, rest)
-	case "devices", "remote":
-		return parseRemoteArguments(a, rest)
-	case "workspace", "checkpoint", "schedule", "teams":
-		return parseManagementArguments(a, rest)
-	}
-	if command == "supervisor" {
-		var action string
-		action, rest, err = parseSupervisorAction(rest)
-		if err != nil {
-			return Arguments{}, err
-		}
-		a.SupervisorAction = action
-	}
-	if command == "scheduler" {
-		a.SchedulerAction, rest, err = parseSupervisorAction(rest)
-		if err != nil {
-			return Arguments{}, errors.New("scheduler requires serve, status, stop, run or migrate")
-		}
-	}
-	fs := flag.NewFlagSet(command, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&a.Root, "root", "", "absolute state root")
-	fs.StringVar(&a.PueueConfig, "pueue-config", "", "absolute initial supervisor configuration")
-	fs.StringVar(&a.Runner, "runner", "", "absolute custom runner executable (advanced override; omit for the automatic runner)")
-	watch := "0s"
-	registerCommandFlags(fs, &a, &watch)
-	registerRemoteFlags(fs, &a)
-	ordered, err := orderFlags(fs, rest)
-	if err != nil {
-		return Arguments{}, err
-	}
-	if err := fs.Parse(ordered); err != nil {
-		return Arguments{}, err
-	}
-	noteControlFlags(fs, &a)
-	if err := a.validate(fs.Args(), watch); err != nil {
-		return Arguments{}, err
-	}
-	return a, nil
 }
 
 func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
@@ -209,70 +162,6 @@ func noteControlFlags(fs *flag.FlagSet, a *Arguments) {
 			}
 		}
 	})
-}
-
-// Management commands have their own subcommand grammar and validation.
-func parseManagementArguments(a Arguments, rest []string) (Arguments, error) {
-	switch a.Command {
-	case "workspace":
-		return parseWorkspaceArguments(a, rest)
-	case "checkpoint":
-		return parseCheckpointArguments(a, rest)
-	case "schedule":
-		return parseScheduleArguments(a, rest)
-	case "teams":
-		return parseTeamsArguments(a, rest)
-	default:
-		return Arguments{}, fmt.Errorf("unknown management command %q", a.Command)
-	}
-}
-
-func parseSupervisorAction(rest []string) (string, []string, error) {
-	for i := 0; i < len(rest); i++ {
-		if strings.HasPrefix(rest[i], "-") {
-			name, _, assigned := strings.Cut(strings.TrimLeft(rest[i], "-"), "=")
-			if isGlobal(name) && !assigned {
-				i++
-			}
-			continue
-		}
-		remaining := append(append([]string(nil), rest[:i]...), rest[i+1:]...)
-		return rest[i], remaining, nil
-	}
-	return "", nil, errors.New("supervisor requires status, migrate or stop-owner")
-}
-
-func separateCommand(args []string) (string, []string, error) {
-	for i := 0; i < len(args); {
-		name, _, assigned := strings.Cut(strings.TrimLeft(args[i], "-"), "=")
-		if strings.HasPrefix(args[i], "-") && isGlobal(name) {
-			if !assigned {
-				i++
-				if i == len(args) {
-					return "", nil, fmt.Errorf("missing value for --%s", name)
-				}
-			}
-			i++
-			continue
-		}
-		command := args[i]
-		switch command {
-		case "-h", "--help":
-			command = "help"
-		case "--version":
-			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "doctor", "providers", "capabilities", "models", "wait", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint", "schedule", "scheduler", "teams", "devices", "remote":
-		default:
-			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
-		}
-		rest := append([]string(nil), args[:i]...)
-		return command, append(rest, args[i+1:]...), nil
-	}
-	return "help", append([]string(nil), args...), nil
-}
-
-func isGlobal(name string) bool {
-	return name == "root" || name == "pueue-config" || name == "runner"
 }
 
 func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
@@ -316,45 +205,6 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	registerAdmissionFlags(fs, a)
 }
 
-// orderFlags permits documented ID --json placement without silently accepting
-// unknown options as positional values. A flag's following value remains literal.
-func orderFlags(fs *flag.FlagSet, args []string) ([]string, error) {
-	var options, positional []string
-	seen := make(map[string]bool)
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			positional = append(positional, args[i+1:]...)
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			positional = append(positional, arg)
-			continue
-		}
-		name, _, assigned := strings.Cut(strings.TrimLeft(arg, "-"), "=")
-		f := fs.Lookup(name)
-		if f == nil {
-			return nil, fmt.Errorf("unknown flag %q", arg)
-		}
-		if seen[name] {
-			return nil, fmt.Errorf("duplicate flag --%s", name)
-		}
-		seen[name] = true
-		options = append(options, arg)
-		boolean, ok := f.Value.(interface{ IsBoolFlag() bool })
-		if assigned || (ok && boolean.IsBoolFlag()) {
-			continue
-		}
-		i++
-		if i == len(args) {
-			return nil, fmt.Errorf("missing value for --%s", name)
-		}
-		options = append(options, args[i])
-	}
-	options = append(options, "--")
-	return append(options, positional...), nil
-}
-
 func (a *Arguments) validate(positional []string, watch string) error {
 	for _, p := range []string{a.Root, a.PueueConfig, a.Runner} {
 		if p != "" && !filepath.IsAbs(p) {
@@ -366,7 +216,7 @@ func (a *Arguments) validate(positional []string, watch string) error {
 
 func (a *Arguments) validateCommand(positional []string, watch string) error {
 	switch a.Command {
-	case "help", "version", "providers":
+	case "help", "version", "providers", "tui":
 		return validateNoPositional(a.Command, positional)
 	case "supervisor":
 		return a.validateSupervisor(positional)
@@ -494,6 +344,9 @@ func (a *Arguments) validateContinue(positional []string) error {
 	if err := task.ValidateTaskID(a.TaskID); err != nil {
 		return err
 	}
+	if err := validateContentSources(a.Brief, a.BriefBytes, false); err != nil {
+		return err
+	}
 	if a.Brief != "" && !filepath.IsAbs(a.Brief) {
 		return errors.New("continue --brief must be an absolute path")
 	}
@@ -530,7 +383,10 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if err := a.validateDispatchProvider(); err != nil {
 		return err
 	}
-	if a.Brief == "" || (a.WorkspaceID == "" && !filepath.IsAbs(a.Cwd)) {
+	if err := validateContentSources(a.Brief, a.BriefBytes, true); err != nil {
+		return err
+	}
+	if a.WorkspaceID == "" && !filepath.IsAbs(a.Cwd) {
 		return errors.New("dispatch requires --brief FILE and --cwd ABS or --workspace ID")
 	}
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
@@ -614,11 +470,16 @@ func (a *Arguments) validateInteractionArguments() error {
 	if err := task.ValidateTaskID(a.MessageID); err != nil {
 		return err
 	}
-	if a.Command == "reply" && (a.RequestID == "" || a.Answers == "") {
+	if a.Command == "reply" {
+		if err := validateContentSources(a.Answers, a.AnswersBytes, true); err != nil {
+			return err
+		}
+	}
+	if a.Command == "reply" && a.RequestID == "" {
 		return errors.New("reply requires --request ID --answers FILE --id MESSAGE_ID")
 	}
-	if a.Command == "steer" && a.Brief == "" {
-		return errors.New("steer requires --brief FILE --id MESSAGE_ID")
+	if a.Command == "steer" {
+		return validateContentSources(a.Brief, a.BriefBytes, true)
 	}
 	return nil
 }
@@ -698,4 +559,16 @@ func registerAdmissionFlags(fs *flag.FlagSet, a *Arguments) {
 	fs.StringVar(&a.Base, "base", "", "committed Git base (default: HEAD)")
 	fs.StringVar(&a.WorkspaceBudget, "workspace-budget", "", "finite workspace helper budget (default: 5m)")
 	registerTeamTargetFlags(fs, a)
+}
+
+// validateContentSources preserves absent versus explicitly supplied content.
+// The content owner validates the bytes; argv can only select the file path.
+func validateContentSources(path string, content []byte, required bool) error {
+	if path != "" && content != nil {
+		return errors.New("choose a file path or inline content, not both")
+	}
+	if required && path == "" && content == nil {
+		return errors.New("a content file or inline content is required")
+	}
+	return nil
 }

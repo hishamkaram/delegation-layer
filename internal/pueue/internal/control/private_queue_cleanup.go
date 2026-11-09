@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -451,7 +450,7 @@ func (c *Client) runPrivateQueueMaintenance(ctx context.Context, finish func(), 
 		if waitForLease {
 			resume, waitErr := waitPrivateQueueMaintenancePending(ownerContext, run.stateRoot, run.private, err)
 			if waitErr != nil {
-				log.Printf("delegate: terminal supervisor cleanup deferred: %v", errors.Join(err, waitErr))
+				c.ReportDiagnostic(fmt.Errorf("delegate: terminal supervisor cleanup deferred: %w", errors.Join(err, waitErr)))
 				return
 			}
 			if resume {
@@ -464,7 +463,7 @@ func (c *Client) runPrivateQueueMaintenance(ctx context.Context, finish func(), 
 		}
 		if err != nil {
 			finishOnReturn = !retainPrivateQueueWorkUntilPending(err, finish)
-			log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
+			c.ReportDiagnostic(fmt.Errorf("delegate: terminal supervisor cleanup deferred: %w", err))
 		}
 		return
 	}
@@ -698,7 +697,7 @@ func (c *Client) SchedulePrivateQueueMaintenance(ctx context.Context) bool {
 	}
 	stateRoot, _ := privateStateRoot(c.binding.ConfigPath)
 	if _, err := requestPrivateQueueMaintenance(ctx, stateRoot); err != nil {
-		log.Printf("delegate: terminal supervisor cleanup request deferred: %v", err)
+		c.ReportDiagnostic(fmt.Errorf("delegate: terminal supervisor cleanup request deferred: %w", err))
 		return false
 	}
 	return c.ScheduleRequestedPrivateQueueMaintenance(ctx)
@@ -724,7 +723,7 @@ func (c *Client) ScheduleRequestedPrivateQueueMaintenance(ctx context.Context) b
 		err := c.options.PrivateMaintenanceLauncher(launchContext, c.options.ControlOwnerExecutable, stateRoot, append([]string{}, environment...))
 		cancelLaunch()
 		if err != nil {
-			log.Printf("delegate: terminal supervisor cleanup owner deferred: %v", err)
+			c.ReportDiagnostic(fmt.Errorf("delegate: terminal supervisor cleanup owner deferred: %w", err))
 			return false
 		}
 		return true

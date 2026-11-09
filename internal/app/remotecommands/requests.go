@@ -47,6 +47,7 @@ type Client struct {
 }
 
 type DispatchInput struct {
+	BriefBytes       []byte
 	TaskID           string
 	Device           string
 	SSHConfig        string
@@ -85,6 +86,7 @@ type DeviceInput struct {
 // originRequest is the workflow's invocation-local selection. It contains only
 // remote command inputs and is never stored as task intent.
 type originRequest struct {
+	BriefBytes       []byte
 	Root             string
 	Command          string
 	RemoteAction     string
@@ -122,7 +124,7 @@ func (a originRequest) message() (task.InteractionMessage, error) {
 
 func (c Client) Dispatch(ctx context.Context, root string, a DispatchInput) (Report, error) {
 	c = c.captureEnvironment()
-	return remoteCLI(ctx, originRequest{Root: root, Command: "dispatch", TaskID: a.TaskID, Device: a.Device, SSHConfig: a.SSHConfig, RemoteExecutable: a.RemoteExecutable, RemoteRoot: a.RemoteRoot, RemoteCwd: a.RemoteCwd, Provider: a.Provider, Brief: a.Brief, InputManifest: a.InputManifest, OutputManifest: a.OutputManifest, Config: a.Config, ResourceGuards: a.ResourceGuards}, c)
+	return remoteCLI(ctx, originRequest{Root: root, Command: "dispatch", TaskID: a.TaskID, Device: a.Device, SSHConfig: a.SSHConfig, RemoteExecutable: a.RemoteExecutable, RemoteRoot: a.RemoteRoot, RemoteCwd: a.RemoteCwd, Provider: a.Provider, Brief: a.Brief, BriefBytes: a.BriefBytes, InputManifest: a.InputManifest, OutputManifest: a.OutputManifest, Config: a.Config, ResourceGuards: a.ResourceGuards}, c)
 }
 
 func (c Client) Task(ctx context.Context, root string, a TaskInput) (Report, error) {

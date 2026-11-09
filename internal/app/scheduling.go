@@ -47,7 +47,13 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 	if _, err = contract.MarshalRequest(request); err != nil {
 		return schedulecommand.CreateInput{}, schedulecommand.InvalidInput(err)
 	}
-	brief, err := readScheduleBrief(a.Brief, tasklifecycle.ReadBrief)
+	var brief []byte
+	if a.BriefBytes != nil {
+		brief, err = tasklifecycle.ReadBriefInput(a.Brief, a.BriefBytes)
+		err = classifyScheduleBriefError(err)
+	} else {
+		brief, err = readScheduleBrief(a.Brief, tasklifecycle.ReadBrief)
+	}
 	if err != nil {
 		return schedulecommand.CreateInput{}, err
 	}
@@ -62,7 +68,10 @@ func prepareScheduleCreate(a Arguments, now func() time.Time, newID func() (stri
 }
 
 func validateScheduleCreateShape(a Arguments) error {
-	if a.Brief == "" || !filepath.IsAbs(a.Cwd) {
+	if a.Brief != "" && a.BriefBytes != nil {
+		return schedulecommand.InvalidInput(errors.New("schedule brief requires exactly one file or text source"))
+	}
+	if (a.Brief == "" && a.BriefBytes == nil) || !filepath.IsAbs(a.Cwd) {
 		return schedulecommand.InvalidInput(errors.New("schedule create requires --brief FILE and --cwd ABS"))
 	}
 	if a.ScheduleCron == "" {
@@ -216,7 +225,7 @@ func scheduleCommand(a Arguments, deps storeDependencies) (result commandResult)
 	if a.ScheduleAction == "create" {
 		return createScheduleCommand(a, deps)
 	}
-	if a.ScheduleAction == "history" || a.ScheduleAction == "execution" || a.ScheduleAction == "health" || (a.ScheduleAction == "policy" && a.SchedulePolicyOperation == "get") {
+	if scheduleReadAction(a) {
 		return scheduleQueryCommand(a, deps)
 	}
 	response := newResponse("schedule")
@@ -420,6 +429,14 @@ func scheduleHistory(ctx context.Context, store contract.Store, a Arguments, res
 var errScheduleQueryClose = errors.New("schedule query resource close failed")
 
 func scheduleQueryCommand(a Arguments, deps storeDependencies) (result commandResult) {
+	return scheduleQueryCommandContext(context.Background(), a, deps)
+}
+
+func scheduleReadAction(a Arguments) bool {
+	return a.ScheduleAction == "list" || a.ScheduleAction == "show" || a.ScheduleAction == "history" || a.ScheduleAction == "execution" || a.ScheduleAction == "health" || (a.ScheduleAction == "policy" && a.SchedulePolicyOperation == "get")
+}
+
+func scheduleQueryCommandContext(parent context.Context, a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse("schedule")
 	switch a.ScheduleAction {
 	case "execution":
@@ -434,19 +451,32 @@ func scheduleQueryCommand(a Arguments, deps storeDependencies) (result commandRe
 	if err != nil {
 		return failedScheduleQuery(response, err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), schedulecommand.OperationTimeout)
+	ctx, cancel := context.WithTimeout(parent, schedulecommand.OperationTimeout)
 	defer cancel()
 	evidence, err := taskdir.OpenReadOnlyStoreContext(ctx, root, deps.registry())
 	if err != nil {
+		if (a.ScheduleAction == "list" || a.ScheduleAction == "show") && missingScheduleRoot(root, err) {
+			return missingScheduleResult(a, response)
+		}
 		return failedScheduleQuery(response, err)
 	}
 	defer func() { mergeScheduleQueryClose(&result, evidence.Close) }()
 	response.RootID = evidence.RootID()
 	store, err := scheduler.OpenReadOnly(ctx, evidence)
 	if err != nil {
+		if (a.ScheduleAction == "list" || a.ScheduleAction == "show") && onlyNotExist(err) {
+			return missingScheduleResult(a, response)
+		}
 		return failedScheduleQuery(response, err)
 	}
 	defer func() { mergeScheduleQueryClose(&result, store.Close) }()
+	return executeScheduleQuery(ctx, store, evidence, a, response)
+}
+
+func executeScheduleQuery(ctx context.Context, store contract.Store, evidence *taskdir.ReadOnlyStore, a Arguments, response Response) commandResult {
+	if a.ScheduleAction == "list" || a.ScheduleAction == "show" {
+		return executeStoredScheduleCommand(ctx, store, a, response)
+	}
 	if a.ScheduleAction == "health" {
 		return scheduleHealth(ctx, store, a.ScheduleID, response)
 	}

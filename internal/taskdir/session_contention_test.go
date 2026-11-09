@@ -60,3 +60,39 @@ func TestSessionReleasePreservesLockIOFailure(t *testing.T) {
 		t.Fatalf("failed release freed the session: %v", err)
 	}
 }
+
+type sessionReleaseUnlockFault struct {
+	lockFault
+	unlockFailed bool
+}
+
+func (f *sessionReleaseUnlockFault) OnFlock(path string, operation int) error {
+	if filepath.Base(path) == ".maintenance.lock" && operation == unix.LOCK_UN && !f.unlockFailed {
+		f.unlockFailed = true
+		return unix.EIO
+	}
+	return f.lockFault.OnFlock(path, operation)
+}
+
+func TestSessionReleaseRetainsJoinedRunContentionAndUnlockFailure(t *testing.T) {
+	s, td, digest := claimedTerminalSession(t)
+	fault := &sessionReleaseUnlockFault{lockFault: lockFault{path: ".run.lock", failures: []error{unix.EWOULDBLOCK}}}
+	s.SetFaultInjector(fault)
+	err := td.ReleaseSession("fixture:test", "release-contention", digest)
+	s.SetFaultInjector(nil)
+	// Failed unlock conservatively retains the Store's known lease. Its owner
+	// explicitly settles it after restoring the native syscall boundary.
+	must(t, s.maintLock.Unlock())
+	if !errors.Is(err, task.ErrSessionBusy) || !errors.Is(err, task.ErrLockBusy) || !errors.Is(err, unix.EIO) || !fault.unlockFailed {
+		t.Fatalf("release lost acquisition or cleanup cause: %v", err)
+	}
+	if task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) }) {
+		t.Fatalf("unlock failure became pure acquisition contention: %v", err)
+	}
+	if task.AllErrorCauses(errors.Join(&sessionProofLockError{cause: task.ErrLockBusy}, task.ErrSessionBusy), func(cause error) bool {
+		return errors.Is(cause, task.ErrLockBusy)
+	}) {
+		t.Fatal("independent active ownership became acquisition contention")
+	}
+	must(t, td.ReleaseSession("fixture:test", "release-contention", digest))
+}

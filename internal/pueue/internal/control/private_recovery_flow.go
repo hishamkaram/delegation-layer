@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -599,7 +598,7 @@ func retainCleanupUntil(cleanup func() error, err error) error {
 			<-handle.Done()
 		}
 		if cleanupErr := cleanup(); cleanupErr != nil {
-			log.Printf("delegation-layer: deferred private supervisor cleanup failed: %v", cleanupErr)
+			reportRetained(pending, fmt.Errorf("delegation-layer: deferred private supervisor cleanup failed: %w", cleanupErr))
 		}
 	}()
 	return nil

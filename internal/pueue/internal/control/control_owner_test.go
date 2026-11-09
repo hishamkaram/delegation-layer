@@ -69,7 +69,7 @@ func runControlOwnerCallerTest(args []string) int {
 		if event.Stage == "started" {
 			started <- struct{}{}
 		}
-	}, "", nil)
+	}, "", nil, nil)
 	select {
 	case <-started:
 		return 0
@@ -268,7 +268,7 @@ func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVer
 		if event.Stage == "started" {
 			started <- struct{}{}
 		}
-	}, statusVersion, nil)
+	}, statusVersion, nil, nil)
 	// The owner child is finite, so join its sole completion before earlier
 	// cleanups such as the fixture's TempDir run. The join cannot use t.Context,
 	// which is canceled before cleanups; the bounded wait only reports a stuck

@@ -36,7 +36,12 @@ and test requirements.
 
 ### Module organization
 
-Review repeated filename families for a shared capability or responsibility.
+Choose the owning package before adding a new capability. Group its implementation,
+command handling and tests in a cohesive feature package; do not use filename
+prefixes as the default substitute for that boundary. Review an emerging
+filename family before adding another member, including the actual callers,
+state owner and allowed dependency direction.
+
 Use a cohesive package when it makes that owner and its dependencies clearer;
 import defining owners instead of reaching through broad compatibility facades.
 Review the complete capability: command entrypoints, implementation, fixtures,
@@ -50,11 +55,14 @@ discovery, source-evidence closure and documentation together. Verify the
 selected cases still execute; a passing empty filter is not preserved coverage.
 Do not leave a second implementation or an unused forwarding facade behind.
 
-Prefixes, flat files, file length and one consumer are not defects by themselves.
-Keep related Go files in one package when extraction would create cycles,
-forwarding layers or artificial callback interfaces. A move needs a concrete
-ownership, contract, dependency or test-selection benefit; remove obsolete
-facades after their consumers migrate instead of replacing them with new ones.
+When private owner state or required dependency direction prevents extraction,
+keep that capability in one cohesive owner-local file and explain the concrete
+constraint; do not export authority or add forwarding layers just to create a
+folder. File length and one consumer do not justify artificial splits. Existing
+families move when the current change already has an ownership, contract,
+dependency or test-selection benefit, not as unrelated churn. Remove obsolete
+facades after their consumers migrate. The integrated review checks this package
+choice and the remaining exceptions, rather than merely counting files.
 
 ## Lifecycle tests
 

@@ -37,6 +37,23 @@ func nativeInfrastructureCallbacks() infrastructurehost.Callbacks {
 	}
 }
 
+func nativeInfrastructureCallbacksForReporter(report func(error)) infrastructurehost.Callbacks {
+	callbacks := nativeInfrastructureCallbacks()
+	if report != nil {
+		cleanup := privateCleanupOwnerWithReporter(report)
+		callbacks.SuccessfulCleanup = cleanup.AuthorizeSuccessfulCleanup
+		callbacks.TerminalEvidence = cleanup.PrepareTerminalEvidence
+		callbacks.TerminalCustody = func(ctx context.Context, root string, binding task.SupervisorRef, scope pueue.PrivateTerminalCustodyScope) error {
+			return releasePrivateTerminalCustodyReported(ctx, root, binding, scope, report)
+		}
+		callbacks.MaintenanceLaunch = func(ctx context.Context, executable, root string, environment []string) error {
+			_, err := supervisor.StartQueueMaintenanceOwnerWithReporter(ctx, executable, root, environment, report)
+			return err
+		}
+	}
+	return callbacks
+}
+
 func nativeInfrastructureHost() infrastructurehost.Host {
 	return infrastructurehost.NewHost(nativeInfrastructureCallbacks(), nativeInfrastructureStores{}, nativeInfrastructureMigration{})
 }
