@@ -233,7 +233,7 @@ func doctorProviderNextStep(reason string) string {
 	case "authentication_unavailable":
 		return "Sign in using the selected provider CLI native login flow, then rerun doctor; live authentication remains unknown."
 	case "state_placement_rejected":
-		return "Choose a state root outside the provider workspace and all provider writable directories, then rerun doctor."
+		return "Use a workspace outside the state root that does not contain it, or run doctor directly with --root selecting a state root outside the provider workspace and all provider writable directories."
 	default:
 		return "Check the selected provider installation, workspace and required provider options; live authentication remains unknown."
 	}

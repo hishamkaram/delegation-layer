@@ -5,7 +5,7 @@ import { getHarness } from "./catalog.mjs";
 import { parseSetupArguments } from "./setup-arguments.mjs";
 import { inspectSetupCli } from "./setup-cli.mjs";
 import { DoctorRequestRejectedError, runSetupDoctor } from "./setup-doctor.mjs";
-import { printFirstTask } from "./setup-recipe.mjs";
+import { printFirstTask, shellQuote } from "./setup-recipe.mjs";
 import { inspectSkill, installSkill } from "./skill-store.mjs";
 import { targetFor } from "./selection.mjs";
 import { applyRouting, prepareRouting, printRouting } from "./routing-store.mjs";
@@ -76,7 +76,10 @@ export async function runSetup(context) {
       }
     }
     report(`Selected CLI: ${cli.executable}`);
-    if (cli.pathAction) report(`Manual PATH step: put ${cli.directory} before other Delegate installations on PATH. Current PATH selection: ${cli.pathDelegate ?? "none"}. Use the absolute command printed below until then.`);
+    if (cli.pathAction) {
+      const pathSelection = cli.pathSelection.kind === "unknown" ? "unknown (PATH inspection unavailable)" : cli.pathSelection.executable ?? "none";
+      report(`Manual PATH step: put ${cli.directory} before other Delegate installations on PATH. Current PATH selection: ${pathSelection}. Until PATH is verified, use this absolute command for passive checks: ${shellQuote(cli.executable)} doctor --json`);
+    }
     step = "doctor";
     const doctor = await runSetupDoctor({ executable: cli.executable, providerArguments: parsed.options.providerArguments, environment });
     printDoctor(doctor.report, report);

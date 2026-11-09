@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -257,6 +257,32 @@ try {
     const withoutPath = await run(defaultSelection, [], { environment: { PATH: path, DELEGATION_LAYER_INSTALL_DIR: "" } });
     assert.equal(withoutPath.code, 0, withoutPath.stderr);
     assert.ok(withoutPath.stdout.includes(`Selected CLI: ${join(defaultBin, "delegate")}`));
+  }
+
+  const advisoryPath = await fixture("advisory-path");
+  await installed(advisoryPath);
+  const loopEntry = join(advisoryPath.directory, "loop");
+  await symlink("loop", loopEntry);
+  const longEntry = join(advisoryPath.directory, "x".repeat(512));
+  for (const [name, entry, code] of [["loop", loopEntry, "ELOOP"], ["long", longEntry, "ENAMETOOLONG"]]) {
+    await assert.rejects(lstat(join(entry, "delegate")), { code }, "the fixture must produce the requested native PATH observation failure");
+    for (const useEnvironment of [false, true]) {
+      const result = await run(advisoryPath, useEnvironment ? [] : ["--install-dir", advisoryPath.bin], {
+        environment: { PATH: `${entry}:${advisoryPath.bin}`, ...(useEnvironment ? { DELEGATION_LAYER_INSTALL_DIR: advisoryPath.bin } : {}) },
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.ok(result.stdout.includes(`Selected CLI: ${join(advisoryPath.bin, "delegate")}`));
+      assert.match(result.stdout, /Current PATH selection: unknown \(PATH inspection unavailable\)/);
+      assert.ok(result.stdout.includes(`${shellQuote(join(advisoryPath.bin, "delegate"))} doctor --json`));
+      assert.doesNotMatch(result.stderr + result.stdout, /ELOOP|ENAMETOOLONG/);
+      assert.equal(result.calls.length, 0);
+    }
+    const automatic = await fixture(`automatic-path-${name}`);
+    await installed(automatic);
+    const failed = await run(automatic, [], { environment: { PATH: `${entry}:${automatic.bin}` } });
+    assert.equal(failed.code, 1, "automatic selection must not infer a fallback from unobservable PATH");
+    assert.equal(failed.calls.length, 0);
+    await noSkill(automatic);
   }
 
   for (const role of ["delegate-run", "pueue", "pueued"]) {

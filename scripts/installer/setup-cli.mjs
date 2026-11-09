@@ -24,7 +24,16 @@ export async function inspectSetupCli({ installDir, environment, home, cwd }) {
   if (explicitDir !== undefined && (!explicitDir || !isAbsolute(explicitDir))) {
     throw new Error("DELEGATION_LAYER_INSTALL_DIR must be an absolute path");
   }
-  const pathDelegate = await delegateOnPath(environment.PATH ?? "", cwd);
+  let pathSelection;
+  try {
+    pathSelection = { kind: "observed", executable: await delegateOnPath(environment.PATH ?? "", cwd) };
+  } catch (error) {
+    if (!explicitDir) throw error;
+    // The selected directory owns CLI selection. An unreadable advisory PATH
+    // cannot invalidate it, and cannot establish which CLI the shell will use.
+    pathSelection = { kind: "unknown" };
+  }
+  const pathDelegate = pathSelection.kind === "observed" ? pathSelection.executable : null;
   const directory = explicitDir ? normalizeAbsolute(explicitDir) : pathDelegate ? dirname(pathDelegate) : join(home, ".local", "bin");
   const executable = join(directory, "delegate");
   const existing = await existingPath(executable);
@@ -42,5 +51,5 @@ export async function inspectSetupCli({ installDir, environment, home, cwd }) {
     }
     if (present.length) throw new Error(`Partial CLI installation in ${directory}; existing roles: ${present.join(", ")}. Choose an empty --install-dir; setup never overwrites CLI files.`);
   }
-  return { executable, directory, absent: !existing, pathDelegate, pathAction: pathDelegate !== executable };
+  return { executable, directory, absent: !existing, pathSelection, pathAction: pathSelection.kind === "unknown" || pathDelegate !== executable };
 }
