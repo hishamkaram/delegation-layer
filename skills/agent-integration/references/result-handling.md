@@ -88,10 +88,15 @@ task ID; observation never launches or retries provider work.
 1. Preserve a concrete failure's guidance. Cancellation and `stop_and_report`
    prevent automatic continuation. An ancillary error does not erase a valid
    terminal outcome.
-2. Return a committed `outcome` only with committed publication. For a
-   validated rejected outcome, use [offline recovery](#offline-recovery) once
-   only when `failure.next_action` is `recheck`; otherwise diagnose and report
-   the rejection using [failure diagnosis](#failure-diagnosis).
+2. Return a committed `outcome` only with committed publication. A rejected
+   idle-timeout outcome can still offer exact-session continuation: require
+   `status: "idle_timed_out"`, `failure.code: "task_idle_timed_out"`,
+   `failure.next_action: "continue_task"`, and `continuation.resumable: true`.
+   Follow [continuation](continuation.md); the predecessor remains rejected.
+   Otherwise, for a validated rejected outcome, use
+   [offline recovery](#offline-recovery) once only when `failure.next_action`
+   is `recheck`; otherwise diagnose and report the rejection using
+   [failure diagnosis](#failure-diagnosis).
 3. With no terminal outcome, handle `timed_out` or `idle_timed_out` before waiting on publication:
    follow [continuation](continuation.md), including its busy-workspace exception.
    For `interrupted`, all three of `failure.code: "task_interrupted"`,

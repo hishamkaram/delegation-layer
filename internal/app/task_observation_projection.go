@@ -64,6 +64,11 @@ func applyRejectedRecovery(response *Response, available *bool) {
 	if available == nil {
 		return
 	}
+	// The lifecycle owner proved an exact-session handoff after output-silence
+	// termination. Keep that guidance alongside the rejected outcome and exit 4.
+	if response.Status == string(tasklifecycle.ContinuationIdleTimedOut) && response.Continuation != nil && response.Continuation.Resumable {
+		return
+	}
 	failure := DispatchFailureResponse{Code: "provider_output_rejected", Stage: "collect", NextAction: "stop_and_report"}
 	if *available {
 		failure.NextAction = "recheck"

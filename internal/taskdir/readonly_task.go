@@ -41,15 +41,18 @@ func (r *ReadOnlyStore) ReadTaskEvidence(ctx context.Context, id string) (TaskEv
 		return evidence, err
 	}
 	td := &TaskDir{store: r.store, TaskID: id, Dir: filepath.Join(r.store.Root, "tasks", id)}
+	// The lifetime owner records native worker Wait after the runner seals or
+	// publishes normal completion. Read closure first, then publication: an
+	// advancing writer must not pair new closure with an older no-seal view.
+	evidence.Lifetime, err = LoadLifetimeEvidenceContext(ctx, td)
+	if err != nil {
+		return evidence, err
+	}
 	evidence.Inspection, err = td.Inspect()
 	if err != nil {
 		return evidence, err
 	}
 	if err = readTaskEvidenceRecords(ctx, td, &evidence); err != nil {
-		return evidence, err
-	}
-	evidence.Lifetime, err = LoadLifetimeEvidenceContext(ctx, td)
-	if err != nil {
 		return evidence, err
 	}
 	evidence.Stops, err = td.ReadStopRecords()

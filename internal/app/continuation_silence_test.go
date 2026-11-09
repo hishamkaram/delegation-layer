@@ -3,6 +3,7 @@ package app
 import (
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
@@ -49,4 +50,21 @@ func readSilenceClosureOffer(t *testing.T, fixture *rebootFixture) *tasklifecycl
 		t.Fatalf("offer=%+v err=%v", offer, err)
 	}
 	return offer
+}
+
+func TestIdleTimeoutRejectedCollectionPreservesContinuationGuidance(t *testing.T) {
+	fixture := newRebootFixture(t, rebootSetup{identity: true, stage: rebootLifetimeClosedSilence, launchEnvironment: true, seal: true, sealExitCode: 1})
+	deps := rebootDependencies(t, fixture)
+	deps.PredicateRegistry = predicate.Default
+	args := Arguments{Root: fixture.root, TaskID: fixture.req.TaskID}
+	collected := collect(args, deps.storeDependencies())
+	if collected.code != 4 || collected.response.Publication != task.PublicationRejected.String() || collected.response.Outcome == nil {
+		t.Fatalf("collect = code %d err=%v %+v", collected.code, collected.err, collected.response)
+	}
+	for _, result := range []commandResult{collected, status(args, deps)} {
+		response := result.response
+		if response.Status != "idle_timed_out" || response.Continuation == nil || !response.Continuation.Resumable || response.Continuation.ContinueCommand == "" || response.Failure == nil || response.Failure.Code != "task_idle_timed_out" || response.Failure.NextAction != "continue_task" {
+			t.Fatalf("%s lost the proven idle-timeout continuation: %+v", response.Command, response)
+		}
+	}
 }

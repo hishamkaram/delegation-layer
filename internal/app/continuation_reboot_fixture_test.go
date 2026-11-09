@@ -68,6 +68,8 @@ type rebootSetup struct {
 	// seal writes raw output and provider.exit under the consumed start
 	// permit, so the reboot left sealed evidence that was never collected.
 	seal bool
+	// sealExitCode selects the sealed invocation result; zero is a successful turn.
+	sealExitCode int
 }
 
 // rebootFixture is the historical private-supervisor fixture whose only queue
@@ -190,17 +192,17 @@ func recordRebootRunnerEvidence(t *testing.T, fixture *historicalSupervisorFixtu
 		}
 	}
 	if setup.seal {
-		sealRebootTurn(t, td)
+		sealRebootTurn(t, td, setup.sealExitCode)
 	}
 	recordRebootLifetime(t, td, setup.stage)
 }
 
-func sealRebootTurn(t *testing.T, td *taskdir.TaskDir) {
+func sealRebootTurn(t *testing.T, td *taskdir.TaskDir, exitCode int) {
 	t.Helper()
 	if err := td.WriteRawFiles("answer\n", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef()); err != nil {
+	if _, err := td.Seal(task.InvocationStarted, exitCode, "", task.FixturePredicateRef()); err != nil {
 		t.Fatal(err)
 	}
 }

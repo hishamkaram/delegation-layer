@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -46,7 +47,7 @@ func TestSchedulerHookRunsThroughNativeOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooks := schedulerHooks{dependencies: Dependencies{RunnerExecutable: self, Environment: []string{"PATH=/bin:/usr/bin"}}}
-	for _, tc := range []struct{ name, path, want string }{{"success", "/bin/true", "succeeded"}, {"failure", "/bin/false", "failed"}, {"missing", filepath.Join(t.TempDir(), "missing"), "unavailable"}} {
+	for _, tc := range []struct{ name, path, want string }{{"success", requiredHookTestExecutable(t, "true"), "succeeded"}, {"failure", requiredHookTestExecutable(t, "false"), "failed"}, {"missing", filepath.Join(t.TempDir(), "missing"), "unavailable"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -75,4 +76,13 @@ func TestSchedulerHookTimeoutDoesNotJoinInheritedOutput(t *testing.T) {
 	if runErr != nil || got != "timed_out" {
 		t.Fatalf("hook result %q error %v", got, runErr)
 	}
+}
+
+func requiredHookTestExecutable(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatalf("required installed hook test command %s: %v", name, err)
+	}
+	return path
 }
