@@ -1,16 +1,24 @@
 """Native descriptor and output-mode contracts without launching Delegate."""
 
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import termios
 import unittest
+from unittest.mock import patch
 
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.processes.contracts import TerminalIO
 from scripts.acceptance.processes.operations import Processes
-from scripts.acceptance.tui.terminal import Terminal, TerminalTermiosMismatch, plain_text, restored_modes
+from scripts.acceptance.tui.terminal import (
+    MAX_TERMIOS_DIAGNOSTIC_BYTES,
+    Terminal,
+    TerminalTermiosMismatch,
+    plain_text,
+    restored_modes,
+)
 
 
 class TerminalAcceptanceTests(unittest.TestCase):
@@ -41,6 +49,50 @@ class TerminalAcceptanceTests(unittest.TestCase):
             terminal.slave = -1
             with self.assertRaises(TerminalTermiosMismatch):
                 terminal.assert_restored()
+        finally:
+            terminal.close()
+
+    def test_mismatch_preserves_exact_comparison_and_reports_numeric_slot_types(self):
+        terminal = Terminal()
+        before = [1, 2, 3, 4, 9600, 9600, [b"\x03", 1]]
+        after = [1, 2, 3, 4, 9600, 9600, [3, b"\x01"]]
+        try:
+            terminal.original = before
+            with patch("scripts.acceptance.tui.terminal.termios.tcgetattr", return_value=after) as read:
+                with self.assertRaises(TerminalTermiosMismatch) as raised:
+                    terminal.assert_restored()
+            read.assert_called_once_with(terminal.master)
+            evidence = json.loads(str(raised.exception).split("; ", 1)[1])
+            self.assertEqual(evidence["before"]["cc"], [["bytes", 3], ["int", 1]])
+            self.assertEqual(evidence["after"]["cc"], [["int", 3], ["bytes", 1]])
+            self.assertEqual(evidence["before"]["lflag"], 4)
+            self.assertEqual(evidence["after"]["ospeed"], 9600)
+            self.assertEqual(before, [1, 2, 3, 4, 9600, 9600, [b"\x03", 1]])
+            self.assertEqual(after, [1, 2, 3, 4, 9600, 9600, [3, b"\x01"]])
+        finally:
+            terminal.close()
+
+    def test_termios_diagnostic_has_bounded_numeric_metadata(self):
+        before = [(1 << 64) - 1] * 6 + [[b"\xff"] * 64]
+        after = [-(1 << 63)] * 6 + [[255] * 64]
+        error = TerminalTermiosMismatch(before, after)
+        self.assertLessEqual(len(str(error).encode("ascii")), MAX_TERMIOS_DIAGNOSTIC_BYTES)
+        evidence = json.loads(str(error).split("; ", 1)[1])
+        self.assertEqual(len(evidence["before"]["cc"]), 64)
+        self.assertEqual(evidence["after"]["cc"], [["int", 255]] * 64)
+        with self.assertRaisesRegex(RuntimeError, "control slots exceeded bound"):
+            TerminalTermiosMismatch(before[:6] + [[b"\xff"] * 65], after)
+        with self.assertRaisesRegex(RuntimeError, "control attribute is invalid"):
+            TerminalTermiosMismatch(before[:6] + [[b"private-input"]], after)
+
+    def test_terminal_ioctl_error_still_propagates_without_mismatch(self):
+        terminal = Terminal()
+        error = termios.error(25, "native ioctl unavailable")
+        try:
+            with patch("scripts.acceptance.tui.terminal.termios.tcgetattr", side_effect=error):
+                with self.assertRaises(termios.error) as raised:
+                    terminal.assert_restored()
+            self.assertIs(raised.exception, error)
         finally:
             terminal.close()
 

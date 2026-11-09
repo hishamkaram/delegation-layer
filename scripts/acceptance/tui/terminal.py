@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import errno
 import fcntl
+import json
 import os
 import pty
 import re
@@ -16,6 +18,8 @@ from scripts.acceptance.processes.contracts import TerminalIO
 
 
 MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024
+MAX_TERMIOS_CONTROL_SLOTS = 64
+MAX_TERMIOS_DIAGNOSTIC_BYTES = 4096
 _CSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
 _OSC = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 _MODE = re.compile(rb"\x1b\[\?([0-9;]+)([hl])")
@@ -23,6 +27,32 @@ _MODE = re.compile(rb"\x1b\[\?([0-9;]+)([hl])")
 
 class TerminalTermiosMismatch(RuntimeError):
     """The still-open observer read terminal attributes unequal to its baseline."""
+
+    def __init__(self, before: Sequence[object], after: Sequence[object]):
+        evidence = {"before": _termios_snapshot(before), "after": _termios_snapshot(after)}
+        message = "terminal termios was not restored; " + json.dumps(evidence, separators=(",", ":"))
+        if len(message.encode("ascii")) > MAX_TERMIOS_DIAGNOSTIC_BYTES:
+            raise RuntimeError("terminal termios diagnostic exceeded bound")
+        super().__init__(message)
+
+
+def _termios_snapshot(state: Sequence[object]) -> dict[str, object]:
+    names = ("iflag", "oflag", "cflag", "lflag", "ispeed", "ospeed")
+    if len(state) != 7 or any(not isinstance(value, int) or isinstance(value, bool)
+                             or not -(1 << 63) <= value < 1 << 64 for value in state[:6]):
+        raise RuntimeError("terminal termios numeric attributes are invalid")
+    controls = state[6]
+    if not isinstance(controls, list) or len(controls) > MAX_TERMIOS_CONTROL_SLOTS:
+        raise RuntimeError("terminal termios control slots exceeded bound")
+    slots: list[tuple[str, int]] = []
+    for value in controls:
+        if isinstance(value, bytes) and len(value) == 1:
+            slots.append(("bytes", value[0]))
+        elif isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255:
+            slots.append(("int", value))
+        else:
+            raise RuntimeError("terminal termios control attribute is invalid")
+    return {**dict(zip(names, state[:6], strict=True)), "cc": slots}
 
 
 def plain_text(data: bytes) -> str:
@@ -108,8 +138,9 @@ class Terminal:
         if self.master < 0:
             raise RuntimeError("terminal master is already closed")
         self.drain(0.05)
-        if termios.tcgetattr(self.master) != self.original:
-            raise TerminalTermiosMismatch("terminal termios was not restored")
+        observed = termios.tcgetattr(self.master)
+        if observed != self.original:
+            raise TerminalTermiosMismatch(self.original, observed)
         data = bytes(self.data)
         if b"\x1b[?1049h" not in data:
             raise RuntimeError("TUI never entered alternate screen")
