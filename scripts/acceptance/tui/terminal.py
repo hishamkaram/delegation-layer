@@ -21,6 +21,10 @@ _OSC = re.compile(rb"\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 _MODE = re.compile(rb"\x1b\[\?([0-9;]+)([hl])")
 
 
+class TerminalTermiosMismatch(RuntimeError):
+    """The still-open observer read terminal attributes unequal to its baseline."""
+
+
 def plain_text(data: bytes) -> str:
     return _CSI.sub(b"", _OSC.sub(b"", data)).decode("utf-8", errors="replace")
 
@@ -43,7 +47,9 @@ class Terminal:
     def __init__(self):
         self.master, self.slave = pty.openpty()
         try:
-            self.original = termios.tcgetattr(self.slave)
+            # A controlling session's exit revokes Darwin slave descriptors.
+            # Keep the same live master as the initial and final observer.
+            self.original = termios.tcgetattr(self.master)
             self.resize(110, 35)
             os.set_blocking(self.master, False)
             self.selector = selectors.DefaultSelector()
@@ -99,9 +105,11 @@ class Terminal:
             self.drain(min(0.05, max(0.0, deadline - time.monotonic())))
 
     def assert_restored(self) -> None:
+        if self.master < 0:
+            raise RuntimeError("terminal master is already closed")
         self.drain(0.05)
-        if termios.tcgetattr(self.slave) != self.original:
-            raise RuntimeError("terminal termios was not restored")
+        if termios.tcgetattr(self.master) != self.original:
+            raise TerminalTermiosMismatch("terminal termios was not restored")
         data = bytes(self.data)
         if b"\x1b[?1049h" not in data:
             raise RuntimeError("TUI never entered alternate screen")

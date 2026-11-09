@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 	"golang.org/x/sys/unix"
 )
@@ -23,6 +24,13 @@ import (
 // Python owns its PTY and private paths; this guardian owns the installed TUI's
 // Start, sole Wait, signal requests and independently proven scope closure.
 func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "--test-tui-terminal-raw-exit" {
+		if err := leaveTerminalRaw(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--test-tui-terminal" {
 		if err := runTerminalUIFixture(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -34,6 +42,15 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 	os.Exit(m.Run())
+}
+
+func leaveTerminalRaw() error {
+	// This fixed negative control intentionally omits Restore on its own PTY.
+	if _, err := term.MakeRaw(os.Stdin.Fd()); err != nil {
+		return err
+	}
+	_, err := os.Stdout.Write([]byte("\x1b[?1049h\x1b[?1049l"))
+	return err
 }
 
 type terminalUIReceipt struct {
@@ -94,7 +111,7 @@ func runTerminalUIFixture(args []string) (resultErr error) {
 	if err = f.scope.BindOwnerProcess(); err != nil {
 		return err
 	}
-	if err = f.start(args[1], args[2]); err != nil {
+	if err = f.start(args[0], args[1], args[2]); err != nil {
 		return err
 	}
 	if err = f.requestSignal(ctx, args[0], args[3]); err != nil {
@@ -139,10 +156,10 @@ func (f *terminalUIFixture) requestSignal(ctx context.Context, mode, trigger str
 
 func validateTerminalUIArgs(args []string) error {
 	if len(args) != 5 {
-		return errors.New("usage: --test-tui-terminal interactive|term|hup|hangup INSTALLED_DELEGATE ABS_ROOT ABS_TRIGGER ABS_RECEIPT")
+		return errors.New("usage: --test-tui-terminal interactive|term|hup|hangup|raw-exit INSTALLED_DELEGATE ABS_ROOT ABS_TRIGGER ABS_RECEIPT")
 	}
 	switch args[0] {
-	case "interactive", "term", "hup", "hangup":
+	case "interactive", "term", "hup", "hangup", "raw-exit":
 	default:
 		return errors.New("unsupported fixed TUI fixture mode")
 	}
@@ -166,8 +183,15 @@ func validateTerminalUIArgs(args []string) error {
 	return err
 }
 
-func (f *terminalUIFixture) start(binary, root string) error {
+func (f *terminalUIFixture) start(mode, binary, root string) error {
 	command := exec.Command(binary, "tui", "--root", root)
+	if mode == "raw-exit" {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		command = exec.Command(self, "--test-tui-terminal-raw-exit")
+	}
 	command.Env = os.Environ()
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := f.scope.Configure(command); err != nil {
@@ -187,11 +211,13 @@ func (f *terminalUIFixture) start(binary, root string) error {
 	}
 	f.state.ChildPID = command.Process.Pid
 	f.child = &terminalUIChild{command: command, done: make(chan struct{})}
+	// Observe before Wait can reap a short-lived child. Both native backends
+	// accept an unreaped zombie's identity; Wait remains owned on every result.
+	ref, err := f.scope.ObserveStarted(command.Process.Pid)
 	go func() {
 		f.child.err = command.Wait()
 		close(f.child.done)
 	}()
-	ref, err := f.scope.ObserveStarted(command.Process.Pid)
 	if err == nil {
 		f.refs = []LaunchRef{ref}
 	}

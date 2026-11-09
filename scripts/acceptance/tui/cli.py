@@ -8,12 +8,13 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import termios
 import time
 
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.evidence.files import read_json, write_json
 from scripts.acceptance.processes.operations import Process, Processes
-from scripts.acceptance.tui.terminal import Terminal
+from scripts.acceptance.tui.terminal import Terminal, TerminalTermiosMismatch
 
 
 def require(condition: bool, message: str) -> None:
@@ -52,6 +53,47 @@ def verify_terminal_child(process: Process, receipt_path: Path, expected: int) -
     write_json(process.directory / "guardian-receipt.json", state)
     require(state.get("child_exit_code") == expected, "native TUI returned an unexpected exit")
     require(state.get("failure_cleanup") is False, "native TUI required failure cleanup")
+
+
+def unrestored_termios_case(book: Processes, helper: Path, base: Path) -> dict[str, object]:
+    """A completed controlling child must leave observable RAW evidence."""
+    terminal = Terminal()
+    process = None
+    receipt_path = base / "unrestored-termios-rejected-receipt.json"
+    try:
+        flags = termios.ICANON | termios.ECHO
+        baseline = terminal.original[3]
+        require(isinstance(baseline, int) and baseline & flags == flags,
+                "negative control requires canonical input and echo initially")
+        process, root, _trigger, receipt_path = terminal_case_start(
+            book, helper, helper, base, "unrestored-termios-rejected", "raw-exit", terminal)
+        wait_child(process, terminal)
+        verify_terminal_child(process, receipt_path, 0)
+        observed = termios.tcgetattr(terminal.master)[3]
+        require(isinstance(observed, int) and observed & flags == 0,
+                "completed RAW child lost its canonical/echo counterexample")
+        try:
+            terminal.assert_restored()
+        except TerminalTermiosMismatch:
+            pass
+        else:
+            raise RuntimeError("unrestored RAW terminal incorrectly passed restoration")
+        require(process.stderr_path.read_bytes() == b"", "unexpected RAW fixture stderr")
+        require(not root.exists(), "RAW terminal control initialized execution state")
+        return {"case": "unrestored-termios-rejected", "exit_code": 0,
+                "exact_wait": True, "scope_empty": True, "raw_flags_observed": True,
+                "termios_mismatch_rejected": True, "execution_root_absent": True}
+    finally:
+        try:
+            if process is not None:
+                if process.poll() is None:
+                    terminal.hangup()
+                    wait_child(process, terminal, timeout=20)
+                (process.directory / "terminal.bin").write_bytes(terminal.data)
+                if not (process.directory / "guardian-receipt.json").exists():
+                    verify_terminal_child(process, receipt_path, 0)
+        finally:
+            terminal.close()
 
 
 def interactive_case(book: Processes, binary: Path, helper: Path, base: Path, name: str,
@@ -183,6 +225,7 @@ def run(binary: Path, helper: Path, output: Path, *, task_binary: Path | None = 
                        "XDG_CACHE_HOME": str(home.directory / "cache"),
                        "TERM": "xterm-256color", "LANG": "C.UTF-8", "NO_COLOR": "1"}
         book = Processes(output / "processes", environment=environment, owner=captures, environment_keys_only=True)
+        cases.append(unrestored_termios_case(book, helper, base))
         cases.append(interactive_case(book, binary, helper, base, "navigate-resize-paste", navigation=True))
         cases.append(interactive_case(book, binary, helper, base, "control-c", ctrl_c=True))
         cases.extend(guardian_case(book, binary, helper, base, mode) for mode in ("term", "hup", "hangup"))

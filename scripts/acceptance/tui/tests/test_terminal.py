@@ -1,14 +1,16 @@
 """Native descriptor and output-mode contracts without launching Delegate."""
 
+import os
 from pathlib import Path
 import sys
 import tempfile
+import termios
 import unittest
 
 from scripts.acceptance.directories.operations import DirectoryOwner
 from scripts.acceptance.processes.contracts import TerminalIO
 from scripts.acceptance.processes.operations import Processes
-from scripts.acceptance.tui.terminal import Terminal, plain_text, restored_modes
+from scripts.acceptance.tui.terminal import Terminal, TerminalTermiosMismatch, plain_text, restored_modes
 
 
 class TerminalAcceptanceTests(unittest.TestCase):
@@ -17,6 +19,30 @@ class TerminalAcceptanceTests(unittest.TestCase):
         self.assertFalse(restored_modes(output))
         self.assertEqual(plain_text(output), "hello")
         self.assertTrue(restored_modes(output + b"\x1b[?1049l\x1b[?2004l\x1b[?25h"))
+
+    def test_termios_observation_survives_unavailable_slave_descriptor(self):
+        terminal = Terminal()
+        try:
+            terminal.data.extend(b"\x1b[?1049h\x1b[?1049l")
+            os.close(terminal.slave)
+            terminal.slave = -1
+            terminal.assert_restored()
+        finally:
+            terminal.close()
+
+    def test_live_observer_rejects_changed_termios_after_slave_closes(self):
+        terminal = Terminal()
+        try:
+            changed = termios.tcgetattr(terminal.slave)
+            changed[3] ^= termios.ECHO
+            termios.tcsetattr(terminal.slave, termios.TCSANOW, changed)
+            terminal.data.extend(b"\x1b[?1049h\x1b[?1049l")
+            os.close(terminal.slave)
+            terminal.slave = -1
+            with self.assertRaises(TerminalTermiosMismatch):
+                terminal.assert_restored()
+        finally:
+            terminal.close()
 
     def test_terminal_port_preserves_shared_process_wait_and_separate_stderr(self):
         owner = DirectoryOwner()
