@@ -10,9 +10,11 @@ runtime owns launch, supervision and publication.
 | --- | --- | --- | --- |
 | Components and owners | [Explore](../diagrams/components.html) | [Light](../diagrams/components.light.svg) · [Dark](../diagrams/components.dark.svg) | [Light](../diagrams/components.light.png) · [Dark](../diagrams/components.dark.png) |
 | Task lifecycle | [Explore](../diagrams/lead-interface.html) | [Light](../diagrams/lead-interface.light.svg) · [Dark](../diagrams/lead-interface.dark.svg) | [Light](../diagrams/lead-interface.light.png) · [Dark](../diagrams/lead-interface.dark.png) |
+| Terminal task browsing and effects | [Explore](../diagrams/terminal-workbench/index.html) | [Light](../diagrams/terminal-workbench/light.svg) · [Dark](../diagrams/terminal-workbench/dark.svg) | [Light](../diagrams/terminal-workbench/light.png) · [Dark](../diagrams/terminal-workbench/dark.png) |
 
-Editable sources: [components](../diagrams/components.architecture.json) and
-[lifecycle](../diagrams/lead-interface.sequence.json). This page owns the
+Editable sources: [components](../diagrams/components.architecture.json),
+[lifecycle](../diagrams/lead-interface.sequence.json), and
+[terminal workbench](../diagrams/terminal-workbench/architecture.json). This page owns the
 implementation overview. The packaged [command reference](../skills/agent-integration/references/command-reference.md)
 and [result handling](../skills/agent-integration/references/result-handling.md)
 own shared public procedures and response decisions.

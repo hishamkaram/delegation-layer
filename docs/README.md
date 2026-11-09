@@ -21,7 +21,7 @@ Start with [installation](installation.md), then the
 | Understand permissions and assurance limits | [Security](security.md) |
 | Diagnose a reported failure | [Troubleshooting](troubleshooting.md) |
 | Understand implementation ownership | [Architecture](architecture.md) |
-| Explore the system | [Components](../diagrams/components.html) · [Task lifecycle](../diagrams/lead-interface.html) |
+| Explore the system | [Components](../diagrams/components.html) · [Task lifecycle](../diagrams/lead-interface.html) · [Terminal workbench](../diagrams/terminal-workbench/index.html) |
 | Change or release Delegate | [Contributing](contributing.md) |
 
 The packaged [integration skill](../skills/agent-integration/SKILL.md) and its

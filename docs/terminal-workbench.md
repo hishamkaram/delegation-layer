@@ -2,7 +2,9 @@
 
 Run `delegate tui` in a terminal to browse and control Tasks, Teams, Schedules
 and System resources. It calls the same application owners as the CLI; opening
-it does not dispatch work, start a scheduler, or repair a supervisor.
+it does not dispatch work, start a scheduler, or repair a supervisor. The
+[frontend/history diagram](../diagrams/terminal-workbench/index.html) shows how
+browsing and explicit effects reach their existing owners.
 
 ```sh
 delegate tui
