@@ -101,8 +101,14 @@ def await_release(case: SchedulerCase, row: Occurrence) -> None:
 
 def collect_failed(case: SchedulerCase, row: Occurrence) -> None:
     directory = case.fixture.state / "tasks" / row.task_id
-    wait_until(lambda: (directory / "provider.exit").is_file(), timeout=case.remaining(),
-               description="controlled provider exit seal")
+
+    def sealed() -> bool:
+        if (directory / "provider.exit").is_file():
+            return True
+        case.require_not_refused(row)
+        return False
+
+    wait_until(sealed, timeout=case.remaining(), description="controlled provider exit seal")
 
     def collected():
         result = case.command("collect-failed", ["collect", row.task_id, "--watch", "2s"], (0, 3, 4))

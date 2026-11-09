@@ -289,21 +289,30 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             provider_bin.mkdir()
             waiters.mkdir()
             marker = root / "session.json"
-            driver._install_workspace_fixture(provider_bin, root / "gate", waiters, "nonce", marker)
+            gate = root / "gate"
+            gate.touch(mode=0o600)
+            driver._install_workspace_fixture(provider_bin, gate, waiters, "nonce", marker)
             owner = DirectoryOwner()
             try:
                 processes = Processes(root / "captures", environment=dict(os.environ), owner=owner,
                                       environment_keys_only=True)
-                for index, resumed in enumerate((False, True)):
-                    arguments = [str(provider_bin / "pi"), "--mode", "json"]
-                    if resumed:
-                        arguments.extend(["--session", driver.FIXTURE_SESSION])
-                    process = processes.run(str(index), arguments, root, stdin=b"session probe\n")
-                    self.assertEqual(json.loads(marker.read_text()), {
-                        "schema_version": 1, "session": driver.FIXTURE_SESSION, "resumed": resumed,
-                    })
-                    events = [json.loads(line) for line in process.output().splitlines()]
-                    self.assertEqual(events[0], {"type": "session", "id": driver.FIXTURE_SESSION})
+                prompts = (b"session probe\n", b"DELEGATE_PRIVATE_UPGRADE_WAIT\n",
+                           b"DELEGATE_PRIVATE_SILENCE_WAIT\n")
+                for index, prompt in enumerate(prompts):
+                    for resumed in (False, True):
+                        with self.subTest(prompt=prompt, resumed=resumed):
+                            arguments = [str(provider_bin / "pi"), "--mode", "json"]
+                            if resumed:
+                                arguments.extend(["--session", driver.FIXTURE_SESSION])
+                            process = processes.run(f"{index}-{resumed}", arguments, root, stdin=prompt)
+                            self.assertEqual(json.loads(marker.read_text()), {
+                                "schema_version": 1, "session": driver.FIXTURE_SESSION, "resumed": resumed,
+                            })
+                            events = [json.loads(line) for line in process.output().splitlines()]
+                            expected_session = {"type": "session", "id": driver.FIXTURE_SESSION}
+                            self.assertEqual(events[0], expected_session)
+                            self.assertEqual([event for event in events if event["type"] == "session"],
+                                             [expected_session])
                 self.assertEqual(processes.pending(), [])
             finally:
                 owner.rollback()

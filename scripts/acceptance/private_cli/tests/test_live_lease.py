@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import select
 import subprocess
 import sys
 import tempfile
@@ -115,6 +116,12 @@ class PrivateLiveLeaseTests(unittest.TestCase):
                 os.fstat(descriptor)
 
     def test_pi_fixture_holds_nonce_bound_fifo_until_gate_release(self):
+        self._assert_pi_fixture_holds_until_gate_release(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+
+    def test_pi_silence_fixture_emits_session_before_gate_release(self):
+        self._assert_pi_fixture_holds_until_gate_release(b"DELEGATE_PRIVATE_SILENCE_WAIT\n", early_session=True)
+
+    def _assert_pi_fixture_holds_until_gate_release(self, prompt, *, early_session=False):
         install = self.root / "bin"
         install.mkdir()
         waiters = self.root / "waiters"
@@ -133,7 +140,7 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         stream = process.stdin
         if stream is None:
             self.fail("the finite provider must own its configured stdin pipe")
-        stream.write(b"DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+        stream.write(prompt)
         stream.close()
         process.stdin = None
         fifo = private_cli_lease_policy.lease_fifo_path(waiters, self.nonce, process.pid)
@@ -149,10 +156,21 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         try:
             self.assertIsNone(process.poll())
             lease.assert_live()
+            header = b""
+            if early_session:
+                output = process.stdout
+                if output is None:
+                    self.fail("the finite provider must own its configured stdout pipe")
+                ready, _, _ = select.select([output], [], [], 2)
+                self.assertTrue(ready, "silence fixture did not emit its session while held")
+                header = os.read(output.fileno(), 4096)
+                self.assertEqual(header, b'{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n')
+                self.assertIsNone(process.poll())
             release_gate.release()
             stdout, stderr = process.communicate(timeout=3)
             self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
             self.assertIn(b"private supervisor acceptance passed", stdout)
+            self.assertEqual((header + stdout).count(b'"type":"session"'), 1)
         finally:
             lease.close()
         self.assertFalse(fifo.exists())

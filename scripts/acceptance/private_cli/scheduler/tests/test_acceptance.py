@@ -472,6 +472,39 @@ class SchedulerAcceptanceTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "operational failure"):
                     case.await_admitted(row)
 
+    def test_in_flight_partial_execution_remains_pending_until_admitted(self):
+        case, row, admitted = self.admitted_case()
+        meta = self.state / "tasks" / row.task_id / "meta.json"
+        prepared = meta.read_bytes()
+        meta.unlink()
+        partial = {"schema_version": 1, "command": "schedule", "root_id": ROOT_ID, "task_id": row.task_id,
+                   "error": "schedule query failed (invalid_evidence)",
+                   "schedule_query_error": {"code": "invalid_evidence"},
+                   "schedule_execution": {"complete": False, "occurrence": {
+                       "schedule_id": SCHEDULE_ID, "task_id": row.task_id,
+                       "due": "1970-01-01T00:01:00Z", "reservation": "active"}}}
+
+        for field, value in (("root_id", SECOND_ID), ("task_id", SECOND_ID), ("command", "status")):
+            with (self.subTest(field=field), patch.object(case, "command", return_value={**partial, field: value}),
+                  self.assertRaisesRegex(RuntimeError, "response identity changed")):
+                case.await_admitted(row)
+        for fault in (None, {"code": "query_failed"}, {"code": "identity_mismatch"}):
+            with (self.subTest(fault=fault),
+                  patch.object(case, "command", return_value={**partial, "schedule_query_error": fault}),
+                  self.assertRaisesRegex(RuntimeError, "execution inspection failed")):
+                case.await_admitted(row)
+
+        def poll_twice(predicate, **_options):
+            self.assertIsNone(predicate())
+            meta.write_bytes(prepared)
+            return predicate()
+
+        with (patch.object(case, "command", side_effect=[partial, admitted]) as command,
+              patch.object(cases, "wait_until", side_effect=poll_twice)):
+            self.assertEqual(case.await_admitted(row), admitted)
+        self.assertEqual(command.call_args_list[0].args[1:], (["schedule", "execution", row.task_id], (0, 1)))
+        self.assertNotIn("scheduler_admission_failure", case.receipt.details)
+
     def test_admitted_status_still_requires_durable_files_and_cold_daemon_evidence(self):
         case, row, response = self.admitted_case()
         case.deadline = time.monotonic()
@@ -788,7 +821,7 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         failure = RuntimeError("case assertion failed")
         args = application.parse_arguments([])
         with (patch.object(service, "stop", side_effect=lambda: events.append("stop")),
-              patch.object(case, "discover", side_effect=lambda: events.append("discover")),
+              patch.object(case, "discover", side_effect=lambda: events.append("discover") or ()),
               patch.object(application, "finalize_fixture", side_effect=lambda *args: events.append("finalize"))):
             with self.assertRaisesRegex(RuntimeError, "case assertion failed"):
                 application.finish_case(args=args, case=case, lifetime=self.lifetime, receipt=case.receipt, failure=failure)
@@ -832,7 +865,7 @@ class SchedulerAcceptanceTests(unittest.TestCase):
         self.lifetime.delegate = self.base / "upgraded-install" / "delegate"
         events = []
         with (patch.object(service, "stop", side_effect=lambda: events.append("stop")),
-              patch.object(case, "discover", side_effect=lambda: events.append("discover")),
+              patch.object(case, "discover", side_effect=lambda: events.append("discover") or ()),
               patch.object(application, "shutdown_terminal_private_supervisor", side_effect=lambda *args, **kwargs: events.append("daemon")) as shutdown,
               patch.object(service, "retire", side_effect=lambda: events.append("retire")),
               patch.object(application, "finalize_fixture", side_effect=lambda *args: events.append("finalize"))):

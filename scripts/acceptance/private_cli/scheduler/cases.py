@@ -16,6 +16,7 @@ from scripts.acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.acceptance.private_cli.leases import LockedReleaseGate
 from scripts.acceptance.private_cli.pair_evidence import assert_state_supervisor_pair
 from scripts.acceptance.private_cli.receipt import AcceptanceReceipt
+from scripts.acceptance.private_cli.scheduler.admission import not_created_failure
 from scripts.acceptance.private_cli.scheduler.occurrences import MINUTE_NS
 from scripts.acceptance.private_cli.scheduler.occurrences import Occurrence
 from scripts.acceptance.private_cli.scheduler.occurrences import identity
@@ -59,17 +60,20 @@ class SchedulerCase:
             raise RuntimeError("scheduler case lost its installed CLI")
         return self.lifetime.old_install / "delegate"
 
-    def command(self, name: str, arguments: list[str], expected: tuple[int, ...] = (0,)) -> dict[str, object]:
+    def command(self, name: str, arguments: list[str], expected: tuple[int, ...] = (0,), *,
+                deadline: float | None = None) -> dict[str, object]:
+        command_deadline = self.deadline if deadline is None else deadline
         self.command_count += 1
         if self.default_root:
             if not isinstance(self.service, SchedulerHost):
                 raise AcceptanceFailure("default-root case requires the managed host")
-            require(self.remaining() > 0, "scheduler case command deadline expired")
+            remaining = max(0, command_deadline - time.monotonic())
+            require(remaining > 0, "scheduler case command deadline expired")
             # Reuse the host's process registry so this caller has an explicit,
             # different cwd and every control child retains the same Wait owner.
             command = self.service.processes.run(
                 f"case-{self.command_count}-{name}", [self.delegate, *arguments, "--json"],
-                self.fixture.workspace, expected=expected, timeout=self.remaining(),
+                self.fixture.workspace, expected=expected, timeout=remaining,
             )
             response = json_object(command.json())
             if self.root_id:
@@ -77,7 +81,7 @@ class SchedulerCase:
             return response
         result = run_json(
             self.delegate, self.lifetime.env, ["--root", str(self.fixture.state), *arguments, "--json"],
-            expected=expected, timeout=None, deadline=self.deadline, capture_root=self.lifetime.capture_token,
+            expected=expected, timeout=None, deadline=command_deadline, capture_root=self.lifetime.capture_token,
             receipt=self.responses / f"{self.command_count:03d}-{name}.json", capture_response=True,
         )
         return json_object(result)
@@ -165,6 +169,40 @@ class SchedulerCase:
                 self.lifetime.attempted_task_ids.append(row.task_id)
         return rows
 
+    def admission_failure(self, row: Occurrence, *, deadline: float | None = None,
+                          in_flight: bool = False) -> dict[str, object] | None:
+        require(row.schedule_id == self.schedule_id, "scheduler occurrence belongs to a different schedule")
+        arguments = ["schedule", "execution", row.task_id]
+        response = (self.command("admission-" + row.task_id, arguments, (0, 1)) if in_flight else
+                    self.command("admission-" + row.task_id, arguments, deadline=deadline))
+        return not_created_failure(response, self.root_id, row, allow_in_flight=in_flight)
+
+    def require_not_refused(self, row: Occurrence) -> None:
+        failure = self.admission_failure(row, in_flight=True)
+        if failure is not None:
+            self.receipt.add_details(scheduler_admission_failure=failure)
+            raise AcceptanceFailure(f"scheduled task was not created: {failure['code']} "
+                                    f"stage={failure['stage']} next_action={failure['next_action']}")
+
+    def reconcile_cleanup_tasks(self, rows: tuple[Occurrence, ...], *, deadline: float) -> None:
+        """After every host joins, separate reservations from ordinary task lifetimes."""
+        self.receipt.add_details(scheduler_reserved_occurrences=[
+            {"task_id": row.task_id, "schedule_id": row.schedule_id, "due_unix_nanos": row.due_ns} for row in rows])
+        absent = []
+        for row in rows:
+            directory = self.fixture.state / "tasks" / row.task_id
+            # Existing or unsafe entries remain subject to the canonical scan.
+            if directory.exists() or directory.is_symlink():
+                continue
+            failure = self.admission_failure(row, deadline=deadline)
+            if failure is not None:
+                absent.append(failure)
+        # Validate all observations before changing the shared finalizer list.
+        proven = {failure["task_id"] for failure in absent}
+        self.lifetime.attempted_task_ids[:] = [task_id for task_id in self.lifetime.attempted_task_ids
+                                             if task_id not in proven]
+        self.receipt.add_details(scheduler_not_created_tasks=absent)
+
     def occurrences(self, count: int) -> tuple[Occurrence, ...]:
         def ready():
             try:
@@ -190,6 +228,7 @@ class SchedulerCase:
         def ready():
             directory = self.fixture.state / "tasks" / row.task_id
             if not all((directory / name).is_file() for name in ("meta.json", "supervisor.ref.json")):
+                self.require_not_refused(row)
                 return None
             response = self.status(row)
             return response if response.get("admission") == "admitted" else None
